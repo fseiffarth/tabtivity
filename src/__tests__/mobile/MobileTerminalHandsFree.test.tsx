@@ -130,7 +130,33 @@ describe(`${BRAND.display} Mobile hands-free`, () => {
     act(() => speech.onresult?.(result("and the", false)));
     await act(async () => { vi.advanceTimersByTime(5_000); });
     expect(chime.calls).toBe(0);
+    // The live words show in the field as provisional text; nothing is sent.
+    expect(box().value).toBe("fix the login and the");
+  });
+
+  it("replaces the provisional words by each reading and commits them with the final", async () => {
+    const speech = await dictate();
+    act(() => speech.onresult?.(result("fix the", false)));
+    expect(box().value).toBe("fix the");
+    act(() => speech.onresult?.(result("fix their log", false)));
+    expect(box().value).toBe("fix their log");
+    act(() => speech.onresult?.(result("fix the login", true)));
     expect(box().value).toBe("fix the login");
+    // The pause counts from the final, not from the guess before it.
+    expect(chime.calls).toBe(0);
+    await act(async () => { vi.advanceTimersByTime(1_500); });
+    expect(chime.calls).toBe(1);
+  });
+
+  it("does not commit the guess when the reader types", async () => {
+    const speech = await dictate();
+    act(() => speech.onresult?.(reading(["fix the login", true], ["and the", false])));
+    expect(box().value).toBe("fix the login and the");
+    fireEvent.change(box(), { target: { value: "fix the login and the!" } });
+    expect(box().value).toBe("fix the login!");
+    // The next reading brings the guess back; the final commits it.
+    act(() => speech.onresult?.(reading(["fix the login", true], ["and the", true])));
+    expect(box().value).toBe("fix the login! and the");
   });
 
   it("keeps the draft on a spoken stop in the window, and drops the stop", async () => {

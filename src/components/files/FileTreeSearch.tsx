@@ -282,6 +282,7 @@ export function FileTreeSearch({
             key={e.path}
             className={`file-entry file-search-row ${e.is_dir ? "dir" : "file"}`}
             title={t("fileTreeSearch.revealTitle", { path: e.path })}
+            data-steer-open={e.is_dir ? undefined : "dblclick"}
             onClick={() => onReveal(e.path, e.is_dir)}
             onDoubleClick={() => openEntry(e.path, e.is_dir)}
           >

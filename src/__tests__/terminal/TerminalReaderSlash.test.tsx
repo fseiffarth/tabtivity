@@ -115,6 +115,14 @@ describe("the Reader composer's / menu and undo", () => {
     expect(box.value).toBe("/model ");
   });
 
+  it("sends Codex /new to its own location picker instead of replacing it with Clear", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, label: "Codex", cmd: "codex" }] } }));
+    const box = await composer(host);
+    fireEvent.change(box, { target: { value: "/new" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ cmd: "codex" }), "/new");
+  });
+
   it("starts afresh once a prompt is sent", async () => {
     const box = await composer(host);
     fireEvent.change(box, { target: { value: "hello" } });

@@ -7,6 +7,18 @@
 //! session thread segments and emits; the worker holds whisper, one job at a
 //! time, finals in order. A final that is due aborts a partial in flight
 //! (whisper's abort callback), so the partial never delays it.
+//!
+//! Partials (`voice:partial`) are the renderer's provisional text, written
+//! straight into the input field, so each one is the transcript of the WHOLE
+//! open segment so far, never a tail. While the segment is short that is one
+//! run over all of it. A long one would cost more with every partial, so the
+//! text before a seam (a [`vad::SEAM_SILENCE_MS`] pause the detector heard
+//! inside the segment) is committed once and kept: later partials run only
+//! on the audio after the seam and emit `committed + tail`. Cadence is
+//! adaptive ([`Pacing`]): the first partial as soon as there is speech, the
+//! next one a small gap after the previous finished. The final is always one
+//! run over the whole segment (a seam is not a sentence end; a final split
+//! there would punctuate mid-sentence), and replaces whatever the partials said.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
@@ -89,6 +101,13 @@ pub struct MuteGate {
 /// The tail after the voice stops (the output device's buffer; step 0's host
 /// probe may raise it).
 pub const MUTE_TAIL: Duration = Duration::from_millis(300);
+
+/// How long a segment that began while the voice spoke (Headset mode) must
+/// have gone on after it opened — the voice is stopped at once, so its echo
+/// dies within [`MUTE_TAIL`] — to count as the user talking over it. Shorter,
+/// it is the voice's own words (an agent's text, attacker-influenced, heard
+/// back on speakers: a lone "One.") and is dropped, not transcribed.
+pub const BARGE_IN_MIN_MS: usize = 600;
 
 impl MuteGate {
     pub const fn new() -> Self {
@@ -206,6 +225,35 @@ pub struct SessionConfig {
     /// ([`super::tts::stop`]; a fake in tests). It stops the voice, never the
     /// agent's turn.
     pub barge_in: fn(),
+    pub pacing: Pacing,
+}
+
+/// How often and over how much the live preview runs.
+#[derive(Clone, Copy, Debug)]
+pub struct Pacing {
+    /// The next partial starts this long after the previous one finished,
+    /// or half its run time if that is longer, up to `max_gap`: a GPU that
+    /// answers in 100 ms is asked again after `min_gap`, a CPU that needs a
+    /// second or two is left breathing.
+    pub min_gap: Duration,
+    pub max_gap: Duration,
+    /// Audio after the committed text that makes the next seam worth
+    /// committing (samples).
+    pub commit_tail: usize,
+}
+
+impl Pacing {
+    pub const LIVE: Self = Self {
+        min_gap: Duration::from_millis(300),
+        max_gap: Duration::from_millis(700),
+        // A run over this much audio takes about 1.5 s on the CPU's `small`
+        // model, about 0.2 s on a GPU (docs/voice_gpu_plan.md).
+        commit_tail: 6 * RATE as usize,
+    };
+
+    fn gap_after(&self, took: Duration) -> Duration {
+        (took / 2).clamp(self.min_gap, self.max_gap.max(self.min_gap))
+    }
 }
 
 impl SessionConfig {
@@ -219,6 +267,7 @@ impl SessionConfig {
             headset: req.headset,
             prompt: req.prompt.clone(),
             barge_in: super::tts::stop,
+            pacing: Pacing::LIVE,
         }
     }
 }
@@ -271,9 +320,14 @@ struct ErrorEvent {
 
 // ── The session thread ────────────────────────────────────────────────────
 
-/// Partials while a segment is open: this often, over this much audio.
-const PARTIAL_EVERY: Duration = Duration::from_millis(1000);
-const PARTIAL_TAIL_SAMPLES: usize = 5 * RATE as usize;
+/// The first partial of a segment waits for this much speech in it (the
+/// segment opens with about 460 ms, so in practice at once)…
+const FIRST_PARTIAL_SAMPLES: usize = 400 * RATE as usize / 1000;
+/// …and a later one for this much new speech since the last.
+const MIN_NEW_SPEECH_SAMPLES: usize = 100 * RATE as usize / 1000;
+/// A seam is committed only with this much audio after it (not a pause that
+/// is about to end the segment).
+const COMMIT_MIN_AFTER_SAMPLES: usize = RATE as usize / 2;
 /// `voice:level` at most this often (≤ 20 Hz).
 const LEVEL_EVERY: Duration = Duration::from_millis(50);
 /// A mic muted in the OS (or on its cable) still opens and delivers digital
@@ -284,13 +338,16 @@ const SILENT_PEAK: f32 = 1e-5;
 const DRAIN_LIMIT: Duration = Duration::from_secs(30);
 
 enum Job {
-    Partial { segment: u64, audio: Vec<f32> },
-    Final { segment: u64, audio: Vec<f32> },
+    /// `prefix`: audio up to a seam (and its end offset in the segment) to
+    /// transcribe and commit first; `audio` is what follows.
+    Partial { segment: u64, prefix: Option<(usize, Vec<f32>)>, audio: Vec<f32> },
+    /// `echo`: the voice's own words heard back; answered empty, not transcribed.
+    Final { segment: u64, audio: Vec<f32>, echo: bool },
 }
 
 enum Done {
     Loaded(Result<Option<VoiceDevice>, VoiceError>),
-    Partial { segment: u64, outcome: Result<Transcript, VoiceError> },
+    Partial { segment: u64, prefix: Option<(usize, Result<Transcript, VoiceError>)>, outcome: Result<Transcript, VoiceError> },
     Final { segment: u64, outcome: Result<Transcript, VoiceError> },
 }
 
@@ -313,9 +370,9 @@ fn worker<F: TranscriberFactory>(
     };
     while let Ok(job) = jobs.recv() {
         match job {
-            Job::Final { segment, audio } => {
+            Job::Final { segment, audio, echo } => {
                 cancel.store(false, Ordering::SeqCst);
-                let outcome = if transcriber.confirm_speech(&audio) {
+                let outcome = if !echo && transcriber.confirm_speech(&audio) {
                     transcriber.transcribe(&audio, false)
                 } else {
                     Ok(Transcript { text: String::new(), no_speech: 1.0 })
@@ -324,11 +381,19 @@ fn worker<F: TranscriberFactory>(
                     return;
                 }
             }
-            // A final queued behind this partial already cancelled it.
-            Job::Partial { .. } if cancel.load(Ordering::SeqCst) => {}
-            Job::Partial { segment, audio } => {
+            // A final queued behind this partial already cancelled it. Still
+            // answered, or the session would wait for it for ever.
+            Job::Partial { segment, .. } if cancel.load(Ordering::SeqCst) => {
+                if done.send(Done::Partial { segment, prefix: None, outcome: Err(VoiceError::ModelFailed) }).is_err() {
+                    return;
+                }
+            }
+            Job::Partial { segment, prefix, audio } => {
+                // The seam's text is a keeper, so it gets the final's care
+                // (temperature fallback); the tail is the cheap preview.
+                let prefix = prefix.map(|(end, audio)| (end, transcriber.transcribe(&audio, false)));
                 let outcome = transcriber.transcribe(&audio, true);
-                if done.send(Done::Partial { segment, outcome }).is_err() {
+                if done.send(Done::Partial { segment, prefix, outcome }).is_err() {
                     return;
                 }
             }
@@ -348,7 +413,15 @@ struct Listener {
     /// Finals queued and not yet answered.
     pending_finals: usize,
     partial_running: bool,
-    last_partial: Instant,
+    partial_started: Instant,
+    /// No partial before this, and none while one runs.
+    next_partial: Instant,
+    /// Speech in the open segment when the last partial was sent.
+    partial_speech: usize,
+    /// The open segment's text before its last committed seam, and the
+    /// seam's offset into the segment's audio (see the module comment).
+    committed_text: String,
+    committed_samples: usize,
     level_sum: f32,
     level_n: usize,
     last_level: Instant,
@@ -356,6 +429,9 @@ struct Listener {
     /// Samples in a row at digital silence, and whether the user was told.
     silent: usize,
     silent_told: bool,
+    /// Samples taken in since the open segment began while the voice spoke
+    /// in Headset mode (`None` for any other segment): see [`BARGE_IN_MIN_MS`].
+    over_voice: Option<usize>,
 }
 
 impl Listener {
@@ -372,7 +448,13 @@ impl Listener {
         self.to_owner(EV_VAD, VadEventPayload { session: self.config.session, segment: self.segment, state: "end" });
         // Cancel a partial in flight: the final must not wait for it.
         self.cancel.store(true, Ordering::SeqCst);
-        if self.jobs.send(Job::Final { segment: self.segment, audio }).is_ok() {
+        // A segment that began over the voice and ended with it was the
+        // voice's own echo, not a barge-in: Headset mode drops it (gap 80).
+        let echo = self.over_voice.take().is_some_and(|taken| {
+            let silence = (self.config.end_silence_ms as usize).div_ceil(20) * (RATE as usize / 50);
+            taken.saturating_sub(silence) < BARGE_IN_MIN_MS * RATE as usize / 1000
+        });
+        if self.jobs.send(Job::Final { segment: self.segment, audio, echo }).is_ok() {
             self.pending_finals += 1;
         }
     }
@@ -401,6 +483,7 @@ impl Listener {
                 self.was_paused = true;
                 // An open segment is dropped, not sent: pausing means "not now".
                 self.vad.reset();
+                self.over_voice = None;
                 self.state("paused", None);
             }
             return;
@@ -417,6 +500,7 @@ impl Listener {
                 self.queue_final(audio);
             }
             self.vad.reset();
+            self.over_voice = None;
         }
         self.level_sum += samples.iter().map(|s| s * s).sum::<f32>();
         self.level_n += samples.len();
@@ -433,9 +517,14 @@ impl Listener {
                     // Talking over the voice, with a headset: it stops.
                     if self.config.headset && GATE.speaking() {
                         (self.config.barge_in)();
+                        self.over_voice = Some(0);
                     }
                     self.segment += 1;
-                    self.last_partial = Instant::now();
+                    // The first partial is due at once.
+                    self.next_partial = Instant::now();
+                    self.partial_speech = 0;
+                    self.committed_text.clear();
+                    self.committed_samples = 0;
                     self.to_owner(
                         EV_VAD,
                         VadEventPayload { session: self.config.session, segment: self.segment, state: "start" },
@@ -444,14 +533,45 @@ impl Listener {
                 VadEvent::End(audio) => self.queue_final(audio),
             }
         }
-        if !self.partial_running && self.last_partial.elapsed() >= PARTIAL_EVERY {
-            if let Some(open) = self.vad.open_audio() {
-                let tail = open[open.len().saturating_sub(PARTIAL_TAIL_SAMPLES)..].to_vec();
-                if self.jobs.send(Job::Partial { segment: self.segment, audio: tail }).is_ok() {
-                    self.partial_running = true;
-                }
-                self.last_partial = Instant::now();
-            }
+        if let Some(taken) = self.over_voice.as_mut() {
+            *taken += samples.len();
+        }
+        self.maybe_partial();
+    }
+
+    /// Starts the next preview run when one is due: none in flight, the gap
+    /// passed, and speech that the last one did not hear.
+    fn maybe_partial(&mut self) {
+        if self.partial_running || Instant::now() < self.next_partial {
+            return;
+        }
+        let Some(open) = self.vad.open_audio() else { return };
+        let speech = open.len().saturating_sub(self.vad.trailing_silence());
+        let heard = if self.partial_speech == 0 { FIRST_PARTIAL_SAMPLES } else { self.partial_speech + MIN_NEW_SPEECH_SAMPLES };
+        if speech < heard {
+            return;
+        }
+        let from = self.committed_samples.min(open.len());
+        // The seam to commit: the latest one that leaves some audio after it,
+        // once the uncommitted part has grown past `commit_tail`.
+        let seam = (open.len() - from >= self.config.pacing.commit_tail)
+            .then(|| {
+                self.vad
+                    .pause_marks()
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|&m| m > from && m + COMMIT_MIN_AFTER_SAMPLES <= open.len())
+            })
+            .flatten();
+        let job = match seam {
+            Some(m) => Job::Partial { segment: self.segment, prefix: Some((m, open[from..m].to_vec())), audio: open[m..].to_vec() },
+            None => Job::Partial { segment: self.segment, prefix: None, audio: open[from..].to_vec() },
+        };
+        if self.jobs.send(job).is_ok() {
+            self.partial_running = true;
+            self.partial_started = Instant::now();
+            self.partial_speech = speech;
         }
     }
 
@@ -459,16 +579,34 @@ impl Listener {
         let session = self.config.session;
         match done {
             Done::Loaded(_) => {}
-            Done::Partial { segment, outcome } => {
+            Done::Partial { segment, prefix, outcome } => {
                 self.partial_running = false;
+                let gap = self.config.pacing.gap_after(self.partial_started.elapsed());
+                self.next_partial = Instant::now() + gap;
                 // Only while that segment is still the open one.
                 if segment != self.segment || !self.vad.is_open() || self.cancel.load(Ordering::SeqCst) {
                     return;
                 }
-                if let Ok(t) = outcome {
-                    if let Some(text) = phantom::keep(&t.text, t.no_speech, self.config.prompt.as_deref()) {
-                        self.to_owner(EV_PARTIAL, TextEvent { session, segment, text: &text });
-                    }
+                let prompt = self.config.prompt.as_deref();
+                let mut committed = None;
+                if let Some((end, run)) = prefix {
+                    // A seam that failed is tried again by the next partial;
+                    // this one says nothing rather than drop the words before it.
+                    let Ok(t) = run else { return };
+                    let piece = phantom::keep(&t.text, t.no_speech, prompt);
+                    committed = Some((end, join(&self.committed_text, piece.as_deref())));
+                }
+                let Ok(t) = outcome else { return };
+                if let Some((end, text)) = committed {
+                    self.committed_samples = end;
+                    self.committed_text = text;
+                }
+                // Phantom filtering applies to the tail as to a final: a
+                // silent stretch must not write "Thank you." into the field.
+                let tail = phantom::keep(&t.text, t.no_speech, prompt);
+                let text = join(&self.committed_text, tail.as_deref());
+                if !text.is_empty() {
+                    self.to_owner(EV_PARTIAL, TextEvent { session, segment, text: &text });
                 }
             }
             Done::Final { segment, outcome } => {
@@ -487,6 +625,15 @@ impl Listener {
                 self.to_owner(EV_FINAL, TextEvent { session, segment, text: text.as_deref().unwrap_or("") });
             }
         }
+    }
+}
+
+/// `head` and `tail` as one text.
+fn join(head: &str, tail: Option<&str>) -> String {
+    match (head.is_empty(), tail) {
+        (_, None) => head.to_string(),
+        (true, Some(t)) => t.to_string(),
+        (false, Some(t)) => format!("{head} {t}"),
     }
 }
 
@@ -533,13 +680,18 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
         segment: 0,
         pending_finals: 0,
         partial_running: false,
-        last_partial: Instant::now(),
+        partial_started: Instant::now(),
+        next_partial: Instant::now(),
+        partial_speech: 0,
+        committed_text: String::new(),
+        committed_samples: 0,
         level_sum: 0.0,
         level_n: 0,
         last_level: Instant::now(),
         was_paused: false,
         silent: 0,
         silent_told: false,
+        over_voice: None,
     };
     listener.state("preparing", None);
 
@@ -655,6 +807,7 @@ mod tests {
             headset: false,
             prompt: None,
             barge_in: || {},
+            pacing: Pacing::LIVE,
         }
     }
 
@@ -663,6 +816,8 @@ mod tests {
         audio: Vec<f32>,
         gap_at: Option<usize>,
         fail_start: Option<VoiceError>,
+        /// Sleep after each 10 ms piece, to play it at a chosen speed.
+        pace: Option<Duration>,
     }
 
     impl AudioSource for FakeSource {
@@ -672,11 +827,15 @@ mod tests {
             }
             let audio = std::mem::take(&mut self.audio);
             let gap_at = self.gap_at;
+            let pace = self.pace;
             std::thread::spawn(move || {
                 for (i, piece) in audio.chunks(160).enumerate() {
                     let after_gap = gap_at == Some(i);
                     if sink.send(Frames::Audio { samples: piece.to_vec(), after_gap }).is_err() {
                         return;
+                    }
+                    if let Some(pace) = pace {
+                        std::thread::sleep(pace);
                     }
                 }
                 // Hold the stream open with silence until the session drops it.
@@ -691,7 +850,8 @@ mod tests {
     /// Each run's audio length and whether it was a partial.
     type Calls = Arc<Mutex<Vec<(usize, bool)>>>;
 
-    /// Answers each run with its text and the run's number, counting runs.
+    /// Answers each run with its text and the number of final runs so far (the
+    /// previews, which start at once, do not move it), counting every run.
     struct FakeFactory {
         fail: Option<VoiceError>,
         calls: Calls,
@@ -708,7 +868,11 @@ mod tests {
             let mut calls = self.calls.lock().unwrap();
             calls.push((audio.len(), partial));
             // A tag is whisper's whole answer; words get the call's number.
-            let text = if self.text.starts_with('[') { self.text.to_string() } else { format!("{} {}", self.text, calls.len()) };
+            // "#len": one word per 20 ms of audio, so a text shows how much
+            // audio it was made from.
+            let text = if self.text == "#len" {
+                vec!["w"; audio.len() / 320].join(" ")
+            } else if self.text.starts_with('[') { self.text.to_string() } else { format!("{} {}", self.text, calls.iter().filter(|(_, partial)| !partial).count()) };
             Ok(Transcript { text, no_speech: 0.0 })
         }
     }
@@ -736,7 +900,9 @@ mod tests {
     }
 
     fn wait_for(events: &RecordingEvents, event: &str, n: usize) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Generous: paced sources sleep per piece, and under the full suite's
+        // load those sleeps overshoot; the tests check order, not speed.
+        let deadline = Instant::now() + Duration::from_secs(30);
         while events.payloads(event).len() < n {
             assert!(Instant::now() < deadline, "timed out waiting for {n} × {event}");
             std::thread::sleep(Duration::from_millis(10));
@@ -785,13 +951,48 @@ mod tests {
         let events = RecordingEvents::new();
         let (factory, _) = factory();
         let cfg = SessionConfig { headset, barge_in: count_barge_in, ..config(9) };
-        let (control, thread) = spawn(&events, cfg, FakeSource { audio: speech(), gap_at: None, fail_start: None }, factory);
+        let (control, thread) = spawn(&events, cfg, FakeSource { audio: speech(), gap_at: None, fail_start: None, pace: None }, factory);
         wait_for(&events, EV_FINAL, 1);
         control.stop();
         thread.join().unwrap();
         assert!(GATE.muted(Instant::now()), "the ended session closed the gate again");
         GATE.set_speaking(false, Instant::now());
         BARGED.load(Ordering::SeqCst)
+    }
+
+    /// Runs `audio` through a Headset session while the voice speaks (the
+    /// fake barge-in does not stop it): the final's text and the number of
+    /// transcriptions run.
+    fn headset_final(audio: Vec<f32>) -> (String, usize) {
+        let _serial = GATE_SERIAL.lock_ok();
+        GATE.set_speaking(true, Instant::now());
+        let events = RecordingEvents::new();
+        let (factory, calls) = factory();
+        let cfg = SessionConfig { headset: true, barge_in: count_barge_in, ..config(9) };
+        let (control, thread) = spawn(&events, cfg, FakeSource { audio, gap_at: None, fail_start: None, pace: None }, factory);
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+        GATE.set_speaking(false, Instant::now());
+        let text = events.payloads(EV_FINAL)[0]["text"].as_str().unwrap().to_string();
+        let ran = calls.lock().unwrap().iter().filter(|(_, partial)| !partial).count();
+        (text, ran)
+    }
+
+    #[test]
+    fn headset_mode_drops_a_segment_that_began_over_the_voice_and_ended_with_it() {
+        // 300 ms of tone opens a segment (260 ms of speech) and is over as
+        // the voice's echo would be: the user did not talk over it.
+        let mut echo = hiss(500);
+        echo.extend(tone(330, 220.0, 0.2));
+        echo.extend(hiss(1000));
+        assert_eq!(headset_final(echo), (String::new(), 0), "the voice's own words are not transcribed");
+        // Speech that goes on well past the voice's stop is a barge-in: kept.
+        let mut spoken = hiss(500);
+        spoken.extend(tone(1600, 220.0, 0.2));
+        spoken.extend(hiss(1000));
+        let (text, ran) = headset_final(spoken);
+        assert_eq!((text.as_str(), ran), ("words 1", 1));
     }
 
     #[test]
@@ -804,7 +1005,7 @@ mod tests {
     fn speech_becomes_one_final_for_the_owner_only() {
         let events = RecordingEvents::new();
         let (factory, _) = factory();
-        let (control, thread) = spawn(&events, config(7), FakeSource { audio: speech(), gap_at: None, fail_start: None }, factory);
+        let (control, thread) = spawn(&events, config(7), FakeSource { audio: speech(), gap_at: None, fail_start: None, pace: None }, factory);
         wait_for(&events, EV_FINAL, 1);
         control.stop();
         thread.join().unwrap();
@@ -830,13 +1031,122 @@ mod tests {
         assert_eq!(states, ["preparing", "listening", "stopped"]);
     }
 
+    fn payloads_of(all: &[app_core::ctx::RecordedEvent], event: &str) -> Vec<serde_json::Value> {
+        all.iter().filter(|e| e.event == event).map(|e| serde_json::from_str(&e.payload).unwrap()).collect()
+    }
+
+    fn words(event: &serde_json::Value) -> usize {
+        event["text"].as_str().unwrap().split_whitespace().count()
+    }
+
+    /// 10 s of speech in five phrases with 500 ms seams, then the closing silence.
+    fn phrases() -> Vec<f32> {
+        let mut audio = hiss(500);
+        for i in 0..5 {
+            audio.extend(tone(1500, 200.0 + 20.0 * i as f32, 0.2));
+            audio.extend(hiss(500));
+        }
+        audio.extend(hiss(1000));
+        audio
+    }
+
+    #[test]
+    fn every_partial_is_the_whole_open_segment_and_none_follows_its_final() {
+        let events = RecordingEvents::new();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let factory = FakeFactory { fail: None, calls: calls.clone(), text: "#len" };
+        // Back to back previews, and a seam committed once 3 s have gathered.
+        let pacing = Pacing { min_gap: Duration::ZERO, max_gap: Duration::ZERO, commit_tail: 3 * RATE as usize };
+        let cfg = SessionConfig { pacing, ..config(4) };
+        let source = FakeSource { audio: phrases(), gap_at: None, fail_start: None, pace: Some(Duration::from_millis(2)) };
+        let (control, thread) = spawn(&events, cfg, source, factory);
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+
+        let all = events.take();
+        let last_partial = all.iter().rposition(|e| e.event == EV_PARTIAL).expect("partials");
+        let final_at = all.iter().position(|e| e.event == EV_FINAL).unwrap();
+        assert!(last_partial < final_at, "a partial arrived after its segment's final");
+
+        let partials = payloads_of(&all, EV_PARTIAL);
+        let final_words = words(&payloads_of(&all, EV_FINAL)[0]);
+        let counts: Vec<usize> = partials.iter().map(words).collect();
+        assert!(partials.iter().all(|p| p["segment"] == 1 && p["session"] == 4));
+        assert!(counts.windows(2).all(|w| w[0] <= w[1]), "a partial lost words: {counts:?}");
+        assert!(counts.iter().all(|c| *c <= final_words), "{counts:?} vs final {final_words}");
+        // A tail-only preview (the old 5 s) could not reach this far.
+        assert!(*counts.last().unwrap() * 100 >= final_words * 80, "{counts:?} vs final {final_words}");
+        // The first one is out within a second of speech.
+        assert!(counts[0] <= 50, "{counts:?}");
+
+        // Whole segment, still bounded: a seam was transcribed once (a
+        // non-partial run besides the final) and previews ran on what follows.
+        let calls = calls.lock().unwrap().clone();
+        assert!(calls.iter().filter(|(_, partial)| !partial).count() >= 2, "{calls:?}");
+        let longest_tail = calls.iter().filter(|(_, partial)| *partial).map(|(n, _)| *n).max().unwrap();
+        assert!(longest_tail < final_words * 320 * 7 / 10, "tails kept growing: {longest_tail} of {}", final_words * 320);
+    }
+
+    #[test]
+    fn the_first_partial_comes_while_the_user_is_still_talking() {
+        let events = RecordingEvents::new();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let factory = FakeFactory { fail: None, calls, text: "#len" };
+        let mut audio = hiss(500);
+        audio.extend(tone(2000, 220.0, 0.2));
+        audio.extend(hiss(1000));
+        let source = FakeSource { audio, gap_at: None, fail_start: None, pace: Some(Duration::from_millis(2)) };
+        let (control, thread) = spawn(&events, config(1), source, factory);
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+        let all = events.take();
+        let first = all.iter().position(|e| e.event == EV_PARTIAL).expect("a partial");
+        assert!(first < all.iter().position(|e| e.event == EV_FINAL).unwrap());
+        let text = &payloads_of(&all, EV_PARTIAL)[0];
+        assert!(words(text) <= 40, "the first preview heard {} words (20 ms each)", words(text));
+    }
+
+    #[test]
+    fn a_phantom_partial_writes_nothing() {
+        let events = RecordingEvents::new();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let factory = FakeFactory { fail: None, calls: calls.clone(), text: "[BLANK_AUDIO]" };
+        let source = FakeSource { audio: phrases(), gap_at: None, fail_start: None, pace: Some(Duration::from_millis(2)) };
+        let (control, thread) = spawn(&events, config(1), source, factory);
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+        assert!(calls.lock().unwrap().iter().any(|(_, partial)| *partial), "previews did run");
+        assert!(events.payloads(EV_PARTIAL).is_empty());
+    }
+
+    #[test]
+    fn the_gap_follows_how_long_the_device_takes_within_bounds() {
+        let p = Pacing::LIVE;
+        assert_eq!(p.gap_after(Duration::from_millis(80)), Duration::from_millis(300));
+        assert_eq!(p.gap_after(Duration::from_millis(800)), Duration::from_millis(400));
+        assert_eq!(p.gap_after(Duration::from_secs(5)), Duration::from_millis(700));
+        let now = Pacing { min_gap: Duration::ZERO, max_gap: Duration::ZERO, ..p };
+        assert_eq!(now.gap_after(Duration::from_secs(1)), Duration::ZERO);
+    }
+
+    #[test]
+    fn joining_committed_text_and_a_tail() {
+        assert_eq!(join("", Some("b")), "b");
+        assert_eq!(join("a", Some("b")), "a b");
+        assert_eq!(join("a", None), "a");
+        assert_eq!(join("", None), "");
+    }
+
     #[test]
     fn stopping_mid_sentence_still_transcribes_it() {
         let events = RecordingEvents::new();
         let (factory, calls) = factory();
         let mut audio = hiss(500);
         audio.extend(tone(600, 220.0, 0.2));
-        let (control, thread) = spawn(&events, config(1), FakeSource { audio, gap_at: None, fail_start: None }, factory);
+        let (control, thread) = spawn(&events, config(1), FakeSource { audio, gap_at: None, fail_start: None, pace: None }, factory);
         wait_for(&events, EV_VAD, 1);
         // Let the rest of the tone reach the detector.
         std::thread::sleep(Duration::from_millis(200));
@@ -852,7 +1162,7 @@ mod tests {
         let (factory, _) = factory();
         let mut audio = hiss(500);
         audio.extend(tone(600, 220.0, 0.2));
-        let (control, thread) = spawn(&events, config(1), FakeSource { audio, gap_at: None, fail_start: None }, factory);
+        let (control, thread) = spawn(&events, config(1), FakeSource { audio, gap_at: None, fail_start: None, pace: None }, factory);
         wait_for(&events, EV_VAD, 1);
         control.abort();
         thread.join().unwrap();
@@ -867,7 +1177,7 @@ mod tests {
         let control = Arc::new(Control::default());
         control.set_paused(true);
         let (ctx, c) = (ctx(events.clone()), control.clone());
-        let source = FakeSource { audio: speech(), gap_at: None, fail_start: None };
+        let source = FakeSource { audio: speech(), gap_at: None, fail_start: None, pace: None };
         let thread = std::thread::spawn(move || run(ctx, config(1), c, source, factory));
         wait_for(&events, EV_STATE, 2);
         std::thread::sleep(Duration::from_millis(300));
@@ -883,7 +1193,7 @@ mod tests {
     fn a_muted_mic_is_warned_about_once_and_keeps_listening() {
         let events = RecordingEvents::new();
         let (factory, _) = factory();
-        let source = FakeSource { audio: vec![0.0; 4 * RATE as usize], gap_at: None, fail_start: None };
+        let source = FakeSource { audio: vec![0.0; 4 * RATE as usize], gap_at: None, fail_start: None, pace: None };
         let (control, thread) = spawn(&events, config(3), source, factory);
         wait_for(&events, EV_ERROR, 1);
         std::thread::sleep(Duration::from_millis(200));
@@ -902,7 +1212,7 @@ mod tests {
         let (factory, _) = factory();
         let mut audio = vec![0.0; 3 * RATE as usize + 1600];
         audio.extend(tone(300, 220.0, 0.2));
-        let (control, thread) = spawn(&events, config(3), FakeSource { audio, gap_at: None, fail_start: None }, factory);
+        let (control, thread) = spawn(&events, config(3), FakeSource { audio, gap_at: None, fail_start: None, pace: None }, factory);
         wait_for(&events, EV_STATE, 3);
         control.stop();
         thread.join().unwrap();
@@ -921,7 +1231,7 @@ mod tests {
         let gap = audio.len() / 160;
         audio.extend(tone(600, 220.0, 0.2));
         audio.extend(hiss(1000));
-        let (control, thread) = spawn(&events, config(1), FakeSource { audio, gap_at: Some(gap), fail_start: None }, factory);
+        let (control, thread) = spawn(&events, config(1), FakeSource { audio, gap_at: Some(gap), fail_start: None, pace: None }, factory);
         wait_for(&events, EV_FINAL, 2);
         control.stop();
         thread.join().unwrap();
@@ -934,7 +1244,7 @@ mod tests {
         let events = RecordingEvents::new();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let factory = FakeFactory { fail: Some(VoiceError::ModelFailed), calls, text: "" };
-        let (_control, thread) = spawn(&events, config(3), FakeSource { audio: speech(), gap_at: None, fail_start: None }, factory);
+        let (_control, thread) = spawn(&events, config(3), FakeSource { audio: speech(), gap_at: None, fail_start: None, pace: None }, factory);
         thread.join().unwrap();
         assert_eq!(events.payloads(EV_ERROR), [serde_json::json!({ "session": 3, "code": "model-failed" })]);
         assert_eq!(
@@ -948,7 +1258,7 @@ mod tests {
         let events = RecordingEvents::new();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let factory = FakeFactory { fail: None, calls, text: "[BLANK_AUDIO]" };
-        let (control, thread) = spawn(&events, config(1), FakeSource { audio: speech(), gap_at: None, fail_start: None }, factory);
+        let (control, thread) = spawn(&events, config(1), FakeSource { audio: speech(), gap_at: None, fail_start: None, pace: None }, factory);
         wait_for(&events, EV_FINAL, 1);
         control.stop();
         thread.join().unwrap();

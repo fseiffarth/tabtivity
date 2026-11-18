@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::services::assistant::{self, AssistantCli, AssistantLaunch};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::services::tmux_local;
+use crate::services::session_mux::{self, Key, MuxError};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::storage;
 
@@ -126,7 +126,7 @@ fn probe() -> Result<Vec<Screen>, String> {
     if crate::services::ai_switch::is_off() {
         return Err(crate::services::ai_switch::AI_OFF.to_string());
     }
-    if !tmux_local::tmux_available() {
+    if !session_mux::mux().available() {
         return Err("tmux_unavailable".to_string());
     }
     let state_dir = storage::state_dir();
@@ -170,12 +170,14 @@ fn probe() -> Result<Vec<Screen>, String> {
         schedule_target_id: None,
         host_session: false,
         api_key: None,
+        mux_wrapped: false,
+        mcp_mark: None,
     };
     #[cfg(target_os = "linux")]
     crate::services::agent_fence::wrap_pty_options_bwrap(&mut opts, &[], storage::ASSISTANT_SCOPE, &home.dir)?;
     #[cfg(target_os = "macos")]
     crate::services::agent_fence::wrap_pty_options_sandbox_exec(&mut opts, &[], storage::ASSISTANT_SCOPE, &home.dir)?;
-    let read = tmux_local::spawn_detached_with(&opts, None).and_then(|()| drive(&session));
+    let read = session_mux::mux().spawn_detached(&opts).map_err(|e| e.to_string()).and_then(|()| drive(&session));
     kill(&session);
     crate::services::api_proxy::on_tab_gone(PROBE_TAB_ID);
     read
@@ -193,9 +195,9 @@ fn drive(session: &str) -> Result<Vec<Screen>, String> {
     if shows_dialog(&ready) {
         return Err("model_probe_dialog: Claude asked something before its prompt".to_string());
     }
-    send(session, &["-l", "/model"])?;
+    send(session, &[Key::Literal("/model".into())])?;
     std::thread::sleep(Duration::from_millis(400));
-    send(session, &["Enter"])?;
+    send(session, &[Key::Named("Enter".into())])?;
     let deadline = Instant::now() + PICKER_WAIT;
     let mut last: Option<Vec<String>> = None;
     loop {
@@ -204,7 +206,7 @@ fn drive(session: &str) -> Result<Vec<Screen>, String> {
         // Drawn twice alike: its notes are in.
         if shows_dialog(&screen) && last.as_ref() == Some(&screen) {
             let screens = walk(session, screen);
-            let _ = send(session, &["Escape"]);
+            let _ = send(session, &[Key::Named("Escape".into())]);
             return screens;
         }
         if Instant::now() > deadline {
@@ -231,7 +233,7 @@ fn highlighted(screen: &[String]) -> Option<u32> {
 fn walk(session: &str, first: Screen) -> Result<Vec<Screen>, String> {
     let mut screens = vec![first];
     for _ in 0..MAX_WALK {
-        send(session, &["Down"])?;
+        send(session, &[Key::Named("Down".into())])?;
         let last = screens.last().cloned().unwrap_or_default();
         let mut moved = None;
         for _ in 0..WALK_POLLS {
@@ -274,30 +276,25 @@ fn wait_steady(session: &str, wait: Duration) -> Result<Screen, String> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn capture(session: &str) -> Result<Screen, String> {
-    let out = tmux_local::tmux_command()
-        .args(tmux_local::local_tmux_screen_args(session))
-        .output()
-        .map_err(|e| format!("model probe: {e}"))?;
-    if !out.status.success() {
-        return Err("model_probe_exited: Claude ended before its model list".to_string());
+    match session_mux::mux().screen(session) {
+        Ok(text) => Ok(text.lines().map(|line| line.trim_end().to_string()).collect()),
+        Err(MuxError::Io(e)) => Err(format!("model probe: {e}")),
+        Err(_) => Err("model_probe_exited: Claude ended before its model list".to_string()),
     }
-    Ok(String::from_utf8_lossy(&out.stdout).lines().map(|line| line.trim_end().to_string()).collect())
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn send(session: &str, keys: &[&str]) -> Result<(), String> {
-    let target = format!("={session}:");
-    let out = tmux_local::tmux_command()
-        .args(["send-keys", "-t", &target])
-        .args(keys)
-        .output()
-        .map_err(|e| format!("model probe: {e}"))?;
-    if out.status.success() { Ok(()) } else { Err("model_probe_exited: Claude ended before its model list".to_string()) }
+fn send(session: &str, keys: &[Key]) -> Result<(), String> {
+    match session_mux::mux().send_keys(session, keys) {
+        Ok(()) => Ok(()),
+        Err(MuxError::Io(e)) => Err(format!("model probe: {e}")),
+        Err(_) => Err("model_probe_exited: Claude ended before its model list".to_string()),
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn kill(session: &str) {
-    let _ = tmux_local::tmux_command().args(tmux_local::local_tmux_kill_args(session)).output();
+    let _ = session_mux::mux().kill(session);
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]

@@ -5,7 +5,7 @@
  * one skips the GPU/Ollama reads the tooltip never shows.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -28,6 +28,7 @@ const usage = {
 };
 
 beforeEach(() => {
+  vi.useFakeTimers();
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve(usage));
   usePowerStore.setState({ onBattery: false, blurred: false });
@@ -43,61 +44,98 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-const flush = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+const flush = () => act(async () => { await Promise.resolve(); });
+const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 
 describe("AppResourceDisplay folded", () => {
   it("asks the backend nothing and arms no timer while folded", async () => {
-    const setIntervalSpy = vi.spyOn(window, "setInterval");
     render(<AppResourceDisplay folded peek={0} />);
     await flush();
     expect(invokeMock).not.toHaveBeenCalled();
-    expect(setIntervalSpy).not.toHaveBeenCalled();
+    await advance(60_000);
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("samples once per peek, without the GPU reads", async () => {
     const { rerender } = render(<AppResourceDisplay folded peek={0} />);
     rerender(<AppResourceDisplay folded peek={1} />);
-    await waitFor(() => expect(useHeaderStatusStore.getState().reports.resources?.label).toContain("12.0%"));
+    await flush();
+    expect(useHeaderStatusStore.getState().reports.resources?.label).toContain("12.0%");
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: false });
   });
 
   it("stops polling on fold but keeps its last reading, and resumes on unfold", async () => {
     const { rerender } = render(<AppResourceDisplay folded={false} peek={0} />);
-    await screen.findByText(/12/);
+    await flush();
+    expect(screen.getByText(/12/)).toBeTruthy();
     expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: true });
 
-    const clearSpy = vi.spyOn(window, "clearInterval");
     rerender(<AppResourceDisplay folded peek={0} />);
-    expect(clearSpy).toHaveBeenCalled();
+    const callsBeforeFold = invokeMock.mock.calls.length;
+    await advance(60_000);
+    expect(invokeMock).toHaveBeenCalledTimes(callsBeforeFold);
     // The cluster counts this member by its report; folding must not drop it.
     expect(useHeaderStatusStore.getState().reports.resources).toBeTruthy();
 
     invokeMock.mockClear();
     rerender(<AppResourceDisplay folded={false} peek={0} />);
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: true }),
-    );
+    await flush();
+    expect(invokeMock).toHaveBeenCalledWith("debug_app_resource_usage", { gpu: true });
   });
 });
 
 describe("AppResourceDisplay cadence", () => {
-  it("polls every 5 s while shown (perf plan §3.3), 15 s while the window is quiesced", async () => {
-    const setIntervalSpy = vi.spyOn(window, "setInterval");
-    const { unmount } = render(<AppResourceDisplay folded={false} peek={0} />);
-    await screen.findByText(/12/);
-    expect(RESOURCE_POLL_MS).toBe(5_000);
-    expect(setIntervalSpy.mock.calls.map(([, ms]) => ms)).toContain(5_000);
-    expect(setIntervalSpy.mock.calls.map(([, ms]) => ms)).not.toContain(2_500);
-    unmount();
-
-    setIntervalSpy.mockClear();
-    act(() => usePowerStore.setState({ blurred: true }));
-    render(<AppResourceDisplay folded={false} peek={0} />);
+  it("keeps focus transitions on cadence and widens while blurred", async () => {
+    render(<AppResourceDisplay />);
     await flush();
-    expect(setIntervalSpy.mock.calls.map(([, ms]) => ms)).toContain(15_000);
+    expect(RESOURCE_POLL_MS).toBe(5_000);
+    await advance(1_000);
+    act(() => usePowerStore.setState({ blurred: true }));
+    act(() => usePowerStore.setState({ blurred: false }));
+    act(() => window.dispatchEvent(new Event("focus")));
+    await flush();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    await advance(4_000);
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    act(() => usePowerStore.setState({ blurred: true }));
+    await advance(14_999);
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    await advance(1);
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("pauses when hidden and catches up on show", async () => {
+    render(<AppResourceDisplay />);
+    await flush();
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    visibility.mockReturnValue("hidden");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await advance(60_000);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue("visible");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await flush();
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for slow reads without overlapping on ticks or focus", async () => {
+    let resolve!: (value: typeof usage) => void;
+    invokeMock.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    render(<AppResourceDisplay />);
+    await advance(20_000);
+    act(() => usePowerStore.setState({ blurred: true }));
+    act(() => usePowerStore.setState({ blurred: false }));
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    await act(async () => resolve(usage));
+    await advance(4_999);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 });

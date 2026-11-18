@@ -232,17 +232,17 @@ impl ProjectDir {
     /// Creates the folder `name` here unless something already has that name.
     /// Open it with [`Self::lookup_dir`], which refuses a link there.
     pub(crate) fn create_dir(&self, name: &str) -> std::io::Result<()> {
-        match self.nt_create(
-            name,
-            FILE_LIST_DIRECTORY | SYNCHRONIZE,
-            FILE_CREATE,
-            FILE_DIRECTORY_FILE,
-            FILE_ATTRIBUTE_NORMAL,
-        ) {
-            Ok(_) => Ok(()),
+        match self.create_new_dir(name) {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-            Err(error) => Err(error),
+            made => made,
         }
+    }
+
+    /// A new folder `name` here, or `AlreadyExists` when anything already
+    /// has that name — the phone's **New folder**, which must know it made it.
+    pub(crate) fn create_new_dir(&self, name: &str) -> std::io::Result<()> {
+        self.nt_create(name, FILE_LIST_DIRECTORY | SYNCHRONIZE, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_ATTRIBUTE_NORMAL)
+            .map(|_| ())
     }
 
     /// A new regular file `name` here, for writing: never an existing name

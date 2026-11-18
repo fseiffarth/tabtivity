@@ -24,6 +24,11 @@ pub type AgentTabLookup = Arc<dyn Fn(&str) -> Option<AgentTabRef> + Send + Sync>
 /// lately as `(device_id, project_id)`, and the tabs held.
 pub type PresenceLookup = Arc<dyn Fn() -> (Vec<(String, String)>, Vec<HeldTab>) + Send + Sync>;
 
+/// The markup questions this process holds for the tabs it spawned, answered
+/// to the window (`commands::markup_mcp::admin_markup`). Takes only the
+/// markup variants of [`AdminRequest`].
+pub type MarkupHandler = Arc<dyn Fn(&AdminRequest) -> AdminResponse + Send + Sync>;
+
 /// Everything the admin plane answers from, shared by every transport.
 #[derive(Clone)]
 pub struct AdminContext {
@@ -41,6 +46,10 @@ pub struct AdminContext {
     /// for what the phone left behind (`phone_origin`, #2348). `None` sweeps
     /// nothing.
     pub state_dir: Option<PathBuf>,
+    /// The markup asks and ticks this process holds, for the window's markup
+    /// views (`docs/headless_mcp_plan.md`, phase 1b). `None` answers that
+    /// there are none.
+    pub markup: Option<MarkupHandler>,
 }
 
 /// After a revoke or Lock down: cancel the prompts and schedules a phone
@@ -262,6 +271,16 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
                 ),
             }
         }
+        Ok(
+            request @ (AdminRequest::MarkupList { .. }
+            | AdminRequest::MarkupTicks { .. }
+            | AdminRequest::MarkupAnswer { .. }
+            | AdminRequest::MarkupReopen { .. }
+            | AdminRequest::MarkupDismiss { .. }),
+        ) => match context.markup.as_ref() {
+            Some(handler) => handler(&request),
+            None => AdminResponse::Error { message: "no markup questions here".into() },
+        },
         Err(message) => AdminResponse::Error { message },
     }
 }
@@ -341,16 +360,17 @@ pub async fn serve(socket: &Path, context: AdminContext) -> Result<(), String> {
 /// Windows control-plane transport: a named pipe plus a same-user token.
 ///
 /// `tokio::net::UnixStream` does not exist on Windows, so the same
-/// length-prefixed JSON frames ride a named pipe instead. A named pipe's
-/// default DACL is broader than a 0o600 socket, and tokio exposes no peer
-/// identity to check — so the peer proves itself with a random token the
-/// listener writes beside the nominal socket path (inside the per-user
-/// profile, whose ACL restricts it to the same user, matching the state dir's
-/// existing posture). The first frame of every connection is that token;
-/// everything after it is the ordinary protocol.
+/// length-prefixed JSON frames ride a named pipe instead, through
+/// [`crate::services::local_pipe`]: a protected owner-only DACL, remote
+/// clients rejected, each side checking the other's process user, and a
+/// random token the listener writes beside the nominal socket path. The first
+/// frame of every connection is that token; everything after it is the
+/// ordinary protocol.
 #[cfg(windows)]
 pub mod pipe {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+
+    pub use crate::services::local_pipe::{create_token, read_token, token_matches, token_path};
 
     /// Stable per-path pipe name so two Tabtivity state dirs never collide.
     pub fn pipe_name(socket: &Path) -> String {
@@ -360,42 +380,16 @@ pub mod pipe {
     /// [`pipe_name`] under a given prefix: the current one, or the one an
     /// older build's host listens on.
     pub fn pipe_name_with(prefix: &str, socket: &Path) -> String {
-        let hex = &crate::digest::sha256_hex(socket.to_string_lossy().as_bytes())[..32];
-        format!(r"\\.\pipe\{prefix}{hex}")
-    }
-
-    pub fn token_path(socket: &Path) -> PathBuf {
-        socket.with_extension("token")
-    }
-
-    /// Mint and persist the listener-side token.
-    pub fn create_token(socket: &Path) -> Result<String, String> {
-        let mut bytes = [0u8; 32];
-        getrandom::fill(&mut bytes).map_err(|e| format!("no system randomness: {e}"))?;
-        let token = crate::digest::hex(&bytes);
-        crate::storage::write_private_atomic(&token_path(socket), token.as_bytes())
-            .map_err(|e| format!("write control token: {e}"))?;
-        Ok(token)
-    }
-
-    pub fn read_token(socket: &Path) -> Result<String, String> {
-        std::fs::read_to_string(token_path(socket))
-            .map(|token| token.trim().to_string())
-            .map_err(|e| format!("read control token: {e}"))
-    }
-
-    pub fn token_matches(presented: &str, expected: &str) -> bool {
-        use subtle::ConstantTimeEq;
-        presented.as_bytes().ct_eq(expected.as_bytes()).into()
+        crate::services::local_pipe::pipe_name_with(prefix, socket)
     }
 
     /// Open a client connection, riding out the tiny window where every pipe
     /// instance is taken (the listener re-creates the next instance right
-    /// after each accept).
+    /// after each accept). A server of another user is refused.
     pub async fn connect(
         socket: &Path,
     ) -> Result<tokio::net::windows::named_pipe::NamedPipeClient, String> {
-        use tokio::net::windows::named_pipe::ClientOptions;
+        use crate::services::local_pipe::open_client;
         let name = pipe_name(socket);
         // A host an older build started listens under the old prefix. Tried
         // only when nothing answers under the current one, and only while
@@ -403,59 +397,40 @@ pub mod pipe {
         let legacy_name = crate::brand::PAIR
             .legacy(crate::brand::Name::CONTROL_PIPE_PREFIX)
             .map(|prefix| pipe_name_with(&prefix, socket));
-        // `ERROR_PIPE_BUSY`: every instance is taken — the one condition a
-        // retry can resolve, since the listener creates the next instance right
-        // after each accept.
-        const ERROR_PIPE_BUSY: i32 = 231;
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            match ClientOptions::new().open(&name) {
-                Ok(client) => return Ok(client),
-                Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
-                    if tokio::time::Instant::now() >= deadline {
-                        return Err(error.to_string());
+        match open_client(&name).await {
+            Ok(client) => Ok(client),
+            // "No such pipe" — the desktop or the host simply not running —
+            // is the answer, not a wait: retrying it made every bridge call
+            // with the desktop closed sit out a whole deadline before it could
+            // say `desktop_unavailable`.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(legacy_name) = &legacy_name {
+                    if let Ok(client) = open_client(legacy_name).await {
+                        crate::brand::legacy_hit("control-pipe");
+                        return Ok(client);
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
-                // Anything else — above all "no such pipe", the desktop or the
-                // host simply not running — is the answer, not a wait: retrying
-                // it made every bridge call with the desktop closed sit out the
-                // whole deadline before it could say `desktop_unavailable`.
-                Err(error) => {
-                    if let Some(legacy_name) = &legacy_name {
-                        if let Ok(client) = ClientOptions::new().open(legacy_name) {
-                            crate::brand::legacy_hit("control-pipe");
-                            return Ok(client);
-                        }
-                    }
-                    return Err(error.to_string());
-                }
+                Err(error.to_string())
             }
+            Err(error) => Err(error.to_string()),
         }
     }
 }
 
 #[cfg(windows)]
 pub async fn serve(socket: &Path, context: AdminContext) -> Result<(), String> {
-    use tokio::net::windows::named_pipe::ServerOptions;
+    use crate::services::local_pipe;
     let name = pipe::pipe_name(socket);
     let token = pipe::create_token(socket)?;
-    let mut server = ServerOptions::new()
-        .first_pipe_instance(true)
-        .create(&name)
-        .map_err(|e| format!("bind admin pipe: {e}"))?;
+    // The protected owner-only DACL: the default one is broader.
+    let mut server = local_pipe::create_server(&name, true).map_err(|e| format!("bind admin pipe: {e}"))?;
     loop {
         // Mirror the Unix loop: a transient failure must not take the admin
-        // plane down permanently.
-        if server.connect().await.is_err() {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            continue;
-        }
-        let Ok(next) = ServerOptions::new().create(&name) else {
+        // plane down permanently. A client of another user never gets here.
+        let Ok(mut stream) = local_pipe::accept(&mut server, &name).await else {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             continue;
         };
-        let mut stream = std::mem::replace(&mut server, next);
         let context = context.clone();
         let token = token.clone();
         tokio::spawn(async move {
@@ -1096,6 +1071,7 @@ mod frame_tests {
             })),
             presence: None,
             state_dir: Some(dir.path().to_path_buf()),
+            markup: None,
         };
         let respond = |request| admin_response(request, &context);
         // A phone's held prompt and a desktop rule, for Lock down below.

@@ -52,6 +52,8 @@
 .mail-indicator-btn,
 .calendar-indicator-btn,
 .todo-indicator-btn,
+.cockpit-indicator-btn,
+.agents-indicator-btn,
 .inbox-indicator-btn,
 .alerts-toggle-btn {
   /* Positioning context for the badge. It must be the BUTTON and not the
@@ -62,6 +64,8 @@
 }
 .mail-indicator-btn[aria-pressed="true"],
 .todo-indicator-btn[aria-pressed="true"],
+.cockpit-indicator-btn[aria-pressed="true"],
+.agents-indicator-btn[aria-pressed="true"],
 .calendar-indicator-btn[aria-pressed="true"],
 .alerts-toggle-btn[aria-pressed="true"] {
   background: var(--control-hover-bg);
@@ -77,6 +81,8 @@
 .mail-indicator-btn,
 .calendar-indicator-btn,
 .todo-indicator-btn,
+.cockpit-indicator-btn,
+.agents-indicator-btn,
 .inbox-indicator-btn,
 .alerts-toggle-btn,
 .local-model-btn,
@@ -95,6 +101,8 @@
 .mail-indicator-icon,
 .calendar-indicator-icon,
 .todo-indicator-icon,
+.cockpit-indicator-icon,
+.agents-indicator-icon,
 .inbox-indicator-icon,
 .help-agent-icon,
 .settings-menu-icon,
@@ -144,7 +152,7 @@ svg.alerts-toggle-icon {
    ResizeObserver, never a media query: the window is what resizes). Tier 1
    folds the apps' badges, tier 2 the clock too, tier 3 the status cluster. */
 .app-header:is([data-width-tier="1"], [data-width-tier="2"], [data-width-tier="3"]) :is(
-  .mail-indicator-badge, .calendar-indicator-badge, .todo-indicator-badge, .inbox-indicator-badge
+  .mail-indicator-badge, .calendar-indicator-badge, .todo-indicator-badge, .cockpit-indicator-badge, .inbox-indicator-badge
 ) {
   display: none;
 }
@@ -156,6 +164,7 @@ svg.alerts-toggle-icon {
 .mail-indicator-badge,
 .calendar-indicator-badge,
 .todo-indicator-badge,
+.cockpit-indicator-badge,
 .inbox-indicator-badge {
   position: absolute;
   top: 1px;
@@ -168,8 +177,11 @@ svg.alerts-toggle-icon {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
-  background: var(--danger);
-  color: var(--accent-contrast);
+  /* A plain count is neutral (2026-11-04: five red dots read as five alarms).
+     Red is for news that needs you — fresh mail, an overdue to-do — and amber
+     for an agent asking (below). */
+  background: color-mix(in srgb, var(--text-primary) 16%, var(--bg-header-solid));
+  color: var(--text-primary);
   font-size: var(--text-xs);
   font-weight: 700;
   line-height: 1;
@@ -182,9 +194,19 @@ svg.alerts-toggle-icon {
    separates the dot from the icon it sits on, which is what reads as "this just
    changed" without introducing a second count to reconcile against the first. */
 .mail-indicator-badge.fresh {
-  /* `--bg-header-solid`, never `--bg-header`: the latter is a gradient in the
-     fancy themes, and a gradient in a box-shadow drops the whole declaration. */
+  /* `--bg-header-solid`, never `--bg-header`: the latter may be a gradient (a
+     Customizer value), and a gradient in a box-shadow drops the declaration. */
   box-shadow: 0 0 0 2px var(--bg-header-solid);
+}
+.mail-indicator-badge.fresh,
+.todo-indicator-badge.overdue {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+/* An agent waiting on an answer: the decision colour of the tab strokes. */
+.cockpit-indicator-badge.asking {
+  background: var(--status-decision);
+  color: #1c1300;
 }
 
 /* "The last check failed" is not "you have mail", so it does not wear mail's
@@ -458,30 +480,11 @@ svg.alerts-toggle-icon {
   opacity: 0.5;
 }
 
-/* The header overlays — mail, calendar, board, models & agents — all wear the root
-   console's subwindow chrome (`.root-overlay.subwindow`, its `.tab-bar` with a
-   glyph mark, a tab strip and the console's controls); the tabs' shared parts
-   are below. All that is left here is their size — exactly the split
-   `.sysmon-dialog` makes, and for the same reason: a whole pane hosted in a
-   window needs a definite height, because the pane fills it and scrolls its own
+/* Mail, calendar, board, agents, models and machines are views of the console
+   window (`layout/RootOverlay`, one frame, one size — the window's). Their bodies
+   keep the old overlays' body classes below; a pane hosted in the window needs
+   the body's definite height, because the pane fills it and scrolls its own
    regions. */
-/* ONE size for all three, deliberately. They are opened from three buttons a few
-   pixels apart in the same header and are switched between constantly, so a
-   window that jumps and resizes on every switch is the thing you notice instead
-   of the content. The board used to claim its own larger box because its columns
-   tile sideways and every extra pixel is another column — which is true, and is
-   why the shared size is the *board's* rather than a compromise between the two:
-   mail's three panes and the calendar's week grid have nothing to lose from the
-   extra room either. */
-.mail-overlay,
-.calendar-overlay,
-.todo-overlay,
-.models-overlay,
-.machines-overlay {
-  width: min(1680px, calc(100vw - 24px));
-  height: min(93vh, calc(100vh - 24px));
-  max-height: min(93vh, calc(100vh - 24px));
-}
 /* Moved, resized and filled like the root console (common/useFloatingFrame):
    the grips are subwindows.css's `.root-overlay-grip`, hung off this frame; a
    move or resize replaces the size above with an inline `position: fixed` one. */
@@ -520,7 +523,7 @@ svg.alerts-toggle-icon {
   flex: 1;
   min-width: 0;
 }
-/* The Models & agents overlay's panes (`models/ModelsOverlay`). The hosted
+/* The Agents and Models views' panes (`models/AgentsView`, `ModelsView`). The hosted
    Settings panels render a title row and a `.dialog-scroll`, which only scrolls
    inside a flex column — so the pane is that column. `:not([hidden])` because
    an author `display` would beat the `hidden` attribute a kept pane wears. */
@@ -533,85 +536,16 @@ svg.alerts-toggle-icon {
   background: var(--bg-elevated);
   color: var(--text-primary);
 }
-/* Each tab's one-line intro, on the same 880px column as the pane under it
-   (its `padding-inline` is the column rule in apps.css — no `padding`
-   shorthand here, so the result doesn't hang on the @import order). */
-.models-overlay-body .models-overlay-intro {
-  margin: 0;
-  padding-top: var(--space-3);
-  flex-shrink: 0;
-}
-/* …except Skills, whose pane is full-width: the intro lines up with its
-   toolbar's 10px inset instead. */
-.models-overlay-body #models-overlay-pane-skills > .models-overlay-intro {
-  padding-inline: 10px;
-}
 /* The window's title already names this surface — the label beside the
    window's tab strip — so the pane's own
    toolbar title would say it twice, one line apart. The calendar needs no
    equivalent: `.cal-toolbar-title` is the visible date range, not the app's
    name, so it says something the band does not. */
-.mail-overlay .mail-toolbar-title,
-.models-overlay-pane .skills-title,
+.mail-overlay-body .mail-toolbar-title,
 .models-overlay-pane > .settings-title-row {
   display: none;
 }
 
-/* ── Models & agents: the overview grid and the bar's trail ──────────────────
-   The overlay opens on a grid of section tiles rather than a tab strip; a tile
-   opens its section and the bar's back button returns. The tiles copy the
-   disk-usage home's `.du-target` (control surface, accent border on hover),
-   larger, with the section's live state on each. */
-.models-overlay-trail {
-  align-self: center;
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 6px;
-  font-size: var(--text-md);
-}
-.models-overlay-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 10px 0 var(--space-2);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-full);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font: inherit;
-  white-space: nowrap;
-}
-.models-overlay-back:hover {
-  background: var(--control-hover-bg);
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-.models-overlay-trail-sep {
-  color: var(--text-muted);
-}
-.models-overlay-trail-current {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.models-section-glyph {
-  display: inline-flex;
-  flex-shrink: 0;
-}
-.models-section-glyph-svg {
-  width: 100%;
-  height: 100%;
-}
 
 .models-home {
   overflow-y: auto;
@@ -626,285 +560,491 @@ svg.alerts-toggle-icon {
   margin: 0 auto;
   padding: 36px 28px 40px;
 }
-.models-home-machine .local-model-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 12px;
-  padding: 0;
-  margin: 0;
-}
-.models-home-machine .local-model-stat {
-  gap: 8px;
-  padding: var(--space-3) 14px;
-  background: var(--control-bg);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-lg);
-}
-.models-home-machine .local-model-meter {
-  height: 6px;
-}
 .models-home-lead {
   margin: 0;
   font-size: var(--text-base);
   color: var(--text-secondary);
 }
-/* Two columns while each tile gets 300px, one below — never the 3 + 1 an
-   auto-fit of four tiles falls into at in-between widths. */
-.models-home-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(max(300px, calc((100% - 16px) / 2)), 1fr));
-  gap: 16px;
+
+/* ── Machines view (header/MachinesView + header/MachinesTable) ─────────────
+   A toolbar, this machine's meters as one band, then one list of every machine
+   sorted by state then name. The list is a table: the same five columns in the
+   head and every row, so the eye runs down a column. Off is a hollow ring — a
+   filled grey dot reads as a list bullet — and green belongs to a session only;
+   a host that answers without one is the info colour. */
+.machines-home-inner {
+  max-width: 1320px;
+  gap: var(--space-4);
 }
-.models-tile {
-  position: relative;
+.machines-view-toolbar {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 14px;
-  min-height: 200px;
-  padding: 20px 22px;
-  text-align: left;
-  font: inherit;
-  color: var(--text-primary);
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--accent) 7%, var(--control-bg)) 0%,
-    var(--control-bg) 60%
-  );
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-lg);
-  cursor: var(--cur-pointer, pointer);
-  transition: border-color 0.15s ease;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
 }
-/* The hover wash is an opacity fade on a pseudo-element: a gradient can't
-   transition, and nothing here animates a shadow. */
-.models-tile::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
+.machines-view-toolbar > .models-home-lead {
+  flex: 1 1 320px;
+  min-width: 0;
 }
-.models-tile:hover {
-  border-color: var(--accent);
-}
-.models-tile:hover::after {
-  opacity: 1;
-}
-.models-tile-head {
+.machines-view-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-2);
 }
-.models-tile-icon {
-  display: grid;
-  place-items: center;
+.machines-add-btn {
+  padding: 6px var(--space-3);
+  font-size: var(--text-base);
+}
+.machines-add-btn svg {
+  width: 14px;
+  height: 14px;
+}
+/* The add / import / export forms and the disconnect-all confirm keep the
+   dropdown's markup; here they are a card of readable width above the list. */
+.machines-view-form {
+  max-width: 560px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+}
+.machines-view-form > .vpn-indicator-row,
+.machines-view-form > .vpn-indicator-note {
+  padding: 0;
+  border: 0;
+}
+.machines-view-form > .tab-new-menu-group-label {
+  padding: 0 0 var(--space-2);
+}
+
+/* This machine: CPU · RAM · GPU side by side under one label. */
+.machines-meters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  overflow: hidden;
+}
+.machines-meters-label {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.machines-meters > .local-model-stats {
+  flex: 1 1 480px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0;
+}
+.machines-meters .local-model-stat {
+  flex: 1 1 220px;
+  gap: 6px;
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--border-subtle);
+}
+.machines-meters .local-model-stat:last-child {
+  border-right: 0;
+}
+.machines-meters .local-model-stat-value {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.machines-meters .local-model-meter {
+  height: 6px;
+}
+
+/* The filter box and the state chips. */
+.machines-table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.machines-filter-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 240px;
+  max-width: 100%;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--control-border, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-muted);
+}
+.machines-filter-box svg {
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
-  width: 42px;
-  height: 42px;
-  border-radius: 11px;
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
 }
-.models-tile-title {
+.machines-filter-box input {
   flex: 1;
   min-width: 0;
-  font-size: var(--text-lg);
-  font-weight: 600;
-}
-.models-tile-badge {
-  flex-shrink: 0;
-  padding: 2px var(--space-2);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--warning) 18%, transparent);
-  color: var(--warning);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.models-tile-go {
-  display: inline-flex;
-  flex-shrink: 0;
-  color: var(--text-muted);
-  opacity: 0.6;
-  transform: translateX(-3px);
-  transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease;
-}
-.models-tile:hover .models-tile-go,
-.models-tile:focus-visible .models-tile-go {
-  opacity: 1;
-  transform: none;
-  color: var(--accent);
-}
-.models-tile-desc {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.models-tile-intro {
-  font-size: var(--text-md);
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-.models-tile-stat {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
   font-size: var(--text-base);
-  font-weight: 500;
+  color: var(--text-primary);
 }
-/* Pinned to the tile's foot, so tiles of one row line their chips up. */
-.models-tile-chips {
+.machines-filter-box:focus-within {
+  border-color: var(--accent);
+}
+.machines-filter-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: auto;
 }
-.models-tile-chip {
-  max-width: 220px;
-  overflow: hidden;
-  padding: 2px 9px;
+.machines-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-full);
   background: var(--bg-main);
-  font-size: var(--text-sm);
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
 }
-.models-tile-chip.on {
-  border-color: color-mix(in srgb, var(--success) 50%, var(--border-color));
+.machines-filter-chip:hover {
+  background: var(--control-hover-bg);
 }
-.models-tile-chip.off,
-.models-tile-chip.more {
-  color: var(--text-muted);
-}
-.models-tile-chip.more {
-  border-style: dashed;
-}
-
-/* ── Global machines: the overlay's tile grid (header/MachinesOverlay) ───────
-   The Machines dropdown's own rows (`header/MachinesIndicator`,
-   `surface="overlay"`), dressed as the Models overlay's tiles above — the same
-   `.models-home` page, `.models-tile` card and icon box — but a tile is not one
-   button: it holds the row's actions, toggles and forms, so it keeps a plain
-   cursor and loses the menu row's hairline. Selectors are two classes deep so
-   they outrank `.vpn-indicator-row + .vpn-indicator-row` and the grab cursor
-   in header-menus.css whatever the @import order. */
-.machines-overlay-spacer {
-  flex: 1 1 auto;
-}
-.machines-home-inner {
-  max-width: 1320px;
-}
-/* As many 280px columns as fit: a fleet is a list of peers, not four fixed
-   sections, so it takes the auto-fill a two-up would waste. */
-.machines-home .machines-grid {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
-}
-.machines-grid > .machines-tile {
-  gap: 8px;
-  min-width: 0;
-  min-height: 0;
-  padding: 14px var(--space-4);
-  border: 1px solid var(--control-border);
-  cursor: var(--cur-default, default);
-}
-.machines-grid > .machines-tile:hover {
+.machines-filter-chip[aria-pressed="true"] {
   border-color: var(--accent);
-}
-/* The row's buttons sit above the hover wash. */
-.machines-grid > .machines-tile > * {
-  position: relative;
-  z-index: 1;
-}
-.machines-grid > .machines-tile .vpn-indicator-head {
-  gap: 8px;
-  flex-wrap: nowrap;
-}
-.machines-tile .machines-tile-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-}
-.machines-tile .machines-tile-glyph {
-  width: 20px;
-  height: 20px;
-}
-.machines-grid > .machines-tile .vpn-indicator-head .vpn-indicator-config {
-  font-family: inherit;
-  font-size: var(--text-lg);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   font-weight: 600;
 }
-.machines-tile-desc {
-  gap: 4px;
+
+/* The lamp: one 9px dot, its colour from the state class around it. */
+.machines-lamp {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--text-muted);
 }
-.machines-tile .machines-tile-target {
-  overflow: hidden;
-  font-family: var(--mono-font, monospace);
-  font-size: var(--text-md);
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.is-connected > .machines-lamp {
+  background: var(--success);
+  box-shadow: none;
 }
-.machines-tile .machines-tile-stat {
-  flex-wrap: wrap;
+.is-connecting > .machines-lamp {
+  background: color-mix(in srgb, var(--warning) 35%, transparent);
+  box-shadow: inset 0 0 0 2px var(--warning);
+}
+.is-error > .machines-lamp,
+.is-failed > .machines-lamp {
+  background: var(--danger);
+  box-shadow: none;
+}
+.is-up > .machines-lamp {
+  background: var(--info);
+  box-shadow: none;
+}
+
+/* The table. */
+.machines-table {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  overflow-x: auto;
+}
+.machines-table-row {
+  display: grid;
+  grid-template-columns: 128px minmax(150px, 210px) minmax(0, 1fr) minmax(140px, 200px) auto;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 860px;
+  min-height: 50px;
+  padding: 6px var(--space-4);
+  box-sizing: border-box;
+}
+.machines-table-head {
+  min-height: 34px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-panel, var(--bg-secondary));
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.machines-table-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 860px;
+  padding: 6px var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-panel, var(--bg-secondary)) 50%, transparent);
   font-size: var(--text-md);
-  font-weight: 400;
-  line-height: 1.4;
+  font-weight: 600;
   color: var(--text-secondary);
 }
-.machines-tile-busy {
-  max-width: 100%;
+.machines-table-group:first-of-type .machines-table-group-head,
+.machines-table-head + .machines-table-group .machines-table-group-head {
+  border-top: 0;
+}
+.machines-table-group-count {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.machines-table-item + .machines-table-item {
+  border-top: 1px solid var(--border-subtle);
+}
+.machines-table-item:hover {
+  background: var(--control-hover-bg);
+}
+.machines-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.machines-state.is-connected {
+  color: var(--success);
+}
+.machines-state.is-connecting {
+  color: var(--warning);
+}
+.machines-state.is-error {
+  color: var(--danger);
+}
+.machines-state.is-up {
+  color: var(--text-primary);
+}
+.machines-state-word {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  padding: 0 7px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--success) 16%, transparent);
-  color: var(--text-primary);
-  font-size: var(--text-sm);
 }
-.machines-grid > .machines-tile .machines-util {
-  padding: 0;
+.machines-table-machine {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
-/* The icon actions at the tile's foot, so the tiles of one row line them up
-   (the chips' rule in `.models-tile-chips`). */
-.machines-grid > .machines-tile .machines-row-actions {
-  /* The dropdown's 100% basis is a row break; here the flex axis is vertical. */
-  flex-basis: auto;
-  flex-wrap: wrap;
-  margin-top: auto;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-color);
-}
-/* The page's own rows — the note, the fleet bar, add / import / export and
-   their forms — keep the dropdown's markup; on a page they are a left-aligned
-   column of readable width rather than a 280px menu's full-bleed strips. */
-.machines-home-inner > .vpn-indicator-note {
-  padding: 0;
-  border-bottom: 0;
-}
-.machines-home-inner > .vpn-indicator-row {
-  padding: 0;
-  border-top: 0;
-}
-.machines-home-inner > .machines-fleet-icons {
-  justify-content: flex-start;
+.machines-table-name-line {
+  display: flex;
+  align-items: center;
   gap: 6px;
+  min-width: 0;
 }
-.machines-home-inner > .machines-fleet-icons .untested-tag {
-  position: static;
+.machines-table-name {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.machines-home-inner > .menu-form,
-.machines-home-inner > .machines-io-panel {
-  max-width: 520px;
+button.machines-table-name {
+  cursor: var(--cur-pointer, pointer);
 }
-.machines-home-inner > .tab-new-menu-group-label {
-  margin-top: 6px;
+button.machines-table-name:hover {
+  text-decoration: underline;
+}
+.machines-table-target {
+  overflow: hidden;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Project chips: one line; "+N" unfolds the rest onto more lines. */
+.machines-table-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.machines-table-chips.is-open {
+  flex-wrap: wrap;
+}
+.machines-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  max-width: 260px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  white-space: nowrap;
+}
+.machines-chip.is-connected {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.machines-chip.is-error {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.machines-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.machines-chip-runs {
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.machines-chip-more {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
+}
+.machines-table-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+.machines-table-sessions {
+  color: var(--text-primary);
+}
+.machines-table-activity .machines-util {
   padding: 0;
 }
+.machines-table-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 168px;
+}
+.machines-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+.machines-icon-btn:hover {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+.machines-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+/* A failure's reason, and an open form, under the row from the machine column. */
+.machines-table-error,
+.machines-table-detail {
+  min-width: 860px;
+  padding: 0 var(--space-4) var(--space-3) calc(128px + 2 * var(--space-4));
+  box-sizing: border-box;
+}
+.machines-table-error {
+  font-size: var(--text-md);
+  color: var(--danger);
+}
+.machines-table-detail > .vpn-indicator-row,
+.machines-table-detail > .vpn-indicator-actions {
+  max-width: 560px;
+  padding: 0;
+  border: 0;
+}
+.machines-table-empty {
+  margin: 0;
+  padding: var(--space-4);
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+/* Off machines no project uses: one strip of names at the foot. */
+.machines-idle-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 860px;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-color);
+  box-sizing: border-box;
+}
+.machines-idle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+}
+.machines-idle-label strong {
+  color: var(--text-primary);
+}
+.machines-idle-tag {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+  cursor: var(--cur-pointer, pointer);
+}
+.machines-idle-tag:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+/* The shared EntryMenu's rule and destructive entries (a machine row's ⋯). */
+.cockpit-view-menu .entry-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-color);
+}
+.cockpit-view-menu .tab-new-menu-item.is-danger {
+  color: var(--danger);
+}
+.cockpit-view-menu .tab-new-menu-item:disabled {
+  opacity: 0.5;
+  cursor: var(--cur-default, default);
+}
+
 /* The dropdown's door into the overlay, beside its ×. */
 .machines-open-overlay {
   margin-left: auto;
@@ -923,7 +1063,7 @@ svg.alerts-toggle-icon {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
-/* ── The header overlays' tabs (mail/MailOverlay and its three siblings) ─────
+/* ── The apps' views (mail/MailView and its siblings) ────────────────────────
    The overlays wear the root console's chrome (`.root-overlay.subwindow`, its
    `.tab-bar` / `.tab-strip` / `.tab`), so only what they add is here: the
    shared backdrop, mark and label, then mail's Inbox / message / unsent-mail
@@ -1834,11 +1974,8 @@ svg.alerts-toggle-icon {
   /* A fixed-width column set commonly exceeds the overlay's width (5 seeded
      columns + the add-column tile run past ~1600px), so a right-hand column
      like Archived routinely sits off screen and the board has to SHOW that.
-     This once forced a classic native bar, because WebKitGTK's own is an
-     invisible overlay that appears only on hover. The app's thumbs replaced
-     both: `lib/theme/customScrollbar.ts` paints this scroller's horizontal thumb
-     whenever it overflows and keeps it visible, so the affordance is back
-     without a native bar to double up with. */
+     The bar the baseline in `base.css` styles does: it is drawn whenever this
+     scroller overflows and stays visible. */
 }
 /* While a card is in flight the cards stop answering `elementFromPoint`, so the
    hit-test reaches the `.todo-column` underneath — the same trick

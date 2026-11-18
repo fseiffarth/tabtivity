@@ -8,6 +8,28 @@ fn git_available() -> bool {
     super::git_available_blocking()
 }
 
+#[test]
+fn selective_staging_preserves_siblings_and_unstage_keeps_working_bytes() {
+    if !git_available() { return; }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    init_repo(dir);
+    let root = dir.to_string_lossy().into_owned();
+    let selected = "row[1].txt";
+    fs::write(dir.join(selected), "staged version").unwrap();
+    fs::write(dir.join("row1.txt"), "sibling").unwrap();
+    change_index_path(root.clone(), selected.into(), false, None).unwrap();
+    fs::write(dir.join(selected), "working version").unwrap();
+    let staged = change_list(&root, None, "staged").unwrap();
+    assert_eq!(staged.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(), [selected]);
+    let blob = run_git(None, &root, &["show", &format!(":{selected}")]).unwrap();
+    assert_eq!(blob.stdout, b"staged version");
+    change_index_path(root.clone(), selected.into(), true, None).unwrap();
+    assert!(change_list(&root, None, "staged").unwrap().is_empty());
+    assert_eq!(fs::read(dir.join(selected)).unwrap(), b"working version");
+    assert!(change_list(&root, None, "unstaged").unwrap().iter().all(|row| row.needs_count));
+}
+
 /// The import dialog's origin read answers for the folder's own repository
 /// only — a plain folder inside a hosted checkout must not borrow its origin.
 #[test]
@@ -532,6 +554,60 @@ fn git_diff_file_untracked_uses_no_index_fallback() {
         diff.contains("brand new content"),
         "expected file content in fallback diff, got: {diff}"
     );
+}
+
+#[test]
+fn git_diff_file_staged_only_change_shows_the_index_diff() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping git_diff_file_staged_only_change_shows_the_index_diff");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    init_repo(dir);
+
+    fs::write(dir.join("kept.txt"), "one\n").expect("write");
+    for args in [&["add", "kept.txt"][..], &["commit", "-m", "init"][..]] {
+        let ok = crate::paths::command_no_window("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs")
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+    // Edit and stage it: the working tree now equals the index, so the plain
+    // `git diff` is empty — the staged change must still show.
+    fs::write(dir.join("kept.txt"), "one\nstaged line\n").expect("rewrite");
+    let ok = crate::paths::command_no_window("git")
+        .args(["add", "kept.txt"])
+        .current_dir(dir)
+        .output()
+        .expect("git add runs")
+        .status
+        .success();
+    assert!(ok, "git add failed");
+
+    let diff =
+        git_diff_file_blocking(dir.to_string_lossy().to_string(), "kept.txt".to_string())
+            .expect("git_diff_file should succeed");
+    assert!(diff.contains("staged line"), "expected the staged change, got: {diff}");
+}
+
+#[test]
+fn git_diff_file_outside_a_repository_says_so() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping git_diff_file_outside_a_repository_says_so");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    fs::write(dir.join("loose.txt"), "not under git\n").expect("write");
+
+    let err = git_diff_file_blocking(dir.to_string_lossy().to_string(), "loose.txt".to_string())
+        .expect_err("a file outside git has no diff");
+    assert_eq!(err, NOT_A_REPO);
 }
 
 #[test]
@@ -1861,7 +1937,7 @@ fn a_commondir_redirected_hook_never_runs_through_app_git() {
     assert!(!planted.exists(), "planted hook ran on the file diff");
     git_generate_commit_message_blocking(d.clone()).expect("commit message");
     assert!(!planted.exists(), "planted hook ran on commit-message generation");
-    git_add_path_blocking(d.clone(), "f.txt".into()).expect("stage");
+    change_index_path(d.clone(), "f.txt".into(), false, None).expect("stage");
     assert!(!planted.exists(), "planted hook ran on stage");
     let staged = plain_git(&dir, &["diff", "--cached", "--name-only"]);
     assert_eq!(String::from_utf8_lossy(&staged.stdout).trim(), "f.txt", "stage did not stage");
@@ -1933,7 +2009,8 @@ fn the_common_dir_pin_spares_linked_worktrees() {
 
 #[test]
 fn token_helper_is_registered_only_for_the_given_origins() {
-    let args = scoped_token_config(&["https://github.com".to_string()], "x-access-token");
+    let auth = crate::services::git_hosting::GitAuth::single("t0ken-value", &["https://github.com".to_string()]);
+    let args = auth.git_args("x-access-token");
     assert_eq!(&args[..2], ["-c", "credential.helper="]);
     let helpers: Vec<&String> = args.iter().filter(|a| a.contains(".helper=!")).collect();
     assert_eq!(helpers.len(), 1);
@@ -2169,6 +2246,7 @@ const BARE_GIT_ALLOWED: &[(&str, &str, &str)] = &[
     ("services/git/git_hardened.rs", "sanitize_git_config_file", "`config --file` on one file, no repo"),
     ("services/git/git_bounded.rs", "list_path_values", "`config --file` on one file, no repo"),
     ("services/git/git_hardened.rs", "git_available_blocking", "`--version`, no repo"),
+    ("services/git/git_hardened.rs", "local_git_version_blocking", "`--version`, no repo"),
     ("services/git/git_hardened.rs", "git_clone_blocking", "network clone into a new empty dir"),
     ("commands/git.rs", "git_remote_visibility_blocking", "anonymous `ls-remote` of a URL"),
     ("services/dev_build.rs", "commits_behind", "the app's own checkout"),
@@ -2602,4 +2680,26 @@ fn the_file_scans_catch_the_shapes_they_guard_and_only_those() {
     let split = "fn save(dir: &Path) {\n    let path = dir.join(\"a.json\");\n    let v: Vec<u8> = storage::read_json(&path)\n        .unwrap_or_default();\n    std::fs::write(&path, b\"\").ok();\n}\n";
     let lines: Vec<&str> = split.lines().collect();
     assert_eq!(read_default_then_write_same_file(&lines).len(), 1);
+}
+
+/// A status git could not produce is an error, never a clean repo: the pill's
+/// dot drew "clean" over a repo whose `git status` failed (a corrupt index
+/// here; a refused owner or a host without git alike).
+#[test]
+fn a_failed_status_is_an_error_not_a_clean_repo() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping a_failed_status_is_an_error_not_a_clean_repo");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+    fs::write(repo.join("a.txt"), "one\n").unwrap();
+    let dir = repo.to_string_lossy().into_owned();
+    git_add_all_blocking(dir.clone()).expect("add");
+    fs::write(repo.join(".git").join("index"), b"not an index").unwrap();
+
+    assert!(git_status_blocking(dir.clone()).is_err(), "status over a corrupt index");
+    assert!(git_status_probe(dir.clone(), false).is_err(), "the dot's probe");
+    assert!(git_file_statuses_blocking(dir, String::new()).is_err(), "the file tree's letters");
 }

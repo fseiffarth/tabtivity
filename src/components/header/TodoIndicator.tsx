@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { CalendarTask } from "../../types";
 import { calendarColor, useCalendarStore } from "../../stores/calendar/calendar";
+import { isViewShown, useViewShown } from "../../stores/rootOverlay";
 import { useSettingsStore } from "../../stores/settings";
 import { useTodoStore } from "../../stores/todo";
 import {
@@ -65,7 +66,7 @@ export function TodoIndicator() {
   const enabled = useSettingsStore((s) => s.settings?.todo_board ?? true);
   const tasks = useCalendarStore((s) => s.tasks);
   const calendars = useCalendarStore((s) => s.calendars);
-  const overlayOpen = useTodoStore((s) => s.overlayOpen);
+  const overlayOpen = useViewShown("todo");
   // Shared across every header hover-menu (stores/headerHoverMenu) so switching
   // straight from another one closes it instantly instead of racing its own
   // close-grace timer. `setMenuOpen` mirrors the old local-state setter's
@@ -272,7 +273,7 @@ export function TodoIndicator() {
           setMenuOpen(false);
           window.clearTimeout(closeTimer.current);
           const store = useTodoStore.getState();
-          if (store.overlayOpen) store.closeOverlay();
+          if (isViewShown("todo")) store.closeOverlay();
           else store.openOverlay();
         }}
         // Keyboard reach: tabbing to the button is the one way in no pointer will

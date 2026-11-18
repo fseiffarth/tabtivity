@@ -35,21 +35,17 @@ function paneFor(scope: string, tabKey: string): HTMLElement | null {
 }
 
 /**
- * The document's scrolling box in the tab's pane — the largest that can
- * scroll now — or null when nothing in it scrolls (a short file, a picture,
- * a page in a frame).
+ * The largest box under `root` (never `root` itself) that scrolls now, or
+ * null. Breadth first and never into a box already found: the document's box
+ * sits near the top, and what it holds is the document itself.
  */
-export function documentScroller(scope: string, tabKey: string): HTMLElement | null {
-  const pane = paneFor(scope, tabKey);
-  if (!pane) return null;
+function scrollerBelow(root: HTMLElement): HTMLElement | null {
   let best: HTMLElement | null = null;
   let bestArea = 0;
-  // Breadth first and never into a box already found: the document's box sits
-  // near the top, and what it holds is the document itself.
-  const queue: HTMLElement[] = [pane];
+  const queue: HTMLElement[] = [root];
   for (let seen = 0; queue.length > 0 && seen < SEARCH_LIMIT; seen++) {
     const el = queue.shift()!;
-    if (el !== pane && scrolls(el)) {
+    if (el !== root && scrolls(el)) {
       const area = el.clientWidth * el.clientHeight;
       if (area > bestArea || !best) {
         best = el;
@@ -64,14 +60,93 @@ export function documentScroller(scope: string, tabKey: string): HTMLElement | n
   return best;
 }
 
+/**
+ * The largest box inside `root` that scrolls now, scoped to one element (a
+ * Reader view's viewer half, say): `root` itself when it scrolls and nothing
+ * below it does. Null when nothing there scrolls (a short file, a picture, a
+ * page in a frame).
+ */
+export function largestScroller(root: HTMLElement): HTMLElement | null {
+  return scrollerBelow(root) ?? (scrolls(root) ? root : null);
+}
+
+/** Give Work here the active document's editing caret, even in a short file
+ *  with no scrolling box. Keep the selection and viewport where they were. */
+export function focusDocumentEditor(scope: string, tabKey: string): boolean {
+  const pane = paneFor(scope, tabKey);
+  if (!pane) return false;
+  for (const editor of pane.querySelectorAll<HTMLTextAreaElement>("textarea.file-viewer-editor:not(:disabled):not([readonly])")) {
+    if (!documentControlVisible(editor, pane)) continue;
+    editor.focus({ preventScroll: true });
+    if (document.activeElement === editor) return true;
+  }
+  return false;
+}
+
+/** TeX workspaces retain their other files under display:none ancestors. */
+function documentControlVisible(el: HTMLElement, pane: HTMLElement): boolean {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (node.hidden || node.inert || node.hasAttribute("inert") || style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+    if (node === pane) break;
+  }
+  return true;
+}
+
+/** A just-opened file can still be reading when Work hands it the keyboard.
+ * Retry only while its visible loading placeholder remains, and stop if the
+ * caller's visit changes or the user presses another key / points elsewhere. */
+export function focusDocumentEditorWhenReady(scope: string, tabKey: string, current: () => boolean): () => void {
+  let timer: number | null = null;
+  const cancel = () => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+    document.removeEventListener("keydown", cancel, true);
+    document.removeEventListener("pointerdown", cancel, true);
+  };
+  const attempt = (tries: number) => {
+    if (!current() || focusDocumentEditor(scope, tabKey) || tries === 0) {
+      cancel();
+      return;
+    }
+    const pane = paneFor(scope, tabKey);
+    const loading = pane && Array.from(pane.querySelectorAll<HTMLElement>(".file-viewer-loading"))
+      .some((el) => documentControlVisible(el, pane));
+    if (!loading) {
+      cancel();
+      return;
+    }
+    timer = window.setTimeout(() => attempt(tries - 1), 50);
+  };
+  document.addEventListener("keydown", cancel, true);
+  document.addEventListener("pointerdown", cancel, true);
+  attempt(20);
+  return cancel;
+}
+
+/**
+ * The document's scrolling box in the tab's pane — the largest that can
+ * scroll now — or null when nothing in it scrolls (a short file, a picture,
+ * a page in a frame).
+ */
+export function documentScroller(scope: string, tabKey: string): HTMLElement | null {
+  const pane = paneFor(scope, tabKey);
+  return pane ? scrollerBelow(pane) : null;
+}
+
+/** Scroll `box` `pages` screens (negative = up). False for 0 pages. */
+export function scrollBox(box: HTMLElement, pages: number): boolean {
+  if (pages === 0) return false;
+  // A little under a whole screen, so a line read last stays in sight.
+  box.scrollTop += Math.sign(pages) * Math.max(1, Math.round(box.clientHeight * Math.abs(pages) * 0.9));
+  return true;
+}
+
 /** Scroll the document `pages` screens (negative = up). False when nothing
  *  in the tab scrolls. */
 export function scrollDocument(scope: string, tabKey: string, pages: number): boolean {
   const box = documentScroller(scope, tabKey);
-  if (!box || pages === 0) return false;
-  // A little under a whole screen, so a line read last stays in sight.
-  box.scrollTop += Math.sign(pages) * Math.max(1, Math.round(box.clientHeight * Math.abs(pages) * 0.9));
-  return true;
+  return box ? scrollBox(box, pages) : false;
 }
 
 /** To the document's end. */

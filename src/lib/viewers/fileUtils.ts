@@ -1,6 +1,7 @@
 import type { TranslationKey } from "../i18n";
 import { relativePathWithin } from "../paths";
 import { LEGACY_BRAND } from "../brand";
+import { isEventFileName } from "./tensorboard";
 
 export interface FileEntry {
   name: string;
@@ -13,6 +14,12 @@ export interface FileEntry {
   mime: string | null;
 }
 
+/**
+ * The root entries the "Project docs" group holds. The backend owns the truth
+ * (`project_docs_status`); this is the fallback before its answer arrives. A
+ * Rust test (`services::scaffold` `the_ts_fallback_list_is_the_catalog`) keeps
+ * it equal to the catalog's names plus `.gitignore` and `.git`.
+ */
 export const STANDARD_PROJECT_FILES = new Set([
   "PROJECT.md",
   "README.md",
@@ -25,7 +32,6 @@ export const STANDARD_PROJECT_FILES = new Set([
   "STATUS.md",
   "DOCUMENTATION.md",
   ".gitignore",
-  ".claude",
   ".git",
 ]);
 
@@ -48,6 +54,10 @@ export type InternalViewer =
   | "tex"
   | "table"
   | "notebook"
+  // A TensorBoard event file (`events.out.tfevents.*`, matched by NAME, not
+  // extension) or a folder of runs: the training curves, drawn natively. No
+  // fallback when opted out — the bytes are binary.
+  | "tensorboard"
   | "diff"
   // SSH-sync host-vs-mirror diff. Never auto-selected by extension — only opened
   // explicitly from a diverged (amber) file's diff button; routed to `DiffView`
@@ -192,6 +202,9 @@ export function isDeckFile(name: string): boolean {
 /** The viewer a file *type* maps to, ignoring any user opt-out. */
 function naturalViewerFor(entry: FileEntry): InternalViewer | null {
   if (entry.is_dir) return null;
+  // Event files are named by prefix (`events.out.tfevents.<time>.<host>.<pid>.<n>`),
+  // so the "extension" is a host name or a counter: match the name first.
+  if (isEventFileName(entry.name)) return "tensorboard";
   const ext = (entry.extension ?? "").toLowerCase();
   if (ext === ".pdf") return "pdf";
   // .gif gets the dedicated animated-GIF viewer (frame transport: pause, step,
@@ -364,6 +377,12 @@ export const VIEWER_PREF_TYPES: ViewerTypeMeta[] = [
     id: "notebook",
     labelKey: "viewerType.notebook",
     extensions: [".ipynb"],
+    autocomplete: false,
+  },
+  {
+    id: "tensorboard",
+    labelKey: "viewerType.tensorboard",
+    extensions: ["events.out.tfevents.*"],
     autocomplete: false,
   },
   {

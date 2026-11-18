@@ -50,6 +50,10 @@ pub struct OllamaModelInfo {
     /// Whole seconds until Ollama unloads it; `None` when pinned, idle, or the
     /// expiry is unreadable or already past.
     pub expires_in_secs: Option<u64>,
+    /// The context window it is loaded with (`/api/ps` `context_length`), which
+    /// is the server's choice, not the model's limit. `None` unless `running`,
+    /// or when this Ollama does not report it.
+    pub context_length: Option<u64>,
     /// An Ollama cloud model (its `/api/tags` entry names a `remote_host` /
     /// `remote_model`): listed, but there is nothing on this machine to load.
     pub remote: bool,
@@ -61,6 +65,7 @@ pub struct OllamaModelInfo {
 // PATH lookups go through the shared, cross-platform `crate::paths::binary_on_path`
 // (`where` on Windows, `which` elsewhere); see that module for the rationale.
 use crate::paths::binary_on_path;
+use crate::services::agent_latest;
 use crate::tauri_host::Ctx;
 use app_core::CoreCtx;
 
@@ -105,16 +110,23 @@ pub const OLLAMA_DOWNLOAD_URL: &str = "https://ollama.com/download";
 /// - **Windows**: `winget install --id Ollama.Ollama …` (silent, per-user). winget
 ///   ships with all supported Windows 10/11 builds; if it is absent or fails, the
 ///   UI falls back to the manual command + the ollama.com download link.
-/// - **Linux/macOS**: the official `curl … install.sh | sh` script. It needs root
+/// - **Linux**: the official `curl … install.sh | sh` script. It needs root
 ///   to drop the binary and register the systemd service; it invokes `sudo` itself,
 ///   so a non-interactive run only succeeds with passwordless sudo or as root.
+/// - **macOS**: the same script, whose Darwin branch downloads `Ollama-darwin.zip`,
+///   moves Ollama.app into /Applications (an admin account's right, no `sudo`),
+///   then links `/usr/local/bin/ollama` — through `sudo` only when that dir is not
+///   the user's, which fails without a terminal. That one step does not matter:
+///   the app's CLI dir is on Tabtivity's PATH ([`crate::paths::MACOS_OLLAMA_CLI_DIR`]),
+///   so a run that got the app in place installed Ollama ([`install_failed`]).
 ///
 /// Returns the install log on success, or the tail of the output on failure.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_ollama(ctx: Ctx) -> Result<String, String> {
     let ctx = ctx.0;
-    // The installer runs for minutes: its whole run stays off the runtime.
-    app_core::rt::try_blocking("install", move || install_ollama_blocking(&ctx)).await
+    // The installer runs for minutes: its whole run stays off the runtime,
+    // holding the install lock for exactly that long.
+    crate::services::agent_install::run_locked("ollama", "Ollama", move || install_ollama_blocking(&ctx)).await
 }
 
 /// The blocking body of [`install_ollama`].
@@ -143,6 +155,8 @@ fn install_ollama_blocking(ctx: &CoreCtx) -> Result<String, String> {
     // Per-OS hint appended to failure messages (the likely reason it didn't take).
     let fail_hint: &str = if cfg!(target_os = "windows") {
         "It may need winget (App Installer) or administrator rights"
+    } else if cfg!(target_os = "macos") {
+        "It may need an administrator account (it installs into /Applications)"
     } else {
         "It likely needs sudo"
     };
@@ -183,7 +197,7 @@ fn install_ollama_blocking(ctx: &CoreCtx) -> Result<String, String> {
     let combined = lines.join("\n");
     let combined = combined.trim().to_string();
 
-    if !status.success() {
+    if install_failed(status.success(), cfg!(target_os = "macos"), ollama_installed) {
         let tail: Vec<&str> = combined.lines().rev().take(20).collect();
         let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
         return Err(if tail.is_empty() {
@@ -212,6 +226,14 @@ fn install_ollama_blocking(ctx: &CoreCtx) -> Result<String, String> {
     } else {
         combined
     })
+}
+
+/// Whether an Ollama installer run failed: it exited non-zero, except on
+/// macOS when Ollama is detected anyway — `install.sh` then stopped only at
+/// its `sudo ln` into /usr/local/bin, after Ollama.app was in place (see
+/// [`install_ollama`]). `detected` runs only for that case.
+fn install_failed(exited_ok: bool, macos: bool, detected: impl FnOnce() -> bool) -> bool {
+    !exited_ok && !(macos && detected())
 }
 
 /// OS-appropriate install guidance for the frontend, so the UI can render the
@@ -325,7 +347,8 @@ fn vibe_installed() -> bool {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_vibe(ctx: Ctx) -> Result<String, String> {
     let ctx = ctx.0;
-    app_core::rt::try_blocking("install", move || install_vibe_blocking(&ctx)).await
+    // The key of Manage CLIs' `vibe`: the two never install it side by side.
+    crate::services::agent_install::run_locked("vibe", "Vibe", move || install_vibe_blocking(&ctx)).await
 }
 
 /// The blocking body of [`install_vibe`].
@@ -509,6 +532,7 @@ fn models_detailed() -> Result<Vec<OllamaModelInfo>, String> {
                 expires_at,
                 pinned,
                 expires_in_secs,
+                context_length: ps.and_then(|p| p.context_length),
                 remote: is_remote_entry(m),
                 name,
             }
@@ -525,6 +549,8 @@ struct PsEntry {
     size: u64,
     /// `expires_at`, verbatim (RFC 3339).
     expires_at: Option<String>,
+    /// `context_length`: the context window it is loaded with.
+    context_length: Option<u64>,
 }
 
 /// The resident models in an `/api/ps` body, keyed by name. A body that is not
@@ -543,6 +569,7 @@ fn ps_entries(ps_body: &str) -> std::collections::HashMap<String, PsEntry> {
                     vram: m["size_vram"].as_u64().unwrap_or(0),
                     size: m["size"].as_u64().unwrap_or(0),
                     expires_at: m["expires_at"].as_str().map(String::from),
+                    context_length: m["context_length"].as_u64(),
                 },
             ))
         })
@@ -1239,6 +1266,15 @@ fn pull_blocking(ctx: &CoreCtx, model: &str) -> Result<(), String> {
     }
 
     if let Some(err) = last_err {
+        if is_missing_manifest(&err) {
+            // The registry has no such ref (renamed or withdrawn tag, a typo):
+            // no re-pull can ever succeed, so keeping the record would offer a
+            // Continue that fails the same way on every open.
+            mark_pending_pull(model, false);
+            return Err(format!(
+                "{model} is not on the registry (renamed or removed?), so it cannot be downloaded or resumed. Ollama said: {err}"
+            ));
+        }
         return Err(friendly_ollama_error(&err));
     }
     if status_code >= 400 {
@@ -1249,6 +1285,14 @@ fn pull_blocking(ctx: &CoreCtx, model: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Ollama's pull error for a ref the registry answers 404 for: its
+/// `pullModelManifest` maps the 404 to `os.ErrNotExist`, so the stream says
+/// `pull model manifest: file does not exist`.
+fn is_missing_manifest(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("manifest") && (lower.contains("does not exist") || lower.contains("not found"))
+}
+
 // ── Update checks ─────────────────────────────────────────────────────────
 //
 // Ollama has no "is there a newer version of this model" API: `ollama pull`
@@ -1256,7 +1300,8 @@ fn pull_blocking(ctx: &CoreCtx, model: &str) -> Result<(), String> {
 // means the only way to *ask* without transferring gigabytes is to compare
 // manifest digests. `/api/tags` reports the digest of the manifest on disk and
 // the registry answers the same value in the `ollama-content-digest` response
-// header, so one HEAD per model settles it.
+// header, so one HEAD per model settles it. Hugging Face sends no such header,
+// so an `hf.co/` model's manifest is fetched (a few hundred bytes) and hashed.
 //
 // This is the one part of the local-model feature that reaches the network
 // without a model being installed or run, so it is **on demand only** — a
@@ -1290,7 +1335,11 @@ pub struct OllamaModelUpdate {
 /// `validate_model_name` already restricting the characters that reach the
 /// URL); its caller runs it off the async runtime.
 fn registry_head(model: &str) -> Result<(String, Option<i64>), String> {
-    let url = registry_manifest_url(model)?;
+    let at = registry_ref(model)?;
+    if at.hugging_face() {
+        return Ok((hf::manifest_digest(&at.manifest_url())?, None));
+    }
+    let url = at.manifest_url();
     let output = crate::paths::command_no_window("curl")
         .args(["-sSI", "--max-time", "15", &url])
         .output()
@@ -1388,9 +1437,12 @@ fn wanted_updates(models: Vec<(String, String)>) -> Vec<OllamaModelUpdate> {
 // before v0.15, so on an older server that agent is absent from the new-tab
 // menu with nothing anywhere saying why.
 //
-// Same discipline as the model check: the **installed** version is free (a local
-// `ollama --version`) and read whenever the menu opens; the **latest** version
-// is a network request and happens only when the user clicks.
+// The **installed** version is free (a local `ollama --version`) and read
+// whenever the menu opens. The **latest** version is a network request: made on
+// the "Check for updates" click, and once a day by the agent CLIs' daily release
+// check ([`daily_release_check`], `commands::agents::start_daily_update_check`).
+// Either answer is stored beside the CLIs' (`agent_latest`, key
+// [`agent_latest::OLLAMA_KEY`]), and the menu's local read hands it back.
 
 /// Where the newest published version is read from: GitHub's releases rather
 /// than ollama.com (whose `/api/version` answers `0.0.0`) — the same source the
@@ -1441,15 +1493,19 @@ pub struct OllamaVersionStatus {
     /// The installed version, e.g. `"0.14.3"`. Empty when Ollama isn't
     /// installed, or answered something we couldn't parse.
     pub current: String,
-    /// The newest published version, e.g. `"0.32.5"`. Empty whenever the remote
-    /// half didn't run or didn't answer — never a stand-in for `current`.
+    /// The newest published version, e.g. `"0.32.5"`, from the last stored
+    /// check. Empty when no check has answered yet — never a stand-in for
+    /// `current`.
     pub latest: String,
+    /// The version the running local server reports. Empty when none answered.
+    /// Not equal to `current` right after an upgrade that left the old server
+    /// running — the upgrade watcher's cue to restart it.
+    pub server: String,
     /// True only when both versions parsed *and* `latest` is genuinely newer.
     /// An unreadable version on either side is not an update.
     pub update_available: bool,
-    /// The one-click upgrade command. Deliberately the *install* command: both
-    /// installers (winget, `install.sh`) upgrade in place, and a second command
-    /// string would be a second thing to keep correct.
+    /// The one-click upgrade command ([`ollama_upgrade_cmd`]): `winget upgrade`
+    /// on Windows, the install script elsewhere (it upgrades in place).
     pub install_cmd: String,
     /// Which shell `install_cmd` needs, for `runInstallInTab`.
     pub shell_kind: String,
@@ -1475,6 +1531,39 @@ fn parse_version(text: &str) -> Option<String> {
             looks_like.then(|| t.to_string())
         })
         .next()
+}
+
+/// The installed binary's version out of `ollama --version` output.
+///
+/// With a server running, the CLI's first line is the **server's** version and
+/// the binary's own comes after as `Warning: client version is X` — printed
+/// only when the two differ. That is exactly the state right after an upgrade
+/// whose installer left the old server running (Windows' silent winget upgrade),
+/// where taking the first version kept showing the replaced one. So the client
+/// line wins when present.
+fn installed_version(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| {
+            let (_, rest) = line.split_once("client version is")?;
+            parse_version(rest)
+        })
+        .or_else(|| parse_version(text))
+}
+
+/// The running local server's version out of the same `ollama --version`
+/// output: its `ollama version is X` line. `None` when no server answered (the
+/// CLI then says it could not connect, and prints only the client's version).
+///
+/// Differing from [`installed_version`] means the server still running is the
+/// one an upgrade replaced on disk — which the upgrade watcher restarts.
+fn server_version(text: &str) -> Option<String> {
+    if text.contains("could not connect") {
+        return None;
+    }
+    text.lines().find_map(|line| {
+        let (_, rest) = line.split_once("ollama version is")?;
+        parse_version(rest)
+    })
 }
 
 /// Compare two dotted versions numerically. `None` when either side doesn't
@@ -1505,12 +1594,12 @@ fn version_is_newer(candidate: &str, current: &str) -> Option<bool> {
     Some(false)
 }
 
-/// The installed Ollama version, and — only when `check_remote` — the newest
-/// published one.
+/// The installed Ollama version against the newest published one.
 ///
 /// `check_remote: false` touches no network at all, so the menu can show what is
-/// installed the moment it opens. `true` is the "Check for updates" click and
-/// costs one unauthenticated GitHub request.
+/// installed the moment it opens; the newest version is then the last stored
+/// check (the daily one or a click), if any. `true` is the "Check for updates"
+/// click and costs one unauthenticated GitHub request.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
     app_core::rt::spawn_blocking(move || {
@@ -1524,24 +1613,24 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
         // server-unreachable case is already handled: `ollama --version` prints
         // a warning line and then the client version, which is exactly what
         // `parse_version` scans past.
-        let current = crate::paths::command_no_window("ollama")
+        let text = crate::paths::command_no_window("ollama")
             .arg("--version")
             .output()
             .ok()
             .filter(|o| o.status.success())
-            .and_then(|o| {
-                let text = format!(
+            .map(|o| {
+                format!(
                     "{}{}",
                     String::from_utf8_lossy(&o.stdout),
                     String::from_utf8_lossy(&o.stderr)
-                );
-                parse_version(&text)
+                )
             })
             .unwrap_or_default();
 
         let mut status = OllamaVersionStatus {
-            current,
-            install_cmd: ollama_install_cmd().to_string(),
+            current: installed_version(&text).unwrap_or_default(),
+            server: server_version(&text).unwrap_or_default(),
+            install_cmd: ollama_upgrade_cmd().to_string(),
             shell_kind: if cfg!(target_os = "windows") {
                 "powershell"
             } else {
@@ -1550,23 +1639,59 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
             .to_string(),
             ..Default::default()
         };
-        if !check_remote {
-            return status;
-        }
-
-        match latest_ollama_tag().as_deref().map(parse_version) {
-            Some(Some(latest)) => {
-                status.update_available =
-                    version_is_newer(&latest, &status.current).unwrap_or(false);
-                status.latest = latest;
-            }
-            Some(None) => status.error = Some("couldn't read the latest version".to_string()),
-            None => status.error = Some("couldn't reach the release feed".to_string()),
+        let checked = if check_remote {
+            Some(check_latest_ollama())
+        } else {
+            agent_latest::load().remove(agent_latest::OLLAMA_KEY)
+        };
+        if let Some(checked) = checked {
+            apply_checked(&mut status, &checked);
         }
         status
     })
     .await
     .unwrap_or_default()
+}
+
+/// Ask GitHub for the newest Ollama release and store the answer (a failure
+/// keeps the last release seen, as for a CLI). Blocking: one `curl`.
+fn check_latest_ollama() -> agent_latest::Checked {
+    let found = match latest_ollama_tag().as_deref().map(parse_version) {
+        Some(Some(latest)) => Ok(latest),
+        Some(None) => Err("couldn't read the latest version".to_string()),
+        None => Err("couldn't reach the release feed".to_string()),
+    };
+    agent_latest::remember(agent_latest::OLLAMA_KEY, Some(found))
+}
+
+/// Fold a stored check into `status`, compared against the version installed
+/// now — so an upgrade made since the check never shows as still pending.
+fn apply_checked(status: &mut OllamaVersionStatus, checked: &agent_latest::Checked) {
+    status.latest = checked.latest.clone().unwrap_or_default();
+    status.update_available = !status.latest.is_empty()
+        && version_is_newer(&status.latest, &status.current).unwrap_or(false);
+    status.error = checked.error.clone();
+}
+
+/// Ollama's turn in the daily release check: when Ollama is installed and its
+/// last check (clicked or daily) is a day old, ask once and store the answer.
+/// True when it asked, so the caller tells the windows to re-read.
+pub async fn daily_release_check() -> bool {
+    app_core::rt::spawn_blocking(|| {
+        let due = agent_latest::is_due(
+            &agent_latest::load(),
+            agent_latest::OLLAMA_KEY,
+            crate::clock::now_secs(),
+            agent_latest::DAILY_EVERY_SECS,
+        );
+        if !due || !ollama_installed() {
+            return false;
+        }
+        check_latest_ollama();
+        true
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Permanently delete a locally installed model.
@@ -1576,43 +1701,122 @@ pub async fn delete_ollama_model(model: String) -> Result<(), String> {
     app_core::rt::try_blocking("delete", move || ollama_http("DELETE", "/api/delete", Some(&body)).map(drop)).await
 }
 
-/// Split a model ref into its registry repo path and tag, applying the implicit
-/// `library/` namespace and defaulting the tag to `latest`. Shared by the
-/// manifest and config-blob fetches so both address the exact same repo.
-fn registry_repo_tag(model: &str) -> Result<(String, String), String> {
+/// Ollama's own registry, where every model ref without a host lives.
+const OLLAMA_REGISTRY: &str = "https://registry.ollama.ai/v2";
+
+/// Where one model ref's manifest and blobs are served: the registry's `/v2`
+/// root, the repo path under it and the tag.
+#[derive(Debug, PartialEq)]
+struct RegistryRef {
+    base: &'static str,
+    repo: String,
+    tag: String,
+}
+
+impl RegistryRef {
+    fn manifest_url(&self) -> String {
+        format!("{}/{}/manifests/{}", self.base, self.repo, self.tag)
+    }
+
+    fn blob_url(&self, hex: &str) -> String {
+        format!("{}/{}/blobs/sha256:{hex}", self.base, self.repo)
+    }
+
+    fn hugging_face(&self) -> bool {
+        self.base == hf::REGISTRY
+    }
+}
+
+/// Address a model ref on its registry, applying the implicit `library/`
+/// namespace and defaulting the tag to `latest`. Shared by the manifest and
+/// config-blob fetches so both address the exact same repo. A ref whose first
+/// part is a host (`hf.co/user/repo:Q4_K_M`) is pulled by Ollama from that
+/// host, so its manifest is read there too: Hugging Face is the one such host
+/// answered; any other is refused rather than asked of Ollama's registry,
+/// which would only ever say "not found".
+fn registry_ref(model: &str) -> Result<RegistryRef, String> {
     validate_model_name(model)?;
 
-    let (name, tag) = match model.split_once(':') {
-        Some((n, t)) => (n, t),
-        None => (model, "latest"),
+    // The tag follows the last `:` of the last path part, so a host's port
+    // (`host:5000/ns/m`) is never taken for one.
+    let (name, tag) = match model.rsplit_once(':') {
+        Some((n, t)) if !t.contains('/') => (n, t),
+        _ => (model, "latest"),
     };
+    if let Some((host, rest)) = name.split_once('/').filter(|(host, _)| host.contains('.')) {
+        if !hf::is_hf_host(host) {
+            return Err(format!("{host} is not a registry whose models can be looked up"));
+        }
+        return Ok(RegistryRef {
+            base: hf::REGISTRY,
+            repo: rest.to_string(),
+            tag: tag.to_string(),
+        });
+    }
     // Bare names live under the implicit `library/` namespace on the registry.
     let repo = if name.contains('/') {
         name.to_string()
     } else {
         format!("library/{name}")
     };
-    Ok((repo, tag.to_string()))
+    Ok(RegistryRef {
+        base: OLLAMA_REGISTRY,
+        repo,
+        tag: tag.to_string(),
+    })
 }
 
 fn registry_manifest_url(model: &str) -> Result<String, String> {
-    let (repo, tag) = registry_repo_tag(model)?;
-    Ok(format!(
-        "https://registry.ollama.ai/v2/{repo}/manifests/{tag}"
-    ))
+    Ok(registry_ref(model)?.manifest_url())
 }
 
 /// How long one request to the registry or ollama.com may take, connect
 /// included. A manifest, a config blob and a search page are a few KB each.
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
+/// The largest body [`registry_get`] reads: a manifest, a config blob and an
+/// ollama.com search page are a few KB to a few hundred. A caller that
+/// legitimately needs more passes its own cap to [`registry_response`].
+const REGISTRY_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 /// `GET url` from Ollama's registry or ollama.com: HTTPS only, redirects
 /// followed (the registry hands blobs to a CDN, which `curl -L` followed too),
-/// and bounded by [`REGISTRY_TIMEOUT`]. The `curl` this replaced had no time
-/// limit, so a stalled server held its caller for as long as TCP kept the
-/// connection (code screen B2). `Ok(None)` is an HTTP error status, what
-/// `curl -f` failed on. `headers` are sent as given (fixed names and values).
+/// and bounded by [`REGISTRY_TIMEOUT`] and [`REGISTRY_MAX_BYTES`]. The `curl`
+/// this replaced had no time limit, so a stalled server held its caller for as
+/// long as TCP kept the connection (code screen B2). `Ok(None)` is an HTTP
+/// error status, what `curl -f` failed on. `headers` are sent as given (fixed
+/// names and values).
 async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<u8>>, String> {
+    Ok(registry_response(url, headers, REGISTRY_MAX_BYTES).await?.map(|(_, body)| body))
+}
+
+/// Refuse a body whose declared `Content-Length` is over `cap` before any of
+/// it is read.
+fn declared_len_fits(declared: Option<u64>, cap: usize) -> Result<(), String> {
+    match declared {
+        Some(n) if n > cap as u64 => Err(format!("registry response too large ({n} bytes, at most {cap})")),
+        _ => Ok(()),
+    }
+}
+
+/// Append one streamed `chunk` to `body`, refusing once the total would pass
+/// `cap` — a missing or lying `Content-Length` (or a compressed body that
+/// expands) is caught here.
+fn push_capped(body: &mut Vec<u8>, chunk: &[u8], cap: usize) -> Result<(), String> {
+    if body.len().saturating_add(chunk.len()) > cap {
+        return Err(format!("registry response too large (more than {cap} bytes)"));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+/// [`registry_get`] with the response headers kept, for the Hugging Face
+/// search, which hands its next page out in a `Link` header. The body is
+/// read in chunks and refused past `max_bytes`.
+async fn registry_response(
+    url: &str,
+    headers: &[(&str, &str)],
+    max_bytes: usize,
+) -> Result<Option<(reqwest::header::HeaderMap, Vec<u8>)>, String> {
     crate::services::mail_engine::install_crypto_provider();
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -1625,18 +1829,24 @@ async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
-    let response = request
+    let mut response = request
         .send()
         .await
         .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
     if !response.status().is_success() {
         return Ok(None);
     }
-    let body = response
-        .bytes()
+    declared_len_fits(response.content_length(), max_bytes)?;
+    let head = response.headers().clone();
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
-    Ok(Some(body.to_vec()))
+        .map_err(|e| format!("failed to query registry: {}", e.without_url()))?
+    {
+        push_capped(&mut body, &chunk, max_bytes)?;
+    }
+    Ok(Some((head, body)))
 }
 
 /// Fetch the Ollama registry manifest (config + layers) for a model ref, through
@@ -1654,15 +1864,15 @@ async fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, Strin
 }
 
 /// Fetch a registry blob (here: a manifest's config object) by digest. The
-/// `repo` comes from `registry_repo_tag` (already `validate_model_name`d) and the
+/// repo comes from [`registry_ref`] (already `validate_model_name`d) and the
 /// digest is checked to be a bare `sha256:<hex>`, so nothing user-typed reaches
 /// the URL unvalidated — the same bounded [`registry_get`] the manifest uses.
-async fn fetch_registry_blob(repo: &str, digest: &str) -> Result<serde_json::Value, String> {
+async fn fetch_registry_blob(at: &RegistryRef, digest: &str) -> Result<serde_json::Value, String> {
     let hex = digest
         .strip_prefix("sha256:")
         .filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or_else(|| "invalid config digest".to_string())?;
-    let url = format!("https://registry.ollama.ai/v2/{repo}/blobs/sha256:{hex}");
+    let url = at.blob_url(hex);
     let body = registry_get(&url, &[])
         .await?
         .ok_or_else(|| "registry returned no config blob".to_string())?;
@@ -1694,7 +1904,7 @@ pub struct RegistryDetails {
 /// though it has nothing to download. Two small HTTP reads, fetched lazily.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, String> {
-    let (repo, _tag) = registry_repo_tag(&model)?;
+    let at = registry_ref(&model)?;
     let manifest = fetch_registry_manifest(&model).await?;
 
     // Only the layer bytes are the download; the config blob is a few hundred
@@ -1711,18 +1921,22 @@ pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, S
 
     let (mut params, mut quant) = (None, None);
     if let Some(digest) = manifest["config"]["digest"].as_str() {
-        if let Ok(cfg) = fetch_registry_blob(&repo, digest).await {
+        if let Ok(cfg) = fetch_registry_blob(&at, digest).await {
             params = cfg["model_type"]
                 .as_str()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(String::from);
+            // Hugging Face writes `unknown` here: the tag is the quantization.
             quant = cfg["file_type"]
                 .as_str()
                 .map(str::trim)
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("unknown"))
                 .map(String::from);
         }
+    }
+    if quant.is_none() && at.hugging_face() && at.tag != "latest" {
+        quant = Some(at.tag.to_ascii_uppercase());
     }
 
     Ok(RegistryDetails {
@@ -1764,6 +1978,15 @@ pub struct RegistryModel {
     pub pulls: String,
     /// Relative update label, e.g. "1 week ago".
     pub updated: String,
+    /// A Hugging Face GGUF repo (`hf.co/<user>/<repo>`, [`hf`]), whose `sizes`
+    /// are its quantization tags.
+    pub hugging_face: bool,
+    /// Parameter count when the search already says it ("7.6B"): Hugging Face
+    /// only. An Ollama row's sizes are its parameter counts.
+    pub params: Option<String>,
+    /// A gated Hugging Face repo: Ollama's key must be added to the user's
+    /// account before it pulls.
+    pub gated: bool,
 }
 
 /// One page of ollama.com/search results.
@@ -2007,6 +2230,9 @@ fn parse_search_html(html: &str) -> RegistrySearchPage {
                 sizes,
                 pulls: card_pulls(card).unwrap_or_default(),
                 updated: card_updated(card).unwrap_or_default(),
+                hugging_face: false,
+                params: None,
+                gated: false,
             })
         })
         .collect();
@@ -2573,6 +2799,15 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
         cmd.env(IGPU_ENABLE_VAR, "1");
     }
 
+    // The same entitlement, for the context window: see
+    // [`spawned_context_length`]. A value the user set is left alone.
+    if std::env::var_os(CONTEXT_LENGTH_VAR).is_none() {
+        let vram = crate::gpustat::snapshot().iter().map(|g| g.vram_total).max().unwrap_or(0);
+        if let Some(n) = spawned_context_length(vram) {
+            cmd.env(CONTEXT_LENGTH_VAR, n.to_string());
+        }
+    }
+
     let pid = crate::paths::spawn_reaped(cmd)
         .map_err(|e| format!("failed to start ollama serve: {e}"))?;
     // Recorded before the wait, not after: a server that came up too slowly for
@@ -2587,6 +2822,92 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
     }
 
     Err("ollama serve started but did not become reachable within 8 s".to_string())
+}
+
+/// What stops an Ollama server this run did not start: the desktop app first,
+/// which would otherwise bring its server straight back. Matched by exact
+/// process name, so nothing but Ollama's own programs is touched.
+#[cfg(target_os = "windows")]
+const STOP_UNOWNED_SERVER: &[(&str, &[&str])] = &[
+    ("taskkill", &["/F", "/IM", "ollama app.exe"]),
+    ("taskkill", &["/F", "/T", "/IM", "ollama.exe"]),
+];
+#[cfg(target_os = "macos")]
+const STOP_UNOWNED_SERVER: &[(&str, &[&str])] =
+    &[("pkill", &["-x", "Ollama"]), ("pkill", &["-x", "ollama"])];
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const STOP_UNOWNED_SERVER: &[(&str, &[&str])] = &[("pkill", &["-x", "ollama"])];
+
+/// Stop the local Ollama server and start it again, whoever started it. The one
+/// place a server Tabtivity only *used* is stopped ([`OwnedServer`]): the user
+/// pressed Restart and confirmed that it stops everything Ollama is doing.
+///
+/// Refusal: `ollama_remote` for a server on another machine. The bare code
+/// `ollama_still_running` means it outlived the stop.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn restart_ollama_server() -> Result<(), String> {
+    // Waits for the old server to go and the new one to answer.
+    app_core::rt::try_blocking("restart", restart_server).await
+}
+
+fn restart_server() -> Result<(), String> {
+    let addr = ollama_addr()?;
+    if !addr_is_loopback(&addr) {
+        return Err("ollama_remote".to_owned());
+    }
+
+    // The unit keeps its own environment, and whatever this run owned of it.
+    #[cfg(target_os = "linux")]
+    if addr == DEFAULT_OLLAMA_ADDR && ollama_under_systemd() {
+        let restarted = std::process::Command::new("systemctl")
+            .args(["restart", "ollama"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if restarted && wait_for_ollama(Instant::now() + Duration::from_secs(8)) {
+            return owner_gate(&addr);
+        }
+        return Err("ollama serve restarted but did not become reachable within 8 s".to_string());
+    }
+
+    shutdown_owned_server();
+    if ollama_listening() {
+        for (bin, args) in STOP_UNOWNED_SERVER {
+            let _ = crate::paths::command_no_window(bin)
+                .args(*args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while ollama_listening() {
+        if Instant::now() >= deadline {
+            return Err("ollama_still_running".to_owned());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    ensure_running(true)
+}
+
+/// The environment variable that sets a server's default context window.
+const CONTEXT_LENGTH_VAR: &str = "OLLAMA_CONTEXT_LENGTH";
+
+/// The context window a server Tabtivity spawns gets, or `None` to keep Ollama's
+/// own default. Pure + tested.
+///
+/// Below 24 GiB of VRAM Ollama defaults to 4096, while OpenCode's system prompt
+/// and tools alone run to about 11 000 tokens. The excess is cut with no error:
+/// the agent loses the user's message and every tool result. Nothing on the
+/// OpenAI-compatible API can raise it: `/v1` ignores `num_ctx`, and its next
+/// request reloads a model warmed with a larger one back to the default. So it
+/// has to be the server's default. Larger GPUs already default higher.
+fn spawned_context_length(vram_total: u64) -> Option<u32> {
+    const OLLAMA_LARGER_DEFAULT_VRAM: u64 = 24 * 1024 * 1024 * 1024;
+    (vram_total < OLLAMA_LARGER_DEFAULT_VRAM).then_some(32_768)
 }
 
 /// Whether an already-resolved `host:port` points at this machine. Takes the
@@ -2864,10 +3185,28 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// section entirely. Pure + tested.
 fn build_context_block(files: &[ContextFile]) -> String {
     let mut out = String::new();
+    for (name, body) in capped_references(files, |_| true) {
+        out.push_str("--- ");
+        out.push_str(name);
+        out.push_str(" ---\n");
+        out.push_str(&body);
+        out.push_str("\n\n");
+    }
+    out
+}
+
+/// The references a request may carry, in order, each trimmed and truncated
+/// to [`MAX_CONTEXT_PER_FILE`] until [`MAX_CONTEXT_TOTAL`] is spent. Empty
+/// files and those `keep` refuses are skipped and cost nothing. Pure.
+fn capped_references(files: &[ContextFile], keep: impl Fn(&ContextFile) -> bool) -> Vec<(&str, String)> {
+    let mut out = Vec::new();
     let mut total = 0usize;
     for f in files {
         if total >= MAX_CONTEXT_TOTAL {
             break;
+        }
+        if !keep(f) {
+            continue;
         }
         let cap = MAX_CONTEXT_PER_FILE.min(MAX_CONTEXT_TOTAL - total);
         let body = truncate_chars(f.content.trim(), cap);
@@ -2875,13 +3214,62 @@ fn build_context_block(files: &[ContextFile]) -> String {
             continue;
         }
         total += body.len();
-        out.push_str("--- ");
-        out.push_str(f.name.trim());
-        out.push_str(" ---\n");
-        out.push_str(&body);
-        out.push_str("\n\n");
+        out.push((f.name.trim(), body));
     }
     out
+}
+
+/// A FIM model family whose trained multi-file layout is known, so references
+/// can travel on the FIM path through `raw: true` (plan, fixed decision 2).
+struct FimLayout {
+    /// Matched against the model's family key ([`fim_family_key`]).
+    starts_with: &'static str,
+    repo_name: &'static str,
+    file_sep: &'static str,
+    fim_prefix: &'static str,
+    fim_suffix: &'static str,
+    fim_middle: &'static str,
+    /// The family's other control tokens, sent as stop strings too.
+    extra_stops: &'static [&'static str],
+}
+
+impl FimLayout {
+    /// Every control token: what a raw prompt stops at and what no reference,
+    /// file name or caret text may contain.
+    fn tokens(&self) -> impl Iterator<Item = &'static str> + '_ {
+        [self.repo_name, self.file_sep, self.fim_prefix, self.fim_suffix, self.fim_middle]
+            .into_iter()
+            .chain(self.extra_stops.iter().copied())
+    }
+
+    fn holds_token(&self, text: &str) -> bool {
+        self.tokens().any(|token| text.contains(token))
+    }
+}
+
+/// Families with a known layout. `qwen2.5-coder` is Qwen's repository-level
+/// layout (`<|repo_name|>`, `<|file_sep|>`, then the FIM tokens), as the
+/// model card describes it.
+const FIM_LAYOUTS: &[FimLayout] = &[FimLayout {
+    starts_with: "qwen2.5-coder",
+    repo_name: "<|repo_name|>",
+    file_sep: "<|file_sep|>",
+    fim_prefix: "<|fim_prefix|>",
+    fim_suffix: "<|fim_suffix|>",
+    fim_middle: "<|fim_middle|>",
+    extra_stops: &["<|endoftext|>", "<|fim_pad|>"],
+}];
+
+/// A model name's family key: lower case, between the last `/` and the `:`
+/// (`registry.example/ns/Qwen2.5-Coder:1.5b` → `qwen2.5-coder`). Pure.
+fn fim_family_key(model: &str) -> String {
+    let name = model.trim().rsplit('/').next().unwrap_or("");
+    name.split(':').next().unwrap_or("").to_ascii_lowercase()
+}
+
+fn fim_layout(model: &str) -> Option<&'static FimLayout> {
+    let key = fim_family_key(model);
+    FIM_LAYOUTS.iter().find(|layout| key.starts_with(layout.starts_with))
 }
 
 /// Build the user message paired with [`COMPLETION_SYSTEM`]: a per-caret TASK hint
@@ -2891,7 +3279,9 @@ fn build_context_block(files: &[ContextFile]) -> String {
 /// word/sentence/line (and, when mid-sentence, biases toward finishing it first),
 /// `Block` completes the current block/paragraph, and `Scope` the whole enclosing
 /// function or scope. When `context` is non-empty it is inserted as a read-only
-/// REFERENCE FILES section before BEFORE/AFTER. Pure + tested.
+/// REFERENCE FILES section before AFTER/BEFORE. Section order is
+/// `Language / references / AFTER / BEFORE / TASK`, so the text that changes
+/// while typing is last (plan B4). Pure + tested.
 fn completion_prompt(
     prefix: &str,
     suffix: &str,
@@ -2949,7 +3339,10 @@ insertion; never output, quote, or repeat them):\n{context}\n"
     let prose = if is_completion_prose(language) {
         "Continue prose in the natural language of BEFORE and AFTER, even when references use another language. Preserve Markdown/LaTeX markup. Do not translate or switch to English.\n"
     } else { "" };
-    format!("Language: {lang}\n{prose}{task}\n\n{reference}BEFORE:\n{prefix}\n\nAFTER:\n{suffix}")
+    // What changes while the user types goes last: the prefix's tail, and the
+    // TASK, which switches at a line start and at `;` or `:`. Everything before
+    // the first changed token is served from the model's prompt cache.
+    format!("Language: {lang}\n{prose}\n{reference}AFTER:\n{suffix}\n\nBEFORE:\n{prefix}\n\n{task}")
 }
 
 /// Strip wrapping artefacts a chat model sometimes adds around a raw completion:
@@ -3019,13 +3412,26 @@ fn overlap_len(a: &str, b: &str) -> usize {
 /// cursor (BEFORE "…return " → completion "return a + b") or pre-echo the text just
 /// after it. Trims a leading run of `completion` that repeats the tail of `prefix`
 /// and a trailing run that repeats the head of `suffix`, ignoring whitespace at the
-/// seam. Pure + tested.
-fn trim_context_overlap(prefix: &str, suffix: &str, completion: &str) -> String {
+/// seam. With `keep_break` (see [`keeps_line_break`]) a line break after the
+/// echoed tail survives with the next line's indentation, so code written below
+/// an echoed comment lands on its own line, not inside the comment. Pure + tested.
+fn trim_context_overlap(prefix: &str, suffix: &str, completion: &str, keep_break: bool) -> String {
     // Leading overlap with the end of BEFORE.
     let head = completion.trim_start();
     let p = prefix.trim_end();
     let mut c = match overlap_len(p, head) {
-        n if n >= MIN_SEAM_OVERLAP => head[n..].trim_start(),
+        n if n >= MIN_SEAM_OVERLAP => {
+            let rest = &head[n..];
+            let body = rest.trim_start();
+            let gap = &rest[..rest.len() - body.len()];
+            match gap.rfind('\n') {
+                // The last line break (with its `\r`), then the next line's indent.
+                Some(nl) if keep_break && !body.is_empty() => {
+                    &rest[if gap[..nl].ends_with('\r') { nl - 1 } else { nl }..]
+                }
+                _ => body,
+            }
+        }
         _ => completion,
     };
 
@@ -3051,12 +3457,42 @@ pub fn cancel_text_completion(request_id: String) {
     crate::services::text_completion::cancel(&request_id);
 }
 
+/// Whether a chat answer's leading line break is part of the insertion: only
+/// when the caret's line has text before it (else the break would double) and
+/// the sentence stop is off (else [`completion_stop`] would cut the answer at
+/// that break and return nothing). Pure.
+fn keeps_line_break(prefix: &str, sentence: bool) -> bool {
+    !sentence && !prefix.ends_with('\n')
+}
+
 /// Preserve native FIM whitespace. Chat output still needs conservative wrapper
-/// cleanup; withhold incomplete fence/preamble lines while tokens arrive.
-fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &str) -> String {
+/// cleanup; withhold incomplete fence/preamble lines while tokens arrive. With
+/// `keep_break` one leading line break of the answer is set aside, the wrapper
+/// handling runs on the rest, and the break is put back: a completion that
+/// starts on the next line (code below an intent comment) stays there.
+fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &str, keep_break: bool) -> String {
     if fim {
         return raw.to_string();
     }
+    let lead = if !keep_break {
+        ""
+    } else if raw.starts_with("\r\n") {
+        "\r\n"
+    } else if raw.starts_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
+    let rest = chat_preview(&raw[lead.len()..], done, prefix, suffix, keep_break);
+    // Nothing to show yet, or the rest brought its own break (an echoed line).
+    if rest.is_empty() || rest.starts_with(['\n', '\r']) {
+        return rest;
+    }
+    format!("{lead}{rest}")
+}
+
+/// [`completion_preview`] of a chat answer without its kept line break.
+fn chat_preview(raw: &str, done: bool, prefix: &str, suffix: &str, keep_break: bool) -> String {
     if !done && !raw.contains('\n') {
         let first = raw.trim_start().to_ascii_lowercase();
         if first.starts_with('`')
@@ -3081,7 +3517,162 @@ fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &s
     let cleaned = clean_completion(raw);
     // Do not flicker by removing a suffix match that may still grow. The final
     // snapshot applies both seams before the frontend marks it finished.
-    trim_context_overlap(prefix, if done { suffix } else { "" }, &cleaned)
+    trim_context_overlap(prefix, if done { suffix } else { "" }, &cleaned, keep_break)
+}
+
+/// `text-completion-stats-<requestId>`: how one completion went, emitted once
+/// before `complete_text` returns successfully (the plan's IPC contract). The
+/// Ollama counts are absent when the socket was dropped before its final
+/// record (sentence stop, time budget).
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct CompletionStats {
+    endpoint: &'static str,
+    model: String,
+    /// `done` (the model finished), `line` (sentence stop), `budget` (time budget).
+    stop: &'static str,
+    first_token_ms: Option<u64>,
+    total_ms: u64,
+    reference_bytes: usize,
+    references_dropped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_eval_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_eval_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eval_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eval_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    load_ms: Option<u64>,
+}
+
+impl CompletionStats {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        endpoint: &'static str,
+        model: &str,
+        stop: &'static str,
+        first_token: Option<Duration>,
+        total: Duration,
+        reference_bytes: usize,
+        references_dropped: bool,
+        record: Option<&crate::services::text_completion::FinalRecord>,
+    ) -> Self {
+        let ms = |ns: Option<u64>| ns.map(|ns| ns / 1_000_000);
+        Self {
+            endpoint,
+            model: model.to_string(),
+            stop,
+            first_token_ms: first_token.map(|d| d.as_millis() as u64),
+            total_ms: total.as_millis() as u64,
+            reference_bytes,
+            references_dropped,
+            prompt_eval_count: record.and_then(|r| r.prompt_eval_count),
+            prompt_eval_ms: ms(record.and_then(|r| r.prompt_eval_duration)),
+            eval_count: record.and_then(|r| r.eval_count),
+            eval_ms: ms(record.and_then(|r| r.eval_duration)),
+            load_ms: ms(record.and_then(|r| r.load_duration)),
+        }
+    }
+}
+
+/// What the editor shows for the answer so far, and whether the sentence stop
+/// ended it (the stream is then dropped). `sentence` is the stop being on:
+/// Sentence mode without an intent comment. Pure + tested.
+fn completion_snapshot(
+    raw: &str,
+    fim: bool,
+    done: bool,
+    prefix: &str,
+    suffix: &str,
+    sentence: bool,
+    prose: bool,
+) -> (String, bool) {
+    let mut text = completion_preview(raw, fim, done, prefix, suffix, keeps_line_break(prefix, sentence));
+    let stop = sentence.then(|| completion_stop(&text, prose, done)).flatten();
+    if let Some(end) = stop {
+        text.truncate(end);
+    }
+    (text, stop.is_some())
+}
+
+/// How long an automatic request may stream after its first token before it
+/// settles for the complete lines it has (plan B6). Sentence mode reaches it
+/// only for an intent comment, where its line stop is off.
+fn completion_budget(mode: CompletionMode) -> Duration {
+    match mode {
+        CompletionMode::Sentence => Duration::from_millis(1500),
+        CompletionMode::Block => Duration::from_secs(3),
+        CompletionMode::Scope => Duration::from_secs(6),
+    }
+}
+
+/// Where `text` ends after its complete lines: at its last line break (`\r`
+/// included), when non-blank text comes before it. Pure.
+fn complete_lines_end(text: &str) -> Option<usize> {
+    let nl = text.rfind('\n')?;
+    let end = if text[..nl].ends_with('\r') { nl - 1 } else { nl };
+    (!text[..end].trim().is_empty()).then_some(end)
+}
+
+/// The time budget's verdict for an automatic request: where to cut `text`
+/// once `since_first_token` passed the mode's budget and the text holds a
+/// complete line, else `None` (keep streaming). Pure + tested.
+fn budget_cut(mode: CompletionMode, since_first_token: Duration, text: &str) -> Option<usize> {
+    if since_first_token < completion_budget(mode) {
+        return None;
+    }
+    complete_lines_end(text)
+}
+
+/// The final text of a request the time budget stopped: the complete lines
+/// its last preview showed (the same snapshot of the same answer, cut at the
+/// same place), and only then the seam against AFTER that a final chat text
+/// gets. The other order trims a half-written echo of AFTER first and then
+/// cuts one complete line more than the preview did. Pure + tested.
+fn budget_text(raw: &str, fim: bool, prefix: &str, suffix: &str, sentence: bool, prose: bool) -> String {
+    let mut text = completion_snapshot(raw, fim, false, prefix, suffix, sentence, prose).0;
+    if let Some(end) = complete_lines_end(&text) {
+        text.truncate(end);
+    }
+    if fim {
+        return text;
+    }
+    // The leading seam is already trimmed; an empty BEFORE leaves it alone.
+    trim_context_overlap("", suffix, &text, false)
+}
+
+/// The endpoint one completion request may use, or why it may not run: the
+/// policy block `complete_text` runs before any client exists. A local-models-
+/// only project (`services::agent_privacy`) is completed by this machine's
+/// models only: loopback host, a model the endpoint lists without a remote (an
+/// Ollama cloud model answers on ollama.com). Every request then asks `gate`
+/// (`owner_gate`) whose listener the address is, as every other Ollama call
+/// does before it writes a byte, so source text never reaches a process
+/// squatting on the loopback port. `refusal` and `gate` are parameters
+/// because a unit test can make neither real one refuse on demand.
+fn completion_endpoint(
+    settings: &crate::schema::Settings,
+    locked: bool,
+    project_id: Option<&str>,
+    model: &str,
+    refusal: &dyn Fn(&str, &str) -> Option<String>,
+    gate: &dyn Fn(&str) -> Result<(), String>,
+) -> Result<String, String> {
+    let local_only = locked
+        || project_id
+            .and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
+            .is_some_and(|policy| policy.local_only);
+    let (host, allow_remote) = host_setting(settings);
+    let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
+    if locked {
+        if let Some(refusal) = refusal(&addr, model) {
+            return Err(refusal);
+        }
+    }
+    gate(&addr)?;
+    Ok(addr)
 }
 
 fn completion_body(
@@ -3099,9 +3690,14 @@ fn completion_body(
     } else {
         mode.num_predict()
     };
+    // No penalties: code repeats identifiers and brackets by nature. The first
+    // candidate is greedy (`top_k` 1); [`sample_candidate`] widens alternates.
     let mut body = serde_json::json!({
         "model": model, "stream": true, "think": false,
-        "options": { "temperature": 0.1, "num_predict": cap }
+        "options": {
+            "temperature": 0.1, "num_predict": cap, "top_k": 1,
+            "repeat_penalty": 1.0, "presence_penalty": 0,
+        }
     });
     if fim {
         body["prompt"] = prefix.into();
@@ -3118,10 +3714,121 @@ fn completion_body(
     body
 }
 
+/// Alt+[ / Alt+] cycle through up to three candidates: each has its own seed,
+/// and an alternate samples at temperature 0.5 with the model's own `top_k`
+/// rather than the first candidate's greedy pick. Pure + tested.
+fn sample_candidate(body: &mut serde_json::Value, candidate: u32) {
+    let candidate = candidate.min(2);
+    body["options"]["seed"] = serde_json::json!(candidate + 1);
+    if candidate > 0 {
+        body["options"]["temperature"] = serde_json::json!(0.5);
+        if let Some(options) = body["options"].as_object_mut() {
+            options.remove("top_k");
+        }
+    }
+}
+
+/// Whether a request goes the FIM way first (plan, fixed decision 1): a model
+/// with `insert` always does for code; prose stays on chat so its language and
+/// markup instructions apply. Pure.
+fn uses_fim(language: &str, insert: bool) -> bool {
+    insert && !is_completion_prose(language)
+}
+
+/// What one attempt sends: the endpoint, the body, the bytes of references it
+/// carries and whether this path drops references (a FIM model without a known
+/// layout: true whether or not any were attached, so the editor can stop
+/// sending them).
+#[derive(Debug)]
+struct CompletionPlan {
+    endpoint: &'static str,
+    body: serde_json::Value,
+    reference_bytes: usize,
+    references_dropped: bool,
+}
+
+/// One attempt's request (plan B3). `fim` comes from [`uses_fim`], false for
+/// the chat retry after a FIM refusal. On FIM an empty suffix is sent as
+/// `"\n"`: the published templates take the FIM branch only for a non-empty
+/// `.Suffix`. References ride along only for a family in [`FIM_LAYOUTS`],
+/// through `raw: true` in its trained repository layout, which bypasses the
+/// model's template; a reference whose name or text holds one of the family's
+/// control tokens is left out, and caret text or a file name holding one
+/// keeps the templated body without references. Pure + tested.
+#[allow(clippy::too_many_arguments)]
+fn completion_plan(
+    prefix: &str,
+    suffix: &str,
+    model: &str,
+    language: &str,
+    mode: CompletionMode,
+    references: &[ContextFile],
+    file_name: Option<&str>,
+    fim: bool,
+) -> CompletionPlan {
+    if !fim {
+        let carried = capped_references(references, |_| true);
+        let context = build_context_block(references);
+        return CompletionPlan {
+            endpoint: "chat",
+            body: completion_body(prefix, suffix, model, language, mode, &context, false),
+            reference_bytes: carried.iter().map(|(_, body)| body.len()).sum(),
+            references_dropped: false,
+        };
+    }
+    let suffix = if suffix.is_empty() { "\n" } else { suffix };
+    let mut body = completion_body(prefix, suffix, model, language, mode, "", true);
+    let Some(layout) = fim_layout(model) else {
+        return CompletionPlan { endpoint: "generate", body, reference_bytes: 0, references_dropped: true };
+    };
+    let file_name = file_name.map(str::trim).filter(|name| !name.is_empty()).unwrap_or("file");
+    let carried = capped_references(references, |f| !layout.holds_token(&f.name) && !layout.holds_token(&f.content));
+    let unsafe_text = [prefix, suffix, file_name].iter().any(|text| layout.holds_token(text))
+        || file_name.contains(['\n', '\r']);
+    if carried.is_empty() || unsafe_text {
+        return CompletionPlan { endpoint: "generate", body, reference_bytes: 0, references_dropped: false };
+    }
+    let mut prompt = format!("{}project\n", layout.repo_name);
+    for (name, content) in &carried {
+        prompt.push_str(&format!("{}{name}\n{content}\n", layout.file_sep));
+    }
+    prompt.push_str(&format!(
+        "{}{file_name}\n{}{prefix}{}{suffix}{}",
+        layout.file_sep, layout.fim_prefix, layout.fim_suffix, layout.fim_middle
+    ));
+    let line_stop = body["options"].get("stop").is_some();
+    let mut stops: Vec<&str> = layout.tokens().collect();
+    if line_stop {
+        stops.push("\n");
+    }
+    if let Some(fields) = body.as_object_mut() {
+        fields.remove("suffix");
+    }
+    body["prompt"] = prompt.into();
+    body["raw"] = true.into();
+    body["options"]["stop"] = serde_json::json!(stops);
+    CompletionPlan {
+        endpoint: "generate",
+        body,
+        reference_bytes: carried.iter().map(|(_, content)| content.len()).sum(),
+        references_dropped: false,
+    }
+}
+
+/// A FIM refusal the chat retry may answer: Ollama's 400 for a model without
+/// insert support, matched exactly rather than any text holding "400".
+fn fim_refused(error: &str) -> bool {
+    error == "ollama HTTP 400" || error.contains("does not support insert")
+}
+
 /// Streaming completion through the configured Ollama endpoint. Insert support
 /// comes from /api/show capabilities, carried by list_ollama_models_detailed.
-/// Attached references stay on the chat path to avoid injecting prose into raw
-/// source. Unsupported FIM falls back to chat before any ghost is published.
+/// A model with `insert` completes code through FIM (`/api/generate`), with
+/// references only for a family whose layout [`completion_plan`] knows; prose
+/// and other models use chat. Unsupported FIM falls back to chat before any
+/// ghost is published. `trigger` is `auto` or `manual` (missing: manual);
+/// `file_name` is the edited file's project-relative path for the reference
+/// layout (missing: `file`).
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn complete_text(
@@ -3136,68 +3843,99 @@ pub async fn complete_text(
     request_id: String,
     candidate: Option<u32>,
     project_id: Option<String>,
+    file_name: Option<String>,
+    trigger: Option<String>,
 ) -> Result<String, String> {
     use crate::services::text_completion;
     crate::services::ai_switch::check()?;
     let event = format!("text-completion-{request_id}");
+    let stats_event = format!("text-completion-stats-{request_id}");
     text_completion::run(request_id, async move {
-        let settings = crate::storage::load_settings().unwrap_or_default();
-        let local_only = project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
-            .is_some_and(|policy| policy.local_only);
-        let (host, allow_remote) = host_setting(&settings);
-        let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
+        // Judged afresh for every request, off the async worker: a cached lock
+        // verdict would let a project that was just locked reach a remote host.
+        let (checked_project, checked_model) = (project_id.clone(), model.clone());
+        let addr = app_core::rt::try_blocking("Completion endpoint", move || {
+            let settings = crate::storage::load_settings().unwrap_or_default();
+            let locked = crate::services::agent_privacy::completion_locked(checked_project.as_deref());
+            completion_endpoint(
+                &settings,
+                locked,
+                checked_project.as_deref(),
+                &checked_model,
+                &|addr, model| crate::services::agent_privacy::completion_refusal(true, addr, model),
+                &owner_gate,
+            )
+        })
+        .await?;
         let client = text_completion::client()?;
         let mode = CompletionMode::parse(mode.as_deref().unwrap_or("sentence"));
-        let context = context
-            .as_deref()
-            .map(build_context_block)
-            .unwrap_or_default();
+        let references = context.unwrap_or_default();
         // Bound independently of the UI for callers other than the text viewer.
         let prefix = bounded_completion_prefix(&prefix);
         let suffix = truncate_chars(&suffix, 4096);
         let prose = is_completion_prose(&language);
         let sentence = mode == CompletionMode::Sentence && trailing_comment_intent(&prefix, &language).is_none();
-        // Prose always uses chat so language/markup instructions are effective.
-        let fim = !prose && insert == Some(true) && context.is_empty() && !suffix.is_empty();
+        let fim = uses_fim(&language, insert == Some(true));
+        let automatic = trigger.as_deref() == Some("auto");
         for use_fim in if fim { vec![true, false] } else { vec![false] } {
-            let mut body =
-                completion_body(&prefix, &suffix, &model, &language, mode, &context, use_fim);
-            let candidate = candidate.unwrap_or(0).min(2);
-            body["options"]["seed"] = serde_json::json!(candidate + 1);
-            if candidate > 0 {
-                body["options"]["temperature"] = serde_json::json!(0.5);
-            }
-            let endpoint = if use_fim { "generate" } else { "chat" };
+            let CompletionPlan { endpoint, mut body, reference_bytes, references_dropped } = completion_plan(
+                &prefix, &suffix, &model, &language, mode, &references, file_name.as_deref(), use_fim,
+            );
+            sample_candidate(&mut body, candidate.unwrap_or(0));
             let mut published = false;
+            let started = Instant::now();
+            let mut first_token: Option<Duration> = None;
+            let mut over_budget = false;
             let result = text_completion::stream(
                 &client,
                 &format!("http://{addr}/api/{endpoint}"),
                 &body,
                 |raw, done| {
-                    let mut text = completion_preview(raw, use_fim, done, &prefix, &suffix);
-                    let stop = sentence.then(|| completion_stop(&text, prose, done)).flatten();
-                    if let Some(end) = stop { text.truncate(end); }
+                    if first_token.is_none() && !raw.is_empty() {
+                        first_token = Some(started.elapsed());
+                    }
+                    let (mut text, mut stopped) =
+                        completion_snapshot(raw, use_fim, done, &prefix, &suffix, sentence, prose);
+                    if automatic && !stopped && !done {
+                        let since_first = first_token.map_or(Duration::ZERO, |at| started.elapsed().saturating_sub(at));
+                        if let Some(end) = budget_cut(mode, since_first, &text) {
+                            text.truncate(end);
+                            (stopped, over_budget) = (true, true);
+                        }
+                    }
                     published |= !text.is_empty();
                     // Target only the requesting editor's client (the calling
                     // window). IPC Channels bypass the embedded browser's origin
                     // ACL (see browser.rs tests).
                     ctx.emit_to_caller(&event, text);
-                    Ok(stop.is_some())
+                    Ok(stopped)
                 },
             )
             .await;
             match result {
-                Ok(raw) => {
-                    let mut text = completion_preview(&raw, use_fim, true, &prefix, &suffix);
-                    if sentence {
-                        if let Some(end) = completion_stop(&text, prose, true) { text.truncate(end); }
-                    }
+                Ok(streamed) => {
+                    let stop = if streamed.record.is_some() {
+                        "done"
+                    } else if over_budget {
+                        "budget"
+                    } else {
+                        "line"
+                    };
+                    let text = if stop == "budget" {
+                        budget_text(&streamed.text, use_fim, &prefix, &suffix, sentence, prose)
+                    } else {
+                        completion_snapshot(&streamed.text, use_fim, true, &prefix, &suffix, sentence, prose).0
+                    };
+                    let stats = CompletionStats::new(endpoint, &model, stop, first_token, started.elapsed(), reference_bytes, references_dropped, streamed.record.as_ref());
+                    // Once, before the final text, on its own event: an older
+                    // frontend ignores it, and the return value stays the text.
+                    ctx.emit_to_caller(&stats_event, stats);
                     return Ok(text);
                 }
                 Err(e)
                     if use_fim
                         && !published
-                        && (e.contains("400") || e.contains("does not support insert")) =>
+                        && fim_refused(&e) =>
                 {
                     continue
                 }
@@ -3615,15 +4353,11 @@ fn dirs_vibe_config() -> Result<std::path::PathBuf, String> {
 /// out, inside the agent, where the message is somebody else's.
 fn ollama_provider_block() -> String {
     let base = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
-    format!(
-        "\n[[providers]]\nname = \"ollama\"\napi_base = \"http://{base}/v1\"\napi_key_env_var = \"\"\napi_style = \"openai\"\nbackend = \"generic\"\nreasoning_field_name = \"reasoning_content\"\nproject_id = \"\"\nregion = \"\"\n\n[providers.extra_headers]\n"
-    )
+    crate::services::local_drivers::vibe_provider_block(&base)
 }
 
 fn ollama_model_block(model: &str, alias: &str) -> String {
-    format!(
-        "\n[[models]]\nname = \"{model}\"\nprovider = \"ollama\"\nalias = \"{alias}\"\ntemperature = 0.2\ninput_price = 0.0\noutput_price = 0.0\nthinking = \"off\"\nauto_compact_threshold = 200000\n"
-    )
+    crate::services::local_drivers::vibe_model_block(model, alias)
 }
 
 #[cfg(all(test, unix))]
@@ -3691,6 +4425,28 @@ mod owned_server_tests {
     }
 }
 
+pub mod hf;
+
+/// Search the Hugging Face Hub's GGUF repos, one page at a time (body in
+/// [`hf::search_huggingface_models_in`]). Declared here, not in `hf.rs`, so the
+/// core dispatcher's generator sees it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn search_huggingface_models(
+    query: String,
+    sort: String,
+    cursor: Option<String>,
+) -> Result<hf::HfSearchPage, String> {
+    hf::search_huggingface_models_in(query, sort, cursor).await
+}
+
+/// Ollama's public key, for a gated Hugging Face repo ([`hf::OllamaPublicKey`]).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn ollama_public_key() -> hf::OllamaPublicKey {
+    app_core::rt::spawn_blocking(hf::ollama_public_key_blocking)
+        .await
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -3715,11 +4471,12 @@ mod phone_control_tests {
                 vram: 26_783_818_710,
                 size: 26_783_818_710,
                 expires_at: Some("2319-01-14T10:20:46.070730299+01:00".into()),
+                context_length: Some(262_144),
             }
         );
         assert_eq!(
             ps["qwen3:8b"],
-            PsEntry { vram: 0, size: 7_100_000_000, expires_at: None }
+            PsEntry { vram: 0, size: 7_100_000_000, expires_at: None, context_length: None }
         );
         assert!(ps_entries("garbage").is_empty());
         assert!(ps_entries(r#"{"models":[]}"#).is_empty());
@@ -3874,6 +4631,42 @@ mod phone_control_tests {
         // This test process's own listener, in its own namespace, passes.
         let own = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         assert_eq!(owner_gate(&format!("127.0.0.1:{}", own.local_addr().unwrap().port())), Ok(()));
+    }
+
+    /// B1: a completion asks the owner gate before its client exists, so a
+    /// refused listener never sees a connection, let alone the source text.
+    #[test]
+    fn a_completion_asks_the_owner_gate_before_it_connects() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let settings = crate::schema::Settings { ollama_host: Some(addr.clone()), ..Default::default() };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let refusing = |a: &str| -> Result<(), String> {
+            asked.borrow_mut().push(a.to_string());
+            Err(format!("{LISTENER_REFUSED}: another account (uid 1002) is listening"))
+        };
+        let never = |_: &str, _: &str| -> Option<String> { panic!("an unlocked project asks no locality") };
+        for project in [None, Some("p1")] {
+            let err = completion_endpoint(&settings, false, project, "coder", &never, &refusing).unwrap_err();
+            assert!(err.starts_with(LISTENER_REFUSED), "{err}");
+        }
+        assert_eq!(*asked.borrow(), vec![addr.clone(), addr.clone()]);
+        assert_eq!(
+            listener.accept().map(|_| ()).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the refused listener was never connected to"
+        );
+
+        // A passing gate hands the address on; a locked project's refusal
+        // comes first and the gate is not asked at all.
+        assert_eq!(completion_endpoint(&settings, false, None, "coder", &never, &|_| Ok(())), Ok(addr.clone()));
+        let refuse_locked = |_: &str, m: &str| Some(format!("refused {m}"));
+        let gate_unasked = |_: &str| -> Result<(), String> { panic!("refused before the gate") };
+        assert_eq!(
+            completion_endpoint(&settings, true, Some("p1"), "big:cloud", &refuse_locked, &gate_unasked),
+            Err("refused big:cloud".into())
+        );
     }
 
     #[test]

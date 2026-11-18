@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { containerBuildShell, installShellCommand } from "../../lib/installCommand";
+import { containerBuildShell, customInstallShell, installShellCommand } from "../../lib/installCommand";
 
 describe("containerBuildShell", () => {
   it("builds the container image through PowerShell on Windows, never cmd.exe", () => {
@@ -23,5 +23,20 @@ describe("installShellCommand", () => {
 
   it("leaves shell-neutral commands on the default shell", () => {
     expect(installShellCommand("default")).toBe("");
+  });
+});
+
+describe("customInstallShell", () => {
+  it("sends PowerShell syntax to PowerShell on Windows", () => {
+    expect(customInstallShell("irm https://example.test/install.ps1 | iex", true)).toBe("powershell");
+    expect(customInstallShell("$env:PATH += ';x'", true)).toBe("powershell");
+  });
+
+  it("keeps npm, pip and friends on the default shell", () => {
+    expect(customInstallShell("npm install -g some-cli", true)).toBe("default");
+  });
+
+  it("never picks PowerShell off Windows", () => {
+    expect(customInstallShell("irm https://example.test/install.ps1 | iex", false)).toBe("default");
   });
 });

@@ -42,9 +42,13 @@ pub fn install_env_in(state_dir: &Path) -> Vec<(String, String)> {
 /// common installers honour, all under [`install_root_in`]. On Windows also
 /// `USERPROFILE` (what PowerShell's `$HOME` and npm's `~` read there) and
 /// `APPDATA` (npm's default global prefix, `%APPDATA%\npm`, and most
-/// per-user tool configs) inside the install home. An installer that asks
-/// the shell API for the profile folder instead of the environment still
-/// lands in the user's profile; that is not reachable from here.
+/// per-user tool configs) and `LOCALAPPDATA` inside the install home.
+/// Antigravity's `install.ps1` writes `$env:LOCALAPPDATA\agy\bin\agy.exe` and
+/// Codex's its launcher junction `$env:LOCALAPPDATA\Programs\OpenAI\Codex\bin`;
+/// without it both landed in the user's profile, where Update must not touch
+/// them. An installer that asks the shell API for the profile folder instead
+/// of the environment still lands in the user's profile; that is not
+/// reachable from here.
 pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)> {
     let root = install_root_in(state_dir);
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
@@ -58,10 +62,7 @@ pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)>
         ("PIP_USER".into(), "1".into()),
         ("PYTHONUSERBASE".into(), s(root.join(".local"))),
     ];
-    if windows {
-        env.push(("USERPROFILE".into(), s(root.clone())));
-        env.push(("APPDATA".into(), s(root.join("AppData").join("Roaming"))));
-    }
+    env.extend(crate::services::agent_home::windows_profile_env(windows, &root));
     env
 }
 
@@ -97,6 +98,13 @@ pub fn bin_dirs_for(windows: bool, state_dir: &Path) -> Vec<PathBuf> {
     .collect();
     if windows {
         dirs.insert(2, root.join("npm"));
+        // The `LOCALAPPDATA` installers' launchers ([`install_env_for`]).
+        let local = root.join("AppData").join("Local");
+        dirs.push(local.join("agy").join("bin"));
+        dirs.push(local.join("Programs").join("OpenAI").join("Codex").join("bin"));
+        // Cursor's `install?win32=true` and Meta's `install.ps1` (2442f).
+        dirs.push(local.join("cursor-agent"));
+        dirs.push(local.join("Programs").join("muse"));
     }
     dirs
 }
@@ -155,12 +163,140 @@ pub fn fence_read_only_paths() -> Vec<String> {
 /// non-zero with the reason on stderr when it cannot (1.4.5, 2026-10-30).
 const SELF_UPDATE_ARGV: &[(&str, &[&str])] = &[("antigravity", &["update"])];
 
+/// Installers running now, by key: a registry agent id, or `"ollama"` for
+/// the Ollama runtime. Two clicks (the setup wizard and Manage CLIs, or a
+/// double click) used to start two installers of one CLI side by side,
+/// writing the same npm prefix or install script target at once.
+static INSTALLS_RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Held for the whole run of one install, update or removal
+/// ([`begin_install`]); dropping it, however the run ends, lets the next one
+/// start. Hand it to [`InstallGuard::run`] with the installer: held in the
+/// command's async frame it would be let go when that future is dropped,
+/// while the installer on the blocking pool runs on.
+#[must_use = "the install lock is released as soon as the guard is dropped"]
+pub struct InstallGuard(String);
+
+impl InstallGuard {
+    /// Run `work` on the blocking pool with this guard moved in, so the lock
+    /// lives exactly as long as `work`.
+    pub async fn run<T: Send + 'static>(
+        self,
+        work: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        app_core::rt::try_blocking("install", move || {
+            let _held = self;
+            work()
+        })
+        .await
+    }
+}
+
+/// [`begin_install`] then [`InstallGuard::run`]: a refusal comes back before
+/// any of `work` runs.
+pub async fn run_locked<T: Send + 'static>(
+    key: &str,
+    label: &str,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    begin_install(key, label)?.run(work).await
+}
+
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        let mut running = INSTALLS_RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        running.retain(|k| k != &self.0);
+    }
+}
+
+/// Claim the install lock for `key` (an agent id, `"ollama"`), or refuse
+/// with "`label` is already being installed" while another install or
+/// update of it runs. Keys share one space: the Ollama panel's Vibe install
+/// and Manage CLIs' install of `vibe` both take `"vibe"`.
+pub fn begin_install(key: &str, label: &str) -> Result<InstallGuard, String> {
+    let mut running = INSTALLS_RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    if running.iter().any(|k| k == key) {
+        return Err(format!(
+            "{label} is already being installed, updated or removed. Wait for that run to finish."
+        ));
+    }
+    running.push(key.to_string());
+    Ok(InstallGuard(key.to_string()))
+}
+
 /// See [`SELF_UPDATE_ARGV`]; `None` means the installer run again is the update.
 pub fn self_update_argv(agent_id: &str) -> Option<&'static [&'static str]> {
     SELF_UPDATE_ARGV
         .iter()
         .find(|(id, _)| *id == agent_id)
         .map(|(_, argv)| *argv)
+}
+
+/// The oldest `uv` Mistral Vibe's `install.sh` works with: it installs and
+/// upgrades `mistral-vibe` with `--python cpython-3.14+gil`, which an older
+/// uv cannot fetch (0.5.9: "No download found for request:
+/// cpython-3.14-linux-x86_64-gnu"). The script pins uv 0.11.26 (2026-11-07)
+/// but installs it only when no `uv` is on PATH at all, so a stale one the
+/// user keeps in `~/.local/bin` failed every Update.
+const VIBE_MIN_UV: &str = "0.11";
+
+/// A current `uv` into the install home's `~/.local/bin` (`HOME` is the
+/// install home; that dir leads the installer's PATH), with Astral's
+/// installer. `UV_UNMANAGED_INSTALL` writes no receipt and edits no shell
+/// profile, so nothing of the user's uv setup changes.
+const FRESH_UV: &str =
+    "curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=\"$HOME/.local/bin\" sh 2>&1 && ";
+
+/// A shell prefix for `agent_id`'s Unix installer line, or `""`. `probe_uv`
+/// says what `uv` the installer would find first on its PATH: `None` none,
+/// `Some(None)` one whose version could not be read. Only called for an
+/// installer that needs it. A missing uv needs nothing: the installer brings
+/// its own.
+pub fn installer_prelude(
+    agent_id: &str,
+    probe_uv: impl FnOnce() -> Option<Option<String>>,
+) -> &'static str {
+    if agent_id != "vibe" {
+        return "";
+    }
+    match probe_uv() {
+        Some(Some(version))
+            if crate::services::agent_versions::version_cmp(&version, VIBE_MIN_UV)
+                != std::cmp::Ordering::Less =>
+        {
+            ""
+        }
+        Some(_) => FRESH_UV,
+        None => "",
+    }
+}
+
+/// CLIs, by registry id, whose installer takes any copy on its PATH for its
+/// own and then upgrades in the install home, where there is none: Vibe's
+/// `install.sh` finds the user's `~/.local/bin/vibe`, runs `uv tool upgrade
+/// mistral-vibe` against the install home's `UV_TOOL_DIR` and fails
+/// ("`mistral-vibe` is not installed; run `uv tool install`", 2026-11-10).
+const INSTALLER_HIDES_HOST_COPY: &[&str] = &["vibe"];
+
+/// Dirs never left off an installer's PATH: without them it has no shell
+/// tools at all. A host copy there still reaches the installer.
+const SYSTEM_BIN_DIRS: &[&str] = &["/bin", "/sbin", "/usr/bin", "/usr/sbin"];
+
+/// The PATH dirs `agent_id`'s installer runs with: `dirs` minus, for a CLI in
+/// [`INSTALLER_HIDES_HOST_COPY`], every dir outside `root` (the install home)
+/// that holds `bin`, so the installer installs fresh into the install home
+/// instead of upgrading a copy it does not own. Pure over the filesystem.
+pub fn installer_path_dirs(agent_id: &str, bin: &str, root: &Path, dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    if !INSTALLER_HIDES_HOST_COPY.contains(&agent_id) {
+        return dirs;
+    }
+    dirs.into_iter()
+        .filter(|d| {
+            d.starts_with(root)
+                || SYSTEM_BIN_DIRS.iter().any(|s| d == Path::new(s))
+                || !d.join(bin).is_file()
+        })
+        .collect()
 }
 
 /// The auto-update switch of a CLI, by command basename. Only switches that
@@ -177,7 +313,52 @@ fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
         // tmpfs in the fence: "restart to update" then restarted on the old
         // version, every time.
         "copilot" => &[("COPILOT_AUTO_UPDATE", "false")],
+        // Its launcher (version 3, 1.4.15–1.4.23) forks a background download of
+        // the whole ~470 MB binary once its interval has passed, beside itself
+        // in a folder the fence keeps read-only. Manage CLIs' Update is the way.
+        "muse" => &[("MUSE_NO_AUTO_UPDATE", "1")],
         _ => &[],
+    }
+}
+
+/// The auto-update switch of a CLI that has one only as an argument, by
+/// command basename: the flag, and the oldest build it was read in, which also
+/// names how that CLI's installed build is read.
+///
+/// Cursor: the hidden top-level `--disable-auto-update` skips the background
+/// update its session starts two seconds in (read out of 2026.09.28 and
+/// 2026.11.11; there is no environment variable). Without it, a fenced Cursor
+/// downloads every new build into the agent home's `~/.local/share/cursor-agent`
+/// and can never link it in, as `~/.local/bin` is read-only there.
+const AUTOUPDATE_OFF_ARGS: &[(&str, &str, &str)] = &[("cursor-agent", "--disable-auto-update", "2026.09.28")];
+
+/// The argument switch of [`AUTOUPDATE_OFF_ARGS`] for `cmd`, when the build
+/// `version` (read from the resolved executable) is one it was read in. An
+/// unread or older build gets nothing: the flag is hidden, and a build that
+/// does not know it would refuse to start.
+fn autoupdate_off_arg(cmd: &str, version: Option<&str>) -> Option<&'static str> {
+    let bin = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
+    let bin = bin.strip_suffix(".exe").unwrap_or(bin);
+    let (_, flag, since) = AUTOUPDATE_OFF_ARGS.iter().find(|(b, _, _)| *b == bin)?;
+    let version = version?;
+    (crate::services::agent_versions::version_cmp(version, since) != std::cmp::Ordering::Less).then_some(*flag)
+}
+
+/// [`apply_fence_env`]'s twin for a CLI whose only switch is an argument
+/// ([`AUTOUPDATE_OFF_ARGS`]): put it first in a session's `args`. `exe` is the
+/// executable `cmd` resolves to, whose `versions/<build>/` folder names the
+/// installed build. A subcommand (`cursor-agent login`) is left alone — the
+/// first argument names it — and so is an argv that already carries the flag.
+pub fn apply_fence_args(cmd: &str, exe: Option<&Path>, args: &mut Vec<String>) {
+    if crate::services::agent_fence::runs_subcommand(args) {
+        return;
+    }
+    let version = exe.and_then(crate::services::agent_latest::installed_build);
+    let Some(flag) = autoupdate_off_arg(cmd, version.as_deref()) else {
+        return;
+    };
+    if !args.iter().any(|a| a == flag) {
+        args.insert(0, flag.to_string());
     }
 }
 
@@ -236,12 +417,123 @@ pub(crate) fn migrate_legacy_stores_in(state_dir: &Path) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_second_install_of_one_key_is_refused_until_the_first_ends() {
+        // Keys unique to this test: the lock is process-wide.
+        let first = super::begin_install("test-lock-a", "Lock A").unwrap();
+        let err = super::begin_install("test-lock-a", "Lock A").err().unwrap();
+        assert!(err.contains("Lock A is already being installed, updated or removed"), "{err}");
+        // Another key is not held up.
+        let other = super::begin_install("test-lock-b", "Lock B").unwrap();
+        drop(first);
+        let again = super::begin_install("test-lock-a", "Lock A").unwrap();
+        drop((again, other));
+        // A run that ends in a panic still lets go.
+        let _ = std::panic::catch_unwind(|| {
+            let _held = super::begin_install("test-lock-a", "Lock A").unwrap();
+            panic!("installer crashed");
+        });
+        assert!(super::begin_install("test-lock-a", "Lock A").is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_already_installed_early_return_lets_go_of_the_lock() {
+        let out = super::run_locked("test-lock-early", "Early", || Ok("Early is already installed.")).await;
+        assert_eq!(out.as_deref(), Ok("Early is already installed."));
+        assert!(super::begin_install("test-lock-early", "Early").is_ok());
+        // The async-side early return (`install_agent`'s, before `run`) too.
+        async fn command(installed: bool) -> Result<&'static str, String> {
+            let running = super::begin_install("test-lock-early", "Early")?;
+            if installed {
+                return Ok("Early is already installed.");
+            }
+            running.run(|| Ok("installed")).await
+        }
+        assert_eq!(command(true).await.as_deref(), Ok("Early is already installed."));
+        assert!(super::begin_install("test-lock-early", "Early").is_ok());
+        // A failed run lets go as well.
+        assert!(super::run_locked("test-lock-early", "Early", || Err::<(), _>("boom".into())).await.is_err());
+        assert!(super::begin_install("test-lock-early", "Early").is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_lock_outlives_a_dropped_command_while_the_installer_runs() {
+        use std::future::Future;
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let (started, has_started) = std::sync::mpsc::channel::<()>();
+        let mut command = Box::pin(super::run_locked("test-lock-drop", "Drop", move || {
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(())
+        }));
+        // Poll once so the installer starts on the blocking pool, then drop the
+        // command's future the way a cancelled invoke would.
+        let waker = std::task::Waker::noop();
+        assert!(command.as_mut().poll(&mut std::task::Context::from_waker(waker)).is_pending());
+        has_started.recv().unwrap();
+        drop(command);
+        let refused = super::begin_install("test-lock-drop", "Drop").err().unwrap();
+        assert!(refused.contains("Drop is already being installed"), "{refused}");
+        // Once the installer ends, the lock is free again.
+        go.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if super::begin_install("test-lock-drop", "Drop").is_ok() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "lock never released");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[test]
     fn only_a_cli_whose_installer_cannot_update_has_a_self_update_argv() {
         assert_eq!(super::self_update_argv("antigravity"), Some(&["update"][..]));
         assert_eq!(super::self_update_argv("claude"), None);
     }
 
+    #[test]
+    fn vibe_gets_a_fresh_uv_only_when_the_one_on_path_is_stale() {
+        let v = |s: &'static str| move || Some(Some(s.to_string()));
+        // The reported failure: the user's uv 0.5.9 cannot fetch CPython 3.14.
+        assert_eq!(super::installer_prelude("vibe", v("0.5.9")), super::FRESH_UV);
+        assert_eq!(super::installer_prelude("vibe", v("0.10.4")), super::FRESH_UV);
+        assert_eq!(super::installer_prelude("vibe", || Some(None)), super::FRESH_UV);
+        assert_eq!(super::installer_prelude("vibe", v("0.11.0")), "");
+        assert_eq!(super::installer_prelude("vibe", v("0.12.1")), "");
+        // No uv at all: Vibe's installer brings its own pinned one.
+        assert_eq!(super::installer_prelude("vibe", || None), "");
+        // Any other CLI never probes.
+        assert_eq!(super::installer_prelude("claude", || panic!("probed")), "");
+        // The prefix writes only into the install home and chains on success.
+        assert!(super::FRESH_UV.contains("UV_UNMANAGED_INSTALL=\"$HOME/.local/bin\""));
+        assert!(super::FRESH_UV.trim_end().ends_with("&&"));
+    }
+
     use super::*;
+
+    #[test]
+    fn vibe_installer_does_not_see_the_host_copy_on_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("install");
+        let own = root.join(".local").join("bin");
+        let host = tmp.path().join("home").join(".local").join("bin");
+        let other = tmp.path().join("other");
+        for d in [&own, &host, &other] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(own.join("vibe"), "").unwrap();
+        std::fs::write(host.join("vibe"), "").unwrap();
+        std::fs::write(other.join("uv"), "").unwrap();
+        let dirs = vec![own.clone(), host.clone(), other.clone(), PathBuf::from("/usr/bin")];
+        // The reported failure: the host `~/.local/bin/vibe` made the installer
+        // upgrade a tool the install home never had. Its own copy stays.
+        assert_eq!(
+            installer_path_dirs("vibe", "vibe", &root, dirs.clone()),
+            vec![own.clone(), other.clone(), PathBuf::from("/usr/bin")]
+        );
+        // Every other CLI keeps the PATH as it is.
+        assert_eq!(installer_path_dirs("claude", "vibe", &root, dirs.clone()), dirs);
+    }
 
     #[test]
     fn install_env_points_every_prefix_into_the_install_home() {
@@ -252,6 +544,20 @@ mod tests {
         assert_eq!(Path::new(&get("NPM_CONFIG_PREFIX")), Path::new("/s/agents/install/npm"));
         assert_eq!(Path::new(&get("UV_TOOL_BIN_DIR")), Path::new("/s/agents/install/.local/bin"));
         assert!(bin_dirs_in(Path::new("/s")).contains(&PathBuf::from("/s/agents/install/npm/bin")));
+    }
+
+    /// A remote host's agent folder puts these dirs first on PATH
+    /// (`remote_agents::home_prelude`); each must be a launcher dir the local
+    /// install tree knows too, or the two lists name different places.
+    #[test]
+    fn the_remote_launcher_dirs_are_a_subset_of_the_local_ones() {
+        let state = Path::new("/s");
+        let root = install_root_in(state);
+        let local = bin_dirs_for(false, state);
+        for rel in crate::services::remote_agents::LAUNCHER_DIRS {
+            let dir = rel.split('/').fold(root.clone(), |p, seg| p.join(seg));
+            assert!(local.contains(&dir), "{rel} is not a local launcher dir");
+        }
     }
 
     #[test]
@@ -265,6 +571,8 @@ mod tests {
         assert_eq!(get(&unix, "APPDATA"), None);
         assert_eq!(get(&win, "USERPROFILE"), Some(root.clone()));
         assert_eq!(get(&win, "APPDATA"), Some(root.join("AppData").join("Roaming")));
+        assert_eq!(get(&unix, "LOCALAPPDATA"), None);
+        assert_eq!(get(&win, "LOCALAPPDATA"), Some(root.join("AppData").join("Local")));
         // Everything Unix sets, Windows sets the same way.
         for (k, v) in &unix {
             assert_eq!(get(&win, k), Some(PathBuf::from(v)), "{k}");
@@ -277,6 +585,17 @@ mod tests {
         assert!(bin_dirs_for(true, state).contains(&root.join("npm")));
         assert!(!bin_dirs_for(false, state).contains(&root.join("npm")));
         assert!(bin_dirs_for(true, state).contains(&root.join(".local").join("bin")));
+        // The `LOCALAPPDATA` installers' launchers come onto PATH from there.
+        let local = root.join("AppData").join("Local");
+        for dir in [
+            local.join("agy").join("bin"),
+            local.join("Programs").join("OpenAI").join("Codex").join("bin"),
+            local.join("cursor-agent"),
+            local.join("Programs").join("muse"),
+        ] {
+            assert!(bin_dirs_for(true, state).contains(&dir), "{}", dir.display());
+            assert!(!bin_dirs_for(false, state).contains(&dir), "{}", dir.display());
+        }
     }
 
     #[test]
@@ -290,6 +609,9 @@ mod tests {
         let mut env = std::collections::HashMap::new();
         apply_fence_env("/s/agents/install/npm/bin/copilot", &mut env);
         assert_eq!(env.get("COPILOT_AUTO_UPDATE").map(String::as_str), Some("false"));
+        let mut env = std::collections::HashMap::new();
+        apply_fence_env("/s/agents/install/.local/bin/muse", &mut env);
+        assert_eq!(env.get("MUSE_NO_AUTO_UPDATE").map(String::as_str), Some("1"));
         let mut env = std::collections::HashMap::new();
         apply_fence_env("codex", &mut env);
         assert!(env.is_empty());
@@ -307,6 +629,43 @@ mod tests {
             apply_fence_env_for(false, cmd, &mut env);
             assert_eq!(env.get(var).map(String::as_str), Some("0"), "the desktop keeps the user's value: {cmd}");
         }
+    }
+
+    #[test]
+    fn cursors_updater_is_switched_off_only_on_a_build_known_to_take_the_flag() {
+        let flag = Some("--disable-auto-update");
+        assert_eq!(autoupdate_off_arg("cursor-agent", Some("2026.09.28-64d2043")), flag);
+        assert_eq!(autoupdate_off_arg("/home/u/.local/bin/cursor-agent", Some("2026.11.11-b912975")), flag);
+        assert_eq!(autoupdate_off_arg("cursor-agent.exe", Some("2027.01.02-abc")), flag);
+        // Older or unread: the flag is hidden, and a build without it refuses to start.
+        assert_eq!(autoupdate_off_arg("cursor-agent", Some("2026.09.23-86fc751")), None);
+        assert_eq!(autoupdate_off_arg("cursor-agent", None), None);
+        assert_eq!(autoupdate_off_arg("claude", Some("2026.10.01")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fenced_cursor_session_gets_the_flag_first_and_a_subcommand_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let build = tmp.path().join("cursor-agent").join("versions").join("2026.11.11-b912975");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("cursor-agent"), "").unwrap();
+        let link = tmp.path().join("cursor-agent-link");
+        std::os::unix::fs::symlink(build.join("cursor-agent"), &link).unwrap();
+        let run = |args: &[&str]| {
+            let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            apply_fence_args("cursor-agent", Some(&link), &mut args);
+            args
+        };
+        assert_eq!(run(&[]), ["--disable-auto-update"]);
+        assert_eq!(run(&["--continue"]), ["--disable-auto-update", "--continue"]);
+        assert_eq!(run(&["-p", "hello"]), ["--disable-auto-update", "-p", "hello"]);
+        assert_eq!(run(&["--disable-auto-update", "-p", "x"]), ["--disable-auto-update", "-p", "x"]);
+        assert_eq!(run(&["login"]), ["login"]);
+        // An executable outside a `versions/` folder: build unread, nothing added.
+        let mut args = vec!["--continue".to_string()];
+        apply_fence_args("cursor-agent", Some(tmp.path()), &mut args);
+        assert_eq!(args, ["--continue"]);
     }
 
     #[test]

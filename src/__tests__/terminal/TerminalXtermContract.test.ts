@@ -32,6 +32,7 @@ import {
   shiftTabForAgent,
 } from "../../lib/terminal/terminalControl";
 import { shiftTabKey } from "../../../mobile-web/src/terminal/agentModes";
+import { readableRange } from "../../../mobile-web/src/terminal/readableScreen";
 import { copyableSelection } from "../../lib/terminal/terminalSelection";
 import { keySelectHighlight, keySelectRange, startKeySelect } from "../../lib/terminal/keyboardSelect";
 import { cellAt } from "../../lib/terminal/terminalUrls";
@@ -159,6 +160,14 @@ describe("buffer and selection, as copy and keyboard select read them", () => {
     expect(buf.getLine(2)?.isWrapped).toBe(false);
     term.selectLines(0, 2);
     expect(copyableSelection(term, false)).toBe(`${long}\nnext`);
+  });
+
+  it("marks the row after a full one wrapped when no line break came, as readableRange undoes after a rule", async () => {
+    const { term } = openTerm();
+    await written(term, `${"─".repeat(COLS)}❯ Try it`);
+    const buf = term.buffer.active;
+    expect(buf.getLine(1)?.isWrapped).toBe(true);
+    expect(readableRange(buf, 0, 2).map((line) => line.text)).toEqual(["❯ Try it"]);
   });
 
   it("gives a wide glyph two cells — an empty one after it — so cellAt counts past it", async () => {

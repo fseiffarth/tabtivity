@@ -3,10 +3,13 @@
 import "../../src/lib/brandMigrationBoot";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { App } from "./App";
+// The app inside the desktop switcher (`shell/`): the home natively, another
+// linked desktop in a frame.
+import { DesktopShell } from "./shell/DesktopShell";
 import { ErrorBoundary } from "./ErrorBoundary";
 import "./style.css";
 import "./themes.css";
+import "./steering/steering.css";
 import { applyPhoneTheme } from "./theme";
 import { rememberPushLanguage } from "./pushTitles";
 import { hardenPrototype } from "../../src/lib/hardenPrototype";
@@ -39,6 +42,6 @@ window.addEventListener("unhandledrejection", (event) => traceFailure("unhandled
 applyPhoneTheme();
 rememberPushLanguage();
 if ("serviceWorker" in navigator) window.addEventListener("load", () => void navigator.serviceWorker.register("/sw.js"));
-const page = voiceProbeWanted() ? <React.Suspense fallback={null}><VoiceProbe /></React.Suspense> : <App />;
+const page = voiceProbeWanted() ? <React.Suspense fallback={null}><VoiceProbe /></React.Suspense> : <DesktopShell />;
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><ErrorBoundary>{page}</ErrorBoundary></React.StrictMode>);
 

@@ -20,21 +20,24 @@ import { useTimerStore } from "../../stores/timer";
 import { PillStatusBars } from "./PillStatusBars";
 import { PillTabMarks } from "./PillTabMarks";
 import { ProjectPhoneMark } from "../mobile/PhoneHereMark";
-import { useProjectsStore } from "../../stores/projects";
+import { stopClosedProjectScope, useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { adoptSyncOutcome, isResumableAgentTab, syncWorkspace, useTabsStore } from "../../stores/tabs";
 import { restorableSavedTabs, savedLayoutTreeOf } from "../../stores/tabs/savedLayout";
-import { IS_HOST_LINUX, IS_HOST_WINDOWS } from "../../lib/platform";
-import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL, providerAuthLoginCmd } from "../../lib/installCommand";
+import { IS_HOST_LINUX } from "../../lib/platform";
+import { runInstallInTab, containerBuildShell } from "../../lib/installCommand";
 import { PythonInterpreterWindow } from "./PythonInterpreterWindow";
 import { useGitDirtyStore } from "../../stores/gitDirty";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
 import { providerName, gitTypeLabel } from "./projectTypeTags";
+import { guessProvider, PublishWindow } from "./PublishWindow";
 import { GitTokenScopes, tokenPageUrl } from "../common/GitTokenScopes";
 import { ProjectHoverCard, projectDescription, useProjectHoverCard } from "./ProjectHoverCard";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { ActivityCalendar } from "./ActivityCalendar";
 import { CategoryEditor } from "./CategoryEditor";
+import { AgentPrivacyDialog } from "./AgentPrivacyDialog";
+import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { ExtendToRemoteDialog } from "./ExtendToRemoteDialog";
 import { ProjectExportDialog } from "./ProjectExportDialog";
 import { autoConnectEligibility } from "./autoConnectEligibility";
@@ -54,12 +57,13 @@ import { VmSettingsDialog } from "./VmSettingsDialog";
 import { categoryColor, primaryCategoryColor, projectCategories } from "../../lib/theme/categoryColor";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
-import { useBoxEditorStore } from "../../stores/boxEditor";
+import { useBoxSliceStore } from "../../stores/boxSlice";
 import { useBoxesStore } from "../../stores/boxes";
-import { boxColor } from "../../lib/theme/boxColor";
+import { BoxMemberChecklist } from "./BoxMemberChecklist";
+import { useQuickCreateBox } from "./useQuickCreateBox";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
-import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PauseIcon, SquareIcon, UnlockIcon } from "../common/icons/Icon";
+import { BoxSwatch, CheckIcon, CloseIcon, LockIcon, PauseIcon, UnlockIcon } from "../common/icons/Icon";
 import {
   agentFenceInstallCommand,
   agentFenceMarkLevel,
@@ -101,6 +105,15 @@ interface Props {
    *  mode is active). Renders a small overlay chip — absolutely positioned so
    *  showing it never shifts the strip. Absent outside steering mode. */
   station?: number;
+  /** The project is hidden from the "All projects" strip (`lib/projects/barHidden`).
+   *  Absent = the View group offers no hide/show row. */
+  barHidden?: boolean;
+  onToggleBarHidden?: (hide: boolean) => void;
+  /** Hide mode is on (`bar_solo`: the strip shows only the project in scope).
+   *  With `onToggleSolo`, the View group offers "Hide other projects" / "Show
+   *  other projects"; both absent inside a slice, which ignores the mode. */
+  solo?: boolean;
+  onToggleSolo?: () => void;
 }
 
 /** File endings that mark a project as holding Python — the "Python interpreter…"
@@ -390,220 +403,6 @@ function RenameWindow({
   );
 }
 
-/** Best-effort guess at the provider for a not-yet-published project: an
- *  explicit prior provider wins, else sniff the profile URL host, else GitHub. */
-function guessProvider(project: ProjectEntry): GitProvider {
-  if (project.git_provider === "github" || project.git_provider === "gitlab") {
-    return project.git_provider;
-  }
-  if (project.git_profile_url?.toLowerCase().includes("gitlab")) return "gitlab";
-  return "github";
-}
-
-function PublishWindow({
-  project,
-  onPublish,
-  onClose,
-}: {
-  project: ProjectEntry;
-  onPublish: (
-    provider: GitProvider,
-    visibility: "public" | "private",
-    publishFrom: PublishFrom,
-  ) => Promise<string>;
-  onClose: () => void;
-}) {
-  const t = useT();
-  const modalRef = useModalFocus(onClose);
-  const [provider, setProvider] = useState<GitProvider>(() => guessProvider(project));
-  const [visibility, setVisibility] = useState<"public" | "private">(
-    project.git_type === "remote-public" ? "public" : "private",
-  );
-  // Which side runs the CLI. Defaults to this machine (for a remote project, its
-  // lockstep mirror): the provider login lives here, not on the work remote. A
-  // project pinned to its host has no local copy, so only the host can publish
-  // (the backend refuses "local" for it).
-  const hostPinned = isHostPinned(project);
-  const [publishFrom, setPublishFrom] = useState<PublishFrom>(hostPinned ? "remote" : "local");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState("");
-  const isRemoteWork = Boolean(project.remote);
-  // True when the CLI will run on this machine — always for a local project, and
-  // for a remote one unless the host was explicitly chosen.
-  const runsLocally = !isRemoteWork || publishFrom === "local";
-  // The CLI the chosen provider drives, surfaced in the command preview/help.
-  const cli = provider === "gitlab" ? "glab" : "gh";
-  const createPreview =
-    provider === "gitlab"
-      ? `glab repo create ${project.name} --${visibility} --remoteName origin && git push`
-      : `gh repo create ${project.name} --${visibility} --source=. --push`;
-  const cliInstall = PROVIDER_CLI_INSTALL[provider];
-  // Whether `cli` is on PATH here. Meaningful whenever the publish runs on this
-  // machine — which now includes a work-remote project publishing from its
-  // mirror. Only the explicit "work-remote host" choice runs somewhere this
-  // probe (a local `<cli> --version`) can't see. `null` while probing/unknown,
-  // so a pending answer never claims the CLI is missing.
-  const [cliAvailable, setCliAvailable] = useState<boolean | null>(null);
-  // The saved global token (⚙ Settings → Git hosting) — a project-specific
-  // override is possible too (`GitHostingWindow`) but rare enough that this
-  // approximation (skip the sign-in nudge when a token is set at all) is fine.
-  const gitToken = useSettingsStore((s) => s.settings?.git_token ?? "");
-
-  useEffect(() => {
-    if (!runsLocally) {
-      setCliAvailable(null);
-      return;
-    }
-    let cancelled = false;
-    setCliAvailable(null);
-    invoke<boolean>("provider_cli_available", { provider })
-      .then((ok) => !cancelled && setCliAvailable(ok))
-      .catch(() => !cancelled && setCliAvailable(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [runsLocally, provider]);
-
-  const publish = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const output = await onPublish(provider, visibility, publishFrom);
-      setResult(output || t("pill.published"));
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="settings-title-row">
-          <h2>{t("pill.publishTitle", { name: project.name, provider: providerName(provider) })}</h2>
-          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
-        </div>
-        <div className="project-dialog-path">
-          {t("pill.currentPrefix")} {gitTypeLabel(project.git_type, project.git_provider, t)}
-          {isRemoteWork && !runsLocally && ` ${t("pill.runsOnWorkRemote")}`}
-        </div>
-        <label>
-          {t("pill.hostingProvider")}
-          <Dropdown
-            className="dropdown-block"
-            value={provider}
-            disabled={busy || Boolean(result)}
-            onChange={(v) => setProvider(v as GitProvider)}
-            options={[
-              { value: "github", label: "GitHub" },
-              { value: "gitlab", label: "GitLab" },
-            ]}
-          />
-        </label>
-        {/* A work-remote project has the same history on both sides, so which one
-            creates the repo is a real choice — and only this machine holds the
-            provider login, which is why it is the default. */}
-        {isRemoteWork && !hostPinned && (
-          <label>
-            {t("pill.publishFrom")} <UntestedTag id="pill.publishFrom" />
-            <Dropdown
-              className="dropdown-block"
-              value={publishFrom}
-              disabled={busy || Boolean(result)}
-              onChange={(v) => setPublishFrom(v as PublishFrom)}
-              options={[
-                { value: "local", label: t("pill.publishFromLocal") },
-                { value: "remote", label: t("pill.publishFromRemote") },
-              ]}
-            />
-          </label>
-        )}
-        <label>
-          {t("pill.repoVisibility")}
-          <Dropdown
-            className="dropdown-block"
-            value={visibility}
-            disabled={busy || Boolean(result)}
-            onChange={(v) => setVisibility(v as "public" | "private")}
-            options={[
-              { value: "private", label: t("pill.visPrivate") },
-              { value: "public", label: t("pill.visPublic") },
-            ]}
-          />
-        </label>
-        <div className="project-dialog-path">
-          {t("pill.publishRunsPre")} <code>{createPreview}</code>. {t("pill.publishRunsMid")} <code>{cli}</code>{" "}
-          {t("pill.publishRunsPost")}
-        </div>
-
-        {isRemoteWork && (
-          <div className="project-dialog-path">
-            {runsLocally
-              ? t("pill.publishFromLocalHint", { cli })
-              : t("pill.publishRemoteCliHint", { cli })}
-          </div>
-        )}
-
-        {!runsLocally ? null : cliAvailable === false ? (
-          <div className="tex-install-banner" role="status">
-            <span className="tex-install-banner-text">
-              {t("pill.publishCliMissingPre")} <code>{cliInstall.bin}</code>{" "}
-              {t("pill.publishCliMissingMid")} <code>{cliInstall.bin} auth login</code>
-              {t("pill.publishCliMissingPost")}
-            </span>
-            <code className="ollama-install-cmd">{cliInstall.cmd}</code>
-            <button
-              type="button"
-              className="ollama-action-btn primary"
-              title={t("projectDialog.runInTerminalTitle")}
-              onClick={() =>
-                runInstallInTab(
-                  t("projectDialog.installBinLabel", { bin: cliInstall.bin }),
-                  cliInstall.cmd,
-                  IS_HOST_WINDOWS ? "default" : "bash",
-                )
-              }
-            >
-              {t("projectDialog.runInTerminalBtn")}
-            </button>
-          </div>
-        ) : cliAvailable === true && !gitToken.trim() ? (
-          <div className="tex-install-banner" role="status">
-            <span className="tex-install-banner-text">{t("pill.publishSignInHint", { cli })}</span>
-            <button
-              type="button"
-              className="ollama-action-btn primary"
-              title={t("pill.publishSignInTitle", { cmd: providerAuthLoginCmd(provider) })}
-              onClick={() =>
-                runInstallInTab(
-                  t("pill.publishSignInBtn", { cli }),
-                  providerAuthLoginCmd(provider),
-                  IS_HOST_WINDOWS ? "default" : "bash",
-                )
-              }
-            >
-              {t("pill.publishSignInBtn", { cli })}
-            </button>
-          </div>
-        ) : null}
-
-        {error && <ErrorNote className="project-dialog-error" error={error} />}
-        {result && <div className="scaffold-empty">{result}</div>}
-        <div className="project-dialog-actions">
-          <button type="button" onClick={onClose}>{result ? t("common.close") : t("common.cancel")}</button>
-          {!result && (
-            <button type="button" disabled={busy} onClick={() => void publish()}>
-              {busy ? t("pill.publishing") : t("pill.publish")}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
 
 function GitHostingWindow({
   project,
@@ -1198,6 +997,10 @@ export function ProjectPill({
   shiftPx,
   groupHintActive,
   station,
+  barHidden,
+  onToggleBarHidden,
+  solo,
+  onToggleSolo,
 }: Props) {
   const t = useT();
   // Shared hover card (identical popup in the right file-viewer). Owns the
@@ -1207,12 +1010,29 @@ export function ProjectPill({
   // mounted and simply never opens, since it arms nothing until `open`.
   const fastMode = useFastMode();
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null);
+  // The member pill's box swatches are a door into the box (below): the small
+  // list of its boxes when it is in several, anchored under the swatches.
+  const [swatchMenu, setSwatchMenu] = useState<ContextMenuPos | null>(null);
   // Multi-select (3b): Ctrl/Cmd-click toggles membership in the shared pill
   // selection; the ring (`is-selected`) and the "Box these (N)…" menu entry
   // both read it. A plain activation click clears it (see the switcher).
   const selectedPills = usePillSelectionStore((s) => s.selected);
   const isSelected = selectedPills.includes(project.id);
-  const boxesForMenu = useBoxesStore((s) => s.boxes);
+  // The box whose slice the strip shows, if this pill is one of its members: the
+  // menu then offers the explicit "Remove ⟨project⟩ from ⟨box⟩".
+  const sliceBoxId = useBoxSliceStore((s) => s.sliceBoxId);
+  const scopeLoaded = useTabsStore((s) => Object.prototype.hasOwnProperty.call(s.tabsByScope, project.id));
+  const closeInBox = async (boxId: string) => {
+    if (project.status !== "inactive") {
+      await useProjectsStore.getState().deactivateProject(project.id);
+      return;
+    }
+    // On screen: step back to the box first, or its panes would be unloaded
+    // under the view.
+    if (useTabsStore.getState().scope === project.id) await useBoxSliceStore.getState().selectBox(boxId);
+    await stopClosedProjectScope(project.id, { ask: true });
+  };
+  const sliceBox = useBoxesStore((s) => (sliceBoxId ? (s.boxes.find((b) => b.id === sliceBoxId) ?? null) : null));
   // With `connections_headless` off Tabtivity handles no passwords at all, so neither
   // key auth nor a saved password can ever be the answer — auto-connect there means
   // the login opens in the root terminal instead (see `autoConnectInteractive` in
@@ -1233,6 +1053,7 @@ export function ProjectPill({
   const [showForget, setShowForget] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [editCategories, setEditCategories] = useState(false);
+  const [showAgentPrivacy, setShowAgentPrivacy] = useState(false);
   const [extendRemote, setExtendRemote] = useState(false);
   // Set instead of `extendRemote` alone when a global machine was handed to this
   // (local-only) project from the header's Machines menu — seeds the "Extend to
@@ -1262,6 +1083,8 @@ export function ProjectPill({
   const setProjectScheduleMcp = useProjectsStore((s) => s.setProjectScheduleMcp);
   const setProjectGitPushMcp = useProjectsStore((s) => s.setProjectGitPushMcp);
   const { confirmAction, showMessage, dialogs: pillDialogs } = useDialogs();
+  // "Box these (N)…" and "New box with ⟨project⟩…": the one name prompt, then in.
+  const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
   const [agentFenceStatus, setAgentFenceStatus] = useState<AgentFenceStatus | null>(null);
   useEffect(() => {
     if (!contextMenu) return;
@@ -1530,6 +1353,9 @@ export function ProjectPill({
     if (!pillRef.current) return;
     void hover.open(pillRef.current.getBoundingClientRect());
   };
+  // A status bar opens its tab's own card: the project card steps aside while
+  // it is up and comes back when the pointer is on the pill again.
+  const handleBarHover = (on: boolean) => (on ? hover.close() : handleMouseEnter());
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1758,6 +1584,36 @@ export function ProjectPill({
       {/* Hover popup — hidden while context menu is open (which calls hover.close). */}
       {!contextMenu && !fastMode && <ProjectHoverCard project={project} state={hover} />}
       {pillDialogs}
+      {quickCreateDialogs}
+
+      {/* The swatch click's list of this member's boxes (it is in several). */}
+      {swatchMenu && boxTags && boxTags.length > 1 && (
+        <ContextMenuPortal
+          x={swatchMenu.x}
+          y={swatchMenu.y}
+          onClose={() => setSwatchMenu(null)}
+          className="context-menu project-pill-box-menu"
+          keepBelow
+        >
+          <div className="context-menu-group">
+            <div className="context-menu-group-label">
+              {t("pill.openBoxHeading")} <UntestedTag id="projectPill.boxSwatch" />
+            </div>
+            {boxTags.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => {
+                  setSwatchMenu(null);
+                  void useBoxSliceStore.getState().selectBox(b.id);
+                }}
+              >
+                <BoxSwatch className="context-menu-box-swatch" color={b.color} />
+                {b.name}
+              </button>
+            ))}
+          </div>
+        </ContextMenuPortal>
+      )}
 
       {/* Right-click context menu */}
       {contextMenu && (
@@ -1784,6 +1640,32 @@ export function ProjectPill({
             >
               {t("pill.showActivity")}
             </button>
+            {barHidden !== undefined && onToggleBarHidden && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  onToggleBarHidden(!barHidden);
+                }}
+                title={t(barHidden ? "pill.showOnAllProjectsTitle" : "pill.hideFromAllProjectsTitle")}
+              >
+                {t(barHidden ? "pill.showOnAllProjects" : "pill.hideFromAllProjects")}
+                <UntestedTag id="pill.hideFromAllProjects" />
+              </button>
+            )}
+            {onToggleSolo && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  onToggleSolo();
+                }}
+                title={t(solo ? "pill.showOtherProjectsTitle" : "pill.hideOtherProjectsTitle")}
+              >
+                {t(solo ? "pill.showOtherProjects" : "pill.hideOtherProjects")}
+                <UntestedTag id="barHidden.solo" />
+              </button>
+            )}
             {!hostPinned && (
               <button
                 onClick={() => {
@@ -1919,68 +1801,66 @@ export function ProjectPill({
             </button>
           </div>
 
-          {/* Boxes (3a): checkbox row per box (toggle add/remove, additive N:M),
-              "Box these (N)…" when a multi-selection includes this pill, "New
-              box with ⟨project⟩…" into the editor, and — past ~6 boxes — an
-              "Edit boxes…" overflow into the same editor. */}
+          {/* Boxes: the shared checklist (a row per box, additive N:M, stays open
+              across toggles, scrolls, filters past 8 rows), "Box these (N)…" when
+              a multi-selection includes this pill, "New box with ⟨project⟩…" — both
+              through the one name prompt, after which you are in the new box — and,
+              inside a box slice, the explicit "Remove ⟨project⟩ from ⟨box⟩". */}
           <div className="context-menu-group">
-            <div className="context-menu-group-label">{t("pill.boxesGroup")}</div>
+            <div className="context-menu-group-label">
+              {t("pill.boxesGroup")} <UntestedTag id="boxMembers.checklist" />
+            </div>
             {selectedPills.length >= 2 && isSelected && (
               <button
                 className="untested"
                 onClick={() => {
                   setContextMenu(null);
-                  useBoxEditorStore.getState().openCreate(selectedPills);
+                  void quickCreateBox(selectedPills);
                 }}
               >
                 {t("pill.boxTheseEllipsis", { count: selectedPills.length })}
                 <UntestedTag id="projectPill.4" />
               </button>
             )}
-            {boxesForMenu.slice(0, 6).map((b) => {
-              const member = b.member_ids.includes(project.id);
-              return (
-                <button
-                  key={b.id}
-                  className="context-menu-check"
-                  onClick={() => {
-                    setContextMenu(null);
-                    const store = useBoxesStore.getState();
-                    if (member) void store.removeFromBox(project.id, b.id);
-                    else void store.addToBox(project.id, b.id);
-                  }}
-                  title={t(member ? "pill.leaveBoxTitle" : "pill.joinBoxTitle", { name: b.name })}
-                >
-                  <span className="context-menu-checkmark" aria-hidden>
-                    {member ? <CheckboxIcon /> : <SquareIcon />}
-                  </span>
-                  <BoxSwatch className="context-menu-box-swatch" color={boxColor(b)} />
-                  {b.name}
-                </button>
-              );
-            })}
+            {sliceBox && sliceBox.member_ids.includes(project.id) && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  void useBoxesStore.getState().removeFromBox(project.id, sliceBox.id);
+                }}
+              >
+                {t("projectSwitcher.removeFromBox", { name: project.name, box: sliceBox.name })}
+                <UntestedTag id="boxMembers.removeFromBox" />
+              </button>
+            )}
+            {/* Inside a box a member's ✕ takes it out of the box, so closing
+                the project needs a row of its own — also for a member that is
+                closed in the general strip and was reopened by entering the
+                box, which nothing else could stop. */}
+            {sliceBox && sliceBox.member_ids.includes(project.id) && (project.status !== "inactive" || scopeLoaded) && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  void closeInBox(sliceBox.id);
+                }}
+              >
+                {t("pill.closeProject")}
+                <UntestedTag id="boxMembers.closeInBox" />
+              </button>
+            )}
+            <BoxMemberChecklist project={project} />
             <button
               className="untested"
               onClick={() => {
                 setContextMenu(null);
-                useBoxEditorStore.getState().openCreate([project.id]);
+                void quickCreateBox([project.id]);
               }}
             >
               {t("pill.newBoxWithEllipsis", { name: project.name })}
               <UntestedTag id="projectPill.5" />
             </button>
-            {boxesForMenu.length > 6 && (
-              <button
-                className="untested"
-                onClick={() => {
-                  setContextMenu(null);
-                  useBoxEditorStore.getState().openEditor(null);
-                }}
-              >
-                {t("pill.editBoxesEllipsis")}
-                <UntestedTag id="projectPill.6" />
-              </button>
-            )}
           </div>
 
           {/* Git */}
@@ -2178,6 +2058,22 @@ export function ProjectPill({
                 </span>
               )}
             </button>
+            {/* Local models only: no cloud model reads this project. Local
+                folders only (the backend refuses a remote, VM or container
+                project and says why). */}
+            {!project.remote && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  setShowAgentPrivacy(true);
+                }}
+                title={t("agentPrivacy.menuTitle")}
+              >
+                {isLocalModelsOnly(project) ? <><CheckIcon />{" "}</> : ""}{t("agentPrivacy.menuItem")}
+                <UntestedTag id="agentPrivacy.menuItem" />
+              </button>
+            )}
             <button
               className="untested"
               onClick={() => {
@@ -2496,6 +2392,10 @@ export function ProjectPill({
         <GitHostingWindow project={project} onClose={() => setShowGitHosting(false)} />
       )}
 
+      {showAgentPrivacy && (
+        <AgentPrivacyDialog project={project} onClose={() => setShowAgentPrivacy(false)} />
+      )}
+
       {/* Category-tag editor */}
       {editCategories && (
         <CategoryEditor project={project} onClose={() => setEditCategories(false)} />
@@ -2746,8 +2646,24 @@ export function ProjectPill({
           <span className="project-pill-label">{project.name}</span>
           {boxTags && boxTags.length > 0 && (
             <span
-              className="project-pill-boxdot"
-              title={t("pill.inBoxes", { list: boxTags.map((b) => b.name).join(", ") })}
+              className="project-pill-boxdot is-link"
+              role="button"
+              aria-haspopup={boxTags.length > 1 ? "menu" : undefined}
+              title={t(boxTags.length > 1 ? "pill.openBoxesTitle" : "pill.openBoxTitle", {
+                list: boxTags.map((b) => b.name).join(", "),
+              })}
+              // Inside the pill's own button: its press must neither start a
+              // pill drag (pointer-down) nor activate the project (click).
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (boxTags.length === 1) {
+                  void useBoxSliceStore.getState().selectBox(boxTags[0].id);
+                  return;
+                }
+                const r = e.currentTarget.getBoundingClientRect();
+                setSwatchMenu({ x: r.left, y: r.bottom });
+              }}
             >
               {/* One swatch per box, in the box's colour — the same colour
                   the box's own pill wears in the leading segment, so a
@@ -2793,6 +2709,20 @@ export function ProjectPill({
             {vmRunning ? "▣" : "▢"}
           </button>
         )}
+        {/* Local models only: a lock on the pill, opening the switch. */}
+        {isLocalModelsOnly(project) && (
+          <button
+            className="pill-vm-glyph pill-local-only-glyph"
+            title={t("agentPrivacy.badgeTitle")}
+            aria-label={t("agentPrivacy.badgeLabel")}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAgentPrivacy(true);
+            }}
+          >
+            <LockIcon size={12} />
+          </button>
+        )}
         {/* Agent-fence marker: red while agents of this project run outside
             the fence right now (measured, so a tab started before the fence
             became the only mode counts). Opens the pill menu, whose fence row
@@ -2816,7 +2746,7 @@ export function ProjectPill({
             <CloseIcon />
           </button>
         )}
-        <PillStatusBars scope={project.id} />
+        <PillStatusBars scope={project.id} onBarHover={handleBarHover} />
       </div>
     </>
   );

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { dialogFooterShown, freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
+import { dialogFooterShown, freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, revealSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, optionForDigit, selectMoveKeys, selectRowPosition, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
 import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { BRAND } from "../../lib/brand";
+import { pickerAsks } from "../../../mobile-web/src/screens/terminal/useAsyncAsk";
 
 const lines = (...texts: string[]) => texts.map((text) => ({ text }));
 const ESC = String.fromCharCode(27);
@@ -547,6 +548,39 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     ]);
   });
 
+  it("reads Codex's queued async question once shift+← opened it", () => {
+    // Codex 0.169.0, request_user_input_async opened from its queue while the
+    // turn works on (scripts/verify-cli/codex/async_question.py, `opened`).
+    const screen = lines(
+      "? Which window shows the bug?",
+      "  • Main window",
+      "  • Popped-out window",
+      "  • Phone",
+      "• Working (8s • esc to interrupt)",
+      "• Queued follow-up inputs",
+      "  Which window shows the bug?",
+      "  › 1. Main window",
+      "    2. Popped-out window",
+      "    3. Phone",
+      "    4. Other",
+      "  enter submit   ^] skip   shift+→ main prompt",
+    );
+    const prompt = readSelectPrompt(screen, "Codex", 110);
+    expect(prompt?.options.map((option) => option.label)).toEqual(["Main window", "Popped-out window", "Phone", "Other"]);
+    expect(prompt?.current).toBe(0);
+    // Which queued question it is: the lines under the queue's heading, as
+    // wrapped — not the echo of the ask further up.
+    expect(pickerAsks(prompt, screen, "Which window shows the bug?")).toBe(true);
+    expect(pickerAsks(prompt, screen, "Which file?")).toBe(false);
+    const wrapped = lines("• Queued follow-up inputs", "  Which window shows", "  the bug?", "  › 1. Main window", "    2. Phone", "  enter submit   ^] skip   shift+→ main prompt");
+    expect(pickerAsks(readSelectPrompt(wrapped, "Codex", 24), wrapped, "Which window shows the bug?")).toBe(true);
+    // A picker that is not the queue's (a blocking question) is never taken for it.
+    const blocking = lines("  Which window shows the bug?", "  › 1. Main window", "    2. Phone", "  enter to submit answer");
+    expect(pickerAsks(readSelectPrompt(blocking, "Codex", 110), blocking, "Which window shows the bug?")).toBe(false);
+    // Still queued, only the hint on screen: nothing to answer there yet.
+    expect(readSelectPrompt(lines("• Queued follow-up inputs", "  ? 1 question", "    shift+← to answer", "› Ask Codex to do anything"), "Codex")).toBeNull();
+  });
+
   it("bounds a Codex question to the dialog, not to the session above it", () => {
     // The real screen of a codex 0.155.1 tab that had not been prompted yet
     // (captured off the pane, replayed through xterm): its whole startup
@@ -765,6 +799,25 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(question?.options[0]).toMatchObject({ label: "Red", description: "Warm and loud" });
   });
 
+  it("rejoins a label 2.1.325 wrapped one column short of the pane's edge", () => {
+    // verify-cli claude/2.1.325/prompt/prompt@60x30: `these` would have ended
+    // in column 60, where 2.1.323 put it; 2.1.325 leaves that column free.
+    const prompt = readSelectPrompt([
+      { text: " Do you want to proceed?" },
+      { text: " ❯ 1. Yes" },
+      { text: "   2. Yes, and don’t ask again for: python3 *" },
+      { text: "   3. Yes, and switch to auto mode · auto mode handles " },
+      { text: "      these prompts for you" },
+      { text: "   4. No" },
+    ], "Claude Code", 60);
+    expect(prompt?.options.map((option) => [option.label, option.description])).toEqual([
+      ["Yes", undefined],
+      ["Yes, and don’t ask again for: python3 *", undefined],
+      ["Yes, and switch to auto mode · auto mode handles these prompts for you", undefined],
+      ["No", undefined],
+    ]);
+  });
+
   it("knows Claude's free-text row and types into it", () => {
     const single = readSelectPrompt(lines(
       "Which database?",
@@ -832,7 +885,8 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     "   ❯ 3. Fable ✔                Fable 5.1 · Most capable for your hardest and",
     "                               longest-running tasks",
     "   ↓ 4. Sonnet                 Sonnet 5 · Efficient for routine tasks",
-    "      … +2 models",
+    // The note counts only the rows below the window (measured on 2.1.317).
+    "      … +1 models",
   );
 
   it("reads a windowed picker's slice and how many rows it hides", () => {
@@ -848,6 +902,112 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(middle?.hidden).toBe(2);
     expect(middle?.options.map((option) => option.number)).toEqual([2, 3, 4]);
     expect(middle?.current).toBe(1);
+  });
+
+  it("counts the rows above a window with the ones its note says are below", () => {
+    // Claude Code 2.1.317 in an 80×24 pane: thirteen models, three drawn.
+    const frame = (rows: string[], below?: number) => lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new",
+      "",
+      ...rows,
+      ...(below ? [`      … +${below} models`] : []),
+      "",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    );
+    const opened = readSelectPrompt(frame([
+      "   ↑ 3.  Fable 5.1              For your toughest challenges",
+      "     4.  Sonnet 5.5             Most efficient for simpler tasks",
+      "   ❯ 5.  Haiku 5.5 ✔            Fastest for quick answers",
+    ], 8), "Claude")!;
+    expect(opened.hidden).toBe(10);
+    let step = mergeSelectRows(null, opened);
+    // Up to the first row in one run, then down to the last.
+    expect(revealSelectRow(step, opened)).toBe(1);
+    const top = readSelectPrompt(frame([
+      "   ❯ 1.  Default (recommended)  Sonnet 5.5 · Efficient for routine tasks",
+      "     2.  Opus 5.5               For complex work and everyday tasks",
+      "   ↓ 3.  Fable 5.1              For your toughest challenges",
+    ], 10), "Claude")!;
+    step = mergeSelectRows(step, top, true);
+    expect(revealSelectRow(step, top)).toBe(13);
+    // The walk's frames came across the link coalesced: this one shares no
+    // row with the step, and mid-walk it is still the same list.
+    const bottom = readSelectPrompt(frame([
+      "   ↑ 11. Opus 4.7               Best for everyday, complex tasks",
+      "     12. Opus 4.6               Best for everyday, complex tasks",
+      "   ❯ 13. Sonnet 4.6             Efficient for routine tasks",
+    ]), "Claude")!;
+    expect(sameSelectStep(step, bottom)).toBe(false);
+    step = mergeSelectRows(step, bottom, true);
+    expect(step.options.map((option) => option.number)).toEqual([1, 2, 3, 4, 5, 11, 12, 13]);
+    // What the coalesced frames skipped is fetched by the next run.
+    expect(revealSelectRow(step, bottom)).toBe(6);
+  });
+
+  it("reads Claude Code 2.1.326's `↑ N more` / `↓ N more` window rows", () => {
+    // 2.1.326 in an 80×24 pane (verify-cli model.py): the hidden sides are
+    // rows of their own, no arrow in a row's number slot, no `… +N` note.
+    const middle = readSelectPrompt(lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new",
+      "   sessions. For other or older models, use --model.",
+      "     ↑ 2 more",
+      "     3.  Fable 5.2              For your toughest challenges",
+      "     4.  Sonnet 5.5             Most efficient for simpler tasks",
+      "   ❯ 5.  Haiku 5.5              Fastest for quick answers",
+      "     ↓ 1 more",
+      "",
+      "   ◐ Medium effort (default) ←/→ to adjust",
+    ), "Claude")!;
+    expect(middle.title).toBe("Select model");
+    expect(middle.options.map((option) => option.number)).toEqual([3, 4, 5]);
+    expect(middle.current).toBe(2);
+    // Rows above (2) and the `↓` row's count (1), as the note gave on 2.1.325.
+    expect(middle.hidden).toBe(3);
+    const top = readSelectPrompt(lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new",
+      "   sessions. For other or older models, use --model.",
+      "   ❯ 1.  Default (recommended)  Opus 5.5 · Best for everyday, complex tasks",
+      "     2.  Opus 5.5 ✔             For complex work and everyday tasks",
+      "     3.  Fable 5.2              For your toughest challenges",
+      "     ↓ 3 more",
+    ), "Claude")!;
+    expect(top.hidden).toBe(3);
+    let step = mergeSelectRows(null, top);
+    expect(missingSelectRow(step, top)).toBe(4);
+    step = mergeSelectRows(step, middle);
+    expect(missingSelectRow(step, middle)).toBe(6);
+  });
+
+  it("reads a scrolled 2.1.326 picker whose slice sits under `↑ N more`", () => {
+    // The expanded `/model` at 120×40, scrolled to its last row.
+    const prompt = readSelectPrompt(lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new sessions. For other or older models, use",
+      "   --model.",
+      "     ↑ 4 more",
+      "     5.  Haiku 5.5              Fastest for quick answers",
+      "     ▾   More models",
+      "     6.  Fable 5.1              Most capable for your hardest and longest-running tasks",
+      "     7.  Haiku 4.5              Fastest for quick answers",
+      "   ❯ 8.  Sonnet 5               Efficient for routine tasks",
+      "",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    ), "Claude")!;
+    expect(prompt.options.map((option) => option.label)).toEqual(["Haiku 5.5", "More models", "Fable 5.1", "Haiku 4.5", "Sonnet 5"]);
+    expect(prompt.current).toBe(4);
+    // The slice's top row may be the expander itself.
+    const expanderTop = readSelectPrompt(lines(
+      "   Select model",
+      "     ↑ 5 more",
+      "     ▾   More models",
+      "     6.  Fable 5.1              Most capable for your hardest and longest-running tasks",
+      "   ❯ 7.  Haiku 4.5              Fastest for quick answers",
+    ), "Claude")!;
+    expect(expanderTop.options.map((option) => option.label)).toEqual(["More models", "Fable 5.1", "Haiku 4.5"]);
+    expect(expanderTop.current).toBe(2);
   });
 
   it("still refuses a run that starts past 1 without a window's marks", () => {
@@ -870,6 +1030,89 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(mergeSelectRows(step, next).options.map((option) => option.label)).toEqual(["Low", "High"]);
     // A picker that draws every row has nothing missing.
     expect(missingSelectRow(mergeSelectRows(null, next), next)).toBeUndefined();
+  });
+
+  describe("Claude Code 2.1.322's folded older models", () => {
+    // Captured with scripts/verify-cli/claude/model.py (2026-11-10): the
+    // `More models` row has no number, sits at the numbers' column and folds
+    // the models numbered on under it.
+    const frame = (rows: string[], below?: number) => lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names,",
+      "   specify with --model.",
+      "",
+      ...rows,
+      ...(below ? [`      … +${below} models`] : []),
+      "   ● High effort ←/→ to adjust",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    );
+    const TOP = [
+      "     1.  Default (recommended)  Sonnet 5.5 · Efficient for routine tasks",
+      "     2.  Opus 5.5 ✔             For complex work and everyday tasks",
+      "     3.  Fable 5.2              For your toughest challenges",
+      "     4.  Sonnet 5.5             Most efficient for simpler tasks",
+      "     5.  Haiku 5.5              Fastest for quick answers",
+    ];
+
+    it("keeps the expander in the run, highlighted or not", () => {
+      const folded = readSelectPrompt(frame([TOP[0], "   ❯ 2.  Opus 5.5 ✔             For complex work and everyday tasks", ...TOP.slice(2), "     ▸   More models             "]), "Claude")!;
+      expect(folded.options.map((option) => `${option.number}:${option.label}`)).toEqual([
+        "1:Default (recommended)", "2:Opus 5.5 ✔", "3:Fable 5.2", "4:Sonnet 5.5", "5:Haiku 5.5", "5.5:More models",
+      ]);
+      expect(folded.options[5].expander).toBe(true);
+      // Highlighted, it is the dialog's one mark: before, nothing read at all.
+      const on = readSelectPrompt(frame([...TOP, "   ❯ ▸   More models             "]), "Claude")!;
+      expect(on.current).toBe(5);
+    });
+
+    it("reads the opened list on through the expander, walking it as a row", () => {
+      const opened = readSelectPrompt(frame([
+        ...TOP.slice(0, 2), "   ❯ 3.  Fable 5.2              For your toughest challenges", ...TOP.slice(3),
+        "     ▾   More models             ",
+        "     6.  Fable 5.1              Most capable for your hardest and longest-running tasks",
+        "     7.  Haiku 4.5              Fastest for quick answers",
+        "     8.  Sonnet 5               Efficient for routine tasks",
+        "     9.  Opus 5                 Best for everyday, complex tasks",
+        "   ↓ 10. Fable 5                Most capable for your hardest and longest-running tasks",
+      ], 4), "Claude")!;
+      expect(opened.options.map((option) => option.number)).toEqual([1, 2, 3, 4, 5, 5.5, 6, 7, 8, 9, 10]);
+      expect(opened.hidden).toBe(4);
+      const step = mergeSelectRows(null, opened);
+      expect(selectRowPosition(step, 5.5)).toBe(6);
+      expect(selectRowPosition(step, 6)).toBe(7);
+      // From Fable 5.2 to Haiku 4.5 is five arrows, not four: one stops on the
+      // expander. By number the tap picked Fable 5.1.
+      expect(selectKeys(selectRowPosition(step, 3), selectRowPosition(step, 7))).toEqual([...Array(5).fill(`${ESC}[B`), "\r"]);
+      // Fifteen rows: the four the note says are below come after position 11.
+      expect(revealSelectRow(step, opened)).toBe(15);
+    });
+
+    it("reads a slice whose top row is the expander", () => {
+      // 80×24: three rows, the expander above the two it opened.
+      const slice = readSelectPrompt(frame([
+        "   ↑ ▾   More models             ",
+        "     6.  Fable 5.1              Most capable for your hardest and longest-running tasks",
+        "   ❯ 7.  Haiku 4.5              Fastest for quick answers",
+      ], 7), "Claude")!;
+      expect(slice.options.map((option) => option.number)).toEqual([5.5, 6, 7]);
+      expect(slice.current).toBe(2);
+      // Five numbered rows above it, seven below.
+      expect(slice.hidden).toBe(12);
+      const step = mergeSelectRows(null, slice);
+      expect(missingSelectRow(step, slice)).toBe(1);
+      expect(revealSelectRow(step, slice)).toBe(1);
+    });
+
+    it("does not let a stray `▸ More …` line above a dialog swallow it", () => {
+      const prompt = readSelectPrompt(lines("▸ More options", "❯ 1. Yes", "  2. No"))!;
+      expect(prompt.options.map((option) => option.label)).toEqual(["Yes", "No"]);
+    });
+
+    it("leaves the expander out of what a digit answers", () => {
+      const folded = readSelectPrompt(frame([TOP[0], "   ❯ 2.  Opus 5.5 ✔             For complex work and everyday tasks", ...TOP.slice(2), "     ▸   More models             "]), "Claude")!;
+      expect(optionForDigit(folded, 5)?.label).toBe("Haiku 5.5");
+      expect(optionForDigit(folded, 6)).toBeNull();
+    });
   });
 
   it("moves the highlight without accepting it", () => {

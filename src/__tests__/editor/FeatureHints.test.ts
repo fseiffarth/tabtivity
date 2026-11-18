@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
 import { readdirSync, readFileSync } from "node:fs";
-import { enSource } from "../../lib/i18n";
+import { enSource, translate } from "../../lib/i18n";
 import { FEATURE_HINTS, type FeatureHintSpec } from "../../lib/shortcuts/featureHints";
 import { HINTS, pickHint, type HintCtx } from "../../lib/shortcuts/hints";
 
@@ -89,16 +89,50 @@ describe("pickHint with feature hints", () => {
   });
 
   it("skips seen hints and falls through the catalogue", () => {
+    // Four projects and no box: the one situational hint (box-create) is eligible too.
+    const ctx: HintCtx = { ...active, projectCount: 4, boxCount: 0 };
     const seen = new Set(seenCore);
     const order: string[] = [];
     for (let i = 0; i < FEATURE_HINTS.length; i++) {
-      const next = pickHint(active, seen, true, { anchorOnScreen: () => true });
+      const next = pickHint(ctx, seen, true, { anchorOnScreen: () => true });
       if (!next) break;
       order.push(next);
       seen.add(next);
     }
     expect(order.length).toBe(FEATURE_HINTS.length);
-    expect(pickHint(active, seen, true, { anchorOnScreen: () => true })).toBeNull();
+    expect(pickHint(ctx, seen, true, { anchorOnScreen: () => true })).toBeNull();
+  });
+
+  describe("the box-create hint (a ghost pill, four projects, no box)", () => {
+    const onlyGhost = (sel: string) => sel === ".box-ghost-pill";
+    const pick = (ctx: HintCtx, anchorOnScreen: (sel: string) => boolean = onlyGhost) =>
+      pickHint(ctx, seenCore, true, { anchorOnScreen });
+
+    it("shows with four projects and no box while the ghost pill is on screen", () => {
+      expect(pick({ ...active, projectCount: 4, boxCount: 0 })).toBe("box-create");
+      expect(pick({ ...active, projectCount: 9, boxCount: 0 })).toBe("box-create");
+    });
+
+    it("waits for four projects", () => {
+      expect(pick({ ...active, projectCount: 3, boxCount: 0 })).toBeNull();
+    });
+
+    it("never shows once a box exists, or while the box count is unknown", () => {
+      expect(pick({ ...active, projectCount: 6, boxCount: 1 })).toBeNull();
+      expect(pick({ ...active, projectCount: 6 })).toBeNull();
+    });
+
+    it("needs its anchor on screen like every feature hint", () => {
+      expect(pick({ ...active, projectCount: 6, boxCount: 0 }, () => false)).toBeNull();
+    });
+
+    it("has copy in all five languages", () => {
+      for (const lang of ["en", "de", "es", "fr", "it"] as const) {
+        for (const part of ["title", "body"]) {
+          expect(translate(lang, `hint.f.box-create.${part}` as never).length).toBeGreaterThan(0);
+        }
+      }
+    });
   });
 
   it("still lets an anchored onboarding hint wait for its anchor", () => {

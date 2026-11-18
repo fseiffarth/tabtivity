@@ -1,8 +1,9 @@
 //! Read-aloud (docs/desktop_voice_plan.md step 2c): one speaker thread for
 //! the machine, a queue of reads, and the OS voice behind [`TtsEngine`] —
 //! SSIP to speech-dispatcher on Linux ([`super::ssip`]), the `tts` crate's
-//! WinRT / AVFoundation voices on Windows and macOS. Phase 2's Piper would be
-//! one more engine; nothing above the trait changes.
+//! WinRT / AVFoundation voices on Windows and macOS — or, per read, a natural
+//! Piper voice ([`super::piper`], plan step 7) when one is installed for the
+//! read's language and the user has not turned natural voices off.
 //!
 //! The mute gate ([`super::session::GATE`]) goes up before the first chunk
 //! of a read and down after the last one; `voice:speaking` `done` is sent
@@ -25,9 +26,25 @@ pub use super::ssip::Spoken;
 
 pub const EV_SPEAKING: &str = "voice:speaking";
 
-/// An OS voice. `say` blocks until the chunk is spoken or `cancel` stops it.
+/// A voice. `say` blocks until the chunk is spoken or `cancel` stops it.
 pub trait TtsEngine {
     fn say(&mut self, chunk: &str, lang: &str, rate: f32, cancel: &AtomicBool) -> Result<Spoken, VoiceError>;
+
+    /// A whole read; `natural`: a Piper voice may say it. By default each
+    /// chunk in turn, and a stop ends it before the next.
+    fn say_read(&mut self, chunks: &[String], lang: &str, rate: f32, natural: bool, cancel: &AtomicBool) -> Result<Spoken, VoiceError> {
+        let _ = natural;
+        for chunk in chunks {
+            if cancel.load(Ordering::SeqCst) {
+                return Ok(Spoken::Cancelled);
+            }
+            let outcome = self.say(chunk, lang, rate, cancel)?;
+            if outcome != Spoken::Done {
+                return Ok(outcome);
+            }
+        }
+        Ok(Spoken::Done)
+    }
 }
 
 /// Builds the engine on the speaker thread (the `tts` crate's handle must
@@ -49,6 +66,7 @@ struct Read {
     chunks: Vec<String>,
     lang: String,
     rate: f32,
+    natural: bool,
     /// The stop count when it was queued: a later stop drops it.
     generation: u64,
 }
@@ -86,17 +104,11 @@ fn run(ctx: CoreCtx, factory: EngineFactory, reads: Receiver<Read>, cancel: Arc<
         cancel.store(false, Ordering::SeqCst);
         GATE.set_speaking(true, Instant::now());
         emit(&ctx, &read.id, "started", None);
-        let mut outcome: Result<Spoken, VoiceError> = Ok(Spoken::Done);
-        for chunk in &read.chunks {
-            if read.generation < generation.load(Ordering::SeqCst) {
-                outcome = Ok(Spoken::Cancelled);
-                break;
-            }
-            outcome = engine.say(chunk, &read.lang, read.rate, &cancel);
-            if !matches!(outcome, Ok(Spoken::Done)) {
-                break;
-            }
-        }
+        let outcome = if read.generation < generation.load(Ordering::SeqCst) {
+            Ok(Spoken::Cancelled)
+        } else {
+            engine.say_read(&read.chunks, &read.lang, read.rate, read.natural, &cancel)
+        };
         GATE.set_speaking(false, Instant::now());
         match outcome {
             Ok(Spoken::Done) => {
@@ -115,7 +127,8 @@ static SPEAKER: Mutex<Option<Speaker>> = Mutex::new(None);
 
 /// Queue a read (after whatever is being said; `replace` stops that first).
 /// The speaker thread starts with the first read, on `factory`'s engine.
-pub fn queue(ctx: &CoreCtx, factory: impl FnOnce() -> EngineFactory, id: String, chunks: Vec<String>, lang: String, rate: f32, replace: bool) -> Result<(), VoiceError> {
+#[allow(clippy::too_many_arguments)]
+pub fn queue(ctx: &CoreCtx, factory: impl FnOnce() -> EngineFactory, id: String, chunks: Vec<String>, lang: String, rate: f32, natural: bool, replace: bool) -> Result<(), VoiceError> {
     let mut guard = SPEAKER.lock_ok();
     if guard.as_ref().is_some_and(|s| s.thread.is_finished()) {
         *guard = None;
@@ -140,13 +153,15 @@ pub fn queue(ctx: &CoreCtx, factory: impl FnOnce() -> EngineFactory, id: String,
     let generation = speaker.generation.load(Ordering::SeqCst);
     speaker
         .reads
-        .send(Read { id, chunks, lang, rate, generation })
+        .send(Read { id, chunks, lang, rate, natural, generation })
         .map_err(|_| VoiceError::SpeechFailed)
 }
 
 fn stop_speaker(speaker: &Speaker) {
     speaker.generation.fetch_add(1, Ordering::SeqCst);
     speaker.cancel.store(true, Ordering::SeqCst);
+    // A Piper child dies at once, not at the speaker's next poll.
+    super::piper::kill_current();
 }
 
 /// Stop what is being said and everything queued.
@@ -310,7 +325,54 @@ pub fn os_engine() -> EngineFactory {
     })
 }
 
-/// Whether read-aloud can run here, without starting anything.
+/// Read-aloud's engine: a natural voice when one is installed for the read's
+/// language (and wanted), else the OS voice, built only once it is needed —
+/// a machine reading only with Piper never connects to speech-dispatcher.
+struct ReadAloud {
+    os: Option<Result<Box<dyn TtsEngine>, VoiceError>>,
+}
+
+impl ReadAloud {
+    fn os(&mut self) -> Result<&mut Box<dyn TtsEngine>, VoiceError> {
+        let os = self.os.get_or_insert_with(|| os_engine()());
+        os.as_mut().map_err(|e| *e)
+    }
+}
+
+impl TtsEngine for ReadAloud {
+    fn say(&mut self, chunk: &str, lang: &str, rate: f32, cancel: &AtomicBool) -> Result<Spoken, VoiceError> {
+        self.os()?.say(chunk, lang, rate, cancel)
+    }
+
+    fn say_read(&mut self, chunks: &[String], lang: &str, rate: f32, natural: bool, cancel: &AtomicBool) -> Result<Spoken, VoiceError> {
+        #[cfg(feature = "voice-io")]
+        {
+            if let Some(voice) = super::piper::ready_for(lang).filter(|_| natural) {
+                if let Some(spoken) = super::piper::say_read(voice, chunks, rate, cancel)? {
+                    return Ok(spoken);
+                }
+            }
+        }
+        let _ = natural;
+        self.os()?.say_read(chunks, lang, rate, false, cancel)
+    }
+}
+
+/// The speaker's engine: natural voices with the OS voice behind them.
+pub fn engine() -> EngineFactory {
+    Box::new(|| Ok(Box::new(ReadAloud { os: None }) as Box<dyn TtsEngine>))
+}
+
+/// Whether a read in `lang` can be said here, without starting anything:
+/// an installed natural voice needs no OS voice.
+pub fn availability_for(lang: &str, natural: bool) -> Option<VoiceError> {
+    if natural && super::piper::ready_for(lang).is_some() {
+        return None;
+    }
+    availability()
+}
+
+/// Whether the OS voice can run here, without starting anything.
 pub fn availability() -> Option<VoiceError> {
     #[cfg(target_os = "linux")]
     {
@@ -394,8 +456,8 @@ mod tests {
     fn reads_are_spoken_in_turn_with_done_after_the_tail() {
         let _serial = SERIAL.lock_ok();
         let (ctx, events, said, factory) = setup(10);
-        queue(&ctx, &factory, "a".into(), chunks(&["One.", "Two."]), "de".into(), 1.0, false).unwrap();
-        queue(&ctx, &factory, "b".into(), chunks(&["Three."]), "de".into(), 1.0, false).unwrap();
+        queue(&ctx, &factory, "a".into(), chunks(&["One.", "Two."]), "de".into(), 1.0, false, false).unwrap();
+        queue(&ctx, &factory, "b".into(), chunks(&["Three."]), "de".into(), 1.0, false, false).unwrap();
         wait_for(&events, 4);
         assert_eq!(states(&events), [("a".into(), "started".into()), ("a".into(), "done".into()), ("b".into(), "started".into()), ("b".into(), "done".into())]);
         assert_eq!(*said.lock().unwrap(), ["One.", "Two.", "Three."]);
@@ -407,7 +469,7 @@ mod tests {
     fn the_mic_is_muted_while_it_speaks() {
         let _serial = SERIAL.lock_ok();
         let (ctx, events, _, factory) = setup(300);
-        queue(&ctx, &factory, "a".into(), chunks(&["Long."]), "en".into(), 1.0, false).unwrap();
+        queue(&ctx, &factory, "a".into(), chunks(&["Long."]), "en".into(), 1.0, false, false).unwrap();
         wait_for(&events, 1);
         assert!(GATE.muted(Instant::now()));
         wait_for(&events, 2);
@@ -418,8 +480,8 @@ mod tests {
     fn a_stop_cancels_the_read_and_drops_the_queue() {
         let _serial = SERIAL.lock_ok();
         let (ctx, events, said, factory) = setup(2_000);
-        queue(&ctx, &factory, "a".into(), chunks(&["Long.", "Longer."]), "en".into(), 1.0, false).unwrap();
-        queue(&ctx, &factory, "b".into(), chunks(&["Queued."]), "en".into(), 1.0, false).unwrap();
+        queue(&ctx, &factory, "a".into(), chunks(&["Long.", "Longer."]), "en".into(), 1.0, false, false).unwrap();
+        queue(&ctx, &factory, "b".into(), chunks(&["Queued."]), "en".into(), 1.0, false, false).unwrap();
         wait_for(&events, 1);
         stop();
         wait_for(&events, 3);
@@ -432,9 +494,9 @@ mod tests {
     fn replace_says_the_new_read_instead() {
         let _serial = SERIAL.lock_ok();
         let (ctx, events, said, factory) = setup(1_000);
-        queue(&ctx, &factory, "a".into(), chunks(&["Old."]), "en".into(), 1.0, false).unwrap();
+        queue(&ctx, &factory, "a".into(), chunks(&["Old."]), "en".into(), 1.0, false, false).unwrap();
         wait_for(&events, 1);
-        queue(&ctx, &factory, "b".into(), chunks(&["New."]), "en".into(), 1.0, true).unwrap();
+        queue(&ctx, &factory, "b".into(), chunks(&["New."]), "en".into(), 1.0, false, true).unwrap();
         wait_for(&events, 4);
         assert_eq!(states(&events)[1], ("a".into(), "stopped".into()));
         assert_eq!(*said.lock().unwrap(), ["New."]);
@@ -446,7 +508,7 @@ mod tests {
         let _serial = SERIAL.lock_ok();
         let (ctx, events, _, _) = setup(0);
         let failing = || -> EngineFactory { Box::new(|| Err(VoiceError::NoSpeechServer)) };
-        queue(&ctx, failing, "a".into(), chunks(&["x"]), "en".into(), 1.0, false).unwrap();
+        queue(&ctx, failing, "a".into(), chunks(&["x"]), "en".into(), 1.0, false, false).unwrap();
         wait_for(&events, 1);
         assert_eq!(events.payloads(EV_SPEAKING)[0], serde_json::json!({ "readId": "a", "state": "failed", "reason": "no-speech-server" }));
         stop_for_exit(Duration::from_secs(1));

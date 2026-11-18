@@ -196,6 +196,20 @@ fn probe(dir: &Path, program: &str, args: &[&str]) -> Option<String> {
     }
 }
 
+/// Poetry's env path for `dir`, asked only when `approved(dir)`: Poetry runs
+/// project-chosen plugins, so an unapproved folder is never handed to it.
+fn poetry_env_if(
+    dir: &Path,
+    approved: impl FnOnce(&Path) -> bool,
+    run: impl FnOnce(&Path) -> Option<String>,
+) -> Option<String> {
+    if approved(dir) {
+        run(dir)
+    } else {
+        None
+    }
+}
+
 /// Interpreters visible from a LOCAL project directory.
 ///
 /// Done natively rather than by shelling out a script because it must also work on
@@ -225,7 +239,14 @@ pub fn discover_local(dir: &Path) -> Vec<PyInterpreter> {
     }
 
     // 2. Poetry — the env lives outside the tree, so nothing else can find it.
-    if let Some(p) = probe(dir, "poetry", &["env", "info", "-p"]) {
+    //    Poetry reads the project's `pyproject.toml`/`poetry.toml` and can load
+    //    project-named plugins, i.e. run the project's code on the host. So it
+    //    runs only for a folder the user approved through `exec_trust`; any
+    //    other folder just offers no poetry entry (probes are optional).
+    let poetry = poetry_env_if(dir, crate::services::exec_trust::approved_for, |dir| {
+        probe(dir, "poetry", &["env", "info", "-p"])
+    });
+    if let Some(p) = poetry {
         let py = PathBuf::from(&p).join(venv_python_rel());
         if py.is_file() {
             out.push(PyInterpreter {
@@ -604,6 +625,25 @@ mod tests {
         );
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].kind, "poetry"); // ranked above "active"
+    }
+
+    /// Poetry is never run in a folder `exec_trust` has not approved, and an
+    /// approved one is asked as before.
+    #[test]
+    fn poetry_runs_only_in_an_approved_folder() {
+        let dir = Path::new("project");
+        let ran = std::cell::Cell::new(false);
+        let run = |_: &Path| {
+            ran.set(true);
+            Some("env".to_string())
+        };
+        assert_eq!(poetry_env_if(dir, |_| false, run), None);
+        assert!(!ran.get(), "an unapproved folder is never handed to poetry");
+        assert_eq!(poetry_env_if(dir, |_| true, run).as_deref(), Some("env"));
+        assert!(ran.get());
+        // The real check: a fresh folder has no approval.
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!crate::services::exec_trust::approved_for(tmp.path()));
     }
 
     #[test]

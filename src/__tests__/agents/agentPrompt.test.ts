@@ -207,6 +207,27 @@ describe("looksLikeDecisionPrompt", () => {
     // A numbered "Trust" item in an answer is not that menu.
     expect(looksLikeDecisionPrompt("• Steps:\n  1. Trust the proxy\n  2. Continue the rollout")).toBe(false);
   });
+
+  it("detects Meta Muse Code's menu, numbered without a stop behind a ⟩", () => {
+    // Captured from Muse 1.4.15's workspace-trust question (120 columns).
+    const screen = [
+      "Do you trust this workspace?",
+      "Workspace: /work",
+      "Trusting allows project-local skills, rules, hooks, and plugin config to load before the model runs.",
+      "Only trust this workspace when you trust its contents.",
+      "",
+      "⟩ 1  Trust and continue",
+      "  2  Quit",
+      "",
+      "Use Up/Down or 1/2, then Enter. Esc quits.",
+    ].join("\n");
+    expect(looksLikeDecisionPrompt(screen)).toBe(true);
+    // The pointer on the second row.
+    expect(looksLikeDecisionPrompt("  1  Trust and continue\n⟩ 2  Quit")).toBe(true);
+    // A pointer row alone, and two-space numbers inside a line, are not a menu.
+    expect(looksLikeDecisionPrompt("⟩ 1  Trust and continue\n\nDone.")).toBe(false);
+    expect(looksLikeDecisionPrompt("⟩ 1  item and 2  more on one line")).toBe(false);
+  });
 });
 
 describe("stripAnsi", () => {

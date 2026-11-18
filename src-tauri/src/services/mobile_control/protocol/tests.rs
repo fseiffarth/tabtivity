@@ -2,7 +2,7 @@ use super::{
     AgentTabPrompt, AgentTabPrompts, AgentTabSchedules, AgentTabStatus, AgentTabTiming, ClosedAgentTab, DesktopRequest,
     DesktopResponse, git_dot, MobileAlertItem,
     MobileAlertsSnapshot, MobileMarkupAnswer,
-    MobileMailView, MobilePromptInput, MobileScheduleInput, PromptMutation, ScheduleMutation, SyncDirection, SyncOp,
+    MobileMailView, MobilePromptInput, MobileScheduleInput, PromptMutation, ScheduleMutation, SyncOp,
 };
 use crate::schema::AgentScheduleRule;
 use serde_json::json;
@@ -138,13 +138,16 @@ fn a_newer_desktop_costs_the_phone_only_the_field_this_build_lacks() {
 fn the_sync_requests_are_placed_and_timed() {
     let id = || "request-1".to_string();
     let project = || "p".to_string();
-    let resolve = DesktopRequest::SyncResolve { request_id: id(), project_id: project(), op: SyncOp::DeleteHost, paths: vec!["a.txt".into()] };
+    let resolve = DesktopRequest::SyncResolve { request_id: id(), project_id: project(), op: SyncOp::DeleteHost, paths: vec!["a.txt".into()], expect: Some("abc".into()) };
     let wire = serde_json::to_value(&resolve).expect("serialize");
-    assert_eq!((wire["type"].as_str(), wire["op"].as_str()), (Some("sync_resolve"), Some("delete_host")));
+    assert_eq!((wire["type"].as_str(), wire["op"].as_str(), wire["expect"].as_str()), (Some("sync_resolve"), Some("delete_host"), Some("abc")));
+    // A forget carries no fingerprint, and a window reads one without it.
+    let forget = serde_json::json!({ "type": "sync_resolve", "request_id": "r", "project_id": "p", "op": "forget", "paths": [] });
+    assert!(matches!(serde_json::from_value::<DesktopRequest>(forget).expect("decode"), DesktopRequest::SyncResolve { expect: None, .. }));
     assert!(resolve.is_mutation());
     let reads = [
         DesktopRequest::SyncDiverged { request_id: id(), project_id: project() },
-        DesktopRequest::SyncPreview { request_id: id(), project_id: project(), direction: SyncDirection::Push, paths: vec![] },
+        DesktopRequest::SyncPreview { request_id: id(), project_id: project(), op: SyncOp::DeleteLocal, paths: vec![] },
         DesktopRequest::SyncDiff { request_id: id(), project_id: project(), path: "a.txt".into() },
     ];
     for read in &reads {

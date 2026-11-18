@@ -16,11 +16,15 @@
 
 use std::{fs, path::Path};
 
+use base64ct::{Base64UrlUnpadded, Encoding};
+use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use serde::Serialize;
 use serde_json::Value;
+use sha2::Sha256;
 
 use super::files::{self, FilesError};
-use super::protocol::DivergedFile;
+use super::protocol::{DivergedFile, SyncOp};
 
 /// Rows sent; the rest are counted in `total`, and one action takes at most
 /// this many, so all of a shown list goes at once.
@@ -58,6 +62,103 @@ pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesErr
 /// project. A hidden name is refused here too (`files::unseal`).
 pub fn unseal(host_key: &[u8], raw_id: &str, token: &str) -> Option<String> {
     files::unseal(host_key, &aad(raw_id), token)
+}
+
+/// How long a preview token stays good: the phone's confirmation sheet is
+/// open for a moment, not for the afternoon.
+pub const PREVIEW_TTL_SECS: u64 = 600;
+
+/// The longest fingerprint a token carries: a SHA-256 in hex.
+const MAX_FINGERPRINT: usize = 64;
+
+/// Why a resolve's preview token did not open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewRefusal {
+    /// The resolve named no token (an older phone, or one that skipped the
+    /// preview).
+    Required,
+    /// Malformed, forged, past its expiry, or minted for another project, op
+    /// or set of files.
+    Stale,
+}
+
+impl PreviewRefusal {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Required => "preview_required",
+            Self::Stale => "preview_stale",
+        }
+    }
+}
+
+/// The key preview tokens are authenticated with: derived from the host key
+/// under its own label, so it is never the one path tokens are sealed with.
+fn preview_key(host_key: &[u8]) -> [u8; 32] {
+    let mut key: [u8; 32] = std::array::from_fn(|_| 0);
+    Hkdf::<Sha256>::new(Some(b"diverged-preview"), host_key)
+        .expand(b"preview-token v1", &mut key)
+        .expect("32 bytes is a valid HKDF-SHA256 length");
+    key
+}
+
+/// What a token's MAC covers: the project, the op, the sorted paths, the
+/// window's fingerprint and the expiry, each length-prefixed so no field runs
+/// into the next.
+fn preview_mac(host_key: &[u8], raw_id: &str, op: SyncOp, paths: &[String], fingerprint: &str, expiry: u64) -> HmacSha256 {
+    let mut mac = HmacSha256::new_from_slice(&preview_key(host_key)).expect("HMAC accepts all key sizes");
+    let mut field = |bytes: &[u8]| {
+        mac.update(&(bytes.len() as u64).to_be_bytes());
+        mac.update(bytes);
+    };
+    field(raw_id.as_bytes());
+    field(op.as_str().as_bytes());
+    let mut sorted: Vec<&String> = paths.iter().collect();
+    sorted.sort();
+    field(&(sorted.len() as u64).to_be_bytes());
+    for path in sorted {
+        field(path.as_bytes());
+    }
+    field(fingerprint.as_bytes());
+    field(&expiry.to_be_bytes());
+    mac
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// The token a preview hands the phone: `v1.<expiry>.<fingerprint>.<mac>`. The
+/// fingerprint is the window's hash of the state and mtimes of the rows it
+/// showed; the MAC is the host key's over it, the project, the op and the
+/// files, so a resolve can only be authorised by a preview of exactly what it
+/// does. `None` for a fingerprint that is not hex (a window that is not ours).
+pub fn preview_token(host_key: &[u8], raw_id: &str, op: SyncOp, paths: &[String], fingerprint: &str, now: u64) -> Option<String> {
+    if !valid_fingerprint(fingerprint) {
+        return None;
+    }
+    let expiry = now.saturating_add(PREVIEW_TTL_SECS);
+    let mac = preview_mac(host_key, raw_id, op, paths, fingerprint, expiry).finalize().into_bytes();
+    Some(format!("v1.{expiry}.{fingerprint}.{}", Base64UrlUnpadded::encode_string(&mac)))
+}
+
+fn valid_fingerprint(fingerprint: &str) -> bool {
+    !fingerprint.is_empty() && fingerprint.len() <= MAX_FINGERPRINT && fingerprint.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The fingerprint a token vouches for, if it was minted by this host for
+/// exactly this project, op and set of paths and has not expired. The MAC is
+/// compared in constant time.
+pub fn open_preview_token(host_key: &[u8], raw_id: &str, op: SyncOp, paths: &[String], token: Option<&str>, now: u64) -> Result<String, PreviewRefusal> {
+    let token = token.filter(|token| !token.is_empty()).ok_or(PreviewRefusal::Required)?;
+    let mut parts = token.split('.');
+    let (Some("v1"), Some(expiry), Some(fingerprint), Some(mac), None) = (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) else {
+        return Err(PreviewRefusal::Stale);
+    };
+    let (Ok(expiry), true, Ok(mac)) = (expiry.parse::<u64>(), valid_fingerprint(fingerprint), Base64UrlUnpadded::decode_vec(mac)) else {
+        return Err(PreviewRefusal::Stale);
+    };
+    if preview_mac(host_key, raw_id, op, paths, fingerprint, expiry).verify_slice(&mac).is_err() || now > expiry {
+        return Err(PreviewRefusal::Stale);
+    }
+    Ok(fingerprint.to_string())
 }
 
 /// One row as the phone gets it.
@@ -190,5 +291,83 @@ mod tests {
         let good = seal(KEY, "p", "a.txt").unwrap();
         assert_eq!(open_all(KEY, "p", std::slice::from_ref(&good)), Some(vec!["a.txt".to_string()]));
         assert_eq!(open_all(KEY, "p", &[good, "nonsense".into()]), None);
+    }
+
+    const FP: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn paths(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn a_preview_token_opens_for_the_op_and_files_it_was_minted_for() {
+        let files = paths(&["b.txt", "a.txt"]);
+        let token = preview_token(KEY, "p", SyncOp::DeleteHost, &files, FP, 1_000).unwrap();
+        // Order does not matter: the phone may name the files in any order.
+        let reordered = paths(&["a.txt", "b.txt"]);
+        assert_eq!(open_preview_token(KEY, "p", SyncOp::DeleteHost, &reordered, Some(&token), 1_001), Ok(FP.to_string()));
+        assert_eq!(open_preview_token(KEY, "p", SyncOp::DeleteHost, &files, Some(&token), 1_000 + PREVIEW_TTL_SECS), Ok(FP.to_string()), "good through its last second");
+    }
+
+    #[test]
+    fn a_preview_token_is_refused_for_anything_else() {
+        let files = paths(&["a.txt", "b.txt"]);
+        let token = preview_token(KEY, "p", SyncOp::DeleteHost, &files, FP, 1_000).unwrap();
+        let stale = |op, files: &[String], token: &str, now| open_preview_token(KEY, "p", op, files, Some(token), now);
+        assert_eq!(stale(SyncOp::DeleteHost, &files, &token, 1_000 + PREVIEW_TTL_SECS + 1), Err(PreviewRefusal::Stale), "expired");
+        assert_eq!(stale(SyncOp::DeleteLocal, &files, &token, 1_001), Err(PreviewRefusal::Stale), "another op");
+        assert_eq!(stale(SyncOp::Pull, &files, &token, 1_001), Err(PreviewRefusal::Stale), "a take-a-side from a delete's receipt");
+        assert_eq!(stale(SyncOp::DeleteHost, &paths(&["a.txt"]), &token, 1_001), Err(PreviewRefusal::Stale), "fewer files");
+        assert_eq!(stale(SyncOp::DeleteHost, &paths(&["a.txt", "b.txt", "c.txt"]), &token, 1_001), Err(PreviewRefusal::Stale), "more files");
+        assert_eq!(stale(SyncOp::DeleteHost, &paths(&["a.txt", "c.txt"]), &token, 1_001), Err(PreviewRefusal::Stale), "other files");
+        assert_eq!(open_preview_token(KEY, "other", SyncOp::DeleteHost, &files, Some(&token), 1_001), Err(PreviewRefusal::Stale), "another project");
+        assert_eq!(open_preview_token(&[8u8; 32], "p", SyncOp::DeleteHost, &files, Some(&token), 1_001), Err(PreviewRefusal::Stale), "another host key");
+    }
+
+    #[test]
+    fn a_preview_token_cannot_be_edited_to_say_something_else() {
+        let files = paths(&["a.txt"]);
+        let token = preview_token(KEY, "p", SyncOp::DeleteHost, &files, FP, 1_000).unwrap();
+        let parts: Vec<&str> = token.split('.').collect();
+        let other_fp = "f".repeat(64);
+        let forged = [
+            format!("{}.{}.{}.{}", parts[0], parts[1], other_fp, parts[3]),
+            format!("{}.{}.{}.{}", parts[0], 9_999_999, parts[2], parts[3]),
+            format!("v2.{}.{}.{}", parts[1], parts[2], parts[3]),
+            format!("{}.{}.{}", parts[0], parts[1], parts[2]),
+            format!("{token}.extra"),
+            format!("v1.1600.{FP}.not base64!"),
+            String::from("garbage"),
+        ];
+        for token in &forged {
+            assert_eq!(open_preview_token(KEY, "p", SyncOp::DeleteHost, &files, Some(token), 1_001), Err(PreviewRefusal::Stale), "{token}");
+        }
+    }
+
+    #[test]
+    fn no_token_is_required_not_stale() {
+        let files = paths(&["a.txt"]);
+        assert_eq!(open_preview_token(KEY, "p", SyncOp::Pull, &files, None, 1), Err(PreviewRefusal::Required));
+        assert_eq!(open_preview_token(KEY, "p", SyncOp::Pull, &files, Some(""), 1), Err(PreviewRefusal::Required));
+        assert_eq!(PreviewRefusal::Required.code(), "preview_required");
+        assert_eq!(PreviewRefusal::Stale.code(), "preview_stale");
+    }
+
+    #[test]
+    fn only_a_hex_fingerprint_is_sealed() {
+        let files = paths(&["a.txt"]);
+        for bad in ["", "not hex", "ABC", &"a".repeat(65), "a.b"] {
+            assert_eq!(preview_token(KEY, "p", SyncOp::Pull, &files, bad, 1), None, "{bad:?}");
+        }
+        assert!(preview_token(KEY, "p", SyncOp::Pull, &files, "abc123", 1).is_some());
+    }
+
+    #[test]
+    fn only_forget_goes_without_a_preview() {
+        for op in [SyncOp::Pull, SyncOp::Push, SyncOp::DeleteHost, SyncOp::DeleteLocal] {
+            assert!(op.needs_preview(), "{op:?}");
+        }
+        assert!(!SyncOp::Forget.needs_preview());
+        assert!(SyncOp::DeleteHost.deletes() && SyncOp::DeleteLocal.deletes() && !SyncOp::Pull.deletes());
     }
 }

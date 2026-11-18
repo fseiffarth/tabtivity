@@ -306,9 +306,7 @@ pub(crate) fn compute_allowed_roots(
         let Some(b) = boxes.iter().find(|b| b.id == box_id) else {
             return Vec::new();
         };
-        if let Some(folder) = &b.folder {
-            roots.push(PathBuf::from(folder));
-        }
+        roots.extend(crate::services::box_store::box_folder_root(b));
         let in_box = || {
             projects
                 .iter()

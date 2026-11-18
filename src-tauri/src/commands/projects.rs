@@ -13,6 +13,7 @@ use crate::schema::project::{
 };
 use crate::schema::projects::{ProjectEntry, ProjectsList};
 use crate::services::remote_sync::SyncManifestState;
+use crate::services::scaffold::{self, write_scaffold_file};
 use crate::storage;
 use crate::tauri_host::Ctx;
 pub(crate) use crate::paths::sanitize_name;
@@ -734,6 +735,10 @@ pub(crate) fn entry_is_vm(entry: &ProjectEntry) -> bool {
 /// exist. `src` is only removed after the whole copy succeeded, so a failed
 /// fallback leaves the source intact and the move retryable.
 pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
+    move_tree_with(src, dst, CopyLimits::DEFAULT)
+}
+
+fn move_tree_with(src: &Path, dst: &Path, limits: CopyLimits) -> Result<(), String> {
     if !src.exists() {
         return Ok(());
     }
@@ -745,7 +750,7 @@ pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
         Err(e) if crate::paths::is_cross_device(&e) || dst.exists() => {}
         Err(e) => return Err(format!("could not move {}: {e}", src.display())),
     }
-    copy_tree_core(src, dst, true)?;
+    copy_tree_core_with(src, dst, true, limits)?;
     fs::remove_dir_all(src).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -765,10 +770,25 @@ fn move_fresh_tree(
     what: &str,
     rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<(), String> {
+    move_fresh_tree_with(src, dst, what, rename, CopyLimits::DEFAULT)
+}
+
+fn move_fresh_tree_with(
+    src: &Path,
+    dst: &Path,
+    what: &str,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    limits: CopyLimits,
+) -> Result<(), String> {
     match rename(src, dst) {
         Ok(()) => Ok(()),
         Err(e) if crate::paths::is_cross_device(&e) => {
-            copy_tree_core(src, dst, true)?;
+            // `dst` was free, so what is there after a failed copy (a bound
+            // hit, a read error) is our half-made tree; the source stays.
+            if let Err(error) = copy_tree_core_with(src, dst, true, limits) {
+                let _ = fs::remove_dir_all(dst);
+                return Err(error);
+            }
             fs::remove_dir_all(src).map_err(|e| e.to_string())
         }
         Err(e) => Err(format!("could not move {what}: {e}")),
@@ -790,10 +810,82 @@ fn move_fresh_tree(
 /// case — errored out a cross-device `archive_project` halfway through the
 /// move, and a link to a large tree silently duplicated it. A dangling link is
 /// therefore fine here: the link itself is copied, pointing at the same target.
+///
+/// Gap 83: the tree is one an agent may have written to, so the walk takes
+/// each entry's type from the directory entry (an `lstat`, never a followed
+/// link) and copies only regular files, read from a handle opened
+/// `O_NOFOLLOW | O_NONBLOCK` and checked regular on that handle
+/// ([`home_io::open_regular`]) — a FIFO an agent planted blocks nothing, and
+/// pipes, sockets and devices are skipped (they carry no data, so a move that
+/// skipped one still removes its source). Entries, bytes and depth are
+/// bounded like [`tree_copy`]'s; a bound hit fails the copy, and every caller
+/// removes the source only after a copy that returned `Ok`.
 fn copy_tree_core(src: &Path, dst: &Path, keep_git: bool) -> Result<(), String> {
+    copy_tree_core_with(src, dst, keep_git, CopyLimits::DEFAULT)
+}
+
+/// What one [`copy_tree_core`] walk may cover.
+#[derive(Debug, Clone, Copy)]
+struct CopyLimits {
+    entries: usize,
+    bytes: u64,
+    depth: usize,
+}
+
+impl CopyLimits {
+    /// The user's own copy (archive, mirror move, Duplicate, the Remote →
+    /// Remote-only move-out): the tree is theirs and a `target/` or
+    /// `node_modules/` easily holds 200 000 entries, so there is no entry or
+    /// byte cap (user decision, 2026-11-05; the caps of
+    /// [`crate::services::tree_copy`] guard a tree a stranger or a remote host
+    /// picks). The depth cap stays: it bounds the walk's recursion, not a size.
+    const DEFAULT: CopyLimits = CopyLimits { entries: usize::MAX, bytes: u64::MAX, depth: 128 };
+}
+
+/// The running totals of one walk.
+#[derive(Default)]
+struct CopyTally {
+    entries: usize,
+    bytes: u64,
+    skipped: usize,
+}
+
+fn copy_tree_core_with(
+    src: &Path,
+    dst: &Path,
+    keep_git: bool,
+    limits: CopyLimits,
+) -> Result<(), String> {
+    let mut tally = CopyTally::default();
+    copy_dir_core(src, dst, keep_git, limits, &mut tally, 0)?;
+    if tally.skipped > 0 {
+        eprintln!(
+            "copy_tree_core: left {} special file(s) (pipes, sockets, devices) out of {}",
+            tally.skipped,
+            src.display()
+        );
+    }
+    Ok(())
+}
+
+fn copy_dir_core(
+    src: &Path,
+    dst: &Path,
+    keep_git: bool,
+    limits: CopyLimits,
+    tally: &mut CopyTally,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > limits.depth {
+        return Err("too large to copy: the folders are nested too deeply".to_string());
+    }
     fs::create_dir_all(dst).map_err(|e| e.to_string())?;
     for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
+        tally.entries += 1;
+        if tally.entries > limits.entries {
+            return Err("too large to copy: the folder holds too many entries".to_string());
+        }
         let file_type = entry.file_type().map_err(|e| e.to_string())?;
         if !keep_git && entry.file_name() == ".git" {
             continue;
@@ -806,12 +898,120 @@ fn copy_tree_core(src: &Path, dst: &Path, keep_git: bool) -> Result<(), String> 
             if !keep_git && fs::symlink_metadata(from.join(".git")).is_ok() {
                 continue;
             }
-            copy_tree_core(&from, &to, keep_git)?;
+            copy_dir_core(&from, &to, keep_git, limits, tally, depth + 1)?;
+        } else if file_type.is_file() {
+            copy_file_core(&from, &to, limits, tally)?;
         } else {
-            fs::copy(&from, &to).map_err(|e| e.to_string())?;
+            tally.skipped += 1;
         }
     }
     Ok(())
+}
+
+/// Open `from` (listed as a regular file) for reading the way
+/// [`crate::services::home_io::open_regular`] does — no link followed, no wait
+/// on a FIFO, regular on the handle — but telling "not there to copy" from
+/// "could not be read": `Ok(None)` only for a file that vanished or stopped
+/// being a regular file since the directory read (a swapped-in link, pipe or
+/// socket); an unreadable file (permissions, I/O) is an `Err`, so the move
+/// that called never removes a source holding bytes it could not copy.
+fn open_source_file(from: &Path) -> Result<Option<fs::File>, String> {
+    #[cfg(unix)]
+    let opened = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(from)
+    };
+    #[cfg(not(unix))]
+    let opened = match fs::symlink_metadata(from) {
+        Ok(m) if m.is_file() => fs::File::open(from),
+        Ok(_) => return Ok(None),
+        Err(e) => Err(e),
+    };
+    match opened {
+        Ok(file) => Ok(file
+            .metadata()
+            .map_err(|e| format!("{}: {e}", from.display()))?
+            .is_file()
+            .then_some(file)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        #[cfg(unix)]
+        // ELOOP: a link where the file was; ENXIO: a socket or an unopened pipe.
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENXIO)) => Ok(None),
+        Err(e) => Err(format!("{}: {e}", from.display())),
+    }
+}
+
+/// One regular file, through a no-follow, non-blocking handle that is checked
+/// regular once open. A file that stopped being regular (or vanished) between
+/// the directory read and the open is skipped, like a special file. The
+/// destination may be left by an interrupted earlier pass (a resumed archive),
+/// so it is opened by [`create_destination`]: never through a link.
+fn copy_file_core(from: &Path, to: &Path, limits: CopyLimits, tally: &mut CopyTally) -> Result<(), String> {
+    use std::io::Read;
+    let Some(input) = open_source_file(from)? else {
+        tally.skipped += 1;
+        return Ok(());
+    };
+    let permissions = input.metadata().ok().map(|m| m.permissions());
+    let mut out = create_destination(to)?;
+    let room = limits.bytes.saturating_sub(tally.bytes);
+    // One byte past the room tells "exactly full" from "over".
+    let copied = std::io::copy(&mut input.take(room.saturating_add(1)), &mut out)
+        .map_err(|e| e.to_string())?;
+    if copied > room {
+        return Err("too large to copy: the copy is larger than the limit".to_string());
+    }
+    tally.bytes += copied;
+    if let Some(permissions) = permissions {
+        let _ = out.set_permissions(permissions);
+    }
+    Ok(())
+}
+
+/// Open the destination file of a copy for writing without following a link.
+/// A new file is made with `O_EXCL | O_NOFOLLOW`; one a resumed pass left is
+/// opened `O_NOFOLLOW | O_NONBLOCK`, checked regular on the handle (a FIFO
+/// planted there fails instead of blocking the copy), and then emptied. A link
+/// at `to` is refused: the copy fails (a move keeps its source) rather than
+/// write through it or guess what it was meant to be.
+fn create_destination(to: &Path) -> Result<fs::File, String> {
+    let refuse = |why: &str| format!("{}: {why}", to.display());
+    match fs::symlink_metadata(to) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(refuse("the destination is a link, not a file the copy may write"));
+        }
+        Ok(meta) if !meta.is_file() => {
+            return Err(refuse("the destination is not a regular file"));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+            return options.open(to).map_err(|e| format!("{}: {e}", to.display()));
+        }
+        Err(e) => return Err(refuse(&e.to_string())),
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    if !file.metadata().map_err(|e| format!("{}: {e}", to.display()))?.is_file() {
+        return Err(refuse("the destination is not a regular file"));
+    }
+    file.set_len(0).map_err(|e| format!("{}: {e}", to.display()))?;
+    Ok(file)
 }
 
 /// Recreate one symlink at `to`, replacing whatever an interrupted earlier copy
@@ -958,6 +1158,8 @@ pub fn archive_project_blocking(project_id: String, archived_at: String) -> Resu
         }
         Ok(())
     })?;
+    // The folder moved into the archive; its checkpoints name the old place.
+    crate::services::checkpoints::purge_project(&project_id);
     Ok(())
 }
 
@@ -1028,6 +1230,8 @@ fn forget_project_state(project_id: &str, remote: bool) -> Result<(), String> {
         dirs.push(remote_project_state_dir(project_id));
     }
     remove_dirs_if_present(&dirs)?;
+    // Its per-turn checkpoints (`services::checkpoints`).
+    crate::services::checkpoints::purge_project(project_id);
     purge_project_time(project_id)
 }
 
@@ -1632,6 +1836,9 @@ fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEn
     {
         eprintln!("rename_project_dir: saved tab layout not updated: {e}");
     }
+    if let Err(e) = crate::services::tab_archive::rewrite_paths(project_id, old_s, new_s) {
+        eprintln!("rename_project_dir: tab archive not updated: {e}");
+    }
     if new.join(".git").exists() {
         if let Err(e) = repair_moved_worktrees(&new, old_s, new_s) {
             eprintln!("rename_project_dir: git worktree repair: {e}");
@@ -1765,6 +1972,14 @@ pub fn set_project_sandbox_blocking(
         );
     }
 
+    // A local-models-only project runs no container yet
+    // (`services::agent_privacy`).
+    if enabled {
+        if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
+            return Err(refusal);
+        }
+    }
+
     // Existing spec: the `projects.json` mirror in the state dir is the ONLY
     // source. There used to be a `project.json` fallback for entries predating the
     // mirror, but `project.json` lives inside the project tree — inside the
@@ -1854,6 +2069,13 @@ pub fn set_project_sandbox_spec(
     clean(&mut spec.memory);
     clean(&mut spec.cpus);
     clean(&mut spec.network);
+    if spec.enabled {
+        if let Ok(entry) = crate::services::remote::project_entry(&project_id) {
+            if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
+                return Err(refusal);
+            }
+        }
+    }
     // Refuse `host` (and any non-name) here, where the user can see the error —
     // `services::sandbox::harden_opts` additionally drops an invalid network at
     // spawn, so a spec written before this check still can't remove isolation.
@@ -2088,17 +2310,24 @@ fn apply_mobile_access(project: &mut ProjectEntry, enabled: bool, devices: Optio
     }
 }
 
-/// What this machine needs before any project can be a phone scope: local
-/// terminals that outlive the window (the phone attaches to their tmux
-/// sessions), and tmux itself.
-fn mobile_access_prerequisites() -> Result<(), String> {
+/// What this machine needs before any project or box can be a phone scope:
+/// local terminals that outlive the window (the phone attaches to their
+/// sessions), and the session backend itself (tmux; on Windows the session
+/// host). The desktop asks to turn these on before it calls a switch-on
+/// (`mobileSessionGate.ts`), so this refusal is the backstop.
+pub(crate) fn mobile_access_prerequisites() -> Result<(), String> {
     let settings: crate::schema::Settings =
         storage::read_json(&storage::settings_path()).unwrap_or_default();
     if !settings.persist_local_sessions() {
         return Err("Enable persistent local terminal sessions before Mobile access".into());
     }
-    if !crate::services::tmux_local::tmux_available() {
-        return Err("Mobile access requires tmux on this machine".into());
+    if !crate::services::session_mux::mux().available() {
+        // Windows has no tmux by design: its backend is the session host.
+        return Err(if cfg!(windows) {
+            "Mobile access on Windows needs the Windows session host: turn it on in Settings → Mobile".into()
+        } else {
+            "Mobile access requires tmux on this machine".into()
+        });
     }
     Ok(())
 }
@@ -2223,6 +2452,26 @@ pub fn set_project_remote_label(
         .map(str::to_string);
     patch_remote_spec(&project_id, |remote| remote.label = normalized.clone())?;
     Ok(normalized)
+}
+
+/// Set (or clear) the **agent folder** of a remote project's primary machine: the
+/// absolute folder on the host where agent CLIs install and keep their sessions
+/// and login instead of the login's home (`RemoteSpec::agent_dir`), for a host
+/// whose home quota is small. A blank string clears it. Applies to agent tabs
+/// launched after the change; the worker twin is `patch_compute_host`'s
+/// `agent_dir`. Returns the stored folder (`None` when cleared); an invalid path
+/// (relative, `~`, `..`) is refused and nothing is written.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_project_remote_agent_dir(
+    project_id: String,
+    agent_dir: Option<String>,
+) -> Result<Option<String>, String> {
+    let cleaned = match agent_dir {
+        Some(dir) => crate::services::remote_agents::clean_agent_dir(&dir)?,
+        None => None,
+    };
+    patch_remote_spec(&project_id, |remote| remote.agent_dir = cleaned.clone())?;
+    Ok(cleaned)
 }
 
 /// Set (or clear) the **SSH login name** a remote project's primary host is
@@ -2494,7 +2743,7 @@ pub fn remove_compute_host(
 }
 
 /// Patch a worker host's toggles (`sync_code` / `pull_outputs` / `auto_connect` /
-/// `shared_fs` / `label` / `user`). Each argument is applied only when `Some`, so a
+/// `shared_fs` / `label` / `user` / `agent_dir`). Each argument is applied only when `Some`, so a
 /// caller can flip one flag without restating the others. Unknown `host_id` is a
 /// silent no-op (returns the unchanged list). A patch that would turn a worker of a
 /// remote-only project into a synced copy is refused, exactly as
@@ -2513,8 +2762,10 @@ pub fn patch_compute_host(
     shared_fs: Option<bool>,
     label: Option<String>,
     user: Option<String>,
+    agent_dir: Option<String>,
 ) -> Result<Vec<ComputeHost>, String> {
-    let patch = HostPatch { sync_code, pull_outputs, auto_connect, shared_fs, label, user };
+    let agent_dir = agent_dir.map(|dir| crate::services::remote_agents::clean_agent_dir(&dir)).transpose()?;
+    let patch = HostPatch { sync_code, pull_outputs, auto_connect, shared_fs, label, user, agent_dir };
     let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
     let refused = std::sync::Mutex::new(None);
     let hosts = patch_compute_hosts(&project_id, |hosts| {
@@ -2539,6 +2790,8 @@ struct HostPatch {
     shared_fs: Option<bool>,
     label: Option<String>,
     user: Option<String>,
+    /// Already checked by `clean_agent_dir`: `Some(None)` clears the folder.
+    agent_dir: Option<Option<String>>,
 }
 
 impl HostPatch {
@@ -2579,6 +2832,9 @@ impl HostPatch {
         }
         if let Some(v) = self.auto_connect {
             h.spec.auto_connect = v.then_some(true);
+        }
+        if let Some(dir) = &self.agent_dir {
+            h.spec.agent_dir = dir.clone();
         }
         if let Some(v) = &self.label {
             let t = v.trim();
@@ -3171,120 +3427,8 @@ pub fn move_remote_mirror_blocking(
 
 // ── Scaffold new project ───────────────────────────────────────────────────
 
-/// The one file that carries real instructions. Every agent-specific doc is a
-/// pointer to it (see `CLAUDE_SCAFFOLD`/`GEMINI_SCAFFOLD`), so guidance is
-/// written once and every agent reads the same text instead of three stubs
-/// drifting apart.
-///
-/// Kept to placeholders: agents load it every session, and it is the user's
-/// file from the first write on — never rewritten unless still byte-identical
-/// to a template Tabtivity shipped (`AGENTS_HISTORY`). So nothing about Tabtivity
-/// itself goes here (the `tabtivity-send` hint comes from `services::agent_hint`
-/// and the session hook), and the map of the other files is `PROJECT.md`'s.
-/// Changing this text? Add the old one to `scaffold_history/` first — a test
-/// pins it.
-const AGENTS_SCAFFOLD: &str = r#"# Agents
-
-Canonical instructions for every AI coding agent in this project;
-`CLAUDE.md` and `GEMINI.md` import this file. Write guidance **here**, and
-keep it to what an agent would otherwise get wrong: it is loaded into every
-session. [PROJECT.md](./PROJECT.md) maps the rest of the project.
-
-## Project
-
-_What this project is, in a sentence or two._
-
-## Running
-
-_Build, run and test commands._
-
-## Conventions
-
-_Layout, style, and anything an agent must not do._
-"#;
-
-/// Claude Code pointer. `@AGENTS.md` on its own line is Claude Code's import
-/// syntax, so the canonical text is actually *loaded*, not merely referenced —
-/// a plain "see AGENTS.md" line would leave the agent to decide whether to open
-/// it.
-const CLAUDE_SCAFFOLD: &str = r#"# Claude Context
-
-This project's instructions live in [AGENTS.md](./AGENTS.md); the import below
-pulls them in. Write project guidance there, not here — keep this file for
-Claude-specific overrides only.
-
-@AGENTS.md
-
-Other agent files: [AGENTS.md](./AGENTS.md) · [GEMINI.md](./GEMINI.md)
-"#;
-
-/// Gemini CLI pointer — same shape as `CLAUDE_SCAFFOLD`; the Gemini CLI honors
-/// the same `@file` import syntax in its context file.
-const GEMINI_SCAFFOLD: &str = r#"# Gemini Context
-
-This project's instructions live in [AGENTS.md](./AGENTS.md); the import below
-pulls them in. Write project guidance there, not here — keep this file for
-Gemini-specific overrides only.
-
-@AGENTS.md
-
-Other agent files: [AGENTS.md](./AGENTS.md) · [CLAUDE.md](./CLAUDE.md)
-"#;
-
-/// The navigation hub: one file linking every other scaffold file with a line
-/// on what it is for, so a fresh project can be walked from a single entry
-/// point — the links are relative, so the markdown viewer's link-following
-/// (#49/#50) opens each target in-app. Scaffolded like the rest (never
-/// overwritten), and listed first so previews show the map before the mapped.
-const PROJECT_SCAFFOLD: &str = concat!(r#"# Project Map
-
-Start here. This file links every scaffold file with what it is for, so the
-project can be navigated from one place. The links are relative and open
-in "#, crate::app_name!(), r#"'s markdown viewer.
-
-## Docs
-
-- [README.md](./README.md) — overview: what this project is and how to use it
-- [DOCUMENTATION.md](./DOCUMENTATION.md) — reference documentation
-- [ROADMAP.md](./ROADMAP.md) — planned direction
-- [STATUS.md](./STATUS.md) — current state
-- [TODO.md](./TODO.md) — open work items
-- [REMARKS.md](./REMARKS.md) — project-wide remarks attached to files and lines
-
-## Agent instructions
-
-- [AGENTS.md](./AGENTS.md) — canonical instructions for every AI coding agent
-- [CLAUDE.md](./CLAUDE.md) — Claude Code pointer; imports AGENTS.md
-- [GEMINI.md](./GEMINI.md) — Gemini CLI pointer; imports AGENTS.md
-
-## Config
-
-- [.claude/settings.json](./.claude/settings.json) — Claude Code permissions for this project
-- [.gitignore](./.gitignore) — patterns git ignores (git-backed projects only)
-
-_Add links to your own key files and folders here so this stays the map of
-the project._
-"#);
-
-const REMARKS_SCAFFOLD: &str = r#"# Remarks
-
-Per-file remarks. One bullet per remark:
-`- [ ] [<path>:<line>](./<path>:<line>) — text`. Line optional, a hint only.
-Tick a box to resolve a remark. Everything else in this file is yours.
-"#;
-
-pub const SCAFFOLD_FILES: &[(&str, &str)] = &[
-    ("PROJECT.md", PROJECT_SCAFFOLD),
-    ("AGENTS.md", AGENTS_SCAFFOLD),
-    ("CLAUDE.md", CLAUDE_SCAFFOLD),
-    ("GEMINI.md", GEMINI_SCAFFOLD),
-    ("TODO.md", "# TODO\n"),
-    ("REMARKS.md", REMARKS_SCAFFOLD),
-    ("ROADMAP.md", "# Roadmap\n"),
-    ("STATUS.md", "# Status\n"),
-    ("README.md", "# Project\n"),
-    ("DOCUMENTATION.md", "# Documentation\n"),
-];
+// The scaffold's docs and their templates live in `services::scaffold` (the
+// catalog); this module keeps the callers.
 
 /// The folder a saved screen grab lands in. `tabtivity-` prefixed because the
 /// plain name is one a *project* plausibly owns — a repo with its own
@@ -3360,7 +3504,22 @@ fn project_generated_dir_blocking(project_dir: String, kind: String) -> Result<S
 // the list for good.
 pub const GITIGNORE_DEFAULT: &str = concat!("__pycache__/\n*.pyc\n.venv/\nnode_modules/\ntarget/\ndist/\nbuild/\n.env\n.env.local\n.DS_Store\n*.log\n*.swp\n*.swo\n.idea/\n.", crate::app_slug!(), "/\n", crate::app_slug!(), "-screenshots/\n", crate::app_slug!(), "-emails/\n", crate::legacy_slug!(), "-screenshots/\n", crate::legacy_slug!(), "-emails/\nscreenshots/\nemails/\nproject.json\n");
 
-pub const CLAUDE_SETTINGS: &str = r#"{"permissions":{"allow":[],"deny":[]}}"#;
+/// The `.gitignore` a project in `dir` is given: [`GITIGNORE_DEFAULT`] plus
+/// each section its folder calls for (`scaffold::gitignore_sections_at`, e.g.
+/// LaTeX build files beside a `.tex`). Only ever adds to the generic list.
+pub fn gitignore_for(dir: &Path) -> String {
+    let mut text = GITIGNORE_DEFAULT.to_string();
+    for section in scaffold::gitignore_sections_at(dir) {
+        text.push('\n');
+        text.push_str(section.heading);
+        text.push('\n');
+        for pattern in section.patterns {
+            text.push_str(pattern);
+            text.push('\n');
+        }
+    }
+    text
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3370,7 +3529,9 @@ pub struct ScaffoldPreviewItem {
     pub kind: String,
 }
 
-/// Write the standard Tabtivity project scaffold into a directory.
+/// Write the standard Tabtivity project scaffold into a directory: the
+/// catalog's `default` docs (`services::scaffold`) and, for git projects, the
+/// `.gitignore`. Never over anything already there.
 ///
 /// When `with_git` is false the scaffold files are still written but no git
 /// repository is initialized — used for "local, no git" projects (git_type
@@ -3378,72 +3539,25 @@ pub struct ScaffoldPreviewItem {
 pub fn scaffold_project(dir: &Path, with_git: bool) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
 
-    for (name, content) in SCAFFOLD_FILES {
-        write_scaffold_file(&dir.join(name), content)?;
+    for doc in scaffold::defaults() {
+        scaffold::create_doc_at(dir, doc)?;
     }
     if with_git {
-        write_scaffold_file(&dir.join(".gitignore"), GITIGNORE_DEFAULT)?;
-    }
-    if let Some(dot_claude) = scaffold_claude_dir(dir)? {
-        write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)?;
+        write_scaffold_file(&dir.join(".gitignore"), &gitignore_for(dir))?;
     }
     if with_git && !dir.join(".git").exists() {
         let _ = crate::services::git_init::init_repo(dir);
-        // Give the fresh repo an initial commit so the scaffold (`.claude`, docs,
+        // Give the fresh repo an initial commit so the scaffold (docs,
         // `.gitignore`) is TRACKED, not merely present. This is what makes a later
         // remote `extend` seed the host: git lockstep pairs by transferring
         // *committed* state (`init_pairing` → `reset --hard`), so an unborn HEAD
         // would leave the freshly-paired remote empty and untracked files (like
-        // `.claude/settings.json`) never ride the bundle. Only runs for a repo we
+        // `AGENTS.md`) never ride the bundle. Only runs for a repo we
         // just created — an imported repo already has `.git`, so its history is
         // never touched.
         git_scaffold_commit(dir);
     }
     Ok(())
-}
-
-/// The most of a scaffold doc read to tell a legacy stub from the user's own.
-const MAX_SCAFFOLD_DOC_BYTES: u64 = 4 << 20;
-
-/// A scaffold doc (`CLAUDE.md`, …) in the project tree as text, `None` for
-/// anything else: missing, a link, a FIFO (never waited on — the project
-/// list asks this of every project), too large or not UTF-8. `None` is never
-/// a stub, so nothing that is not a plain file of ours is rewritten.
-fn read_scaffold_doc(path: &Path) -> Option<String> {
-    crate::services::home_io::read_record_capped(path, MAX_SCAFFOLD_DOC_BYTES)
-}
-
-/// Create one scaffold file unless something — a file, a folder, a symlink,
-/// dangling or not — is already at `path`. Returns whether it was written.
-///
-/// The never-overwrite rule in one place. An imported tree is attacker-controlled
-/// and the user's own, so an `exists()`-then-write pair was two holes: a dangling
-/// `CLAUDE.md -> ~/somewhere` passed the check and the write then created the
-/// link's target outside the project, and a file appearing between the check and
-/// the write was truncated. `create_new` + `O_NOFOLLOW` decide in the one open.
-fn write_scaffold_file(path: &Path, content: &str) -> std::io::Result<bool> {
-    match write_no_follow(path, content.as_bytes(), true) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-        Err(e) => Err(e),
-    }
-}
-
-/// `dir/.claude`, created when absent. `None` when something other than a real
-/// folder is already there — a file, or a symlink the tree shipped — and the
-/// scaffold then leaves `.claude/settings.json` alone rather than write through
-/// it or fail the whole import on it.
-fn scaffold_claude_dir(dir: &Path) -> std::io::Result<Option<PathBuf>> {
-    let dot_claude = dir.join(".claude");
-    match fs::symlink_metadata(&dot_claude) {
-        Ok(meta) if meta.is_dir() => Ok(Some(dot_claude)),
-        Ok(_) => Ok(None),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(&dot_claude)?;
-            Ok(Some(dot_claude))
-        }
-        Err(e) => Err(e),
-    }
 }
 
 /// `skip_scaffold`'s half of `scaffold_project`: no template files, but a project
@@ -3504,8 +3618,9 @@ fn git_head_unborn(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// The `GITIGNORE_DEFAULT` patterns absent from `dir/.gitignore` — a missing
-/// file reports every default. Read-only: this is the migration plan's preview
+/// The [`gitignore_for`] patterns (the generic defaults plus the sections the
+/// folder calls for) absent from `dir/.gitignore` — a missing file reports
+/// every one. Read-only: this is the migration plan's preview
 /// of what `ensure_gitignore_defaults` would append.
 ///
 /// Anything but a regular file at that name (a link, dangling or not, or a
@@ -3513,9 +3628,10 @@ fn git_head_unborn(dir: &Path) -> bool {
 /// reports nothing, so the plan and the repair go on with their other steps
 /// instead of failing on it.
 fn missing_gitignore_lines_at(dir: &Path) -> std::io::Result<Vec<String>> {
-    let defaults: Vec<&str> = GITIGNORE_DEFAULT
+    let wanted = gitignore_for(dir);
+    let defaults: Vec<&str> = wanted
         .lines()
-        .filter(|l| !l.is_empty())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect();
     let path = dir.join(".gitignore");
     if fs::symlink_metadata(&path).is_ok_and(|meta| !meta.file_type().is_file()) {
@@ -3554,7 +3670,7 @@ pub(crate) fn read_project_gitignore(path: &Path) -> std::io::Result<Option<Stri
         .ok_or_else(|| std::io::Error::other(".gitignore is not a readable UTF-8 file of at most 4 MB"))
 }
 
-/// Append any `GITIGNORE_DEFAULT` pattern missing from `dir/.gitignore` to the
+/// Append any [`gitignore_for`] pattern missing from `dir/.gitignore` to the
 /// end of the file, creating it fresh if absent. Existing lines are never
 /// reordered or removed — this only ever adds patterns Tabtivity scaffolds by
 /// default (e.g. a new one like `project.json` added after the project's
@@ -3566,7 +3682,7 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
     }
     let path = dir.join(".gitignore");
     let Some(mut updated) = read_project_gitignore(&path)? else {
-        write_no_follow(&path, GITIGNORE_DEFAULT.as_bytes(), true)?;
+        write_no_follow(&path, gitignore_for(dir).as_bytes(), true)?;
         return Ok(missing);
     };
     if !updated.is_empty() && !updated.ends_with('\n') {
@@ -3583,7 +3699,7 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
 /// Write the default `dir/.gitignore` unless there is something at that name
 /// — a dangling link included, whose target would land outside the project.
 fn write_default_gitignore_if_missing(dir: &Path) -> std::io::Result<()> {
-    match write_no_follow(&dir.join(".gitignore"), GITIGNORE_DEFAULT.as_bytes(), true) {
+    match write_no_follow(&dir.join(".gitignore"), gitignore_for(dir).as_bytes(), true) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         other => other,
     }
@@ -3690,81 +3806,26 @@ impl ScaffoldRepairReport {
     }
 }
 
-/// The stubs the agent docs used to be scaffolded with, before `AGENTS.md`
-/// became the canonical file and `CLAUDE.md`/`GEMINI.md` became pointers to it.
-/// A repair upgrades an agent doc whose content is still byte-identical to its
-/// legacy stub (or empty): that text is provably untouched, so replacing it
-/// loses nothing. Anything a user or an agent actually wrote fails the match and
-/// is left alone — the never-overwrite rule still holds for every other file.
-const LEGACY_AGENT_STUBS: &[(&str, &str)] = &[
-    ("AGENTS.md", "# Agents\n"),
-    ("CLAUDE.md", "# Claude Context\n"),
-    ("GEMINI.md", "# Gemini Context\n"),
-];
-
-/// Every earlier `AGENTS_SCAFFOLD`, byte for byte, oldest first (2026-08-26 to
-/// 2026-09-28). A project scaffolded with one of them still holds that text
-/// until someone edits it, and only this list lets a repair tell such an
-/// untouched copy from the user's own words: the never-overwrite rule meant
-/// the 09-05 copy kept telling agents the outbox takes images only.
-const AGENTS_HISTORY: &[&str] = &[
-    include_str!("scaffold_history/AGENTS.2026-08-26.md"),
-    include_str!("scaffold_history/AGENTS.2026-08-30.md"),
-    include_str!("scaffold_history/AGENTS.2026-09-05.md"),
-    include_str!("scaffold_history/AGENTS.2026-09-14.md"),
-    include_str!("scaffold_history/AGENTS.2026-09-28.md"),
-];
-
-/// True when `content` is the untouched legacy stub for the agent doc `name`
-/// (or empty), or an untouched earlier `AGENTS.md` template. Line endings are
-/// ignored — a checkout may have turned them to CRLF. Pure, so the upgrade rule
-/// is unit-testable without touching disk.
-fn is_legacy_agent_stub(name: &str, content: &str) -> bool {
-    let Some((_, stub)) = LEGACY_AGENT_STUBS.iter().find(|(n, _)| *n == name) else {
-        return false;
-    };
-    if content.trim().is_empty() || content.trim() == stub.trim() {
-        return true;
-    }
-    let content = content.replace("\r\n", "\n");
-    name == "AGENTS.md" && AGENTS_HISTORY.contains(&content.as_str())
-}
-
 /// Like `scaffold_project`, but for an **already-scaffolded** project whose
-/// scaffold has drifted behind current defaults (e.g. it predates a scaffold
-/// file or a `.gitignore` pattern being added). Fills in whatever is missing —
+/// scaffold has drifted behind current defaults (e.g. a default doc was
+/// deleted or a `.gitignore` pattern was added since). Fills in whatever is missing —
 /// same never-overwrite rule for existing files — and additionally merges any
-/// missing `GITIGNORE_DEFAULT` pattern into an already-present `.gitignore`
+/// missing [`gitignore_for`] pattern into an already-present `.gitignore`
 /// (plain `scaffold_project` leaves a pre-existing `.gitignore` untouched).
 fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<ScaffoldRepairReport> {
     fs::create_dir_all(dir)?;
 
     let mut report = ScaffoldRepairReport::default();
-    for (name, content) in SCAFFOLD_FILES {
-        let p = dir.join(name);
-        if write_scaffold_file(&p, content)? {
-            report.created_files.push((*name).to_string());
-            continue;
-        }
-        // Only an agent doc still holding its untouched legacy stub is rewritten.
-        let Some(existing) = read_scaffold_doc(&p) else {
-            continue;
-        };
-        if existing != *content && is_legacy_agent_stub(name, &existing) {
-            write_no_follow(&p, content.as_bytes(), false)?;
-            report.updated_files.push((*name).to_string());
+    for doc in scaffold::defaults() {
+        if scaffold::create_doc_at(dir, doc)? {
+            report.created_files.push(doc.name.to_string());
+        } else if scaffold::upgrade_doc_at(dir, doc)? {
+            // Only `AGENTS.md` still holding an untouched earlier template.
+            report.updated_files.push(doc.name.to_string());
         }
     }
     if with_git {
         report.gitignore_lines_added = ensure_gitignore_defaults(dir)?;
-    }
-
-    if let Some(dot_claude) = scaffold_claude_dir(dir)? {
-        if write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)? {
-            report
-                .created_files
-                .push(".claude/settings.json".to_string());
-        }
     }
     if with_git && !dir.join(".git").exists() {
         let _ = crate::services::git_init::init_repo(dir);
@@ -3783,7 +3844,7 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
 /// there is no local target to repair (e.g. a remote project with no mirror
 /// recorded yet, or a remote-only one, whose leftover `mirror` pointer is not a
 /// copy it keeps and must not be written into).
-fn scaffold_target_for_entry(entry: &ProjectEntry) -> Option<(PathBuf, bool)> {
+pub(crate) fn scaffold_target_for_entry(entry: &ProjectEntry) -> Option<(PathBuf, bool)> {
     if crate::services::remote::entry_is_remote_only(entry) {
         return None;
     }
@@ -3805,33 +3866,14 @@ fn scaffold_target_for_entry(entry: &ProjectEntry) -> Option<(PathBuf, bool)> {
 /// Tauri command so the exact warning rule can be covered without depending on
 /// the user's persisted project list.
 fn scaffold_is_missing_at(target: &Path, with_git: bool) -> bool {
-    SCAFFOLD_FILES.iter().any(|(name, _)| {
-        let p = target.join(name);
-        // An agent doc still holding its untouched legacy stub counts as
-        // missing: a repair would change it, so the tag must not claim the
-        // scaffold is complete (see `is_legacy_agent_stub`).
-        // Anything at the name counts as present — a dangling link too —
-        // because that is what `write_scaffold_file` keeps: `exists()` would
-        // call it missing for good, as no repair ever writes it.
-        match read_scaffold_doc(&p) {
-            Some(existing) => is_legacy_agent_stub(name, &existing),
-            None => fs::symlink_metadata(&p).is_err(),
-        }
-    }) || (with_git && fs::symlink_metadata(target.join(".gitignore")).is_err())
-        || !claude_settings_present(target)
-}
-
-/// Whether `.claude/settings.json` is there by the rule the scaffold keeps
-/// (`scaffold_claude_dir`, `write_scaffold_file`): a `.claude` that is not a
-/// plain folder (a link, dangling or not) is left alone, and so is anything at
-/// `settings.json`. Either counts as present, or no repair would ever clear it.
-fn claude_settings_present(target: &Path) -> bool {
-    let dot_claude = target.join(".claude");
-    match fs::symlink_metadata(&dot_claude) {
-        Ok(meta) if meta.is_dir() => fs::symlink_metadata(dot_claude.join("settings.json")).is_ok(),
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    // Only a `default` doc counts, and anything at its name counts as present
+    // (`scaffold::present_at`: a dangling link too). A template-state
+    // `AGENTS.md` is *not* missing: every existing project holds an earlier
+    // template, and the tag must not nag for a file the user never touched
+    // (a repair still upgrades it, `scaffold::upgrade_doc_at`). `.git` is the
+    // separate `git_type` axis and not counted.
+    !scaffold::missing_defaults_at(target).is_empty()
+        || (with_git && !scaffold::present_at(target, ".gitignore"))
 }
 
 /// A single project's scaffold-repair outcome, for the "Repair scaffold
@@ -3845,9 +3887,8 @@ pub struct ProjectScaffoldRepair {
     pub report: ScaffoldRepairReport,
 }
 
-/// Repair one project's scaffold: fill in any scaffold doc, `.gitignore`
-/// pattern, or `.claude/settings.json` that is missing relative to current
-/// defaults. Safe to run repeatedly — every step is additive/idempotent.
+/// Repair one project's scaffold: fill in any default doc or `.gitignore`
+/// pattern that is missing relative to current defaults. Safe to run repeatedly — every step is additive/idempotent.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepair, String> {
     app_core::rt::try_blocking("project", move || repair_project_scaffold_blocking(project_id)).await
@@ -3913,7 +3954,7 @@ pub fn repair_all_project_scaffolds_blocking() -> Result<Vec<ProjectScaffoldRepa
 /// 2. Every legacy entry additionally gets its on-disk scaffold refreshed (the
 ///    same additive, never-overwrite repair as the manual "Repair scaffold
 ///    files" action), since a legacy project also predates current scaffold
-///    defaults (`.claude/settings.json`, newer docs, `.gitignore` patterns).
+///    defaults (newer docs, `.gitignore` patterns).
 ///
 /// The normalized list is persisted once if anything changed, so the migration
 /// is durable rather than re-derived on every load. Runs best-effort at startup
@@ -3966,12 +4007,11 @@ fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
     // Anything at the path counts — a dangling symlink too — because that is
     // what `write_scaffold_file` keeps; `exists()` would call such a link
     // missing and promise a file the import then doesn't write.
-    let present = |rel: &str| fs::symlink_metadata(dir.join(rel)).is_ok();
-    let mut items = SCAFFOLD_FILES
-        .iter()
-        .map(|(name, _)| ScaffoldPreviewItem {
-            path: (*name).to_string(),
-            exists: present(name),
+    let present = |rel: &str| scaffold::present_at(dir, rel);
+    let mut items = scaffold::defaults()
+        .map(|doc| ScaffoldPreviewItem {
+            path: doc.name.to_string(),
+            exists: present(doc.name),
             kind: "file".to_string(),
         })
         .collect::<Vec<_>>();
@@ -3988,11 +4028,6 @@ fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
         // repository inside somebody else's worktree.
         exists: dir.join(".git").exists(),
         kind: "directory".to_string(),
-    });
-    items.push(ScaffoldPreviewItem {
-        path: ".claude/settings.json".to_string(),
-        exists: present(".claude/settings.json"),
-        kind: "file".to_string(),
     });
     items
 }
@@ -4013,14 +4048,11 @@ fn preview_project_scaffold_blocking(source_dir: String) -> Result<Vec<ScaffoldP
 }
 
 /// True when the scaffold target's `AGENTS.md` still holds no project guidance:
-/// missing, empty, the untouched legacy stub, or an untouched earlier template
-/// (all `is_legacy_agent_stub` answers). Pure, so the rule is unit-testable
-/// without touching the project list.
+/// missing, empty, or an untouched template of any build
+/// (`scaffold::agents_empty_at`, on the capped no-follow reader: a link or FIFO
+/// planted as `AGENTS.md` is read as missing, never followed).
 fn agents_empty_at(target: &Path) -> bool {
-    match fs::read_to_string(target.join("AGENTS.md")) {
-        Ok(existing) => is_legacy_agent_stub("AGENTS.md", &existing),
-        Err(_) => !target.join("AGENTS.md").exists(),
-    }
+    scaffold::agents_empty_at(target)
 }
 
 /// True when a project's `AGENTS.md` still holds no project guidance (see
@@ -4047,9 +4079,8 @@ fn project_agents_empty_blocking(project_id: String) -> Result<bool, String> {
     Ok(agents_empty_at(&target))
 }
 
-/// True when a project is missing one or more scaffold pieces (any scaffold
-/// doc, `.claude/settings.json`, or — for git-backed projects only —
-/// `.gitignore`) — drives the "no scaffold" tag in the pill hover overlay.
+/// True when a project is missing one or more scaffold pieces (a default doc
+/// or — for git-backed projects only — `.gitignore`) — drives the "no scaffold" tag in the pill hover overlay.
 /// `.gitignore` is a git-axis artifact, so it is not required of `git_type:
 /// "none"` projects (which never get one written, see `scaffold_project`).
 /// `.git` is likewise excluded: git presence is the separate `git_type` axis. A
@@ -4142,38 +4173,30 @@ fn entry_migration_details(entry: &ProjectEntry) -> Vec<String> {
 /// step per piece so each can be accepted or declined on its own.
 fn migration_steps_at(dir: &Path, with_git: bool) -> std::io::Result<Vec<MigrationStep>> {
     let mut steps = Vec::new();
-    for (name, content) in SCAFFOLD_FILES {
-        let p = dir.join(name);
-        match read_scaffold_doc(&p) {
+    for doc in scaffold::defaults() {
+        let name = doc.name;
+        match scaffold::read_scaffold_doc(&dir.join(name)) {
             Some(existing) => {
-                if existing != *content && is_legacy_agent_stub(name, &existing) {
+                if doc.upgradable() && existing != doc.template && doc.is_untouched(&existing) {
                     steps.push(MigrationStep {
                         id: format!("stub:{name}"),
                         kind: "upgradeStub".to_string(),
-                        path: Some((*name).to_string()),
+                        path: Some(name.to_string()),
                         details: vec![],
                     });
                 }
             }
             None => {
-                if !p.exists() {
+                if !scaffold::present_at(dir, name) {
                     steps.push(MigrationStep {
                         id: format!("file:{name}"),
                         kind: "createFile".to_string(),
-                        path: Some((*name).to_string()),
+                        path: Some(name.to_string()),
                         details: vec![],
                     });
                 }
             }
         }
-    }
-    if !dir.join(".claude/settings.json").exists() {
-        steps.push(MigrationStep {
-            id: "claude_settings".to_string(),
-            kind: "createFile".to_string(),
-            path: Some(".claude/settings.json".to_string()),
-            details: vec![],
-        });
     }
     if with_git {
         let missing = missing_gitignore_lines_at(dir)?;
@@ -4210,28 +4233,14 @@ fn apply_migration_steps_at(
 ) -> std::io::Result<ScaffoldRepairReport> {
     fs::create_dir_all(dir)?;
     let mut report = ScaffoldRepairReport::default();
-    for (name, content) in SCAFFOLD_FILES {
-        let p = dir.join(name);
+    for doc in scaffold::defaults() {
+        let name = doc.name;
         if accepted.contains(&format!("file:{name}")) {
-            if write_scaffold_file(&p, content)? {
-                report.created_files.push((*name).to_string());
+            if scaffold::create_doc_at(dir, doc)? {
+                report.created_files.push(name.to_string());
             }
-        } else if accepted.contains(&format!("stub:{name}")) {
-            if let Some(existing) = read_scaffold_doc(&p) {
-                if existing != *content && is_legacy_agent_stub(name, &existing) {
-                    write_no_follow(&p, content.as_bytes(), false)?;
-                    report.updated_files.push((*name).to_string());
-                }
-            }
-        }
-    }
-    if accepted.contains("claude_settings") {
-        if let Some(dot_claude) = scaffold_claude_dir(dir)? {
-            if write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)? {
-                report
-                    .created_files
-                    .push(".claude/settings.json".to_string());
-            }
+        } else if accepted.contains(&format!("stub:{name}")) && scaffold::upgrade_doc_at(dir, doc)? {
+            report.updated_files.push(name.to_string());
         }
     }
     if with_git && accepted.contains("gitignore") {
@@ -4473,6 +4482,7 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
             auto_connect: Some(true),
             key_auth: Some(true),
             persist_sessions: None,
+            agent_dir: None,
             vm: Some(true),
             remote_only: None,
             label: Some("VM".to_string()),

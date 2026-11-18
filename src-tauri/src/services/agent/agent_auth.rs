@@ -50,7 +50,9 @@
 //! into a home, the home's copy before it is left there), and a tab's copy is
 //! adopted only as a token rotation of an `oauth` entry the store already
 //! holds ([`opencode_adoption`]) — never a new entry, a changed key, type,
-//! `enterpriseUrl` or `accountId`. [`sweep_unadmissible_in`] moves failing
+//! `enterpriseUrl` or `accountId`, nor a token whose identity claim
+//! ([`access_identity`], decoded unsigned) differs from the stored one's
+//! (gap 94). [`sweep_unadmissible_in`] moves failing
 //! copies aside at startup and flags a V2 database that already took a
 //! `wellknown` source. AppHandle-free and unit-testable.
 
@@ -344,13 +346,49 @@ struct Adoption {
     refused: Option<String>,
 }
 
+/// The longest access-token payload (base64) read for an identity.
+const MAX_JWT_PAYLOAD: usize = 16 * 1024;
+
+/// Who an OpenCode `oauth` entry's access token names: the `sub`, and where
+/// the token carries one a ChatGPT account id (`account_id`, `accountId`,
+/// `https://api.openai.com/auth`.`chatgpt_account_id`), joined into one
+/// string. `None` for a token with no such claim (opaque, `gho_…`).
+/// The token is decoded, never verified: a rotation is compared against the
+/// **stored** entry's identity, which is as strong as the unsigned claim —
+/// it stops accounts mixing and a lazy swap, not an agent that forges a
+/// token to match (it reads its own home's copy, so it can).
+fn access_identity(entry: &serde_json::Value) -> Option<String> {
+    use base64::Engine as _;
+    let token = entry.get("access")?.as_str()?;
+    let payload = token.split('.').nth(1)?;
+    if token.split('.').count() != 3 || payload.len() > MAX_JWT_PAYLOAD {
+        return None;
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    let text = |v: Option<&serde_json::Value>| v.and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+    let parts: Vec<String> = [
+        text(claims.get("sub")).map(|v| format!("sub={v}")),
+        text(claims.get("account_id")).map(|v| format!("account_id={v}")),
+        text(claims.get("accountId")).map(|v| format!("accountId={v}")),
+        text(claims.get("https://api.openai.com/auth").and_then(|a| a.get("chatgpt_account_id"))).map(|v| format!("chatgpt_account_id={v}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(";"))
+}
+
 /// [`Adoption`] of `home` (a tab's copy) over `stored` (the store's file).
 /// Every CLI but OpenCode takes the copy as it is. OpenCode takes only a
 /// rotation of the tokens of an `oauth` entry the store already holds: the
 /// store's own entries, with `refresh`, `access` and `expires` from the copy.
 /// A new entry, a changed `api` entry, and a changed `type`, `accountId` or
 /// `enterpriseUrl` are not taken; a copy that is not [`admissible`] in the
-/// first place is taken in no part.
+/// first place is taken in no part. Where the stored entry's `access` token
+/// carries an identity ([`access_identity`]), a rotation must carry the same
+/// one, or it is refused as `<entry>.access`; a stored token without a claim
+/// keeps the rule above only.
 fn opencode_adoption(stored: Option<&[u8]>, home: &[u8]) -> Adoption {
     let refuse = |field: String| Adoption { bytes: None, refused: Some(field) };
     let copy = match opencode_entries(home) {
@@ -373,6 +411,10 @@ fn opencode_adoption(stored: Option<&[u8]>, home: &[u8]) -> Adoption {
             if held != entry {
                 refused.get_or_insert_with(|| short(name));
             }
+            continue;
+        }
+        if access_identity(held).is_some_and(|pinned| access_identity(entry) != Some(pinned)) {
+            refused.get_or_insert_with(|| format!("{}.access", short(name)));
             continue;
         }
         if let Some(target) = merged.get_mut(name).and_then(|m| m.as_object_mut()) {
@@ -968,6 +1010,26 @@ pub struct WellknownHome {
     pub origins: Vec<String>,
 }
 
+/// Whether the store holds a login for `cli` under `paths` (a row's `signed_in`).
+fn store_holds_login(state_dir: &Path, cli: &str, paths: &[AuthPath]) -> bool {
+    paths.iter().any(|p| {
+        let s = store_path_in(state_dir, cli, p);
+        match p.kind {
+            AuthKind::File => std::fs::metadata(&s).is_ok_and(|m| m.len() > 0),
+            AuthKind::Dir(names) => !store_dir_logins(&s, names).is_empty(),
+        }
+    })
+}
+
+/// Whether the store holds a shared login for `cli` — what the Agents view
+/// shows as signed in. False for a CLI whose login is not shared.
+pub fn signed_in_in(state_dir: &Path, cli: &str) -> bool {
+    registry()
+        .into_iter()
+        .find(|(id, _)| *id == cli)
+        .is_some_and(|(id, paths)| store_holds_login(state_dir, id, paths))
+}
+
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
     status_with(state_dir, user_home, &BTreeSet::new())
 }
@@ -980,13 +1042,7 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
         .into_iter()
         .map(|(cli, paths)| {
             let store_dir = store_dir_in(state_dir, cli);
-            let signed_in = paths.iter().any(|p| {
-                let s = store_path_in(state_dir, cli, p);
-                match p.kind {
-                    AuthKind::File => std::fs::metadata(&s).is_ok_and(|m| m.len() > 0),
-                    AuthKind::Dir(names) => !store_dir_logins(&s, names).is_empty(),
-                }
-            });
+            let signed_in = store_holds_login(state_dir, cli, paths);
             let importable = paths.iter().any(|p| {
                 let src = home_path(user_home, p.rel);
                 match p.kind {
@@ -1132,27 +1188,43 @@ pub fn import_from_user_home(cli: &str) -> Result<usize, String> {
 /// Marks that the first start of the login store has run.
 const IMPORTED_MARKER: &str = ".agent_logins_imported";
 
+/// Whether the first start of the login store has run, or the user answered
+/// the first-start question (`services::agent_import_offer`).
+pub(crate) fn import_marked_in(state_dir: &Path) -> bool {
+    state_dir.join(IMPORTED_MARKER).exists()
+}
+
+pub(crate) fn mark_imported_in(state_dir: &Path) {
+    let _ = std::fs::write(state_dir.join(IMPORTED_MARKER), b"");
+}
+
+/// The CLIs whose login this computer holds and the store does not: what a
+/// first-start import takes. Judged by the files' presence only; nothing of
+/// a login is read.
+pub(crate) fn import_candidates_in(state_dir: &Path, user_home: &Path) -> Vec<String> {
+    status_in(state_dir, user_home)
+        .into_iter()
+        .filter(|login| login.shared && login.importable && !login.signed_in)
+        .map(|login| login.id)
+        .collect()
+}
+
 /// Import, once, every login this computer holds for a CLI the store has no
 /// login for yet, so the upgrade to per-scope homes keeps every agent signed
 /// in without a trip to Settings. Never repeated: a later Sign out stays
-/// signed out. Run before the keeper starts and before any tab spawns.
+/// signed out. Run before the keeper starts and before any tab spawns, and
+/// only for an install that ran before: a fresh one is asked first
+/// (`services::agent_import_offer`).
 pub fn import_once_in(state_dir: &Path, user_home: &Path) {
-    let marker = state_dir.join(IMPORTED_MARKER);
-    if marker.exists() {
+    if import_marked_in(state_dir) {
         return;
     }
-    for login in status_in(state_dir, user_home) {
-        if login.shared && login.importable && !login.signed_in {
-            if let Err(e) = import_from_user_home_in(state_dir, user_home, &login.id) {
-                eprintln!("agent_auth: first import of {}: {e}", login.id);
-            }
+    for id in import_candidates_in(state_dir, user_home) {
+        if let Err(e) = import_from_user_home_in(state_dir, user_home, &id) {
+            eprintln!("agent_auth: first import of {id}: {e}");
         }
     }
-    let _ = std::fs::write(&marker, b"");
-}
-
-pub fn import_once() {
-    import_once_in(&storage::state_dir(), &crate::paths::home_dir());
+    mark_imported_in(state_dir);
 }
 
 /// Login files that left the shared set on 2026-10-08 (threat recheck,

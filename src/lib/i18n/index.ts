@@ -170,12 +170,14 @@ export function applyLanguage(value: string | null | undefined) {
 /** The locale to spell dates in (weekday and month names) for `lang`: the
  *  browser's own when it already speaks that language, so its regional habits
  *  (`en-GB`, `de-AT`) survive, else the bare language — a phone held in one
- *  language while the app is set to another would otherwise mix the two. */
+ *  language while the app is set to another would otherwise mix the two.
+ *  Always named, never `undefined`: `Intl`'s default is the runtime's locale,
+ *  which need not be `navigator.language` (Node takes the OS's). */
 export function dateLocale(
   lang: Language = useI18nStore.getState().lang,
   browser: string | undefined = typeof navigator === "undefined" ? undefined : navigator.language,
-): string | undefined {
-  return browser && browser.toLowerCase().split("-")[0] === lang ? undefined : lang;
+): string {
+  return browser && browser.toLowerCase().split("-")[0] === lang ? browser : lang;
 }
 
 /** Look up a key in `lang`, falling back to English then the raw key (also the

@@ -23,10 +23,15 @@ pills swaps all of that at once.
    picker changes it), writes starter files, initializes git and makes a
    first commit. Tick "Skip scaffolding" to start empty.
 
-Starter files include `AGENTS.md` (the canonical agent instructions),
-`CLAUDE.md` and `GEMINI.md` (pointers that import `AGENTS.md`), a `.gitignore`,
-`README.md`, `TODO.md` and a few status documents. Existing files are never
-overwritten.
+Starter files are `AGENTS.md` (the canonical agent instructions, with
+Boundaries and Verify sections to fill in), `README.md` and, for a git project,
+a `.gitignore` (a folder that holds `.tex` files also gets the LaTeX build
+files). No `CLAUDE.md`, `GEMINI.md` or `.claude/settings.json` is written: the
+agent CLIs in Tabtivity read `AGENTS.md` directly. `PROJECT.md`, `TODO.md`,
+`ROADMAP.md`, `STATUS.md` and `DOCUMENTATION.md` are made one at a time from
+the file tree's **Project docs** group (see `files-and-viewers`). Existing files
+are never overwritten, and a project that already has the older stubs keeps
+them.
 
 ## Import an existing folder or repository
 
@@ -63,6 +68,19 @@ guided SLURM wizard. See `remote-projects`.
   project…** and more.
 - The × on a pill closes the project (it stays registered). The search box
   finds projects that are not open.
+- Right-click a pill → **Hide from All projects** keeps an open project off
+  the All projects row; it stays open, in its boxes and in search, and shows
+  while it is the project you are in. A box pill's **Hide its projects from
+  All projects** does the same for every member. The **N hidden** entry in
+  the logo's ▾ list unfolds them: click a name to open it, the eye to show it
+  again.
+- **Hide mode** keeps only the project you are in on the All projects row:
+  tick **Show only the current project** in the logo's ▾ list, or right-click
+  a pill → **Hide other projects** (that pill's project stays), or pick the
+  command palette row of the same name. The row follows you as you switch
+  projects; the others stay open and wait under **N hidden** → **Hidden by
+  hide mode**. Untick it, or **Show other projects**, to bring them back. A
+  box's own row ignores hide mode.
 - Drop one pill on another (Alt-drag) to group them into a box. See
   `containers-boxes`.
 

@@ -12,6 +12,7 @@ import { EMPTY_LAYER, addMark } from "../../../mobile-web/src/markup/layer";
 const store = vi.hoisted(() => ({
   loadLayer: vi.fn(),
   saveLayer: vi.fn(async (..._args: unknown[]) => true),
+  layerKeys: vi.fn(async (..._args: unknown[]) => [] as string[]),
 }));
 vi.mock("../../../mobile-web/src/markup/store", async (original) => ({
   ...(await original<typeof import("../../../mobile-web/src/markup/store")>()),
@@ -25,8 +26,18 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
 
 import { MarkupView } from "../../../mobile-web/src/components/MarkupView";
 import { Project } from "../../../mobile-web/src/screens/Project";
-import { findFileTab, keepMarkupTab, openFileTab, readFileTabs, type FileTab } from "../../../mobile-web/src/filesPlace";
+import { MARKED_TABS_CAP, findFileTab, keepMarkupTab, openFileTab, readFileTabs, type FileTab } from "../../../mobile-web/src/filesPlace";
+import { keyedFile, recoverMarkupTabs } from "../../../mobile-web/src/markup/recoverCards";
+import { storageKey } from "../../../src/lib/brand";
 import type { TabRow } from "../../../mobile-web/src/api";
+
+/** The round, the ticks and the agent's card wait behind the head's Agent
+ * badge while marking: open its sheet (it stays open while marking). */
+const openAgent = () => {
+  const badge = screen.queryByRole("button", { name: /^Agent/ });
+  if (badge && badge.getAttribute("aria-pressed") !== "true") fireEvent.click(badge);
+};
+
 
 const PICTURE = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
 const LAYER = addMark(addMark(EMPTY_LAYER, 1, [800, 600], { kind: "ink", color: "red", width: 2, points: [[10, 10, 0.5], [40, 30, 0.5]] }),
@@ -80,6 +91,8 @@ beforeEach(() => {
   store.loadLayer.mockReset();
   store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PICTURE.size, modified: PICTURE.modified }, saved: 1 });
   store.saveLayer.mockClear();
+  store.layerKeys.mockReset();
+  store.layerKeys.mockResolvedValue([]);
 });
 afterEach(() => {
   cleanup();
@@ -113,12 +126,84 @@ describe("filesPlace · markup cards", () => {
     expect(findFileTab("p1", { place: "", name: "a.pdf" })).toMatchObject({ token: "tok-a3", tab: "tab-files" });
     expect(findFileTab("p1", { from: "outbox", place: "", name: "a.pdf" })?.tab).toBe("tab-outbox");
   });
+
+  const readPdf = (n: number): FileTab => ({ token: `tok-${n}`, name: `read-${n}.pdf`, kind: "application/pdf", size: n, modified: n, place: "" });
+
+  it("never lets PDFs only read push a markup's card out", () => {
+    keepMarkupTab("p1", { token: "tok-m", name: "marked.pdf", kind: "application/pdf", size: 1, modified: 1, place: "papers" });
+    for (let n = 0; n < 30; n++) openFileTab("p1", readPdf(n));
+    const names = readFileTabs("p1").map((tab) => tab.name);
+    expect(names).toContain("marked.pdf");
+    // The PDFs only read keep their own cap of twelve, newest first.
+    expect(names.filter((name) => name.startsWith("read-"))).toEqual(Array.from({ length: 12 }, (_, i) => `read-${29 - i}.pdf`));
+    // Reopening the marked file from the library keeps it a markup's card.
+    openFileTab("p1", { token: "tok-m2", name: "marked.pdf", kind: "application/pdf", size: 1, modified: 1, place: "papers" });
+    for (let n = 30; n < 50; n++) openFileTab("p1", readPdf(n));
+    expect(findFileTab("p1", { place: "papers", name: "marked.pdf" })).toMatchObject({ token: "tok-m2", marked: true });
+  });
+
+  it("counts a card stored before `marked` whose rounds went to a tab as a markup's", () => {
+    const legacy = { token: "tok-l", name: "legacy.pdf", kind: "application/pdf", size: 1, modified: 1, place: "", tab: "tab-1" };
+    const reads = Array.from({ length: 12 }, (_, n) => readPdf(n));
+    localStorage.setItem(storageKey("mobile.fileTabs"), JSON.stringify({ p1: [...reads, legacy] }));
+    openFileTab("p1", readPdf(100));
+    expect(findFileTab("p1", { place: "", name: "legacy.pdf" })?.tab).toBe("tab-1");
+  });
+
+  it("caps markups' cards apart, at their own cap", () => {
+    for (let n = 0; n < MARKED_TABS_CAP + 5; n++) keepMarkupTab("p1", { ...readPdf(n), name: `m-${n}.pdf` });
+    expect(readFileTabs("p1")).toHaveLength(MARKED_TABS_CAP);
+  });
+});
+
+describe("recoverCards · markups that lost their card", () => {
+  it("reads a layer key's file, and skips Annotate's layer", () => {
+    expect(keyedFile("p1", "p1:files:/a.pdf")).toEqual({ from: "files", folders: [], name: "a.pdf" });
+    expect(keyedFile("p1", "p1:files:docs/sub/a.pdf")).toEqual({ from: "files", folders: ["docs", "sub"], name: "a.pdf" });
+    expect(keyedFile("p1", "p1:outbox:x.pdf")).toEqual({ from: "outbox", name: "x.pdf" });
+    expect(keyedFile("p1", "p1:files:/a.pdf#remarks")).toBeNull();
+    expect(keyedFile("p1", "p2:files:/a.pdf")).toBeNull();
+  });
+
+  it("gives every stored markup without a card its card back, after the cards there are", async () => {
+    store.layerKeys.mockResolvedValue([`p1:outbox:${PICTURE.name}`, "p1:files:docs/b.pdf", "p1:files:/c.pdf#remarks", "p1:files:/gone.pdf", "p1:files:/kept.pdf"]);
+    openFileTab("p1", { token: "tok-k", name: "kept.pdf", kind: "application/pdf", size: 3, modified: 3, place: "" });
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      asked.push(url);
+      if (url === "/api/v1/projects/p1/outbox") return jsonResponse(200, { files: [PICTURE] });
+      if (url === "/api/v1/projects/p1/files/entry?name=docs") return jsonResponse(200, { entry: { token: "tok-docs", name: "docs", kind: "dir", size: 0, modified: 0 } });
+      if (url === "/api/v1/projects/p1/files/entry?name=b.pdf&dir=tok-docs") return jsonResponse(200, { entry: { token: "tok-b", name: "b.pdf", kind: "application/pdf", size: 7, modified: 8 } });
+      return jsonResponse(404, { error: "file_not_found" });
+    }));
+    await recoverMarkupTabs("p1", true, new AbortController().signal);
+    expect(readFileTabs("p1").map((tab) => tab.name)).toEqual(["kept.pdf", PICTURE.name, "b.pdf"]);
+    expect(findFileTab("p1", { from: "outbox", place: "", name: PICTURE.name })).toMatchObject({ label: "plot.png", marked: true });
+    expect(findFileTab("p1", { place: "docs", name: "b.pdf" })).toMatchObject({ token: "tok-b", folder: "tok-docs", size: 7, marked: true });
+    // A card opened to read whose file has marks becomes a markup's card.
+    expect(findFileTab("p1", { place: "", name: "kept.pdf" })?.marked).toBe(true);
+    // A file that is gone is not asked about again this page's life.
+    asked.length = 0;
+    await recoverMarkupTabs("p1", true, new AbortController().signal);
+    expect(asked).toEqual([]);
+  });
+
+  it("leaves project files alone while the desktop's files switch is off", async () => {
+    store.layerKeys.mockResolvedValue(["p1:files:/solo.pdf"]);
+    const fetch = vi.fn(async () => jsonResponse(500, {}));
+    vi.stubGlobal("fetch", fetch);
+    await recoverMarkupTabs("p1", false, new AbortController().signal);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(readFileTabs("p1")).toEqual([]);
+  });
 });
 
 describe("MarkupView · the file's card", () => {
   it("keeps a card for a marked file, naming the tab a Submit opened", async () => {
     desktop();
     render(<MarkupView projectId="p1" scope={{ project: "p1" }} file={PICTURE} newTab={{ projectId: "p1", show: vi.fn() }} onClose={vi.fn()} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(findFileTab("p1", { from: "outbox", place: "", name: PICTURE.name })).toMatchObject({ label: "plot.png" }));
     await waitFor(() => expect(submitButton().disabled).toBe(false));

@@ -47,6 +47,11 @@ pub struct GitOverview {
     pub branches_total: u32,
     pub remote_branches: Vec<String>,
     pub remote_total: u32,
+    /// git could not read the project (no git, a refused or damaged repo): no
+    /// reading, as opposed to `repo: false` for a folder that is not one. A
+    /// flag only: git's message can name a path.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
 }
 
 /// The project folder's checkout: its branch, or the short sha it is detached
@@ -423,6 +428,7 @@ pub fn assemble(
         branches_total: count(local.len()),
         remote_branches: remote.iter().take(MAX_BRANCHES).map(|b| cap(&b.name)).collect(),
         remote_total: count(remote.len()),
+        unreadable: false,
     }
 }
 
@@ -490,12 +496,18 @@ fn probe_within(root: &Path, host_key: &[u8], tab_cwds: &[String], budget: Durat
     let dir = root.to_string_lossy().into_owned();
     // `mirror`, as the desktop bridge lists them: a local project ignores the
     // side, and it can never pick an SSH host.
-    let worktrees = crate::commands::git::git_worktree_list_blocking(dir.clone(), Some("mirror".into()), None)
-        .unwrap_or_default();
+    let Ok(worktrees) = crate::commands::git::git_worktree_list_blocking(dir.clone(), Some("mirror".into()), None) else {
+        return GitOverview { unreadable: true, ..GitOverview::default() };
+    };
     if worktrees.is_empty() {
         return GitOverview::default();
     }
-    let branches = crate::commands::git::git_branches_blocking(dir).unwrap_or_default();
+    // A branch list git could not read leaves the sheet without branches; say
+    // so rather than show a repo that has none.
+    let (branches, branches_unread) = match crate::commands::git::git_branches_blocking(dir) {
+        Ok(branches) => (branches, false),
+        Err(_) => (Vec::new(), true),
+    };
     let tabs = tab_counts(&worktrees, tab_cwds);
     let mut order: Vec<usize> = (0..worktrees.len()).collect();
     order.sort_by_key(|&at| (!worktrees[at].is_current, std::cmp::Reverse(tabs[at])));
@@ -515,7 +527,9 @@ fn probe_within(root: &Path, host_key: &[u8], tab_cwds: &[String], budget: Durat
             }
         }
     }
-    assemble(&worktrees, &branches, &dots, tab_cwds, host_key)
+    let mut overview = assemble(&worktrees, &branches, &dots, tab_cwds, host_key);
+    overview.unreadable = branches_unread;
+    overview
 }
 
 /// One folder the ＋ sheet can start an agent in, as the window's bridge

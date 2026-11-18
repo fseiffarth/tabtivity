@@ -1,0 +1,506 @@
+use super::*;
+
+fn names(docs: impl Iterator<Item = &'static ScaffoldDoc>) -> Vec<&'static str> {
+    docs.map(|d| d.name).collect()
+}
+
+#[test]
+fn the_catalog_has_unique_names_and_the_lean_default_set() {
+    let all = names(DOCS.iter());
+    let mut unique = all.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), all.len(), "duplicate catalog name: {all:?}");
+    assert_eq!(names(defaults()), ["AGENTS.md", "README.md"]);
+    for name in ["PROJECT.md", "TODO.md", "ROADMAP.md", "STATUS.md", "DOCUMENTATION.md"] {
+        let d = doc(name).unwrap();
+        assert!(!d.default && d.creatable && !d.pointer, "{name}: create on demand");
+    }
+    for name in ["CLAUDE.md", "GEMINI.md"] {
+        let d = doc(name).unwrap();
+        assert!(d.pointer && !d.default && !d.creatable, "{name}: recognised, never written");
+    }
+    let remarks = doc("REMARKS.md").unwrap();
+    assert!(!remarks.default && !remarks.creatable && !remarks.pointer);
+    for d in DOCS {
+        assert!(!d.name.contains('/') && !d.name.contains('\\'), "{} is a leaf name", d.name);
+        assert!(!d.default || d.creatable, "a default doc is creatable");
+        assert!(!d.pointer || !d.creatable, "a pointer is never offered for creation");
+        for old in d.history {
+            assert_ne!(*old, d.template, "{}: history must hold earlier texts only", d.name);
+        }
+    }
+    assert!(doc("../AGENTS.md").is_none());
+    assert!(doc("agents.md").is_none(), "names match exactly");
+}
+
+#[test]
+fn state_is_missing_template_or_edited() {
+    let todo = doc("TODO.md").unwrap();
+    assert_eq!(todo.state_of(None), DocState::Missing);
+    assert_eq!(todo.state_of(Some("")), DocState::Template);
+    assert_eq!(todo.state_of(Some(" \n\t\n")), DocState::Template);
+    assert_eq!(todo.state_of(Some("# TODO\n")), DocState::Template);
+    assert_eq!(todo.state_of(Some("# TODO\r\n")), DocState::Template, "CRLF checkouts");
+    assert_eq!(todo.state_of(Some("# TODO")), DocState::Template);
+    assert_eq!(todo.state_of(Some("# TODO\n\n- [ ] ship\n")), DocState::Edited);
+    assert_eq!(todo.state_of(Some("# Roadmap\n")), DocState::Edited, "another doc's stub is text");
+
+    let agents = doc("AGENTS.md").unwrap();
+    assert_eq!(agents.state_of(Some(AGENTS_SCAFFOLD)), DocState::Template);
+    for old in AGENTS_HISTORY {
+        assert_eq!(agents.state_of(Some(old)), DocState::Template);
+        assert_eq!(agents.state_of(Some(&old.replace('\n', "\r\n"))), DocState::Template);
+        assert_eq!(agents.state_of(Some(&format!("{old}\n## Mine\n"))), DocState::Edited);
+    }
+}
+
+#[test]
+fn every_old_stub_reads_as_a_template_and_the_pointers_as_pointers() {
+    for (name, old) in [
+        ("TODO.md", "# TODO\n"),
+        ("ROADMAP.md", "# Roadmap\n"),
+        ("STATUS.md", "# Status\n"),
+        ("README.md", "# Project\n"),
+        ("DOCUMENTATION.md", "# Documentation\n"),
+        ("AGENTS.md", "# Agents\n"),
+        ("REMARKS.md", REMARKS_SCAFFOLD),
+        ("PROJECT.md", PROJECT_SCAFFOLD_2026_11_13),
+        ("PROJECT.md", PROJECT_SCAFFOLD),
+    ] {
+        assert_eq!(doc(name).unwrap().state_of(Some(old)), DocState::Template, "{name}");
+    }
+    for (name, old) in [
+        ("CLAUDE.md", "# Claude Context\n"),
+        ("CLAUDE.md", CLAUDE_POINTER),
+        ("GEMINI.md", "# Gemini Context\n"),
+        ("GEMINI.md", GEMINI_POINTER),
+        ("CLAUDE.md", ""),
+    ] {
+        assert_eq!(doc(name).unwrap().state_of(Some(old)), DocState::Pointer, "{name}");
+    }
+    // A pointer the user wrote in is theirs.
+    let mine = format!("{CLAUDE_POINTER}\nAlways answer in German.\n");
+    assert_eq!(doc("CLAUDE.md").unwrap().state_of(Some(&mine)), DocState::Edited);
+    assert_eq!(doc("CLAUDE.md").unwrap().state_of(None), DocState::Missing);
+}
+
+/// The remarks feature starts `REMARKS.md` with its own TS template; the
+/// catalog's copy must be the same bytes or a freshly made file would read as
+/// `edited`.
+#[test]
+fn the_remarks_template_is_the_ts_one() {
+    let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("src")
+        .join("lib")
+        .join("projects")
+        .join("projectRemarks.ts");
+    let src = std::fs::read_to_string(&ts).expect("projectRemarks.ts");
+    let start = src.find("export const REMARKS_TEMPLATE = `").expect("REMARKS_TEMPLATE") + "export const REMARKS_TEMPLATE = `".len();
+    let end = start + src[start..].find("`;").expect("closing backtick");
+    let literal = src[start..end].replace("\\`", "`");
+    assert_eq!(literal, REMARKS_SCAFFOLD);
+    assert_eq!(doc("REMARKS.md").unwrap().template, literal);
+}
+
+#[test]
+fn create_never_overwrites_and_upgrade_touches_only_an_untouched_agents_md() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    // Create writes the template once.
+    let todo = doc("TODO.md").unwrap();
+    assert!(create_doc_at(dir, todo).unwrap());
+    assert_eq!(std::fs::read_to_string(dir.join("TODO.md")).unwrap(), "# TODO\n");
+    std::fs::write(dir.join("TODO.md"), "mine").unwrap();
+    assert!(!create_doc_at(dir, todo).unwrap(), "a second create is a no-op");
+    assert_eq!(std::fs::read_to_string(dir.join("TODO.md")).unwrap(), "mine");
+
+    // A folder at the name is kept too.
+    std::fs::create_dir(dir.join("STATUS.md")).unwrap();
+    assert!(!create_doc_at(dir, doc("STATUS.md").unwrap()).unwrap());
+    assert!(dir.join("STATUS.md").is_dir());
+
+    // Upgrade: only AGENTS.md, only while untouched.
+    let agents = doc("AGENTS.md").unwrap();
+    assert!(!upgrade_doc_at(dir, agents).unwrap(), "nothing there");
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    assert!(upgrade_doc_at(dir, agents).unwrap());
+    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), AGENTS_SCAFFOLD);
+    assert!(!upgrade_doc_at(dir, agents).unwrap(), "the current template is left as is");
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n\nMine.\n").unwrap();
+    assert!(!upgrade_doc_at(dir, agents).unwrap());
+    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), "# Agents\n\nMine.\n");
+
+    // No other doc is ever rewritten, not even an empty one.
+    std::fs::write(dir.join("README.md"), "").unwrap();
+    assert!(!upgrade_doc_at(dir, doc("README.md").unwrap()).unwrap());
+    std::fs::write(dir.join("CLAUDE.md"), "# Claude Context\n").unwrap();
+    assert!(!upgrade_doc_at(dir, doc("CLAUDE.md").unwrap()).unwrap());
+    assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(), "# Claude Context\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_or_fifo_is_missing_and_never_followed_or_written_through() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("p");
+    std::fs::create_dir(&dir).unwrap();
+    let outside = tmp.path().join("outside.md");
+
+    // Dangling link: a create must not make its target.
+    std::os::unix::fs::symlink(&outside, dir.join("AGENTS.md")).unwrap();
+    let agents = doc("AGENTS.md").unwrap();
+    assert!(!create_doc_at(&dir, agents).unwrap());
+    assert!(!outside.exists());
+    assert!(present_at(&dir, "AGENTS.md"), "a dangling link is 'there' for the tag");
+    assert_eq!(state_at(&dir, agents), DocState::Missing);
+    assert!(agents_empty_at(&dir));
+
+    // Link to a stub: not read, so not upgraded either.
+    std::fs::write(&outside, "# Agents\n").unwrap();
+    assert_eq!(state_at(&dir, agents), DocState::Missing);
+    assert!(!upgrade_doc_at(&dir, agents).unwrap());
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "# Agents\n");
+
+    // A FIFO is never waited on.
+    let fifo = dir.join("README.md");
+    crate::services::home_io::mkfifo(&fifo);
+    let d = dir.clone();
+    let state = crate::services::home_io::within_deadline(move || state_at(&d, doc("README.md").unwrap()));
+    assert_eq!(state, DocState::Missing);
+    let d = dir.clone();
+    assert!(!crate::services::home_io::within_deadline(move || create_doc_at(&d, doc("README.md").unwrap()).unwrap()));
+}
+
+#[test]
+fn a_doc_over_the_read_cap_is_not_a_stub() {
+    let tmp = tempfile::tempdir().unwrap();
+    let big = vec![b' '; (MAX_SCAFFOLD_DOC_BYTES + 1) as usize];
+    std::fs::write(tmp.path().join("TODO.md"), big).unwrap();
+    // Unreadable under the cap reads as missing (and is present on disk).
+    assert_eq!(state_at(tmp.path(), doc("TODO.md").unwrap()), DocState::Missing);
+    assert!(present_at(tmp.path(), "TODO.md"));
+}
+
+#[test]
+fn the_status_lists_present_docs_and_ghost_rows_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n\nReal.\n").unwrap();
+    std::fs::write(dir.join("CLAUDE.md"), "# Claude Context\n").unwrap();
+    std::fs::write(dir.join("TODO.md"), "# TODO\n").unwrap();
+
+    let status = docs_status_at(dir);
+    let row = |name: &str| status.iter().find(|s| s.name == name).cloned();
+    assert_eq!(
+        row("AGENTS.md"),
+        Some(DocStatus { name: "AGENTS.md", state: DocState::Edited, nested_under: None, creatable: true, is_default: true })
+    );
+    assert_eq!(
+        row("CLAUDE.md"),
+        Some(DocStatus { name: "CLAUDE.md", state: DocState::Pointer, nested_under: Some("AGENTS.md"), creatable: false, is_default: false })
+    );
+    assert_eq!(row("TODO.md").unwrap().state, DocState::Template);
+    // The default flag is the catalog's, so the frontends need no list of their own.
+    let flagged: Vec<&str> = status.iter().filter(|s| s.is_default).map(|s| s.name).collect();
+    assert_eq!(flagged, defaults().map(|d| d.name).collect::<Vec<_>>());
+    // A ghost row: missing and creatable.
+    assert_eq!(row("README.md").unwrap().state, DocState::Missing);
+    assert!(row("README.md").unwrap().creatable);
+    assert_eq!(row("PROJECT.md").unwrap().state, DocState::Missing);
+    // Absent and not creatable: no row.
+    assert!(row("GEMINI.md").is_none());
+    assert!(row("REMARKS.md").is_none());
+
+    let json = serde_json::to_value(&status[0]).unwrap();
+    assert_eq!(json["nestedUnder"], serde_json::Value::Null);
+    assert_eq!(json["state"], "edited");
+    let pointer = serde_json::to_value(row("CLAUDE.md").unwrap()).unwrap();
+    assert_eq!(pointer["nestedUnder"], "AGENTS.md");
+    assert_eq!(pointer["state"], "pointer");
+}
+
+#[test]
+fn missing_defaults_names_what_a_repair_would_create() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert_eq!(missing_defaults_at(tmp.path()), ["AGENTS.md", "README.md"]);
+    std::fs::write(tmp.path().join("README.md"), "").unwrap();
+    assert_eq!(missing_defaults_at(tmp.path()), ["AGENTS.md"]);
+    std::fs::write(tmp.path().join("AGENTS.md"), "# Agents\n").unwrap();
+    assert!(missing_defaults_at(tmp.path()).is_empty(), "a template-state doc is not missing");
+}
+
+/// A real `AGENTS.md` this module cannot read (not UTF-8, over the cap) holds
+/// somebody's guidance: it is not "empty", or the fill-in card would invite an
+/// agent to write over it. Nothing at the name, or an untouched template, is.
+#[test]
+fn an_unreadable_plain_agents_md_is_not_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    assert!(agents_empty_at(dir), "nothing there");
+    std::fs::write(dir.join("AGENTS.md"), [0xff, 0xfe, b'#', b' ', b'x']).unwrap();
+    assert!(!agents_empty_at(dir), "not UTF-8");
+    std::fs::write(dir.join("AGENTS.md"), vec![b'x'; (MAX_SCAFFOLD_DOC_BYTES + 1) as usize]).unwrap();
+    assert!(!agents_empty_at(dir), "over the cap");
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    assert!(agents_empty_at(dir), "an untouched template");
+}
+
+/// Whatever sits at a catalog name is "there": the status never reports it
+/// `missing` (a ghost row whose create is refused), and gives a folder no row.
+#[test]
+fn something_present_is_never_a_missing_ghost_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let state = |name: &str| docs_status_at(dir).into_iter().find(|s| s.name == name).map(|s| s.state);
+
+    // Not UTF-8 and over the cap: unreadable plain files are `edited`.
+    std::fs::write(dir.join("TODO.md"), [0xff, 0xfe, b'x']).unwrap();
+    assert_eq!(state("TODO.md"), Some(DocState::Edited));
+    std::fs::write(dir.join("ROADMAP.md"), vec![b'x'; (MAX_SCAFFOLD_DOC_BYTES + 1) as usize]).unwrap();
+    assert_eq!(state("ROADMAP.md"), Some(DocState::Edited));
+
+    // A folder named like a doc: no row at all.
+    std::fs::create_dir(dir.join("STATUS.md")).unwrap();
+    assert_eq!(state("STATUS.md"), None);
+
+    // Still a ghost when truly absent.
+    assert_eq!(state("PROJECT.md"), Some(DocState::Missing));
+
+    // A pointer that is a link shows (the common `CLAUDE.md -> AGENTS.md`).
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("AGENTS.md", dir.join("CLAUDE.md")).unwrap();
+        assert_eq!(state("CLAUDE.md"), Some(DocState::Edited));
+        // A dangling link on a creatable doc: present, not a ghost.
+        std::os::unix::fs::symlink(dir.join("nowhere.md"), dir.join("README.md")).unwrap();
+        assert_eq!(state("README.md"), Some(DocState::Edited));
+        // A FIFO is never waited on.
+        crate::services::home_io::mkfifo(&dir.join("DOCUMENTATION.md"));
+        let d = dir.to_path_buf();
+        let rows = crate::services::home_io::within_deadline(move || docs_status_at(&d));
+        assert_eq!(rows.iter().find(|s| s.name == "DOCUMENTATION.md").unwrap().state, DocState::Edited);
+    }
+    // Every row that is `missing` is something a create can write.
+    for row in docs_status_at(dir).iter().filter(|s| s.state == DocState::Missing) {
+        assert!(row.creatable);
+        assert!(!present_at(dir, row.name), "{} is there", row.name);
+    }
+}
+
+fn temp_leftovers(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| n.ends_with(".tmp"))
+        .collect()
+}
+
+#[test]
+fn an_upgrade_is_a_rename_that_leaves_no_temporary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let agents = doc("AGENTS.md").unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    assert!(upgrade_doc_at(dir, agents).unwrap());
+    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), AGENTS_SCAFFOLD);
+    assert!(temp_leftovers(dir).is_empty());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(dir.join("AGENTS.md"), "").unwrap();
+        std::fs::set_permissions(dir.join("AGENTS.md"), std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(upgrade_doc_at(dir, agents).unwrap());
+        let mode = std::fs::metadata(dir.join("AGENTS.md")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o640, "the replaced file's mode is kept");
+    }
+}
+
+/// The user saves while the upgrade is under way: that save wins, whichever way
+/// the editor writes (in place, or by renaming a new file over the name).
+#[test]
+fn a_save_during_an_upgrade_is_kept() {
+    let agents = doc("AGENTS.md").unwrap();
+    let mine = "# Agents\n\nMine.\n";
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    let d = dir.to_path_buf();
+    assert!(!upgrade_doc_with(dir, agents, || std::fs::write(d.join("AGENTS.md"), mine).unwrap()).unwrap());
+    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), mine, "in-place save");
+    assert!(temp_leftovers(dir).is_empty());
+
+    // A new file renamed over the name, with bytes that still read untouched:
+    // another inode, so the upgrade backs off all the same.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    let d = dir.to_path_buf();
+    assert!(!upgrade_doc_with(dir, agents, || {
+        std::fs::write(d.join("side"), "# Agents\n").unwrap();
+        std::fs::rename(d.join("side"), d.join("AGENTS.md")).unwrap();
+    })
+    .unwrap());
+    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), "# Agents\n");
+    assert!(temp_leftovers(dir).is_empty());
+}
+
+/// A link swapped in while the upgrade is under way is never replaced.
+#[cfg(unix)]
+#[test]
+fn a_link_swapped_in_during_an_upgrade_is_left_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("p");
+    std::fs::create_dir(&dir).unwrap();
+    let outside = tmp.path().join("outside.md");
+    std::fs::write(&outside, "# Agents\n").unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    let d = dir.clone();
+    let o = outside.clone();
+    assert!(!upgrade_doc_with(&dir, doc("AGENTS.md").unwrap(), || {
+        std::fs::remove_file(d.join("AGENTS.md")).unwrap();
+        std::os::unix::fs::symlink(&o, d.join("AGENTS.md")).unwrap();
+    })
+    .unwrap());
+    assert!(std::fs::symlink_metadata(dir.join("AGENTS.md")).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "# Agents\n");
+    assert!(temp_leftovers(&dir).is_empty());
+}
+
+/// A write into the upgrade's temporary that fails after the file exists (a
+/// full disk) must not leave the temporary in the project; a temporary
+/// somebody else planted at that name is not ours to remove.
+#[test]
+fn a_failed_write_into_the_upgrade_temp_removes_the_temp() {
+    let agents = doc("AGENTS.md").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    let err = upgrade_doc_via(
+        dir,
+        agents,
+        || {},
+        |path, _, create_new| {
+            write_no_follow(path, b"", create_new)?;
+            Err(io::Error::other("no space left on device"))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.to_string(), "no space left on device");
+    assert!(temp_leftovers(dir).is_empty(), "the half-written temp is gone");
+    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), "# Agents\n");
+
+    // A planted name at the temp is refused by create-new and left alone.
+    let planted = std::cell::RefCell::new(None);
+    let err = upgrade_doc_via(
+        dir,
+        agents,
+        || {},
+        |path, _, _| {
+            std::fs::write(path, "planted").unwrap();
+            *planted.borrow_mut() = Some(path.to_path_buf());
+            Err(io::Error::from(io::ErrorKind::AlreadyExists))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    let planted = planted.into_inner().unwrap();
+    assert_eq!(std::fs::read_to_string(planted).unwrap(), "planted");
+}
+
+/// `STANDARD_PROJECT_FILES` (`fileUtils.ts`) is the fallback list shown before
+/// the status arrives: the catalog's names plus `.gitignore` and `.git`, no
+/// more, no less. Hand-written TS, checked here.
+#[test]
+fn the_ts_fallback_list_is_the_catalog() {
+    let ts = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("src")
+        .join("lib")
+        .join("viewers")
+        .join("fileUtils.ts");
+    let src = std::fs::read_to_string(&ts).expect("fileUtils.ts");
+    let start = src.find("export const STANDARD_PROJECT_FILES = new Set([").expect("STANDARD_PROJECT_FILES")
+        + "export const STANDARD_PROJECT_FILES = new Set([".len();
+    let end = start + src[start..].find("]);").expect("end of the set");
+    let mut in_ts: Vec<&str> = src[start..end]
+        .lines()
+        .map(|l| l.trim().trim_end_matches(','))
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .map(|l| l.trim_matches('"'))
+        .collect();
+    in_ts.sort_unstable();
+    let mut in_catalog: Vec<&str> = DOCS.iter().map(|d| d.name).chain([".gitignore", ".git"]).collect();
+    in_catalog.sort_unstable();
+    assert_eq!(in_ts, in_catalog, "update STANDARD_PROJECT_FILES in src/lib/viewers/fileUtils.ts");
+}
+
+fn section_headings(dir: &Path) -> Vec<&'static str> {
+    gitignore_sections_at(dir).iter().map(|s| s.heading).collect()
+}
+
+/// A `.tex` at the root or one folder down calls for the LaTeX section;
+/// an empty folder, a deeper one, or a skipped folder does not.
+#[test]
+fn a_tex_file_at_the_root_or_one_folder_down_detects_latex() {
+    let empty = tempfile::tempdir().unwrap();
+    assert!(section_headings(empty.path()).is_empty());
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("Main.TEX"), "").unwrap();
+    assert_eq!(section_headings(root.path()), ["# LaTeX build files"]);
+
+    let sub = tempfile::tempdir().unwrap();
+    std::fs::create_dir(sub.path().join("chapters")).unwrap();
+    std::fs::write(sub.path().join("chapters").join("intro.tex"), "").unwrap();
+    assert_eq!(section_headings(sub.path()), ["# LaTeX build files"]);
+
+    let deep = tempfile::tempdir().unwrap();
+    let two_down = deep.path().join("a").join("b");
+    std::fs::create_dir_all(&two_down).unwrap();
+    std::fs::write(two_down.join("x.tex"), "").unwrap();
+    std::fs::create_dir(deep.path().join("node_modules")).unwrap();
+    std::fs::write(deep.path().join("node_modules").join("y.tex"), "").unwrap();
+    std::fs::create_dir(deep.path().join(".hidden")).unwrap();
+    std::fs::write(deep.path().join(".hidden").join("z.tex"), "").unwrap();
+    assert!(section_headings(deep.path()).is_empty());
+}
+
+/// The tree is attacker-controlled: a link named `*.tex`, or a linked folder
+/// holding one, is neither followed nor counted.
+#[cfg(unix)]
+#[test]
+fn a_linked_tex_or_linked_folder_detects_nothing() {
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("real.tex"), "").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path().join("real.tex"), dir.path().join("main.tex")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("chapters")).unwrap();
+    assert!(section_headings(dir.path()).is_empty());
+}
+
+/// The scan stops after its entry budget: a marker past it is not seen.
+#[test]
+fn the_section_scan_is_capped() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("many");
+    std::fs::create_dir(&sub).unwrap();
+    for i in 0..SECTION_SCAN_ENTRIES {
+        std::fs::write(sub.join(format!("f{i}")), "").unwrap();
+    }
+    std::fs::create_dir(dir.path().join("zz")).unwrap();
+    std::fs::write(dir.path().join("zz").join("late.tex"), "").unwrap();
+    // Two subfolders: whichever lists first, `many` spends the whole budget
+    // either before `zz` is listed or `zz` is found first — so check the
+    // budget directly instead of the listing order.
+    let mut found = vec![false; GITIGNORE_SECTIONS.len()];
+    let mut budget = SECTION_SCAN_ENTRIES;
+    scan_for_sections(&sub, &mut found, &mut budget, None);
+    assert_eq!(budget, 0);
+    scan_for_sections(&dir.path().join("zz"), &mut found, &mut budget, None);
+    assert!(!found[0], "nothing is read past the budget");
+}

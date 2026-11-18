@@ -9,7 +9,7 @@ import { ConfirmDialog } from "../../components/common/PromptDialogs";
  *   - Ctrl+Shift+Up/Down preview a subwindow; focus commits on Shift release;
  *   - Ctrl+Enter toggles fullscreen, Escape exits it;
  *   - Ctrl+W closes the active tab; Shift+Ctrl+W closes the subwindow;
- *   - Shift+Ctrl+Tab cycles to the next active project;
+ *   - Alt+Shift+→ cycles to the next active project;
  *   - chords are ignored while a text input is focused.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -28,6 +28,9 @@ import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
+import { useBoxesStore } from "../../stores/boxes";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 
 function Harness() {
   useKeyboard({ onTogglePanels: () => {} });
@@ -65,6 +68,9 @@ describe("#62 keyboard nav wiring", () => {
     resetTabs();
     useSubwindowNavStore.getState().end();
     useSettingsStore.setState({ settings: null });
+    resetBoxSlice();
+    useBoxesStore.setState({ boxes: [] });
+    useRootOverlayStore.setState({ open: false, view: "root" });
     cleanup();
   });
 
@@ -188,7 +194,7 @@ describe("#62 keyboard nav wiring", () => {
     expect(useTabsStore.getState().tabs.find((t) => t.key === a.key)).toBeTruthy();
   });
 
-  it("Shift+Ctrl+Tab cycles to the next active project", () => {
+  it("Alt+Shift+→ cycles to the next active project", () => {
     useProjectsStore.setState({
       projects: [
         { id: "p1", name: "P1", status: "current", position: 1 } as never,
@@ -201,11 +207,11 @@ describe("#62 keyboard nav wiring", () => {
     useProjectsStore.setState({ setActive });
     render(<Harness />);
 
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
     expect(setActive).toHaveBeenCalledWith("p2");
   });
 
-  it("Shift+Ctrl+Tab wraps through the ROOT scope, not past it", () => {
+  it("Alt+Shift+→ wraps through the ROOT scope, not past it", () => {
     // The root terminal is the pill strip's first pill, so the cycle stops
     // there. It used to be reachable only by leaving it: `null` matched no
     // pill, so cycling out worked and cycling back in was impossible.
@@ -220,15 +226,67 @@ describe("#62 keyboard nav wiring", () => {
     useProjectsStore.setState({ setActive });
     render(<Harness />);
 
-    // Last pill → wraps to the root scope.
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
-    expect(setActive).toHaveBeenCalledWith(null);
+    // Last pill → wraps to the root station: the Root view opens, the
+    // workspace stays on its project (no switch to the root scope).
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
+    expect(setActive).not.toHaveBeenCalled();
+    expect(rootViewShown(useRootOverlayStore.getState())).toBe(true);
 
-    // And out of the root scope again, into the first pill.
-    setActive.mockClear();
-    useProjectsStore.setState({ activeId: null });
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    // And out of Root again, into the first pill; the view steps aside.
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
     expect(setActive).toHaveBeenCalledWith("p1");
+    expect(rootViewShown(useRootOverlayStore.getState())).toBe(false);
+  });
+
+  it("Alt+Shift+→ inside a box slice walks only the pills the slice shows, an inactive member included", () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: "p1", name: "P1", status: "active", position: 1 } as never,
+        { id: "p2", name: "P2", status: "inactive", position: 2 } as never,
+        { id: "p3", name: "P3", status: "active", position: 3 } as never,
+        { id: "p4", name: "P4", status: "active", position: 4 } as never,
+      ],
+      activeId: "p1",
+    });
+    useBoxesStore.setState({
+      boxes: [{ id: "bx", name: "bx", member_ids: ["p1", "p2", "p4"], position: 0 }],
+    });
+    useBoxSliceStore.setState({ sliceBoxId: "bx" });
+    useTabsStore.setState({ scope: "p1" });
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ setActive });
+    render(<Harness />);
+
+    // p1 -> p2 (closed in the general strip, but a pill in the slice).
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
+    expect(setActive).toHaveBeenLastCalledWith("p2");
+    // p2 -> p4: p3 is not in the box, so it is skipped.
+    useTabsStore.setState({ scope: "p2" });
+    useProjectsStore.setState({ activeId: "p2" });
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
+    expect(setActive).toHaveBeenLastCalledWith("p4");
+  });
+
+  it("Alt+Shift+→ from the box's own scope lands on its first visible pill", () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: "p1", name: "P1", status: "active", position: 1 } as never,
+        { id: "p2", name: "P2", status: "active", position: 2 } as never,
+        { id: "p3", name: "P3", status: "active", position: 3 } as never,
+      ],
+      activeId: "p1",
+    });
+    useBoxesStore.setState({
+      boxes: [{ id: "bx", name: "bx", member_ids: ["p2", "p3"], position: 0 }],
+    });
+    useBoxSliceStore.setState({ sliceBoxId: "bx" });
+    useTabsStore.setState({ scope: "box:bx" });
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ setActive });
+    render(<Harness />);
+
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
+    expect(setActive).toHaveBeenLastCalledWith("p2");
   });
 
   it("uses a custom binding from settings when present", () => {

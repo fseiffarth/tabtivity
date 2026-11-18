@@ -4,7 +4,7 @@ The working guide to keeping a remote (SSH) project's **local mirror** and its
 **host tree** in step. `docs/context/git_sync.md` records *why* the design is
 what it is; this document says *what happens*, in what order, and what to do
 when the UI goes amber, orange or red. Code: `src-tauri/src/services/
-{remote_sync,sync_auto,git_peer,local_loss,worker_sync}.rs` and
+{remote_sync,sync_auto,sync_pool,sync_task,git_peer,local_loss,worker_sync}.rs` and
 `src-tauri/src/commands/{sync,git_peer}.rs`; UI: `src/stores/remote/sync.ts`,
 `src/components/files/{FileTree,ProjectFilesView,ProjectFilesPane}.tsx`,
 `src/components/files/GitHistory.tsx` (the Lockstep bar).
@@ -23,7 +23,7 @@ Two independent engines keep them in step. They **split the tree by git**:
 | | Git lockstep (`git_peer`) | Byte-sync (`sync_auto` + `commands::sync`) |
 |---|---|---|
 | Owns | every **git-tracked** file (`git ls-files` in the mirror, i.e. the index) | everything else: untracked and gitignored files |
-| Moves | **commits and refs**, via `git bundle` over the pooled SFTP session, then `git merge --ff-only` / `checkout` on each side | **raw bytes**, one file at a time over SFTP (rsync as a fast path for folder pulls) |
+| Moves | **commits and refs**, via `git bundle` over the pooled SFTP session, then `git merge --ff-only` / `checkout` on each side | **raw bytes**, per file over SFTP, a few at once (rsync as a fast path for folder pulls) |
 | Scope | the whole repo, once enabled | an explicit per-path manifest (`sync.json`) — nothing crosses unless marked |
 | Reads `.gitignore`? | yes (it is git) | **no** |
 | Trigger | mirror `.git` watcher (800 ms debounce) + a 12 s host poll | mirror watcher (1.5 s debounce) + a 25 s host re-stat, for auto-marked paths only |
@@ -65,6 +65,19 @@ Both engines run only while the project's pooled SSH session is up
 | `auto_off` | carve-out: overrides an ancestor's (or the project-wide) `auto_sync` |
 | `excluded` | out of byte-sync entirely — skipped by auto-sync **and** by *Sync all* / *Push all* |
 
+A transfer moves up to four files at once (`sync_pool::run_ordered`): the
+remote round trips overlap, while the recording, progress and failure report
+still take each file in order. Files in flight may hold at most 128 MiB (two
+files of the 64 MiB cap) by their listed sizes, so small files run four wide and
+a file over that runs alone. The host walk lists up to eight folders ahead at
+once and still returns files depth-first in listing order (`sync_pool::walk_listed`).
+
+A transfer records each file in the in-memory manifest as it lands and writes
+`sync.json` in batches (`remote_sync::RecordBatch`: every 64 files or 2 s, and
+once more before it reports), so a folder transfer does not rewrite the whole
+file per file. A transfer cut off before its last write leaves at most that
+batch unsaved, which reads as moved, never as clean.
+
 A transfer whose record cannot be saved (`sync.json` unwritable, or rewritten
 by the app's other process meanwhile) never leaves a base that reads clean:
 `remote_sync::save_manifest_or_mark_stale` forgets the moved files' bases, in
@@ -91,9 +104,13 @@ against local mtime (clocks differ). For one file:
 | green, no host stat | **lockstep-owned** tracked file; in step as of the last commit | tree badge |
 
 Status is refreshed by the `sync_status` command (on view, every 15 s while the
-tree is visible, after every transfer, and after every auto-sync pass). A
+tree is visible, after every transfer, and after every auto-sync pass). The
+store runs one pass per project at a time: asks that arrive during a pass share
+the one that follows it, and a batch of transfers refreshes once, at its end. A
 metadata-only amber — same bytes, drifted mtime, ≤ 1 MiB — is read on both
-sides and healed to green by re-recording the base.
+sides and healed to green by re-recording the base. A same-size pair read and
+found different is remembered by its stats (`remote_sync::KnownDifferent`, in
+memory) and not read from the host again until one side's stat moves.
 
 ### 2.3 Marking scope
 
@@ -128,11 +145,14 @@ gets the *Large folders* census once at setup for the same reason.
 
 Runs every 25 s and ~1.5 s after a write inside the mirror (writes under
 `.git/` and `.tabtivity/` do not count — those are lockstep's and the runtime's).
+Writes that never pause (a log appended every second) hold the pass off for at
+most one interval, not for as long as they last.
 Per pass:
 
 1. Candidates = auto-marked files ∪ host walk of each auto folder ∪ mirror walk
    of each auto folder. Symlinks, nested repositories, `.git`, `.tabtivity` are
-   never walked.
+   never walked, and neither is a folder no auto file can be under (an excluded
+   `data/`, a carved-out `.venv`: `remote_sync::auto_walk_skip`).
 2. Drop anything whose effective auto is off, then drop the git-tracked set if
    lockstep is on.
 3. For each candidate, stat both sides and pick the **safe direction**:
@@ -142,11 +162,18 @@ Per pass:
 | no | no | nothing |
 | yes | no | pull host → mirror |
 | no | yes | push mirror → host, but only if the host still matches its base (`push_decision == Safe`) |
-| yes | yes | skip; the row stays orange for you |
+| yes | yes | skip; the row stays orange for you (the *take the newer copy* switch, 2.6, decides it by mtime instead) |
 
 A file that exists on **both** sides but was never synced counts as "both
 moved" (no base to compare against) and is skipped every pass. Pull or push it
 once by hand to adopt it; after that it has a base and auto-sync takes over.
+
+Files are judged and moved a few at a time (2.1). Once the loop is stopping or a
+manual pull/push/delete waits for the lock, no further file starts; the files in
+flight finish and are recorded, never cut off mid-file. A both-sides-changed file
+the *take the newer copy* switch resolves waits until the other files are done
+and is resolved one at a time, with the same checks before each; one whose
+marker was turned off or excluded in the meantime is left alone.
 
 Deletions are not propagated in the background: a file deleted on one side
 sits orange until you finish the deletion from the diverged list (*apply
@@ -183,7 +210,9 @@ keeps the cap (its per-file timeout is sized for it), as does every push.
 
 **Push** (`sync_push`, *Push all* in the Local tree): for each file the host is
 re-stat'd; a host that moved since the base **blocks** that file and returns it
-as a conflict. The tree then asks per file — *keep local* (force push), *take
+as a conflict. A file whose transfer stalls for 120 s fails, and no further file
+starts after it; the ones already in flight finish under their own 120 s and are
+reported, and the rest are not attempted. The tree then asks per file — *keep local* (force push), *take
 host* (pull), *skip* — and *skip all* drops the queue, leaving the files orange.
 
 A targeted pull or push whose every candidate was withheld (tracked by git under
@@ -200,6 +229,18 @@ From the *± diverged* list or the row's context menu:
 - **Keep local** for one or all: a confirmed force push.
 - **Apply delete** when one side is gone: propagates the deletion, after
   re-verifying live that the side is positively absent.
+
+**Take the newer copy automatically** (checkbox at the top of the diverged
+list; `sync_take_newer_get` / `sync_set_take_newer`, stored per project in
+`<state_dir>/remote-projects/<id>/sync_settings.json`, off by default). With it
+on, the auto pass (2.4) no longer skips a both-sides-changed file on an auto
+path: the copy with the newer mtime wins, after the loser is saved under
+`conflict-backups/<unix secs>/<rel>` (pruned after 30 days) and logged in
+`local_loss` (*overwritten locally* / *overwritten on the host*). A deletion on
+either side, a tie, a missing mtime or a copy over the 64 MiB cap is left
+orange; a failed backup leaves the file untouched, and the same failed state is
+not retried until a side moves. It is the one place byte-sync compares the two
+machines' clocks.
 
 ## 3. Git lockstep, step by step
 
@@ -234,12 +275,18 @@ A side whose git probe could not run is never treated as empty.
 ### 3.2 A normal pass (`reconcile_with`)
 
 Every pass is one of: the 12 s poll, a `.git` write on the mirror, *Sync now* /
-*Retry*, or the pass a coordinated checkout runs. Steps:
+*Retry*, or the pass a coordinated checkout runs. The poll's batched host probe
+runs with `GIT_OPTIONAL_LOCKS=0`, like every local read: its `git status` never
+takes the host's `index.lock`, so a `git add` typed on the host cannot trip on
+it. (The per-command fallback for a host without a POSIX `sh`, and the status
+that names the dirty files of a refusal, still run plain.) Steps:
 
 1. **Connected?** If the pool is cold: status *disconnected*, nothing claimed,
    nothing written.
 2. **Probe** both sides in one round trip each: HEAD, branches, tags, tracked
-   dirty bit, HEAD subject, and the branches checked out in linked worktrees.
+   dirty bit (`git status --untracked-files=no`: the untracked tree is not
+   scanned for it), HEAD subject, and the branches checked out in linked
+   worktrees. The pass reuses the snapshots its checkout detection just took.
 3. **Early-out** when the last pass was green and neither side's ref signature
    (refs + HEAD + dirty bit) changed. `Sync now` bypasses it.
 4. **Transfer mirror → host, then host → mirror.** Each leg: thin bundle of the
@@ -331,7 +378,9 @@ altogether.
 
 Extra compute hosts receive the **mirror's** current HEAD one way
 (`worker_sync`): bundle → SFTP → `git fetch` → `reset --hard FETCH_HEAD`,
-never `git clean`. Before reset, a collision check refuses incoming paths that
+never `git clean`. The worker's git runs hardened like lockstep's host git
+(`git_peer::hardened_remote_script`): the worker repo's hooks and
+`core.fsmonitor` program do not run on a code sync. Before reset, a collision check refuses incoming paths that
 would overwrite untracked outputs, including ignored files and file/directory
 replacements; it guards every apply, the full-bundle fallback included. The
 check and reset are separate operations; pause output writers while syncing to
@@ -340,7 +389,8 @@ worker's last synced commit; when that comes out empty although the mirror's
 HEAD is a different commit (the mirror was reset backwards), the full bundle is
 sent, so the worker moves back with it and its record stays true. Triggered on
 worker connect, on every commit the lockstep watcher sees (so it needs lockstep
-enabled), and by *Sync code now*. The manual action sends a full bundle even at
+enabled), and by *Sync code now*; a fan-out pushes to all its workers at once
+(each has its own session, bundle and record). The manual action sends a full bundle even at
 an unchanged source HEAD to repair tracked worker drift. A removed repository is
 rebuilt only when existing files do not collide with incoming code. A
 shared-filesystem worker gets nothing —
@@ -354,6 +404,7 @@ into the mirror.
 |---|---|
 | `<state_dir>/remote-projects/<id>/sync.json` | byte-sync manifest |
 | `<state_dir>/remote-projects/<id>/git_peer.json` | lockstep state (enabled, status, last observed heads, early-out signatures) |
+| `<state_dir>/remote-projects/<id>/sync_settings.json`, `conflict-backups/<secs>/` | the *take the newer copy* switch; the copies it replaced (30 days) |
 | `<state_dir>/remote-projects/<id>/local_loss.json` | what lockstep/sync destroyed on the mirror, until acknowledged |
 | `<state_dir>/remote-projects/<id>/workers/<host>.json` | each worker's last pushed head |
 | `<mirror>/.git/tabtivity-lockstep.bundle`, `<host>/.git/tabtivity-lockstep.bundle` | transient bundle files, removed after each pass |

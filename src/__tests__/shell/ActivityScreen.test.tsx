@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActivityTab } from "../../../mobile-web/src/api";
 import { Activity } from "../../../mobile-web/src/screens/Activity";
 import { BRAND, storageKey } from "../../lib/brand";
+import { listScrollKey, rememberListScroll, takeListScroll } from "../../../mobile-web/src/listScroll";
 
 const fetchMock = vi.fn();
 const MIN = 60_000;
@@ -123,7 +124,7 @@ describe("Mobile activity list — rows", () => {
     await screen.findByText("Working");
 
     // lastWorking (default): the tiers, then the reading each tier carries.
-    expect(cards().map((c) => c.querySelector("strong")!.textContent)).toEqual(["Asking", "Working", "Done", "Fresh"]);
+    expect(cards().map((c) => c.querySelector("strong")!.textContent)).toEqual(["Asking", "Done", "Fresh", "Working"]);
     expect(small("Working")).toBe("Aurora · working now");
     expect(small("Done")).toBe("Aurora · finished 3 min ago");
     expect(small("Asking")).toBe("Aurora · worked 10 min ago");
@@ -242,5 +243,23 @@ describe("Mobile activity list — polling discipline", () => {
     expect(signal.aborted).toBe(true);
     settle(new Response("{}", { status: 200 }));
     await waitFor(() => expect(onConnection).not.toHaveBeenCalled());
+  });
+});
+
+describe("Mobile activity list — back from a tab", () => {
+  it("puts the list back where it stood once its own rows are in, not before", async () => {
+    const scrollTo = vi.fn();
+    Object.defineProperty(window, "scrollTo", { configurable: true, value: scrollTo });
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 640, writable: true });
+    rememberListScroll(listScrollKey(null));
+    (window as { scrollY: number }).scrollY = 0;
+    let release: (value: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve; }));
+    render(<Activity open={() => {}} onConnection={() => {}} />);
+    expect(scrollTo).not.toHaveBeenCalled();
+    release(new Response(JSON.stringify({ tabs: [tab("Done", "done")], desktop_available: true }), { status: 200 }));
+    await screen.findByText("Done");
+    expect(scrollTo).toHaveBeenCalledWith(0, 640);
+    expect(takeListScroll(listScrollKey(null))).toBeNull();
   });
 });

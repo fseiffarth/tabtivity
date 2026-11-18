@@ -52,9 +52,25 @@ pub async fn skills_install(
     app_core::rt::try_blocking("skills", move || skills::install_skill(&target, &source_id, &rel_path)).await
 }
 
+/// `name` carries the skill's *folder* (`InstalledSkill::folder`); the key
+/// keeps its old spelling so the web client's confinement table
+/// (`core_dispatch`) and older clients stay unchanged.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_uninstall(target: SkillTarget, name: String) -> Result<(), String> {
     app_core::rt::try_blocking("skills", move || skills::uninstall_skill(&target, &name)).await
+}
+
+/// Copy an installed skill (`InstalledSkill::folder`) from one target into
+/// another — between projects, or between a project and the personal scope.
+/// `overwrite` replaces a copy already in `to`; without it one is refused.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn skills_copy(
+    from: SkillTarget,
+    folder: String,
+    to: SkillTarget,
+    overwrite: bool,
+) -> Result<(), String> {
+    app_core::rt::try_blocking("skills", move || skills::copy_installed(&from, &folder, &to, overwrite)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]

@@ -10,11 +10,47 @@ import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktre
 import { ErrorNote } from "../common/ErrorNote";
 import { basename, dirname, resolvePath } from "../../lib/paths";
 
+interface PullCheckout {
+  site: "local" | "mirror" | "host";
+  path: string;
+  git_dir: string;
+  host: [string, string, string | null, number] | null;
+}
+
+/** A successful fetch in a specific checkout, from the selected upstream. */
+export interface FetchReceipt {
+  checkout: PullCheckout;
+  upstream_ref: string | null;
+  remote: string | null;
+  fetched_at: number;
+}
+
+interface PullReview {
+  checkout: PullCheckout;
+  branch: string;
+  checked_out: string | null;
+  upstream_ref: string;
+  remote: string;
+  local_oid: string;
+  incoming_oid: string;
+}
+
+function matchesFetch(receipt: FetchReceipt | null, review: PullReview): receipt is FetchReceipt {
+  return !!receipt?.checkout
+    && receipt.checkout.site === review.checkout.site
+    && receipt.checkout.path === review.checkout.path
+    && receipt.checkout.git_dir === review.checkout.git_dir
+    && JSON.stringify(receipt.checkout.host) === JSON.stringify(review.checkout.host)
+    && receipt.upstream_ref === review.upstream_ref
+    && receipt.remote === review.remote;
+}
+
 /** Mirrors `commands::git_pull::PullPreview`. */
 interface PullPreview {
   branch: string;
   upstream: string;
   is_current: boolean;
+  review?: PullReview;
   incoming: string[];
   outgoing: string[];
   files: { path: string; status: string; both: boolean }[];
@@ -24,13 +60,20 @@ interface PullPreview {
 export interface MergeState {
   merging: boolean;
   conflicts: string[];
+  mirror?: boolean;
+  path?: string | null;
 }
 
 /** Open one file of `repoDir` in the `gitmerge` viewer (the shared three-way
  *  compare): the incoming diff, or the conflict resolver mid-merge. */
-function openInMergeView(repoDir: string, rel: string) {
+function openInMergeView(repoDir: string, rel: string, review?: PullReview) {
   const abs = resolvePath(repoDir, rel);
-  openLinkedFile(undefined, dirname(abs), { path: abs, viewer: "gitmerge", label: basename(abs) });
+  openLinkedFile(undefined, dirname(abs), {
+    path: abs,
+    viewer: "gitmerge",
+    label: basename(abs),
+    ...(review ? { gitPullTips: { local_oid: review.local_oid, incoming_oid: review.incoming_oid } } : {}),
+  });
 }
 
 /**
@@ -41,15 +84,16 @@ function openInMergeView(repoDir: string, rel: string) {
  * a diverged checked-out branch offers a merge, which may stop on conflicts
  * that `GitMergeBar` then walks through.
  *
- * `branch` null = the checked-out branch. `canOpenFiles` is false for a remote
- * project: the merge view resolves into this machine's working tree.
+ * `branch` null = the checked-out branch. The merge viewer opens files on the
+ * local and mirror checkouts.
  */
 export function GitPullPanel({
   projectDir,
   worktree,
   projectId,
   branch,
-  canOpenFiles,
+  lastFetches,
+  onFetched,
   onClose,
   onDone,
 }: {
@@ -57,7 +101,8 @@ export function GitPullPanel({
   worktree?: GitWorktreeSelection | null;
   projectId: string | null;
   branch: string | null;
-  canOpenFiles: boolean;
+  lastFetches: () => Iterable<FetchReceipt>;
+  onFetched: (receipt: FetchReceipt) => void;
   onClose: () => void;
   /** After a pull or merge changed the repo (conflicts may be pending). */
   onDone: () => void;
@@ -68,44 +113,90 @@ export function GitPullPanel({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
 
-  const load = useCallback(async () => {
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
+  const [notice, setNotice] = useState<"gitPull.checkoutChanged" | "gitPull.stale" | "gitPull.backendRequired" | null>(null);
+
+  const load = useCallback(async (forceFetch = false) => {
     setBusy(true);
+    setPreview(null);
     setError(null);
+    setNotice(null);
     setFetchError(null);
-    // A failed fetch (offline, auth) still leaves a useful preview against the
-    // tracking refs as of the last fetch — say so rather than show nothing.
+    setFetchedAt(null);
+    const args = { projectDir, ...gitWorktreeArgs(worktree), branch };
+    const readPreview = () => invoke<PullPreview>("git_pull_preview", args);
     try {
-      await invoke("git_fetch", { projectDir, ...gitWorktreeArgs(worktree), projectId });
-    } catch (e) {
-      setFetchError(String(e));
-    }
-    try {
-      setPreview(await invoke<PullPreview>("git_pull_preview", { projectDir, ...gitWorktreeArgs(worktree), branch }));
+      const receipts = Array.from(lastFetches());
+      if (!forceFetch && receipts.length > 0) {
+        const cached = await readPreview().catch(() => null);
+        if (cached?.review) {
+          const review = cached.review;
+          const prior = receipts.find((receipt) => matchesFetch(receipt, review));
+          if (prior) {
+            setFetchedAt(prior.fetched_at);
+            setPreview(cached);
+            return;
+          }
+        }
+      }
+      // A fetch can fail while the existing tracking refs still offer a preview.
+      let receipt: FetchReceipt | null = null;
+      try {
+        receipt = await invokeTrusted<FetchReceipt>("git_fetch", { ...args, projectId });
+        if (receipt?.checkout) onFetched(receipt);
+      } catch (e) {
+        setFetchError(String(e));
+      }
+      const next = await readPreview();
+      if (!next.review) {
+        setNotice("gitPull.backendRequired");
+        return;
+      }
+      const review = next.review;
+      if (matchesFetch(receipt, review)) {
+        setFetchedAt(receipt.fetched_at);
+      } else if (receipt) {
+        setNotice("gitPull.checkoutChanged");
+        return;
+      } else {
+        setFetchedAt(receipts.find((prior) => matchesFetch(prior, review))?.fetched_at ?? null);
+      }
+      setPreview(next);
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
-  }, [projectDir, projectId, branch, worktree]);
+  }, [projectDir, projectId, branch, worktree, lastFetches, onFetched]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const apply = async (merge: boolean) => {
-    if (!preview) return;
+    if (!preview?.review) return;
     setBusy(true);
     setError(null);
     try {
-      await invokeTrusted("git_pull_apply", { projectDir, ...gitWorktreeArgs(worktree), branch: preview.branch, merge });
+      const result = await invokeTrusted<{ stale: boolean }>("git_pull_apply", {
+        projectDir, ...gitWorktreeArgs(worktree), branch: preview.branch, merge, review: preview.review,
+      });
+      if (result.stale) {
+        setPreview(null);
+        setNotice("gitPull.stale");
+        return;
+      }
       onDone();
       onClose();
     } catch (e) {
       setError(String(e));
+    } finally {
       setBusy(false);
     }
   };
 
+  const checkout = preview?.review?.checkout;
+  const canOpenFiles = !!checkout && checkout.site !== "host";
   const diverged = !!preview && preview.outgoing.length > 0;
   const upToDate = !!preview && preview.incoming.length === 0;
 
@@ -118,14 +209,22 @@ export function GitPullPanel({
             : t("gitPull.titleLoading")}
         </span>
         <UntestedTag id="gitPull.1" />
+        <UntestedTag id="gitPull.checkoutReview" />
         <span className="git-worktree-spacer" />
-        <button className="toolbar-btn" onClick={() => void load()} disabled={busy} title={t("gitPull.refetchTitle")}>
+        <button className="toolbar-btn" onClick={() => void load(true)} disabled={busy} title={t("gitPull.refetchTitle")} aria-label={t("gitPull.refetchTitle")}>
           <RefreshIcon />
         </button>
         <button className="toolbar-btn" onClick={onClose} title={t("common.close")}>
           <CloseIcon />
         </button>
       </div>
+      {checkout && (
+        <div className="git-worktree-note">
+          {t(checkout.site === "mirror" ? "gitPull.mirrorCheckout" : checkout.site === "host" ? "gitPull.hostCheckout" : "gitPull.localCheckout", { path: checkout.path })}
+        </div>
+      )}
+      {fetchedAt !== null && <div className="git-worktree-note">{t("gitPull.lastFetch", { time: new Date(fetchedAt * 1000).toLocaleString() })}</div>}
+      {notice && <div className="git-worktree-note git-pull-warn">{t(notice)}</div>}
       {fetchError && <div className="git-worktree-note git-pull-warn">{t("gitPull.fetchFailed", { error: fetchError })}</div>}
       {error && <ErrorNote className="git-worktree-note git-pull-error" error={error} />}
       {busy && !preview && <div className="git-worktree-note">{t("gitPull.fetching")}</div>}
@@ -156,7 +255,7 @@ export function GitPullPanel({
           )}
           <div className="git-worktree-note">
             {t("gitPull.filesHeading", { count: preview.files.length })}
-            {preview.is_current && canOpenFiles && ` ${t("gitPull.filesHint")}`}
+            {canOpenFiles && ` ${t("gitPull.filesHint")}`}
           </div>
           <ul className="git-pull-list git-pull-files">
             {preview.files.map((f) => (
@@ -164,11 +263,9 @@ export function GitPullPanel({
                 <button
                   type="button"
                   className="git-pull-file"
-                  // The preview compares HEAD with the upstream, so it only
-                  // describes the checked-out branch.
-                  disabled={!canOpenFiles || !preview.is_current}
+                  disabled={!canOpenFiles}
                   title={f.both ? t("gitPull.bothTitle", { path: f.path }) : f.path}
-                  onClick={() => openInMergeView(worktree?.path || projectDir, f.path)}
+                  onClick={() => checkout && openInMergeView(checkout.path, f.path, preview.review)}
                 >
                   <span className={`git-pull-status git-pull-status--${f.status}`}>{f.status}</span>
                   <span className="git-pull-path">{f.path}</span>
@@ -276,7 +373,7 @@ export function GitMergeBar({
                   className="git-pull-file"
                   disabled={!canOpenFiles}
                   title={rel}
-                  onClick={() => openInMergeView(worktree?.path || projectDir, rel)}
+                  onClick={() => openInMergeView(state.path || worktree?.path || projectDir, rel)}
                 >
                   <span className="git-pull-status git-pull-status--U">U</span>
                   <span className="git-pull-path">{rel}</span>

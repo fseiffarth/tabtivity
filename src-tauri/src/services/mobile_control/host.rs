@@ -34,9 +34,11 @@ use super::{
     chat_changes,
     chat_uncommitted,
     config::{verify_tailscale_serve, HostConfig},
+    deadline,
     diverged,
-    discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
+    files_zip,
     git_overview,
     headless,
     host_files,
@@ -55,9 +57,12 @@ use super::{
         MAX_TAB_LABEL,
     },
     presence,
+    project_docs,
     pty_bridge::{self, TerminalRegistry},
     remarks,
     scheduler,
+    serve,
+    shell_mask,
     uploads,
     push::{AgentTabRef, PushPrefs},
     sign_in,
@@ -85,6 +90,64 @@ const PDF_FRAME_PATH: &str = "/pdf-frame.html";
 
 const MOBILE_PERMISSIONS_POLICY: &str =
     "camera=(), microphone=(self), on-device-speech-recognition=(self), geolocation=(), payment=(), usb=()";
+
+/// The phone page's policy with no linked desktop, and the one spelling of
+/// it: `phone_csp` widens this text for the linked ones.
+const PHONE_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+
+/// The phone page's CSP for these linked desktops
+/// (`docs/phone_multi_desktop_plan.md`): each may frame this page
+/// (`frame-ancestors`), this page may frame each (`frame-src`) and probe its
+/// `/healthz` (`connect-src`). None linked: `PHONE_CSP` itself. The widened
+/// policy is `PHONE_CSP` with those directives replaced; one the replace no
+/// longer finds, or a value that is no header, stays closed.
+fn phone_csp(linked: &[String]) -> HeaderValue {
+    if linked.is_empty() {
+        return HeaderValue::from_static(PHONE_CSP);
+    }
+    let list = linked.join(" ");
+    let widened = PHONE_CSP
+        .replace("connect-src 'self';", &format!("connect-src 'self' {list}; frame-src 'self' {list};"))
+        .replace("frame-ancestors 'none';", &format!("frame-ancestors {list};"));
+    HeaderValue::from_str(&widened).unwrap_or_else(|_| HeaderValue::from_static(PHONE_CSP))
+}
+
+/// `MOBILE_PERMISSIONS_POLICY` with the features it grants this page
+/// (`(self)`: the microphone and speech recognition) delegable to the linked
+/// desktops' frames: an `allow=` attribute on the frame cannot widen what
+/// this header grants. None linked: the constant itself.
+fn permissions_policy(linked: &[String]) -> HeaderValue {
+    if linked.is_empty() {
+        return HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY);
+    }
+    let quoted: String = linked.iter().map(|origin| format!(" \"{origin}\"")).collect();
+    let widened = MOBILE_PERMISSIONS_POLICY.replace("(self)", &format!("(self{quoted})"));
+    HeaderValue::from_str(&widened).unwrap_or_else(|_| HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY))
+}
+
+/// The linked desktops of a host (`linked::linked_desktops`), none behind
+/// the server gateway (`secure`), where a link has no meaning.
+fn linked_for(secure: bool, state_dir: &std::path::Path, origin: &str) -> Vec<String> {
+    if secure {
+        return Vec::new();
+    }
+    super::linked::linked_desktops(state_dir, origin)
+}
+
+/// [`linked_for`] of the host serving a request.
+fn linked(state: &HostState) -> Vec<String> {
+    linked_for(state.web.secure(), &state.config.state_dir, &state.config.origin)
+}
+
+/// What the header middleware needs: whether the host is behind the gateway
+/// (its socket is `wss:`, and nothing is linked), and where to read the
+/// linked desktops from. Shared behind an `Arc`: the middleware's state is
+/// cloned for every request.
+struct HeaderState {
+    secure: bool,
+    state_dir: PathBuf,
+    origin: String,
+}
 
 #[derive(Clone)]
 struct HostState {
@@ -127,7 +190,7 @@ struct HostState {
 /// The owner's spawn seam (headless owner plan, H1b): `launch` starts a
 /// prepared tab detached under its tmux name, `installed` says which agent
 /// CLIs the ＋ sheet may offer. Production is `launch_prep::prepare` plus
-/// `tmux_local::spawn_detached_with` on the default tmux server — the same
+/// the session mux's `spawn_detached` on the default tmux server — the same
 /// launch assembly and the same server the window uses, so the window later
 /// attaches to what the sidecar started — and the registry's install probe.
 /// `new_project` makes a phone's new project
@@ -159,17 +222,51 @@ impl Default for HeadlessSpawner {
             launch: Arc::new(|opts: PtyOptions| {
                 Box::pin(async move {
                     let prepared = crate::services::launch_prep::prepare(opts, None, None).await?;
-                    #[cfg(unix)]
-                    {
-                        crate::services::tmux_local::spawn_detached_with(&prepared.opts, None)?;
-                        prepared.commit();
-                        Ok(())
+                    let check = prepared.privacy_check();
+                    let (tab, seq, session) =
+                        (prepared.opts.id.clone(), prepared.spawn_seq(), prepared.opts.tmux_session.clone());
+                    // No local session backend (Windows with the session
+                    // host off): `Unavailable`, and the prepared spawn is
+                    // dropped. On the session host only what `prepare`'s
+                    // wrap marked runs (`headless_spawn_refused`).
+                    let mux = crate::services::session_mux::mux();
+                    if let Some(why) = headless_spawn_refused(mux.kind(), prepared.opts.mux_wrapped) {
+                        return Err(why.to_string());
                     }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = prepared;
-                        Err("a tab with no window needs tmux, which this platform has none of".to_string())
+                    // Off the async workers: the session host's connect may
+                    // start the host (a lazy start, ≤ 3 s). A launch that may
+                    // only rejoin its live session (`host_attach_only`: let
+                    // through the AI switch, a revival of its MCP lanes, or
+                    // found alive in a host whose setting is off) never goes
+                    // through the create-or-attach spawn: alive, there is
+                    // nothing to start; gone meanwhile, it is refused.
+                    let opts = prepared.opts.clone();
+                    let attach_only = prepared.host_attach_only;
+                    app_core::rt::blocking("headless spawn", move || {
+                        if attach_only {
+                            let name = opts.tmux_session.as_deref().unwrap_or_default();
+                            let alive = mux.holds_sessions() && mux.has(name).unwrap_or(false);
+                            return headless_rejoin(alive, crate::services::ai_switch::is_off());
+                        }
+                        mux.spawn_detached(&opts).map_err(|e| e.to_string())
+                    })
+                    .await??;
+                    prepared.commit();
+                    // Local models only switched on while this agent was starting
+                    // (`launch_prep::recheck_privacy`): refused, its session ends here.
+                    if let Err(refusal) = crate::services::launch_prep::recheck_privacy(check).await {
+                        let sweep = app_core::rt::blocking("Local models only", move || {
+                            let sweep = crate::services::agent_privacy::end_sessions(session.as_slice());
+                            crate::services::launch_prep::on_tab_gone(&tab, seq);
+                            sweep
+                        })
+                        .await;
+                        return Err(match crate::commands::agent_privacy::unconfirmed_note(sweep) {
+                            Some(note) => format!("{refusal} {note}"),
+                            None => refusal,
+                        });
                     }
+                    Ok(())
                 })
             }),
             installed: Arc::new(crate::services::agent_registry::binary_is_installed),
@@ -178,6 +275,35 @@ impl Default for HeadlessSpawner {
         }
     }
 }
+
+/// Why the owner's spawn may not start a prepared launch detached, or
+/// `None`. On the Windows session host only a launch `launch_prep::prepare`
+/// marked (`PtyOptions::mux_wrapped`) runs: its wrap applies the desktop's
+/// own routing rule (`session_host::route::routes_through_host`: the flag and
+/// `persist_local_sessions` on, a local AI tab with a session name, never
+/// the root scope, the Host session or a shell) and refuses a batch file
+/// (`route::host_argv`). tmux wraps every local launch with a session name,
+/// as before.
+fn headless_spawn_refused(kind: crate::services::session_mux::MuxKind, wrapped: bool) -> Option<&'static str> {
+    (kind == crate::services::session_mux::MuxKind::WinHost && !wrapped)
+        .then_some("this launch does not run in the session host (only a local agent tab does)")
+}
+
+/// The owner's answer to a launch that may only rejoin its session
+/// (`PreparedLaunch::host_attach_only`): nothing to start while it lives;
+/// ended meanwhile, never created again — refused with the AI switch's own
+/// code while the switch is off (`headless_create_error` reads it), else
+/// with [`SESSION_ENDED`].
+fn headless_rejoin(alive: bool, ai_off: bool) -> Result<(), String> {
+    match (alive, ai_off) {
+        (true, _) => Ok(()),
+        (false, true) => Err(crate::services::ai_switch::AI_OFF.to_string()),
+        (false, false) => Err(SESSION_ENDED.to_string()),
+    }
+}
+
+/// A rejoin-only launch (a revival) whose session ended before the rejoin.
+const SESSION_ENDED: &str = "the tab's session ended before it could be rejoined; start the tab again";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -305,27 +431,63 @@ fn exact_origin(headers: &HeaderMap, state: &HostState) -> bool {
     headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) == Some(state.config.origin.as_str())
 }
 
-fn cookie_token(headers: &HeaderMap) -> Option<&str> {
-    session_cookie_in(&crate::brand::PAIR, headers.get(header::COOKIE)?.to_str().ok()?)
+fn cookie_token<'a>(headers: &'a HeaderMap, state: &HostState) -> Option<&'a str> {
+    device_session_cookie(headers, &crate::services::server::host_of(&state.config.origin))
 }
 
-/// The phone store's session token in a request, for the browser transport
-/// behind the gateway (`web_client::ServerLink`).
-pub fn device_session_cookie(headers: &HeaderMap) -> Option<&str> {
-    cookie_token(headers)
+/// The phone store's session token in a request to the host whose origin's
+/// `host[:port]` is `authority` — the browser transport behind the gateway
+/// (`web_client::ServerLink`) asks with its public host.
+pub fn device_session_cookie<'a>(headers: &'a HeaderMap, authority: &str) -> Option<&'a str> {
+    session_cookie_in(&crate::brand::PAIR, cookie_port(authority), headers.get(header::COOKIE)?.to_str().ok()?)
+}
+
+/// The explicit port of `host[:port]`, `None` on the default one.
+///
+/// Cookies ignore ports: a phone host on `HOST:10000` and the server
+/// gateway on `HOST` (`docs/context/server_gateway.md`, one shared Tailscale
+/// Serve) share one cookie jar, so under one name each sign-in overwrote the
+/// other's. A host on an explicit port names its cookie after it
+/// (`session_cookie_name`). `validate_origin` drops a default port, so the
+/// plain name stays the one a host on 443 always used.
+fn cookie_port(authority: &str) -> Option<&str> {
+    let (_, port) = authority.rsplit_once(':')?;
+    (!port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())).then_some(port)
+}
+
+/// The session cookie's name under `base` (`brand::SESSION_COOKIE` or a
+/// pair's name) for a host on `port`.
+fn session_cookie_name(base: &str, port: Option<&str>) -> String {
+    match port {
+        Some(port) => format!("{base}_{port}"),
+        None => base.to_string(),
+    }
+}
+
+/// The name this host sets its session cookie under.
+fn own_session_cookie(state: &HostState) -> String {
+    session_cookie_name(
+        crate::brand::SESSION_COOKIE,
+        cookie_port(&crate::services::server::host_of(&state.config.origin)),
+    )
 }
 
 /// The session token in a `Cookie` header: the cookie under its current name,
 /// else under the name an older build's host set (counted as a legacy hit).
-fn session_cookie_in<'a>(pair: &crate::brand::Pair, cookies: &'a str) -> Option<&'a str> {
+/// A host on an explicit port reads only its own name: the old names never
+/// carried a port, so one could be the default port's host's cookie.
+fn session_cookie_in<'a>(pair: &crate::brand::Pair, port: Option<&str>, cookies: &'a str) -> Option<&'a str> {
     let named = |wanted: &str| {
         cookies.split(';').find_map(|part| {
             let (name, value) = part.trim().split_once('=')?;
             (name == wanted).then_some(value)
         })
     };
-    if let Some(token) = named(&pair.cur(crate::brand::Name::SESSION_COOKIE)) {
+    if let Some(token) = named(&session_cookie_name(&pair.cur(crate::brand::Name::SESSION_COOKIE), port)) {
         return Some(token);
+    }
+    if port.is_some() {
+        return None;
     }
     let token = named(&pair.legacy(crate::brand::Name::SESSION_COOKIE)?)?;
     crate::brand::legacy_hit("session-cookie");
@@ -368,7 +530,7 @@ fn authenticate(
     headers: &HeaderMap,
     state: &HostState,
 ) -> Result<Phone, (StatusCode, Json<serde_json::Value>)> {
-    let token = cookie_token(headers)
+    let token = cookie_token(headers, state)
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     state
         .auth
@@ -480,7 +642,7 @@ async fn open_ticket(
     if let Err(error) = mutation_guard(&headers, &state) {
         return error;
     }
-    let Some(token) = cookie_token(&headers) else {
+    let Some(token) = cookie_token(&headers, &state) else {
         return api_error(StatusCode::UNAUTHORIZED, "authentication_required");
     };
     let uri = match body.url.parse::<Uri>() {
@@ -498,7 +660,7 @@ async fn open_ticket(
 }
 
 /// Run a catalog read without holding an async worker for it. A read past the
-/// TTL forks `tmux ls` (bounded by `discovery::TMUX_LS_TIMEOUT`, but seconds
+/// TTL forks `tmux ls` (bounded by `session_mux::tmux::LIST_TIMEOUT`, but seconds
 /// against a hung tmux server) and every other read waits on the catalog mutex
 /// behind it; done inline on the workers, a few such requests parked all of
 /// them and the sidecar stopped answering anything — pings and terminal output
@@ -639,15 +801,17 @@ fn poke_window(state: &HostState, raw_id: Option<&str>, slices: &[&str]) {
 
 /// [`poke_window`] from where there is no `HostState`: the MCP listener's
 /// notices (`docs/headless_mcp_plan.md`) — a schedule proposal a headless
-/// tab made shows in an open window at once. Must run inside the runtime.
+/// tab made shows in an open window at once. Does nothing off the runtime
+/// (a thread the host did not start has no window to hurry).
 fn poke_desktop(control_dir: &std::path::Path, raw_id: Option<&str>, slices: &[&str]) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
     let socket = control_dir.join("desktop-control.sock");
     let request = DesktopRequest::Refresh {
         request_id: new_request_id(),
         project_id: raw_id.map(str::to_string),
         slices: slices.iter().map(|s| s.to_string()).collect(),
     };
-    tokio::spawn(async move {
+    runtime.spawn(async move {
         let _ = admin::desktop_call(&socket, &request).await;
     });
 }
@@ -687,12 +851,21 @@ fn catalog_stale(state: &HostState) {
         .invalidate();
 }
 
-async fn security_headers(State(secure): State<bool>, request: Request<Body>, next: Next) -> Response<Body> {
+async fn security_headers(State(header_state): State<Arc<HeaderState>>, request: Request<Body>, next: Next) -> Response<Body> {
+    let secure = header_state.secure;
     let sensitive = request.uri().path().starts_with("/api/") || request.uri().path() == "/healthz";
     let frame = request.uri().path() == PDF_FRAME_PATH;
     // The browser desktop client's pages get the desktop's CSP with its
     // socket allowed (`web_client::page_csp`), not the phone's.
     let desktop = request.uri().path() == "/desktop" || request.uri().path().starts_with("/desktop/");
+    // The phone's documents are what a linked desktop frames; scripts and
+    // styles under `/assets/` are never framed and keep the closed policy.
+    let document = !sensitive && !frame && !desktop && !request.uri().path().starts_with("/assets/");
+    let linked = if document {
+        linked_for(secure, &header_state.state_dir, &header_state.origin)
+    } else {
+        Vec::new()
+    };
     let host = request
         .headers()
         .get(header::HOST)
@@ -707,7 +880,9 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    if !framed {
+    // `X-Frame-Options` cannot name several origins; with desktops linked a
+    // document leaves it to `frame-ancestors`, which outranks it anyway.
+    if !framed && linked.is_empty() {
         headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     }
     headers.insert(
@@ -718,10 +893,7 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
     if sensitive && !headers.contains_key(header::CACHE_CONTROL) {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
-    headers.insert(
-        "permissions-policy",
-        HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY),
-    );
+    headers.insert("permissions-policy", permissions_policy(&linked));
     if desktop {
         let hashes = headers
             .remove(web_client::INLINE_SCRIPT_HASHES)
@@ -734,7 +906,7 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
     } else if !framed {
         // `img-src blob:`: the files library's covers are drawn on the phone
         // and shown as object URLs (`mobile-web/src/thumbs.ts`).
-        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+        headers.insert(header::CONTENT_SECURITY_POLICY, phone_csp(&linked));
     }
     response
 }
@@ -743,7 +915,7 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
 /// opaque, and whether `'self'` still matches the server it came from differs
 /// between engines — so the server is also named outright, from the `Host`
 /// the request came in on (a host name, nothing else, or it is left out).
-fn pdf_frame_policy(host: Option<&HeaderValue>) -> String {
+fn pdf_frame_policy(host: Option<&HeaderValue>, linked: &[String]) -> String {
     let named = host
         .and_then(|value| value.to_str().ok())
         .filter(|host| {
@@ -753,30 +925,54 @@ fn pdf_frame_policy(host: Option<&HeaderValue>) -> String {
         })
         .map(|host| format!(" https://{host}"))
         .unwrap_or_default();
+    // `frame-ancestors` checks every ancestor: under a linked desktop's
+    // frame the PWA's own pdf.js frame has that desktop above it too.
+    let ancestors: String = linked.iter().map(|origin| format!(" {origin}")).collect();
     format!(
-        "default-src 'none'; script-src 'self'{named}; style-src 'unsafe-inline'; img-src blob: data:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'{named}"
+        "default-src 'none'; script-src 'self'{named}; style-src 'unsafe-inline'; img-src blob: data:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'{named}{ancestors}"
     )
 }
 
 /// `GET /pdf-frame.html` — the sealed frame (`PDF_FRAME_PATH`), with its own
 /// framing rules. Only the frame's own bytes: a bundle without it is a 404,
 /// never the app shell under a framable policy.
-async fn pdf_frame(headers: HeaderMap) -> Response<Body> {
+async fn pdf_frame(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
+    pdf_frame_response(&headers, &linked(&state))
+}
+
+/// [`pdf_frame`]'s answer for these linked desktops.
+fn pdf_frame_response(headers: &HeaderMap, linked: &[String]) -> Response<Body> {
     let Some((bytes, mime)) = embedded_asset(PDF_FRAME_PATH) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    Response::builder()
+    let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime)
         .header(header::CACHE_CONTROL, "no-cache")
-        .header(header::X_FRAME_OPTIONS, "SAMEORIGIN")
-        .header(header::CONTENT_SECURITY_POLICY, pdf_frame_policy(headers.get(header::HOST)))
+        .header(header::CONTENT_SECURITY_POLICY, pdf_frame_policy(headers.get(header::HOST), linked));
+    // `SAMEORIGIN` would refuse it under a linked desktop's frame.
+    if linked.is_empty() {
+        response = response.header(header::X_FRAME_OPTIONS, "SAMEORIGIN");
+    }
+    response
         .body(Body::from(bytes))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-async fn health() -> impl IntoResponse {
-    Json(json!({ "ok": true }))
+/// `GET /healthz`. A linked desktop's phone app reads it cross-origin for its
+/// switcher's lamp (`credentials: "omit"`): only a linked origin is answered
+/// with CORS, and the body says nothing but that the host is up.
+async fn health(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
+    let mut response = Json(json!({ "ok": true })).into_response();
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    if let Some(origin) = origin.filter(|origin| linked(&state).iter().any(|entry| entry == origin)) {
+        if let Ok(value) = HeaderValue::from_str(origin) {
+            let headers = response.headers_mut();
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+            headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+        }
+    }
+    response
 }
 
 async fn pair(
@@ -844,7 +1040,7 @@ async fn login(
         Ok((token, expires_at)) => {
             let mut response =
                 Json(json!({ "ok": true, "expires_at": expires_at })).into_response();
-            let cookie = format!("{}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200", crate::brand::SESSION_COOKIE);
+            let cookie = format!("{}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200", own_session_cookie(&state));
             response
                 .headers_mut()
                 .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
@@ -858,19 +1054,21 @@ async fn logout(State(state): State<HostState>, headers: HeaderMap) -> Response<
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
     }
-    if let Some(token) = cookie_token(&headers) {
+    if let Some(token) = cookie_token(&headers, &state) {
         state.auth.lock_ok().logout(token);
     }
     let mut response = Json(json!({ "ok": true })).into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_static(
-            concat!("__Host-", crate::app_slug!(), "_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"),
-        ),
-    );
+    if let Ok(expired) = HeaderValue::from_str(&format!(
+        "{}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0",
+        own_session_cookie(&state)
+    )) {
+        response.headers_mut().insert(header::SET_COOKIE, expired);
+    }
     // A cookie an older build's host set is expired as well; there is none
-    // to name while the name is unchanged.
-    if let Some(old) = crate::brand::PAIR.legacy(crate::brand::Name::SESSION_COOKIE) {
+    // to name while the name is unchanged. Not on an explicit port: the old
+    // name carried none, so it would expire the default port's host's cookie.
+    let ported = cookie_port(&crate::services::server::host_of(&state.config.origin)).is_some();
+    if let Some(old) = crate::brand::PAIR.legacy(crate::brand::Name::SESSION_COOKIE).filter(|_| !ported) {
         if let Ok(expired) =
             HeaderValue::from_str(&format!("{old}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"))
         {
@@ -904,13 +1102,21 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
         .filter(|scheme| scheme.len() <= 32 && scheme.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
         .unwrap_or("light_lavender")
         .to_string();
+    // From the settings read above, not a second read (`linked`).
+    let linked_desktops: Vec<_> = match &settings {
+        Some(settings) if !state.web.secure() => super::linked::linked_in(settings, &state.config.origin),
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .map(|origin| json!({ "origin": origin }))
+    .collect();
     (
         StatusCode::OK,
         Json(
             // `server`: this host is a server daemon, which never has a window
             // (`server_window_codes`): the phone words its "no window" notes
             // for a server and leaves out what only a window answers.
-            json!({ "desktop_available": desktop_available, "server": state.web.on_server(), "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state) }),
+            json!({ "desktop_available": desktop_available, "server": state.web.on_server(), "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops }),
         ),
     )
 }
@@ -985,10 +1191,22 @@ async fn projects(
     } else {
         HashMap::new()
     };
+    // A box row's members, narrowed to the projects this phone's catalog
+    // lists (its own switch and device list): the phone folds those under
+    // the box and never learns that any other member exists.
+    let listable = catalog_snapshot
+        .projects
+        .iter()
+        .filter(|p| p.public.kind == ScopeKind::Project)
+        .map(|p| p.public.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
     let mut rows = listed
         .into_iter()
         .map(|p| {
             let mut public = p.public.clone();
+            if let Some(members) = public.members.as_mut() {
+                members.retain(|id| listable.contains(id.as_str()));
+            }
             if is_git_project(p) {
                 public.git = git.get(&p.raw_id).copied();
             }
@@ -1240,6 +1458,9 @@ async fn project(
         _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None, None),
     };
     let mut public = project.public.clone();
+    // Only the list folds members under a box, and only there are they
+    // narrowed to what this phone may see: the detail sends none.
+    public.members = None;
     if is_git_project(project) {
         public.git = git.as_deref().and_then(git_dot);
     }
@@ -1247,6 +1468,7 @@ async fn project(
     // agent: the ＋ sheet's agent list would only offer what the create refuses.
     let agents = if public.kind == ScopeKind::Assistant { Vec::new() } else { agents };
     let closed = closed_tab_rows(closed);
+    let archived = archived_tab_rows(&state.config.state_dir, &project.raw_id, project.public.kind == ScopeKind::Assistant);
     let mut timings = timings
         .into_iter()
         .map(|timing| (timing.tmux_session.clone(), timing))
@@ -1318,7 +1540,7 @@ async fn project(
     (
         StatusCode::OK,
         Json(
-            json!({ "project": public, "tabs": tabs, "desktop_available": desktop_available, "agents": agents, "closed": closed,
+            json!({ "project": public, "tabs": tabs, "desktop_available": desktop_available, "agents": agents, "closed": closed, "archived": archived,
                 // Whether this project's 📁 answers (`files.rs`): the host-wide
                 // switch, and a project with a folder rather than a box, the
                 // root console or a project the phone has no folder of.
@@ -1345,6 +1567,8 @@ async fn project(
                 "create": project.create,
                 // Whether the phone may offer a new shell (`shells_open`).
                 "shells": shells_open(&state.config.state_dir),
+                // Whether the ＋ sheet offers Desktop (`desktop_images_open`).
+                "desktop_images": desktop_images_open(&state.config.state_dir),
                 // `tmux` where tabs attach through tmux; `unsupported` on a
                 // host with none (Windows), where the phone hides ＋, Schedule
                 // and Mark up's Submit (`terminals_support`).
@@ -1379,6 +1603,44 @@ fn closed_tab_rows(rows: Vec<super::protocol::ClosedAgentTab>) -> Vec<serde_json
                 "label": clean(&row.label),
                 "agent": clean(&row.agent),
                 "closed_at": row.closed_at,
+            })
+        })
+        .collect()
+}
+
+/// How many archived tabs the project detail lists: the newest. The archive
+/// itself keeps more (`services::tab_archive`); the desktop lists them all.
+const MAX_ARCHIVED_ROWS: usize = 100;
+
+/// The project's archived tabs (`services::tab_archive`) for the phone's
+/// Archived fold, read off the state dir so they show with no window too:
+/// the opaque id, the label, the tab kind, the agent CLI for an agent tab and
+/// when it was archived. No folder, command line or session id crosses. The
+/// assistant's scope has no archive.
+fn archived_tab_rows(state_dir: &std::path::Path, raw_id: &str, assistant: bool) -> Vec<serde_json::Value> {
+    use crate::services::tab_archive;
+    if assistant {
+        return Vec::new();
+    }
+    let clean = |text: &str| -> String { text.chars().filter(|c| !c.is_control()).take(MAX_TAB_LABEL).collect() };
+    tab_archive::list_at(&tab_archive::archive_path_in(state_dir, raw_id))
+        .into_iter()
+        .filter(|entry| tab_archive::archive_id_ok(&entry.id))
+        .take(MAX_ARCHIVED_ROWS)
+        .map(|entry| {
+            let kind = entry.tab.extra.get("kind").and_then(serde_json::Value::as_str).unwrap_or("shell");
+            let kind = match kind {
+                "agent" | "local_agent" => "agent",
+                "shell" => "shell",
+                _ => "other",
+            };
+            let agent = if kind == "agent" { clean(&entry.tab.cmd) } else { String::new() };
+            json!({
+                "id": entry.id,
+                "label": clean(&entry.tab.label),
+                "kind": kind,
+                "agent": agent,
+                "archived_at": entry.archived_at,
             })
         })
         .collect()
@@ -1840,6 +2102,59 @@ async fn reopen_tab(
     answer_created(&state, &phone, &project_id, response).await
 }
 
+/// `POST /api/v1/projects/{project_id}/tabs/archived/{archive_id}/restore` —
+/// bring an archived tab back in the desktop window (`stores/tabArchive`),
+/// built the way a restart builds it. Answers like a create, with the tab's
+/// row, when it came back as a terminal the phone can attach to; `200
+/// { restored, on_desktop }` when it opened on the desktop only; `409
+/// nothing_to_restore` once the entry is gone. Needs the window: with none,
+/// `503 desktop_unavailable`.
+async fn restore_archived_tab(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((project_id, archive_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !crate::services::tab_archive::archive_id_ok(&archive_id) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some(project) = catalog_snapshot.project(&project_id) else {
+        return api_error(StatusCode::NOT_FOUND, "project_not_found");
+    };
+    if project.public.kind == ScopeKind::Assistant {
+        return api_error(StatusCode::NOT_FOUND, "nothing_to_restore");
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::RestoreArchivedTab {
+            request_id: new_request_id(),
+            project_id: project.raw_id.clone(),
+            archive_id,
+        },
+    )
+    .await;
+    if desktop_down(&response) {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+    }
+    match response {
+        Ok(DesktopResponse::Activated) => {
+            catalog_stale(&state);
+            (StatusCode::OK, Json(json!({ "restored": true, "on_desktop": true })))
+        }
+        Ok(DesktopResponse::Error { code, .. }) if code == "nothing_to_restore" => {
+            api_error(StatusCode::CONFLICT, "nothing_to_restore")
+        }
+        other => answer_created(&state, &phone, &project_id, other).await,
+    }
+}
+
 /// The linked worktree each of the project's tabs works in, in tab order, for
 /// its card — and the worktrees its subagents at work are in, other than that
 /// one. Only agent tabs are named: where the agent is now and where its
@@ -2011,9 +2326,16 @@ fn diverged_scope(state: &HostState, phone: &Phone, project_id: &str) -> Result<
     Ok(project.raw_id.clone())
 }
 
-/// What the window said to a Diverged request that is not its answer.
+/// What the window said to a Diverged request that is not its answer. The
+/// window repeats the sidecar's checks (`project_sync`, the HPC hosts, the
+/// preview's fingerprint), and each refusal keeps its name; any
+/// other error is the transfer's, and its words stay on that side.
 fn diverged_desktop_error(response: Result<DesktopResponse, String>) -> (StatusCode, Json<serde_json::Value>) {
     match response {
+        Ok(DesktopResponse::Error { code, .. }) if code == "sync_off" || code == "hpc_host" => {
+            api_error(StatusCode::FORBIDDEN, if code == "sync_off" { "sync_off" } else { "hpc_host" })
+        }
+        Ok(DesktopResponse::Error { code, .. }) if code == "preview_stale" => api_error(StatusCode::CONFLICT, "preview_stale"),
         Ok(DesktopResponse::Error { code, .. }) if code != "desktop_unavailable" => {
             eprintln!("mobile: the window refused a Diverged request: {code}");
             api_error(StatusCode::CONFLICT, "sync_failed")
@@ -2070,14 +2392,37 @@ async fn diverged_list(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DivergedPreviewBody {
-    direction: SyncDirection,
+    /// Any op but `forget`.
+    #[serde(default)]
+    op: Option<SyncOp>,
+    /// What an older phone sent for `op`: a transfer's direction. Its token
+    /// is still handed back, so the refusal comes from the resolve.
+    #[serde(default)]
+    direction: Option<SyncDirection>,
     files: Vec<String>,
 }
 
-/// `POST /api/v1/projects/{project_id}/diverged/preview` with `{ "direction",
-/// "files": [token…] }` — what the transfer would do, for the phone's
-/// confirmation (`sync_transfer_preview`). Reads only, but it prices an act
-/// only `project_sync` allows, so it is closed with the act.
+impl DivergedPreviewBody {
+    /// The op previewed: `op`, or the older `direction`; never both and never
+    /// `forget`, which has nothing to preview.
+    fn previewed_op(&self) -> Option<SyncOp> {
+        let op = match (self.op, self.direction) {
+            (Some(op), None) => op,
+            (None, Some(direction)) => direction.into(),
+            _ => return None,
+        };
+        op.needs_preview().then_some(op)
+    }
+}
+
+/// `POST /api/v1/projects/{project_id}/diverged/preview` with `{ "op",
+/// "files": [token…] }` — what the act would do, for the phone's
+/// confirmation (`sync_transfer_preview` for a transfer; the files a deletion
+/// would remove). Reads only, but it prices an act only `project_sync` allows,
+/// so it is closed with the act. The answer carries `token`: the window's
+/// fingerprint of the rows it read, sealed (`diverged::preview_token`) for
+/// ten minutes against this op over exactly these files. `resolve` takes no
+/// destructive op without it.
 async fn diverged_preview(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -2095,21 +2440,31 @@ async fn diverged_preview(
     if !diverged::sync_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "sync_off");
     }
-    let Ok(DivergedPreviewBody { direction, files }) = serde_json::from_slice(&body) else {
+    let Ok(preview_body) = serde_json::from_slice::<DivergedPreviewBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    let paths = match diverged_paths(&state, &raw_id, &files) {
+    let Some(op) = preview_body.previewed_op() else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let paths = match diverged_paths(&state, &raw_id, &preview_body.files) {
         Ok(paths) => paths,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
-        &DesktopRequest::SyncPreview { request_id: new_request_id(), project_id: raw_id, direction, paths },
+        &DesktopRequest::SyncPreview { request_id: new_request_id(), project_id: raw_id.clone(), op, paths: paths.clone() },
     )
     .await;
     match response {
-        Ok(DesktopResponse::SyncPreview { preview }) => (StatusCode::OK, Json(json!({ "preview": preview }))),
+        Ok(DesktopResponse::SyncPreview { preview, fingerprint }) => {
+            // A window that sent no usable fingerprint is one this sidecar
+            // cannot bind a resolve to: no token, so no destructive act.
+            let Some(token) = diverged::preview_token(&host_key(&state), &raw_id, op, &paths, &fingerprint, crate::clock::now_secs()) else {
+                return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+            };
+            (StatusCode::OK, Json(json!({ "preview": preview, "token": token })))
+        }
         other => diverged_desktop_error(other),
     }
 }
@@ -2119,14 +2474,22 @@ async fn diverged_preview(
 struct DivergedResolveBody {
     op: SyncOp,
     files: Vec<String>,
+    /// The `token` of the preview the phone confirmed; every op but `forget`.
+    #[serde(default)]
+    token: Option<String>,
 }
 
 /// `POST /api/v1/projects/{project_id}/diverged/resolve` with `{ "op",
-/// "files": [token…] }` — take a side, complete a deletion or forget, file by
-/// file, over the commands the desktop's orange view calls. `403 sync_off`
-/// unless `project_sync` is on. Answers `{ done, failed, skipped }`; a window
-/// that overruns the deadline is `desktop_unavailable`, and it is still
-/// working: the phone says it does not know and reads the list again.
+/// "files": [token…], "token" }` — take a side, complete a deletion or
+/// forget, file by file, over the commands the desktop's orange view calls.
+/// `403 sync_off` unless `project_sync` is on. Every op but `forget` needs the
+/// preview's `token` for this op over exactly these files, or it is refused
+/// `409 preview_required` / `preview_stale` and nothing reaches the window;
+/// the window then checks the token's fingerprint against a fresh status pass
+/// and refuses `preview_stale` too if the rows moved. Answers `{ done,
+/// failed, skipped }`; a window that overruns the deadline is
+/// `desktop_unavailable`, and it is still working: the phone says it does not
+/// know and reads the list again.
 async fn diverged_resolve(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -2144,17 +2507,25 @@ async fn diverged_resolve(
     if !diverged::sync_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "sync_off");
     }
-    let Ok(DivergedResolveBody { op, files }) = serde_json::from_slice(&body) else {
+    let Ok(DivergedResolveBody { op, files, token }) = serde_json::from_slice(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let paths = match diverged_paths(&state, &raw_id, &files) {
         Ok(paths) => paths,
         Err(error) => return error,
     };
+    let expect = if op.needs_preview() {
+        match diverged::open_preview_token(&host_key(&state), &raw_id, op, &paths, token.as_deref(), crate::clock::now_secs()) {
+            Ok(fingerprint) => Some(fingerprint),
+            Err(refusal) => return api_error(StatusCode::CONFLICT, refusal.code()),
+        }
+    } else {
+        None
+    };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
-        &DesktopRequest::SyncResolve { request_id: new_request_id(), project_id: raw_id, op, paths },
+        &DesktopRequest::SyncResolve { request_id: new_request_id(), project_id: raw_id, op, paths, expect },
     )
     .await;
     match response {
@@ -3538,14 +3909,7 @@ async fn tab(
 /// that would smuggle control characters into a terminal title, is refused here
 /// rather than stored and quietly re-rendered as something else.
 fn clean_tab_label(raw: &str) -> Option<String> {
-    let label = raw.trim();
-    if label.is_empty()
-        || label.chars().count() > MAX_TAB_LABEL
-        || label.chars().any(char::is_control)
-    {
-        return None;
-    }
-    Some(label.to_string())
+    crate::services::workspace::clean_tab_label(raw)
 }
 
 /// `PUT /api/v1/tabs/{id}` — rename one agent tab. The desktop owns the write
@@ -4300,6 +4664,8 @@ async fn close_tab(
                 if crate::services::workspace::owns_tmux_session(&closed) {
                     // Its MCP tokens go with it (`docs/headless_mcp_plan.md`).
                     crate::services::root_mcp::revoke_tab(&format!("{}{tmux_session}", headless::LAUNCH_ID_PREFIX));
+                    // Its markup asks and ticks die with the session.
+                    crate::services::markup_mcp::sweep();
                     let runner = state.runner.clone();
                     let ended = tokio::task::spawn_blocking(move || runner.kill(&tmux_session)).await;
                     if let Ok(Err(why)) = ended {
@@ -4368,6 +4734,53 @@ fn schedule_desktop_error(
 /// prompt-send and rename routes need — those surfaces exist for agent tabs
 /// alone — while the close route serves every tab the phone lists, shell
 /// included. Neither value is ever serialized back to the phone.
+/// `POST /api/v1/tabs/{tab_id}/archive` — put one tab into its project's
+/// archive, as the desktop's tab menu Archive does: kept there, and ended.
+/// Needs the window (it writes the archive from the tab it holds); with none,
+/// `503 desktop_unavailable`.
+async fn archive_tab(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let (project_id, tmux_session) = match tab_target(&state, &phone, &tab_id, false) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::ArchiveTab { request_id: new_request_id(), project_id, tmux_session },
+    )
+    .await;
+    if desktop_down(&response) {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+    }
+    match response {
+        Ok(DesktopResponse::Closed) => {
+            catalog_stale(&state);
+            (StatusCode::OK, Json(json!({ "archived": true })))
+        }
+        Ok(DesktopResponse::Error { code, .. }) => api_error(
+            match code.as_str() {
+                "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                "tab_not_found" => StatusCode::NOT_FOUND,
+                "not_archivable" => StatusCode::CONFLICT,
+                _ => StatusCode::BAD_REQUEST,
+            },
+            &code,
+        ),
+        _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+    }
+}
+
 fn tab_target(
     state: &HostState,
     phone: &Phone,
@@ -4446,6 +4859,19 @@ fn drop_box(
     }
     has_folder(project)?;
     Ok(project.root.clone())
+}
+
+/// A file is about to land in a Tabby chat's drop box: the chat has had an
+/// attachment (`assistant_attach`, gap 78), whatever the phone types next. The
+/// uid is the catalog's own (the tab's `sessionId`), never the request's.
+/// Nothing for any other scope.
+fn note_chat_file(state_dir: &std::path::Path, project: &super::discovery::ResolvedProject, tab: &ResolvedTab) {
+    if project.public.kind != ScopeKind::Assistant {
+        return;
+    }
+    if let Some(uid) = tab.session_id.as_deref() {
+        crate::services::assistant_attach::note_attachment_in(state_dir, uid);
+    }
 }
 
 /// A tab that runs on its remote project's host has nothing on this machine
@@ -4889,30 +5315,226 @@ async fn tab_named_files(
     (StatusCode::OK, Json(json!({ "files": found })))
 }
 
+/// `?target=` is the link's target as the agent wrote it (`file://…`).
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ArtifactQuery {
+    target: Option<String>,
+}
+
+/// The longest link target looked at.
+const ARTIFACT_TARGET_MAX: usize = 1024;
+
+/// `GET /api/v1/tabs/{tab_id}/artifact?target=` — the plan or notes an
+/// Antigravity chat wrote and linked from an answer (`agent_artifacts`): the
+/// text of one file of this tab's own conversation folder, read-only, as
+/// `{ "artifact": { name, text } }`. Behind the "Project files on the phone"
+/// switch, like the answers' other file reads. The target is only a name to
+/// look up: the conversation comes from the tab's record, and anything that
+/// is not a text file below it is `artifact_not_found`.
+async fn tab_artifact(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<ArtifactQuery>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !files::files_open(&state.config.state_dir) {
+        return api_error(StatusCode::NOT_FOUND, "files_off");
+    }
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some((project, tab)) = snapshot.tab(&tab_id) else {
+        return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+    };
+    if !is_git_project(project) {
+        return api_error(StatusCode::NOT_FOUND, "not_a_project");
+    }
+    if tab.public.kind != "agent" || tab.cmd != "agy" {
+        return api_error(StatusCode::BAD_REQUEST, "agent_tab_required");
+    }
+    if let Err(error) = not_on_host(tab) {
+        return error;
+    }
+    let target = query.target.unwrap_or_default();
+    if target.is_empty() || target.len() > ARTIFACT_TARGET_MAX {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_target");
+    }
+    let (project_id, cwd, launch_id) = (project.raw_id.clone(), tab.cwd.clone(), tab.session_id.clone().unwrap_or_default());
+    let found = tokio::task::spawn_blocking(move || {
+        crate::services::agent_artifacts::read_for_tab(Some(&project_id), &cwd, &launch_id, &target)
+    })
+    .await;
+    match found {
+        Ok(Some(artifact)) => (StatusCode::OK, Json(json!({ "artifact": artifact }))),
+        Ok(None) => api_error(StatusCode::NOT_FOUND, "artifact_not_found"),
+        Err(_) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed"),
+    }
+}
+
+/// The running shells cross masked (`shell_mask`, threat model gap 79): the
+/// command line and the agent's description of it with the tab's own folders
+/// made project-relative, every other host path cut to its leaf and anything
+/// secret-shaped hidden. `folders` are the scope's roots, the tab's and the
+/// session's cwd. The masked line may be longer or shorter than the desktop's
+/// cut; `cut` still says the desktop cut it.
+fn mask_shell_commands(transcript: &mut crate::services::agent_transcript::AgentTranscript, folders: &[&str]) {
+    for shell in &mut transcript.shells {
+        shell.command = shell_mask::mask_command(&shell.command, folders);
+        if let Some(description) = shell.description.as_mut() {
+            *description = shell_mask::mask_command(description, folders);
+        }
+    }
+}
+
+/// The waiting tool calls cross masked the same way: a file tool's path
+/// project-relative or cut to its leaf, `WebFetch`'s URL to its scheme and
+/// host, any other tool's subject dropped (the backend sets none; a transcript
+/// read off a remote host is not ours to trust). An entry whose name is no
+/// tool name is dropped.
+fn mask_waiting_tools(transcript: &mut crate::services::agent_transcript::AgentTranscript, folders: &[&str]) {
+    use crate::services::agent_transcript::{subject_kind, tool_name_ok, SubjectKind, MAX_TOOL_SUBJECT_CHARS, MAX_WAITING_TOOLS};
+    transcript.waiting_tools.retain(|tool| tool_name_ok(&tool.name));
+    // A remote host's list is as long and as odd as its agent made it: the
+    // newest few, each subject cut before it is masked, a stamp that is no
+    // timestamp dropped.
+    let extra = transcript.waiting_tools.len().saturating_sub(MAX_WAITING_TOOLS);
+    transcript.waiting_tools.drain(..extra);
+    for tool in &mut transcript.waiting_tools {
+        tool.at = tool.at.take().filter(|at| at.len() <= 40 && chrono::DateTime::parse_from_rfc3339(at).is_ok());
+        tool.subject = tool.subject.chars().take(MAX_TOOL_SUBJECT_CHARS).collect();
+        tool.subject = match subject_kind(&tool.name) {
+            Some(SubjectKind::Path) => shell_mask::mask_path(&tool.subject, folders),
+            Some(SubjectKind::Url) => shell_mask::mask_url(&tool.subject),
+            None => String::new(),
+        };
+    }
+}
+
+/// The folders a phone transcript is made relative to: the catalog's (the
+/// tab's cwd, the project's roots) and the transcript's own newest `cwd` only
+/// when it is one of them or inside one. That `cwd` is written by the agent
+/// (or read off a remote host): taken alone, `/home` would make every path
+/// below it relative and show `alice/.ssh/id` where `…/id` belongs.
+fn masking_folders(mut known: Vec<String>, transcript_cwd: Option<&str>) -> Vec<String> {
+    known.retain(|folder| !folder.is_empty());
+    let inside = |cwd: &std::path::Path| {
+        !cwd.components().any(|part| matches!(part, std::path::Component::ParentDir))
+            && known.iter().any(|folder| {
+                let folder = std::path::Path::new(folder);
+                folder.components().any(|part| matches!(part, std::path::Component::Normal(_))) && cwd.starts_with(folder)
+            })
+    };
+    if let Some(cwd) = transcript_cwd.filter(|cwd| inside(std::path::Path::new(cwd))) {
+        known.push(cwd.to_string());
+    }
+    known
+}
+
+/// Each of `folders` as a command line may spell it: as given, as
+/// `canonicalize` resolves it (links followed; on Windows the long names,
+/// without the `\\?\` prefix) and, on Windows, by its 8.3 short name (a CI
+/// runner's `RUNNER~1` temp dir). A spelling none of these catches is not
+/// shown whole: `shell_mask` cuts it to its leaf like any other host path.
+fn folder_spellings(folders: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for folder in folders.iter().filter(|folder| !folder.is_empty()) {
+        out.push(folder.clone());
+        let Ok(real) = std::fs::canonicalize(folder) else { continue };
+        let real = crate::paths::without_verbatim_prefix(real);
+        #[cfg(windows)]
+        out.extend(short_path_name(&real));
+        out.push(real.to_string_lossy().into_owned());
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `path`'s 8.3 short spelling, `None` when it has none or it cannot be read.
+#[cfg(windows)]
+fn short_path_name(path: &std::path::Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: `wide` is NUL-terminated and outlives the call, which writes
+    // within the slice it is given.
+    let len = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buf)) } as usize;
+    (len > 0 && len < buf.len()).then(|| String::from_utf16_lossy(&buf[..len]))
+}
+
 /// A transcript as the phone may see it: the folders the agent and its
 /// subagents work in are paths, which do not cross the browser API. A
 /// subagent's folder in a linked worktree of the tab's project crosses as that
 /// worktree's name and branch instead (`worktree` on its `agent` entry), as the
-/// tab cards name it. The running shells cross whole, command line included
-/// (cut at the desktop's bound, as its Reader shows them).
+/// tab cards name it. The running shells and the waiting tool calls cross
+/// masked ([`mask_shell_commands`], [`mask_waiting_tools`]): no raw command,
+/// path or URL reaches `json!(transcript)`.
 async fn phone_transcript(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
+    let mut entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
+    let has_blocking = transcript.entries.iter().any(|entry| entry.blocking);
+    let wants_tab = has_blocking || !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
+    let found = wants_tab
+        .then(|| catalog(state, phone).ok())
+        .flatten()
+        .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone(), tab.session_id.clone().filter(|_| !tab.place.on_host()))));
+    if has_blocking {
+        // The phone has no live "asking" state, so a question the agent is
+        // blocked on stands only while the tab's turn record says `decision`;
+        // a leftover one (dead or resumed session, a question the phone never
+        // saw while Claude works) would be a phantom card. Fail closed.
+        let record = match found.as_ref().and_then(|(project, _, uid)| uid.clone().map(|uid| (project.raw_id.clone(), uid))) {
+            Some((project_id, uid)) => {
+                let state_dir = state.config.state_dir.clone();
+                tokio::task::spawn_blocking(move || headless::turn_record(&state_dir, &project_id, &uid)).await.ok().flatten()
+            }
+            None => None,
+        };
+        if !matches!(record, Some((crate::services::agent_turn::TurnState::Decision, _))) {
+            // `entry_cwds` is positional with the entries: drop in step.
+            let mut keep = transcript.entries.iter().map(|entry| !entry.blocking).collect::<Vec<_>>().into_iter();
+            entry_cwds.retain(|_| keep.next().unwrap_or(true));
+            transcript.entries.retain(|entry| !entry.blocking);
+            // The `version` fingerprints the file, which does not move when
+            // the hook writes `decision` a moment later: handing it out would
+            // answer the phone's next poll `unchanged` and the question would
+            // never arrive. No version, a full read until the record says so.
+            transcript.version = None;
+        }
+    }
+    if !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() {
+        let mut folders: Vec<String> = Vec::new();
+        if let Some((project, cwd, _)) = &found {
+            folders.push(cwd.clone());
+            folders.extend(std::iter::once(&project.root).chain(&project.roots).map(|root| root.to_string_lossy().into_owned()));
+        }
+        let folders = masking_folders(folders, transcript.cwd.as_deref());
+        let folders = folder_spellings(&folders);
+        let folders: Vec<&str> = folders.iter().map(String::as_str).collect();
+        mask_shell_commands(&mut transcript, &folders);
+        mask_waiting_tools(&mut transcript, &folders);
+    }
     transcript.context_card = None;
     transcript.cwd = None;
     transcript.running_cwds.clear();
     if let Some(prompt) = transcript.cut_prompt.as_mut() {
         prompt.cwd = None;
     }
-    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
     let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
-    let project = (entry_cwds.iter().any(|cwd| !cwd.is_empty()))
-        .then(|| catalog(state, phone).ok())
-        .flatten()
-        .and_then(|catalog| catalog.tab(tab_id).map(|(project, _)| project.clone()))
+    let project = found
+        .filter(|_| entry_cwds.iter().any(|cwd| !cwd.is_empty()))
+        .map(|(project, _, _)| project)
         .filter(is_git_project);
     if let Some(project) = project {
         let all: Vec<&str> = entry_cwds.iter().map(String::as_str).collect();
@@ -5715,14 +6337,16 @@ async fn assistant_models(
 }
 
 /// The CLI build a phone's model sheet on `tab_id` lists the remembered rows
-/// of (`services::model_rows`): its registry id and executable. Only for an
+/// of (`services::model_rows`): its registry id, executable and the desktop's
+/// own id of the tab's scope (rows are kept and listed per scope, gap 95; the
+/// id never crosses the browser API). Only for an
 /// agent tab whose CLI runs on this machine — not a remote, container or VM
 /// project's, not a host tab's, not a local-model tab's (its model is fixed).
 fn model_rows_cli(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
-) -> Result<(&'static str, crate::services::agent_versions::VersionSource), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(&'static str, crate::services::agent_versions::VersionSource, String), (StatusCode, Json<serde_json::Value>)> {
     let catalog = catalog(state, phone)?;
     let Some((project, tab)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
@@ -5733,7 +6357,9 @@ fn model_rows_cli(
     if project.host != super::discovery::ProjectHost::Local || tab.place.on_host() || tab.local_model {
         return Err(api_error(StatusCode::CONFLICT, "not_this_machine"));
     }
-    crate::services::agent_registry::installed_source(&tab.cmd).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "unknown_agent"))
+    let (cli, source) = crate::services::agent_registry::installed_source(&tab.cmd)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "unknown_agent"))?;
+    Ok((cli, source, project.raw_id.clone()))
 }
 
 /// `GET /api/v1/tabs/{id}/model-rows` — `{ title?, rows }`, the rows the tab's
@@ -5748,12 +6374,12 @@ async fn model_rows(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let (cli, source) = match model_rows_cli(&state, &phone, &tab_id) {
+    let (cli, source, scope) = match model_rows_cli(&state, &phone, &tab_id) {
         Ok(cli) => cli,
         Err(error) => return error,
     };
     let store = crate::services::model_rows::store_path_in(&state.config.state_dir);
-    let rows = crate::services::model_rows::rows_in(&store, cli, Some(&source)).unwrap_or_default();
+    let rows = crate::services::model_rows::rows_in(&store, cli, &scope, Some(&source)).unwrap_or_default();
     (StatusCode::OK, Json(json!(rows)))
 }
 
@@ -5772,103 +6398,15 @@ async fn remember_model_rows(
     let Ok(rows) = serde_json::from_slice::<crate::services::model_rows::Rows>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    let (cli, source) = match model_rows_cli(&state, &phone, &tab_id) {
+    let (cli, source, scope) = match model_rows_cli(&state, &phone, &tab_id) {
         Ok(cli) => cli,
         Err(error) => return error,
     };
     let store = crate::services::model_rows::store_path_in(&state.config.state_dir);
-    match crate::services::model_rows::remember_rows_in(&store, cli, Some(&source), rows) {
+    match crate::services::model_rows::remember_rows_in(&store, cli, &scope, Some(&source), rows) {
         Ok(()) => (StatusCode::OK, Json(json!({ "kept": true }))),
         Err(why) => {
             eprintln!("mobile: keeping a model list failed: {why}");
-            api_error(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
-        }
-    }
-}
-
-/// The CLI whose startup defaults a phone's model sheet on `tab_id` edits
-/// (`services::agent_defaults`): an agent tab's — not a local-model tab's (its
-/// model is fixed), a Tabby chat's (its launch is pinned) or a host tab's
-/// (its command names nothing on this machine).
-fn launch_defaults_cli(
-    state: &HostState,
-    phone: &Phone,
-    tab_id: &str,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    let catalog = catalog(state, phone)?;
-    let Some((_, tab)) = catalog.tab(tab_id) else {
-        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
-    };
-    if tab.public.kind != "agent" {
-        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
-    }
-    if tab.local_model || tab.place.on_host() || tab.public.assistant_launch.is_some() {
-        return Err(api_error(StatusCode::CONFLICT, "no_launch_defaults"));
-    }
-    Ok(crate::services::agent_defaults::stem(&tab.cmd).to_string())
-}
-
-/// `GET /api/v1/tabs/{id}/launch-defaults` — `{ saved: { model, effort },
-/// capabilities, cli, models }`: the model and effort new sessions of the
-/// tab's CLI start on (Manage CLIs → Default model and effort), what that CLI
-/// can take, its command and the user's own model-name list (`null` when none).
-async fn launch_defaults(
-    State(state): State<HostState>,
-    headers: HeaderMap,
-    Path(tab_id): Path<String>,
-) -> impl IntoResponse {
-    let phone = match authenticate(&headers, &state) {
-        Ok(phone) => phone,
-        Err(error) => return error,
-    };
-    let cli = match launch_defaults_cli(&state, &phone, &tab_id) {
-        Ok(cli) => cli,
-        Err(error) => return error,
-    };
-    let settings = crate::storage::read_json::<crate::schema::Settings>(&state.config.state_dir.join("settings.json"))
-        .unwrap_or_default();
-    (
-        StatusCode::OK,
-        Json(json!({
-            "saved": crate::services::agent_defaults::saved_in(&settings, &cli),
-            "capabilities": crate::services::agent_defaults::capabilities(&cli),
-            "cli": cli,
-            // The user's own list from Settings → Agents, when they set one
-            // for this CLI; the built-in names live in the phone's bundle.
-            "models": settings.agent_models.as_ref().and_then(|all| all.get(&cli.to_lowercase())),
-        })),
-    )
-}
-
-/// `PUT /api/v1/tabs/{id}/launch-defaults` with `{ model, effort }` — keep
-/// them as the tab's CLI's startup defaults (both blank: back to the CLI's
-/// own). This session keeps its model; only new ones start on these. `400`
-/// with `invalid_model` / `invalid_effort` / `effort_needs_model` for what the
-/// desktop form refuses too.
-async fn save_launch_defaults(
-    State(state): State<HostState>,
-    headers: HeaderMap,
-    Path(tab_id): Path<String>,
-    body: Bytes,
-) -> impl IntoResponse {
-    let phone = match mutation_guard(&headers, &state) {
-        Ok(phone) => phone,
-        Err(error) => return error,
-    };
-    let Ok(saved) = serde_json::from_slice::<crate::services::agent_defaults::Saved>(&body) else {
-        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
-    };
-    let cli = match launch_defaults_cli(&state, &phone, &tab_id) {
-        Ok(cli) => cli,
-        Err(error) => return error,
-    };
-    if let Err(code) = crate::services::agent_defaults::check(&cli, &saved) {
-        return api_error(StatusCode::BAD_REQUEST, code);
-    }
-    match crate::services::agent_defaults::save_in(&state.config.state_dir.join("settings.json"), &cli, &saved) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "saved": true }))),
-        Err(why) => {
-            eprintln!("mobile: saving launch defaults failed: {why}");
             api_error(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
         }
     }
@@ -6023,6 +6561,9 @@ async fn terminal(
     // refuses to yield still produces `session_busy`, from the bridge.
     // Everything but a shell runs an AI: its input obeys the AI switch.
     let ai = tab.public.kind != "shell";
+    // A Tabby chat on Claude: its inbox pictures go in as pastes of the file.
+    let pictures = tab_project.public.kind == ScopeKind::Assistant
+        && crate::services::assistant::AssistantCli::cmd_takes_pasted_pictures(&tab.cmd);
     let tmux = tab.tmux_name.clone();
     let viewer = pty_bridge::Viewer {
         device_id: phone.device_id().to_string(),
@@ -6030,7 +6571,7 @@ async fn terminal(
     };
     let registry = state.terminal_registry.clone();
     let auth = state.auth.clone();
-    let token = cookie_token(&headers).unwrap_or_default().to_string();
+    let token = cookie_token(&headers, &state).unwrap_or_default().to_string();
     let state_dir = state.config.state_dir.clone();
     let catalog = state.catalog.clone();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
@@ -6071,6 +6612,7 @@ async fn terminal(
                 tab_id,
                 catalog,
                 ai,
+                pictures,
                 move |interrupt| {
                     mark_tab_input(&input_socket, input_project.clone(), input_tmux.clone(), interrupt);
                 },
@@ -6149,6 +6691,7 @@ async fn inbox_upload(
         Ok(root) => root,
         Err(error) => return error,
     };
+    note_chat_file(&state.config.state_dir, project, tab);
     drop(catalog);
     store_in_project_inbox(root, query.name, body).await
 }
@@ -6277,6 +6820,7 @@ fn desktop_image_error(code: &str) -> (StatusCode, Json<serde_json::Value>) {
             "file_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "inbox_full" => StatusCode::INSUFFICIENT_STORAGE,
             "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+            "desktop_images_off" => StatusCode::FORBIDDEN,
             _ => StatusCode::BAD_REQUEST,
         },
         code,
@@ -6286,7 +6830,8 @@ fn desktop_image_error(code: &str) -> (StatusCode, Json<serde_json::Value>) {
 /// `GET /api/v1/tabs/{tab_id}/desktop-images` — the composer's **+ → From the
 /// desktop**: what the desktop would copy into this tab's project inbox (its
 /// clipboard image, recent screenshots and pictures). Opaque ids and folder
-/// labels only; the desktop keeps every path.
+/// labels only; the desktop keeps every path. Closed unless the desktop's
+/// "Desktop pictures on the phone" switch is on (`desktop_images_open`).
 async fn desktop_images(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -6296,6 +6841,9 @@ async fn desktop_images(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if !desktop_images_open(&state.config.state_dir) {
+        return desktop_image_error("desktop_images_off");
+    }
     let (project_id, _) = match inbox_project(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
@@ -6350,6 +6898,9 @@ async fn attach_desktop_image(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if !desktop_images_open(&state.config.state_dir) {
+        return desktop_image_error("desktop_images_off");
+    }
     let Ok(request) = serde_json::from_slice::<AttachDesktopImageBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
@@ -6362,6 +6913,10 @@ async fn attach_desktop_image(
     };
     if state.web.on_server() {
         return api_error(StatusCode::NOT_IMPLEMENTED, SERVER_NO_WINDOW);
+    }
+    // This route puts a picture into a Tabby chat's folder (gap 78).
+    if let Some(uid) = chat.as_deref() {
+        crate::services::assistant_attach::note_attachment_in(&state.config.state_dir, uid);
     }
     let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
@@ -6592,7 +7147,7 @@ async fn outbox_file(
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
-    outbox_bytes(root, name, &query).await
+    outbox_bytes(root, name, &query, &headers).await
 }
 
 /// `GET /api/v1/projects/{project_id}/outbox/{name}` — the same bytes by the
@@ -6612,7 +7167,7 @@ async fn project_outbox_file(
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
-    outbox_bytes(root, name, &query).await
+    outbox_bytes(root, name, &query, &headers).await
 }
 
 /// `DELETE /api/v1/tabs/{tab_id}/outbox/{name}` — drop one of the files the
@@ -6736,7 +7291,7 @@ async fn outbox_removal(root: PathBuf, name: String) -> (StatusCode, Json<serde_
     }
 }
 
-async fn outbox_bytes(root: PathBuf, name: String, query: &HashMap<String, String>) -> Response<Body> {
+async fn outbox_bytes(root: PathBuf, name: String, query: &HashMap<String, String>, headers: &HeaderMap) -> Response<Body> {
     if !outbox::valid_name(&name) {
         return api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
     }
@@ -6746,36 +7301,40 @@ async fn outbox_bytes(root: PathBuf, name: String, query: &HashMap<String, Strin
     let read = tokio::task::spawn_blocking(move || outbox::read(&root, &name))
         .await
         .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
-    let mut response = file_response(read, &filename, download);
+    let mut response = file_response(read, &filename, download, headers);
     // A leaf can be rewritten under its name, so only a read the phone named
     // by its version (`?v=<modified>-<size>`, `outboxFileUrl`) may be kept:
     // without it the chat's album, the viewer and its Share each pulled the
     // whole picture down the link again, side by side.
-    if response.status() == StatusCode::OK && !download && query.contains_key("v") {
+    if kept_answer(response.status()) && !download && query.contains_key("v") {
         response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(INBOX_FILE_CACHE));
     }
     response
 }
 
 /// A drop-box read as the phone gets it: typed by the bytes, inline unless it
-/// is bytes the phone cannot show or a download was asked for.
+/// is bytes the phone cannot show or a download was asked for; one range of
+/// it when asked (`serve::from_bytes`), so a short film in the chat plays on
+/// iOS.
 fn file_response(
     read: Result<(Vec<u8>, &'static str), outbox::OutboxError>,
     filename: &str,
     download: bool,
+    headers: &HeaderMap,
 ) -> Response<Body> {
     match read {
-        Ok((bytes, kind)) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, kind)
-            .header(header::CONTENT_LENGTH, bytes.len())
-            .header(header::CONTENT_DISPOSITION, if kind == "application/octet-stream" || download { format!("attachment; filename=\"{filename}\"") } else { "inline".into() })
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| {
-                api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response()
-            }),
+        Ok((bytes, kind)) => {
+            let disposition = if kind == "application/octet-stream" || download { format!("attachment; filename=\"{filename}\"") } else { "inline".into() };
+            serve::from_bytes(headers, bytes, &serve::Head { kind, disposition, etag: None })
+        }
         Err(error) => outbox_error(error).into_response(),
     }
+}
+
+/// Whether a file answer is one a cache policy applies to: the whole, or a
+/// range of it.
+fn kept_answer(status: StatusCode) -> bool {
+    status == StatusCode::OK || status == StatusCode::PARTIAL_CONTENT
 }
 
 /// `GET /api/v1/tabs/{tab_id}/inbox?names=a,b` — what the phone sent into this
@@ -6837,11 +7396,11 @@ async fn inbox_file(
     let read = tokio::task::spawn_blocking(move || inbox::read(&root, &name))
         .await
         .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
-    let mut response = file_response(read, &filename, download);
+    let mut response = file_response(read, &filename, download, &headers);
     // A leaf carries its arrival stamp and is never rewritten, so the phone
     // may keep its picture: without this every API answer is `no-store` and
     // each remount of the chat pulled the whole original down the link again.
-    if response.status() == StatusCode::OK && !download {
+    if kept_answer(response.status()) && !download {
         response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(INBOX_FILE_CACHE));
     }
     response
@@ -6928,6 +7487,7 @@ async fn markup_submit(
         } else {
             Ok(markup::UndoTarget { state_dir: &state_dir, owner })
         };
+        markup::not_foreign(&state_dir, &root, &source)?;
         markup::submit_with_undo(&root, &source, &request, send_back, undo)
     })
     .await;
@@ -7172,19 +7732,30 @@ fn markup_desktop_error(code: &str) -> ApiRefusal {
     )
 }
 
-/// Ask the window. The asks live in its process, beside the root MCP
-/// listener that took them; with no window there is no listener and so no
-/// ask, and the owner has nothing to answer from (headless owner plan) — a
-/// closed desktop is `desktop_unavailable`, which the phone reads as "no
-/// card". Never an error the phone would show. A server daemon has no window
-/// and serves the markup lane itself (`Runtime::serves_markup`), so it
-/// answers from its own asks ([`markup_here`]).
+/// Ask the window. The asks of a tab it spawned live in its process, beside
+/// the root MCP listener that took them; its markup commands also read the
+/// asks of the tabs this host spawned (`commands::markup_mcp`, over the admin
+/// socket), so an open window answers for both. With no window open, the asks
+/// this process holds for the tab are answered here ([`markup_here`]) — a tab
+/// the host spawned asks with no window at all — and a tab that has none is
+/// `desktop_unavailable`, which the phone reads as "no card". Never an error
+/// the phone would show. A server daemon has no window and serves the markup
+/// lane itself (`Runtime::serves_markup`), so it always answers from its own
+/// asks.
 async fn markup_call(state: &HostState, request: DesktopRequest, tab: &ResolvedTab) -> Result<DesktopResponse, ApiRefusal> {
     let response = if state.web.on_server() {
         Ok(markup_here(state, request, tab).await)
     } else {
         let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-        admin::desktop_call(&desktop_socket, &request).await
+        let asked = admin::desktop_call(&desktop_socket, &request).await;
+        // No window, or one that does not know the tab (a tab this host just
+        // spawned): what this process holds for the tab is the answer.
+        let lacks_tab = matches!(&asked, Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found");
+        if (desktop_down(&asked) || lacks_tab) && markup_held_here(&request, tab).await {
+            Ok(markup_here(state, request, tab).await)
+        } else {
+            asked
+        }
     };
     if desktop_down(&response) {
         return Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"));
@@ -7196,8 +7767,30 @@ async fn markup_call(state: &HostState, request: DesktopRequest, tab: &ResolvedT
     }
 }
 
-/// A markup request answered in this process — a server daemon's, which
-/// holds the asks its tabs made (`services::markup_mcp`). The window's bridge
+/// Whether this process holds something a markup request is about: an open
+/// ask or a tick for the tab (a list), the open ask the request names (an
+/// answer or a dismissal). Asked before [`markup_here`] answers in a window's
+/// place, so a tab with nothing to show stays the quiet `desktop_unavailable`.
+async fn markup_held_here(request: &DesktopRequest, tab: &ResolvedTab) -> bool {
+    use crate::commands::markup_mcp as commands;
+    let Some(target) = tab.schedule_target_id.clone().filter(|id| !id.is_empty()) else { return false };
+    let (project_id, ask_id) = match request {
+        DesktopRequest::MarkupQuestions { project_id, .. } => (project_id.clone(), None),
+        DesktopRequest::MarkupAnswer { project_id, ask_id, .. } | DesktopRequest::MarkupDismiss { project_id, ask_id, .. } => {
+            (project_id.clone(), Some(ask_id.clone()))
+        }
+        _ => return false,
+    };
+    let asks = commands::markup_mcp_list(project_id.clone(), target.clone(), None).await.unwrap_or_default();
+    match ask_id {
+        Some(id) => asks.iter().any(|ask| ask.id == id),
+        None => !asks.is_empty() || !commands::markup_mcp_ticks(project_id, target, None).await.unwrap_or_default().is_empty(),
+    }
+}
+
+/// A markup request answered in this process — a server daemon's, or a
+/// desktop's Mobile host with no window open: it holds the asks its tabs made
+/// (`services::markup_mcp`). The window's bridge
 /// steps (`MobileBridgeHost.tsx`: `markupQuestionsFor`,
 /// `answerMarkupFromPhone`, `dismissMarkupFromPhone`) over the same
 /// `markup_mcp_*` commands, keyed by the tab's schedule target; an answer's
@@ -7248,7 +7841,7 @@ async fn markup_here(state: &HostState, request: DesktopRequest, tab: &ResolvedT
                 .into_iter()
                 .map(|a| Answer { options: a.options.into_iter().map(|i| i as usize).collect(), other: a.other })
                 .collect();
-            let taken = match commands::markup_mcp_answer(project_id.clone(), target.clone(), ask_id.clone(), answers) {
+            let taken = match commands::markup_mcp_answer(project_id.clone(), target.clone(), ask_id.clone(), answers).await {
                 Ok(taken) => taken,
                 Err(code) if ask_codes.contains(&code.as_str()) => return error(&code, "The agent's questions did not take this answer"),
                 Err(code) => return error(&code, "The answer could not be taken"),
@@ -7262,14 +7855,14 @@ async fn markup_here(state: &HostState, request: DesktopRequest, tab: &ResolvedT
                 }
                 Err(why) => {
                     eprintln!("mobile: holding a markup answer failed: {why}");
-                    match commands::markup_mcp_reopen(project_id, target, ask_id, taken.receipt) {
+                    match commands::markup_mcp_reopen(project_id, target, ask_id, taken.receipt).await {
                         Ok(()) => error("delivery_failed", "The answer could not be queued; the questions are open again"),
                         Err(_) => error("not_delivered", "The answer could not be queued, and the questions have closed"),
                     }
                 }
             }
         }
-        DesktopRequest::MarkupDismiss { project_id, ask_id, .. } => match commands::markup_mcp_dismiss(project_id, target, ask_id) {
+        DesktopRequest::MarkupDismiss { project_id, ask_id, .. } => match commands::markup_mcp_dismiss(project_id, target, ask_id).await {
             Ok(()) => DesktopResponse::Seen,
             Err(code) if ask_codes.contains(&code.as_str()) => error(&code, "The agent's questions are no longer open"),
             Err(code) => error(&code, "The questions could not be closed"),
@@ -7568,6 +8161,7 @@ fn files_error(error: files::FilesError) -> (StatusCode, Json<serde_json::Value>
             files::FilesError::Unavailable | files::FilesError::HostOffline => StatusCode::CONFLICT,
             files::FilesError::NotFound => StatusCode::NOT_FOUND,
             files::FilesError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            files::FilesError::TimedOut => StatusCode::GATEWAY_TIMEOUT,
             files::FilesError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         },
         error.code(),
@@ -7639,13 +8233,21 @@ async fn project_files_list(
     };
     let key = state.auth.lock_ok().host_key().to_vec();
     let accepts = uploads::accepts(&rel);
-    // A directory walk that opens every kept file to type it: off the executor.
-    let listed = tokio::task::spawn_blocking(move || files::list(&root, &rel, &key, &raw_id))
-        .await
-        .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
+    // The root also says where its catalog docs stand (the "Project docs"
+    // group): names and states, read under the same deadline. A stalled read
+    // leaves the array out, which the phone shows as the plain group.
+    let docs_root = rel.is_empty().then(|| root.clone());
+    // A directory walk that opens every kept file to type it: off the
+    // executor, under the local deadline (a stalled mount answers `timeout`).
+    let listed = deadline::local(move || files::list(&root, &rel, &key, &raw_id)).await;
     match listed {
         Ok(listing) => {
             let mut answer = json!(listing);
+            if let Some(root) = docs_root {
+                if let Ok(docs) = deadline::local(move || Ok(project_docs::status(&root))).await {
+                    answer["docs"] = json!(docs);
+                }
+            }
             answer["uploads"] = json!(accepts && uploads::uploads_open(&state.config.state_dir));
             answer["remarks"] = json!(remarks::remarks_open(&state.config.state_dir));
             (StatusCode::OK, Json(answer))
@@ -7654,11 +8256,74 @@ async fn project_files_list(
     }
 }
 
-/// `GET /api/v1/projects/{project_id}/files/search?q=<words>` — the project's
-/// files and folders whose names hold every word, each with the sealed trail
-/// of folders above it (`files::search`). Read-only, like the listing; no
-/// path appears in the answer, only the leaf names the drawer would show.
-/// `&on=host` searches the remote side by a bounded walk (`host_files`).
+/// `GET /api/v1/projects/{project_id}/files/entry?name=<leaf>[&dir=<token>]` —
+/// one file or folder of the folder `dir` seals (none: the root), as its
+/// listing would row it (`files::lookup`): `{ "entry": … }`, or
+/// `file_not_found` when it is no longer there. What the phone's favorites,
+/// recents and Mark up's Reload ask instead of listing the whole folder again.
+/// `name` is one leaf the browser would list; nothing else is accepted.
+/// `&on=host` asks the remote side (`host_files::entry_on`).
+async fn project_files_entry(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    // The scope first, as every files route answers it: a name is judged
+    // only where the files are open.
+    let name = query.get("name").filter(|name| files::valid_segment(name)).cloned();
+    if on_host_side(&query) {
+        let (spec, known, raw_id) = match host_files_scope(&state, &phone, &project_id) {
+            Ok(scope) => scope,
+            Err(error) => return error,
+        };
+        let Some(name) = name else {
+            return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+        };
+        let dir = match host_files_rel(&state, &raw_id, query.get("dir")) {
+            Ok(rel) => rel,
+            Err(error) => return error,
+        };
+        let key = state.auth.lock_ok().host_key().to_vec();
+        return match state.host_files.entry(&spec, known, files::child(&dir, &name), key, raw_id).await {
+            Ok(entry) => (StatusCode::OK, Json(json!({ "entry": entry }))),
+            Err(error) => files_error(error),
+        };
+    }
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let Some(name) = name else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let dir = match files_rel(&state, &raw_id, query.get("dir")) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let rel = files::child(&dir, &name);
+    // Opens and sniffs one file: off the executor, as a listing is.
+    let found = deadline::local(move || Ok(files::lookup(&root, &rel, &key, &raw_id))).await;
+    match found {
+        Ok(Some(entry)) => (StatusCode::OK, Json(json!({ "entry": entry }))),
+        Err(files::FilesError::TimedOut) => files_error(files::FilesError::TimedOut),
+        Ok(None) | Err(_) => api_error(StatusCode::NOT_FOUND, "file_not_found"),
+    }
+}
+
+/// `GET /api/v1/projects/{project_id}/files/search?q=<words>[&dir=<token>][&ignored=1]`
+/// — the project's files and folders whose names hold every word, each with
+/// the sealed trail of folders above it (`files::search_in`). `dir` keeps the
+/// search inside that folder; `ignored=1` searches what git ignores too, by a
+/// bounded walk. Read-only, like the listing; no path appears in the answer,
+/// only the leaf names the drawer would show. `&on=host` searches the remote
+/// side by a bounded walk (`host_files`), inside `dir` likewise; it has no
+/// git listing, so `ignored` changes nothing there.
 async fn project_files_search(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -7678,8 +8343,12 @@ async fn project_files_search(
         if q.len() > files::MAX_QUERY {
             return api_error(StatusCode::BAD_REQUEST, "query_too_long");
         }
+        let under = match host_files_rel(&state, &raw_id, query.get("dir")) {
+            Ok(rel) => rel,
+            Err(error) => return error,
+        };
         let key = state.auth.lock_ok().host_key().to_vec();
-        return match state.host_files.search(&spec, known, q, key, raw_id).await {
+        return match state.host_files.search(&spec, known, q, under, key, raw_id).await {
             Ok(found) => (StatusCode::OK, Json(json!(found))),
             Err(error) => files_error(error),
         };
@@ -7691,11 +8360,15 @@ async fn project_files_search(
     if q.len() > files::MAX_QUERY {
         return api_error(StatusCode::BAD_REQUEST, "query_too_long");
     }
+    let under = match files_rel(&state, &raw_id, query.get("dir")) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let scope = files::SearchScope { under, ignored: query.get("ignored").is_some_and(|on| on == "1") };
     let key = state.auth.lock_ok().host_key().to_vec();
-    // A git listing or a walk of the whole tree: off the executor.
-    let found = tokio::task::spawn_blocking(move || files::search(&root, &q, &key, &raw_id))
-        .await
-        .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
+    // A git listing or a walk of the whole tree: off the executor, under the
+    // local deadline.
+    let found = deadline::local(move || files::search_in(&root, &q, &key, &raw_id, &scope)).await;
     match found {
         Ok(found) => (StatusCode::OK, Json(json!(found))),
         Err(error) => files_error(error),
@@ -7705,8 +8378,14 @@ async fn project_files_search(
 /// `GET /api/v1/projects/{project_id}/files/raw?f=<token>[&download=1]` — one
 /// file's bytes, typed by its head as the outbox types them (active formats are
 /// inert text), for the same viewer. Read-only; the browser's one write is
-/// `project_files_upload`, which only adds new files. `&on=host` reads a
-/// remote-side token's file from the host (`host_files`).
+/// `project_files_upload`, which only adds new files.
+///
+/// This computer's side streams the file from the descriptor it proved, with
+/// no size cap (a text is served as its first `MAX_OUTBOX_FILE` bytes), and
+/// answers one `Range` (206), `If-None-Match` (304) and `If-Range` against a
+/// strong `ETag` (`serve`). `&on=host` reads a remote-side token's file from
+/// the host (`host_files`): a range there is read on its own, at most
+/// `MAX_OUTBOX_FILE` per answer; the whole file keeps that cap.
 async fn project_files_raw(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -7719,7 +8398,11 @@ async fn project_files_raw(
         Err(error) => return error.into_response(),
     };
     let no_token = || api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
-    let read = if on_host_side(&query) {
+    let download = query.get("download").is_some_and(|v| v == "1");
+    let disposition = |kind: &str, leaf: &str| {
+        if kind == "application/octet-stream" || download { attachment_disposition(leaf) } else { "inline".into() }
+    };
+    if on_host_side(&query) {
         let (spec, known, raw_id) = match host_files_scope(&state, &phone, &project_id) {
             Ok(scope) => scope,
             Err(error) => return error.into_response(),
@@ -7730,42 +8413,47 @@ async fn project_files_raw(
             Err(error) => return error.into_response(),
         };
         let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
-        (leaf, state.host_files.read(&spec, known, rel).await)
-    } else {
-        let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
-            Ok(scope) => scope,
-            Err(error) => return error.into_response(),
+        // No validator on this side, so an `If-Range` always asks for the whole.
+        let range = headers
+            .get(header::RANGE)
+            .filter(|_| !headers.contains_key(header::IF_RANGE))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let read = match range {
+            Some(range) => state.host_files.read_range(&spec, known, rel, range).await,
+            None => state.host_files.read(&spec, known, rel).await.map(|(bytes, kind)| host_files::HostRead::Whole(bytes, kind)),
         };
-        let Some(token) = query.get("f") else { return no_token() };
-        let rel = match files_rel(&state, &raw_id, Some(token)) {
-            Ok(rel) => rel,
-            Err(error) => return error.into_response(),
+        return match read {
+            Ok(host_files::HostRead::Whole(bytes, kind)) => {
+                serve::from_bytes(&headers, bytes, &serve::Head { kind, disposition: disposition(kind, &leaf), etag: None })
+            }
+            Ok(host_files::HostRead::Part { bytes, kind, start, total }) => {
+                serve::from_part(bytes, start, total, &serve::Head { kind, disposition: disposition(kind, &leaf), etag: None })
+            }
+            Ok(host_files::HostRead::Unsatisfiable { kind, total }) => {
+                serve::out_of_range(total, &serve::Head { kind, disposition: disposition(kind, &leaf), etag: None })
+            }
+            Err(error) => files_error(error).into_response(),
         };
-        let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
-        let read = tokio::task::spawn_blocking(move || files::read(&root, &rel))
-            .await
-            .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
-        (leaf, read)
+    }
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error.into_response(),
     };
-    let (leaf, read) = read;
-    let download = query.get("download").is_some_and(|v| v == "1");
-    match read {
-        Ok((bytes, kind)) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, kind)
-            .header(header::CONTENT_LENGTH, bytes.len())
-            .header(
-                header::CONTENT_DISPOSITION,
-                if kind == "application/octet-stream" || download {
-                    attachment_disposition(&leaf)
-                } else {
-                    "inline".into()
-                },
-            )
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| {
-                api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response()
-            }),
+    let Some(token) = query.get("f") else { return no_token() };
+    let rel = match files_rel(&state, &raw_id, Some(token)) {
+        Ok(rel) => rel,
+        Err(error) => return error.into_response(),
+    };
+    let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
+    // Only the open and the type sniff wait on the disk here; the body then
+    // streams from the descriptor proven by that open.
+    match deadline::local(move || files::open_served(&root, &rel)).await {
+        Ok(served) => {
+            let etag = serve::etag(&served.meta);
+            let head = serve::Head { kind: served.kind, disposition: disposition(served.kind, &leaf), etag: Some(&etag) };
+            serve::from_file(&headers, served.file, served.len, &head).await
+        }
         Err(error) => files_error(error).into_response(),
     }
 }
@@ -7789,7 +8477,9 @@ fn upload_error(error: uploads::UploadError) -> (StatusCode, Json<serde_json::Va
             uploads::UploadError::Refused => StatusCode::FORBIDDEN,
             uploads::UploadError::Empty => StatusCode::BAD_REQUEST,
             uploads::UploadError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            uploads::UploadError::Full => StatusCode::INSUFFICIENT_STORAGE,
+            uploads::UploadError::Exists => StatusCode::CONFLICT,
+            uploads::UploadError::Full | uploads::UploadError::FoldersFull => StatusCode::INSUFFICIENT_STORAGE,
+            uploads::UploadError::Busy => StatusCode::TOO_MANY_REQUESTS,
             uploads::UploadError::Unavailable => StatusCode::CONFLICT,
             uploads::UploadError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         },
@@ -7828,7 +8518,7 @@ async fn project_files_upload(
     headers: HeaderMap,
     Path(project_id): Path<String>,
     Query(query): Query<UploadQuery>,
-    body: Bytes,
+    body: Body,
 ) -> impl IntoResponse {
     let (phone, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
         Ok(scope) => scope,
@@ -7838,6 +8528,38 @@ async fn project_files_upload(
         Ok(rel) => rel,
         Err(error) => return error,
     };
+    // Refused before a byte is staged: a folder that takes none, or a body
+    // that says it is past the cap.
+    if !uploads::accepts(&rel_dir) {
+        return upload_error(uploads::UploadError::Refused);
+    }
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > uploads::MAX_UPLOAD_FILE) {
+        return upload_error(uploads::UploadError::TooLarge);
+    }
+    // The room is claimed before a byte is staged: the declared length
+    // against the day's budget left after the bodies already on their way
+    // (`Full`), and only so many bodies at once (`Busy`). Held until the
+    // file has landed or the request has failed.
+    // Off the connection executor: it reads the log under the lock a copy
+    // into a project holds for its whole length.
+    let reserved = {
+        let (state_dir, raw_id) = (state.config.state_dir.clone(), raw_id.clone());
+        tokio::task::spawn_blocking(move || uploads::reserve(&state_dir, &raw_id, declared)).await
+    };
+    let reservation = match reserved.unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string()))) {
+        Ok(reservation) => reservation,
+        Err(error) => return upload_error(error),
+    };
+    // Staged in the sidecar's private folder as it arrives, hashed on the
+    // way: never held whole in memory; a body past its claim is cut off.
+    let staged = match uploads::stage_body(&state.config.state_dir, body, &reservation).await {
+        Ok(staged) => staged,
+        Err(error) => return upload_error(error),
+    };
     // The device label for the desktop's notice, and the key the answer's
     // row is sealed with.
     let (label, key) = {
@@ -7846,10 +8568,12 @@ async fn project_files_upload(
         (label, auth.host_key().to_vec())
     };
     let state_dir = state.config.state_dir.clone();
-    // Up to MAX_INBOX_FILE bytes written and hashed under the sidecar-wide
-    // log lock: off the connection executor.
+    // The staged body copied into the project under the sidecar-wide log
+    // lock: off the connection executor. The staging file goes with `staged`.
     let landed = tokio::task::spawn_blocking(move || {
-        uploads::store(&state_dir, &root, &raw_id, &rel_dir, &query.name, &body, label.as_deref())
+        // The claim goes once the file is logged (or has failed to be).
+        let _reservation = reservation;
+        uploads::store_staged(&state_dir, &root, &raw_id, &rel_dir, &query.name, &staged, label.as_deref())
             .map(|landed| files::entry(&root, &landed.rel, &key, &raw_id))
     })
     .await
@@ -7859,6 +8583,172 @@ async fn project_files_upload(
         Ok(None) => upload_error(uploads::UploadError::NotFound),
         Err(error) => upload_error(error),
     }
+}
+
+/// `POST /api/v1/projects/{project_id}/files/folder?name=<name>[&dir=<token>]`
+/// — the library's **New folder**: an empty folder under the phone's name in
+/// the folder it stands in, behind the upload guards (session, exact origin,
+/// both switches) and the same rules (no dot folder, no dot name). Add-only:
+/// a taken name is `already_exists`. Answers the folder's listing row.
+async fn project_files_folder(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<UploadQuery>,
+) -> impl IntoResponse {
+    let (phone, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let rel_dir = match files_rel(&state, &raw_id, query.dir.as_ref()) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let (label, key) = {
+        let auth = state.auth.lock_ok();
+        let label = auth.devices().into_iter().find(|device| device.id == phone.device_id()).map(|device| device.name);
+        (label, auth.host_key().to_vec())
+    };
+    let state_dir = state.config.state_dir.clone();
+    let made = tokio::task::spawn_blocking(move || {
+        uploads::make_folder(&state_dir, &root, &raw_id, &rel_dir, &query.name, label.as_deref())
+            .map(|rel| files::lookup(&root, &rel, &key, &raw_id))
+    })
+    .await
+    .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));
+    match made {
+        Ok(Some(entry)) => (StatusCode::CREATED, Json(json!({ "entry": entry }))),
+        Ok(None) => upload_error(uploads::UploadError::NotFound),
+        Err(error) => upload_error(error),
+    }
+}
+
+/// `POST /api/v1/projects/{project_id}/files/docs?name=<leaf>` — a ghost row's
+/// **Create** in the "Project docs" group: the catalog doc `name` written into
+/// the project root from its template, behind the upload guards (session,
+/// exact origin, both switches). Create-new: a taken name is `already_exists`
+/// and nothing is touched; a name outside the catalog's creatable docs is
+/// `invalid_request`. No upload-log entry and no Undo — it is a template file
+/// the user can delete. The answer is the new file's listing row.
+async fn project_files_docs_create(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<UploadQuery>,
+) -> impl IntoResponse {
+    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let name = query.name;
+    // Creates a file (and opens the new one to type it): off the executor,
+    // under the local deadline.
+    let made = deadline::local(move || {
+        Ok(project_docs::create(&root, &name).map(|()| files::lookup(&root, &name, &key, &raw_id)))
+    })
+    .await;
+    match made {
+        Ok(Ok(Some(entry))) => (StatusCode::CREATED, Json(json!({ "entry": entry }))),
+        Ok(Ok(None)) => api_error(StatusCode::NOT_FOUND, "file_not_found"),
+        Ok(Err(error)) => api_error(
+            match error {
+                project_docs::CreateError::NotCreatable => StatusCode::BAD_REQUEST,
+                project_docs::CreateError::Exists => StatusCode::CONFLICT,
+                project_docs::CreateError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+            error.code(),
+        ),
+        Err(error) => files_error(error),
+    }
+}
+
+/// `DELETE /api/v1/projects/{project_id}/files/folder?f=<token>` — **Undo** of
+/// a **New folder**: only a folder the phone made within the hour, and only
+/// while it is still empty (`uploads::remove_made_folder`).
+async fn project_files_folder_undo(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let Some(token) = query.get("f") else {
+        return upload_error(uploads::UploadError::NotFound);
+    };
+    let rel = match files_rel(&state, &raw_id, Some(token)) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let removed = tokio::task::spawn_blocking(move || uploads::remove_made_folder(&root, &raw_id, &rel))
+        .await
+        .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));
+    match removed {
+        Ok(()) => (StatusCode::OK, Json(json!({ "removed": true }))),
+        Err(error) => upload_error(error),
+    }
+}
+
+/// `GET /api/v1/projects/{project_id}/files/zip[?dir=<token>][&check=1]` —
+/// **Download as zip**: the folder's files as a stored zip, streamed
+/// (`files_zip`). This computer's side only; past `files_zip::MAX_ZIP_FILES`
+/// files or `MAX_ZIP_BYTES` bytes it is `folder_too_large`, before anything
+/// is sent. `check=1` answers only `{ files, bytes, skipped }` (or the
+/// refusal), so the phone can say so before it hands the browser a download,
+/// and how many files `files_zip::unsafe_entry` leaves out of it by name.
+async fn project_files_zip(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response<Body> {
+    let phone = match authenticate_or_ticket(&headers, &state, &uri) {
+        Ok(phone) => phone,
+        Err(error) => return error.into_response(),
+    };
+    if on_host_side(&query) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request").into_response();
+    }
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error.into_response(),
+    };
+    let rel = match files_rel(&state, &raw_id, query.get("dir")) {
+        Ok(rel) => rel,
+        Err(error) => return error.into_response(),
+    };
+    let leaf = if rel.is_empty() { "files".to_string() } else { rel.rsplit('/').next().unwrap_or("files").to_string() };
+    let planned = {
+        let (root, rel) = (root.clone(), rel.clone());
+        deadline::local(move || files_zip::plan(&root, &rel)).await
+    };
+    let planned = match planned {
+        Ok(planned) => planned,
+        Err(files::FilesError::TooLarge) => return api_error(StatusCode::PAYLOAD_TOO_LARGE, "folder_too_large").into_response(),
+        Err(error) => return files_error(error).into_response(),
+    };
+    if query.get("check").is_some_and(|on| on == "1") {
+        return (StatusCode::OK, Json(json!({ "files": planned.count(), "bytes": planned.bytes, "skipped": planned.skipped }))).into_response();
+    }
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
+    tokio::task::spawn_blocking(move || {
+        let writer = files_zip::ChannelWriter::new(sender.clone());
+        if let Err(error) = files_zip::write(&root, &planned, writer) {
+            // The phone gone is no error worth a send; anything else cuts the body.
+            let _ = sender.blocking_send(Err(error));
+        }
+    });
+    let stream = futures_util::stream::poll_fn(move |context| receiver.poll_recv(context));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(header::CONTENT_DISPOSITION, attachment_disposition(&format!("{leaf}.zip")))
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response())
 }
 
 /// The largest remarks body: a page's worth of highlights and notes is a few
@@ -8045,7 +8935,11 @@ where
 /// through the same middleware stack the sidecar serves.
 fn router(state: HostState) -> Router {
     // Behind the gateway the socket is `wss:`; the CSP names it so.
-    let secure = state.web.secure();
+    let header_state = Arc::new(HeaderState {
+        secure: state.web.secure(),
+        state_dir: state.config.state_dir.clone(),
+        origin: state.config.origin.clone(),
+    });
     Router::new()
         .route("/healthz", get(health))
         .route("/api/v1/pair", post(pair))
@@ -8095,6 +8989,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/projects/{project_id}/tabs", post(create_tab))
         .route("/api/v1/projects/{project_id}/tabs/reopen", post(reopen_tab))
+        .route("/api/v1/projects/{project_id}/tabs/archived/{archive_id}/restore", post(restore_archived_tab))
         .route(
             "/api/v1/projects/{project_id}/launch-options",
             get(launch_options),
@@ -8120,6 +9015,7 @@ fn router(state: HostState) -> Router {
             "/api/v1/tabs/{tab_id}",
             get(tab).put(rename_tab).delete(close_tab),
         )
+        .route("/api/v1/tabs/{tab_id}/archive", post(archive_tab))
         .route("/api/v1/tabs/{tab_id}/color", put(color_tab))
         .route("/api/v1/tabs/{tab_id}/order", put(order_tab))
         .route("/api/v1/tabs/{tab_id}/prompt", post(sent_prompt))
@@ -8131,7 +9027,6 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/locations", get(tab_locations))
         .route("/api/v1/tabs/{tab_id}/location", post(move_tab_location))
         .route("/api/v1/tabs/{tab_id}/assistant-models", get(assistant_models))
-        .route("/api/v1/tabs/{tab_id}/launch-defaults", get(launch_defaults).put(save_launch_defaults))
         .route("/api/v1/tabs/{tab_id}/model-rows", get(model_rows).post(remember_model_rows))
         .route("/api/v1/tabs/{tab_id}/assistant-model", post(switch_assistant_model))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
@@ -8150,6 +9045,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
         .route("/api/v1/tabs/{tab_id}/changes", get(tab_changes))
         .route("/api/v1/tabs/{tab_id}/named-files", get(tab_named_files))
+        .route("/api/v1/tabs/{tab_id}/artifact", get(tab_artifact))
         .route("/api/v1/tabs/{tab_id}/terminal", get(terminal))
         // The phone's drop box takes a whole photo; every other body stays at
         // the control-message limit below (the inner layer wins).
@@ -8201,11 +9097,22 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/projects/{project_id}/files", get(project_files_list))
         .route("/api/v1/projects/{project_id}/files/raw", get(project_files_raw))
         .route("/api/v1/projects/{project_id}/files/search", get(project_files_search))
+        .route("/api/v1/projects/{project_id}/files/entry", get(project_files_entry))
         .route(
             "/api/v1/projects/{project_id}/files/upload",
-            delete(project_files_upload_undo)
-                .merge(post(project_files_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
+            // The body is a stream the handler stages and caps itself
+            // (`uploads::MAX_UPLOAD_FILE`); no extractor buffers it.
+            delete(project_files_upload_undo).merge(post(project_files_upload)),
         )
+        .route(
+            "/api/v1/projects/{project_id}/files/folder",
+            delete(project_files_folder_undo).merge(post(project_files_folder).layer(DefaultBodyLimit::max(1024))),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/files/docs",
+            post(project_files_docs_create).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route("/api/v1/projects/{project_id}/files/zip", get(project_files_zip))
         .route(
             "/api/v1/projects/{project_id}/files/remarks",
             post(project_files_remarks).layer(DefaultBodyLimit::max(REMARKS_BODY)),
@@ -8229,7 +9136,7 @@ fn router(state: HostState) -> Router {
         .layer(DefaultBodyLimit::max(MAX_CONTROL_MESSAGE))
         .layer(middleware::from_fn_with_state(state.web.on_server(), server_window_codes))
         .layer(middleware::from_fn(feature_gate))
-        .layer(middleware::from_fn_with_state(secure, security_headers))
+        .layer(middleware::from_fn_with_state(header_state, security_headers))
 }
 
 /// What a phone request that only a window can answer gets on a server
@@ -8338,6 +9245,8 @@ async fn sweep_mcp_tokens(runner: Arc<dyn scheduler::Runner>, mut shutdown: toki
             for id in sessions {
                 let _ = crate::services::root_mcp::revoke_session(&id);
             }
+            // What the tab asked or ticked goes with its tokens (phase 1b).
+            crate::services::markup_mcp::sweep();
         }
     }
 }
@@ -8408,6 +9317,7 @@ fn start_background_relays(core_ctx: &app_core::CoreCtx, state_dir: &std::path::
     }
     if browser_clients || server {
         crate::services::agent_turn::start(core_ctx.clone());
+        crate::services::checkpoints::start(core_ctx.clone());
         // The browser Reader's transcript watches (`transcript-changed`), as
         // the window installs its own: this process's `agent_tab_transcript`
         // arms them, and without a sink the panel would only poll.
@@ -8535,6 +9445,9 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
             (presence_state.sightings.current(), presence_state.terminal_registry.viewers())
         })),
         state_dir: Some(state_dir.clone()),
+        // The window's markup views read the asks of the tabs this process
+        // spawned from here (`commands::markup_mcp`).
+        markup: Some(Arc::new(crate::commands::markup_mcp::admin_markup)),
     };
     tokio::spawn(async move {
         let _ = admin::serve(&admin_path, admin_context).await;
@@ -8552,8 +9465,19 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     let on_server = matches!(listen, Listen::Unix { .. });
     let listener = crate::commands::root_mcp::start_headless(
         Arc::new(move |notice| {
-            if notice == crate::commands::root_mcp::Notice::Schedules {
-                poke_desktop(&notice_dir, None, &["schedules"]);
+            use crate::commands::root_mcp::Notice;
+            match notice {
+                Notice::Schedules => poke_desktop(&notice_dir, None, &["schedules"]),
+                // A tab of this host asked or ticked: an open window's markup
+                // views re-read (their event, `markup-mcp-changed`).
+                Notice::Markup => poke_desktop(&notice_dir, None, &["markup"]),
+                Notice::GitPush => {}
+                Notice::Workspace { scope, .. } => poke_desktop(&notice_dir, Some(&scope), &["workspace"]),
+                // A tab this host spawned: the window only joins its PTY and
+                // shows no stale card for it (`TerminalView`), so the flag
+                // stays this process's (a server daemon's clients hear it
+                // through `serve_everything`).
+                Notice::TabStale { .. } => {}
             }
         }),
         on_server.then_some(&core_ctx),
@@ -8640,6 +9564,10 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     if let Some(registry) = core_ctx.state.try_get::<crate::terminal::RegistryState>() {
         registry.lock_ok().kill_all();
     }
+    // The local lanes of the cut tabs this process spawned (a phone-started tab
+    // fences here): no socket outlives the stop.
+    #[cfg(unix)]
+    crate::services::local_lane::stop_for_exit();
     if let Some(error) = serve_failure.lock_ok().take() {
         return Err(format!("Tailscale Serve verification failed: {error}"));
     }
@@ -8759,7 +9687,7 @@ mod embedded_bundle_tests {
             assert_eq!(body(asset_response(path)).await, (StatusCode::OK, shell.clone()), "{path}");
         }
         assert_eq!(body(asset_response("/assets/index-planted.js")).await.0, StatusCode::NOT_FOUND);
-        let frame = body(pdf_frame(HeaderMap::new()).await).await;
+        let frame = body(pdf_frame_response(&HeaderMap::new(), &[])).await;
         match embedded(PDF_FRAME_PATH) {
             Some(bytes) => assert_eq!(frame, (StatusCode::OK, bytes)),
             None => assert_eq!(frame.0, StatusCode::NOT_FOUND),

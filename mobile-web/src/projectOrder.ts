@@ -1,5 +1,9 @@
 import { translate, useI18nStore, type TranslationKey } from "../../src/lib/i18n";
-import type { ScopeKind } from "./api";
+import type { ActivityTab, ScopeKind } from "./api";
+import { DEFAULT_AGENT_SORT, sortAgentTabs } from "../../shared/agentSort";
+import { lastWorkedAt } from "./components/AgentModeMarks";
+import { draftPreview } from "./agentPrompts";
+import { readDrafts } from "./drafts";
 
 /**
  * The home list's hand-arranged project order.
@@ -11,14 +15,31 @@ import type { ScopeKind } from "./api";
  * desktop pills are a switcher the whole day's work runs through, the phone list
  * is a handful of rows reached with one thumb.
  *
- * The host still sorts what it sends (live sessions, then last activity, then
- * name), and that stays the fallback: a project the reader has never placed
- * keeps the host's order rather than being dropped somewhere arbitrary.
+ * Unplaced projects follow their highest-priority agent in the Agents view's
+ * default order. Projects with no listed agent keep the host's order below them.
  */
 import { applyServerOrder } from "./tabReorder";
 
+/** Rank each project by its first agent in the default Agents order. Sorting
+ * before applying the remembered order keeps hand-arranged positions intact. */
+export function sortProjectsByAgents<T extends { id: string }>(rows: readonly T[], tabs: readonly ActivityTab[]): T[] {
+  const drafts = readDrafts();
+  const sorted = sortAgentTabs(tabs, DEFAULT_AGENT_SORT, (tab) => ({
+    decision: tab.agent_status === "question",
+    ready: tab.agent_status === "done",
+    working: tab.agent_status === "working",
+    drafted: !!draftPreview(drafts[tab.id]),
+    doneAt: lastWorkedAt(tab),
+  }));
+  const rank = new Map<string, number>();
+  for (const tab of sorted) {
+    if (!rank.has(tab.project_id)) rank.set(tab.project_id, rank.size);
+  }
+  return [...rows].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+}
+
 /** Sort the listed rows into the remembered order. Placed projects lead, in the
- * order they were arranged; everything else keeps the order the host sent and
+ * order they were arranged; everything else keeps its default agent order and
  * follows — which is also where a project that has only just become active
  * arrives, rather than in the middle of a list the reader arranged by hand.
  *

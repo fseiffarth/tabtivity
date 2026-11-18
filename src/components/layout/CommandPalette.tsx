@@ -12,6 +12,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { useProjectsStore } from "../../stores/projects";
+import { scopeDisplayName, useBoxesStore } from "../../stores/boxes";
+import { useBoxSliceStore } from "../../stores/boxSlice";
+import { setBarSolo } from "../../lib/projects/barHidden";
+import { boxColor } from "../../lib/theme/boxColor";
 import { useSettingsStore } from "../../stores/settings";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import type { TabEntry } from "../../stores/tabs/types";
@@ -32,6 +36,8 @@ import { resolveProjectDirectory } from "../../types";
 import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
 import { TabStatusMark, statusMarkSlots } from "../tabs/TabLocalityBadges";
 import { UntestedTag } from "../common/UntestedTag";
+import { BoxSwatch } from "../common/icons/Icon";
+import { useQuickCreateBox } from "../projects/useQuickCreateBox";
 import { searchSettings, type NavEntry } from "./settingsIndex";
 
 /** Opens the palette; a `CustomEvent` detail of `{ filter: "#" }` opens it on
@@ -113,7 +119,9 @@ function openProjectFile(projectDir: string, rel: string, beside: boolean) {
  *  in the scope on screen. */
 function showTab(scope: string, key: string, beside: boolean) {
   const tabs = useTabsStore.getState();
-  if (beside && scope === tabs.scope && tabs.focusedGroupId) {
+  // A root tab is never moved into the workspace's layout: root is shown by
+  // its own window, `jumpToTab` opens that.
+  if (beside && scope === tabs.scope && scope !== ROOT_SCOPE && tabs.focusedGroupId) {
     tabs.splitWithTab(key, tabs.focusedGroupId, "right");
     return;
   }
@@ -147,6 +155,13 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
     setSelected(0);
   }, []);
   const modalRef = useModalFocus(close, open);
+  // The "New box…" action: the name prompt outlives the palette (a pick closes
+  // it first), so its host is rendered on both sides of `open`.
+  const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
+  // Read at pick time: the rows are built once per opening and must not follow
+  // the prompt hook's identity.
+  const quickCreateRef = useRef(quickCreateBox);
+  quickCreateRef.current = quickCreateBox;
 
   const projectDir = useCallback((): string => {
     const { projects, activeId } = useProjectsStore.getState();
@@ -215,12 +230,13 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
     }
 
     const { projects, activeId, setActive } = useProjectsStore.getState();
+    const { boxes } = useBoxesStore.getState();
     const dir = projectDir();
     if (!filesOnly) {
       const tabs = useTabsStore.getState();
       const byScope: Record<string, readonly TabEntry[]> = { ...tabs.tabsByScope, [tabs.scope]: tabs.tabs };
-      const name = (scope: string) =>
-        scope === ROOT_SCOPE ? t("palette.scope.root") : (projects.find((p) => p.id === scope)?.name ?? null);
+      // A box scope's tabs name their box, like a project's name their project.
+      const name = (scope: string) => scopeDisplayName(scope, projects, boxes, t);
       take(
         t("palette.group.tabs"),
         Object.entries(byScope).flatMap(([scope, list]) =>
@@ -236,6 +252,26 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
           text: project.name,
           run: () => void setActive(project.id),
         })),
+      );
+      take(
+        t("palette.group.boxes"),
+        [...boxes]
+          .sort((a, b) => a.position - b.position)
+          .map((box) => ({
+            id: `box:${box.id}`,
+            group: "",
+            label: (
+              <>
+                <BoxSwatch className="command-palette-box-swatch" color={boxColor(box)} />
+                <Highlighted text={box.name} query={query} />
+              </>
+            ),
+            text: box.name,
+            detail: t(box.member_ids.length === 1 ? "projectSearch.boxMemberOne" : "projectSearch.boxMemberMany", {
+              count: box.member_ids.length,
+            }),
+            run: () => void useBoxSliceStore.getState().selectBox(box.id),
+          })),
       );
     }
     if (dir) {
@@ -254,8 +290,67 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
     }
     if (filesOnly) return out;
 
+    // Box actions lead the Actions group (one heading: same label, adjacent).
+    // "Add X to Box" needs a typed query, or a blank palette would list one row
+    // per box; the other two are short and always offered.
+    const actionsHead = t("palette.group.actions");
+    const sliceId = useBoxSliceStore.getState().sliceBoxId;
+    const current = projects.find((p) => p.id === activeId);
+    const boxActions: Row[] = [
+      {
+        id: "boxaction:new",
+        group: "",
+        label: t("palette.action.newBox"),
+        text: t("palette.action.newBox"),
+        run: () => void quickCreateRef.current(),
+      },
+      ...(sliceId && boxes.some((b) => b.id === sliceId)
+        ? [
+            {
+              id: "boxaction:showAll",
+              group: "",
+              label: t("palette.action.showAllProjects"),
+              text: t("palette.action.showAllProjects"),
+              run: () => void useBoxSliceStore.getState().leaveBox(),
+            },
+          ]
+        : []),
+      // Hide mode (`lib/projects/barHidden`), only where it applies: the
+      // unsliced strip. One row that names the switch's other state.
+      ...(sliceId
+        ? []
+        : [
+            (() => {
+              const solo = useSettingsStore.getState().settings?.bar_solo === true;
+              const label = t(solo ? "pill.showOtherProjects" : "pill.hideOtherProjects");
+              return {
+                id: "boxaction:solo",
+                group: "",
+                label,
+                text: label,
+                run: () => void setBarSolo(!solo),
+              };
+            })(),
+          ]),
+      ...(query && current
+        ? [...boxes]
+            .sort((a, b) => a.position - b.position)
+            .filter((box) => !box.member_ids.includes(current.id))
+            .map((box) => {
+              const label = t("palette.action.addToBox", { project: current.name, box: box.name });
+              return {
+                id: `boxaction:add:${box.id}`,
+                group: "",
+                label,
+                text: label,
+                run: () => void useBoxesStore.getState().addToBox(current.id, box.id),
+              };
+            })
+        : []),
+    ];
+    take(actionsHead, boxActions);
     take(
-      t("palette.group.actions"),
+      actionsHead,
       SHORTCUT_DEFS.filter((def) => ACTION_GROUPS.has(def.group) && !def.context && !HIDDEN_ACTIONS.test(def.action)).map(
         (def) => actionRow(def.action, t(def.labelKey), overrides),
       ),
@@ -321,7 +416,7 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
     }
   };
 
-  if (!open) return null;
+  if (!open) return <>{quickCreateDialogs}</>;
 
   const emptyLine = () => {
     if (filesLoading) return t("quickOpen.loading");
@@ -333,6 +428,7 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
 
   let lastGroup: string | null = null;
   return (
+    <>
     <div
       className="modal-backdrop command-palette-backdrop"
       onMouseDown={(e) => {
@@ -396,9 +492,12 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
             <kbd>{chordLabel({ key: "Escape" })}</kbd> {t("palette.footerClose")}
           </span>
           <UntestedTag id="desktop.palette" />
+          <UntestedTag id="palette.boxes" />
         </div>
       </div>
     </div>
+    {quickCreateDialogs}
+    </>
   );
 }
 

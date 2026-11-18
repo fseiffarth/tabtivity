@@ -19,7 +19,7 @@ pub(crate) fn pty_id_for(ctx: &Ctx, registry: &RegistryState, id: String) -> Str
 }
 
 /// What `pty_spawn` tells the tab it launched.
-#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PtySpawned {
     /// The session name rode in on the launch argv (Claude's `--name`), so the
     /// tab must not also type its `/rename` line.
@@ -37,6 +37,21 @@ pub struct PtySpawned {
     /// its composer, so the window reads no question off its screen until
     /// the hooks speak again (`agent_turn::LeftTurn`).
     pub resting: bool,
+    /// The tab only reattached a session whose agent is mid-turn right now:
+    /// the state its hooks last wrote (`working`/`decision`), which the tab
+    /// starts out in. Left out of the answer when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<&'static str>,
+    /// The key the window names this tab's checkpoints by
+    /// (`services::checkpoints`); only the window gets it. Left out when the
+    /// tab has none.
+    #[serde(rename = "checkpointKey", skip_serializing_if = "Option::is_none")]
+    pub checkpoint_key: Option<String>,
+    /// The tab reattached an agent session whose Tabtivity MCP credentials
+    /// nobody honours any more (`root_mcp_mark::Reattach::Stale`): its tools
+    /// do not answer until the agent is restarted. Left out when unset.
+    #[serde(rename = "mcpStale", skip_serializing_if = "std::ops::Not::not")]
+    pub mcp_stale: bool,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -98,13 +113,29 @@ pub async fn pty_spawn(
 
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
+    let mcp_stale = prepared.mcp_stale;
+    let turn = prepared.live_turn.map(crate::services::agent_turn::TurnState::as_str);
+    let checkpoint_key = prepared.checkpoint_key.clone();
     let drop_dir = prepared.drop_dir.clone();
-    let result = crate::terminal::spawn_pty(
-        ctx.0.clone(),
-        registry.clone(),
-        prepared.opts.clone(),
-        prepared.spawn_seq(),
-    );
+    let privacy_check = prepared.privacy_check();
+    let (spawned_id, spawned_seq) = (prepared.opts.id.clone(), prepared.spawn_seq());
+    let spawn = {
+        let (core, registry, opts, seq) = (ctx.0.clone(), registry.clone(), prepared.opts.clone(), prepared.spawn_seq());
+        let attach_only = prepared.host_attach_only;
+        move || match attach_only {
+            // Let through as a rejoin only (the AI switch), or found alive in
+            // the session host: attach, never create.
+            true => crate::terminal::spawn_pty_attach_only(core, registry, opts, seq),
+            false => crate::terminal::spawn_pty(core, registry, opts, seq),
+        }
+    };
+    // A launch the Windows session host takes connects (and may start the
+    // host) before its stream exists: off the async workers.
+    let result = if cfg!(windows) && prepared.opts.mux_wrapped {
+        app_core::rt::blocking("terminal", spawn).await.and_then(|spawned| spawned)
+    } else {
+        spawn()
+    };
     if result.is_ok() {
         claim.keep();
         if let Some(target) = login {
@@ -124,8 +155,18 @@ pub async fn pty_spawn(
             // The MCP session access fold lists live sessions; a new token is one.
             ctx.emit(crate::commands::root_mcp::SESSIONS_EVENT, ());
         }
+        // Local models only switched on while this agent was starting: both gates
+        // ran before the PTY existed, the switch's sweep saw only registered ones.
+        // Judged again now that it is registered; refused, it ends here.
+        if let Err(refusal) = crate::services::launch_prep::recheck_privacy(privacy_check).await {
+            let note = crate::commands::agent_privacy::end_refused_spawn(registry, &spawned_id, spawned_seq).await;
+            return Err(match note {
+                Some(note) => format!("{refusal} {note}"),
+                None => refusal,
+            });
+        }
     }
-    result.map(|()| PtySpawned { named, interrupted, attached: false, resting })
+    result.map(|()| PtySpawned { named, interrupted, attached: false, resting, turn, checkpoint_key, mcp_stale })
 }
 
 /// Whether a server client's spawn of `id` would join the tab another client
@@ -178,104 +219,121 @@ pub async fn agent_fence_marks(
     .await
 }
 
+/// Whether this machine has a usable tmux (2442r): persistent local terminals
+/// and phone terminals need it, and a Mac ships without. Re-probed by the
+/// backend while missing, so an install is noticed without a restart. `async`:
+/// the probe spawns `tmux -V`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn local_tmux_available() -> bool {
+    app_core::rt::try_blocking("terminal", || Ok::<bool, String>(crate::services::tmux_local::tmux_available()))
+        .await
+        .unwrap_or(false)
+}
+
 /// Kill a **local** tmux session (TODO #85) — the explicit-close / Sessions-view
-/// kill of a local persistent tab. No-op on Windows / without tmux.
+/// kill of a local persistent tab, through the session mux (`SessionMux::kill`,
+/// which reaps the pane's process subtree first). No-op where the machine has
+/// no local session backend (Windows today, no tmux).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill(session: String) -> Result<(), String> {
-    if !crate::services::tmux_local::tmux_available() {
+    // As its siblings: a client names a session, never a tmux pattern or a
+    // special target (`*`, `$0`) that could end a session the app never made.
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session) {
+        return Err(format!("invalid tmux session name '{session}'"));
+    }
+    let mux = crate::services::session_mux::mux();
+    if !mux.holds_sessions() {
         return Ok(());
     }
     app_core::rt::try_blocking("terminal", move || {
-        let output = crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_kill_args(&session))
-            .output()
-            .map_err(|e| format!("could not run tmux: {e}"))?;
-        // Killed or already gone either way: its launcher (if the command line
-        // needed one) has nothing left to launch, and its agent's API proxy
-        // tokens nothing left to serve.
-        crate::services::tmux_local::remove_launcher(&session);
-        crate::services::api_proxy::on_tmux_session_gone(&session);
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            // Explicit close is idempotent: a session that already exited is
-            // already in the desired state.
-            if detail.contains("can't find session")
-                || detail.contains("no server running")
-                || detail.contains("failed to connect to server")
-            {
-                return Ok(());
-            }
-            return Err(if detail.is_empty() {
-                format!("tmux could not kill session '{session}'")
-            } else {
-                format!("tmux could not kill session '{session}': {detail}")
-            });
+        use crate::services::session_mux::MuxError;
+        // Explicit close is idempotent: a session that already exited is
+        // already in the desired state (`kill` answers `Ok` for it).
+        let killed = mux.kill(&session);
+        // Killed or already gone either way — unless the backend could not
+        // even be asked — its agent's API proxy tokens have nothing left to
+        // serve (the mux dropped its launcher).
+        if !matches!(killed, Err(MuxError::Io(_))) {
+            crate::services::api_proxy::on_tmux_session_gone(&session);
+            // Nothing left to revive: the reattach record drops its row.
+            crate::services::root_mcp::root_mcp_reattach::on_session_gone(&session);
         }
-        Ok(())
+        killed.map_err(|e| match e {
+            MuxError::Refused(why) => {
+                let detail = why.strip_prefix("tmux kill-session:").unwrap_or(&why).trim();
+                if detail.is_empty() {
+                    format!("tmux could not kill session '{session}'")
+                } else {
+                    format!("tmux could not kill session '{session}': {detail}")
+                }
+            }
+            e => format!("tmux could not kill session '{session}': {e}"),
+        })
     })
     .await
 }
 
 /// End every tmux session Tabtivity created on the local machine during a clean
 /// application quit — the frontend close handler's half of
-/// `services::tmux_local::kill_app_sessions`, which owns the rule (every
-/// `tabtivity-` session, no foreign one) and is also run by `RunEvent::Exit` as
-/// the net for exits that never reach frontend code. A renderer or process
-/// crash reaches neither, leaving the sessions alive for restore.
+/// `SessionMux::kill_app_sessions` (tmux: `services::tmux_local::kill_app_sessions`),
+/// which owns the rule (every `tabtivity-` session, no foreign one) and is also
+/// run by `RunEvent::Exit` as the net for exits that never reach frontend code.
+/// A renderer or process crash reaches neither, leaving the sessions alive for
+/// restore.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
-    if !crate::services::tmux_local::tmux_available() {
+    let mux = crate::services::session_mux::mux();
+    if !mux.holds_sessions() {
         return Ok(());
     }
-    app_core::rt::try_blocking("terminal", crate::services::tmux_local::kill_app_sessions).await
+    app_core::rt::try_blocking("terminal", move || {
+        let ended = mux.kill_app_sessions().map_err(|e| e.to_string());
+        crate::services::root_mcp::root_mcp_reattach::on_all_sessions_gone();
+        ended
+    })
+    .await
 }
 
 /// Whether a **local** tmux session's pane has ended and stays on screen — a
 /// fenced agent that quit (`remain-on-exit`, `services::tmux_local`). The pane
 /// card's Restart / Open a shell here offer reads it. `false` for a session
-/// that is not here (a remote tab, one that exited, no tmux).
+/// that is not here (a remote tab, one that exited, no local session backend).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_pane_dead(session: String) -> Result<bool, String> {
-    if !crate::services::ssh_exec::valid_tmux_session_name(&session)
-        || !crate::services::tmux_local::tmux_available()
-    {
+    let mux = crate::services::session_mux::mux();
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session) || !mux.available() {
         return Ok(false);
     }
-    app_core::rt::blocking("terminal", move || {
-        crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_pane_dead_args(&session))
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .is_some_and(|output| {
-                crate::services::tmux_local::pane_dead_answer(&String::from_utf8_lossy(&output.stdout))
-            })
-    })
-    .await
+    app_core::rt::blocking("terminal", move || mux.pane(&session).is_ok_and(|pane| pane.dead)).await
+}
+
+/// The local sessions the app minted that are running now
+/// (`tmux_local::sessions_to_reap`'s rule): what the window's restore wake
+/// reads to find a stopped tab whose agent a crash left running. Empty with no
+/// local session backend or no server.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn local_tmux_app_sessions() -> Vec<String> {
+    let mux = crate::services::session_mux::mux();
+    if !mux.holds_sessions() {
+        return Vec::new();
+    }
+    app_core::rt::try_blocking("terminal", move || Ok::<_, String>(crate::services::session_mux::app_session_names(mux.as_ref())))
+        .await
+        .unwrap_or_default()
 }
 
 /// The visible screen of a **local** tmux session, as plain rows — what the
 /// model tag beside an agent tab reads the session's status line from
 /// (`stores/agents/agentModels`). `None` when the session is not here (a remote
-/// tab, one that exited, no tmux), which the caller reads as "no screen".
+/// tab, one that exited, no local session backend), which the caller reads as
+/// "no screen".
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String> {
-    if !crate::services::ssh_exec::valid_tmux_session_name(&session)
-        || !crate::services::tmux_local::tmux_available()
-    {
+    let mux = crate::services::session_mux::mux();
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session) || !mux.available() {
         return Ok(None);
     }
-    app_core::rt::blocking("terminal", move || {
-        let output = crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_screen_args(&session))
-            .output()
-            .ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-    })
-    .await
+    app_core::rt::blocking("terminal", move || mux.screen(&session).ok()).await
 }
 
 /// Rename a **local** tmux session (TODO #85). `new_name` must be a safe tmux name.
@@ -284,20 +342,17 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
     if !crate::services::ssh_exec::valid_tmux_session_name(&new_name) {
         return Err("a session name may only contain letters, digits, '-' and '_'".to_string());
     }
-    if !crate::services::tmux_local::tmux_available() {
+    let mux = crate::services::session_mux::mux();
+    if !mux.available() {
         return Ok(());
     }
     app_core::rt::blocking("terminal", move || {
-        let renamed = crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_rename_args(
-                &session, &new_name,
-            ))
-            .output()
-            .is_ok_and(|o| o.status.success());
         // The agent inside keeps running: its API proxy tokens follow the
         // session's new name instead of being swept as gone.
-        if renamed {
+        if mux.rename(&session, &new_name).is_ok() {
             crate::services::api_proxy::on_tmux_renamed(&session, &new_name);
+            // Its stamp moved with it; so does its reattach row.
+            crate::services::root_mcp::root_mcp_reattach::on_session_renamed(&session, &new_name);
         }
     })
     .await
@@ -345,7 +400,18 @@ pub async fn pty_drop_files(
         .ok_or("no_terminal")?
         .ok_or("remote_tab")?;
     let sizes = sizes.unwrap_or_default();
-    app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await
+    // A file of a local-models-only project is never copied into the inbox of
+    // a tab that is not a verified local-model tab of it (a cloud agent, a
+    // Tabby chat): `services::agent_privacy`.
+    if agent && crate::services::agent_privacy::drop_refused(&id, &paths) {
+        return Ok(PtyDropped { error: Some(crate::services::agent_privacy::DROP_REFUSED.to_string()), ..PtyDropped::default() });
+    }
+    let dropped = app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await?;
+    // A file in a Tabby chat's inbox is an attachment, whatever is typed next.
+    if agent && !dropped.items.is_empty() {
+        crate::services::assistant_attach::note_tab_file(&id);
+    }
+    Ok(dropped)
 }
 
 fn drop_files(dir: &Path, paths: &[String], sizes: &[Option<u64>], agent: bool) -> PtyDropped {
@@ -419,7 +485,11 @@ pub async fn pty_paste_clipboard_image(ctx: Ctx, id: String, agent: bool) -> Res
         .map_err(|_| "no_clipboard_image")?
         .map_err(|_| "no_clipboard_image")??;
     let state_dir = crate::storage::state_dir();
-    app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?
+    let pasted = app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?;
+    if agent && pasted.is_ok() {
+        crate::services::assistant_attach::note_tab_file(&id);
+    }
+    pasted
 }
 
 fn paste_image(dir: &Path, state_dir: &Path, png: &[u8], agent: bool) -> Result<String, String> {
@@ -493,6 +563,9 @@ pub async fn pty_write(
         let reg = registry.lock_ok();
         (reg.input_sender(&id), reg.is_ai(&id))
     };
+    // A Tabby chat's keystrokes decide, here in the backend, whether the chat
+    // has had an `@` attachment (the web lane then narrows its URLs).
+    crate::services::assistant_attach::note_tab_input(&id, &data);
     // The AI switch: while it is off nothing typed reaches an agent; an
     // interrupt or a key that only steers its screen still does.
     let kept = if ai && crate::services::ai_switch::is_off() {
@@ -506,13 +579,39 @@ pub async fn pty_write(
         }
         return Err(crate::services::ai_switch::AI_OFF.to_string());
     }
-    if let Some(sender) = sender {
-        sender
-            .send(data)
-            .await
-            .map_err(|_| format!("terminal '{id}' is no longer accepting input"))?;
+    let Some(sender) = sender else { return Ok(()) };
+    let closed = || format!("terminal '{id}' is no longer accepting input");
+    // A Tabby chat whose CLI has no file tool gets each inbox picture it is
+    // sent as a paste of the file (`assistant_attach`, Claude); an Enter
+    // straight after one waits for the CLI to take it. Writes to one chat
+    // queue behind that wait, so a key typed meanwhile stays after the Enter.
+    if crate::services::assistant_attach::chat_of_tab(&id).is_some() {
+        let _turn = chat_write_lock(&id).lock_owned().await;
+        let Some(pieces) = crate::services::assistant_attach::tab_picture_pastes(&id, &data) else {
+            return sender.send(data).await.map_err(|_| closed());
+        };
+        for (index, piece) in pieces.into_iter().enumerate() {
+            if index > 0 {
+                tokio::time::sleep(crate::services::assistant_attach::PICTURE_SUBMIT_HOLD).await;
+            }
+            sender.send(piece).await.map_err(|_| closed())?;
+        }
+        return Ok(());
     }
-    Ok(())
+    sender.send(data).await.map_err(|_| closed())
+}
+
+/// One lock per Tabby chat PTY, held across a `pty_write` that may wait out
+/// [`assistant_attach::PICTURE_SUBMIT_HOLD`](crate::services::assistant_attach::PICTURE_SUBMIT_HOLD).
+fn chat_write_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS.get_or_init(Default::default).lock_ok();
+    if locks.len() >= 256 && !locks.contains_key(id) {
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+    }
+    locks.entry(id.to_string()).or_default().clone()
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -666,8 +765,14 @@ pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     // respawning the id (gap 18). Nothing taken, nothing to end — the
     // reader task's end already cleaned up that spawn.
     let taken = registry.lock_ok().take(&id);
-    if let Some(taken) = taken {
-        app_core::rt::blocking("terminal", move || taken.teardown()).await?;
+    match taken {
+        Some(taken) => app_core::rt::blocking("terminal", move || taken.teardown()).await?,
+        // No PTY: a spawn of the tab may still be opening (a session host
+        // open takes seconds). Retire it, so it cannot register after the
+        // tab closed and leave its agent running with no tab.
+        None => {
+            app_core::rt::blocking("terminal", move || crate::terminal::retire_inflight_spawn(&id)).await?;
+        }
     }
     Ok(())
 }
@@ -752,6 +857,26 @@ pub fn register_host_bound_tab(project_id: String, uid: String) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The frontend reads `mcpStale` (camelCase) off the spawn's answer, and
+    /// only when it is set.
+    #[test]
+    fn a_stale_spawn_answers_mcp_stale_in_camel_case() {
+        let json = serde_json::to_value(PtySpawned { mcp_stale: true, ..PtySpawned::default() }).unwrap();
+        assert_eq!(json["mcpStale"], true);
+        let json = serde_json::to_value(PtySpawned::default()).unwrap();
+        assert!(json.get("mcpStale").is_none() && json.get("mcp_stale").is_none(), "left out when unset");
+    }
+
+    /// A client can name no tmux pattern or special target: `*`, `$0`, `%1`
+    /// would end a session the app never made (screen 2026-11-12 H9). The
+    /// check runs before tmux is even looked for, so no tmux server is touched.
+    #[test]
+    fn local_tmux_kill_refuses_a_name_that_is_not_a_session_name() {
+        for name in ["*", "$0", "%1", "", "a:b", "x.y", "train*"] {
+            assert!(app_core::rt::block_on(local_tmux_kill(name.to_string())).is_err(), "{name:?}");
+        }
+    }
 
     #[test]
     fn agent_drop_copies_into_the_tab_folders_inbox() {

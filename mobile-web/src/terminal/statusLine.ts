@@ -20,19 +20,25 @@
 
 import {
   antigravityFooter,
+  isAntigravityHintRow,
   isAntigravityTab,
   readAntigravityPicker,
 } from "./antigravity";
+import { codexModelSegment, codexOutputRow, codexPathTruncated, isCodexTab } from "./codexFooter";
+import { isMuseTab, museStatus } from "./muse";
+import { isCopilotTab, readCopilotFrame } from "./copilotStatus";
 import {
   isOpenCodeHomeFooter,
   isOpenCodeTab,
   isOpenCodePlaceholder,
+  openCodeBannerPath,
   openCodeComposer,
   openCodeFullFooter,
   openCodeMiniRow,
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
+import { claudeEffortHint, effortHintAbove, isClaudeTmuxNotice, withoutEffortHint } from "./claudeStatus";
 import { openCodePermissionShown } from "./openCodeQuestion";
 import { isActionRow, isChatRow, isStrayListRow, isUnnumberedRow } from "./selectPrompt";
 import { readAgentList } from "./subagentInput";
@@ -144,6 +150,8 @@ const MODES: [RegExp, string][] = [
   [/\byolo mode\b/iu, "yolo"],
   [/\bask permissions\b/iu, "ask permissions"],
   [/\bauto mode\b/iu, "auto"],
+  // Claude Code 2.1.284+ names its ordinary mode (`⏸ manual mode on`).
+  [/\bmanual mode\b/iu, "default"],
   [/^[⏵⏩▶›>\s]*auto(?:\s+on)?$/iu, "auto"],
 ];
 
@@ -244,6 +252,9 @@ function classify(segment: string, status: SessionStatus) {
   }
   if (!status.path) {
     const path = PATH.exec(segment);
+    // A path cut short by the pane's width (`~/work/pro…`) is no path: it would
+    // stand in front of the tab's real one.
+    if (path?.[1].endsWith("…")) return;
     if (path) {
       status.path = path[1];
       if (!status.branch) {
@@ -344,6 +355,8 @@ function openCodeFrame(
     else break;
   }
   const status: SessionStatus = { mode: row.mode };
+  const folder = openCodeBannerPath(lines);
+  if (folder) status.path = folder;
   if (row.context) status.context = row.context;
   if (row.model) status.model = row.model;
   if (!status.model) {
@@ -377,6 +390,8 @@ function openCodeMiniV2Frame(
     else break;
   }
   const status: SessionStatus = {};
+  const folder = openCodeBannerPath(lines);
+  if (folder) status.path = folder;
   if (row.mode) status.mode = row.mode;
   if (row.model) status.model = row.model;
   if (row.variant) status.effort = row.variant;
@@ -420,6 +435,8 @@ function openCodeFullFrame(
     else break;
   }
   const status: SessionStatus = {};
+  if (facts.path) status.path = facts.path;
+  if (facts.branch) status.branch = facts.branch;
   if (composer.mode) status.mode = composer.mode;
   if (composer.model) status.model = composer.model;
   if (composer.variant) status.effort = composer.variant;
@@ -451,9 +468,14 @@ function antigravityFrame(
   while (index >= 0 && !lines[index].text.trim()) index -= 1;
   if (index < 0) return null;
   const footer = antigravityFooter(lines[index].text);
-  if (!footer) return null;
-  const status: SessionStatus = { model: footer.model };
-  if (footer.effort) status.effort = footer.effort;
+  // A footer that is only its hint (a narrow pane drops the model beside
+  // `Press up to edit queued messages`) is still this family's frame: it names
+  // no model, and the generic scan must not name one from the rows above it.
+  if (!footer && !isAntigravityHintRow(lines[index].text)) return null;
+  const status: SessionStatus = {};
+  if (footer) status.model = footer.model;
+  if (footer?.effort) status.effort = footer.effort;
+  if (footer?.mode) status.mode = footer.mode;
   const picker = readAntigravityPicker(lines);
   return { ...(picker ? { start: picker.frameStart } : {}), footer: index, status };
 }
@@ -502,6 +524,14 @@ export function sessionStatus(
   if (mini) return mini.status;
   const antigravity = antigravityFrame(lines, agentLabel);
   if (antigravity) return antigravity.status;
+  const muse = isMuseTab(agentLabel) ? museStatus(lines, SEARCH_WINDOW) : null;
+  if (muse) return muse;
+  // Copilot keeps its path and branch over the box and its model under it.
+  const copilot = readCopilotFrame(lines, agentLabel);
+  if (copilot) return copilot.status;
+  // Without its footer a Copilot screen is a dialog (`/statusline` previews a
+  // model of its own), not a frame: nothing under a `❯` is a status.
+  if (isCopilotTab(agentLabel)) return null;
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return null;
   const bottom = agentListStart(lines);
   let inputIndex = -1;
@@ -516,12 +546,27 @@ export function sessionStatus(
   if (inputIndex < 0) return null;
   const status: SessionStatus = {};
   let read = 0;
+  const codex = isCodexTab(agentLabel);
   for (let index = inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
     const text = lines[index].text.trim();
-    if (!text) continue;
+    if (!text || isClaudeTmuxNotice(text) || (codex && codexOutputRow(text))) continue;
     read += 1;
-    for (const segment of text.split(SEGMENT_SPLIT)) classify(segment.trim(), status);
+    const effort = claudeEffortHint(text);
+    if (effort) status.effort = effort;
+    let column = 0;
+    for (const segment of withoutEffortHint(text).split(SEGMENT_SPLIT)) {
+      const fact = segment.trim();
+      // Codex's footer opens with its model and effort, whatever the model is called.
+      const modelColumn = codex && codexModelSegment(fact, status, read === 1 && column === 0);
+      column += 1;
+      if (!modelColumn) classify(fact, status);
+    }
   }
+  if (!status.effort) {
+    const hint = effortHintAbove(lines, inputIndex);
+    if (hint) status.effort = hint.effort;
+  }
+  if (codex && codexPathTruncated(status.path)) delete status.path;
   // Claude Code prints its goal at the right end of its last footer row, under
   // a custom statusline that can wrap to several rows on a narrow pane — past
   // the rows read above. The phrase is only ever the footer's, so every row of
@@ -551,8 +596,9 @@ export function shortenPath(path: string): string {
  * input line. It is a question waiting for an answer, never the composer —
  * and so is a multi-select question's unnumbered `❯ Submit` (`isActionRow`)
  * and the highlighted row of an unnumbered dialog (`isUnnumberedRow`), and a
- * preview question's `❯ Chat about this` (`isChatRow`). */
-const OPTION_ROW = /^\s*[>›❯*]\s*\d{1,2}[.)]\s/u;
+ * preview question's `❯ Chat about this` (`isChatRow`), and the `/model`
+ * picker's `❯ ▸ More models`. */
+const OPTION_ROW = /^\s*[>›❯*]\s*(?:\d{1,2}[.)]|[▸▶►])\s/u;
 
 /** The rule an agent draws across the top of its input box, with the project
  * or model name sitting in it (`──────── my-project ─`). `readableScreen`
@@ -588,6 +634,8 @@ export function inputFrameStart(
   // sheet is already showing its rows. Without one the ordinary scan below
   // finds the box on its own.
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return lines.length;
+  const copilot = readCopilotFrame(lines, agentLabel);
+  if (copilot) return copilot.start;
   const antigravity = antigravityFrame(lines, agentLabel);
   let start = antigravity?.start ?? -1;
   const bottom = agentListStart(lines);
@@ -605,7 +653,7 @@ export function inputFrameStart(
   // the frame; left behind they would trail the output with a rule and a gap.
   while (start > 0) {
     const above = lines[start - 1].frameText ?? lines[start - 1].text;
-    if (!above.trim() || labelledRule(above)) start -= 1;
+    if (!above.trim() || labelledRule(above) || claudeEffortHint(lines[start - 1].text)) start -= 1;
     else break;
   }
   return start;

@@ -341,7 +341,9 @@ container) — as opposed to the git **push** axis (#21/#22).*
           mismatches. Document the model; consider running `git` on the remote
           via the exec wrapper; add a manual "refresh file tree" affordance.
         - [ ] **SSH `LocalForward` per project** to reach remote dev-server ports
-          at `localhost:port`.
+          at `localhost:port`. Plan: `docs/localhost_viewer_plan.md` (server
+          chip + `ssh -O forward` over the ControlMaster; also fixes remote-tab
+          loopback links opening the local port).
         - [ ] **Remote-status panel** (mount state, control-master liveness, VPN
           state, last error) for debuggability.
 
@@ -1859,9 +1861,9 @@ step record: `docs/remote_only_projects_handoff.md`.
   - [ ] ❌ Doesn't work on Windows
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
-- [ ] 🖐️ Manual test — a `.tex` file → **Compile**: a host build tab runs `latexmk`, the PDF tab
-  opens once it is written, and a second Compile replaces the build tab and
-  reloads the PDF.
+- [ ] 🖐️ Manual test — a `.tex` file → **Compile**: `latexmk` runs on the host with no tab
+  (`compile_tex_host`), errors show in the editor, the PDF tab opens when the
+  build is done, and a second Compile reloads that same PDF tab.
   - [ ] ✅ Works on Linux (X11)
   - [ ] ❌ Doesn't work on Linux (X11)
   - [ ] ✅ Works on Linux (Wayland)

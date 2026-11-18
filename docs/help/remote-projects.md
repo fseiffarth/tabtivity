@@ -20,7 +20,10 @@ no sshfs, no FUSE mount, nothing to install on the host.
    blank to use your SSH key or agent; fill it in for password login.
 5. Click **Connect**. A remote file browser appears.
 6. Step into the folder you want and click **Use this folder**. New creates a
-   subfolder there; Import registers the folder in place.
+   subfolder there, named like the project by default; edit **Folder name on the
+   host** to use another spelling (capitals and spaces are fine, but it must be
+   a single name: no `/` or `\`, not `.` or `..`, not starting with `-`). Import
+   registers the folder in place.
 7. Name the project, pick a Git hosting option, and click Create/Import.
 
 Passwords are not saved unless you opt in; a saved password goes to the OS
@@ -65,8 +68,9 @@ Where things run:
 - Search, Ctrl+P quick open and the context-file picker search the host
   while connected (an HPC host asks first).
 - Git (commit, push, branches, worktrees, Publish…) runs on the host.
-- TeX **Compile** saves, then runs `latexmk` in a build tab on the host; the
-  PDF tab opens once the build writes it.
+- TeX **Compile** saves, then runs `latexmk` on the host in the background
+  (no tab); errors show in the editor as for a local build, and the PDF tab
+  opens or reloads when it is done.
 - The phone lists the host tabs, starts agents on the host and reads the
   files under ☰ Files, while the desktop is connected.
 
@@ -95,7 +99,8 @@ offered on a VM project.
 1. Right-click the local project's pill → **Extend to remote…**.
 2. Connect to the host (or pick one under "Your machines").
 3. Browse to the parent folder where the host copy should live → **Use this
-   folder**, then review Local ⇄ Remote and click **Extend to remote**.
+   folder**, optionally change the **Folder name on the host**, then review
+   Local ⇄ Remote and click **Extend to remote**.
 4. Your local files are not touched: they become the mirror, and Git sync
    carries commits between the two. See `sync`.
 
@@ -132,6 +137,17 @@ a run survives an SSH drop, a laptop sleep or Tabtivity quitting. Closing a tab
 only detaches it. The **Sessions** view (☰ toggle in the file panel) lists
 live sessions per machine; click one to reattach, × to kill. Local agent tabs
 and the root console do not use tmux, and there is no tmux on Windows.
+
+## Agents on a host with a small home quota
+
+An agent CLI on a host installs into the login's home and keeps its sessions
+and login there. When that home has little quota, set an **Agent folder** in the
+machine's connect dialog (the pill's lamp → the machine): an absolute path on
+the host, e.g. on a scratch or project volume. Agent tabs opened afterwards run
+with a `HOME` inside it, so the install, the sessions (`.claude`, `.codex`, …)
+and the login all land there. Agents on that machine sign in once more; `git`
+and `ssh` keep using your own keys and identity. A blank folder goes back to the
+home. Shell tabs are not affected.
 
 ## HPC clusters (SLURM)
 

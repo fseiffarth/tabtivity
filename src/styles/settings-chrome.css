@@ -260,6 +260,12 @@ button.settings-btn.danger:hover:not(:disabled),
   border-radius: var(--radius);
   background: #fff;
 }
+/* An agent's print request under review: its note, the agent's own words. */
+.print-preview-request {
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
 .print-preview-options {
   display: flex;
   align-items: center;
@@ -769,11 +775,9 @@ label.settings-toggle-card-row {
 .settings-row > input,
 .settings-row > select,
 .settings-row > .dropdown,
-.settings-row > .password-input,
 .settings-card-row > input,
 .settings-card-row > select,
-.settings-card-row > .dropdown,
-.settings-card-row > .password-input {
+.settings-card-row > .dropdown {
   flex: 0 1 200px;
   width: 200px;
 }
@@ -949,8 +953,7 @@ label.settings-toggle-card-row {
    `.agent-list-entry` was a second, near-identical card that used
    --bg-elevated / --border-subtle instead; all three are one surface now. */
 .settings-card,
-.settings-toggle-card,
-.agent-list-entry {
+.settings-toggle-card {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1076,17 +1079,7 @@ label.settings-toggle-card-row {
   padding-top: 2px;
 }
 
-/* Sub-panel navigation menu at the foot of the main settings panel. Mirrors the
-   Lessons / How-to-start card menu (.lesson-item) so the whole app's "pick a
-   destination" lists read as one style. */
-.settings-nav-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.settings-nav-item,
+/* The Lessons / How-to-start card menu: a "pick a destination" list. */
 .lesson-item {
   display: flex;
   flex-direction: column;
@@ -1101,19 +1094,16 @@ label.settings-toggle-card-row {
   transition: border-color var(--transition), background var(--transition);
 }
 
-.settings-nav-item:hover,
 .lesson-item:hover {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
 }
 
-.settings-nav-item-title,
 .lesson-item-title {
   font-weight: 600;
   font-size: var(--text-base);
 }
 
-.settings-nav-item-blurb,
 .lesson-item-blurb {
   color: var(--text-secondary);
   font-size: var(--text-md);
@@ -1156,36 +1146,6 @@ label.settings-toggle-card-row {
   line-height: 1.4;
 }
 
-.mobile-phone-install {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin: 6px 0;
-  padding: 10px var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border-subtle));
-  border-radius: var(--radius-sm);
-  background: linear-gradient(110deg, color-mix(in srgb, var(--accent) 11%, var(--control-bg)), var(--control-bg));
-}
-
-.mobile-phone-install strong {
-  color: var(--text-primary);
-  font-size: var(--text-md);
-}
-
-.mobile-phone-install p {
-  max-width: 530px;
-  margin: 3px 0 0;
-  color: var(--text-secondary);
-  font-size: var(--text-md);
-  line-height: 1.4;
-}
-
-/* Chrome comes from `.settings-btn.primary`; only the layout role is local. */
-.mobile-phone-install-button {
-  flex: 0 0 auto;
-}
-
 /* A compact, actionable summary of the checks Tabtivity itself can make. It does
    not pretend to verify tailnet account policy or the physical phone. */
 .mobile-security-health {
@@ -1220,11 +1180,6 @@ label.settings-toggle-card-row {
 }
 
 @media (max-width: 560px) {
-  .mobile-phone-install {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .mobile-security-health {
     align-items: flex-start;
     flex-direction: column;
@@ -1677,8 +1632,10 @@ label.settings-toggle-card-row {
 
 /* Canonical dialog header: solid accent + subtle divider, matching
    .settings-title-row h2. (Previously a fancy_dark-only gradient-clipped title
-   that diverged from every other dialog.) */
-.project-dialog h2 {
+   that diverged from every other dialog.) A title inside the header band
+   (`.settings-title-row`) is left out: the band draws the divider, and a second
+   one under the h2 alone stopped short of the close button. */
+.project-dialog h2:not(.settings-title-row > h2) {
   font-size: var(--text-xl);
   font-weight: 650;
   color: var(--accent);
@@ -2037,6 +1994,49 @@ label.settings-toggle-card-row {
   color: var(--text-muted);
   font-size: var(--text-md);
   word-break: break-all;
+}
+
+/* A running create/import's steps (ProjectDialog footer). */
+.project-dialog-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-md);
+}
+
+.project-dialog-progress li {
+  display: flex;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.project-dialog-progress li[data-state="active"] {
+  color: var(--text-primary);
+}
+
+.project-dialog-progress-mark {
+  flex: 0 0 12px;
+  text-align: center;
+}
+
+.project-dialog-progress-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.project-dialog-progress-elapsed {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.project-dialog-progress-detail {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 
 /* Remote machines manager (multi-host remote, docs/multi_host_remote_plan.md).
@@ -2410,7 +2410,8 @@ label.settings-toggle-card-row {
   color: var(--danger);
 }
 
-.local-loss-badge-overwritten {
+.local-loss-badge-overwritten,
+.local-loss-badge-overwrittenOnHost {
   color: var(--warning);
 }
 
@@ -3345,19 +3346,43 @@ label.settings-toggle-card-row {
   border: 1px solid var(--danger);
 }
 
-/* The fourth button: no fill and no border, for a link-weight action beside
-   real ones. `.settings-btn` is the default, `.btn-primary`/`.btn-danger` the CTAs. */
+/* The fourth button: no fill and no border at rest, for a link-weight action
+   beside real ones; a soft fill under the pointer. `.settings-btn` is the
+   default, `.btn-primary`/`.btn-danger` the CTAs. Modifiers: `.is-danger` for
+   a destructive quiet action (delete in a row), `.is-notable` for one that has
+   news (an update waiting). */
 .btn-quiet {
   padding: var(--space-1) var(--space-2);
   border: 0;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-secondary);
+  white-space: nowrap;
   cursor: var(--cur-pointer, pointer);
-  transition: color var(--transition);
+  transition: color var(--transition), background var(--transition);
 }
 
 .btn-quiet:hover:not(:disabled) {
   color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.btn-quiet:disabled {
+  opacity: 0.5;
+  cursor: var(--cur-default, default);
+}
+
+.btn-quiet.is-danger,
+.btn-quiet.is-danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+.btn-quiet.is-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.btn-quiet.is-notable {
+  color: var(--success);
+  font-weight: 600;
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -3381,6 +3406,48 @@ label.settings-toggle-card-row {
 .btn-primary:disabled,
 .btn-danger:disabled {
   opacity: 0.55;
+  cursor: var(--cur-default, default);
+}
+
+/* The one segmented control (round 2, 2026-11-04): a soft track, the picked
+   option a lifted chip in ink. It replaced four per-feature looks (skills
+   scope, Ollama filters, stats period, activity years). The picked state is
+   whichever marker its host already sets: `.active`, `.on` or `.selected`.
+   The track wraps, so a long run (years, filters) stays inside its column. */
+.seg {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+}
+.seg > button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: 500;
+  cursor: var(--cur-pointer, pointer);
+  transition: background var(--transition), color var(--transition);
+}
+.seg > button:hover:not(:disabled):not(:is(.active, .on, .selected)) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.seg > button:is(.active, .on, .selected) {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-1);
+}
+.seg > button:disabled {
+  opacity: 0.45;
   cursor: var(--cur-default, default);
 }
 

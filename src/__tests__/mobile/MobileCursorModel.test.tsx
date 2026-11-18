@@ -143,14 +143,12 @@ describe(`${BRAND.display} Mobile — Cursor agent's model sheet`, () => {
     FakeWebSocket.sent = [];
 
     // Opened on the current model, third of twelve, rows 1–6 drawn: the
-    // highlight walks half a window past the first hidden row…
+    // highlight walks to the last row in one run…
     await paint(dialog(1, 3));
-    expect(await keysSent(() => FakeWebSocket.sent, 6, 600)).toEqual(Array(6).fill(DOWN));
+    expect(await keysSent(() => FakeWebSocket.sent, 9, 1200)).toEqual(Array(9).fill(DOWN));
     FakeWebSocket.sent = [];
-    await paint(dialog(4, 9));
-    expect(await keysSent(() => FakeWebSocket.sent, 3, 600)).toEqual(Array(3).fill(DOWN));
-    FakeWebSocket.sent = [];
-    // …and, once every row is known, back to where it was. Arrows only.
+    // …the frame it lands on shares no row with the first, and is the same
+    // list all the same; every row known, back to where it was. Arrows only.
     await paint(dialog(7, 12));
     expect(await keysSent(() => FakeWebSocket.sent, 9, 1200)).toEqual(Array(9).fill(UP));
     await paint(dialog(1, 3));

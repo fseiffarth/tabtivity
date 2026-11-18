@@ -17,7 +17,7 @@ import {
   type OpenCodePickerRow,
 } from "../../../mobile-web/src/terminal/openCodeMini";
 import { readableScreen, type ReadableBufferLike, type ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
-import { groupOpenCodeModels } from "../../../mobile-web/src/terminal/openCodeModelGroups";
+import { groupOpenCodeModels, isOpenCodeModelList } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../../lib/agents/readerLive";
 import { BRAND } from "../../lib/brand";
 
@@ -131,7 +131,7 @@ const fullFrame = (footer: string, row = composerRow("Build", "Muse Spark 1.3 Fr
 describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
   it("reads the agent, the model without its provider, the variant and the context", () => {
     expect(sessionStatus(fullFrame(" ~/projects/app                        12.3K (5%) · $0.02  ctrl+p commands"), "OpenCode"))
-      .toEqual({ mode: "build", model: "Muse Spark 1.3 Free", effort: "high", context: "95%" });
+      .toEqual({ path: "~/projects/app", mode: "build", model: "Muse Spark 1.3 Free", effort: "high", context: "95%" });
   });
 
   it("keeps the whole model phrase where the row's colours are unknown", () => {
@@ -140,7 +140,7 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
       " Plan auto · Grok 4.5 GitHub Copilot",
       " ~/projects/app                                   tab agents  ctrl+p commands",
     );
-    expect(sessionStatus(screen, "OpenCode")).toEqual({ mode: "plan", model: "Grok 4.5 GitHub Copilot" });
+    expect(sessionStatus(screen, "OpenCode")).toEqual({ path: "~/projects/app", mode: "plan", model: "Grok 4.5 GitHub Copilot" });
   });
 
   it("reads the composer while the session works", () => {
@@ -179,14 +179,14 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
       line(`${" ".repeat(113)}2.1.3`),
     ];
     expect(inputFrameStart(screen, "OpenCode")).toBe(0);
-    expect(sessionStatus(screen, "OpenCode")).toEqual({ mode: "build", model: "Flint 40B Free" });
+    expect(sessionStatus(screen, "OpenCode")).toEqual({ path: "/…/scratchpad/oc/proj", mode: "build", model: "Flint 40B Free" });
     // A version printed as output under no box is still not a frame.
     expect(inputFrameStart(lines("Bumped to", "", "2.1.3"), "OpenCode")).toBe(3);
   });
 
   it("names no mode in shell mode", () => {
     const screen = lines("", " Shell", " ~/projects/app                 esc exit shell mode");
-    expect(sessionStatus(screen, "OpenCode")).toEqual({});
+    expect(sessionStatus(screen, "OpenCode")).toEqual({ path: "~/projects/app" });
   });
 
   it("is not found without its footer, or for a tab no label names OpenCode", () => {
@@ -241,7 +241,7 @@ describe(`${BRAND.display} Mobile OpenCode 2 mini status`, () => {
       "",
       "Build · gemma4:26b · Ollama (local) · ctrl+p menu",
     );
-    expect(sessionStatus(start, "gemma4:26b · OpenCode")).toEqual({ mode: "build", model: "gemma4:26b" });
+    expect(sessionStatus(start, "gemma4:26b · OpenCode")).toEqual({ path: "~/projects/app", mode: "build", model: "gemma4:26b" });
     expect(inputFrameStart(start, "gemma4:26b · OpenCode")).toBe(1);
     expect(inputFrameStart(start, "Claude")).toBe(start.length);
   });
@@ -621,6 +621,60 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
       .toEqual(["Recent", "Muse Spark 1.3 Free", "MiMo-V2.6-Flash Free", "Ling 3.0 Flash Fin Free"]);
   });
 
+  it("ends a short list at the dialog's bottom, not at the composer under it", () => {
+    // OpenCode 2.3.0's variant dialog on a phone-sized pane (captured at 40×28
+    // and 46×32, 2026-11-17): the list stops well above the composer, with
+    // two blank rows and the composer's empty `┃` row between. `readableScreen`
+    // folds those into one blank, which read as the one blank between provider
+    // groups — and the composer's prompt, model row and status bar, cut at the
+    // dialog's column, came out as variants (`eepSeek V4.1 Flash Free
+    // OpenCode`, the status bar's `<path>:develop` cut mid-word).
+    for (const rows of [
+      [
+        "     Select variant             esc",
+        "",
+        "     Search",
+        "",
+        "   ● Default",
+        "     low",
+        "     medium",
+        "     high",
+        "",
+        "",
+        " ┃ Ask anything… \"Fix broken tests\"",
+        " ┃",
+        " ┃ stub",
+        " ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ~/work:develop",
+      ],
+      [
+        "     Select variant                   esc",
+        "",
+        "     Search",
+        "",
+        "   ● Default",
+        "     low",
+        "     medium",
+        "     high",
+        "",
+        "",
+        "  ┃",
+        "  ┃  Build · stub Ollama (local)",
+        "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "  …/work…  shift+tab agents  ctrl+p commands",
+      ],
+    ]) {
+      const buffer: ReadableBufferLike = {
+        length: rows.length,
+        getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }),
+      };
+      const page = readOpenCodePickerPage(readableScreen(buffer).lines);
+      expect(page?.title).toBe("Select variant");
+      expect(page?.rows.map((row) => row.text)).toEqual(["Default", "low", "medium", "high"]);
+      expect(page?.rows[0].marked).toBe(true);
+    }
+  });
+
   it("is no picker for a conversation that only mentions one", () => {
     expect(readOpenCodePicker(lines("  I opened   Select model to check", "", "  Search", "  Big Pickle"))).toBeNull();
   });
@@ -815,5 +869,16 @@ describe(`${BRAND.display} Mobile OpenCode model picker walk`, () => {
     const met = mergeOpenCodePage(wrapped, ["b", "c", "d"].map(row));
     expect(met.done).toBe(true);
     expect(met.main.map((entry) => entry.text)).toEqual(["a", "b", "c", "d", "e", "f"]);
+  });
+});
+
+describe(`${BRAND.display} OpenCode model list test`, () => {
+  it("is OpenCode's own Select model step only", () => {
+    expect(isOpenCodeModelList("OpenCode", "Select model")).toBe(true);
+    expect(isOpenCodeModelList("open code", "Select model")).toBe(true);
+    expect(isOpenCodeModelList("OpenCode", "Select agent")).toBe(false);
+    expect(isOpenCodeModelList("Claude", "Select model")).toBe(false);
+    expect(isOpenCodeModelList(undefined, "Select model")).toBe(false);
+    expect(isOpenCodeModelList("OpenCode", undefined)).toBe(false);
   });
 });

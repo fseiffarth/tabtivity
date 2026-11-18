@@ -9,13 +9,15 @@ import { storageKey } from "../../../lib/brand";
 
 /** Every page the wizard can show, in canonical order. The goals picked on the
  *  Goals page decide which of the setup pages a run actually visits
- *  (`introRoute`). */
-export const INTRO_PAGES = ["welcome", "goals", "projects", "agents", "localModels", "forYou", "askApp", "done"] as const;
+ *  (`introRoute`); `computer` is on the route only while a fresh install's
+ *  import question is open. */
+export const INTRO_PAGES = ["welcome", "computer", "goals", "projects", "agents", "localModels", "forYou", "askApp", "done"] as const;
 export type IntroPage = (typeof INTRO_PAGES)[number];
 
 /** Each page's title in the step rail, the compact dropdown and the heading. */
 export const INTRO_PAGE_TITLE_KEYS: Record<IntroPage, TranslationKey> = {
   welcome: "intro.page.welcome",
+  computer: "intro.page.computer",
   goals: "intro.page.goals",
   projects: "intro.page.projects",
   agents: "intro.page.agents",
@@ -42,8 +44,11 @@ export function writeIntroPage(page: IntroPage): void {
   try {
     // The stored value is the table's own literal, never the caller's string:
     // a page name is no secret, whatever it was derived from.
+    // `computer` is not remembered either: whether it is on the route is known
+    // only once the backend answered, so the next open starts at Welcome, one
+    // step before it.
     const known = INTRO_PAGES.find((p) => p === page);
-    if (!known || known === "welcome") localStorage.removeItem(PAGE_KEY);
+    if (!known || known === "welcome" || known === "computer") localStorage.removeItem(PAGE_KEY);
     else localStorage.setItem(PAGE_KEY, known);
   } catch {
     // Private window / blocked storage: the wizard simply starts at Welcome.
@@ -51,7 +56,7 @@ export function writeIntroPage(page: IntroPage): void {
 }
 
 /** What the user can say they want to do on the Goals page, in display order. */
-export const INTRO_GOALS = ["code", "localAi", "write", "remote", "sandbox", "organize", "phone", "explore"] as const;
+export const INTRO_GOALS = ["code", "phone", "localAi", "write", "remote", "sandbox", "organize", "explore"] as const;
 export type IntroGoal = (typeof INTRO_GOALS)[number];
 
 /** One goal card and what picking it brings along. */
@@ -144,9 +149,11 @@ export function effectiveGoals(goals: readonly IntroGoal[]): IntroGoal[] {
 
 /** The pages this run visits: welcome and goals, the union of the effective
  *  goals' setup pages, then forYou, askApp and done — no duplicates, always in
- *  INTRO_PAGES order. */
-export function introRoute(goals: readonly IntroGoal[]): IntroPage[] {
+ *  INTRO_PAGES order. `computer` (the import question, right after Welcome)
+ *  joins only when asked for. */
+export function introRoute(goals: readonly IntroGoal[], opts: { computer?: boolean } = {}): IntroPage[] {
   const wanted = new Set<IntroPage>(ALWAYS_PAGES);
+  if (opts.computer) wanted.add("computer");
   for (const g of effectiveGoals(goals)) for (const p of INTRO_GOAL_DEFS[g].pages) wanted.add(p);
   return INTRO_PAGES.filter((p) => wanted.has(p));
 }
@@ -240,6 +247,39 @@ export const AGENT_SIGN_IN_KEYS: Record<FeaturedAgentId, TranslationKey> = {
   antigravity: "intro.agents.signIn.antigravity",
   gemini: "intro.agents.signIn.gemini",
 };
+
+/** The fresh-install import question (`agent_import_offer`,
+ *  `services::agent_import_offer`): what this computer holds that the user may
+ *  bring along. Names only. */
+export interface ImportOffer {
+  /** The question is open. */
+  pending: boolean;
+  /** Registry ids of the CLIs whose login this computer holds. */
+  logins: string[];
+  /** Home-relative config folders with something to import (`.claude`, …). */
+  config: string[];
+}
+
+/** What an answer did (`agent_import_offer_answer`). */
+export interface ImportOutcome {
+  logins: { id: string; error: string | null }[];
+  config: { files: number; configs: number } | null;
+  configError: string | null;
+}
+
+/** Whether an offer has anything to ask about. */
+export function offerAsks(offer: ImportOffer | null | undefined): offer is ImportOffer {
+  return !!offer && offer.pending && offer.logins.length + offer.config.length > 0;
+}
+
+/** The config card's key among the ticked ones on the import page; login cards
+ *  use their CLI id. */
+export const IMPORT_CONFIG_KEY = "config";
+
+/** Everything an offer lists, ticked: how the import page starts. */
+export function allImportKeys(offer: ImportOffer): string[] {
+  return [...offer.logins, ...(offer.config.length > 0 ? [IMPORT_CONFIG_KEY] : [])];
+}
 
 /** An installer that goes through npm needs Node.js first. */
 export function installNeedsNpm(installCmd: string): boolean {

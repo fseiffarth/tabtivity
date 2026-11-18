@@ -1,3 +1,4 @@
+pub mod agent_privacy;
 pub mod agent_prompts;
 pub mod agent_tasks;
 pub mod agents;
@@ -12,6 +13,7 @@ pub mod calendar;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod clipboard;
+pub mod cockpit_results;
 pub mod copilot;
 pub mod crash;
 pub mod credentials;
@@ -33,6 +35,8 @@ pub mod hpc_ws;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod ide;
+pub mod checkpoints;
+pub mod tab_archive;
 pub mod local_loss;
 pub mod mail;
 pub mod markdown;
@@ -47,16 +51,21 @@ pub mod os_clock;
 pub mod pdf_clip;
 pub mod pdf_markup;
 pub mod persist_lane;
+pub mod port_forward;
 pub mod power;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod presenter;
+// Window/OS-only (`client`): agent print requests approved in the preview.
+#[cfg(feature = "desktop")]
+pub mod print_mcp;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod print_native;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod printing;
+pub mod project_docs;
 pub mod project_runtime;
 // Full project export/import — move a project to another computer
 // (docs/context/project_transfer.md).
@@ -84,7 +93,13 @@ pub mod subwindow;
 #[cfg(feature = "desktop")]
 pub mod connect;
 pub mod sync;
+pub mod sync_handoff;
 pub mod synctex;
+// Window-only (`client`): tab messaging's window surface; the lane is served
+// by the window alone (`Runtime::serves_tabs`).
+#[cfg(feature = "desktop")]
+pub mod tabs_mcp;
+pub mod tfevents;
 pub mod terminal;
 pub mod tex;
 pub mod timer;

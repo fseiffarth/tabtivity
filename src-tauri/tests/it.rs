@@ -17,6 +17,7 @@
 mod capability_scope;
 mod embed_capability_tests;
 mod file_ops_tests;
+mod local_lane_relay;
 mod mail_hostile_crypto;
 mod mail_hostile_message;
 mod no_foreign_config_writes;

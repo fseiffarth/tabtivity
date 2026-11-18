@@ -290,6 +290,7 @@ export function RemoteUsageWarningDialog() {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === activeId));
   const machines = useGlobalMachinesStore((s) => s.machines);
   const machineStatus = useGlobalMachinesStore((s) => s.status);
+  const machineReachable = useGlobalMachinesStore((s) => s.reachable);
   const byProject = useRemoteStatusStore((s) => s.byProject);
   const byHost = useRemoteStatusStore((s) => s.byHost);
   const settings = useSettingsStore((s) => s.settings);
@@ -350,7 +351,8 @@ export function RemoteUsageWarningDialog() {
           host: m.host,
           port: m.port,
         },
-        machineStatus[m.id] === "connected",
+        // A session the sweep found off the network is not read automatically.
+        machineStatus[m.id] === "connected" && machineReachable[m.id] !== false,
         isHpcHost(settings, { user: m.user, host: m.host, port: m.port }),
       ),
     );
@@ -383,7 +385,7 @@ export function RemoteUsageWarningDialog() {
       }
     }
     return list;
-  }, [machines, machineStatus, project, byProject, byHost, settings]);
+  }, [machines, machineStatus, machineReachable, project, byProject, byHost, settings]);
 
   // Opening is itself the request for a reading: whatever the last connect left
   // cached is however old the session is, so every host the sweep may touch is

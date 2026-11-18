@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { SettingsCard, SettingsHeader, SettingsList } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
-import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
-import { GitPushMcpSettings } from "../agents/GitPushMcp";
-import { MarkupMcpSettings } from "../agents/MarkupMcpSettings";
+import { AppToolsSettings } from "../agents/AppToolsSettings";
 import { cliInstallsByAdmin } from "../../lib/transport/linkState";
 import { runInstallInTab } from "../../lib/installCommand";
 import type { CustomAgent } from "../../types";
@@ -33,7 +31,7 @@ import {
 } from "../../lib/shortcuts/shortcuts";
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { NAMES } from "../../lib/brand";
-import { runWithProgress } from "../../lib/runWithProgress";
+import { useAgentInstaller } from "../../hooks/useAgentInstaller";
 import type { SubPanelProps } from "./subPanelProps";
 import type {
   AgentVersionStale,
@@ -51,11 +49,14 @@ import {
 } from "./agentNotices";
 import type { AgentLogin } from "./AgentLoginsRows";
 import { CodexAutoReviewToggle, AgentAccounts } from "./AgentAccounts";
+import { ClaudeTokenRow } from "./ClaudeTokenRow";
 import { AgentFenceCard } from "./AgentFenceCard";
 import { AgentCronSection } from "./AgentCronSection";
 import { AgentComposerCard } from "./AgentComposerCard";
 import { AgentDefaults } from "./AgentDefaults";
 import { RefreshIcon } from "../common/icons/Icon";
+import { useDialogs } from "../common/PromptDialogs";
+import { experimentalEnabled } from "../../lib/experimental";
 
 const NO_CUSTOM_AGENTS: CustomAgent[] = [];
 
@@ -82,6 +83,7 @@ export function AgentsPanel({
   // A hosted server: the administrator installs CLIs (#2354).
   const adminInstalls = cliInstallsByAdmin();
   const { settings, updateSettings } = useSettingsStore();
+  const { confirmAction, dialogs } = useDialogs();
   const remoteMachines = useGlobalMachinesStore((s) => s.machines);
   const remoteMachinesLoaded = useGlobalMachinesStore((s) => s.loaded);
   const loadRemoteMachines = useGlobalMachinesStore((s) => s.load);
@@ -93,14 +95,13 @@ export function AgentsPanel({
     void updateSettings({ disabled_agents: next });
   };
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
-  // The agent id whose installer is currently running (only one at a time).
-  const [installing, setInstalling] = useState<string | null>(null);
+  // The headless installer, its live per-agent logs and errors — shared with
+  // the intro's Agent CLIs page. `installing` holds the one running id.
+  const installer = useAgentInstaller();
+  const { installing, logs, errors, logRef, setError } = installer;
   // The agent id currently being removed (Remove, or the first half of
   // Reinstall) — disjoint from `installing` so the two actions never overlap.
   const [removing, setRemoving] = useState<string | null>(null);
-  // Per-agent live install log, keyed by agent id.
-  const [logs, setLogs] = useState<Record<string, string>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
   // Per-agent target selection and failure for explicit installs on a global
   // remote machine. This is independent of local `installed`: each machine has
   // its own CLI state.
@@ -114,6 +115,10 @@ export function AgentsPanel({
   const [updates, setUpdates] = useState<Record<string, AgentUpdateReport>>({});
   /** The CLIs whose own "Check for update" is in flight. */
   const [checkingUpdates, setCheckingUpdates] = useState<Record<string, true>>({});
+  /** The section head's "Check all" is in flight. */
+  const [checkingAll, setCheckingAll] = useState(false);
+  /** The section head's "Update all" is running its queue. */
+  const [updatingAll, setUpdatingAll] = useState(false);
   // Filter over the *not installed* half only (see the two sections below).
   const [search, setSearch] = useState("");
   const node = useNodeRuntimeStatus();
@@ -133,7 +138,6 @@ export function AgentsPanel({
       cancelled = true;
     };
   }, [loginsVersion]);
-  const logRef = useRef<HTMLPreElement>(null);
   const shortcutOverrides = useShortcutOverrides();
   const customAgents = settings?.custom_agents ?? NO_CUSTOM_AGENTS;
   // Custom agents whose command is on PATH — the + menu's own probe, so a
@@ -184,36 +188,27 @@ export function AgentsPanel({
     if (!remoteMachinesLoaded) void loadRemoteMachines();
   }, [loadRemoteMachines, remoteMachinesLoaded]);
 
-  // Keep the live install log pinned to its latest line.
-  useEffect(() => {
-    const el = logRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [logs, installing]);
-
-  const appendAgentLog = (id: string, p: { id: string; line: string }) => {
-    if (p.id !== id) return;
-    setLogs((l) => ({ ...l, [id]: l[id] ? `${l[id]}\n${p.line}` : p.line }));
+  const installAgent = async (id: string) => {
+    // The hook broadcasts the registry change; this panel re-reads its own.
+    if (!(await installer.install(id))) return;
+    refresh();
+    loadVersions(true);
+    if (id === "copilot") void offerCopilotCompletion();
   };
 
-  const installAgent = async (id: string) => {
-    setInstalling(id);
-    setErrors(({ [id]: _drop, ...rest }) => rest);
-    setLogs((l) => ({ ...l, [id]: "" }));
-    try {
-      // Stream the installer's output, filtering to this agent's events.
-      await runWithProgress<{ id: string; line: string }, string>(
-        "agent-install-progress",
-        (p) => appendAgentLog(id, p),
-        () => invoke<string>("install_agent", { id }),
-      );
-      refresh();
-      notifyAgentRegistryChanged();
-      loadVersions(true);
-    } catch (err) {
-      setErrors((e) => ({ ...e, [id]: String(err) }));
-    } finally {
-      setInstalling(null);
-    }
+  // A fresh Copilot CLI install is the moment the editor's Copilot completion
+  // becomes reachable, so ask once then rather than leave it buried under
+  // Experimental. Yes switches the experiment on and picks Copilot as the
+  // provider; each project still gives its own consent on that card.
+  const offerCopilotCompletion = async () => {
+    const current = useSettingsStore.getState().settings;
+    if (experimentalEnabled(current, "copilot_completion") && current?.code_completion_provider === "copilot") return;
+    const yes = await confirmAction({
+      title: t("agents.copilotCompletionOfferTitle"),
+      body: t("agents.copilotCompletionOfferBody"),
+      confirmLabel: t("agents.copilotCompletionOfferConfirm"),
+    });
+    if (yes) void updateSettings({ copilot_completion: true, code_completion_provider: "copilot" });
   };
 
   // Ask one CLI's registry for its newest release — each card's own button, the
@@ -243,29 +238,67 @@ export function AgentsPanel({
       .finally(() => setCheckingUpdates(({ [id]: _drop, ...rest }) => rest));
   };
 
+  // The section head's twin of the per-card button: one `check_agent_updates`
+  // without an id asks every installed CLI's registry at once (in parallel on
+  // the backend). Explicit only, like the per-card one.
+  const checkAllUpdates = (ids: string[]) => {
+    setCheckingAll(true);
+    invoke<AgentUpdateReport[]>("check_agent_updates", { id: null })
+      .then((rows) => {
+        setUpdates((u) => ({ ...u, ...Object.fromEntries(rows.map((row) => [row.agent, row])) }));
+        loadVersions(false);
+      })
+      .catch(() =>
+        setUpdates((u) => ({
+          ...u,
+          ...Object.fromEntries(
+            ids.map((id) => [
+              id,
+              {
+                agent: id,
+                current: null,
+                latest: null,
+                updateAvailable: false,
+                checkable: true,
+                error: t("agents.updateCheckNoBackend"),
+              },
+            ]),
+          ),
+        })),
+      )
+      .finally(() => setCheckingAll(false));
+  };
+
   // Run the CLI's own installer again, which fetches the newest release (into
   // Tabtivity's install home, ahead of a host copy on PATH), or its own update
   // verb where the installer cannot. Same live log as an install; the card stays
-  // in the installed list throughout.
+  // in the installed list throughout. Returns whether it succeeded; the caller
+  // re-reads the list and versions (once, for a whole "Update all" queue).
+  const runAgentUpdate = async (id: string): Promise<boolean> => {
+    const ok = await installer.update(id);
+    if (ok) setUpdates(({ [id]: _drop, ...rest }) => rest);
+    return ok;
+  };
+  const afterUpdates = () => {
+    refresh();
+    notifyAgentRegistryChanged();
+    loadVersions(true);
+  };
   const updateAgent = async (id: string) => {
-    setInstalling(id);
-    setErrors(({ [id]: _drop, ...rest }) => rest);
-    setLogs((l) => ({ ...l, [id]: "" }));
+    if (await runAgentUpdate(id)) afterUpdates();
+  };
+  // One installer at a time (`installing` holds one id), so the queue runs in
+  // order; a failure stays on its card and the rest still run.
+  const updateAllAgents = async (ids: string[]) => {
+    setUpdatingAll(true);
+    let any = false;
     try {
-      await runWithProgress<{ id: string; line: string }, string>(
-        "agent-install-progress",
-        (p) => appendAgentLog(id, p),
-        () => invoke<string>("update_agent", { id }),
-      );
-      setUpdates(({ [id]: _drop, ...rest }) => rest);
-      setLogs(({ [id]: _drop, ...rest }) => rest);
-      refresh();
-      notifyAgentRegistryChanged();
-      loadVersions(true);
-    } catch (err) {
-      setErrors((e) => ({ ...e, [id]: String(err) }));
+      for (const id of ids) {
+        if (await runAgentUpdate(id)) any = true;
+      }
     } finally {
-      setInstalling(null);
+      setUpdatingAll(false);
+      if (any) afterUpdates();
     }
   };
 
@@ -274,7 +307,7 @@ export function AgentsPanel({
   // Returns whether it succeeded, so `reinstallAgent` knows whether to proceed.
   const removeAgent = async (id: string): Promise<boolean> => {
     setRemoving(id);
-    setErrors(({ [id]: _drop, ...rest }) => rest);
+    setError(id, null);
     try {
       await invoke<string>("uninstall_agent", { id });
       refresh();
@@ -282,7 +315,7 @@ export function AgentsPanel({
       loadVersions(true);
       return true;
     } catch (err) {
-      setErrors((e) => ({ ...e, [id]: String(err) }));
+      setError(id, String(err));
       return false;
     } finally {
       setRemoving(null);
@@ -296,22 +329,13 @@ export function AgentsPanel({
     if (await removeAgent(id)) await installAgent(id);
   };
 
+  // The hook re-detects, broadcasts and leaves "still not detected" on a miss.
   const recheck = (id: string) => {
-    void invoke<boolean>("agent_is_installed", { id })
-      .then((ok) => {
-        setAgents((prev) =>
-          prev?.map((a) => (a.id === id ? { ...a, installed: ok } : a)) ?? prev,
-        );
-        notifyAgentRegistryChanged();
-        loadVersions(true);
-        if (!ok) {
-          setErrors((e) => ({
-            ...e,
-            [id]: t("agents.stillNotDetected"),
-          }));
-        }
-      })
-      .catch(() => {});
+    void installer.recheck(id).then((ok) => {
+      if (ok === null) return;
+      setAgents((prev) => prev?.map((a) => (a.id === id ? { ...a, installed: ok } : a)) ?? prev);
+      loadVersions(true);
+    });
   };
 
   // Install a CLI on a remote machine, watched: the backend hands back an
@@ -657,6 +681,13 @@ export function AgentsPanel({
           <AgentDefaults agent={a} />
         </AgentsFold>
       )}
+      {/* The token also lives in Accounts & keys; here it is where someone
+          looking for Claude's own sign-in looks first. */}
+      {a.id === "claude" && a.installed && (
+        <AgentsFold label={<>{t("settings.claudeToken")} <UntestedTag id="agents.claudeTokenCard" /></>}>
+          <ClaudeTokenRow heading={false} />
+        </AgentsFold>
+      )}
       {a.installed && installedExtras && (
         <div className="agents-card-use">
           <span className="agents-card-use-label">
@@ -694,11 +725,11 @@ export function AgentsPanel({
             <button
               type="button"
               className="settings-btn sm"
-              disabled={!!checkingUpdates[a.id] || installing === a.id}
+              disabled={!!checkingUpdates[a.id] || checkingAll || installing === a.id}
               title={t("agents.checkUpdatesTitle", { label: a.label })}
               onClick={() => checkUpdate(a.id)}
             >
-              {checkingUpdates[a.id] ? t("agents.checkingUpdates") : t("agents.checkUpdates")}
+              {checkingUpdates[a.id] || checkingAll ? t("agents.checkingUpdates") : t("agents.checkUpdates")}
             </button>
             <UntestedTag id="settingsSubPanels.agentUpdates" />
             <UntestedTag id="settingsSubPanels.3" />
@@ -906,6 +937,18 @@ export function AgentsPanel({
   };
 
   const installedAgents = sortByAgentOrder(installedList, (a) => a.bin, agentOrder);
+  // "Update all" takes only a definite update (installed version read and older
+  // than the newest release); an unreadable one keeps its own card's button.
+  const updatableIds = adminInstalls
+    ? []
+    : installedAgents
+        .filter((a) => {
+          const update = updates[a.id];
+          const current = versions[a.id]?.version ?? update?.current ?? null;
+          return !!(update?.updateAvailable && current && update.latest);
+        })
+        .map((a) => a.id);
+  const anyInstallBusy = installing !== null || removing !== null;
   const availableAgents = (agents ?? []).filter((a) => !a.installed);
   const query = search.trim().toLowerCase();
   // Matched on the label, the id and the binary name, because a CLI is looked
@@ -921,6 +964,26 @@ export function AgentsPanel({
       <SettingsHeader title={t("nav.agents.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
       <p className="settings-help agents-lead">{t("agents.lead")}</p>
+      {/* The two panel-wide switches, as the shared settings card: a short
+          title on the row, what it does on the help line beneath. */}
+      <div className="settings-card agents-top-settings">
+        <label className="settings-toggle-card-row">
+          <span>{t("agents.dailyReleaseCheck")} <UntestedTag id="agents.dailyReleaseCheck" /></span>
+          <Toggle
+            checked={settings?.daily_release_check !== false}
+            onChange={(event) => void useSettingsStore.getState().updateSettings({ daily_release_check: event.target.checked })}
+          />
+        </label>
+        <p className="settings-help">{t("agents.dailyReleaseCheckHelp")}</p>
+        <label className="settings-toggle-card-row">
+          <span>{t("agents.autoTabName")} <UntestedTag id="agents.autoTabName" /></span>
+          <Toggle
+            checked={settings?.agent_tab_auto_name !== false}
+            onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_tab_auto_name: event.target.checked })}
+          />
+        </label>
+        <p className="settings-help">{t("agents.autoTabNameHelp")}</p>
+      </div>
       {node.status && !node.status.npm && (
         <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
       )}
@@ -932,6 +995,37 @@ export function AgentsPanel({
           <div className="agents-section-head" role="heading" aria-level={3}>
             {t("agents.installedGroup")}
             <span className="agents-count">{installedAgents.length}</span>
+            {installedAgents.length > 0 && (
+              <>
+                <span className="agents-spacer" />
+                <UntestedTag id="agents.updateAll" />
+                {updatableIds.length > 0 && (
+                  <button
+                    type="button"
+                    className="settings-btn sm primary"
+                    disabled={anyInstallBusy}
+                    title={t("agents.updateAllTitle", {
+                      labels: installedAgents
+                        .filter((a) => updatableIds.includes(a.id))
+                        .map((a) => a.label)
+                        .join(", "),
+                    })}
+                    onClick={() => void updateAllAgents(updatableIds)}
+                  >
+                    {updatingAll ? t("agents.updatingAll") : t("agents.updateAll", { count: updatableIds.length })}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  disabled={checkingAll || anyInstallBusy}
+                  title={t("agents.checkAllUpdatesTitle")}
+                  onClick={() => checkAllUpdates(installedAgents.map((a) => a.id))}
+                >
+                  {checkingAll ? t("agents.checkingUpdates") : t("agents.checkAllUpdates")}
+                </button>
+              </>
+            )}
           </div>
           {installedAgents.length === 0 ? (
             <p className="settings-help">{t("agents.noneInstalled")}</p>
@@ -995,19 +1089,7 @@ export function AgentsPanel({
         >
           <AgentCronSection agents={agents} />
         </AgentsGroup>
-        <AgentsGroup title={t("agents.groupTools")} summary={t("agents.sumTools")}>
-          <div className="agents-stack">
-            <div className="agents-option">
-              <AgentScheduleMcpSettings />
-            </div>
-            <div className="agents-option">
-              <GitPushMcpSettings />
-            </div>
-            <div className="agents-option">
-              <MarkupMcpSettings />
-            </div>
-          </div>
-        </AgentsGroup>
+        <AppToolsSettings />
         <AgentsGroup
           title={<>{t("agents.composerHeading")} <UntestedTag id="settingsSubPanels.2" /></>}
           summary={t("agents.sumComposer")}
@@ -1016,6 +1098,7 @@ export function AgentsPanel({
         </AgentsGroup>
       </div>
       </div>
+      {dialogs}
     </>
   );
 }

@@ -53,11 +53,23 @@ describe("gpuTotals", () => {
     expect(gpuTotals([dgpu])).toEqual({ used: 8 * 1024 ** 3, total: 24 * 1024 ** 3 });
   });
 
-  it("sums across adapters, and is zero for none", () => {
-    expect(gpuTotals([apu, dgpu]).total).toBe(
-      apu.vram_total + apu.shared_total + dgpu.vram_total,
-    );
+  it("sums across discrete cards, and is zero for none", () => {
+    expect(gpuTotals([dgpu, dgpu]).total).toBe(2 * dgpu.vram_total);
     expect(gpuTotals([])).toEqual({ used: 0, total: 0 });
+  });
+
+  it("leaves an iGPU's borrowed RAM out of the figure beside a discrete card", () => {
+    // Intel UHD beside an RTX 4080 Laptop GPU: DXGI declares 128 MB + 48.9 GB.
+    const igpu: GpuSample = {
+      ...apu,
+      name: "Intel(R) UHD Graphics",
+      driver: "dxgi",
+      vram_total: 128 * 1024 ** 2,
+      shared_total: 48_883 * 1024 ** 2,
+      busy_percent: null,
+    };
+    expect(gpuTotals([igpu, dgpu])).toEqual(gpuTotals([dgpu]));
+    expect(gpuTotals([apu, dgpu])).toEqual(gpuTotals([dgpu]));
   });
 });
 

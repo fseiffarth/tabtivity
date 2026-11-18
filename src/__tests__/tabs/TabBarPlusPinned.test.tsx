@@ -35,6 +35,8 @@ vi.mock("@tauri-apps/api/window", () => ({
 import { TabBar } from "../../components/tabs/TabBar";
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
+import { useBoxesStore } from "../../stores/boxes";
+import type { ProjectBox, ProjectEntry } from "../../types";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -138,5 +140,166 @@ describe("the subwindow + is outside the scrolling tab strip", () => {
     expect(close).toBeGreaterThan(open);
     expect(src.slice(open, close)).not.toContain("tab-new-wrap");
     expect(src).toContain("tab-new-wrap");
+  });
+});
+
+// The box "+" menu (box redesign step 11): "Start in…" on the Agents, Shell and
+// Files rows instead of the old "Box members" group, and a first line naming
+// where a plain pick starts. Outside a box nothing of it exists.
+describe("the + menu in a box", () => {
+  const member = (id: string): ProjectEntry => ({
+    id,
+    name: id,
+    status: "active",
+    position: 1,
+    local_file: `/w/${id}/project.json`,
+    directory: `/w/${id}`,
+  });
+  const box: ProjectBox = { id: "b1", name: "thesis", member_ids: ["api", "paper"], position: 1, folder: "/boxes/thesis" };
+
+  beforeEach(() => {
+    // jsdom has no layout; the menu scrolls the highlighted search hit into view.
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  async function openBoxMenu(activeCwd: string | null): Promise<void> {
+    useProjectsStore.setState({ projects: [member("api"), member("paper")], activeId: "api", loaded: true });
+    useBoxesStore.setState({ boxes: [box] });
+    useTabsStore.getState().setScope("box:b1");
+    if (activeCwd) {
+      useTabsStore.getState().addTab({ label: "first", cmd: "", args: [], env: {}, cwd: activeCwd, kind: "shell" });
+    }
+    const groupId = useTabsStore.getState().focusedGroupId!;
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<TabBar groupId={groupId} projectCwd="/boxes/thesis" showGroupClose={false} />));
+    });
+    await act(async () => {
+      fireEvent.click(container.querySelector(".tab-new-btn")!);
+    });
+  }
+  /** A row's own label: the text after its dot (the untested pill is a later sibling). */
+  const labelOf = (el: Element) => el.querySelector(".tab-new-menu-dot")?.nextSibling?.textContent ?? "";
+  const labels = () => [...document.querySelectorAll(".tab-new-menu-item")].map(labelOf);
+  const rowOf = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>(".tab-new-menu-item")].find(
+      (el) => el.querySelector(".tab-new-menu-dot")?.nextSibling?.textContent === label,
+    )!;
+  /** Open the ▾ beside the row called `label`. */
+  const openFlyout = async (label: string) => {
+    const caret = rowOf(label).parentElement!.querySelector<HTMLButtonElement>(".tab-new-menu-split-caret")!;
+    await act(async () => {
+      fireEvent.click(caret);
+    });
+  };
+  const newest = () => useTabsStore.getState().tabs[useTabsStore.getState().tabs.length - 1];
+
+  it("names the member of the active tab in its first line, and drops the Box members group", async () => {
+    await openBoxMenu("/w/api");
+    expect(document.querySelector(".tab-new-menu-target")?.textContent).toContain("New tab in api");
+    expect(document.querySelector(".tab-new-menu-target .tab-member-mark.box")).toBeNull();
+    expect(document.body.textContent).not.toContain("Box members");
+    expect(labels().some((l) => l.includes("Files — api") || l.includes("Shell — api"))).toBe(false);
+  });
+
+  it("names the whole box after a tab in the box folder, or with no tab at all", async () => {
+    await openBoxMenu("/boxes/thesis");
+    expect(document.querySelector(".tab-new-menu-target")?.textContent).toContain("New tab in thesis (whole box)");
+    expect(document.querySelector(".tab-new-menu-target .tab-member-mark.box")).not.toBeNull();
+    cleanup();
+    useTabsStore.setState({ tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {}, tabs: [], layout: null });
+    await openBoxMenu(null);
+    expect(document.querySelector(".tab-new-menu-target")?.textContent).toContain("(whole box)");
+  });
+
+  it("opens Start in… on Agents, Shell and Files: the whole box, then every member", async () => {
+    await openBoxMenu("/w/api");
+    for (const row of ["Claude", "Shell", "Files"]) {
+      expect(rowOf(row).parentElement?.classList.contains("tab-new-menu-split"), row).toBe(true);
+    }
+    await openFlyout("Claude");
+    const flyout = [...document.querySelectorAll(".tab-new-menu-more .tab-new-menu-item")].map(labelOf);
+    expect(flyout).toEqual(["Claude in the whole box", "Claude in api", "Claude in paper"]);
+    expect(document.querySelector(".tab-new-menu-more .tab-new-menu-group-label")?.textContent).toBe("Start Claude in…");
+  });
+
+  it("starts an agent in another member under the plain label, with no name suffix", async () => {
+    await openBoxMenu("/w/api");
+    await openFlyout("Claude");
+    const entry = [...document.querySelectorAll<HTMLButtonElement>(".tab-new-menu-more .tab-new-menu-item")].find((el) =>
+      labelOf(el) === "Claude in paper",
+    )!;
+    await act(async () => {
+      fireEvent.click(entry);
+    });
+    expect(newest()).toMatchObject({ kind: "agent", cmd: "claude", cwd: "/w/paper", label: "Claude" });
+  });
+
+  it("starts a shell in the whole box, and a plain Shell click follows the member", async () => {
+    await openBoxMenu("/w/api");
+    await act(async () => {
+      fireEvent.click(rowOf("Shell"));
+    });
+    expect(newest()).toMatchObject({ kind: "shell", cwd: "/w/api", label: "Shell" });
+    await act(async () => {
+      fireEvent.click(document.querySelector(".tab-new-btn")!);
+    });
+    await openFlyout("Shell");
+    const entry = [...document.querySelectorAll<HTMLButtonElement>(".tab-new-menu-more .tab-new-menu-item")].find((el) =>
+      labelOf(el) === "Shell in the whole box",
+    )!;
+    await act(async () => {
+      fireEvent.click(entry);
+    });
+    expect(newest()).toMatchObject({ kind: "shell", cwd: "/boxes/thesis", label: "Shell" });
+  });
+
+  it("maps Files: a member's is the project-files tab, the whole box's the plain one", async () => {
+    await openBoxMenu("/w/api");
+    await act(async () => {
+      fireEvent.click(rowOf("Files"));
+    });
+    expect(newest()).toMatchObject({ kind: "projectfiles", cwd: "/w/api", label: "Files" });
+    await act(async () => {
+      fireEvent.click(document.querySelector(".tab-new-btn")!);
+    });
+    await openFlyout("Files");
+    const entry = [...document.querySelectorAll<HTMLButtonElement>(".tab-new-menu-more .tab-new-menu-item")].find((el) =>
+      labelOf(el) === "Files in the whole box",
+    )!;
+    await act(async () => {
+      fireEvent.click(entry);
+    });
+    expect(newest()).toMatchObject({ kind: "files", cwd: "/boxes/thesis", label: "Files" });
+  });
+
+  it("finds a member by name in the search box, under its full label", async () => {
+    await openBoxMenu("/w/api");
+    const search = document.querySelector<HTMLInputElement>(".tab-new-menu-search")!;
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "claude in paper" } });
+    });
+    expect(labels().filter((l) => l.includes(" in "))).toEqual(["Claude in paper"]);
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "paper" } });
+    });
+    expect(labels().filter((l) => l.includes(" in paper"))).toEqual([
+      "Claude in paper",
+      "Shell in paper",
+      "Files in paper",
+    ]);
+    await act(async () => {
+      fireEvent.keyDown(search, { key: "Enter" });
+    });
+    expect(newest()).toMatchObject({ kind: "agent", cwd: "/w/paper" });
+  });
+
+  it("has no first line and no Start in… outside a box", async () => {
+    const container = await renderBar(1);
+    await act(async () => {
+      fireEvent.click(container.querySelector(".tab-new-btn")!);
+    });
+    expect(document.querySelector(".tab-new-menu-target")).toBeNull();
+    expect(document.querySelector(".tab-new-menu-split")).toBeNull();
   });
 });

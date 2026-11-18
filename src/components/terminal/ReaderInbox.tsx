@@ -35,7 +35,7 @@ export interface ReaderInbox {
 export const ReaderInboxContext = createContext<ReaderInbox | null>(null);
 
 /** The inbox file as the viewers know it: the project's own path to it. */
-function inboxEntry(projectDir: string, file: OutboxFile): FileEntry {
+export function inboxEntry(projectDir: string, file: OutboxFile): FileEntry {
   return {
     name: file.name,
     path: resolvePath(projectDir, `${NAMES.inboxDir}/${file.name}`),

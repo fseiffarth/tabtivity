@@ -85,23 +85,6 @@ impl InboxError {
     }
 }
 
-/// Whether `head` (a name's part before its first dot) is one of Windows'
-/// reserved device names: `CON PRN AUX NUL`, and `COM`/`LPT` followed by one
-/// of `0`–`9`, `¹`, `²`, `³` (Win32 reads the superscripts as digits). A file
-/// named one (any case, any extension: `CON.txt`, `nul`, `com1.tar.gz`) can be
-/// created handle-relative, but Explorer can neither open nor delete it.
-fn is_device_name(head: &str) -> bool {
-    let upper = head.to_ascii_uppercase();
-    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
-        return true;
-    }
-    let (Some(prefix), Some(port)) = (upper.get(..3), upper.get(3..)) else {
-        return false;
-    };
-    matches!(prefix, "COM" | "LPT")
-        && matches!(port, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
-}
-
 /// A file name rebuilt from the phone's: the last path component only, drawn
 /// from letters, digits, `.`, `-` and `_`, never starting with a dot, bounded
 /// in length with its extension kept. Empty in, `attachment` out. A Windows
@@ -111,7 +94,7 @@ pub fn safe_name(raw: &str) -> String {
     let name = safe_name_unchecked(raw);
     // Windows reads the part before the first dot as the device.
     let head = name.split('.').next().unwrap_or("");
-    if is_device_name(head) {
+    if crate::paths::is_windows_device_name(head) {
         return format!("{head}_{}", &name[head.len()..]);
     }
     name
@@ -236,6 +219,12 @@ fn store_at(
 /// (`create_file` is `O_EXCL`). Returns the name written. A file whose write
 /// fails is removed again. `base` is a [`safe_name`] (stamped or not).
 pub(super) fn create_unique(dir: &ProjectDir, base: &str, bytes: &[u8]) -> std::io::Result<String> {
+    create_unique_with(dir, base, |file| file.write_all(bytes))
+}
+
+/// [`create_unique`], the new file's bytes written by `fill` (a streamed
+/// copy); a file `fill` fails on is removed again.
+pub(super) fn create_unique_with(dir: &ProjectDir, base: &str, mut fill: impl FnMut(&mut std::fs::File) -> std::io::Result<()>) -> std::io::Result<String> {
     // `safe_name` bounds characters; one file name holds 255 bytes (Linux,
     // `files::plain_segment`). Cut the stem at a character so a stamp, the
     // extension and a `-1000` suffix still fit. A dotted tail too long to
@@ -262,7 +251,7 @@ pub(super) fn create_unique(dir: &ProjectDir, base: &str, bytes: &[u8]) -> std::
         };
         match dir.create_file(&name) {
             Ok(mut file) => {
-                if let Err(error) = file.write_all(bytes).and_then(|()| file.flush()) {
+                if let Err(error) = fill(&mut file).and_then(|()| file.flush()) {
                     drop(file);
                     let _ = dir.remove_file(&name);
                     return Err(error);

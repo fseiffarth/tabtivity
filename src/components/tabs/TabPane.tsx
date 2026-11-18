@@ -6,6 +6,7 @@ import { EmbedPane } from "../embed/EmbedPane";
 import { FileViewerPane } from "../embed/FileViewerPane";
 import { RemotePaneHold } from "../projects/RemotePaneHold";
 import { HostSessionHold } from "./HostSessionHold";
+import { TabCloseGuard } from "./TabCloseGuard";
 import { tabTerminalSpawn } from "../../lib/terminal/terminalSpawn";
 import { LoginTabPasteBar } from "../projects/CredentialPasteBar";
 
@@ -124,8 +125,8 @@ export interface TabPaneProps {
   tmuxSession?: string;
   /** The owning project lives only on its host (`isHostPinned`: a VM or a
    *  remote-only project), so tab locality is pinned to it (agents-default-local
-   *  is exactly the escape those forbid). Resolved by PaneSlot; a popout omits
-   *  it — its panes are attach-only and never spawn. */
+   *  is exactly the escape those forbid). Every host passes it, attach-only
+   *  ones too: it decides where the pane's Chat reads the conversation. */
   hostPinned?: boolean;
   /** A terminal pane shows its Reader always, with no toggle (the Tabby
    *  overlay's chats; see `TerminalView.readerAlways`). */
@@ -232,8 +233,11 @@ function TabPaneImpl({
         return <RemotePaneHold host={remoteHost} onConnect={onConnect ?? (() => {})} />;
       }
       return <FileBrowser projectDir={filesProjectDir} projectId={projectId} active={visible} />;
+    // The two kinds that hold an editable file viewer: their close guard asks
+    // before a close drops an unsaved buffer (`lib/tabs/tabCloseGuard`).
     case "projectfiles":
       return (
+        <TabCloseGuard scope={scope} tabKey={tab.key}>
         <ProjectFilesTab
           scope={scope}
           cwd={tab.cwd}
@@ -246,24 +250,29 @@ function TabPaneImpl({
           folder={tab.folder}
           visible={visible}
         />
+        </TabCloseGuard>
       );
     case "embed":
-      return tab.viewer ? (
-        <FileViewerPane
-          viewer={tab.viewer}
-          path={tab.embedPath ?? ""}
-          projectId={projectId}
-          tabKey={tab.key}
-          visible={visible}
-          groupId={groupId}
-        />
-      ) : (
-        <EmbedPane
-          path={tab.embedPath ?? ""}
-          exec={tab.embedExec}
-          projectId={projectId}
-          visible={visible}
-        />
+      return (
+        <TabCloseGuard scope={scope} tabKey={tab.key}>
+          {tab.viewer ? (
+            <FileViewerPane
+              viewer={tab.viewer}
+              path={tab.embedPath ?? ""}
+              projectId={projectId}
+              tabKey={tab.key}
+              visible={visible}
+              groupId={groupId}
+            />
+          ) : (
+            <EmbedPane
+              path={tab.embedPath ?? ""}
+              exec={tab.embedExec}
+              projectId={projectId}
+              visible={visible}
+            />
+          )}
+        </TabCloseGuard>
       );
     default: {
       // Remote terminal pane while the pool is down (main window only): show a

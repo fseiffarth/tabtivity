@@ -24,8 +24,9 @@ import type {
   SkillTarget,
 } from "../../types/skills";
 
-/** `~/.claude/skills/` — read by every project on this machine, and by no
- *  other machine. */
+/** The agent-global layer's `.claude/skills/` (laid into every agent home,
+ *  never the user's own `~/.claude`) — read by every project on this machine,
+ *  and by no other machine. */
 export const PERSONAL_SKILLS: SkillTarget = Object.freeze({ kind: "personal" });
 
 /** `<dir>/.claude/skills/` — this project's own, travelling with its tree. */
@@ -71,11 +72,26 @@ export function installSkill(
   return invoke<void>("skills_install", { target, sourceId, relPath });
 }
 
-export function uninstallSkill(target: SkillTarget, name: string): Promise<void> {
-  return invoke<void>("skills_uninstall", { target, name });
+/** Removes `<target>/.claude/skills/<folder>/` — pass `InstalledSkill.folder`,
+ *  never the frontmatter name. The wire key is still `name`. */
+export function uninstallSkill(target: SkillTarget, folder: string): Promise<void> {
+  return invoke<void>("skills_uninstall", { target, name: folder });
 }
 
 /** Every skill folder actually on disk under the target's `.claude/skills/`. */
 export function listInstalledSkills(target: SkillTarget): Promise<InstalledSkill[]> {
   return invoke<InstalledSkill[]>("skills_list_installed", { target });
+}
+
+/** Copy an installed skill (`InstalledSkill.folder`) from one target into
+ *  another — project to project, or between a project and the personal scope.
+ *  `overwrite` replaces a copy `to` already holds; without it the backend
+ *  refuses one, so a copy that appeared since the caller looked is not lost. */
+export function copyInstalledSkill(
+  from: SkillTarget,
+  folder: string,
+  to: SkillTarget,
+  overwrite: boolean,
+): Promise<void> {
+  return invoke<void>("skills_copy", { from, folder, to, overwrite });
 }

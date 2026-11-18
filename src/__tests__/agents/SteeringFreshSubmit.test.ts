@@ -49,7 +49,7 @@ describe("a chat prompt into a fresh Claude", () => {
   it("presses Enter again while no turn has begun", async () => {
     register("claude");
     const sent = sendSteeringPrompt(tab, "fix the bug");
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(400);
     await sent;
     expect(enters()).toBe(1);
     await vi.advanceTimersByTimeAsync(FRESH_SUBMIT_CHECK_MS * FRESH_SUBMIT_TRIES + 100);
@@ -59,11 +59,11 @@ describe("a chat prompt into a fresh Claude", () => {
   it("leaves a slash command and another CLI's prompt at one Enter", async () => {
     register("claude");
     const command = sendSteeringPrompt(tab, "/model");
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(400);
     await command;
     register("codex");
     const other = sendSteeringPrompt({ ...tab, label: "Codex", cmd: "codex" }, "fix the bug");
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(400);
     await other;
     await vi.advanceTimersByTimeAsync(FRESH_SUBMIT_CHECK_MS * FRESH_SUBMIT_TRIES + 100);
     expect(enters()).toBe(2);

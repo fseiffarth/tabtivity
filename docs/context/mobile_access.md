@@ -28,8 +28,9 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    - VM: the opted-in `mirror` only; without one the project is listed with no
      folder (`folder: false`).
 
-   **Locality rule.** The phone attaches through a tmux session on this
-   machine, so on a remote, VM or container project only tabs that run here are
+   **Locality rule.** The phone attaches through a session on this machine
+   (tmux; on Windows the native session host, behind `windows_session_host`,
+   agent tabs only), so on a remote, VM or container project only tabs that run here are
    listed (`runs_on_this_machine`, the window's `effectiveTabLocation` table;
    the fixture `tabLocality.fixture.json` pins both). `create` is `all` (local),
    `agents` (remote with a mirror; the agent runs `local_only` in the mirror and
@@ -50,7 +51,7 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    is listed too (`discovery::host_of_tab`, one rule with the refresher's
    targets): a resumable agent, or a shell behind `shell_tabs`, carrying its
    scope's tmux name, only while `remote.persist_sessions` is not `false`;
-   never on Windows. It is read off the session file with no mirror and no
+   never on Windows (no ControlMaster there, whatever the session host does). It is read off the session file with no mirror and no
    cwd check, and `PublicTab.on_host` is the only new fact the phone gets. The
    phone reaches it **only through the desktop's ControlMaster** for that
    host, by its literal socket path (`ssh_exec::host_mux_args`:
@@ -88,7 +89,44 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    - switch off → the list is ignored, and `set_*_mobile_access(false)`
      removes both keys.
 
-Root has no per-phone list (out of scope).
+Root has a per-phone list of its own, `tabtivity_mobile_host.root_devices`
+beside the `root_access` switch in `settings.json`, and it is **opt-in**: absent,
+empty or malformed is no phone, so a phone paired later is off root until the
+user ticks it (Settings → Mobile → the root row's phones button, or the phone's
+own panel). `discovery::root_devices` feeds the same `ScopeSource.devices` the
+other lists do, so the catalog, `pty_bridge`'s re-check and `phone_origin` all
+apply it. The list narrows the switch and the review gate; it never opens
+either. The phone draws no root row: the logo on its start page opens it.
+
+## Linked desktops (framing, not access)
+
+`tabtivity_mobile_host.linked_desktops` names other desktops' phone hosts
+(`docs/phone_multi_desktop_plan.md`): each listed origin may frame this
+host's phone documents, and this host's documents may frame and probe it.
+`mobile_control/linked.rs` reads it per request and re-validates every entry
+(same `<tailnet>.ts.net` as this host's own origin, any port, not `*.c.ts.net`,
+not its own origin, ≤ 8); a bad entry is dropped alone, an unreadable file is
+no link, and behind the gateway nothing is linked. What a link changes, in
+`host.rs` `security_headers` (an empty list leaves every header byte-identical):
+a phone **document** gets `frame-ancestors`/`frame-src`/`connect-src` with the
+list, the microphone and speech recognition delegable to it, and no
+`X-Frame-Options`; the pdf.js frame names the list among its ancestors;
+`/healthz` answers a listed `Origin` with CORS (the switcher's lamp, body
+`{ok:true}` only); status carries `linked_desktops`. `/api/*`, `/assets/*` and
+`/desktop/*` stay closed, and `exact_origin` is unchanged: a link is never a
+session. A framed page signs in as a device of this host like any other, so
+every layer above still decides what it reaches. Clickjacking by a linked
+origin (covering, fading or moving this host's framed UI to steer taps) is
+answered in the framed page itself, since the framer is the untrusted side:
+`mobile-web/src/shell/frameGuard.ts` takes no input until IntersectionObserver
+v2 reports the page visible for 500 ms, and fails closed where the browser
+cannot report it (iOS Safari, Firefox: a card offers this desktop on its own).
+Left open: a frame cropped by its parent still shows its own real pixels.
+A service worker serves its cached shell with the headers it was cached
+with, so a list change reaches an open phone at the shell's next update.
+The desktop edits the list in Settings → Mobile → Linked desktops
+(`mobile/LinkedDesktops.tsx`); its add check (`src/lib/linkedDesktops.ts`)
+mirrors `linked.rs` only to say why an address is refused.
 
 ## Where it is enforced
 
@@ -254,6 +292,20 @@ nothing for a hostile phone; the risk it answers is a private document one
 *Added to projects* notice with Undo, and nothing auto-committed. Non-dot
 names that tools pick up (`conftest.py`, a root `Makefile` in a project
 without one) are not refused — within that threat note.
+
+**Project docs (`mobile_control/project_docs.rs`).** The root listing of this
+computer's side also carries `docs` — the catalog docs of `services::scaffold`
+(`AGENTS.md`, `README.md`, `TODO.md`, …) with `state` (`missing` / `template` /
+`edited` / `pointer`), `nestedUnder`, `creatable`, `isDefault`: names only, from
+the same capped no-follow read the desktop tree uses. A ghost row's **Create**
+is `POST …/files/docs?name=<leaf>` behind the upload guards (`upload_scope`:
+session, exact origin, both switches). `name` is matched against the catalog's
+*creatable* leaves, never joined (a path, `CLAUDE.md`, `REMARKS.md`, `.gitignore`
+are `invalid_request`); the write is create-new + no-follow, so a taken name is
+`already_exists` and nothing is touched. It writes a fixed template into the
+project root (a root file `PROJECT.md`/`TODO.md`/… a tool might read, same
+note as a root `Makefile`); no upload-log entry and no Undo — the user deletes
+it like any file. The remote side (`&on=host`) has no `docs` and no create.
 
 ## Known gaps
 

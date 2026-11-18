@@ -18,6 +18,7 @@
 
 import { highlight, type Lang } from "./highlight";
 import { escapeHtml } from "../textSafety";
+import { APP_LINK_SCHEME, parseAppLink } from "../navigation/appLinks";
 
 /** An href as the URL parser will read it: leading and trailing C0 controls
  *  and spaces dropped, ASCII tab, LF and CR removed anywhere (WHATWG URL). A
@@ -307,6 +308,10 @@ function renderInline(raw: string, spans?: InlineSpans): string {
     if (url.includes(NUL)) return m;
     const href = safeHref(url);
     const inner = renderInline(label, store);
+    if (parseAppLink(url)) {
+      const idx = links.push(`<span class="md-link" data-app-link="${escapeHtml(url)}">${inner}</span>`) - 1;
+      return mark("L", idx);
+    }
     // #49: a link to a local file (relative/absolute path or file: scheme) gets a
     // `file-link` class so it reads as clickable, matching the editor's dotted
     // underline. Remote/anchor links keep the plain style.
@@ -329,13 +334,18 @@ function renderInline(raw: string, spans?: InlineSpans): string {
   // A NUL counts as a boundary on both sides: it is only ever a placeholder
   // delimiter, and the URL class must stop at one so a bare URL sitting directly
   // against an earlier link's marker doesn't swallow it into its own href.
-  text = text.replace(/(^|[\s(\u0000])((?:https?:\/\/|www\.)[^\s<\u0000]+)/g, (m, pre: string, rawUrl: string) => {
+  const bareUrl = new RegExp(`(^|[\\s(\\u0000])((?:https?:\\/\\/|www\\.|${APP_LINK_SCHEME})[^\\s<\\u0000]+)`, "g");
+  text = text.replace(bareUrl, (m, pre: string, rawUrl: string) => {
     let url = rawUrl;
     let trail = "";
     const tm = url.match(/[.,;:!?)\]}]+$/);
     if (tm) {
       trail = url.slice(url.length - tm[0].length);
       url = url.slice(0, url.length - tm[0].length);
+    }
+    if (parseAppLink(url)) {
+      const idx = links.push(`<span class="md-link" data-app-link="${escapeHtml(url)}">${escapeHtml(url)}</span>`) - 1;
+      return `${pre}${mark("L", idx)}${trail}`;
     }
     const href = safeHref(url.startsWith("www.") ? `https://${url}` : url);
     if (!href) return m;
@@ -394,14 +404,17 @@ const ALERT_TITLE: Record<string, string> = {
   caution: "Caution",
 };
 
-function renderBlockquote(rawLines: string[]): string {
+/** `renderBody` renders the quote's inner lines as full Markdown blocks, so a
+ *  table, list, code fence or nested quote inside `>` lines renders as one
+ *  instead of being flattened into a single inline run. */
+function renderBlockquote(rawLines: string[], renderBody: (src: string) => string): string {
   // GitHub alert syntax: first line is `[!NOTE]` (or TIP/IMPORTANT/WARNING/CAUTION),
   // the remainder is the body. Anything else is a plain blockquote.
   const first = rawLines[0]?.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i);
   if (first) {
     const kind = ALERT_KINDS[first[1].toUpperCase()];
-    const body = rawLines.slice(1).join(" ").trim();
-    const bodyHtml = body ? `<p>${renderInline(body)}</p>` : "";
+    const body = rawLines.slice(1).join("\n");
+    const bodyHtml = body.trim() ? renderBody(body) : "";
     return (
       `<div class="md-alert md-alert-${kind}">` +
       `<p class="md-alert-title">${ALERT_TITLE[kind]}</p>` +
@@ -409,7 +422,7 @@ function renderBlockquote(rawLines: string[]): string {
       `</div>`
     );
   }
-  return `<blockquote>${renderInline(rawLines.join(" "))}</blockquote>`;
+  return `<blockquote>${renderBody(rawLines.join("\n"))}</blockquote>`;
 }
 
 // ── Tables ──────────────────────────────────────────────────────────────────
@@ -569,6 +582,9 @@ function renderBlocks(
   src: string,
   breaks: boolean,
   onHeading?: (heading: MarkdownHeading) => void,
+  // Shared with nested blockquote bodies, so a heading inside a quote gets an
+  // id unique across the whole document (and the TOC sees the same ids).
+  headingId: (text: string) => string = headingIdAllocator(),
 ): string {
   // Drop NUL up front — it is the inline placeholder delimiter (`mark`), and
   // stripping it here is what makes a marker impossible to forge from document
@@ -577,7 +593,6 @@ function renderBlocks(
   const out: string[] = [];
   let i = 0;
 
-  const headingId = headingIdAllocator();
   const pushHeading = (level: number, text: string) => {
     const id = headingId(text);
     onHeading?.({ level, text, id });
@@ -681,7 +696,7 @@ function renderBlocks(
         quote.push(lines[i].replace(/^\s*>\s?/, ""));
         i++;
       }
-      out.push(renderBlockquote(quote));
+      out.push(renderBlockquote(quote, (body) => renderBlocks(body, breaks, onHeading, headingId)));
       continue;
     }
 

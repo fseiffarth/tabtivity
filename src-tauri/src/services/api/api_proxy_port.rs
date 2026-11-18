@@ -156,28 +156,20 @@ pub fn names_tools_port(text: &str, port: u16) -> bool {
     text.contains(&format!("//127.0.0.1:{port}/mcp"))
 }
 
-/// The app's local tmux sessions whose environment names `port` for `service`.
+/// The app's local sessions whose environment (`SessionMux::env_text`: tmux's
+/// session environment and the session's launcher script) names `port` for
+/// `service`.
 fn keyed_sessions(service: Service, port: u16) -> Vec<String> {
-    use crate::services::tmux_local;
-    if !tmux_local::tmux_available() {
+    let mux = crate::services::session_mux::mux();
+    if !mux.available() {
         return Vec::new();
     }
-    let Ok(listed) = tmux_local::tmux_command().args(["ls", "-F", "#{session_name}"]).output() else { return Vec::new() };
-    if !listed.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&listed.stdout)
-        .lines()
-        .filter(|name| tmux_local::is_app_local_tmux_session(name))
-        .filter(|name| {
-            let environment = tmux_local::tmux_command()
-                .args(["show-environment", "-t", name])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                .unwrap_or_default();
-            service.named_in(&environment, port) || tmux_local::launcher_text(name).is_some_and(|t| service.named_in(&t, port))
-        })
-        .map(str::to_string)
+    let Ok(listed) = mux.list() else { return Vec::new() };
+    listed
+        .into_iter()
+        .map(|session| session.name)
+        .filter(|name| crate::services::tmux_local::is_app_local_tmux_session(name))
+        .filter(|name| mux.env_text(name).is_some_and(|text| service.named_in(&text, port)))
         .collect()
 }
 
@@ -202,13 +194,11 @@ pub fn on_fallback_for(service: Service, port: u16, new_port: u16) {
     let Some(holder) = holder else { return };
     let (mut ended, mut failed) = (Vec::new(), Vec::new());
     if holder != Holder::Unknown {
+        let mux = crate::services::session_mux::mux();
         for name in keyed_sessions(service, port) {
-            let killed = crate::services::tmux_local::tmux_command()
-                .args(crate::services::tmux_local::local_tmux_kill_args(&name))
-                .output()
-                .is_ok_and(|o| o.status.success());
-            crate::services::tmux_local::remove_launcher(&name);
-            if killed {
+            // The mux reaps the pane's subtree, ends the session and drops
+            // its launcher.
+            if mux.kill(&name).is_ok() {
                 crate::services::api_proxy::on_tmux_session_gone(&name);
                 ended.push(name);
             } else {
@@ -224,12 +214,6 @@ pub fn on_fallback_for(service: Service, port: u16, new_port: u16) {
     let ts = crate::clock::now_secs();
     let notice = PortNotice { service, ts, port, new_port, holder, ended, failed };
     let _ = crate::storage::write_json_atomic(&notice_path(service), &notice);
-}
-
-/// A remembered port from the one-line file at `path`; `0`, junk or no file
-/// is none.
-pub fn remembered_in(path: &std::path::Path) -> Option<u16> {
-    std::fs::read_to_string(path).ok().and_then(|s| s.trim().parse::<u16>().ok()).filter(|p| *p != 0)
 }
 
 #[cfg(test)]
@@ -284,18 +268,5 @@ mod tests {
         assert!(!Service::AgentTools.named_in("X_ROOT_MCP_URL=http://127.0.0.1:41235/mcp\n", 41234));
         assert!(!Service::AgentTools.named_in("ANTHROPIC_BASE_URL=http://127.0.0.1:41234/anthropic\n", 41234), "the proxy's port is not the tools'");
         assert!(!Service::ApiProxy.named_in(env, 41234), "nor the other way round");
-    }
-
-    #[test]
-    fn a_remembered_port_is_a_real_port_or_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("port");
-        assert_eq!(remembered_in(&file), None);
-        std::fs::write(&file, "41234\n").unwrap();
-        assert_eq!(remembered_in(&file), Some(41234));
-        for junk in ["0", "", "x", "70000"] {
-            std::fs::write(&file, junk).unwrap();
-            assert_eq!(remembered_in(&file), None, "{junk:?}");
-        }
     }
 }

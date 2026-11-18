@@ -6,14 +6,34 @@ import { useSyncStore } from "../../stores/remote/sync";
 import { useTabsStore } from "../../stores/tabs";
 import { resolveProjectDirectory, resolveLocalMirror } from "../../types";
 import { relFromAbs } from "../../lib/viewers/fileUtils";
+import { readFileText } from "../../lib/files/fileAccess";
 import { useT } from "../../lib/i18n";
+import { useSyncSideTimes } from "./useSyncSideTimes";
+import { SyncHandoffButton } from "./SyncHandoffButton";
+import { sha256Hex } from "../../lib/sha256";
+import { UntestedTag } from "../common/UntestedTag";
+import { buildHandoffFile } from "../../lib/viewers/syncHandoff";
+import { joinRemote } from "../../lib/viewers/syncHandoffCollect";
+import { sshOf, useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 
-/** Join a remote directory and a project-relative path with a single `/`
- *  (POSIX — the host is always Unix here), tolerating a trailing slash on the
- *  root and a leading one on the rel. */
-function joinRemote(root: string, rel: string): string {
-  return `${root.replace(/\/+$/, "")}/${rel.replace(/^\/+/, "")}`;
+/** One recorded hand-over (`services::sync_handoff::ExportRef`). */
+interface ExportRef {
+  id: string;
+  /** Unix seconds. */
+  exportedAt: number;
 }
+
+/** What Load resolved found (`services::sync_handoff::ResolvedLoad`). */
+interface ResolvedLoad extends ExportRef {
+  /** The agent's result in that hand-over; never another hand-over's. */
+  text: string | null;
+  /** The copies shown now differ from the ones handed over. */
+  stale: boolean;
+  older: ExportRef | null;
+  newer: ExportRef | null;
+}
+
+const exportTime = (secs: number) => new Date(secs * 1000).toLocaleString();
 
 /**
  * Three-way merge for a diverged (amber) file of a remote project — the PyCharm-
@@ -41,7 +61,7 @@ export function SyncMergeView({
 
   // Resolve the mirror root the same way FileViewerPane does, so `rel` keys the
   // sync backend exactly like the orange list's own pull/push calls.
-  const { rel, hostPath } = useMemo(() => {
+  const { rel, hostPath, mirrorRoot, projectDir } = useMemo(() => {
     const projectDir = resolveProjectDirectory(project);
     const mirrorRoot = resolveLocalMirror(project) ?? (projectDir ? `${projectDir}/mirror` : null);
     const r = mirrorRoot ? relFromAbs(mirrorRoot, path) : null;
@@ -49,6 +69,8 @@ export function SyncMergeView({
     return {
       rel: r,
       hostPath: r && remotePath ? joinRemote(remotePath, r) : null,
+      mirrorRoot,
+      projectDir: projectDir || null,
     };
   }, [project, path]);
 
@@ -97,8 +119,8 @@ export function SyncMergeView({
     setLocalText(null);
     setHostText(null);
     Promise.all([
-      invoke<string>("read_file_text", { path, projectId }).catch(() => ""),
-      invoke<string>("read_file_text", { path: hostPath, projectId }),
+      readFileText(path, projectId).catch(() => ""),
+      readFileText(hostPath, projectId),
     ])
       .then(([local, host]) => {
         if (cancelled) return;
@@ -112,6 +134,51 @@ export function SyncMergeView({
       cancelled = true;
     };
   }, [path, hostPath, projectId, t]);
+
+  // Per-side modified times + per-change blame times (which side is newer).
+  const sideTimes = useSyncSideTimes({ projectId, rel, mirrorRoot, projectDir, localText, hostText });
+
+  const connected = useRemoteStatusStore((s) => (projectId ? sshOf(s, projectId) === "connected" : false));
+  // A resolved file the agent wrote, handed to the Result column (never saved).
+  const [loadResult, setLoadResult] = useState<{ text: string; nonce: number } | null>(null);
+  const [note, setNote] = useState<{ text: string; warn?: boolean } | null>(null);
+  // The hand-over this view made; without one (a remount, a restart, a bulk
+  // export from the side panel) the backend reads the newest one it recorded
+  // for this file. An older hand-over's result is only offered, never loaded
+  // in its place.
+  const [exportId, setExportId] = useState<string | null>(null);
+  const [offer, setOffer] = useState<{ older: ExportRef | null; newer: ExportRef | null } | null>(null);
+  const loadResolved = (id: string | null) => {
+    if (!projectId || !rel || localText == null || hostText == null) return;
+    setNote(null);
+    setOffer(null);
+    invoke<ResolvedLoad | null>("sync_handoff_load_resolved", {
+      projectId,
+      relPath: rel,
+      exportId: id,
+      localHash: sha256Hex(localText),
+      remoteHash: sha256Hex(hostText),
+    })
+      .then((r) => {
+        if (!r) {
+          setNote({ text: t("syncHandoff.noExport") });
+          return;
+        }
+        if (r.older || r.newer) setOffer({ older: r.older, newer: r.newer });
+        const time = exportTime(r.exportedAt);
+        if (r.text == null) {
+          setNote({ text: t("syncHandoff.noneYetFor", { time }) });
+          return;
+        }
+        setLoadResult({ text: r.text, nonce: Date.now() });
+        setNote(
+          r.stale
+            ? { text: t("syncHandoff.loadedStale", { time }), warn: true }
+            : { text: t("syncHandoff.loadedFrom", { time }) },
+        );
+      })
+      .catch((e) => setNote({ text: String(e), warn: true }));
+  };
 
   const closeTab = () => {
     if (tabKey) useTabsStore.getState().removeTab(tabKey);
@@ -167,6 +234,44 @@ export function SyncMergeView({
       {error != null && (
         <div className="file-viewer-error" style={{ padding: "4px 8px", flex: "0 0 auto" }}>{error}</div>
       )}
+      {note != null && (
+        <div
+          className={note.warn ? "file-viewer-error" : "file-viewer-loading"}
+          style={{ flex: "0 0 auto", padding: "4px 10px", fontSize: "11px" }}
+        >
+          {note.text}
+          {offer?.older && (
+            <>
+              {" "}
+              {t("syncHandoff.olderOffer", { time: exportTime(offer.older.exportedAt) })}{" "}
+              <button
+                type="button"
+                className="file-viewer-format-btn"
+                onClick={() => offer.older && loadResolved(offer.older.id)}
+              >
+                {t("syncHandoff.loadOlder")}
+              </button>
+            </>
+          )}
+          {offer?.newer && (
+            <>
+              {" "}
+              {t("syncHandoff.newerExists", { time: exportTime(offer.newer.exportedAt) })}{" "}
+              <button
+                type="button"
+                className="file-viewer-format-btn"
+                onClick={() => {
+                  if (!offer.newer) return;
+                  setExportId(offer.newer.id);
+                  loadResolved(offer.newer.id);
+                }}
+              >
+                {t("syncHandoff.readNewer")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {identical && (
         <div
           className="file-viewer-loading"
@@ -193,6 +298,31 @@ export function SyncMergeView({
           applyLabel={applying ? t("syncMergeView.resolving") : t("syncMergeView.resolve")}
           onApply={apply}
           onClose={closeTab}
+          sideTimes={sideTimes ?? undefined}
+          loadResult={loadResult}
+          barExtra={
+            <>
+              <button
+                className="file-viewer-format-btn"
+                onClick={() => loadResolved(exportId)}
+                title={t("syncHandoff.loadResolvedTitle")}
+              >
+                {t("syncHandoff.loadResolved")}
+              </button>
+              <SyncHandoffButton
+                projectId={projectId}
+                connected={connected}
+                label={t("syncHandoff.button")}
+                title={t("syncHandoff.buttonTitle")}
+                onExported={(out) => setExportId(out.id)}
+                collect={async () => ({
+                  files: rel ? [buildHandoffFile({ relPath: rel, localText: localText ?? "", remoteText: hostText ?? "", times: sideTimes })] : [],
+                  skipped: 0,
+                })}
+              />
+              <UntestedTag id="syncHandoff.resolver" />
+            </>
+          }
         />
       </div>
     </div>

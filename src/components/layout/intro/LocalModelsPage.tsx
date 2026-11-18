@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { runWithProgress } from "../../../lib/runWithProgress";
+import { startInstallRun, useInstallRunsStore, type InstallRun } from "../../../stores/installRuns";
 import { useT } from "../../../lib/i18n";
 import { formatBytes } from "../../../lib/formatBytes";
 import { IS_HOST_WINDOWS } from "../../../lib/platform";
@@ -32,6 +33,9 @@ interface LocalModel {
 }
 
 const OLLAMA_DOWNLOAD_URL = "https://ollama.com/download";
+/** `installRuns` keys — the backend's install-lock keys for the two. */
+const OLLAMA_RUN = "ollama";
+const VIBE_RUN = "vibe";
 
 /**
  * Intro page 4 — a local model, step by step: install Ollama, start it, pull a
@@ -39,6 +43,14 @@ const OLLAMA_DOWNLOAD_URL = "https://ollama.com/download";
  * tab, and (optionally) for autocomplete. Every probe is local (Ollama is on
  * this machine) and lives only while this page is mounted, i.e. visible; the
  * Ollama lamp rides the app's one shared poller (`useOllamaStatus`).
+ *
+ * Installs run headless where Settings' own one-click path needs no password —
+ * Vibe everywhere (per-user), Ollama on Windows (winget, per-user) — with a
+ * live log, then re-detect, and the wizard stays open. The runs live in
+ * `stores/installRuns`, so leaving this page mid-install and coming back shows
+ * the same run, and its end is re-detected whichever mount sees it. On Linux
+ * and macOS Ollama installs with ollama.com's `install.sh`, which may ask for
+ * a sudo password; that one opens a terminal tab and the wizard steps aside.
  */
 export function LocalModelsPage({ onClose }: { onClose: () => void }) {
   const t = useT();
@@ -57,6 +69,11 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
   const [vibe, setVibe] = useState<boolean | null>(null);
   const [vibeStrategy, setVibeStrategy] = useState<{ os: string; command: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The headless installs (`install_ollama` / `install_vibe`), shared with
+  // every other view through the module-level run store.
+  const ollamaRun = useInstallRunsStore((s) => s.runs[OLLAMA_RUN]);
+  const vibeRun = useInstallRunsStore((s) => s.runs[VIBE_RUN]);
+  const jobLogRef = useRef<HTMLPreElement>(null);
   const live = useRef(true);
   useEffect(() => {
     live.current = true;
@@ -157,15 +174,57 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
     };
   }, [target]);
 
-  const installOllama = () => {
+  // Keep the live install log pinned to its latest line.
+  useEffect(() => {
+    const el = jobLogRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [ollamaRun?.log, vibeRun?.log]);
+
+  const windows = strategy?.os ? strategy.os === "windows" : IS_HOST_WINDOWS;
+  // Settings' one-click path where it needs no password (winget, per-user);
+  // Linux/macOS's script registers a system service and asks for sudo.
+  const ollamaHeadless = windows && !!strategy?.auto;
+
+  const installOllamaInTerminal = () => {
     const command = strategy?.command;
     if (!command) return;
     // The install script registers a system service and asks for sudo — a
     // visible terminal can answer that, the headless `install_ollama` cannot.
-    const windows = strategy?.os ? strategy.os === "windows" : IS_HOST_WINDOWS;
     runInstallInTab(t("install.ollamaTabLabel"), command, windows ? "default" : "bash");
     onClose();
   };
+
+  const installOllama = () => {
+    if (!ollamaHeadless) {
+      installOllamaInTerminal();
+      return;
+    }
+    // As Settings does after its install, the server is started on success —
+    // by the run itself, so it happens even if this page was left meanwhile.
+    void startInstallRun<{ line: string }>(OLLAMA_RUN, {
+      event: "ollama-install-progress",
+      line: (p) => p.line,
+      command: "install_ollama",
+      detect: () => invoke<boolean>("ollama_is_installed"),
+      onSuccess: () => void invoke("ensure_ollama_running").catch(() => {}),
+    });
+  };
+
+  // A run that ended well — started here, before this mount, or elsewhere —
+  // is re-detected by whichever mount sees the end.
+  const ollamaDone = ollamaRun?.succeeded ?? 0;
+  const seenOllamaDone = useRef(ollamaDone);
+  useEffect(() => {
+    if (ollamaDone === seenOllamaDone.current) return;
+    seenOllamaDone.current = ollamaDone;
+    void invoke<boolean>("ollama_is_installed")
+      .then((ok) => {
+        if (!live.current) return;
+        setInstalled(ok);
+        if (ok) refreshModels();
+      })
+      .catch(() => {});
+  }, [ollamaDone, refreshModels]);
 
   const recheckInstalled = () => {
     void invoke<boolean>("ollama_is_installed")
@@ -238,12 +297,68 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
     void updateSettings(roles?.tabs ? { ollama_roles: { ...roles, tabs: model } } : { ollama_model: model });
   };
 
-  const installVibe = () => {
+  const installVibeInTerminal = () => {
     const command = vibeStrategy?.command;
     if (!command) return;
     runInstallInTab(t("install.vibeTabLabel"), command, vibeStrategy?.os === "windows" ? "powershell" : "bash");
     onClose();
   };
+
+  // Vibe installs per-user (no password), so headless as Settings runs it.
+  const installVibe = () => {
+    void startInstallRun<{ line: string }>(VIBE_RUN, {
+      event: "vibe-install-progress",
+      line: (p) => p.line,
+      command: "install_vibe",
+      detect: () => invoke<boolean>("vibe_is_installed"),
+    });
+  };
+
+  const vibeDone = vibeRun?.succeeded ?? 0;
+  const seenVibeDone = useRef(vibeDone);
+  useEffect(() => {
+    if (vibeDone === seenVibeDone.current) return;
+    seenVibeDone.current = vibeDone;
+    void invoke<boolean>("vibe_is_installed")
+      .then((ok) => {
+        if (!live.current) return;
+        setVibe(ok);
+        if (!ok) {
+          setError(
+            vibeStrategy?.os === "windows" ? t("ollama.vibeStillNotDetectedWindows") : t("ollama.vibeStillNotDetectedOther"),
+          );
+        }
+      })
+      .catch(() => {});
+  }, [vibeDone, vibeStrategy?.os, t]);
+
+  const ollamaRunning = !!ollamaRun?.running;
+  const vibeRunning = !!vibeRun?.running;
+  const failed = (run: InstallRun | undefined) => !!run && !run.running && !!run.error;
+  /** A run's progress: who holds it, the live log, or the failure. */
+  const runView = (run: InstallRun | undefined) =>
+    run && (
+      <>
+        {run.running && (
+          <IntroStatus ok={null}>
+            {run.elsewhere ? t("intro.models.installElsewhere") : t("ollama.runningInstaller")}
+          </IntroStatus>
+        )}
+        {(run.running || run.error) && !run.elsewhere && (
+          <pre className="ollama-install-log" ref={run.running ? jobLogRef : undefined} role="log">
+            {run.log || t("ollama.startingEllipsis")}
+          </pre>
+        )}
+        {failed(run) && <ErrorNote className="project-dialog-error" error={run.error ?? ""} role="alert" />}
+      </>
+    );
+  // The pull's reason to wait, said beside the disabled button.
+  const pullBlocked =
+    installed === false
+      ? t("intro.models.pullNeedsInstall")
+      : installed === true && !serverUp
+        ? t("intro.models.pullNeedsServer")
+        : null;
 
   return (
     <>
@@ -265,18 +380,37 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
         <IntroStep num={1} title={t("intro.models.step1Title")} done={installed === true}>
           {installed === false && (
             <>
-              <div className="settings-help">{t("intro.models.step1Body")}</div>
+              <div className="settings-help">
+                {t(ollamaHeadless ? "intro.models.step1BodyWindows" : "intro.models.step1Body")}
+              </div>
               {strategy?.command ? (
                 <>
                   <code className="ollama-install-cmd">{strategy.command}</code>
                   <IntroActions>
-                    <button type="button" className="settings-btn primary" onClick={installOllama}>
-                      {t("intro.models.installOllama")}
+                    <button
+                      type="button"
+                      className="settings-btn primary"
+                      disabled={ollamaRunning}
+                      onClick={installOllama}
+                    >
+                      {ollamaHeadless
+                        ? ollamaRunning
+                          ? t("ollama.installingEllipsis")
+                          : t("ollama.installBtn")
+                        : t("intro.models.installOllama")}
                     </button>
-                    <button type="button" className="settings-btn sm" onClick={recheckInstalled}>
+                    {/* The headless one failed: the terminal can answer what it could not. */}
+                    {ollamaHeadless && failed(ollamaRun) && (
+                      <button type="button" className="settings-btn sm" onClick={installOllamaInTerminal}>
+                        {t("intro.models.installOllama")}
+                      </button>
+                    )}
+                    <button type="button" className="settings-btn sm" disabled={ollamaRunning} onClick={recheckInstalled}>
                       {t("common.recheck")}
                     </button>
+                    {ollamaHeadless && <UntestedTag id="desktop.intro.localModelsInlineInstall" />}
                   </IntroActions>
+                  {runView(ollamaRun)}
                 </>
               ) : (
                 <IntroActions>
@@ -330,19 +464,26 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
                 type="button"
                 className="settings-btn primary"
                 disabled={!serverUp || pull !== null}
+                aria-describedby={pullBlocked ? "intro-models-pull-blocked" : undefined}
                 onClick={() => void pullModel(pick.model)}
               >
-                {pull
-                  ? pull.pct === null
-                    ? t("intro.models.pulling")
-                    : t("intro.models.pullingPct", { pct: pull.pct })
-                  : t("intro.models.pull", { model: pick.model })}
+                {pull ? t("intro.models.pulling") : t("intro.models.pull", { model: pick.model })}
               </button>
             )}
             <button type="button" className="settings-btn sm" onClick={() => openSettings("ollama")}>
               {t("intro.models.browse")}
             </button>
           </IntroActions>
+          {pull && (
+            <IntroStatus ok={null}>
+              {pull.pct === null ? t("intro.models.pulling") : t("intro.models.pullingPct", { pct: pull.pct })}
+            </IntroStatus>
+          )}
+          {pick && !has(pick.model) && pullBlocked && (
+            <div className="settings-help" id="intro-models-pull-blocked">
+              {pullBlocked}
+            </div>
+          )}
         </IntroStep>
 
         <IntroStep num={4} title={t("intro.models.step4Title")} done={onGpu}>
@@ -382,14 +523,23 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
           )}
           <IntroActions>
             {vibe === false && vibeStrategy?.command && (
-              <button type="button" className="settings-btn sm" onClick={installVibe}>
-                {t("ollama.installVibe")}
-              </button>
+              <>
+                <button type="button" className="settings-btn sm" disabled={vibeRunning} onClick={installVibe}>
+                  {vibeRunning ? t("ollama.installingEllipsis") : t("ollama.installVibe")}
+                </button>
+                {failed(vibeRun) && (
+                  <button type="button" className="settings-btn sm" onClick={installVibeInTerminal}>
+                    {t("ollama.runInTerminal")}
+                  </button>
+                )}
+                <UntestedTag id="desktop.intro.localModelsInlineInstall" />
+              </>
             )}
             <button type="button" className="settings-btn sm" onClick={() => startLessonById("local-model", onClose)}>
               {t("intro.walkMeThrough")}
             </button>
           </IntroActions>
+          {vibe === false && runView(vibeRun)}
         </IntroStep>
 
         <IntroStep num={6} title={t("intro.models.step6Title")}>
@@ -398,7 +548,7 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
       </IntroSteps>
 
       {error && <ErrorNote className="project-dialog-error" error={error} />}
-      <p className="settings-help">{t("intro.terminalNote")}</p>
+      <p className="settings-help">{t("intro.terminalNoteInline")}</p>
     </>
   );
 }

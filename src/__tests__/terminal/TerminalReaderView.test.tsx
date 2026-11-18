@@ -34,6 +34,8 @@ import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { useActivityStore } from "../../stores/activity";
+import { openReaderComposer } from "../../lib/agents/readerSteering";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { clearSentPrompts, noteSentPrompt } from "../../lib/agents/sentPrompts";
@@ -111,6 +113,35 @@ describe("the agent pane's Reader", () => {
     }));
     // A long session that never spawned a subagent has no "Subagents (0)".
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
+  });
+
+  it("keeps an unrecognized terminal screen folded and removes it once input returns", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const rows = ["• Ran a build", "  + 224 lines (ctrl+t to expand)"];
+    const term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    try {
+      reader(host);
+      await screen.findByText("fix the parser");
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+      const disclosure = host.querySelector<HTMLDetailsElement>(".terminal-reader-stray-output");
+      expect(disclosure).not.toBeNull();
+      expect(disclosure!.open).toBe(false);
+      expect(disclosure!.querySelector("summary")?.textContent).toBe("Terminal output");
+      expect(disclosure!.querySelector("pre")?.textContent).toContain("224 lines");
+      expect(screen.getByRole("button", { name: "Go to terminal" })).toBeTruthy();
+      fireEvent.click(disclosure!.querySelector("summary")!);
+      expect(disclosure!.open).toBe(true);
+      await act(async () => {
+        rows.splice(0, rows.length, "• Done.", "", "› ", "? for shortcuts");
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(host.querySelector(".terminal-reader-stray-output")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Go to terminal" })).toBeNull();
+    } finally {
+      unregisterTerminal("p:agent-1", term);
+      vi.useRealTimers();
+    }
   });
 
   it("draws a turn the user cut off as an Interrupted rule, not an answer", async () => {
@@ -296,6 +327,44 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it.each(["Send now", "Cancel and edit"])("%s reaches Codex's queue above the last 40 rows", async (action) => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    const queue = ["queued follow-up"];
+    let box = "";
+    const rows: string[] = [];
+    const draw = () => rows.splice(0, rows.length,
+      "• Working (5s • esc to interrupt)", "",
+      ...(queue.length ? ["• Queued follow-up inputs", "  ↳ queued follow-up", "    shift+← edit last queued message"] : []),
+      ...Array<string>(50).fill(""),
+      `› ${box || "Ask Codex to do anything"}`, "", "  GPT default · ~/work", "  ? for shortcuts",
+    );
+    draw();
+    const term = fakeTerminal(rows);
+    Object.defineProperty(term, "rows", { get: () => rows.length });
+    const hear = (key: string) => {
+      if (key === "\u001b[1;2D") box = queue.pop() ?? "";
+      else if (key === "\u0015") box = "";
+      else if (key === "\u001b") box = queue.splice(0).join("\n");
+      else if (key === "\r") box = "";
+      draw();
+    };
+    registerTerminal("p:agent-1", term);
+    onWritten.add(hear);
+    try {
+      reader(host);
+      await waitFor(() => expect(host.querySelector(".terminal-reader-working")).not.toBeNull());
+      act(() => noteSentPrompt("st-1", "queued follow-up"));
+      await act(async () => fireEvent.click(within(host).getByRole("button", { name: action })));
+      await waitFor(() => expect(queue).toEqual([]));
+      if (action === "Send now") await waitFor(() => expect(written).toContain("\r"));
+      else await waitFor(() => expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("queued follow-up"));
+      expect(box).toBe("");
+    } finally {
+      onWritten.delete(hear);
+      unregisterTerminal("p:agent-1", term);
+    }
+  });
+
   it("starts a new conversation the way the Clear key does, not as a prompt", async () => {
     clearAgentTab.mockReset();
     clearAgentTab.mockResolvedValue(true);
@@ -470,6 +539,77 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it("shows the composer for steering's Prompt key, and hides it again on Esc", async () => {
+    act(() => useKeyboardSteeringStore.getState().enter("scroll"));
+    try {
+      reader(host);
+      await screen.findByText("fix the parser");
+      expect(screen.queryByRole("textbox")).toBeNull();
+      let opened = false;
+      act(() => {
+        opened = openReaderComposer("p:agent-1", "scroll");
+        if (opened) useKeyboardSteeringStore.getState().handOff("prompt");
+      });
+      expect(opened).toBe(true);
+      const box = screen.getByRole("textbox");
+      written.length = 0;
+      expect(document.activeElement).toBe(box);
+      fireEvent.keyDown(box, { key: "Escape" });
+      expect(screen.queryByRole("textbox")).toBeNull();
+      const steering = useKeyboardSteeringStore.getState();
+      expect(steering.active).toBe(true);
+      expect(steering.level).toBe("scroll");
+      // Nothing went to the agent's own Esc.
+      expect(written).not.toContain("\x1b");
+    } finally {
+      act(() => useKeyboardSteeringStore.getState().exit());
+    }
+  });
+
+  it("answers steering's Prompt key while a new chat's CLI is starting, keeping the text until it is up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // No input box yet: the CLI is still starting.
+    const rows = ["", "Starting…"];
+    const term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    act(() => useKeyboardSteeringStore.getState().enter("tabs"));
+    try {
+      sendSteeringPrompt.mockResolvedValue(undefined);
+      reader(host);
+      await screen.findByText("fix the parser");
+      let opened = false;
+      act(() => {
+        opened = openReaderComposer("p:agent-1", "tabs");
+        if (opened) useKeyboardSteeringStore.getState().handOff("prompt");
+      });
+      // The Chat's composer, not the prompt box over the window.
+      expect(opened).toBe(true);
+      const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+      expect(box.disabled).toBe(false);
+      expect(document.activeElement).toBe(box);
+      fireEvent.change(box, { target: { value: "first prompt" } });
+      await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+      expect(sendSteeringPrompt).not.toHaveBeenCalled();
+      expect(box.value).toBe("first prompt");
+      expect(screen.getByRole("alert").textContent).toContain("the agent is still starting");
+      // Up: nothing goes by itself; Enter sends it.
+      await act(async () => {
+        rows.splice(0, rows.length, "> ", "  ? for shortcuts");
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(sendSteeringPrompt).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+      expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "first prompt");
+      const steering = useKeyboardSteeringStore.getState();
+      expect(steering.active).toBe(true);
+      expect(steering.level).toBe("tabs");
+    } finally {
+      act(() => useKeyboardSteeringStore.getState().exit());
+      unregisterTerminal("p:agent-1", term);
+      vi.useRealTimers();
+    }
+  });
+
   it("empties the chat on a clear while the cleared session is still what is read", async () => {
     reader(host);
     await screen.findByText("fix the parser");
@@ -551,6 +691,29 @@ describe("the Reader's subagents", () => {
     ]);
     expect(cards.every((card) => card.querySelector(".terminal-reader-time"))).toBe(true);
     expect(cards.map((card) => !!card.querySelector(".tab-status-mark.done"))).toEqual([true, false, false]);
+  });
+
+  it("opens the subagent Claude's terminal is viewing, and stays on the session otherwise", async () => {
+    const rule = "─".repeat(40);
+    const rows = [
+      `${"─".repeat(30)} Find the tests ─`,
+      "❯ Message @Explore…",
+      rule,
+      "  ◯ main",
+      "  ◯ Explore  Find the parser     3s · ↓ 1k tokens",
+      "  ● Explore  Reading the test folder     3s · ↓ 1k tokens",
+    ];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    const view = reader(host);
+    await screen.findByText("Tests sit beside the sources.");
+    expect(invoke).toHaveBeenCalledWith("agent_tab_transcript", expect.objectContaining({ subagent: "sa-2" }));
+    view.unmount();
+    // Back on the session in the terminal: the chat shows the session.
+    rows.splice(0, rows.length, rule, "❯ ", rule, "  ● main", "  ◯ Explore  Find the tests     3s · ↓ 1k tokens");
+    reader(host);
+    await screen.findByText("Both found.");
+    expect(screen.queryByText("Tests sit beside the sources.")).toBeNull();
   });
 
   it("opens a subagent's own conversation and goes back up", async () => {
@@ -703,7 +866,7 @@ describe("the Reader's live rows", () => {
     expect((screen.getByRole("button", { name: /No, and tell Claude/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("walks the question's rows with ↑/↓ from the empty composer, Enter picking the focused one", async () => {
+  it("walks question buttons while the composer stays disabled", async () => {
     term = fakeTerminal([
       "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",
       "Do you want to make this edit to i18n.ts?",
@@ -714,15 +877,9 @@ describe("the Reader's live rows", () => {
     reader(host);
     await screen.findByRole("group", { name: "Waiting for your answer" });
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
-    // A typed draft keeps ↑/↓ for itself.
-    fireEvent.change(box, { target: { value: "x" } });
-    fireEvent.keyDown(box, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(box);
-    fireEvent.change(box, { target: { value: "" } });
-    // Empty: ↓ lands on the highlighted row, ↓ again on the next.
-    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(box.disabled).toBe(true);
     const first = screen.getByRole("button", { name: /^1\. ?Yes$|^1Yes$/ });
-    expect(document.activeElement).toBe(first);
+    first.focus();
     fireEvent.keyDown(first, { key: "ArrowDown" });
     const second = screen.getByRole("button", { name: /Yes, allow all edits/ });
     expect(document.activeElement).toBe(second);
@@ -733,7 +890,129 @@ describe("the Reader's live rows", () => {
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first, { key: "ArrowUp" });
+    expect(box.disabled).toBe(true);
+  });
+
+  it("preserves a draft while a question blocks input and requires an explicit send afterwards", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    sendSteeringPrompt.mockResolvedValue(undefined);
+    const rows = [
+      "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",
+      "Do you want to make this edit to i18n.ts?",
+      "❯ 1. Yes", "  2. Yes, allow all edits during this session", "  3. No, and tell Claude what to do differently",
+      "", "  esc to cancel",
+    ];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    setReaderDraft("p", "agent-1", "and add a test");
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(box.disabled).toBe(true);
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    // Typed into the pane, the words would answer (or cancel) the question.
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    expect(written).toEqual([]);
+    expect(box.value).toBe("and add a test");
+
+    // Still asking: nothing goes, however long it waits.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    // Answered: the question goes, and after a moment the prompt goes in.
+    await act(async () => { rows.splice(2, rows.length - 2, "⏺ Update(src/lib/i18n.ts)", "> ", "  ? for shortcuts"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+    // Not at once: a question with several steps redraws between them.
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(box.disabled).toBe(false);
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(sendSteeringPrompt).toHaveBeenCalledTimes(1);
+    expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "and add a test");
+  });
+
+  it("takes the keyboard into a new tab's box once its CLI is up, not from a field the user moved to", async () => {
+    // Booting: no status row yet, so the box is disabled and ignores focus().
+    const rows: string[] = [];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    const view = reader(host);
+    await screen.findByText("fix the parser");
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(box.disabled).toBe(true);
+    expect(document.activeElement).not.toBe(box);
+    await act(async () => { rows.splice(0, 0, "> ", "  ? for shortcuts"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(box.disabled).toBe(false);
     expect(document.activeElement).toBe(box);
+
+    // A field elsewhere keeps the keyboard when the box unlocks again.
+    view.unmount();
+    unregisterTerminal("p:agent-1", term);
+    const other = document.createElement("input");
+    document.body.appendChild(other);
+    try {
+      rows.splice(0, rows.length);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      await screen.findByText("fix the parser");
+      other.focus();
+      await act(async () => { rows.splice(0, 0, "> ", "  ? for shortcuts"); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(host.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea")?.disabled).toBe(false);
+      expect(document.activeElement).toBe(other);
+    } finally {
+      other.remove();
+    }
+  });
+
+  it("takes the keyboard from its own xterm under the Reader when a new tab's box unlocks", async () => {
+    // The pane's xterm is built on first show and may grab the keyboard
+    // while the box is still disabled; that is this pane, not a field elsewhere.
+    const rows: string[] = [];
+    const xterm = document.createElement("div");
+    const xtermInput = document.createElement("textarea");
+    xterm.appendChild(xtermInput);
+    document.body.appendChild(xterm);
+    try {
+      term = Object.assign(fakeTerminal(rows), { element: xterm });
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      await screen.findByText("fix the parser");
+      const box = host.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea")!;
+      expect(box.disabled).toBe(true);
+      xtermInput.focus();
+      await act(async () => { rows.splice(0, 0, "> ", "  ? for shortcuts"); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(box.disabled).toBe(false);
+      expect(document.activeElement).toBe(box);
+    } finally {
+      xterm.remove();
+    }
+  });
+
+  it("sends nothing by itself once a waiting prompt was emptied by hand", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    sendSteeringPrompt.mockResolvedValue(undefined);
+    const rows = [
+      "> fix the strings", "", "Do you want to make this edit to i18n.ts?",
+      "❯ 1. Yes", "  2. No, and tell Claude what to do differently", "", "  esc to cancel",
+    ];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "first" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    fireEvent.change(box, { target: { value: "" } });
+    fireEvent.change(box, { target: { value: "second thoughts" } });
+    await act(async () => { rows.splice(2, rows.length - 2, "> ", "  ? for shortcuts"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    expect(box.value).toBe("second thoughts");
   });
 
   it("answers Claude's \"Type something.\" row with typed words, never with Enter on the empty row", async () => {
@@ -760,6 +1039,45 @@ describe("the Reader's live rows", () => {
     expect(written).toEqual(["\u001b[B", "\u001b[B", "a pear", "\r"]);
   });
 
+  it("takes files pasted into the \"Type something.\" field as inbox @ references at the caret", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "agent_tab_transcript") return Promise.resolve(transcript);
+      if (command === "pty_drop_files") return Promise.resolve({ items: ["inbox/a.pdf", "inbox/b.png"], error: null });
+      if (command === "pty_paste_clipboard_image") return Promise.resolve("inbox/shot.png");
+      return Promise.resolve([]);
+    });
+    term = fakeTerminal([
+      "> ask me", "", "☐ Fruit", "", "Which fruit?", "",
+      "❯ 1. Apple", "  2. Type something.",
+      "", "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    const field = screen.getByRole("textbox", { name: "Your answer…" }) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "see" } });
+    field.setSelectionRange(3, 3);
+    const clipboard = (data: Record<string, string>) => ({
+      getData: (type: string) => data[type] ?? "",
+      files: [],
+      types: Object.keys(data),
+    });
+    let pasted = true;
+    await act(async () => {
+      pasted = fireEvent.paste(field, { clipboardData: clipboard({ "text/uri-list": "file:///home/u/a.pdf\r\nfile:///home/u/b.png" }) });
+    });
+    expect(pasted).toBe(false);
+    expect(field.value).toBe("see @inbox/a.pdf @inbox/b.png ");
+    expect(invoke).toHaveBeenCalledWith("pty_drop_files", expect.objectContaining({
+      id: "p:agent-1", paths: ["/home/u/a.pdf", "/home/u/b.png"], agent: true,
+    }));
+    field.setSelectionRange(field.value.length, field.value.length);
+    await act(async () => { fireEvent.paste(field, { clipboardData: clipboard({}) }); });
+    expect(field.value).toBe("see @inbox/a.pdf @inbox/b.png @inbox/shot.png ");
+    expect(fireEvent.paste(field, { clipboardData: clipboard({ "text/plain": "words" }) })).toBe(true);
+  });
+
   it("shows an agent's own question as its header, its question and tagged rows — not the screen", async () => {
     term = fakeTerminal([
       "> push it", "",
@@ -781,6 +1099,100 @@ describe("the Reader's live rows", () => {
     expect(group.querySelector(".terminal-reader-question-context")).toBeNull();
     expect(group.textContent).not.toMatch(/☐|My fix is ready|\(Recommended\)/);
     expect(group.querySelector(".terminal-reader-recommended")?.textContent).toBe("Recommended");
+  });
+
+  describe("through the stored session's record of the call", () => {
+    const withSession = (extra: Record<string, unknown>) => invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, truncated: false, ...extra } : []));
+    const lamp = (state: "decision" | undefined) => act(() => { useActivityStore.setState({ attentionByTab: state ? { "p:agent-1": state } : {} }); });
+    const asked = {
+      kind: "answer", text: "Which colours?", at: "2026-09-30T08:03:00Z", blocking: true,
+      questions: [{ header: "Colours", question: "Which colours should the probe use?", multiSelect: true,
+        options: [{ label: "Red", description: "warm", preview: "+--+\n|  |\n+--+" }, { label: "Blue" }] }],
+    };
+    const DIALOG = [
+      "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",
+      "Do you want to make this edit to i18n.ts?",
+      "❯ 1. Yes", "  2. Yes, allow all edits during this session", "  3. No, and tell Claude what to do differently",
+      "", "  esc to cancel",
+    ];
+    afterEach(() => lamp(undefined));
+
+    it("names what a permission dialog waits on, only while the lamp says it asks", async () => {
+      withSession({ waitingTools: [{ name: "Edit", subject: "/p/src/lib/i18n.ts", at: "2026-09-30T08:03:00Z" }] });
+      term = fakeTerminal([...DIALOG]);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(group.querySelector(".terminal-reader-question-subject")).toBeNull();
+      await lamp("decision");
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject code")?.textContent).toBe("/p/src/lib/i18n.ts"));
+      expect(group.querySelector(".terminal-reader-question-subject small")?.textContent).toMatch(/approval to change/);
+      await lamp(undefined);
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject")).toBeNull());
+    });
+
+    it("names a Bash call's command in full", async () => {
+      withSession({ shells: [{ command: "rm -rf build && make all", at: "2026-09-30T08:03:00Z" }], waitingTools: [{ name: "Agent", at: "2026-09-30T08:04:00Z" }] });
+      term = fakeTerminal(["> build it", "", "Bash command", "  rm -rf build && make all", "", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "", "  esc to cancel"]);
+      registerTerminal("p:agent-1", term);
+      await lamp("decision");
+      reader(host);
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject code")?.textContent).toBe("rm -rf build && make all"));
+      expect(group.querySelector(".terminal-reader-question-subject small")?.textContent).toMatch(/approval to run/);
+    });
+
+    it("shows a waiting question read-only before the terminal draws it, then clickable on its rows", async () => {
+      withSession({ entries: [...transcript.entries, asked] });
+      // The record is there, the dialog is not on screen yet.
+      const rows = ["> fix the strings", "", "✻ Thinking… (3s · ↓ 120 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"];
+      term = fakeTerminal(rows);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      // No lamp: the record alone shows nothing, and not as a chat bubble either.
+      await screen.findByText("fix the parser");
+      expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+      expect(screen.queryByRole("group", { name: "Question" })).toBeNull();
+      await lamp("decision");
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(group.textContent).toMatch(/still drawing this question/);
+      expect((within(group).getByRole("button", { name: /Red/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect(group.querySelector(".terminal-reader-question-ask")?.textContent).toBe("Which colours should the probe use?");
+      // The dialog arrives: the same words on the screen's rows, the boxes and the sample.
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "←  ☐ Colours  →", "Which colours should the probe use?", "❯ 1. [ ] Red", "       warm", "  2. [ ] Blue", "  3. [ ] Type something", "     Submit", "", "  4. Chat about this", "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"); });
+      await waitFor(() => expect(screen.queryByText(/still drawing this question/)).toBeNull());
+      const red = within(screen.getByRole("group", { name: "Waiting for your answer" })).getByRole("button", { name: /Red/ }) as HTMLButtonElement;
+      expect(red.disabled).toBe(false);
+      expect(red.getAttribute("aria-pressed")).toBe("false");
+      expect(red.querySelector(".terminal-reader-option-preview")?.textContent).toBe("+--+\n|  |\n+--+");
+      // Its keys are the screen's: Enter on the highlighted row.
+      fireEvent.click(red);
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(written).toEqual(["\r"]);
+    });
+
+    it("does not bring the read-only card back once the answered dialog is gone, while the lamp and the record still say it asks", async () => {
+      withSession({ entries: [...transcript.entries, asked] });
+      await lamp("decision");
+      const rows = ["> fix the strings", "", "✻ Thinking… (3s · ↓ 120 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"];
+      term = fakeTerminal(rows);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      // Before the dialog: the read-only card stands.
+      const before = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(before.textContent).toMatch(/still drawing this question/);
+      // The dialog is drawn, then answered (it leaves the screen); the lamp is
+      // still "decision" and the stored session still holds the call as waiting.
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "←  ☐ Colours  →", "Which colours should the probe use?", "❯ 1. [ ] Red", "       warm", "  2. [ ] Blue", "  3. [ ] Type something", "     Submit", "", "  4. Chat about this", "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"); });
+      await waitFor(() => expect(screen.queryByText(/still drawing this question/)).toBeNull());
+      expect(within(screen.getByRole("group", { name: "Waiting for your answer" })).getByRole("button", { name: /Red/ })).toBeTruthy();
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "✻ Thinking… (4s · ↓ 150 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"); });
+      await waitFor(() => expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull());
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+      expect(screen.queryByText(/still drawing this question/)).toBeNull();
+    });
   });
 
   it("walks a several-question dialog's tabs with ←/→, so an answer can be changed before Submit", async () => {
@@ -1263,6 +1675,10 @@ describe("agentReader helpers", () => {
     expect(readerOffered({ kind: "local_agent", cmd: "ollama", localDriver: "claude" })).toBe(false);
     expect(readerOffered({ kind: "local_agent", cmd: "ollama", localDriver: "opencode" })).toBe(true);
     expect(readerOffered({ kind: "local_agent", cmd: "ollama", localLaunch: { driver: "opencode", model: "m", args: [] } })).toBe(true);
+    // A resumed local OpenCode tab that kept neither field: its `cmd` names
+    // the driver, the only one that runs without `ollama launch`.
+    expect(readerOffered({ kind: "local_agent", cmd: "opencode" })).toBe(true);
+    expect(readerOffered({ kind: "local_agent", cmd: "codex" })).toBe(false);
     expect(readerOffered({ kind: "agent", cmd: "gemini", localDriver: "opencode" })).toBe(false);
     expect(readerOffered({ kind: "shell", cmd: "bash" })).toBe(false);
     expect(readerOffered(undefined)).toBe(false);

@@ -364,12 +364,36 @@ pub(crate) fn friendly_ollama_error(raw: &str) -> String {
 /// fallback all stay in sync with whatever the installer actually runs.
 ///
 /// - Windows: winget (present on all supported Windows 10/11 builds).
-/// - Linux/macOS: the official distro-agnostic install script.
+/// - Linux/macOS: the official install script. It has a Darwin branch
+///   (checked 2026-11-15): Ollama.app into /Applications, the CLI linked into
+///   /usr/local/bin; no Homebrew needed, which a fresh Mac lacks.
 pub fn ollama_install_cmd() -> &'static str {
     if cfg!(target_os = "windows") {
         "winget install --id Ollama.Ollama -e --silent --accept-source-agreements --accept-package-agreements"
     } else {
         "curl -fsSL https://ollama.com/install.sh | sh"
+    }
+}
+
+/// The one-click command that brings an installed Ollama up to date, run in a
+/// PowerShell tab on Windows and a shell tab elsewhere.
+///
+/// Windows uses `winget upgrade`, not `install`: for a package that is already
+/// present `install` can stop at "already installed / no applicable upgrade"
+/// and leave the old version in place. winget is looked up on PATH first and
+/// then at its per-user App Execution Alias, because a tab's PATH can lack
+/// `%LOCALAPPDATA%\Microsoft\WindowsApps`. The installers elsewhere update in
+/// place, so the install command is the upgrade command.
+pub fn ollama_upgrade_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        concat!(
+            "$w = (Get-Command winget -ErrorAction SilentlyContinue).Source; ",
+            "if (-not $w) { $w = \"$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\winget.exe\" }; ",
+            "& $w upgrade --id Ollama.Ollama -e --silent ",
+            "--accept-source-agreements --accept-package-agreements"
+        )
+    } else {
+        ollama_install_cmd()
     }
 }
 

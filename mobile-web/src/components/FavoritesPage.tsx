@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { tabColorCss } from "../../../src/lib/theme/tabColors";
 import { isUntested } from "../../../src/lib/untested";
-import { ApiError, api, type OutboxFile, type ProjectDetail, type ViewerScope } from "../api";
+import { goBack } from "../backStack";
+import { ApiError, getProjectDetail, type OutboxFile, type ProjectDetail, type ViewerScope } from "../api";
 import { onFavorites, onFolderColors, readFavoritePlaces, rememberFilesPlace, removeFavorite, savedPlace, type FavoritePlace, type FilesSaved } from "../filesPlace";
 import { FileGlyph, FilesLibrary, asViewerFile, failureKey, lookUpSaved, noteFileOpened } from "./FilesLibrary";
 import { OptionSheet } from "./OptionSheet";
@@ -29,7 +30,9 @@ const staleKey = ({ place, item }: Picked) => `${place.placeId}\n${savedPlace(it
 export function FavoritesPage() {
   const t = useT();
   const [places, setPlaces] = useState(() => readFavoritePlaces());
-  const [projects, setProjects] = useState<Record<string, ProjectDetail | "gone">>({});
+  /** Each project's detail, `gone` when no longer shared, `failed` when the
+   * read failed otherwise (its group is named "Project"). */
+  const [projects, setProjects] = useState<Record<string, ProjectDetail | "gone" | "failed">>({});
   const [viewer, setViewer] = useState<{ place: FavoritePlace; file: OutboxFile } | null>(null);
   const [library, setLibrary] = useState<FavoritePlace | null>(null);
   const [sheet, setSheet] = useState<(Picked & { gone: boolean }) | null>(null);
@@ -47,10 +50,12 @@ export function FavoritesPage() {
   useEffect(() => {
     const controller = new AbortController();
     for (const id of ids.split("\n").filter(Boolean)) {
-      void api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(id)}`, { signal: controller.signal }).then(
+      void getProjectDetail(id, controller.signal).then(
         (detail) => setProjects((known) => ({ ...known, [id]: detail })),
         (reason: unknown) => {
-          if (reason instanceof ApiError && reason.code === "project_not_found") setProjects((known) => ({ ...known, [id]: "gone" }));
+          if (controller.signal.aborted) return;
+          const gone = reason instanceof ApiError && reason.code === "project_not_found";
+          setProjects((known) => ({ ...known, [id]: gone ? "gone" : "failed" }));
         },
       );
     }
@@ -60,10 +65,24 @@ export function FavoritesPage() {
   const labelOf = (place: FavoritePlace): string => {
     const project = projects[place.projectId];
     if (project === "gone") return t("mobile.favorites.notShared");
-    if (!project) return t("mobile.favorites.project");
+    if (!project || project === "failed") return t("mobile.favorites.project");
     return place.side === "host" ? `${project.project.label} · ${project.host_label || t("mobile.files.side.host")}` : project.project.label;
   };
-  const sorted = [...places].sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
+  // Sorted by name only once every project's name is in: groups sorted as
+  // names arrive one by one would jump under the reader's finger.
+  const named = places.every((place) => projects[place.projectId] !== undefined);
+  const sorted = named ? [...places].sort((a, b) => labelOf(a).localeCompare(labelOf(b))) : places;
+
+  useEffect(() => {
+    if (!viewer || library) return;
+    // The library takes its own Escape; the viewer here closes as Back does.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      goBack();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [viewer, library]);
 
   const settle = (picked: Picked, isStale: boolean) => setStale((known) => {
     const key = staleKey(picked);

@@ -23,6 +23,7 @@ import { forgetPhoneHold, onPhoneHoldDue, phoneHoldDue } from "../../lib/agents/
 import { agentDeliveryReady, agentDeliveryTurn, lastPtyOutputAt, noteScheduleProposal, useActivityStore } from "../../stores/activity";
 import { recordScheduledDelivery, sendCollectedPrompt, useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
+import { wakeAgentTab } from "../../stores/agents/agentTabStop";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { holdsTimerLease } from "../../stores/timerLease";
 import { aiIsOff } from "../../lib/aiSwitch";
@@ -493,6 +494,9 @@ export function AgentScheduleHost() {
             // The tab being focused is deliberately not part of this gate.
             // Only a phone prompt goes in meanwhile.
             if (!input || !idleForDelivery(input)) {
+              // A stopped tab registers no input: a due prompt wakes it, and
+              // a later tick delivers once it is up (`agentTabStop`).
+              if (!input && binding.tab.stopped) wakeAgentTab(binding.projectId, binding.tab.key);
               if (input) await queueDuePhoneHold(binding, input, schedules, now);
               break;
             }

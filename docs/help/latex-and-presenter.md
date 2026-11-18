@@ -48,10 +48,17 @@ another pane, or pop that pane out to a second screen.
   the PDF (**Cmd+Click** on macOS).
 - **Ctrl+Click** in the PDF jumps to the source line that produced it.
 
-This works across tiled and popped-out panes. It needs the SyncTeX data a
+This works across tiled and popped-out panes, and inside an agent tab's
+**Data** view: there Compile, **Open PDF** and both Ctrl+Clicks switch the
+Data view between the source and its PDF instead of opening tabs (unsaved
+source edits are saved first).
+
+Both directions need the SyncTeX data a
 compile from Tabtivity writes beside the PDF. If the PDF is older or newer
 than that data, or the source changed since the last compile, Tabtivity tells
 you and offers **Recompile**.
+A PDF built into the output folder in an earlier session is found again, and a
+PDF open in the root console offers **Recompile** too.
 
 ## Previews and Beamer
 

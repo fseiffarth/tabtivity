@@ -1,5 +1,6 @@
-//! Bounded LSP framing and concurrent request correlation. Server logs are
-//! discarded; callers explicitly handle status and server-to-client requests.
+//! Bounded LSP framing and concurrent request correlation. Server logs go to
+//! the caller's [`LogSink`] (or nowhere); callers explicitly handle status and
+//! server-to-client requests.
 use serde_json::{json, Value};
 use app_core::sync::LockExt;
 use std::collections::HashMap;
@@ -12,6 +13,11 @@ use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
 use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
+
+/// Where a server's log lines go: `window/logMessage` and `$/logTrace` text
+/// (and, from the process, its stderr), each as one line. The receiver
+/// redacts and bounds them.
+pub type LogSink = Arc<dyn Fn(String) + Send + Sync>;
 
 const MAX_FRAME: usize = 8 * 1024 * 1024;
 const MAX_HEADERS: usize = 8192;
@@ -124,6 +130,15 @@ impl RpcClient {
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
+        Self::connect_logged(reader, writer, None)
+    }
+
+    /// [`connect`](Self::connect), handing the server's log lines to `log`.
+    pub fn connect_logged<R, W>(reader: R, writer: W, log: Option<LogSink>) -> (Self, mpsc::Receiver<Value>)
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let requests = pending.clone();
         let closed = Arc::new(AtomicBool::new(false));
@@ -138,6 +153,17 @@ impl RpcClient {
                 };
                 if let Some(method) = message.get("method").and_then(Value::as_str) {
                     if method == "window/logMessage" || method == "$/logTrace" {
+                        if let Some(log) = &log {
+                            let params = message.get("params");
+                            let text = |key: &str| params.and_then(|p| p.get(key)).and_then(Value::as_str);
+                            let kind = if method == "$/logTrace" { "trace" } else { "log" };
+                            let mut line = format!("{kind}: {}", text("message").unwrap_or(""));
+                            if let Some(verbose) = text("verbose") {
+                                line.push(' ');
+                                line.push_str(verbose);
+                            }
+                            log(line);
+                        }
                         continue;
                     }
                     if events.try_send(message).is_err() {

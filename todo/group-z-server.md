@@ -176,6 +176,45 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+    - Phase 1b done (2026-11-05, never live; `docs/headless_mcp_plan.md`
+      "Phase 1b", handoff `docs/headless_mcp_handoff.md`): the **markup lane
+      in the Mobile host**. A tab the host spawned had no `markup_ask` /
+      `markup_done` (the host routed no `/mcp/markup`), so the phone's ✓
+      badges and **Approve all** never showed. The host now serves the lane
+      for its own tabs (own token store, memory-only asks); the window's
+      markup commands read the host's asks over the admin socket and answer
+      them through its own scheduler; with no window the host answers the
+      phone itself (`hold_prompt`); the host pokes an open window's views.
+    - [x] 🤖 Automated test — a headless create through `grant_lanes` gets the
+      markup server; the host listener admits its token on `/mcp/markup` and
+      still 404s `/mcp`; asks and ticks made through the host's lane show to
+      the window-side listing and to the phone path, with a window and with
+      none; an answer to a host tab's ask is delivered by the host's hold
+      path (no window) or handed to the window to queue, and a window tab's
+      ask never leaves the window. (`host.rs`
+      `a_headless_claude_tab_is_handed_the_hosts_mcp_servers`,
+      `a_tab_the_host_spawned_gets_its_markup_answered_by_the_host_without_a_window`;
+      `commands::markup_mcp` `the_window_reaches_the_asks_and_ticks_the_host_holds`;
+      `commands::root_mcp` `the_headless_router_does_not_route_the_root_lane`,
+      `the_hosts_markup_hook_notifies_its_sink`; `markup_mcp`
+      `two_processes_asks_merge_to_the_newest_and_ticks_to_a_union`,
+      `the_second_process_holds_its_own_asks_and_ticks`;
+      `MobileMarkupPoke.test.ts`.)
+    - [ ] 🖐️ Manual test — Mobile on, window closed: create a Claude tab from
+      the phone, mark up a PDF in it and Submit; the agent's questions, its ✓
+      ticks and **Approve all** show on the phone, and an answer types into
+      the tab. Open the window: the same tab's markup view shows the same
+      card and ticks (answer there: the phone's card closes). Then, with the
+      window open, ask again: the desktop card appears at once. Needs a
+      rebuilt desktop and a restarted Mobile host (`npm run backend:stale`).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
 
 2340. **Show on the phone why a new tab could not be opened.** (2026-10-02,
     found in the headless owner's live test.) A failed ＋ shows only a short
@@ -1275,13 +1314,14 @@ the desktop groundwork the hosted plan's P1 builds on.*
       tabs that outlived it in the tmux unit (an update restarts every
       service) kept naming the old one, on a loopback every account shares —
       another tenant who bound it in the gap got their tool calls and could
-      answer them. It now rebinds the port it remembers
-      (`<state>/root-mcp-port`); taken, it binds another, ends the sessions
-      naming the old one and tells the user (`api_proxy_port::Service::
-      AgentTools`, the API proxy's dialog with its own title, UntestedTag
-      `agentToolsPortDialog.1`). The desktop window's listener keeps a random
-      port (residual: a fenced agent or another account on a shared desktop
-      could take it after a crash).
+      answer them. It now rebinds the port it remembers; taken, it binds
+      another, ends the sessions naming the old one and tells the user
+      (`api_proxy_port::Service::AgentTools`, the API proxy's dialog with its
+      own title, UntestedTag `agentToolsPortDialog.1`). Since the merge of
+      `develop` (2026-11-18) the remembering is `develop`'s own
+      (`root_mcp::bind_host`, `<state>/root_mcp/host-port`, with the reattach
+      record); this branch adds only the ending of the sessions on a lost
+      port, on a server daemon (`root_mcp::lost_port_to_end`).
     - *A local-model agent's Ollama is judged by its owner before it starts*
       (`launch_prep::local_model_spawn_judged`, server only): its CLI sends
       prompts and project files to the loopback Ollama itself, so while the
@@ -1306,9 +1346,8 @@ the desktop groundwork the hosted plan's P1 builds on.*
     proxy's remembered port, voice (`Client` commands, never on a server),
     reader fetches without a proxy (the guide says so), the MCP on/off hover
     card and the ssh-hosts fix (both server-aware already).
-    - [x] 🤖 Automated test — `commands::root_mcp` `a_server_listener_rebinds_its_remembered_port_or_moves_off_a_taken_one`;
-      `api_proxy_port` `finds_a_session_whose_mcp_urls_name_the_tools_port`,
-      `a_remembered_port_is_a_real_port_or_none`;
+    - [x] 🤖 Automated test — `commands::root_mcp` `only_a_server_daemon_ends_the_sessions_of_a_lost_tools_port`;
+      `api_proxy_port` `finds_a_session_whose_mcp_urls_name_the_tools_port`;
       `launch_prep` `only_a_servers_local_model_spawn_has_its_ollama_owner_judged`;
       `settings` `a_hosted_server_offers_no_assistant`;
       `agent_keys` `no_proxy_or_a_cli_it_cannot_serve_fails_the_spawn`;
@@ -1316,7 +1355,7 @@ the desktop groundwork the hosted plan's P1 builds on.*
     - [ ] 🖐️ Manual test — on a server with two accounts, alice and bob:
       alice opens a Claude agent tab in a project and asks it to list its
       tools; `sudo systemctl restart <slug>-serverd@alice`; the tab keeps
-      running and `cat ~alice/.local/share/<slug>-server/root-mcp-port` is
+      running and `cat ~alice/.local/share/<slug>-server/root_mcp/host-port` is
       the port before the restart. Then stop alice's daemon, as bob bind
       that port (`python3 -m http.server <port> --bind 127.0.0.1`), start
       alice's daemon again: alice's browser shows "The agent tools' port was

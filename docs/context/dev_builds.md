@@ -167,6 +167,12 @@ change was not run live.
   notice. The chip's **Relaunch now** runs the copy too (the checkout's only
   while none exists yet). A *committed* launcher edit still reaches the user,
   through the next queued build (the residual below).
+  **The launcher waits instead of `exec`ing** (2026-11-06): the window's main
+  process had been dying with nothing logged and its children left running,
+  and only a parent can read how a process ended. It forwards TERM/HUP/INT
+  to the app and appends `=== EXITED <utc> pid=… killed by SIG… | exit status
+  N ===` to crash.log. With `services::run_heartbeat`'s `PREVIOUS RUN DIED`
+  line (the death time to 30 s), that names a SIGKILL vs a library's `_exit`.
   **Since 2026-09-25 a fenced commit does not build at all**: that path never
   moved `package-dev-auto.stamp` in the real home, so the header chip sat at
   "27 behind" and never showed a build for an agent's commit. The script now

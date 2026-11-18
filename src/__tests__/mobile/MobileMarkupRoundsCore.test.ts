@@ -12,7 +12,7 @@ import {
   type InkMark, type Layer, type TextMark,
 } from "../../../mobile-web/src/markup/layer";
 import { layerKey, loadLayer, moveLayer, saveLayer, SENT_LIMITS, withinLimits, type LayerBackend } from "../../../mobile-web/src/markup/store";
-import { canApply, canUndo, CONFIRM_MS, followRound, nextCheck, SETTLE_MS, startRound, stepRound, holdsUndo, undoneRound, undoSummary, type AgentSignal, type Round } from "../../../mobile-web/src/markup/submitState";
+import { canApply, canUndo, CONFIRM_MS, followRound, nextCheck, SETTLE_MS, startRound, stepRound, holdsUndo, undoFailureNote, undoneRound, undoSummary, type AgentSignal, type Round } from "../../../mobile-web/src/markup/submitState";
 import {
   DEFAULT_MARKUP_APPLY_INSTRUCTION, DEFAULT_MARKUP_INSTRUCTION, defaultMarkupInstruction, markupUndoNote, readMarkupDirect, readMarkupInstruction, writeMarkupDirect, writeMarkupInstruction,
 } from "../../../mobile-web/src/markupInstruction";
@@ -247,7 +247,7 @@ describe("markup rounds · Make these changes", () => {
 });
 
 describe("markup rounds · Undo (apply rounds)", () => {
-  const UNDO = { id: "0123456789abcdef0123456789abcdef", state: "ready" as const };
+  const UNDO = { id: "0123456789abcdef0123456789abcdef", state: "ready" as const, logId: "r".repeat(32) };
   const finish = (round: Round) => stepRound(stepRound(stepRound(round, "working", 1), "idle", 2), "idle", 2 + SETTLE_MS);
 
   it("offers Undo only on a round with an undo id, once it is done — and Make these changes never", () => {
@@ -273,7 +273,7 @@ describe("markup rounds · Undo (apply rounds)", () => {
     expect(canApply(undone)).toBe(false);
     expect(undoneRound(undone, UNDO.id)).toBe(undone);
     // A late answer for an earlier round's undo leaves a newer round's alone.
-    const newer = finish(startRound(false, 100, false, { id: "f".repeat(32), state: "ready" }));
+    const newer = finish(startRound(false, 100, false, { id: "f".repeat(32), state: "ready", logId: "s".repeat(32) }));
     expect(undoneRound(newer, UNDO.id)).toBe(newer);
     expect(holdsUndo(newer, UNDO.id)).toBe(false);
     expect(holdsUndo(finished, UNDO.id)).toBe(true);
@@ -303,6 +303,24 @@ describe("markup rounds · Undo (apply rounds)", () => {
       .toBe("I undid your edits from my last marks: `a.tex` and `b.bib` are back as they were before that round. Don't redo them; no need to reply.");
     expect(markupUndoNote(["a.tex"], 0)).toContain("`a.tex` is back as it was before");
     expect(markupUndoNote(["a.tex"], 1)).toContain("`a.tex` and 1 other file are back");
+  });
+
+  it("words a failed undo the same on both hosts: files changed since, gone, or a plain failure", () => {
+    const t = (key: TranslationKey, vars?: Record<string, string | number>) => translate("en", key, vars);
+    const conflict = (files: string[], more = 0) => ({ code: "undo_conflict", conflict: { files, more } });
+    expect(undoFailureNote(conflict(["paper.tex"]), "undo", "x", t))
+      .toEqual({ text: "Can't undo — `paper.tex` changed since. Nothing was changed.", alert: true, gone: false });
+    expect(undoFailureNote(conflict(["a.tex", "b.tex"], 2), "undo", "x", t).text).toContain("`a.tex`, `b.tex` and 2 more");
+    expect(undoFailureNote(conflict([]), "preview", "x", t).text).toContain("…");
+    // The conflict is read before the code.
+    expect(undoFailureNote({ code: "undo_gone", conflict: { files: ["a.tex"], more: 0 } }, "undo", "x", t).gone).toBe(false);
+    for (const code of ["undo_gone", "round_not_found"]) {
+      expect(undoFailureNote({ code, conflict: null }, "undo", "x", t)).toEqual({ text: translate("en", "mobile.markup.undo.gone"), alert: true, gone: true });
+    }
+    const plain = undoFailureNote({ code: "boom", conflict: null }, "preview", "it broke", t);
+    expect(plain).toEqual({ text: translate("en", "mobile.markup.undo.previewFailed", { reason: "it broke" }), alert: true, gone: false });
+    expect(undoFailureNote({ code: "boom", conflict: null }, "undo", "it broke", t).text)
+      .toBe(translate("en", "mobile.markup.undo.failed", { reason: "it broke" }));
   });
 
   it("treats either mode's default instruction as none, and keeps Apply marks directly on unset", () => {

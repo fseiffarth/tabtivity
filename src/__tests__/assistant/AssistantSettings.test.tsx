@@ -90,7 +90,7 @@ describe("the assistant's settings page", () => {
   it("says how to turn the assistant on while its switch is off, and reads nothing", async () => {
     setSettings({ assistant: false });
     render(<AssistantSettings />);
-    expect(screen.getByText(/Turn on Tabby under Experimental/)).toBeTruthy();
+    expect(screen.getByText(/Turn on Tabby above/)).toBeTruthy();
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === "assistant_options")).toEqual([]);
   });
 
@@ -189,12 +189,12 @@ describe("the assistant's settings page", () => {
 });
 
 describe("the settings navigation", () => {
-  it("lists the assistant's page only while the experimental switch is on", async () => {
+  it("lists the assistant's page with its own switch, whether it is on or off", async () => {
     setSettings({ assistant: false });
     const view = render(<SettingsDialog onClose={() => {}} />);
     await act(async () => {});
     const labels = () => Array.from(view.container.querySelectorAll(".settings-navigation-links button")).map((b) => b.textContent);
-    expect(labels().some((l) => l?.includes("Tabby"))).toBe(false);
+    expect(labels().some((l) => l?.includes("Tabby"))).toBe(true);
     await act(async () => setSettings({ assistant: true }));
     expect(labels().some((l) => l?.includes("Tabby"))).toBe(true);
   });

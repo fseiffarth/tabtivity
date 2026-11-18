@@ -4,7 +4,7 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { viewerFileUrl, type OutboxFile } from "../api";
 import { answerLeaves } from "../terminal/chatFiles";
-import { InboxAlbum, viewableFile, type InboxSource } from "./InboxPreview";
+import { InboxAlbum, openableFile, type InboxSource } from "./InboxPreview";
 
 /** What the chat draws the files its answers name from (`useNamedFiles`). */
 export interface AnswerFiles {
@@ -34,8 +34,9 @@ export function AnswerAlbum({ text, files }: { text: string; files: AnswerFiles 
   const { project, named, sent, open, settle } = files;
   const leaves = useMemo(() => answerLeaves(text, named, sent), [text, named, sent]);
   const source = useMemo<InboxSource>(() => ({
+    scope: { files: project },
     picture: (file) => viewerFileUrl({ files: project }, file),
-    openable: viewableFile,
+    openable: openableFile,
     download: (file) => viewerFileUrl({ files: project }, file, true),
   }), [project]);
   if (leaves.length === 0) return null;

@@ -1,8 +1,10 @@
 /**
  * The phone's Diverged list (`DivergedSheet`, ± in the project drawer): rows by
  * kind, a compare on tap, and the rule that matters: nothing moves without the
- * second tap on a question that says what is lost. A preview that fails asks
- * all the same; a list the desktop has not opened up stays read-only.
+ * second tap on a question that says what is lost. Every act is previewed
+ * first and sent with the preview's receipt (gap 97); a preview that fails
+ * asks nothing, since the desktop would refuse the act; a list the desktop has
+ * not opened up stays read-only.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,16 +24,20 @@ const PREVIEW: SyncPreview = { files: 1, bytes: 2048, overwrites: 1, destructive
 
 type Posted = { url: string; body: Record<string, unknown> };
 
-function desktop({ listing, preview = PREVIEW, outcome = { done: 1, failed: 0, skipped: 0 }, diff = "", status = 200 }: { listing: DivergedList | (() => DivergedList); preview?: SyncPreview | null; outcome?: SyncOutcome | "gone"; diff?: string; status?: number }) {
+/** The receipt the fake desktop mints for a preview: its op and files, so a test can see which one an act echoed. */
+const receiptFor = (body: Record<string, unknown>) => `receipt:${String(body.op)}:${(body.files as string[]).join(",")}`;
+
+function desktop({ listing, preview = PREVIEW, outcome = { done: 1, failed: 0, skipped: 0 }, diff = "", status = 200 }: { listing: DivergedList | (() => DivergedList); preview?: SyncPreview | null; outcome?: SyncOutcome | "gone" | "stale"; diff?: string; status?: number }) {
   const posted: Posted[] = [];
   const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (init?.method === "POST") {
       posted.push({ url, body: JSON.parse(String(init.body)) });
       if (url.endsWith("/preview")) {
-        return preview ? new Response(JSON.stringify({ preview }), { status: 200 }) : new Response(JSON.stringify({ error: "sync_failed" }), { status: 409 });
+        return preview ? new Response(JSON.stringify({ preview, token: receiptFor(posted[posted.length - 1].body) }), { status: 200 }) : new Response(JSON.stringify({ error: "sync_failed" }), { status: 409 });
       }
       if (outcome === "gone") return new Response(JSON.stringify({ error: "desktop_unavailable" }), { status: 503 });
+      if (outcome === "stale") return new Response(JSON.stringify({ error: "preview_stale" }), { status: 409 });
       return new Response(JSON.stringify(outcome), { status: 200 });
     }
     if (url.includes("/diff?")) return new Response(JSON.stringify({ diff, cut: false }), { status: 200 });
@@ -107,7 +113,7 @@ describe("Mobile project — Diverged list", () => {
 
     fireEvent.click(within(ask).getByRole("button", { name: "Overwrite local" }));
     await waitFor(() => expect(resolves(posted)).toHaveLength(1));
-    expect(resolves(posted)[0].body).toEqual({ op: "pull", files: ["t1"] });
+    expect(resolves(posted)[0].body).toEqual({ op: "pull", files: ["t1"], token: "receipt:pull:t1" });
     await screen.findByText("1 file(s) done.");
     expect(onChanged).toHaveBeenCalled();
   });
@@ -122,13 +128,39 @@ describe("Mobile project — Diverged list", () => {
     expect(resolves(posted)).toEqual([]);
   });
 
-  it("still asks when the preview fails, and says it could not check", async () => {
+  it("asks nothing when the preview fails, and says it could not check", async () => {
     const posted = desktop({ listing: list([row("t1", "src/a.py")]), preview: null });
     const sheet = await open();
     fireEvent.click(await within(sheet).findByRole("button", { name: "Keep the local copy" }));
-    const ask = await screen.findByRole("dialog", { name: "Push to host?" });
-    expect(within(ask).getByText(/Couldn't check what this would transfer/)).toBeTruthy();
+    await within(sheet).findByText(/Couldn't check what this would transfer/);
+    expect(screen.queryByRole("dialog", { name: "Push to host?" })).toBeNull();
     expect(resolves(posted)).toEqual([]);
+  });
+
+  it("previews a deletion too, and sends each act the receipt of its own preview", async () => {
+    const posted = desktop({ listing: list([row("t1", "gone-here.txt", { local_mtime: undefined }), row("t2", "gone-there.txt", { host_mtime: undefined }), row("t3", "both.txt")]) });
+    const sheet = await open();
+    fireEvent.click(await within(sheet).findByRole("button", { name: "Delete for all files deleted on one side" }));
+    const ask = await screen.findByRole("dialog", { name: "Delete on the host too?" });
+    expect(posted.filter((post) => post.url.endsWith("/preview")).map((post) => post.body)).toEqual([
+      { op: "delete_host", files: ["t1"] },
+      { op: "delete_local", files: ["t2"] },
+    ]);
+    expect(resolves(posted)).toEqual([]);
+    fireEvent.click(within(ask).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(resolves(posted)).toHaveLength(2));
+    expect(resolves(posted).map((post) => post.body)).toEqual([
+      { op: "delete_host", files: ["t1"], token: "receipt:delete_host:t1" },
+      { op: "delete_local", files: ["t2"], token: "receipt:delete_local:t2" },
+    ]);
+  });
+
+  it("says what a refused act means when the receipt went stale", async () => {
+    desktop({ listing: list([row("t1", "a.txt")]), outcome: "stale" });
+    const sheet = await open();
+    fireEvent.click(await within(sheet).findByRole("button", { name: "Take the remote copy" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Sync to local?" })).getByRole("button", { name: "Overwrite local" }));
+    await within(sheet).findByText(/changed since you were asked/);
   });
 
   it("uploads a new file without the force warning", async () => {
@@ -138,7 +170,7 @@ describe("Mobile project — Diverged list", () => {
     const ask = await screen.findByRole("dialog", { name: "Push to host?" });
     expect(within(ask).queryByText(/overwrites the other side/)).toBeNull();
     fireEvent.click(within(ask).getByRole("button", { name: "Copy to host" }));
-    await waitFor(() => expect(resolves(posted)[0]?.body).toEqual({ op: "push", files: ["t2"] }));
+    await waitFor(() => expect(resolves(posted)[0]?.body).toEqual({ op: "push", files: ["t2"], token: "receipt:push:t2" }));
   });
 
   it("leaves a true conflict out of a bulk action unless asked", async () => {
@@ -148,7 +180,7 @@ describe("Mobile project — Diverged list", () => {
     const ask = await screen.findByRole("dialog", { name: "Sync to local?" });
     fireEvent.click(within(ask).getByRole("button", { name: "Overwrite local" }));
     await waitFor(() => expect(resolves(posted)).toHaveLength(1));
-    expect(resolves(posted)[0].body).toEqual({ op: "pull", files: ["t1"] });
+    expect(resolves(posted)[0].body).toEqual({ op: "pull", files: ["t1"], token: "receipt:pull:t1" });
   });
 
   it("takes the newer copies with one question over both directions", async () => {
@@ -161,7 +193,7 @@ describe("Mobile project — Diverged list", () => {
     const ask = await screen.findByRole("dialog", { name: "Take the newer copies?" });
     fireEvent.click(within(ask).getByRole("button", { name: "Take newer" }));
     await waitFor(() => expect(resolves(posted)).toHaveLength(2));
-    expect(resolves(posted).map((post) => post.body)).toEqual([{ op: "pull", files: ["t1"] }, { op: "push", files: ["t2"] }]);
+    expect(resolves(posted).map((post) => post.body)).toEqual([{ op: "pull", files: ["t1"], token: "receipt:pull:t1" }, { op: "push", files: ["t2"], token: "receipt:push:t2" }]);
   });
 
   it("completes a one-sided deletion after naming the file, and offers it on no other", async () => {
@@ -171,7 +203,7 @@ describe("Mobile project — Diverged list", () => {
     const ask = await screen.findByRole("dialog", { name: "Delete on the host too?" });
     expect(within(ask).getByText(/"gone-here.txt" was deleted from the local mirror/)).toBeTruthy();
     fireEvent.click(within(ask).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(resolves(posted)[0]?.body).toEqual({ op: "delete_host", files: ["t1"] }));
+    await waitFor(() => expect(resolves(posted)[0]?.body).toEqual({ op: "delete_host", files: ["t1"], token: "receipt:delete_host:t1" }));
     expect(within(sheet).getAllByRole("button", { name: /Delete the/ })).toHaveLength(1);
   });
 

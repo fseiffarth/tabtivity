@@ -148,3 +148,133 @@ attaches (a CLI reads its MCP config only at startup).
 
 Not verifiable here: nothing is started live (AGENTS.md). Manual steps are in
 `docs/context/agent_schedule_mcp.md` and the final report.
+
+## Phase 1b — the markup lane in the Mobile host
+
+The bug. A phone's markup view never showed ✓ ticks or **Approve all** for an
+agent tab the Mobile host spawned: the host did not route `/mcp/markup` and
+published `serves_markup: false`, so `grant_lanes` never gave those tabs the
+markup server. A CLI reads its MCP config once, at start, so such a tab lacked
+`markup_ask` / `markup_withdraw` / `markup_done` for its whole life, window or
+not.
+
+### Fixed decisions
+
+- Each process still serves the tabs it spawns. The host now serves the markup
+  lane for its tabs (route `/mcp/markup`, `Runtime::serves_markup = true`),
+  with its own token store; **a token is valid only on the listener of the
+  process that minted it**, and no token or secret touches disk.
+- The root lane stays window-only: `/mcp` is routed only with a context, and
+  `serves_root` stays false in the host. Only the markup route moved out of
+  the `ctx.is_some()` gate.
+- Asks and ticks stay **in memory, in the process that took them**. Nothing is
+  written to disk; no liveness has to cross a process (`session_alive` is a
+  check of the local token store, and stays one).
+- Every view that shows a tab's asks reaches both stores; an answer goes to
+  the process that holds the ask, and the prompt is delivered the way that
+  surface already delivers: the window queues it through its scheduler; the
+  host, with no window, uses `headless::hold_prompt` (`markup_here`).
+- Raw project ids, paths, commands and tmux targets still never cross the
+  browser API: the phone routes are unchanged and still shape the answer
+  (leaf names, sealed rows, `valid_tick`, `valid_ask_id`).
+- A server daemon is unchanged (it never sets a peer and always answers from
+  its own store).
+
+### The design: (b) the host serves its own asks; views route by spawner
+
+- **Host side.** Route `/mcp/markup`; `serve` publishes `serves_markup: true`
+  for every listener. The host's markup change hook (`set_change_hook`, a
+  `OnceLock` installed by `start_headless` when there is no server context)
+  raises `Notice::Markup`, which `host::run` turns into
+  `poke_desktop(["markup"])` — the window turns that slice into its own
+  `markup-mcp-changed` event (`emitMarkupChanged`), which every markup view
+  (`usePdfMarkup`, the cockpit) already re-reads on. The host calls
+  `markup_mcp::sweep()` where it revokes tokens (the phone's close; the
+  60-s sweep), so an ask dies with its session.
+- **Window side.** `commands::markup_mcp`'s commands (`markup_mcp_list`,
+  `_ticks`, `_answer`, `_reopen`, `_dismiss`; same names and payloads, now
+  `async`) read the window's own store and then the host's, over the admin
+  socket (`AdminRequest::MarkupList/Ticks/Answer/Reopen/Dismiss`,
+  `commands::markup_mcp::admin_markup` on the host). Asks merge to the newest
+  (the stores each hold at most one open ask per tab; two exist only across a
+  respawn by the other process, until the old session is swept); ticks union.
+  An answer tries the window's store first and, on `gone`, the host's, which
+  closes the ask and returns `{ prompt, receipt }` — the window then queues
+  the prompt exactly as it does for its own tabs, and a failed queue reopens
+  the ask in whichever process holds it. A dismissal goes to both. The peer
+  is set by the window only (`use_host_peer`, from `commands::root_mcp::start`);
+  with no host running the connect fails at once and the window shows what it
+  holds. A host older than this answers an error, read as "no asks".
+  The TS callers are unchanged.
+- **Phone side (`markup_call`).** With a window open the request goes to the
+  window as before; its merged commands include the host's asks, and its
+  scheduler delivers an answer. With **no window** (or one that does not know
+  the tab), the host answers from its own store (`markup_here`: list, ticks,
+  an answer held with `hold_prompt`, a dismissal), but only when it holds
+  something for the request (`markup_held_here`); a tab with nothing asked
+  stays the quiet `503 desktop_unavailable`, as before.
+- The window opening later needs nothing: the asks are in the host's memory
+  and the window reads them on its first list; the host's pokes ring the
+  views.
+
+### Alternative rejected: (a) a shared on-disk store
+
+Asks and ticks in a 0600 file under the state dir, file-locked like
+`agent_tasks.json`. Rejected because it moves the hard parts rather than
+removing them: liveness (a session id is checkable only in the process that
+minted it, so each entry would carry its owner and a dead owner's entries would
+sit until the 24-h retention — today a crash loses them, correctly); change
+notification both ways (the host can poke the window, but the window→host
+direction needs a second mechanism, or a polling timer); the answer path
+(still has to pick the delivering surface); rate windows (per tab, in memory
+today); and a persisted-JSON round-trip for stores that are deliberately
+ephemeral ("nothing survives a restart", `docs/context/markup_mcp.md`). It also
+turns every 3-s phone poll into a locked file read. The in-memory design adds
+one admin request family and one poke slice, and every existing invariant
+(tokens only in memory, `session_alive` local, 24-h retention) holds.
+
+### Steps
+
+1. `commands::root_mcp`: route `/mcp/markup` unconditionally (`/mcp` stays
+   gated); `serve` publishes `serves_markup: true`; `Notice::Markup`;
+   `start_headless` installs the hook for a host without a context; `start`
+   sets the peer. `Runtime` docs.
+2. `services::markup_mcp`: `Deserialize` on the view types, `Serialize` on
+   `Answer`; `merge_asks` / `merge_ticks`; `MAX_PEER_TICKS`; a test-only
+   second store (`as_host`) so a test can model the two processes.
+3. `protocol` + `admin`: `AdminRequest::Markup*`, `AdminResponse::Markup*`,
+   `AdminContext::markup` handler.
+4. `commands::markup_mcp`: the merged async commands, `*_with(peer, …)` for
+   tests, `admin_markup`, `use_host_peer`.
+5. `host.rs`: `Notice::Markup` → poke; handler on the admin context;
+   `markup_call` fallback + `markup_held_here`; `sweep()` after revokes;
+   `poke_desktop` tolerates a thread outside the runtime.
+6. `MobileBridgeHost.tsx`: the `markup` refresh slice → `emitMarkupChanged`.
+7. Docs, filemaps, todo, handoff.
+
+### Tests (phase 1b)
+
+- `host/tests.rs` `a_headless_claude_tab_is_handed_the_hosts_mcp_servers`
+  (extended): a headless create through `grant_lanes` gets the markup server
+  (env, argv, bound to the tab's project and target); the host listener
+  admits the markup token on `/mcp/markup` over HTTP, refuses the other
+  lanes' tokens there (and the markup token elsewhere), still 404s `/mcp`
+  for it; another process's store refuses it; a targetless spawn or a runtime
+  that holds no asks gets none; the phone's close revokes it.
+- `host/tests.rs` `a_tab_the_host_spawned_gets_its_markup_answered_by_the_host_without_a_window`:
+  asks and ticks made through the host's lane are listed to the phone with no
+  window; the answer is held with `hold_prompt`; a tab with nothing asked is
+  `desktop_unavailable`; with a window the request is forwarded and nothing is
+  held by the host (the window delivers); a window that does not know the tab
+  falls back to the host.
+- `commands::markup_mcp` `the_window_reaches_the_asks_and_ticks_the_host_holds`
+  (two stores, a real admin socket): the window lists the host's asks and
+  ticks and its own, with and without a host; answers, reopens and dismisses
+  go to the holder, a window ask never leaves memory.
+- `commands::root_mcp`: the headless router routes the markup lane (not `/mcp`);
+  the host's hook notifies its sink.
+- `markup_mcp`: merge rules; the second store is isolated.
+- `MobileMarkupPoke.test.ts`: the `markup` slice rings `markup-mcp-changed`.
+
+Not verifiable here: nothing is started live (AGENTS.md). Manual steps are in
+`docs/context/markup_mcp.md` ("Host-spawned tabs").

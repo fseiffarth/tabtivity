@@ -35,8 +35,27 @@ pub struct TexCapability {
     pub engines: Vec<String>,
     /// Whether `bibtex` is on `PATH` (used for bibliography passes).
     pub bibtex: bool,
-    /// Whether `latexmk` is on `PATH` (preferred build driver).
+    /// Whether `latexmk` is on `PATH` (preferred build driver) and can run.
     pub latexmk: bool,
+    /// A `latexmk` was found but cannot run: MiKTeX's, with no Perl on
+    /// `PATH` (MiKTeX ships none). Builds then drive the engine directly and
+    /// say why ([`MIKTEX_PERL_NOTE`]).
+    #[serde(skip)]
+    pub latexmk_needs_perl: bool,
+}
+
+/// What a build driven without latexmk because MiKTeX's needs Perl says.
+const MIKTEX_PERL_NOTE: &str = "MiKTeX's latexmk needs Perl, which is not installed (MiKTeX ships none), so this was built by running the engine directly. Install Perl (Strawberry Perl, for one) to build with latexmk.";
+
+/// Whether the `latexmk` found at `latexmk` is MiKTeX's on Windows with no
+/// Perl to run it: MiKTeX's `latexmk.exe` is a launcher for the Perl script
+/// and fails with "could not find the script engine 'perl'" without one.
+/// TeX Live's runs on the Perl it bundles. Pure; `perl_on_path` is asked
+/// only for MiKTeX's.
+fn latexmk_needs_missing_perl(windows: bool, latexmk: Option<&Path>, perl_on_path: impl FnOnce() -> bool) -> bool {
+    windows
+        && latexmk.is_some_and(|p| p.to_string_lossy().to_ascii_lowercase().contains("miktex"))
+        && !perl_on_path()
 }
 
 /// Outcome of a `compile_tex` run.
@@ -77,11 +96,15 @@ pub fn detect_capability() -> TexCapability {
         .filter(|e| on_path(e))
         .map(|e| e.to_string())
         .collect();
-    let latexmk = on_path("latexmk");
+    let found = on_path("latexmk");
+    let latexmk_needs_perl = found
+        && latexmk_needs_missing_perl(cfg!(windows), crate::paths::resolve_executable("latexmk").as_deref(), || on_path("perl"));
+    let latexmk = found && !latexmk_needs_perl;
     TexCapability {
         available: latexmk || !engines.is_empty(),
         bibtex: on_path("bibtex"),
         latexmk,
+        latexmk_needs_perl,
         engines,
     }
 }
@@ -448,11 +471,7 @@ fn run_in_within_env<S: AsRef<std::ffi::OsStr>>(
             let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&out.stderr));
             if ran.timed_out {
-                text.push_str(&format!(
-                    "\n! {app} stopped {bin} after {} seconds — the build appears to be stuck.\n",
-                    timeout.as_secs(),
-                    app = crate::brand::DISPLAY
-                ));
+                text.push_str(&stuck_note(bin, timeout));
                 return Ok(RunOut { ok: false, text });
             }
             if ran.cut {
@@ -668,9 +687,7 @@ fn latexmk_args(
     if let Some(dir) = out_dir {
         args.push(format!("-outdir={dir}"));
     }
-    for f in extra {
-        args.push(f.clone());
-    }
+    args.extend_from_slice(extra);
     args.push(NO_SHELL_ESCAPE.to_string());
     args.push(file_name.to_string());
     args
@@ -691,9 +708,7 @@ fn engine_args(file_name: &str, out_dir: Option<&str>, extra: &[String]) -> Vec<
     if let Some(dir) = out_dir {
         args.push(format!("-output-directory={dir}"));
     }
-    for f in extra {
-        args.push(f.clone());
-    }
+    args.extend_from_slice(extra);
     args.push(NO_SHELL_ESCAPE.to_string());
     args.push(file_name.to_string());
     args
@@ -821,11 +836,28 @@ fn latexmk_summary(log: &str) -> Option<String> {
     Some(out.join("; "))
 }
 
+/// The log line for a build stopped at its ceiling ({@link RUN_TIMEOUT}), local
+/// or on the host.
+fn stuck_note(bin: &str, timeout: std::time::Duration) -> String {
+    format!(
+        "\n! {app} stopped {bin} after {} seconds — the build appears to be stuck.\n",
+        timeout.as_secs(),
+        app = crate::brand::DISPLAY
+    )
+}
+
 /// Modification time of the PDF, or `None` when it does not exist. Compared
 /// across a run to tell a PDF this build wrote from one left by an earlier one:
 /// forgiving a non-zero exit status is only safe when the output is actually new.
 fn pdf_stamp(pdf: &Path) -> Option<std::time::SystemTime> {
     fs::metadata(pdf).ok().and_then(|m| m.modified().ok())
+}
+
+/// Whether the PDF is there and is not the one `before` ({@link pdf_stamp}, taken
+/// ahead of the build) saw: this run wrote it.
+fn pdf_is_fresh(pdf: &Path, before: Option<std::time::SystemTime>) -> bool {
+    let now = pdf_stamp(pdf);
+    now.is_some() && now != before
 }
 
 /// Whether a build counts as a success, for both the latexmk and the direct
@@ -1125,6 +1157,48 @@ pub async fn compile_tex(
     .await
 }
 
+/// Compile a remote project's `.tex` on its host: `path` is the HOST path (a
+/// file read from the Remote side, or any file of a host-pinned project), which
+/// `compile_tex` cannot open here. Runs latexmk there over the pooled
+/// ControlMaster and waits for it, like a local build (`tex/host.rs` has the
+/// script); no tab opens. The PDF is reported by its host path. A project's
+/// `latexmkrc` runs on the host as the login, where its agents already run —
+/// nothing of the project runs on this machine. Pressed by a person, so the
+/// dial is user-initiated; the frontend asks first on an HPC-tagged host.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn compile_tex_host(
+    project_id: String,
+    path: String,
+    engine: Option<String>,
+) -> Result<TexCompileResult, String> {
+    app_core::rt::try_blocking("compile", move || {
+        let target = crate::services::remote::remote_target_for(&project_id)
+            .ok_or_else(|| "not a remote project: its files build on this machine".to_string())?;
+        let root = target.spec.remote_path.clone();
+        let tex = host::host_tex(&root, &path)?;
+        let script = host::host_build_script(&root, &tex, engine.as_deref());
+        let _dial = crate::services::ssh_common::user_dial(&target.spec.user, &target.spec.host, target.spec.port);
+        // The host's own `timeout` stops the build at the ceiling; this one only
+        // frees the worker if the connection itself stalls.
+        let out = crate::services::ssh_exec::run_remote_script_within(
+            &target.spec,
+            &script,
+            RUN_TIMEOUT + std::time::Duration::from_secs(60),
+        )?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        host::read_host_build(&tex, engine.as_deref(), &stdout, &stderr).ok_or_else(|| {
+            let why = stderr.trim();
+            if why.is_empty() {
+                "the build on the host did not finish".to_string()
+            } else {
+                format!("the build on the host did not run: {why}")
+            }
+        })
+    })
+    .await
+}
+
 /// A deck figure's `.tex` may be compiled only when neither it nor its own
 /// folder is a link (and its name has no `~`, a Windows 8.3 alias): a
 /// figure folder pointed at a box sibling would compile, and write the PDF,
@@ -1161,19 +1235,24 @@ fn own_folder_unlinked_check(path: &Path) -> Result<(), String> {
     }
 }
 
+/// `fs::canonicalize` without Windows' verbatim `\\?\` prefix
+/// (`paths::without_verbatim_prefix`): every canonical path here becomes
+/// latexmk's cwd and `-outdir`, a format build's paths, the include and root
+/// lists and the `pdf_path` the UI opens, and none of those expects the
+/// verbatim spelling (2442i). The only canonicalising in this module; a path
+/// only the verbatim form can name keeps it.
+fn canonical(path: impl AsRef<Path>) -> std::io::Result<std::path::PathBuf> {
+    fs::canonicalize(path).map(crate::paths::without_verbatim_prefix)
+}
+
 fn compile_tex_blocking(
     path: String,
     engine: Option<String>,
     out_dir: Option<String>,
     extra_flags: Option<Vec<String>>,
 ) -> Result<TexCompileResult, String> {
-    let src = fs::canonicalize(&path).map_err(|e| format!("canonicalize {path}: {e}"))?;
-    let is_tex = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("tex"))
-        .unwrap_or(false);
-    if !is_tex {
+    let src = canonical(&path).map_err(|e| format!("canonicalize {path}: {e}"))?;
+    if !src.extension().is_some_and(|e| e.eq_ignore_ascii_case("tex")) {
         return Err(format!("not a .tex file: {}", src.display()));
     }
     let dir = src
@@ -1198,22 +1277,10 @@ fn compile_tex_blocking(
     // source's directory, an absolute one is used as-is. Created if missing so the
     // engine can write into it. The PDF then lands there (not beside the source),
     // so `pdf_path` points into it.
-    let out_dir = out_dir.and_then(|d| {
-        let d = d.trim().to_string();
-        if d.is_empty() {
-            None
-        } else {
-            Some(d)
-        }
-    });
-    let out_path = match &out_dir {
+    let out_path = match out_dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
         Some(d) => {
-            let p = Path::new(d);
-            let abs = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                dir.join(p)
-            };
+            // `join` keeps an absolute `d` as it is.
+            let abs = dir.join(d);
             fs::create_dir_all(&abs)
                 .map_err(|e| format!("create output dir {}: {e}", abs.display()))?;
             Some(abs)
@@ -1222,6 +1289,9 @@ fn compile_tex_blocking(
     };
     // The string form passed to the engine/latexmk flags.
     let out_arg = out_path.as_ref().map(|p| p.to_string_lossy().into_owned());
+    // Where the build's files land: the output dir if one was given, else
+    // beside the source.
+    let build_dir = out_path.as_deref().unwrap_or(dir);
 
     // SECURITY: filter user-supplied flags so none can enable shell-escape.
     let extra = filter_extra_flags(&extra_flags.unwrap_or_default());
@@ -1233,11 +1303,7 @@ fn compile_tex_blocking(
     let engine = engine
         .filter(|e| cap.engines.iter().any(|g| g == e))
         .or_else(|| auto_engine(&src, &cap.engines));
-    // The PDF lands in the output dir if one was given, else beside the source.
-    let pdf = match &out_path {
-        Some(p) => p.join(format!("{stem}.pdf")),
-        None => dir.join(format!("{stem}.pdf")),
-    };
+    let pdf = build_dir.join(format!("{stem}.pdf"));
     let mut log = String::new();
 
     // The cached-preamble fast path (see the "Precompiled document preambles"
@@ -1300,11 +1366,7 @@ fn compile_tex_blocking(
         log.push_str(&out.text);
         // `driver_note` carries latexmk's reason whichever way this lands, so a
         // forgiven build still says what latexmk was unhappy about.
-        let pdf_fresh = {
-            let now = pdf_stamp(&pdf);
-            now.is_some() && now != pdf_before
-        };
-        let success = build_succeeded(out.ok, pdf.exists(), pdf_fresh, doc_errors);
+        let success = build_succeeded(out.ok, pdf.exists(), pdf_is_fresh(&pdf, pdf_before), doc_errors);
         if success {
             // Record this file as the build root for every .tex it pulls in, so
             // pressing Compile in a child later redirects here (resolve_tex_root).
@@ -1368,11 +1430,7 @@ fn compile_tex_blocking(
     let mut doc_errors = log_has_tex_error(&first.text);
     log.push_str(&first.text);
 
-    // The aux lands in the output dir too when one is set.
-    let aux = match &out_path {
-        Some(p) => p.join(format!("{stem}.aux")),
-        None => dir.join(format!("{stem}.aux")),
-    };
+    let aux = build_dir.join(format!("{stem}.aux"));
     let mut pass = |log: &mut String| -> Result<(), String> {
         let out = run_in(dir, &eng, &engine_args)?;
         last_ok = out.ok;
@@ -1381,10 +1439,9 @@ fn compile_tex_blocking(
         Ok(())
     };
     if cap.bibtex && aux_needs_bibtex(&aux) {
-        // bibtex resolves its aux relative to its own CWD; run it in the output
-        // dir when one is set so it finds the aux written there.
-        let bib_dir = out_path.as_deref().unwrap_or(dir);
-        let bib = run_in(bib_dir, "bibtex", std::slice::from_ref(&stem))?;
+        // bibtex resolves its aux relative to its own CWD, so it runs where the
+        // aux was written.
+        let bib = run_in(build_dir, "bibtex", std::slice::from_ref(&stem))?;
         log.push_str(&bib.text);
         for _ in 0..2 {
             pass(&mut log)?;
@@ -1394,11 +1451,7 @@ fn compile_tex_blocking(
         pass(&mut log)?;
     }
 
-    let pdf_fresh = {
-        let now = pdf_stamp(&pdf);
-        now.is_some() && now != pdf_before
-    };
-    let success = build_succeeded(last_ok, pdf.exists(), pdf_fresh, doc_errors);
+    let success = build_succeeded(last_ok, pdf.exists(), pdf_is_fresh(&pdf, pdf_before), doc_errors);
     if success {
         record_root_mappings(&src);
     }
@@ -1413,8 +1466,9 @@ fn compile_tex_blocking(
         shell_escape: log_shows_shell_escape(&log),
         log: tail(&log),
         // Nothing to explain: there is no driver between Tabtivity and the engine,
-        // so a failure here is the engine's own and the log already says it.
-        driver_note: None,
+        // so a failure here is the engine's own and the log already says it —
+        // except why latexmk was passed over, when it was (2442m).
+        driver_note: cap.latexmk_needs_perl.then(|| MIKTEX_PERL_NOTE.to_string()),
     })
 }
 
@@ -1905,7 +1959,7 @@ fn preview_snippet_blocking(
             preamble.len()
         ));
     }
-    let cwd = fs::canonicalize(&dir).map_err(|e| format!("canonicalize {dir}: {e}"))?;
+    let cwd = canonical(&dir).map_err(|e| format!("canonicalize {dir}: {e}"))?;
     if !cwd.is_dir() {
         return Err(format!("not a directory: {}", cwd.display()));
     }
@@ -2058,7 +2112,11 @@ fn font_dirs() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "macos")]
     out.push(home.join("Library/Fonts"));
     #[cfg(target_os = "windows")]
-    out.push(home.join("AppData/Local/Microsoft/Windows/Fonts"));
+    out.extend(windows_font_dirs(
+        &home,
+        std::env::var_os("LOCALAPPDATA").as_deref(),
+        std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).as_deref(),
+    ));
     let _ = &home;
     #[cfg(target_os = "linux")]
     {
@@ -2070,9 +2128,28 @@ fn font_dirs() -> Vec<std::path::PathBuf> {
         out.push("/Library/Fonts".into());
         out.push("/System/Library/Fonts".into());
     }
-    #[cfg(target_os = "windows")]
-    out.push("C:\\Windows\\Fonts".into());
     out
+}
+
+/// Windows' font folders, the user's first: `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
+/// (under the profile when the variable is unset) and `%WINDIR%\Fonts` — not a
+/// `C:\Windows` literal, which misses a Windows installed on another drive
+/// (2442m). Pure, so every OS runs its test.
+#[cfg(any(target_os = "windows", test))]
+fn windows_font_dirs(
+    home: &Path,
+    local_appdata: Option<&std::ffi::OsStr>,
+    windir: Option<&std::ffi::OsStr>,
+) -> Vec<std::path::PathBuf> {
+    let local = local_appdata
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Local"));
+    let windir = windir
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    vec![local.join("Microsoft").join("Windows").join("Fonts"), windir.join("Fonts")]
 }
 
 /// Turn a font file's stem into something a picker can show: `LiberationSerif-BoldItalic`
@@ -2225,7 +2302,7 @@ fn scan_tex_includes(root: &Path) -> Vec<std::path::PathBuf> {
             } else {
                 dir.join(p)
             };
-            let abs = fs::canonicalize(&abs).unwrap_or(abs);
+            let abs = canonical(&abs).unwrap_or(abs);
             if seen.insert(abs.clone()) {
                 out.push(abs.clone());
                 walk(&abs, depth + 1, seen, out);
@@ -2233,7 +2310,7 @@ fn scan_tex_includes(root: &Path) -> Vec<std::path::PathBuf> {
         }
     }
     let mut seen = std::collections::HashSet::new();
-    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let root = canonical(root).unwrap_or_else(|_| root.to_path_buf());
     seen.insert(root.clone());
     let mut out = Vec::new();
     walk(&root, 0, &mut seen, &mut out);
@@ -2248,7 +2325,7 @@ fn record_root_mappings(root: &Path) {
 }
 
 fn record_root_mappings_in(path: &Path, root: &Path) {
-    let root_abs = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let root_abs = canonical(root).unwrap_or_else(|_| root.to_path_buf());
     let children = scan_tex_includes(&root_abs);
     if children.is_empty() {
         return;
@@ -2299,7 +2376,7 @@ fn magic_root(source: &str, dir: &Path) -> Option<std::path::PathBuf> {
             } else {
                 dir.join(p)
             };
-            return Some(fs::canonicalize(&abs).unwrap_or(abs));
+            return Some(canonical(&abs).unwrap_or(abs));
         }
     }
     None
@@ -2310,9 +2387,16 @@ fn magic_root(source: &str, dir: &Path) -> Option<std::path::PathBuf> {
 ///   2. the stored child→root map (if the root still exists and still includes
 ///      this child), else
 ///   3. `path` itself.
+///
+/// Off the main thread: for a child file, step 2 re-reads the root's whole
+/// include tree, and a reverse-search click asks more than once.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn resolve_tex_root(path: String) -> Result<String, String> {
-    let src = fs::canonicalize(&path).unwrap_or_else(|_| Path::new(&path).to_path_buf());
+pub async fn resolve_tex_root(path: String) -> Result<String, String> {
+    app_core::rt::try_blocking("resolve_tex_root", move || resolve_tex_root_blocking(path)).await
+}
+
+fn resolve_tex_root_blocking(path: String) -> Result<String, String> {
+    let src = canonical(&path).unwrap_or_else(|_| Path::new(&path).to_path_buf());
     let dir = src.parent().unwrap_or_else(|| Path::new("."));
 
     // 1. Magic comment wins.
@@ -2344,6 +2428,8 @@ pub fn resolve_tex_root(path: String) -> Result<String, String> {
     // 3. It is its own root.
     Ok(src_str)
 }
+
+mod host;
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../../../mobile-web/src/api";
@@ -88,9 +88,12 @@ describe("mobile board date-governed columns", () => {
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByText("Late")).toBeTruthy());
-    const options = [...(screen.getByLabelText("Move Late") as HTMLSelectElement).options];
-    expect(options.filter((option) => !option.disabled).map((option) => option.value))
-      .toEqual(["overdue", "doing", "shelf"]);
+    fireEvent.click(screen.getByRole("button", { name: "Late: card actions" }));
+    const sheet = screen.getByRole("dialog", { name: "Late" });
+    // The current column has no row; the rows the desktop would refuse are disabled.
+    const rows = within(sheet).getAllByRole("button", { name: /^Move to / }) as HTMLButtonElement[];
+    expect(rows.filter((row) => !row.disabled).map((row) => row.textContent)).toEqual(["Move to Doing", "Move to Archived"]);
+    expect(rows).toHaveLength(5);
   });
 });
 
@@ -131,9 +134,10 @@ describe("mobile board refusals", () => {
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByText("Later")).toBeTruthy());
-    // The select refuses it, so drive the refusal the way an older desktop or a
-    // deadline that moved under the reader would produce it.
-    fireEvent.change(screen.getByLabelText("Move Later"), { target: { value: "doing" } });
+    // The sheet offers the move and the desktop refuses it, as an older desktop
+    // or a deadline that moved under the reader would.
+    fireEvent.click(screen.getByRole("button", { name: "Later: card actions" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Later" })).getByRole("button", { name: "Move to Doing" }));
 
     await waitFor(() => expect(screen.getByText(translate("en", COLUMN_FOLLOWS_DATE))).toBeTruthy());
   });

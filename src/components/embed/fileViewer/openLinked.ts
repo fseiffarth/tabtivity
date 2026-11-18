@@ -16,7 +16,13 @@ import { basename, dirname } from "../../../lib/paths";
 export function openLinkedFile(
   linkingTabKey: string | undefined,
   linkingFileDir: string,
-  resolved: { path: string; viewer: InternalViewer; label: string; mdGraphOriginKey?: string },
+  resolved: {
+    path: string;
+    viewer: InternalViewer;
+    label: string;
+    mdGraphOriginKey?: string;
+    gitPullTips?: TabEntry["gitPullTips"];
+  },
 ) {
   const store = useTabsStore.getState();
   // A `.tex` editor tab that healed into a workspace (`FileViewerPane`) is
@@ -25,6 +31,8 @@ export function openLinkedFile(
   const sameFile = (t: TabEntry) =>
     t.kind === "embed" &&
     t.embedPath === resolved.path &&
+    t.gitPullTips?.local_oid === resolved.gitPullTips?.local_oid &&
+    t.gitPullTips?.incoming_oid === resolved.gitPullTips?.incoming_oid &&
     (t.viewer === resolved.viewer || (resolved.viewer === "tex" && t.viewer === "texworkspace"));
   const tab = {
     label: resolved.label,
@@ -34,6 +42,7 @@ export function openLinkedFile(
     embedPath: resolved.path,
     viewer: resolved.viewer,
     ...(resolved.mdGraphOriginKey ? { mdGraphOriginKey: resolved.mdGraphOriginKey } : {}),
+    ...(resolved.gitPullTips ? { gitPullTips: resolved.gitPullTips } : {}),
   };
   // A linking tab of ANOTHER scope — a viewer in the root console, floating over
   // a project — opens its link beside itself, in its own scope's focused

@@ -1,5 +1,340 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] **Continue work with another CLI** — v0 on develop since 2026-11-04
+  (`TerminalLimitHandoff`, pill `terminal.limitHandoff`); plan
+  `docs/cli_session_handoff_plan.md` (rewritten 2026-11-18) hardens it.
+  Steps A–D implemented on branch `cli-handoff`, never live; new pill
+  `agent.cliHandoff` (tab menu).
+  - [x] A. Successor tab through `newAgentTabForDraft` (resumable, `TAB_UID`).
+    `9e10db308`
+  - [x] B. `agent_cli_handoff_prepare`: `HANDOFF.md` in the target's agent home
+    (first request, recent turns in a budget, cockpit notes, working tree).
+    `9f537d75a`
+  - [x] C. Shared `CliHandoffDialog`: limit notice + tab-menu entry, CLI picker,
+    preview, short bootstrap prompt. `275d12367`
+  - [ ] 🖐️ Manual: Claude → Codex, Codex → Claude, restart resumes the successor.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [ ] **Notes on diff lines, added to the Chat draft** (implemented 2026-11-13, never
+  live; frontend only). Plan `docs/diff_notes_plan.md`, handoff
+  `docs/diff_notes_handoff.md`; pill `diff-notes`, steering key `C` (`viewNote`).
+  Open: the phone's `ChatChanges` and the git-panel `DiffView` (plan "Later").
+  - [x] 🤖 Automated test (`DiffNotes.test.ts`, `ReaderDiffNotes.test.tsx`)
+  - [ ] 🖐️ Manual QA: in a Claude tab with a few edits open Diffs; click the **+**
+    on an added range (Shift+click extends) and on a deleted line in two files,
+    in split, then unified; **Add to draft**: the Chat composer holds the prompt
+    (file:lines, the quoted diff, your note) and the notes are gone; nothing was
+    sent. Check the **+** button over the first line-number gutter and the note
+    box on a horizontally scrolled diff on the real paint path; **C** inside
+    Diffs starts a note on the cursor card's first changed line. Repeat on a
+    subagent's Diffs.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] **Per-turn checkpoints** (implemented 2026-11-13, never live; experimental
+  `turn_checkpoints`). Plan `docs/turn_checkpoints_plan.md`, handoff
+  `docs/turn_checkpoints_handoff.md`, design `docs/context/checkpoints.md`,
+  help topic `checkpoints`; pills `settings.turnCheckpoints`, `checkpoints.now`,
+  `checkpoints.bubble`, `checkpoints.restore`, `checkpoints.scope`. After
+  `npm run backend:stale` is clear:
+  - [ ] 🖐️ Manual QA: switch Settings → Experimental → Per-turn checkpoints on.
+    In a test project (a git repo) let a Claude tab edit two files and create
+    one; Diffs → *Since checkpoint* lists the three; Restore → files back, the
+    new one gone, the note in the composer; *Undo restore* → all three back.
+    Same in a folder that is not a repo, and in a Codex tab. Hover an old prompt
+    → *Restore files to before this* appears only on checkpointed prompts. The
+    Checkpoint chip beside Commit saves a manual one. Restore refuses while the
+    agent works. Check the Settings card's sizes after a day of normal use and
+    that Clear empties a folder's store.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] **Agent-tab and CLI polish, 2026-11-13/14** (implemented, never live; one
+  pill each: `tabBar.markUnread`, `desktop.intro.agents`, `agents.updateAll`,
+  `agents.dailyReleaseCheck`, `agents.autoTabName`,
+  `terminal.reader.sendNowHint`). Help: `tabs-and-panels`, `agent-clis`,
+  `gemini-cli`, `keyboard`. Open: the Chat's `terminal.reader.sendNowHint` line
+  still tells a Claude tab that Esc sends the queue (now Ctrl+X Ctrl+S).
+  - [x] 🤖 Automated tests (`AgentMarkUnread.test.ts`, `IntroAgentsDefault.test.tsx`,
+    `MobileQueuePull.test.ts`, `agent_hint` and `agent_latest` unit tests,
+    `agent_transcript` unknown-command test)
+  - [ ] 🖐️ Mark as unread: right-click a read Claude tab → **Mark as unread**; once
+    another tab is in front it lights as finished (bar, project pill, cockpit,
+    phone Agents list); opening it or typing into it clears it; the entry is
+    absent while the tab already shows unread, and on a shell tab. Also from a
+    popout.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Claude's **Send now** (Chat bubble, desktop K key and the phone's button):
+    while Claude runs a long Bash command, queue a prompt and press Send now:
+    the prompt goes into the turn, the command moves to the background instead
+    of being killed, and nothing is handed back into Claude's box.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manage CLIs: **Check all for updates**, then **Update all (N)** runs the
+    installers one after another with each card's log, a failure staying on its
+    card; Cursor shows `current → latest` and updates through its installer; a
+    fenced Cursor tab starts with `--disable-auto-update` first in its argv.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ How to start → Agent CLIs: the page opens on the current default CLI;
+    clicking an installed chip, Install, or a Recheck that finds the CLI saves
+    it as the default (Manage CLIs' Default chip follows); clicking an
+    uninstalled chip saves nothing.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ How to start → Already on this computer (fresh profile on a computer
+    that holds a Claude or Codex login): the page is step 2; before an answer
+    Settings → Agent logins shows the CLI not signed in. Untick one card, page
+    away and back (it stays unticked), Import the ticked ones: only the ticked
+    logins are signed in, the config lands in Global agent config. A second
+    fresh profile with Don't import: nothing is copied, and the next start
+    still copies nothing.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Gemini and Aider read `AGENTS.md`: in a project with only `AGENTS.md`, a
+    fresh Gemini tab lists it among its loaded context files; Aider's start shows
+    it as a read-only file. Your own `context.fileName` / `read:` entries stay.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Type a misspelled slash command in a Claude tab (`/simplity foo`): the Chat
+    shows the command with its words and Claude's "Unknown command" answer
+    instead of waiting for a turn.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] **Cockpit MCP: rename the calling tab** (implemented 2026-11-06, never live).
+  Plan: `docs/cockpit_mcp_plan.md`. Begin with self-only `tab_rename` on a
+  separate authenticated lane, using versioned workspace edits; later consider
+  own-tab colour/info and scoped aggregate counts. As built:
+  `docs/context/cockpit_mcp.md`; pills `cockpit.mcp.rename` and
+  `agents.tools.group`. Manage CLIs groups all lanes visually under
+  Tabtivity tools; root/web entries link to their existing settings.
+  - [ ] 🖐️ Manual QA: through MCP rename a local agent tab; check strip,
+    cockpit, phone, inactive scope, detached window and restore; repeat for
+    a phone-created tab without a desktop. Check disabled/revoked calls fail,
+    the grouped controls stay independent, and root/web links open their settings.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] Cockpit MCP agent notes (implemented 2026-11-06, never live; plan
+    `docs/cockpit_mcp_extensions_plan.md` steps 1-2, as built
+    `docs/context/cockpit_mcp.md`; pills `cockpit.mcp.activity` and
+    `cockpit.mcp.handoff`). Step 3 (results, 2026-11-06, pill
+    `cockpit.mcp.results`), step 4 (progress/blocker/verification) and step 5
+    (attention, milestones) are implemented below. Phone presentation is open.
+  - [ ] 🖐️ Manual QA, activity: after `npm run backend:stale` is clear (restart
+    when you choose), ask a new local Claude tab to call `tab_get_info`, then
+    `tab_set_activity` with a short line. Check the roster row shows it under
+    the tab name, tagged "Agent says" with a relative time, beside (not in
+    place of) the working/question state; a repeat of the same line changes
+    nothing; a stale `expectedRevision` is refused; after 30 minutes (or a
+    restart of that agent) the line is gone; with the tab's machine down the
+    line is hidden; a hostile line (`<b>`, very long text) renders as text.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, handoff: ask the agent to call `tab_set_handoff` with a
+    summary, checks and remaining. Check the detail pane shows the block
+    marked as written by the agent with its age, newlines kept and markup
+    shown as text; it survives restoring the scope and a restart of the app;
+    a window with an older tab copy (second window or popout) still shows it
+    after a rename elsewhere; the Manage CLIs switch off refuses
+    `tab_get_info` / `tab_set_activity` / `tab_set_handoff` from a running tab.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, results (`tab_set_results`, step 3; `cockpit.mcp.results`):
+    in a local project, ask a new local agent to call `tab_get_info`, then
+    `tab_set_results` with a few project-relative paths (a PNG, a Markdown
+    file, one file that does not exist yet, one with `<b>` in its label). Check
+    the detail pane shows the "Agent results" fold under the handoff with each
+    label and its path as plain text and "Listed by the agent ... ago"; nothing
+    opens or is created by drawing it; clicking an existing file opens its
+    viewer tab in that project (Back returns to the agent tab) and closes the
+    cockpit; clicking the missing one shows "Unavailable" and opens nothing;
+    absolute paths, `..`, `C:\`, `file://` and a symlink out of the project are
+    refused by the tool; replace a listed file by a symlink to a file outside
+    the project and click it: "Not opened: it is outside the project"; the
+    Root console, a box tab, a remote and a worker-hosted project answer
+    `unavailable`; the list survives restoring the scope and a restart, and a
+    second window with an older tab copy still shows it.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, progress (`tab_set_progress`, step 4;
+    `cockpit.mcp.progress`): ask a new local agent to call `tab_get_info`, then
+    `tab_set_progress` with three steps (done, active, pending). Check the
+    detail pane shows "Agent progress" under the results with each label and
+    the words done / in progress / pending, "Reported by the agent ... ago",
+    no spinner; the same steps again change nothing; two active steps, a
+    duplicate id, an id with capitals or spaces and nine steps are refused;
+    after 30 minutes, after restarting that agent (the new run's grant) and
+    while its machine is down the section reads "(past report)" with the
+    active step as "was in progress", never as running; an empty list clears
+    it; it survives restoring the scope and a restart.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, blocker (`tab_set_blocker`, step 4;
+    `cockpit.mcp.blocker`): ask the agent to call `tab_set_blocker` with one
+    line. Check it replaces the activity line under the roster row, tagged
+    "Agent reports blocked" with a relative time, and the detail pane shows
+    "Agent-reported blocker"; the Needs-you count, the row's state mark and
+    the sort do not change (an idle agent that reports a blocker is still
+    idle); text is shown as text (`<b>`), a two-line text is refused;
+    `text: null` restores the activity line; it is gone after 30 minutes and
+    after restarting the agent.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, verification (`tab_set_verification`, step 4;
+    `cockpit.mcp.verification`): ask the agent to call `tab_set_verification`
+    with a passed entry, a failed one with a two-line note and a not_run one.
+    Check the detail pane shows "Agent-reported checks" below the progress
+    with "Reported by the agent at <time> (<ago>). ... did not run or check
+    these." (never "verified"), each outcome as a word, notes keeping their
+    line breaks, markup shown as text; an unknown outcome and nine entries are
+    refused; the list survives a restart and a second window with an older tab
+    copy still shows it; with all the notes full of multi-byte text the write
+    that crosses 32 KiB is refused as too large and nothing changes.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, attention (`tab_request_attention`, step 5;
+    `cockpit.mcp.attention`): ask a local agent that is idle and not asking to
+    call `tab_get_info`, then `tab_request_attention` with a two-line
+    question. Check "Agent asks 1" appears in the Needs-you rail (wide Now,
+    the icon rail's popover in the middle band, the narrow chip and Root's
+    rail), the header badge and its tooltip count it, the question is shown as
+    text (try `<b>x</b>`), clicking the row opens that tab's conversation and
+    answers nothing. Dismiss (rail and detail pane) hides it, the badge falls,
+    and asking the identical question again changes nothing; a changed
+    question is a new item. Make the same tab ask a real question (the CLI's
+    own prompt): it is listed under Asking only, counted once. Options or an
+    answer argument are refused; the question is gone after restarting the
+    agent, after 24 hours (host clock) and when the tab is closed (a reopened
+    tab has none); a second window with an older tab copy cannot bring a
+    dismissed question back.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, milestones (`tab_add_milestone`, step 5;
+    `cockpit.mcp.milestones`): ask the agent to call `tab_add_milestone` with a
+    `requestId` and one line. Check "Agent milestones" in the detail pane
+    (newest first, host time, "Reported by the agent"), the same `requestId`
+    again adds nothing, a 21st milestone drops the oldest, a two-line text is
+    refused, markup shows as text. Close the cockpit, add a milestone from the
+    agent, reopen Tonight: "While you were away" lists it under "Milestones
+    reported by agents" with the "agent-reported" tag and one dated before the
+    window is not listed; after a restart of the app the list survives.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [ ] OpenCode 2 credential sharing (2026-10-22): install/Update/remote and
   the latest-release source already moved to V2 (the user's call, same day),
   so until `agent_auth` can share V2's credential records without sharing its
@@ -2926,7 +3261,442 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+- [x] Live dictation (built 2026-11-13/14, not run live): partials are written
+  into the Chat draft as provisional text and the final replaces them in place
+  (`lib/voice/provisionalDraft.ts`, `terminal/useLiveDictation.ts`); partials
+  transcribe the whole open segment (`services/voice/session.rs`, `vad.rs`); the
+  phone composer does the same (`mobile-web/src/voiceInput.ts`). Pill
+  `terminal.reader.voice.liveDraft`.
+- [ ] 🖐️ Live dictation — desktop Chat, mic on, speak a long sentence with a
+  pause in it: the words appear in the text box while you talk and are rewritten
+  as the sentence grows, with no doubled text when the final lands. Say "Tabby
+  scratch that" / "go on": those words never show in the box. Type inside the
+  provisional words: they become yours and are not typed again. Ctrl+Z only
+  undoes settled sentences. Then the same on the phone's Focus composer. Judge
+  the latency of the first words on CPU and on the GPU.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 - [ ] Phone: probe whether a headset's media button reaches the page through
   the Media Session API (plan step 5); if it does, it toggles talk/stop.
 - [ ] `voice_voices` and a system-voice picker in Settings → Voice (needs a
   per-language filter: espeak-ng lists thousands of variants).
+- [x] Natural voices (plan step 7, `services::voice::piper`): the OS voice
+  sounded terrible on Ubuntu (2026-11-05). Piper MIT binary as a child, one
+  medium voice per app language, install tab from Settings → Voice. Not on
+  macOS (broken build; its own voices are good). Never live.
+- [ ] 🖐️ Natural voice — Settings → Voice: **Natural voice** on, **Install
+  natural voice · N MB** opens a tab that fetches Piper and the voice and
+  verifies both. Turn on Read aloud in a Chat: the next answer is spoken in
+  the neural voice, at the read-aloud speed; Ctrl+Shift+Q silences it at
+  once. Turn Natural voice off: the system voice reads again. Quit: no
+  `piper` process is left (`pgrep -a piper`).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+- [ ] Natural voice in the Chat: offer the install from the Read aloud chip
+  the first time (plan step 7's card), not only in Settings.
+- [ ] Talk over a natural voice through speakers: `webrtc-audio-processing`
+  echo cancellation against the samples `piper.rs` plays (plan step 7);
+  probe the crate on the three CI OSes first.
+
+### Send skill — `docs/context/agent_sessions.md`
+
+- [x] Built 2026-11-08 (uncommitted): `agent_hint::write_skill_in_home`
+  writes a `tabtivity-send` skill into `.claude`/`.codex`/`.copilot`
+  `skills/` of every agent home except the assistant's and the probe's.
+  Folders found by searching Claude 2.1.319, OpenCode 2.2.6, Codex 0.167.0 and
+  Copilot 1.0.107; not live.
+- [ ] 🖐️ Manual test — in a new Claude tab type `/tabtivity-send README.md`:
+  the file goes to the screen you typed from (the desktop chat names it, or
+  the phone gets it). In a new Codex, Copilot and OpenCode tab, `/skills` (or
+  the CLI's skill list) shows `tabtivity-send` **once**. Ask any of them to
+  "send me the output of `ls` on my phone": it pipes through `-n` rather than
+  writing a file first. Tabby's (assistant) chat lists no such skill.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] Send skill for the CLIs not installed here (Gemini, Qwen, Auggie,
+  CodeBuddy, Droid, Cursor, Vibe, Pi, Kimi, Crush, Amp, Goose, Kiro): check
+  with `verify-cli` whether each reads user skills from its home, and from
+  which folder; add the ones that do to `agent_hint::SKILL_DIRS`.
+- [ ] Question mark, Claude: decision from `PermissionRequest` at once, and
+  kept while the pane still shows a dialog after an answer (2026-11-10).
+  Claude 2.1.322 sent its `permission_prompt` notice 6 s after the dialog
+  opened and never once a key was pressed in it, so the lamp came late or not
+  at all; ↑/↓ and Enter on question 1 of several retired it. Now the hook maps
+  `PermissionRequest` (plus `elicitation_url_dialog`, `agent_needs_input`) to
+  `decision`, arrow/Tab keys never retire it, and an answering key on a pane
+  on screen waits for `dialogOnScreen` to find no dialog. Backend change: a
+  restart re-registers the hook in each home.
+  - [x] 🤖 Automated test — `AgentTurnHooks` (navigation, next question,
+    hook settles), `hook_script_records_the_turn_state_for_the_tabs_own_session_only`
+  - [ ] 🖐️ Manual test — after a restart into the new dev build: (1) ask Claude
+    for a two-question AskUserQuestion, switch to another tab at once → the
+    question lamp is up within a second. (2) Back in the tab, press ↓ → still
+    up; Enter on question 1 → still up on question 2 and on the review; Submit
+    → working. (3) Again, but Cancel on the review → the lamp clears within a
+    second. (4) A plan approval (ExitPlanMode) lights it too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] Codex `PermissionRequest` hook: Codex 0.167 has the event (and
+  `Interrupt`); its question lamp still comes from the screen after ~2 s quiet.
+  Verify live (does it fire for an exec approval and for `request_user_input`,
+  payload keys, trust hash label) before adding it to `CODEX_HOOK_EVENTS` and
+  `codex_event_label`.
+- [ ] 🖐️ Reader Files · Links section — open an agent tab, have the agent print a
+  claude.ai artifact link, a GitHub PR link and a file path. Reader → Files: the
+  file under Files, the two links under Links (host bold, path dim, who and when),
+  newest first, each once. Click a link: the "Open link?" box names the exact URL;
+  Cancel opens nothing; confirm opens the browser (no network request before
+  that). A Files tab with only a link in the conversation is enabled. On a remote
+  project tab a `localhost:` link forwards instead of opening this machine's port.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+### Agent print MCP — `docs/context/print_mcp.md`
+
+- [x] Wire every agent CLI into the MCP lanes (`docs/context/agent_mcp_wiring.md`):
+  a per-CLI `McpWiring` row in the registry (Copilot and OpenCode added,
+  verified on 1.0.110 / 2.3.0 against a loopback stub), and the
+  `tabtivity-mcp` command for every other CLI, announced by the session-start hint.
+- [ ] Give Gemini and Qwen a verified `McpWiring` form: a settings file named by
+  `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` (Qwen: its own variable) with `mcpServers`
+  and `${VAR}` headers, written per tab outside the shared home. Run each
+  binary against the stub first (not done: running freshly downloaded
+  packages needed the user's go-ahead). Then Droid, Cursor, Auggie,
+  CodeBuddy, Kimi as each gets installed and verified.
+- [ ] Tell the CLIs without a hint route (Antigravity, Kiro, Cline, Aider,
+  Goose, …) about `tabtivity-mcp`; they get the env pairs but no line.
+- [ ] 🖐️ Copilot and OpenCode see the tools as their own — a fresh Copilot tab
+  and a fresh OpenCode tab in a local project: ask each to list its
+  `tabtivity-print` and `tabtivity-help` tools, then to print a PDF; the print
+  popup appears as with Claude. OpenCode with a local Ollama model: its
+  model picker still lists the loaded models, and the tools are there too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ `tabtivity-mcp` from a CLI that is not wired (e.g. Gemini or Droid)
+  — a fresh tab in a local project: the start hint mentions `tabtivity-mcp`; ask the
+  agent to print a PDF; it runs `tabtivity-mcp call print print_request …`
+  and the print popup appears. `tabtivity-mcp` alone lists the lanes the tab
+  holds (print, git, markup, help, cockpit, tabs, schedule).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Agent print request — fresh Claude tab in a local project with a PDF:
+  ask it to print the PDF, 2 copies, pages 1-2, with a note. A bottom-left popup
+  ("An agent asks to print") and a row in the Print Manager tab's "Agent print
+  requests" card appear. Review: the print preview opens titled "Print request
+  from <tab>", the note under it, copies 2 and pages 1-2 preset; Approve & print
+  opens the system print dialog; after printing `print_status` says `printed`
+  and the popup is gone. Again with Reject → `rejected`. Ask for a `.txt` →
+  `not_pdf`. Close the tab with one pending → it disappears. Later hides the
+  popup until the next request.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+### Tab messaging MCP — `docs/context/tab_messaging_mcp.md`
+
+- [ ] 🖐️ Tab messaging lane (`tabs.mcp.lane`) — Manage CLIs → Tools: "Let agent
+  tabs of a project message each other" is on. Open two fresh Claude tabs and
+  one Codex tab in a local project. In tab A: "list the other tabs and send
+  the Codex tab 'ping'". Type a prompt into a Claude tab you sent a message:
+  the read-your-inbox hint appears beside it. From another project, sending
+  to a handle copied from the first answers `not_found`. Tabby and a root
+  console agent do not list the tools. Restart one tab: its unread is still
+  there. Turn the switch off: a send answers `off`.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Tab messaging and Local models only (`tabs.mcp.lane`) — mark the
+  project Local models only: its messages disappear from the cockpit and
+  cloud tabs close; two local tabs can message each other. In an unlocked
+  project a local-model tab and a Claude tab do not list each other.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Messages fold and hover card (`tabs.mcp.traffic`) — after a send,
+  open the recipient's row in the cockpit (Now): Messages lists it with
+  sender, time and "unread", the text exactly as sent (send `<b>x</b>
+  **y**` and it stays literal). Hovering the recipient's tab shows
+  "messages: 1 unread". After the recipient acks, it reads "read" and the
+  hover line goes. Clear asks first, then empties the project's messages.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Deliver (`tabs.mcp.deliver`) — with a message unread for the Codex
+  tab, press Deliver in its Messages fold: once the tab is idle the fixed
+  read-your-inbox notice is typed as its prompt (never the message text) and
+  the agent reads its inbox. Deliver is greyed out with nothing unread.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Idle wake (`tabs.mcp.wake`) — Manage CLIs → Tools: turn on the
+  project's wake switch under the tab messaging switch. Send a busy tab two
+  messages: the notice is typed once it finishes, once for both. Its reply
+  to the sender does not wake the sender; after you type into it, its next
+  message does. With the switch off nothing is typed by itself.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+#### Follow-ups from the review (`docs/tab_messaging_mcp_handoff.md`, "Flagged for user")
+
+- [x] **Wake notices stack up** (`tabs.mcp.wake`; blocks the "once for that
+  batch" box above). A message that arrives while an earlier notice is still
+  queued counts as a new batch, so a busy tab collects up to 6 notices and
+  runs empty turns; Deliver plus a wake can double up too. Fix on the host
+  in `services::mcp::tabs_mcp` (`wake_claims_in`, the deliver path in
+  `commands/tabs_mcp.rs`): a claimed wake or Deliver covers every later
+  message until the recipient next calls `tabs_inbox`. Regression test: two
+  sends while busy → one claim.
+- [x] **Two opted-in tabs can wake each other in a loop** (design). Each
+  reply is a new batch for the other side; only 6 wakes and 30 sends per tab
+  per hour stop it. Decide first: no wake for a message sent during a
+  wake-started turn, or a per-pair cooldown that a user prompt resets.
+- [x] **Wake and Deliver ignore class.** `wake_claim_in` and Deliver's
+  `nothing_unread` check count messages the recipient can no longer read
+  after a local ↔ cloud change, so they wake a tab to an empty inbox. Use
+  the class-filtered `unread_for`, as the inbox and its cap already do.
+- [x] **The wake skips the liveness check.** `wake_claims_in` trusts
+  `members` and never asks `session_alive`, so a tab whose spawn failed
+  (token revoked by `SpawnTokenGuard`, no PTY exit, so no sweep) can still
+  be claimed and sent a notice. Check liveness in the claim; add a test.
+- [x] **One malformed `projects.json` entry turns the lane off everywhere.**
+  A whole-registry parse failure reads as `Unreadable`, so every call in
+  every project answers `unavailable`. Keep failing closed for the caller's
+  own entry, but read the other entries tolerantly so unlocked projects keep
+  working.
+- [x] **Small cleanups:** remove the uncalled `tabs_mcp::unread_count` and
+  `tabs_mcp::wake_claim` (the forms without `_in`); have the hook remove the
+  `<uid>.mail` marker in both the root and the project slice (`note_mail`
+  writes both); `docs/context/local_models_only.md` says the class never
+  comes from the renderer's `local_model` flag, which is true only for
+  `locked:` (unlocked `local` comes from it, by plan); add grant-matrix rows
+  for remote, worker and `local_only` tabs in `root_mcp/tests.rs`.
+
+### Per-tab resume: Antigravity and Muse — `docs/agent_tab_resume_plan.md`
+
+- [x] Built 2026-11-16: a hook per CLI records each tab's own conversation
+  (`services::antigravity_session`, `services::muse_session`), and a restored
+  tab resumes it by id. Probed offline on Antigravity 1.5.2–1.5.9 and Muse
+  1.3.0 / 1.4.15; not live.
+- [ ] 🖐️ Manual test — Antigravity: open two Antigravity tabs in one project,
+  send a different prompt in each, restart the app: each tab comes back on its
+  own chat (the Chat view too). Ask one tab's agent to run `agy -p "hi"` from
+  its shell tool and restart again: that tab still comes back on its own chat.
+  A third tab opened but never prompted comes back empty, not in a sibling's
+  chat.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Muse: open two Muse tabs in one project, send a
+  different prompt in each, restart the app: each tab shows its own chat (the
+  Chat view too). A third tab with no prompt starts fresh after the restart.
+  On Windows the expected result is the folder's latest (no hook there).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+
+### Turn state from each CLI's own hooks — `docs/agent_tab_resume_plan.md` (follow-up run)
+
+- [x] Built 2026-11-16: Claude's failure and elicitation events, Codex's
+  `PermissionRequest`, and the turn record for Vibe, Copilot, OpenCode,
+  Antigravity and Muse. Probed offline against the real binaries (Claude
+  2.1.325, Codex 0.169.0, Vibe 3.1.2, Copilot 1.0.112, OpenCode 2.2.7 / 2.3.0,
+  Antigravity 1.5.2–1.5.9, Muse 1.3.0 / 1.4.15); not live. OpenCode 1.x was
+  not run.
+- [ ] 🖐️ Manual test — Claude: make a turn fail on the API (sign out, or hit a rate limit). The
+  tab's working mark ends as finished, not stuck on working.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Claude: approve a Bash call that then exits non-zero. The decision mark
+  ends and the tab shows working, then finished.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Claude: an MCP tool that asks a question (elicitation). The decision mark
+  lights as the dialog opens, not 6 s later; answering returns the tab to working.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Codex: after the update Codex shows "Hooks need review" once; pick Trust
+  all, or use the app's Trust action. An approval prompt then lights decision at
+  once; approving returns working; declining clears the mark.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Vibe: the working mark comes on at the prompt, decision on an approval,
+  finished at the turn's end. `/clear`, a new prompt, restart: the tab resumes
+  the new session. A `vibe -p` run from Vibe's bash tool leaves the tab's chat
+  alone after a restart.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Copilot: a prompt shows working, then finished. A file edit shows decision
+  while the approval dialog is open, working once answered; an `ask_user`
+  question shows decision too. `copilot -p hi` run from the agent's shell
+  changes neither the tab's marks nor the chat it resumes. After `/new` and a
+  prompt the marks keep working.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — OpenCode (2.x, and 1.x where installed): a prompt shows working, then
+  finished. A shell command needing permission shows decision until answered; a
+  question form shows decision. `opencode run hi` from the agent's shell
+  changes neither the tab's marks nor the session it restores.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Antigravity: a prompt shows working, then finished. A command waiting for
+  approval lights decision (read off the screen). Esc mid-turn shows
+  interrupted. In a project tab, asked how to send a file to the phone, it
+  names `tabtivity-send`.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Muse: a prompt shows working, then finished (its "Double checking"
+  spinner may still run). Esc mid-turn shows interrupted. `/exit` clears the
+  marks. In a project tab, asked how to send a file, it names `tabtivity-send`.
+  `/clear`, then Undo before another prompt: the tab reopens the cleared
+  session. On Windows there is no Muse hook: the marks come from the screen.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Codex usage-limit stop: in a Codex tab that hits its usage limit
+  ("You've hit your usage limit"), the working mark turns to finished within a
+  few seconds (no `Stop` hook fires; `agent_turn::settle_codex_turn` reads the
+  rollout). A prompt scheduled for after the reset is then typed in at its time,
+  not recorded as missed — with the window open, and with only the phone
+  sidecar running.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS

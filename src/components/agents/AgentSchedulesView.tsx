@@ -112,6 +112,7 @@ export function AgentSchedulesView({ scope, active }: Props) {
     const ptyId = `${scope}:${tab.key}`;
     return {
       decision: attentionByTab[ptyId] === "decision",
+      ready: attentionByTab[ptyId] === "done",
       working: !!busyByTab[ptyId],
       workingAt: lastWorkingByTab[ptyId],
       doneAt: lastDoneByTab[ptyId],

@@ -127,9 +127,13 @@ describe("TerminalView under the AI switch", () => {
     await act(async () => {});
 
     expect(spawns()).toBe(2);
-    expect(invoke).toHaveBeenLastCalledWith("pty_spawn", expect.objectContaining({
-      opts: expect.objectContaining({ id: "p:agent", agent: true }),
-    }));
+    // A resize may follow the successful spawn; inspect the last spawn itself.
+    const spawnCalls = invoke.mock.calls.filter(([cmd]) => cmd === "pty_spawn");
+    expect(spawnCalls[spawnCalls.length - 1]).toEqual([
+      "pty_spawn", expect.objectContaining({
+        opts: expect.objectContaining({ id: "p:agent", agent: true }),
+      }),
+    ]);
     expect(container.ownerDocument.querySelector(".terminal-ai-off-banner")).toBeNull();
     expect(written.join("")).not.toContain("spawn error");
   });

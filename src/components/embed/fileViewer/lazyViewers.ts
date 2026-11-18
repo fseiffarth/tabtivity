@@ -7,6 +7,7 @@ import { lazy } from "react";
 // the Suspense boundaries sit around the two render sites below.
 export const TableView = lazy(() => import("../TableView").then((m) => ({ default: m.TableView })));
 export const NotebookView = lazy(() => import("../NotebookView").then((m) => ({ default: m.NotebookView })));
+export const TensorBoardView = lazy(() => import("../TensorBoardView").then((m) => ({ default: m.TensorBoardView })));
 export const SqliteView = lazy(() => import("../SqliteView").then((m) => ({ default: m.SqliteView })));
 export const PdfView = lazy(() => import("../pdf/PdfViewer").then((m) => ({ default: m.PdfView })));
 export const DeckView = lazy(() => import("../deck/DeckView").then((m) => ({ default: m.DeckView })));

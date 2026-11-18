@@ -52,7 +52,8 @@ pub struct NamedWindow {
 
 /// Every top-level window this platform lets Tabtivity see by class and title:
 /// the X11 client list (under Wayland, its XWayland clients) and Windows'
-/// visible top-levels. Empty on macOS and wherever the scan fails.
+/// visible top-levels, macOS's on-screen windows by owner app and title
+/// (titles need Screen Recording permission). Empty wherever the scan fails.
 pub fn named_windows() -> Vec<NamedWindow> {
     #[cfg(all(target_os = "linux", feature = "desktop"))]
     {
@@ -62,7 +63,11 @@ pub fn named_windows() -> Vec<NamedWindow> {
     {
         windows::named_windows()
     }
-    #[cfg(not(any(all(target_os = "linux", feature = "desktop"), target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::named_windows()
+    }
+    #[cfg(not(any(all(target_os = "linux", feature = "desktop"), target_os = "windows", target_os = "macos")))]
     {
         Vec::new()
     }
@@ -79,7 +84,11 @@ pub fn activate_window(window_id: u64) -> Result<(), String> {
     {
         windows::activate_window(window_id)
     }
-    #[cfg(not(any(all(target_os = "linux", feature = "desktop"), target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::activate_window(window_id)
+    }
+    #[cfg(not(any(all(target_os = "linux", feature = "desktop"), target_os = "windows", target_os = "macos")))]
     {
         let _ = window_id;
         Err("window activation is not supported here".into())

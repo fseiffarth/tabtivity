@@ -5,10 +5,11 @@ import { useT } from "../../lib/i18n";
 import { runInstallInTab } from "../../lib/installCommand";
 import { useProjectsStore } from "../../stores/projects";
 import { SETTINGS_CHANGED_EVENT, useSettingsStore } from "../../stores/settings";
+import { copilotRemoteConsentMatches } from "../../lib/viewers/completion/copilotCompletionProvider";
 import type { Settings } from "../../types";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
-import { SettingsCard } from "./settingsUi";
+import { SettingsAdvanced, SettingsCard } from "./settingsUi";
 
 /** Backend `copilot_setup`. */
 interface CopilotSetup { supported: boolean; installed: boolean; installCommand: string | null }
@@ -18,6 +19,36 @@ interface CopilotAccount {
   status?: { kind: string; message: string | null };
   account?: { status?: string | null; user?: string | null } | null;
   messages?: { id: number; message: string; actions: string[] }[];
+  /** A token for this app account is in the keychain. Absent on a backend
+   *  without "stay signed in", which reads as false. */
+  remembered?: boolean;
+}
+
+/** The newest lines of the project's language-server log (`copilot_diagnostics`,
+ *  redacted, from memory; it never starts a server). Read when the fold opens
+ *  and on Refresh. A build without the command says so instead. */
+function CopilotDiagnostics({ projectId }: { projectId: string }) {
+  const t = useT();
+  const [lines, setLines] = useState<string[] | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const load = useCallback(() => {
+    setUnavailable(false);
+    invoke<{ lines?: unknown }>("copilot_diagnostics", { projectId })
+      .then((d) => setLines(Array.isArray(d?.lines) ? d.lines.filter((l): l is string => typeof l === "string") : []))
+      .catch(() => { setLines(null); setUnavailable(true); });
+  }, [projectId]);
+  useEffect(load, [load]);
+  return (
+    <>
+      {unavailable ? <p className="settings-help">{t("settings.copilotDetailsUnavailable")}</p>
+        : lines === null ? <p className="settings-help">{t("common.loading")}</p>
+        : lines.length === 0 ? <p className="settings-help">{t("settings.copilotDetailsEmpty")}</p>
+        : <pre className="ollama-install-log">{lines.join("\n")}</pre>}
+      <div className="ollama-install-cmd-row">
+        <button type="button" className="ollama-action-btn" onClick={load}>{t("settings.copilotDetailsRefresh")}</button>
+      </div>
+    </>
+  );
 }
 
 /** #45a: provider choice, install, the active project's consent and the
@@ -33,15 +64,18 @@ export function CopilotCompletionCard() {
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
+  // The server refused the device flow (`copilot_sign_in_failed`): its own
+  // line, not the generic error.
+  const [signInFailed, setSignInFailed] = useState(false);
 
   const provider = settings?.code_completion_provider ?? "ollama";
   const policy = project ? settings?.completion_project_policies?.[project.id] : undefined;
   const remote = !!project?.remote;
-  const consented = policy?.copilot === true && policy.local_only !== true && !remote;
+  const consented = policy?.copilot === true && policy.local_only !== true && (project?.remote ? copilotRemoteConsentMatches(policy.remote, project.remote) : !policy.remote);
   const projectId = project?.id;
   const currentProject = useRef(projectId);
   currentProject.current = projectId;
-  useEffect(() => { setCode(null); setAccount(null); setError(null); setSigningIn(false); }, [projectId]);
+  useEffect(() => { setCode(null); setAccount(null); setError(null); setSigningIn(false); setSignInFailed(false); }, [projectId]);
 
   const recheck = useCallback(() => {
     void invoke<CopilotSetup>("copilot_setup").then(setSetup).catch(() => setSetup(null));
@@ -83,6 +117,7 @@ export function CopilotCompletionCard() {
   const signIn = async () => {
     if (!projectId) return;
     setError(null);
+    setSignInFailed(false);
     setSigningIn(true);
     try {
       const device = await invoke<{ userCode: string; verificationUri: string } | null>("copilot_sign_in", { projectId });
@@ -92,7 +127,10 @@ export function CopilotCompletionCard() {
         await invoke("copilot_finish_sign_in", { projectId });
       }
     } catch (e) {
-      if (currentProject.current === projectId) setError(String(e));
+      if (currentProject.current === projectId) {
+        if (String(e).includes("copilot_sign_in_failed")) setSignInFailed(true);
+        else setError(String(e));
+      }
     } finally {
       if (currentProject.current === projectId) { setCode(null); setSigningIn(false); }
       refreshAccount();
@@ -105,7 +143,12 @@ export function CopilotCompletionCard() {
     refreshAccount();
   };
 
-  const signedIn = account?.running && !!account.account?.user;
+  // The server's verdict on the account, not merely a user name: an account
+  // without Copilot access is signed in to GitHub and still gets nothing.
+  const accountStatus = account?.account?.status;
+  const user = account?.account?.user ?? "";
+  const signedIn = !!account?.running && !!user && (accountStatus === "OK" || accountStatus === "MaybeOK");
+  const notAuthorized = !!account?.running && accountStatus === "NotAuthorized";
   return (
     <SettingsCard>
       <p className="settings-help">{t("settings.copilotCloudNotice")}</p>
@@ -140,10 +183,10 @@ export function CopilotCompletionCard() {
       {project ? (
         <>
           <label className="settings-toggle-card-row">
-            <span>{t("settings.copilotProjectConsent", { project: project.name })}</span>
+            <span>{t("settings.copilotProjectConsent", { project: project.name })} {remote && <UntestedTag id="settings.copilotRemoteCompletion" />}</span>
             <Toggle
-              checked={policy?.copilot === true && !remote}
-              disabled={remote || policy?.local_only === true}
+              checked={consented}
+              disabled={policy?.local_only === true}
               onChange={(e) => void setPolicy(e.target.checked, false)}
             />
           </label>
@@ -174,10 +217,13 @@ export function CopilotCompletionCard() {
         <div className="ollama-install-cmd-row">
           <span className="settings-help">
             {code ? t("settings.copilotEnterCode", { code })
-              : signedIn ? t("settings.copilotSignedIn", { user: account?.account?.user ?? "" })
+              : signedIn ? t("settings.copilotSignedIn", { user })
+              : notAuthorized ? <>{t("settings.copilotNotAuthorized", { user })} <UntestedTag id="settings.copilotAccountStatus" /></>
+              : signInFailed ? <>{t("settings.copilotSignInFailed")} <UntestedTag id="settings.copilotAccountStatus" /></>
               : t("settings.copilotSignedOut")}
           </span>
-          {signedIn ? (
+          {/* Signed in without access: signing out is how to switch accounts. */}
+          {signedIn || notAuthorized ? (
             <button type="button" className="ollama-action-btn" onClick={() => void signOut()}>
               {t("settings.copilotSignOut")}
             </button>
@@ -203,7 +249,26 @@ export function CopilotCompletionCard() {
         </div>
       ))}
       {error && <p className="settings-help">{t("settings.copilotError", { error })}</p>}
-      <p className="settings-help">{t("settings.copilotSessionOnly")}</p>
+      {setup?.installed && (
+        <>
+          <label className="settings-toggle-card-row">
+            <span>{t("settings.copilotStaySignedIn")} <UntestedTag id="settings.copilotStaySignedIn" /></span>
+            <Toggle
+              checked={settings?.copilot_stay_signed_in === true}
+              onChange={(e) => void updateSettings({ copilot_stay_signed_in: e.target.checked })}
+            />
+          </label>
+          <p className="settings-help">{t("settings.copilotStaySignedInHelp")}</p>
+        </>
+      )}
+      {projectId && provider === "copilot" && consented && (
+        <SettingsAdvanced title={<>{t("settings.copilotDetails")} <UntestedTag id="settings.copilotDetails" /></>}>
+          <CopilotDiagnostics key={projectId} projectId={projectId} />
+        </SettingsAdvanced>
+      )}
+      {account?.remembered === true
+        ? <p className="settings-help">{t("settings.copilotRemembered")}</p>
+        : <p className="settings-help">{t("settings.copilotSessionOnly")}</p>}
     </SettingsCard>
   );
 }

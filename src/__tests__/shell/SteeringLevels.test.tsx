@@ -1,12 +1,13 @@
 /**
  * Keyboard steering as a hierarchy: projects → subwindows → tabs (↓ in, ↑ out,
  * E S D F doubling the arrows), opened on the tabs by Shift+Space and left by
- * Space / Escape / Enter, the new-tab keys inside a pane, the status jumps, the per-level
+ * Escape / Enter, the new-tab keys inside a pane, the status jumps, the per-level
  * legend table (`steeringKeysFor`) and the region cursor that walks the side
  * panel, the header apps and a pane's + menu.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { useEffect, useState } from "react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -22,6 +23,8 @@ vi.mock("../../lib/shortcuts/tabJump", () => ({
 
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { SteeringLegend } from "../../components/layout/SteeringLegend";
+import { ContextMenuPortal } from "../../components/common/ContextMenuPortal";
+import { AddTabMenuList, type AddMenuGroup } from "../../components/tabs/AddTabMenuList";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { allGroups, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
@@ -134,7 +137,17 @@ describe("steering levels", () => {
     expect(steering().active).toBe(false);
   });
 
-  it("E S D F steer like the arrows, and Space leaves", () => {
+  it("skips the subwindow level both ways while there is one subwindow", () => {
+    useTabsStore.getState().addTab({ label: "a1", cmd: "bash", cwd: "/p", kind: "shell" });
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "ArrowUp" });
+    expect(steering().level).toBe("projects");
+    press({ key: "ArrowDown" });
+    expect(steering().level).toBe("tabs");
+  });
+
+  it("E S D F steer like the arrows, and Escape leaves", () => {
     const { a, b } = twoPanes();
     render(<Harness />);
     press({ key: " ", shiftKey: true });
@@ -150,7 +163,10 @@ describe("steering levels", () => {
     expect(useTabsStore.getState().focusedGroupId).toBe(b);
     press({ key: "d" });
     expect(steering().level).toBe("tabs");
+    // Space is the prompt box now, and no agent tab is active: it stays on.
     press({ key: " " });
+    expect(steering().active).toBe(true);
+    press({ key: "Escape" });
     expect(steering().active).toBe(false);
   });
 
@@ -166,23 +182,48 @@ describe("steering levels", () => {
     expect(steering().level).toBe("tabs");
   });
 
-  it("←/→ on the tabs run on past the last tab into the next subwindow and back", () => {
+  it("←/→ on the tabs wrap inside the subwindow and never cross into another", () => {
     const { a, b } = twoPanes();
     const [a1, a2] = allGroups(useTabsStore.getState().layout).find((g) => g.id === a)!.tabKeys;
     const [b1] = allGroups(useTabsStore.getState().layout).find((g) => g.id === b)!.tabKeys;
     useTabsStore.getState().setGroupActive(a, a2);
     render(<Harness />);
     press({ key: " ", shiftKey: true });
+    // Past the last tab: back to the first of the same subwindow.
     press({ key: "ArrowRight" });
-    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a1 });
     expect(steering().level).toBe("tabs");
     press({ key: "s" });
     expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a2 });
-    press({ key: "s" });
-    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a1 });
-    // Before the first tab of all: the last subwindow's last tab.
-    press({ key: "s" });
+    // A one-tab subwindow stays put both ways.
+    useTabsStore.getState().focusGroup(b);
+    press({ key: "f" });
     expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+    press({ key: "ArrowLeft" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+  });
+
+  it("Next tab (bound to Tab) steps the tabs on both levels, across the subwindows", () => {
+    // Unbound by default — Tab is the Reader view cycle; bound, it still wins
+    // over that (the earlier table row).
+    useSettingsStore.setState({ settings: { steering_keys: { nextTab: ["Tab"] } } as never });
+    const { a, b } = twoPanes();
+    const [a1, a2] = allGroups(useTabsStore.getState().layout).find((g) => g.id === a)!.tabKeys;
+    const [b1] = allGroups(useTabsStore.getState().layout).find((g) => g.id === b)!.tabKeys;
+    useTabsStore.getState().setGroupActive(a, a1);
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "Tab" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a2 });
+    press({ key: "Tab" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+    expect(steering().level).toBe("tabs");
+    // On the subwindow level Tab still steps tabs, where ←/→ walk subwindows.
+    press({ key: "ArrowUp" });
+    expect(steering().level).toBe("panes");
+    press({ key: "Tab", shiftKey: true });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a2 });
+    expect(steering().level).toBe("panes");
   });
 
   it("carries a fullscreen subwindow along when the focus moves", () => {
@@ -256,6 +297,130 @@ describe("steering levels", () => {
     }
   });
 
+  it("steers into nested New Tab flyouts and returns to each opener on Escape", async () => {
+    twoPanes();
+    // jsdom has no layout. Give the menu, flyouts and buttons visible bounds.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 100,
+      height: 20,
+      top: 0,
+      left: 0,
+      right: 100,
+      bottom: 20,
+    } as DOMRect);
+
+    const pick = vi.fn();
+
+    function NewTabMenuFixture() {
+      const [open, setOpen] = useState(false);
+      useEffect(() => {
+        const onRequest = (event: Event) => {
+          const { request } = (event as CustomEvent<NewTabShortcutDetail>).detail;
+          if (request.kind !== "menu") return;
+          event.preventDefault();
+          setOpen((shown) => !shown);
+        };
+        window.addEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+        return () => window.removeEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+      }, []);
+
+      const entry = (key: string, label: string) => ({
+        key,
+        label,
+        color: "#fff",
+        onPick: () => {
+          pick(key);
+          setOpen(false);
+        },
+      });
+      const quick = entry("claude", "Claude");
+      const groups: AddMenuGroup[] = [{
+        label: "Agents",
+        compactEntries: [quick],
+        moreLabel: "More agents",
+        entries: [
+          quick,
+          {
+            ...entry("gemini", "Gemini"),
+            machineTitle: "Choose Gemini machine",
+            machineEntries: [entry("local", "Local mirror"), entry("primary", "Primary host")],
+          },
+          entry("codex", "Codex"),
+        ],
+      }];
+      return open && (
+        <ContextMenuPortal x={0} y={0} className="tab-new-menu tab-add-menu" onClose={() => setOpen(false)}>
+          <AddTabMenuList groups={groups} />
+        </ContextMenuPortal>
+      );
+    }
+
+    render(<><Harness /><NewTabMenuFixture /></>);
+    const button = (name: string | RegExp) => screen.getByRole("button", { name });
+    press({ key: " ", shiftKey: true });
+    const openMore = async () => {
+      press({ key: "+" });
+      await waitFor(() => expect(regionCursor()).toBe(screen.getByRole("textbox")));
+      press({ key: "ArrowDown" });
+      expect(regionCursor()).toBe(button("Claude"));
+      press({ key: "d" });
+      const more = button(/More agents/);
+      expect(regionCursor()).toBe(more);
+      press({ key: "Enter" });
+      await waitFor(() => expect(regionCursor()).toBe(button("Gemini")));
+      return more;
+    };
+    const openMachines = async () => {
+      press({ key: "d" });
+      const machine = button("Choose Gemini machine");
+      expect(regionCursor()).toBe(machine);
+      press({ key: "Enter" });
+      await waitFor(() => expect(regionCursor()).toBe(button("Local mirror")));
+      return machine;
+    };
+
+    const more = await openMore();
+
+    // Going up from the first item wraps inside the More agents flyout.
+    press({ key: "ArrowUp" });
+    expect(regionCursor()).toBe(button("Codex"));
+    press({ key: "d" });
+    expect(regionCursor()).toBe(button("Gemini"));
+    const machine = await openMachines();
+    press({ key: "e" });
+    expect(regionCursor()).toBe(button("Primary host"));
+    press({ key: "ArrowDown" });
+    expect(regionCursor()).toBe(button("Local mirror"));
+
+    press({ key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Local mirror" })).toBeNull();
+      expect(regionCursor()).toBe(machine);
+    });
+    press({ key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Gemini" })).toBeNull();
+      expect(regionCursor()).toBe(more);
+    });
+    press({ key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /More agents/ })).toBeNull();
+      expect(steering()).toMatchObject({ active: true, level: "tabs" });
+    });
+    expect(pick).not.toHaveBeenCalled();
+
+    await openMore();
+    await openMachines();
+    press({ key: "d" });
+    expect(regionCursor()).toBe(button("Primary host"));
+    press({ key: "Enter" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /More agents/ })).toBeNull();
+      expect(steering().active).toBe(false);
+    });
+    expect(pick).toHaveBeenCalledExactlyOnceWith("primary");
+  });
+
   it("acts on the user's steering keys, not the defaults they replaced", () => {
     const { a } = twoPanes();
     useSettingsStore.setState({
@@ -289,7 +454,7 @@ describe("steering levels", () => {
       expect(requests).toHaveLength(0);
       expect(steering().active).toBe(true);
 
-      // Space and Escape are unbound now; Enter leaves.
+      // Escape is unbound now (Space prompts, and no agent is here); Enter leaves.
       press({ key: " " });
       press({ key: "Escape" });
       expect(steering().active).toBe(true);
@@ -420,9 +585,9 @@ describe("steering levels", () => {
     try {
       render(<SteeringLegend />);
       act(() => steering().enter());
-      const items = [...document.querySelectorAll(".steering-legend-item")];
+      const items = [...document.querySelectorAll(".steering-bar-item")];
       const clis = items.find((el) => el.textContent?.includes("CLIs"));
-      expect(clis?.querySelector("kbd")?.textContent).toBe("1–3");
+      expect(clis?.querySelector(".steering-cap")?.textContent).toBe("1–3");
       expect(clis?.getAttribute("title")).toBe("1 Claude · 2 Codex · 3 Gemini");
       expect(items.some((el) => el.textContent?.includes("Codex"))).toBe(false);
     } finally {
@@ -491,6 +656,16 @@ describe("legend table", () => {
     expect(labels({ apps: { mail: true, calendar: false, todo: false } })).toContain("steering.mail.label");
   });
 
+  it("lists next tab on both pane levels, unbound until the user gives it a key", () => {
+    expect(labels({ level: "panes", multiPane: true })).toContain("steering.tabKey.label");
+    expect(labels({ level: "tabs" })).toContain("steering.tabKey.label");
+    expect(labels({ level: "projects" })).not.toContain("steering.tabKey.label");
+    const row = steeringKeysFor({ ...base, level: "tabs" }).find((k) => k.labelKey === "steering.tabKey.label")!;
+    // Tab is the Reader view cycle by default.
+    expect(steeringRowLabel(row, null)).toBe("—");
+    expect(steeringRowLabel(row, { nextTab: ["Tab"] })).toBe("Tab");
+  });
+
   it("names what ←/→ do on the panes level", () => {
     expect(labels({ level: "panes", multiPane: true })).toContain("steering.focus.label");
     expect(labels({ level: "panes", multiPane: true })).not.toContain("steering.tabs.label");
@@ -519,6 +694,16 @@ describe("legend table", () => {
     );
     expect(labels({})).not.toContain("steering.nextDone.label");
     expect(labels({ statusCounts: { decision: 0, working: 0, done: 2 } })).toContain("steering.nextDone.label");
+  });
+
+  it("lists the side panel's row keys and view numbers only while the cursor is in it", () => {
+    expect(labels({ level: "region", sideRegion: true })).toEqual(
+      expect.arrayContaining(["steering.sideParent.label", "steering.sideEnter.label", "steering.sideViewJump.label"]),
+    );
+    expect(labels({ level: "region", sideRegion: true })).not.toContain("steering.sideView.label");
+    expect(labels({ level: "region" })).not.toContain("steering.sideParent.label");
+    expect(labels({ level: "region" })).not.toContain("steering.sideEnter.label");
+    expect(labels({ level: "region" })).not.toContain("steering.sideViewJump.label");
   });
 
   it("never lists the same key twice on one level", () => {

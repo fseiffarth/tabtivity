@@ -3,6 +3,7 @@ import type { PyMainVerdict } from "../lib/terminal/pythonMainCache";
 import type { AgentCron } from "../lib/agents/agentCron";
 import type { CursorPack } from "../lib/theme/cursorPacks";
 import type { TranslationKey } from "../lib/i18n";
+import type { TrustRequest } from "../lib/execTrust";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../lib/brand";
 
 export interface GlobalAppEntry {
@@ -24,6 +25,8 @@ export interface GlobalAppEntry {
  *  - `"scope"` — complete the whole enclosing function or scope.
  */
 export type AutocompleteMode = "sentence" | "block" | "scope";
+/** When an editor asks for a suggestion: after a typing pause, or only on request. */
+export type AutocompleteTrigger = "auto" | "manual";
 
 /**
  * Category of an editor proofreading issue. Drives the underline colour in the
@@ -82,6 +85,7 @@ export interface KeyboardChord {
   shift?: boolean;
   alt?: boolean;
   meta?: boolean;
+  altGr?: boolean;
 }
 
 /**
@@ -129,6 +133,7 @@ export type FilesPanelView =
   | "agents"
   | "orange"
   | "sessions"
+  | "archive"
   | "jobs"
   | "remarks"
   | "todo"
@@ -204,6 +209,10 @@ export interface Settings {
      * agents-only); read by the sidecar per catalog load and repeated by the
      * desktop bridge. */
     shell_tabs?: boolean;
+    /** A paired phone may list and attach this desktop's clipboard image and
+     * newest screenshots, downloads and pictures (+ → Desktop). Unset is off;
+     * read by the sidecar per request and repeated by the window's commands. */
+    desktop_images?: boolean;
     /** A paired phone may list the Ollama models installed here and load or
      * unload them (never download or delete). Unset is on; an explicit false
      * closes the routes. Read by the sidecar per request and repeated by the
@@ -220,6 +229,18 @@ export interface Settings {
      * an empty list, none. Narrows `assistant_access`, never opens it. Carried
      * by every writer of this block, like `assistant_access`. */
     assistant_devices?: string[];
+    /** The paired phones that may open the root console (device ids). Unlike
+     * every other list this one is opt-in: absent or empty is no phone, so a
+     * phone paired later starts off root. Narrows `root_access`, never opens
+     * it. Carried by every writer of this block, like `assistant_devices`. */
+    root_devices?: string[];
+    /** The other desktops' phone-host origins (same tailnet,
+     * `https://<machine>.<tailnet>.ts.net[:port]`) whose phone app may frame
+     * this desktop's phone UI and be framed by it
+     * (`docs/phone_multi_desktop_plan.md`). The sidecar re-validates every
+     * entry per request and drops a bad one. Carried by every writer of this
+     * block, like `root_devices`. */
+    linked_desktops?: string[];
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
@@ -231,6 +252,9 @@ export interface Settings {
    * Machines, CPU/RAM/GPU) expanded into the bar? Unset means collapsed to a
    * single summary lamp; anything non-nominal shows itself regardless. */
   header_status_expanded?: boolean;
+  /** Keep the top bar in the layout in the window's fullscreen mode instead of
+   * auto-hiding it at the screen edge. Unset means auto-hide. */
+  header_fullscreen_pinned?: boolean;
   /** Top-bar placement overrides by item id (`lib/headerPins`): `true` keeps the
    * item in the bar while the chevron is collapsed, `false` folds it behind the
    * chevron. An id that is absent follows the built-in default. */
@@ -241,12 +265,23 @@ export interface Settings {
   /** Top-bar item ids in the order the user dragged them (`lib/headerPins`).
    * An id that is absent keeps its built-in place after the listed ones. */
   header_order?: string[];
+  /** Project ids kept off the "All projects" strip (`lib/projects/barHidden`).
+   *  Still open, still in their boxes' slices and in search. */
+  bar_hidden_projects?: string[];
+  /** Box ids whose members are kept off the "All projects" strip. */
+  bar_hidden_boxes?: string[];
+  /** Hide mode: the "All projects" strip shows only the project in scope
+   *  (`lib/projects/barHidden`). Absent = off. */
+  bar_solo?: boolean;
   /** Default printer per network, keyed by `networkKey()` in
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */
   printer_network_defaults?: Record<string, { printer: string; label: string }>;
+  /** The default (first) host of Settings → Git Hosting, kept for older
+   *  builds; the list itself is `git_hosts`, edited through `lib/gitHosts`.
+   *  Tokens never reach the renderer. */
   git_profile_url?: string;
-  git_token?: string;
+  git_hosts?: string[];
   color_scheme?: string;
   /** UI language for Tabtivity's interface. Unset/unknown falls back to English.
    *  Applied live via `lib/i18n` (`applyLanguage`); the backend round-trips it. */
@@ -338,9 +373,19 @@ export interface Settings {
   /** The read-only "Ask Tabtivity" help MCP (`tabtivity-help`) in local agent tabs.
    *  **Default true** — absent means on. Switched in the intro wizard. */
   help_mcp?: boolean;
+  /** Self-only cockpit tools for eligible local agent tabs. Absent = on. */
+  cockpit_mcp?: boolean;
   /** The markup questions MCP (`services::markup_mcp`, `markup_ask`) in local
    *  project-agent tabs. **Default true** — absent means on. */
   markup_mcp?: boolean;
+  /** The print requests MCP (`services::print_mcp`, `print_request`) in local
+   *  project-agent tabs; every print waits for the user's Approve.
+   *  **Default true** — absent means on. */
+  print_mcp?: boolean;
+  /** Tab messaging (`services::tabs_mcp`, `tabs_list`/`tabs_send`/`tabs_inbox`)
+   *  between the local agent tabs of one project. **Default true** — absent
+   *  means on. */
+  tabs_mcp?: boolean;
   root_mcp_review?: "all" | "destructive" | "off";
   /** Root console: serve the MCP tools to local-model tabs only. Absent means
    *  off. On, cloud agent CLIs get no endpoint and running ones are refused. */
@@ -541,6 +586,10 @@ export interface Settings {
    *  first, then menu order (`agentShortcutSlots`); keys it lacks follow the
    *  ones it names. Round-trips through the backend settings `extra`. */
   agent_order?: string[];
+  /** New agent tabs take the name of their first prompt (`lib/agents/autoTabName`).
+   *  Unset = on; only an explicit `false` turns it off. Round-trips through the
+   *  backend settings `extra`. */
+  agent_tab_auto_name?: boolean;
   /** The scheduled agent warm-up (Manage CLIs → Scheduled warm-up): at each
    *  configured local time, one short message is sent to that agent (in its
    *  one-shot print mode), so its usage window starts *then* rather than
@@ -594,11 +643,21 @@ export interface Settings {
   ollama_roles?: Record<string, string>;
   /** Missing provider retains Ollama; prose keeps its existing Ollama role. */
   code_completion_provider?: "ollama" | "copilot";
+  /** The automatic autocomplete trigger's idle delay per provider, in ms; one
+   *  of 100/200/400/600/1200. Missing or another value: the default (600 for a
+   *  local model, 200 for Copilot). Machine-wide, every tab of that provider. */
+  autocomplete_delay_ms?: { ollama?: number; copilot?: number };
   /** Experimental entry point; this alone never authorizes cloud context. */
   copilot_completion?: boolean;
+  /** Keep the Copilot language server's GitHub token in the OS keychain (one
+   *  entry per app account) so a restart signs in by itself. Off by default;
+   *  sign-out or switching it off deletes the entry. */
+  copilot_stay_signed_in?: boolean;
   /** Tabtivity-owned consent, bound to both project id and canonical directory. */
   completion_project_policies?: Record<string, {
     directory: string;
+    /** Backend-owned SSH endpoint/root identity; absent for local consent. */
+    remote?: string;
     copilot: boolean;
     local_only: boolean;
     /** Copilot also serves the project's text files (Markdown, LaTeX, plain text). */
@@ -666,17 +725,22 @@ export interface Settings {
    *  read-aloud speed (a multiplier, unset: 1); `voice_read_aloud` and
    *  `voice_hands_free_on` are the Chat chips' state — read answers aloud,
    *  and the hands-free loop, which needs the experimental flag below too.
-   *  `voice_gpu`: whether speech may use the GPU (unset: yes). */
+   *  `voice_gpu`: whether speech may use the GPU (unset: yes);
+   *  `voice_natural`: read aloud with an installed natural (Piper) voice
+   *  rather than the OS voice (unset: yes). */
   voice_model?: string;
   voice_lang?: string;
   voice_gpu?: boolean;
   voice_headset?: boolean;
   voice_pause_ms?: number;
   voice_rate?: number;
+  voice_natural?: boolean;
   voice_read_aloud?: boolean;
   voice_hands_free_on?: boolean;
   /** EXPERIMENTAL: the Chat's hands-free loop (`ReaderVoice`). */
   voice_hands_free?: boolean;
+  /** EXPERIMENTAL: per-turn checkpoints of an agent tab's folder (`lib/agents/checkpoints`). */
+  turn_checkpoints?: boolean;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */
@@ -709,6 +773,13 @@ export interface Settings {
    *  of each day. Turning it off stops the popup, not the counting — the recap
    *  stays reachable from Settings. */
   daily_stats_recap?: boolean;
+  /** When true (the default; absent = on), the app looks up the CLIs' and Ollama's
+   *  newest releases once a day by itself. Off: only a click in Manage CLIs or the
+   *  Ollama row asks. Read by the backend at every tick (Manage CLIs). */
+  daily_release_check?: boolean;
+  /** Remote Claude tabs are sent the saved long-lived token too (absent = on);
+   *  the host uses it only without its own login (`services::claude_token`). */
+  claude_token_remote?: boolean;
   /** UTC date ("YYYY-MM-DD") the recap was last auto-shown, so it opens once a day
    *  rather than once per window. Written by the recap host. */
   daily_stats_last_shown?: string;
@@ -761,8 +832,14 @@ export interface Settings {
   /** Persistent LOCAL (tmux) sessions (TODO #85): when true (the default on Unix),
    *  a local project's shell/script tabs run inside a tmux session on the machine,
    *  so a long run keeps going if Tabtivity crashes and the tab reattaches on restart.
-   *  `undefined`/`true` = on; `false` = off. No effect on Windows (no tmux). */
+   *  `undefined`/`true` = on; `false` = off. On Windows it applies only with
+   *  `windows_session_host` on (agent tabs then run in the session host). */
   persist_local_sessions?: boolean;
+  /** EXPERIMENTAL, default OFF, Windows only. Local agent tabs run in the native
+   *  session host (`docs/windows_session_host_plan.md`) so they outlive the
+   *  window and a phone can attach; needs `persist_local_sessions` on too. Read
+   *  through `lib/terminal/localSessions`. Never carried by Debug mode. */
+  windows_session_host?: boolean;
   /** When true (the default), remote SSH/OpenVPN connections are made headlessly
    *  in the background (Tabtivity handles the password transiently). When false, they
    *  are launched as interactive terminal tabs in the Tabtivity root scope, so the
@@ -807,6 +884,10 @@ export interface Settings {
   /** True once the first-run "Using VPN or remote machines?" prompt has been
    *  shown/answered, so it never re-asks automatically. */
   remote_features_prompted?: boolean;
+  /** True once the launch-time "Keep running when closed?" question
+   *  (`mobile/StayAfterQuitPrompt`) has been shown, so it never re-asks; the
+   *  answer itself is the Mobile host's `stay_after_quit`. */
+  stay_after_quit_prompted?: boolean;
   /** Energy-saver mode. "off" never throttles; "battery" (the default) throttles
    *  only while running on battery; "always" throttles regardless of power. When
    *  active, Tabtivity pauses the blob auto-spin, collapses idle animations, and
@@ -828,6 +909,17 @@ export interface Settings {
    *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
    *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
   sleep_tabs_after_min?: number;
+  /** Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the most agent
+   *  tabs with a running process before the least recently used are stopped
+   *  (kept, resumed when shown). Unset → 30; `0` → off. Read through
+   *  `stopAgentTabsCap` (`lib/agents/agentTabStop`). */
+  stop_agent_tabs_cap?: number;
+  /** Minutes an agent tab may sit unused before it is stopped. Unset → 120;
+   *  `0` → off. Read through `stopAgentTabsIdleMs`. */
+  stop_agent_tabs_idle_min?: number;
+  /** Free memory (MiB) under which least recently used agent tabs are
+   *  stopped. Unset → 4096; `0` → off. Read through `stopAgentTabsMinFreeBytes`. */
+  stop_agent_tabs_min_free_mb?: number;
   /** Lines of history a shell terminal keeps (`docs/done/tab_cost_plan.md` step
    *  2): every `TerminalView` whose kind is not `agent`/`local_agent`. Unset or
    *  invalid → 2,000; clamped to [100, 50,000]. Agent tabs keep a fixed 5,000.
@@ -930,6 +1022,9 @@ export interface Settings {
   /** How often the user pressed each hint's Read button, by hint id; every read
    *  halves the hint's chance of showing again (`lib/hintChance.ts`). */
   hints_read?: Record<string, number>;
+  /** When each hint last came up (ms epoch), by hint id, so hints take turns
+   *  instead of every start opening on the same ones (`pickHint`). */
+  hints_shown?: Record<string, number>;
   /** Master switch for the contextual hint system; default ON when unset. */
   hints_enabled?: boolean;
   /** True once the guided "Take a tour" walkthrough has been completed or
@@ -1079,6 +1174,11 @@ export interface RemoteSpec {
    *  picker, the pill's connection lamps, `hostsForProject`). Distinct from the
    *  *project* name — this labels the machine, not the project. */
   label?: string;
+  /** Absolute folder on this machine where agent CLIs install and keep their
+   *  sessions and login instead of the login's home - for a host whose home
+   *  quota is small. Agent tabs launched afterwards run with a `HOME` inside it.
+   *  Absent = the host's own home. */
+  agent_dir?: string;
   /** Persistent remote sessions (TODO #85): run this project's remote shell/script
    *  AND remote agent tabs inside a **tmux** session on the host, so a long run (or a
    *  live agent) survives an SSH drop, a laptop sleep, or Tabtivity quitting. **Default
@@ -1300,19 +1400,29 @@ export interface GitPushProposal {
   remote_sha: string | null;
   commits: string[];
   diffstat: string;
+  /** The changed files as `"<status> <path>"` lines, workflow, hook and
+   *  manifest paths first and capped; `files_total` counts all of them. */
+  files?: string[];
+  files_total?: number;
   note: string;
   needs_url_confirm: boolean;
-  /** The push goes to the remote's default branch: it always waits for a click. */
+  /** The push goes to a branch that always waits for a click: the remote's
+   *  default, main or master, or one a release workflow runs on. */
   to_default?: boolean;
   created_at: string;
   /** `allowed`: an "Allow CI" card the user allowed. */
   status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired" | "allowed";
+  /** Who closed a `dismissed` card. Absent (an older record) reads as the user. */
+  dismissed_by?: "user" | "system" | null;
   category: string | null;
   message: string;
   output: string;
   preflight_output: string;
   /** The user closed the finished card (`git_push_mcp_clear`). */
   cleared: boolean;
+  /** A pending push whose pre-push hook would run on this computer and is not
+   *  approved: the hooks to review (`exec_trust`). Approving re-runs the push. */
+  hooks_trust?: TrustRequest | null;
   state: { branch: string | null; head: string | null; remote: string | null; upstream: string | null; url: string | null; remote_sha: string | null; ahead: number; behind: number };
 }
 
@@ -1330,8 +1440,20 @@ export interface GitReleasePreview {
   category: string | null;
 }
 
+/** A project's agent privacy (`services::agent_privacy`): Local models only
+ *  keeps every cloud model from reading it; Cut network is stored for the day
+ *  the backend can enforce it. Unknown fields round-trip. */
+export interface AgentPrivacy {
+  local_models_only?: boolean;
+  cut_network?: boolean;
+}
+
 export interface ProjectEntry {
+  agent_privacy?: AgentPrivacy;
   schedule_mcp?: "off" | "propose" | "apply";
+  /** Tab messaging's idle wake (`commands::tabs_mcp`): a tab with new unread
+   *  messages gets the host's fixed notice queued once it is idle. Absent = off. */
+  tab_messages_wake?: boolean;
   git_push_mcp?: GitPushMcpPolicy;
   id: string;
   name: string;
@@ -1537,6 +1659,9 @@ export interface ExportProgress {
 /** `inspect_project_export` — a bundle's manifest, read without unpacking. */
 export interface BundleInfo {
   path: string;
+  /** The member inside a project set this describes (pass it back as the
+   *  import request's `member`); absent for a bundle file of its own. */
+  member?: string;
   format: number;
   appVersion: string;
   exportedAt: string;
@@ -1601,6 +1726,55 @@ export interface UnpairOutcome {
   /** The move out failed; the folder is still at `keptAt`. */
   moveError?: string | null;
 }
+
+/** One project's outcome in `export_project_set`. */
+export interface ExportSetMember {
+  projectId: string;
+  name: string;
+  /** Its export report; `path` is the entry name inside the set. */
+  report?: ExportReport;
+  /** Why it is not in the set (the others still are). */
+  error?: string;
+}
+
+/** `export_project_set`'s answer. */
+export interface ExportSetReport {
+  path: string;
+  bytes: number;
+  members: ExportSetMember[];
+}
+
+/** `project-export-set` progress event payload. */
+export interface ExportSetProgress {
+  index: number;
+  count: number;
+  projectId: string;
+  phase: "file" | "done";
+  done: number;
+  total: number;
+}
+
+/** One member of a project set as `inspect_project_bundle` read it. */
+export interface SetMemberInfo {
+  member: string;
+  info?: BundleInfo;
+  error?: string;
+}
+
+/** A project set, read without unpacking. */
+export interface SetInfo {
+  path: string;
+  appVersion: string;
+  exportedAt: string;
+  members: SetMemberInfo[];
+  suggestedParent: string;
+  suggestedMirrorParent: string;
+}
+
+/** `inspect_project_bundle` — a picked file is one project or a set. */
+export type InspectedBundle =
+  | { kind: "project"; info: BundleInfo }
+  | { kind: "set"; set: SetInfo };
 
 /** `import_project_export`'s answer. */
 export interface ImportBundleResult {

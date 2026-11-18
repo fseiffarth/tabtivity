@@ -41,8 +41,10 @@ afterEach(() => {
 
 async function openManager() {
   render(<Calendar />);
-  await waitFor(() => expect(screen.getByRole("button", { name: "Calendars" }).hasAttribute("disabled")).toBe(false));
-  fireEvent.click(screen.getByRole("button", { name: "Calendars" }));
+  // Calendars lives in the head's ⋯ menu; its row's name carries the description.
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: /^Calendars/ }).hasAttribute("disabled")).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: /^Calendars/ }));
   await screen.findByText("Personal");
 }
 

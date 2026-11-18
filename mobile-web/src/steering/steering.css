@@ -1,0 +1,53 @@
+/* Keyboard steering on the phone (docs/mobile_steering_plan.md): the cursor
+   outline and the legend bar. Imported after style.css and themes.css, so at
+   equal specificity these win. Plain hex, themed at build time like the rest.
+   Nothing here animates and nothing blurs: a static solid bar, an outline. */
+
+/* The cursor is real focus. `:focus`, not only `:focus-visible`, because iOS
+   sets the latter unreliably after a key moves focus by script. */
+html[data-steering] :focus:not(body) { outline:3px solid #8c7df4; outline-offset:2px; }
+html[data-steering] [data-steer-row]:focus { outline-offset:-3px; }
+html[data-steering] :is(input,textarea,select):focus { outline-offset:-1px; }
+
+/* The legend's height: a head line and two lines of keys, plus the safe area.
+   A constant, so nothing is measured. Set only while the bar is up. */
+html[data-steer-bar] { --steer-bar-h:calc(58px + env(safe-area-inset-bottom)); }
+html[data-steer-bar][data-steer-folded] { --steer-bar-h:calc(22px + env(safe-area-inset-bottom)); }
+
+/* A row is never left under the bars (the tab bar is ≈76px). */
+html[data-steering] [data-steer-row] { scroll-margin-top:12px; scroll-margin-bottom:calc(96px + var(--steer-bar-h, 0px)); }
+
+/* Room for the bar. The terminal's own `height` is inline (visualViewport), so
+   it gets padding, never a height calc. */
+html[data-steer-bar] .mobile-tabbar { bottom:var(--steer-bar-h); }
+html[data-steer-bar] .tabbed > .screen { padding-bottom:calc(76px + max(24px,env(safe-area-inset-bottom)) + var(--steer-bar-h)); }
+html[data-steer-bar] .tabbed > .todo-screen,
+html[data-steer-bar] .tabbed > .project-screen,
+html[data-steer-bar] .tabbed > .home-screen.has-fab { padding-bottom:calc(150px + max(24px,env(safe-area-inset-bottom)) + var(--steer-bar-h)); }
+html[data-steer-bar] .fab,
+html[data-steer-bar] .todo-fab { bottom:calc(80px + max(6px,env(safe-area-inset-bottom)) + var(--steer-bar-h)); }
+html[data-steer-bar] .sheet-backdrop { padding-bottom:var(--steer-bar-h); }
+html[data-steer-bar] .terminal-screen { padding-bottom:var(--steer-bar-h); }
+
+/* The bar: solid, above the sheet backdrop (12) and the tab bar (8). */
+.steer-bar { position:fixed; inset:auto 0 0 0; z-index:14; display:flex; flex-direction:column; gap:2px; height:var(--steer-bar-h, calc(58px + env(safe-area-inset-bottom))); padding:5px max(10px,calc((100vw - var(--screen-measure)) / 2)) max(5px,env(safe-area-inset-bottom)); overflow:hidden; border-top:1px solid #363c50; background:#151826; color:#c8cde0; font-size:.6875rem; line-height:1.25; pointer-events:none; }
+.steer-bar.folded { height:var(--steer-bar-h, calc(22px + env(safe-area-inset-bottom))); padding-top:3px; padding-bottom:max(3px,env(safe-area-inset-bottom)); color:#98a0b4; }
+.steer-head { display:flex; align-items:center; gap:8px; min-width:0; white-space:nowrap; }
+.steer-badge { color:#d7cffd; font-weight:700; }
+.steer-ladder { display:flex; gap:4px; min-width:0; margin:0; padding:0; list-style:none; overflow:hidden; }
+.steer-ladder li { color:#98a0b4; overflow:hidden; text-overflow:ellipsis; }
+.steer-ladder li + li::before { content:"›"; margin-right:4px; color:#6b7189; }
+.steer-ladder li.current { color:#e7e9f2; font-weight:700; }
+.steer-ladder li.off::before { content:"·"; }
+.steer-legend { margin-left:auto; color:#98a0b4; }
+.steer-flash { min-height:0; color:#d7cffd; font-weight:600; }
+.steer-flash:empty { display:none; }
+.steer-body { color:#c8cde0; }
+.steer-keys { display:flex; flex-wrap:wrap; gap:1px 10px; margin:0; padding:0; list-style:none; max-height:calc(2 * 1.25em); overflow:hidden; }
+.steer-keys li { white-space:nowrap; }
+.steer-bar kbd { padding:0 4px; border:1px solid #363c50; border-radius:4px; background:#222637; color:#e7e9f2; font:inherit; font-weight:650; }
+.steer-keys b { color:#d7cffd; }
+.steer-bar .untested { margin-left:4px; }
+
+/* The one-time "keyboard connected" tip: static, bottom centre, above the tab bar. */
+.steer-tip { position:fixed; z-index:14; left:50%; bottom:calc(88px + env(safe-area-inset-bottom)); transform:translateX(-50%); width:max-content; max-width:calc(100vw - 32px); padding:8px 12px; border:1px solid #363c50; border-radius:12px; background:#151826; color:#e7e9f2; font-size:.8125rem; line-height:1.3; text-align:center; pointer-events:none; }

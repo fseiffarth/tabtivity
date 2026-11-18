@@ -99,8 +99,12 @@ Calls to the read-only help (`ask-tabtivity`) are not listed there.
 ## Which CLIs get the tools
 
 Claude gets them on its command line (`--mcp-config`), Codex through a `-c
-mcp_servers.…` override, tool-capable Local Model tabs through Vibe's
-environment. Other CLIs receive only the address and token in their
-environment. Tabtivity never edits a CLI's own config file to do this. Each
+mcp_servers.…` override, Copilot through `--additional-mcp-config`, OpenCode
+through its inline config (`OPENCODE_CONFIG_CONTENT`), tool-capable Local
+Model tabs through Vibe's environment. Other CLIs receive the address and
+token in their environment and call the tools with the `tabtivity-mcp` command
+(`tabtivity-mcp` lists the servers, `tabtivity-mcp call SERVER TOOL JSON` calls
+one); their session-start hint tells them so. Tabtivity never edits a CLI's own
+config file to do this. Each
 run has its own token, kept in memory only. Whether the agent asks you
 before each tool call is the CLI's own setting.

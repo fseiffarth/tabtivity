@@ -10,6 +10,88 @@ agent is its vendor's own command-line tool (CLI), installed once per machine.
 Tabtivity detects installed CLIs, offers them in every `+` menu, and resumes
 their conversations after a restart where the CLI allows it.
 
+## Rename your agent tab and leave notes through MCP
+
+Every local agent tab receives a separate cockpit MCP (CLIs that do not list
+it as their own tool reach it through the `tabtivity-mcp` command). Ask the agent to call `tab_rename` with a short `label`; it can
+rename only its own tab. The name is saved and appears in the cockpit and on
+your phone. An optional `expectedLabel` prevents overwriting a changed name.
+The session and focus stay as they are.
+
+The same lane lets an agent describe its own work. `tab_get_info` reads its
+label and notes; `tab_set_activity` publishes one short line (up to 160
+characters) and `tab_set_handoff` leaves a note with a summary, the checks it
+ran and what remains. The cockpit shows the activity line under the agent's
+row, tagged **Agent says**, for 30 minutes while its machine is reachable, and
+the handoff in the detail pane. They are the agent's own words: they are
+plain text, never change what the app detects, and cannot approve, verify or
+start anything. A restarted agent starts without the previous line; the
+handoff stays. `tab_set_results` lists files the agent produced, as a label and
+a path inside the project (up to 8). They appear below the handoff as plain
+text; nothing is read or previewed until you click one, and then it opens in a
+viewer tab only if it still lies inside the project folder. A file that is not
+there shows as **Unavailable**. Results work for projects whose files are on
+this computer, not for the Root console, boxes, remote or worker-hosted
+projects. `tab_set_progress` reports plan steps (up to 8, each pending, active
+or done); they show in the detail pane as words, and a report older than 30
+minutes, from an earlier run of the agent or while its machine is down is
+labelled a past report ("was in progress"), never as running.
+`tab_set_blocker` states in one line what is in the agent's way; it replaces
+the activity line under the agent's row, marked as reported by the agent, for
+30 minutes, and does not change the **Needs you** count or the state the app
+detects. `tab_set_verification` lists the checks the agent says it ran or still
+owes (passed, failed, pending or not run, with an optional note); the detail
+pane words it as reported by the agent at a time, and the app runs or verifies
+nothing. `tab_request_attention` is how an agent says it cannot go on without
+you: one question (up to 500 characters) that shows in **Needs you** as **Agent
+asks**, in the header badge and in the detail pane. It is only a notice, with
+no options or answer: clicking it opens that tab's conversation, where you
+answer as usual, and **Dismiss** hides it for good (the same question sent
+again stays hidden). A tab the app already detects as asking is counted once.
+A question disappears after 24 hours, when the agent is restarted or when the
+tab is closed. `tab_add_milestone` records one finished milestone in a line;
+the detail pane lists the last 20, and **While you were away** shows the ones
+reported while you were gone, marked as agent-reported with the time the app
+received them. Agents are limited to 30 calls a minute.
+
+Manage CLIs → Tools → **Let agents rename their own tab and leave notes
+(Cockpit MCP)** is on by default. Turning it off refuses running tabs' calls
+too. Turn it on before launching a new agent to give that agent the tools.
+Existing MCP tools retain their separate permissions. Tabby keeps its web and
+help tools.
+
+## Let agent tabs of a project message each other
+
+Local agent tabs of one project can leave each other short messages through
+the tab messaging MCP (`tabtivity-mcp call tabs …` for CLIs that do not list it
+as their own tool). Ask an agent to list the other tabs (`tabs_list`), send
+one of them a message (`tabs_send`) or read its inbox (`tabs_inbox`). A
+message is plain text up to 4,000 characters for one tab; it stays unread
+until the recipient acknowledges it and disappears after 24 hours or when the
+app quits.
+
+A message reaches the other agent as written by another agent tab, never as
+your prompt. The other agent learns of it when it reads its inbox, and a
+Claude tab sees a short hint beside your next prompt. To prompt an idle tab to
+read its messages, open its row in the cockpit: **Messages** lists every
+message it sent or received, as written, and **Deliver** queues a fixed
+"read your inbox" notice that is typed once the tab is idle; the message text
+itself is never typed. **Clear** removes the project's messages. The tab's
+hover card shows how many are unread.
+
+Only tabs of the same project on this computer reach each other. Tabs of
+another project, box tabs, the Root console, Tabby, and remote, worker, VM
+and container tabs do not. In a project set to **Local models only**, its
+local tabs reach only each other; elsewhere local-model tabs and cloud agent
+tabs never mix. An agent is limited to 30 sends and 120 list or inbox calls an
+hour.
+
+Manage CLIs → Tools → **Let agent tabs of a project message each other
+(MCP)** is on by default; off, running tabs' calls are refused. Below it, each
+project has an off-by-default switch to wake idle tabs: with it on, a tab that
+gets new unread messages is sent the fixed notice by itself once idle, at
+most six times an hour.
+
 ## Install an agent CLI
 
 1. Click the **Models & agents** button in the header (chip icon) and pick
@@ -32,6 +114,21 @@ permission error (EACCES).
 
 On a remote project, the same panel can install an agent onto a chosen remote
 machine instead of this one.
+
+## Keep agent CLIs up to date
+
+Each installed CLI's card has **Check for update**: one request to the registry
+its vendor publishes to (npm, PyPI or GitHub; for Cursor, the build named in its
+installer), only when you click. A newer release turns the card's version chip
+into `current → latest`; click it to run the installer again. The head of the
+Installed list has **Check all for updates**, which asks for every installed CLI
+at once, and then **Update all (N)**, which runs the installer of each CLI with a
+newer release one after another, each with its own log; a failure stays on its
+card. The settings card at the top of Manage CLIs has **Check for new releases
+daily** (on by default), which asks the same feeds (and Ollama's) once a day on
+its own and installs nothing. Inside an agent tab's
+sandbox a CLI cannot update itself, so Cursor's own updater is switched off
+there: update it from Manage CLIs.
 
 ## Prerequisite: Node.js for npm-based agents
 
@@ -79,9 +176,13 @@ per-project homes, and Tabtivity shares each CLI's login file across all of
 them, so every other project's tab of that CLI is signed in too. If this
 computer already holds a login for the CLI, Settings → Agent sandbox → **Agent
 logins** → *Import from this computer* copies just that file into Tabtivity
-(never config, skills or MCP entries). The first start of this version does
-that for you, once, for every CLI Tabtivity has no login for yet. **Sign out** there forgets it
-everywhere. A CLI that keeps its login in the system keyring or a database
+(never config, skills or MCP entries). A fresh install asks you first: the
+first-run intro's **Already on this computer** page lists the logins it found,
+and copies only the ones you leave ticked when you press *Import the ticked
+ones*. *Don't import* copies nothing; either answer is final, and the Settings
+button stays. An install updated from a version without per-project homes
+imports them once without asking, since its agents were signed in before.
+**Sign out** there forgets it everywhere. A CLI that keeps its login in the system keyring or a database
 (Kiro, Kilo, OpenClaw, Copilot), or in a file it also reads as settings or
 environment (Mistral Vibe's `.env`, Aider, mini-swe-agent, Cline), signs in
 once per project instead — an agent in one project must not be able to plant
@@ -179,7 +280,10 @@ API keys section says so.
   install joins it by itself; change it with the "+ tab" chips in the Models &
   agents menu. **More agents & CLIs…** lists every installed agent.
 - The **Default** chip picks the agent Tabtivity uses when it must choose one
-  itself (e.g. filling scaffold files).
+  itself (e.g. filling scaffold files). The first-run **How to start** wizard's
+  Agent CLIs page sets it too: choosing an installed CLI there, installing one
+  or re-checking one that is now installed saves it as the default; only
+  looking at an uninstalled one changes nothing.
 - Root console: agents are off there until you turn on their **Root** chip.
 - In a project with linked git worktrees, a new agent starts in the worktree
   selected in the Git view (none selected: the project folder), and its tab
@@ -219,7 +323,8 @@ Claude, Codex and OpenCode tabs can be used as a chat instead of the
 terminal — the same chat view the phone's Focus uses. Click **Chat** at the
 right end of the prompt row above the terminal:
 your prompts show on the right, the agent's answers on the left as
-formatted text, and slash commands as thin rules. Type into the box at the
+formatted text, and slash commands as thin rules (a picture from the inbox
+named in a command, such as `/design`, shows under its rule). Type into the box at the
 bottom and press Enter to send (Shift+Enter for a new line); a prompt sent
 while the agent works waits in its queue as a typed one would. When the
 agent asks something — a permission prompt ("Do you want to make this
@@ -233,6 +338,26 @@ and remembered: picking Chat (or Terminal) in a Claude tab switches every
 open Claude tab, and new Claude tabs open the same way, while Codex and
 OpenCode tabs keep their own choice. Agents without a chat view keep their
 terminal.
+
+**Diffs** lists the files the conversation changed, newest first. Click the **+**
+in the gutter of a diff line (Shift+click another line of the same hunk for a
+range) to write the agent a note; **Add to draft** in the header puts all your
+notes, each with the lines it is about, into the Chat's text box for you to
+read, edit and send. Nothing is sent for you. With the experimental per-turn
+checkpoints on, you can also put the files back to before one of your prompts
+(see `checkpoints`).
+
+Beside Chat and Terminal, **Files** lists the files the conversation names
+(files its answers mention, pictures and PDFs it shows, files your phone
+sent), newest first within three groups (**Sent by the agent**, **Mentioned in
+its answers**, **Sent by you**), and shows the one you pick in its viewer. Clicking a
+file in the chat opens it there instead of in a new tab. To open it as a tab
+anyway, click ↗ above the viewer, or Ctrl+click the file.
+
+Web links the conversation names (the ones you can click in the chat, including
+ones you pasted) are listed under the files, with the address's host and path,
+who wrote it and when. Clicking one asks first, naming the exact address, and
+only opens your browser once you confirm; Tabtivity never loads the page itself.
 
 ## Switch all AI off
 
@@ -281,8 +406,9 @@ What you want in every project — your `CLAUDE.md`, `AGENTS.md` or
 line), MCP servers — goes in the **global agent config**: Settings → Agent
 sandbox → Global agent config. *Import from this computer* copies it from your
 own `~/.claude`, `~/.codex` and `~/.gemini` (never logins, history or folder
-trust) — done once for you at the first start, if the global config is still
-empty; *Open folder* lets you edit it. Every agent tab gets a fresh copy
+trust). A fresh install offers this on the intro's **Already on this
+computer** page, next to the logins, and copies nothing until you say so;
+*Open folder* lets you edit it. Every agent tab gets a fresh copy
 when it starts, merged into the settings files the CLI writes itself, so a
 model you picked in one project stays picked there. Agents cannot change
 the global config; what an agent changes in its own project's home stays in

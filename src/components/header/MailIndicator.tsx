@@ -8,6 +8,7 @@ import {
   useMailStore,
 } from "../../stores/mail";
 import { useSettingsStore } from "../../stores/settings";
+import { isViewShown, useViewShown } from "../../stores/rootOverlay";
 import { useExperimental } from "../../lib/experimental";
 import { DEFAULT_MAIL_CHECK_MIN, onMailNew } from "../../lib/mail";
 import { useVpnTunnelUp, vpnGateAllows, vpnTunnelUp } from "../../lib/remote/vpn/vpnGate";
@@ -24,7 +25,7 @@ const MENU_ID = "mail";
  * another leaves it behind. Mail does not belong to a project — its store is one
  * global mailbox — so the tab only ever duplicated this button, and it is gone.
  * What is left is one button in the header, always in the same place, opening
- * `MailPane` as an overlay over whatever is on screen (`MailOverlayHost`).
+ * `MailPane` as a view of the console window (`MailView`).
  *
  * One gate: `mail_client`, the experimental flag that owns the whole feature (off
  * for a non-debug user, so a header slot is not spent on mail for someone who
@@ -112,7 +113,7 @@ export function MailIndicator() {
   );
   const unread = useMailStore((s) => inboxUnread(s.foldersByAccount));
   const newCount = useMailStore((s) => s.newCount);
-  const overlayOpen = useMailStore((s) => s.overlayOpen);
+  const overlayOpen = useViewShown("mail");
   // The dropdown's rows. Read unconditionally rather than only while the menu is
   // open: these are already in the store (the badge's own `refreshUnread` puts
   // them there), and a hook cannot be conditional anyway.
@@ -284,7 +285,7 @@ export function MailIndicator() {
           setMenuOpen(false);
           window.clearTimeout(closeTimer.current);
           const store = useMailStore.getState();
-          if (store.overlayOpen) store.closeOverlay();
+          if (isViewShown("mail")) store.closeOverlay();
           else store.openOverlay();
         }}
         // Keyboard reach: tabbing to the button is the one way in that no

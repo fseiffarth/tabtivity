@@ -1213,6 +1213,10 @@ fn rgb(color: Color) -> [f64; 3] {
         Color::Blue => [0.15, 0.39, 0.92],
         Color::Black => [0.07, 0.07, 0.07],
         Color::Yellow => [1.0, 0.85, 0.1],
+        Color::Green => [0.09, 0.64, 0.29],
+        Color::Orange => [0.92, 0.48, 0.05],
+        Color::Purple => [0.49, 0.23, 0.93],
+        Color::Pink => [0.93, 0.28, 0.6],
     }
 }
 

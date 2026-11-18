@@ -32,30 +32,72 @@ pub(crate) fn read_boxes_at(path: &Path) -> Result<BoxesList, String> {
     Ok(boxes)
 }
 
-/// Write the list, stamping each box's revision against what the file holds
-/// (headless owner plan, H1): a changed box gets the next revision, an
-/// unchanged one keeps its own, a new one starts at 1 — whatever number the
-/// caller's copy carried. Every writer in this module goes through here, so
-/// the revisions move consistently.
-pub(crate) fn write_boxes(boxes: &BoxesList) -> Result<BoxesList, String> {
-    let path = boxes_path();
-    let _lock = storage::FileLock::exclusive(&path).map_err(|e| e.to_string())?;
-    let current = read_boxes_at(&path)?;
-    write_boxes_stamped(&path, &current, boxes)
+/// One edit of the boxes file: read it, let `edit` change the list, and write
+/// the result, all under the file's lock. Every command that changes a box
+/// goes through here (or holds the lock the same way, as `create_box_at` and
+/// `patch_box_at` do), because a read taken *before* the lock is a lost update
+/// waiting to happen: box commands run concurrently (the blocking pool for a
+/// browser client, the Mobile sidecar's own process, an async import), and a
+/// writer that read first wrote its stale list back over whatever landed in
+/// between — a box created meanwhile, a member just added.
+///
+/// Answers the list as the file now holds it (revisions stamped) and whatever
+/// `edit` returned. An `edit` that fails, or changes nothing, writes nothing.
+pub(crate) fn update_boxes<R>(
+    edit: impl FnOnce(&mut BoxesList) -> Result<R, String>,
+) -> Result<(BoxesList, R), String> {
+    update_boxes_at(&boxes_path(), edit)
 }
 
-/// [`write_boxes`], answering box `box_id` as the file now holds it — its
-/// revision stamped. A command's answer is the copy the window's store keeps
-/// and later sends back whole through `save_boxes`; the pre-write copy's
-/// revision would get that save refused as stale.
-pub(crate) fn write_boxes_answering(boxes: &BoxesList, box_id: &str) -> Result<ProjectBox, String> {
-    write_boxes(boxes)?
-        .into_iter()
-        .find(|b| b.id == box_id)
-        .ok_or_else(|| format!("box '{box_id}' not found"))
+pub(crate) fn update_boxes_at<R>(
+    path: &Path,
+    edit: impl FnOnce(&mut BoxesList) -> Result<R, String>,
+) -> Result<(BoxesList, R), String> {
+    let _lock = storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
+    let current = read_boxes_at(path)?;
+    let mut next = current.clone();
+    let out = edit(&mut next)?;
+    let written = if next == current { current } else { write_boxes_stamped(path, &current, &next)? };
+    Ok((written, out))
+}
+
+/// [`update_boxes`] for an edit of box `box_id`, answering that box as the
+/// file now holds it — its revision stamped. A command's answer is the copy
+/// the window's store keeps; the pre-write copy's revision would be stale.
+pub(crate) fn update_box(
+    box_id: &str,
+    edit: impl FnOnce(&mut ProjectBox) -> Result<(), String>,
+) -> Result<ProjectBox, String> {
+    let missing = || format!("box '{box_id}' not found");
+    let (written, ()) = update_boxes(|boxes| edit(boxes.iter_mut().find(|b| b.id == box_id).ok_or_else(missing)?))?;
+    written.into_iter().find(|b| b.id == box_id).ok_or_else(missing)
+}
+
+/// Whether a project id would be read as a box's: `box:<x>` is a box scope to
+/// every [`box_id_of_scope`] caller, and an id whose state key
+/// (`storage::project_key`) starts `box_` shares `sessions/box_<x>` and
+/// `agent-homes/box_<x>` with box `<x>`. No id the app mints looks like either
+/// (they are UUIDs); an imported bundle names its own.
+pub(crate) fn id_imitates_box_scope(id: &str) -> bool {
+    id.starts_with(BOX_SCOPE_PREFIX) || storage::project_key(id).starts_with("box_")
+}
+
+/// A box's folder as a root that tabs and viewers may live in: `None` for a
+/// record that names no usable place — empty (every path "starts with" the
+/// empty path), relative, or climbing through `..`. The folder is only ever
+/// written by `ensure_box_folder`; this is what the root builders make of a
+/// record that came from anywhere else (a hand edit, an older file).
+pub(crate) fn box_folder_root(b: &ProjectBox) -> Option<PathBuf> {
+    let folder = b.folder.as_deref()?.trim();
+    let path = Path::new(folder);
+    let climbs = path.components().any(|c| matches!(c, std::path::Component::ParentDir));
+    (!folder.is_empty() && path.has_root() && !climbs).then(|| path.to_path_buf())
 }
 
 /// Write `boxes` stamped against `current`, and answer what was written.
+/// Stamping (headless owner plan, H1): a changed box gets the next revision,
+/// an unchanged one keeps its own, a new one starts at 1 — whatever number the
+/// caller's copy carried.
 pub(crate) fn write_boxes_stamped(path: &Path, current: &BoxesList, boxes: &BoxesList) -> Result<BoxesList, String> {
     if let Some(reserved) = boxes.iter().find(|b| storage::is_reserved_scope(&b.id)) {
         return Err(format!("invalid box id '{}': it names a scope {} keeps for itself", reserved.id, crate::brand::DISPLAY));
@@ -91,6 +133,11 @@ pub const BOXES_STALE: &str = "boxes changed on disk since they were loaded; rel
 /// it did not see is never written over. A box the file no longer holds is
 /// re-created; one the caller dropped is deleted. Answers the list as
 /// written, so the caller can adopt the revisions it stamped.
+///
+/// A box's `folder` is never the caller's to set: it is a root the box's tabs
+/// and viewers may live in (`compute_box_allowed_roots`), resolved only by
+/// `ensure_box_folder`. Each saved box keeps the folder the file holds for it
+/// (none for a new box), whatever the caller's copy says.
 pub(crate) fn save_boxes_at(path: &Path, boxes: &BoxesList) -> Result<BoxesList, String> {
     // The per-box revision check below is what a file system without
     // advisory locks falls back on (`FileLock::exclusive_or_unlocked`).
@@ -103,7 +150,11 @@ pub(crate) fn save_boxes_at(path: &Path, boxes: &BoxesList) -> Result<BoxesList,
             }
         }
     }
-    write_boxes_stamped(path, &current, boxes)
+    let mut boxes = boxes.clone();
+    for incoming in &mut boxes {
+        incoming.folder = current.iter().find(|held| held.id == incoming.id).and_then(|held| held.folder.clone());
+    }
+    write_boxes_stamped(path, &current, &boxes)
 }
 
 /// Gap-spaced next position among boxes (mirrors `projects::next_position`).
@@ -144,22 +195,55 @@ pub(crate) fn boxes_as_seen(boxes: BoxesList, project_ids: Result<HashSet<String
     }
 }
 
-/// Resolve a box's ordered member ids to `(name, root_directory)` pairs by
-/// reading `projects.json`. The root directory mirrors the frontend's
-/// `resolveProjectDirectory`: the `directory` field if present, else the parent
-/// of a `…/project.json` `local_file`. Members that don't resolve are skipped.
-/// An unreadable registry is an error, never "no members" (that would strip
+/// A box's members as its folder presents them to the agents started there.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct BoxMembers {
+    /// `(name, root)` of each member a box tab can work in, in member order:
+    /// these get a link and a doc line.
+    pub reachable: Vec<(String, PathBuf)>,
+    /// Names of the members a box tab cannot enter. Named in the docs, never
+    /// linked.
+    pub unreachable: Vec<String>,
+}
+
+/// Resolve a box's ordered member ids by reading `projects.json`. An
+/// unreadable registry is an error, never "no members" (that would strip
 /// every member's link and doc block).
-pub(crate) fn member_projects(member_ids: &[String]) -> Result<Vec<(String, PathBuf)>, String> {
+pub(crate) fn member_projects(member_ids: &[String]) -> Result<BoxMembers, String> {
     let list = crate::services::remote::projects()?;
-    Ok(member_ids
-        .iter()
-        .filter_map(|id| {
-            let p = list.iter().find(|p| &p.id == id)?;
-            let dir = project_directory(p)?;
-            Some((p.name.clone(), dir))
-        })
-        .collect())
+    Ok(member_projects_in(&list, member_ids, &storage::state_dir()))
+}
+
+/// Pure core of [`member_projects`], over the same rules as the box's roots
+/// ([`compute_box_allowed_roots`], [`member_local_copies`]) so the folder
+/// never links or lists a place a box tab is refused in:
+///
+/// - a local member: its folder (the frontend's `resolveProjectDirectory`);
+/// - a remote member with a local copy: **that copy** (`remote::local_copy_in`:
+///   its mirror). Its `directory` is only its state dir, which a fenced agent
+///   cannot read, so a link there led nowhere;
+/// - a member with no local tree (remote-only, a VM) or set to Local models
+///   only: unreachable — a box tab would be a cloud agent in it, or has no
+///   tree to stand in.
+///
+/// A member id no project has is skipped.
+pub(crate) fn member_projects_in(
+    projects: &[crate::schema::projects::ProjectEntry],
+    member_ids: &[String],
+    state_dir: &Path,
+) -> BoxMembers {
+    let mut out = BoxMembers::default();
+    for id in member_ids {
+        let Some(p) = projects.iter().find(|p| &p.id == id) else {
+            continue;
+        };
+        if crate::services::remote::entry_is_remote_only(p) || crate::services::agent_privacy::is_locked(p) {
+            out.unreachable.push(p.name.clone());
+        } else if let Some(dir) = crate::services::remote::local_copy_in(p, state_dir).or_else(|| project_directory(p)) {
+            out.reachable.push((p.name.clone(), dir));
+        }
+    }
+    out
 }
 
 /// Mirror of the frontend `resolveProjectDirectory` for a single project entry.
@@ -195,14 +279,18 @@ pub(crate) fn compute_box_allowed_roots(
 ) -> Option<Vec<PathBuf>> {
     let b = boxes.iter().find(|b| b.id == box_id)?;
     let mut roots: Vec<PathBuf> = Vec::new();
-    if let Some(folder) = &b.folder {
-        roots.push(PathBuf::from(folder));
-    }
+    roots.extend(box_folder_root(b));
     for id in &b.member_ids {
         let Some(p) = projects.iter().find(|p| &p.id == id) else {
             continue;
         };
         if crate::services::remote::entry_is_remote_only(p) {
+            continue;
+        }
+        // A local-models-only project's folder is never a box root: a box tab
+        // would be a cloud agent in it, and its own tabs take no box root
+        // (`services::agent_privacy`).
+        if crate::services::agent_privacy::is_locked(p) {
             continue;
         }
         if let Some(dir) = project_directory(p) {
@@ -247,6 +335,7 @@ fn member_local_copies(
     b.member_ids
         .iter()
         .filter_map(|id| projects.iter().find(|p| &p.id == id))
+        .filter(|p| !crate::services::agent_privacy::is_locked(p))
         .filter_map(|p| crate::services::remote::local_copy_in(p, state_dir))
         .collect()
 }

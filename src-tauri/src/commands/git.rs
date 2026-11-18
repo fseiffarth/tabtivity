@@ -2,15 +2,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::services::remote::{remote_target_for_dir, RemoteTarget};
+use crate::services::git_hosting::GitAuth;
 use crate::tauri_host::Ctx;
+
+mod branch_exchange;
+use branch_exchange::{BranchAction, BranchComparison, BranchExchange};
 
 // The hardened git runner lives in `services::git_hardened` (S5); these names
 // keep resolving here for every command-side caller.
 pub use crate::services::git_hardened::git_available_blocking;
 pub(crate) use crate::services::git_hardened::{
     check_rev, hardened_git_command_in, hooked_git_command_in, hookless_git_command_in,
-    local_non_repo, pin_common_dir, run_git, run_git_hooked,
-    git_clone_blocking, scoped_token_config, stdout, valid_positional_path, validate_clone_url,
+    failed_read, failure_message, local_non_repo, pin_common_dir, run_git, run_git_hooked, ReadFailure,
+    git_clone_blocking, stdout, valid_positional_path, validate_clone_url,
 };
 
 // Off-thread note: why every git command runs its body through
@@ -59,16 +63,40 @@ pub struct GitStatus {
     /// Internal: lets the dot probe skip two git spawns ([`unpushed_count`]).
     #[serde(skip)]
     pub upstream_ahead: Option<usize>,
+    #[serde(skip)]
+    branch_header: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_exchange: Option<BranchExchange>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_status(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
+    branch_exchange: Option<bool>,
 ) -> Result<GitStatus, String> {
-    app_core::rt::try_blocking("git", move || match worktree {
-        None => git_status_blocking(project_dir),
-        Some(selection) => git_status_blocking_selected(project_dir, Some(selection)),
+    app_core::rt::try_blocking("git", move || {
+        if branch_exchange != Some(true) {
+            return match worktree {
+                None => git_status_blocking(project_dir),
+                Some(selection) => git_status_blocking_selected(project_dir, Some(selection)),
+            };
+        }
+        let mut status = git_status_probe_selected(project_dir.clone(), false, worktree.clone())?;
+        if !status.is_repo {
+            return Ok(status);
+        }
+        let exchange = branch_exchange::read_exchange(project_dir.clone(), worktree.as_ref(), &status);
+        if let BranchExchange::Branch { checkout, ahead, behind, destinations, .. } = &exchange {
+            status.has_remote = true;
+            let up_to_date = *ahead == Some(0) && *behind == Some(0)
+                && destinations.iter().all(|dest| dest.action == branch_exchange::ActionKind::Push && dest.ahead == 0);
+            if up_to_date && remote_target_for_dir(&project_dir).is_none() {
+                status.head_tagged = has_head_tag(checkout);
+            }
+        }
+        status.branch_exchange = Some(exchange);
+        Ok(status)
     })
     .await
 }
@@ -100,17 +128,20 @@ fn git_status_probe_selected(
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<GitStatus, String> {
     let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
+    let no_repo = GitStatus {
+        staged: 0,
+        unstaged: 0,
+        untracked: 0,
+        has_remote: false,
+        is_repo: false,
+        behind: 0,
+        head_tagged: false,
+        upstream_ahead: None,
+        branch_header: None,
+        branch_exchange: None,
+    };
     if local_non_repo(target.as_ref(), &project_dir) {
-        return Ok(GitStatus {
-            staged: 0,
-            unstaged: 0,
-            untracked: 0,
-            has_remote: false,
-            is_repo: false,
-            behind: 0,
-            head_tagged: false,
-            upstream_ahead: None,
-        });
+        return Ok(no_repo);
     }
 
     // `--branch` adds one `## main...origin/main [behind 2]` header — the
@@ -120,6 +151,13 @@ fn git_status_probe_selected(
         &project_dir,
         &["status", "--porcelain", "--branch"],
     )?;
+    // A failed status is no reading: parsing its empty stdout would report a
+    // clean repo (the pill's dot drew "clean" over a refused or git-less one).
+    match failed_read(&out) {
+        None => {}
+        Some(ReadFailure::NotARepo) => return Ok(no_repo),
+        Some(ReadFailure::Error(why)) => return Err(why),
+    }
 
     let text = String::from_utf8_lossy(&out.stdout);
     let mut staged = 0usize;
@@ -127,8 +165,10 @@ fn git_status_probe_selected(
     let mut untracked = 0usize;
     let mut behind = 0usize;
     let mut upstream_ahead = None;
+    let mut branch_header = None;
     for line in text.lines() {
         if let Some(header) = line.strip_prefix("## ") {
+            branch_header = Some(header.to_string());
             let (ahead, back) = header
                 .rfind('[')
                 .map(|at| parse_track(&header[at..]))
@@ -155,14 +195,8 @@ fn git_status_probe_selected(
     }
 
     let has_remote = probe_remote
-        && run_git(target.as_ref(), &project_dir, &["remote"])
-            .map(|o| !o.stdout.is_empty())
-            .unwrap_or(false);
-    let head_tagged = has_remote
-        && target.is_none()
-        && run_git(None, &project_dir, &["tag", "--points-at", "HEAD"])
-            .map(|o| o.status.success() && !o.stdout.trim_ascii().is_empty())
-            .unwrap_or(false);
+        && stdout(target.as_ref(), &project_dir, &["remote"]).is_some_and(|out| !out.is_empty());
+    let head_tagged = has_remote && target.is_none() && has_head_tag(&project_dir);
 
     Ok(GitStatus {
         staged,
@@ -173,7 +207,13 @@ fn git_status_probe_selected(
         behind,
         head_tagged,
         upstream_ahead,
+        branch_header,
+        branch_exchange: None,
     })
+}
+
+fn has_head_tag(project_dir: &str) -> bool {
+    stdout(None, project_dir, &["tag", "--points-at", "HEAD"]).is_some_and(|out| !out.is_empty())
 }
 
 /// Whether a `git status --branch` header names an upstream that still
@@ -351,27 +391,22 @@ fn git_generate_commit_message_blocking_selected(
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<String, String> {
     let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
-    let files_out = run_git(
-        target.as_ref(),
-        &project_dir,
-        &["diff", "--staged", "--name-only"],
-    )?;
-    let staged_text = String::from_utf8_lossy(&files_out.stdout).to_string();
-    let staged: Vec<&str> = staged_text.lines().collect();
+    // A failed diff is an error, not "no files": the fallback message below
+    // would otherwise stand in for one git never produced.
+    let names = |args: &[&str]| -> Result<Vec<String>, String> {
+        let out = run_git(target.as_ref(), &project_dir, args)?;
+        if !out.status.success() {
+            return Err(failure_message(&out));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect())
+    };
+    let staged = names(&["diff", "--staged", "--name-only"])?;
 
     // Also check untracked / unstaged if nothing staged
     let files: Vec<String> = if staged.is_empty() {
-        let all = run_git(target.as_ref(), &project_dir, &["diff", "--name-only"])
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
-        all
+        names(&["diff", "--name-only"])?
     } else {
-        staged.iter().map(|s| s.to_string()).collect()
+        staged
     };
 
     if files.is_empty() {
@@ -437,7 +472,7 @@ pub async fn git_commit(
     project_dir: String,
     message: String,
     worktree: Option<GitWorktreeSelection>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     app_core::rt::try_blocking("git", move || match worktree {
         None => git_commit_blocking(project_dir, message),
         Some(selection) => git_commit_blocking_selected(project_dir, message, Some(selection)),
@@ -445,7 +480,7 @@ pub async fn git_commit(
     .await
 }
 
-fn git_commit_blocking(project_dir: String, message: String) -> Result<(), String> {
+fn git_commit_blocking(project_dir: String, message: String) -> Result<String, String> {
     git_commit_blocking_selected(project_dir, message, None)
 }
 
@@ -453,14 +488,16 @@ fn git_commit_blocking_selected(
     project_dir: String,
     message: String,
     worktree: Option<GitWorktreeSelection>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
     require_hook_trust(target.as_ref(), &project_dir)?;
     let out = run_git_hooked(target.as_ref(), &project_dir, &["commit", "-m", &message])?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
-    Ok(())
+    // Git's commit summary identifies the branch and abbreviated commit
+    // that this operation recorded, even if another checkout follows.
+    Ok(String::from_utf8_lossy(&out.stdout).lines().find(|s| s.starts_with('[')).unwrap_or("").to_owned())
 }
 
 /// Returns a map of `relative_path → status` for all entries directly under `rel_path`.
@@ -548,6 +585,12 @@ fn git_file_statuses_blocking(
         ]
     };
     let out = run_git(target.as_ref(), &project_dir, &status_args)?;
+    // A failed status is no reading, not "nothing modified or ignored".
+    match failed_read(&out) {
+        None => {}
+        Some(ReadFailure::NotARepo) => return Ok(HashMap::new()),
+        Some(ReadFailure::Error(why)) => return Err(why),
+    }
     let porcelain = String::from_utf8_lossy(&out.stdout).into_owned();
 
     // prefix used to filter entries under rel_path
@@ -678,7 +721,10 @@ fn git_file_statuses_blocking(
             .map(|name| (true, name))
             .collect();
         let rel = rel_path.trim_matches('/');
-        for name in crate::services::mobile_control::files::ignored_names(Path::new(&project_dir), rel, &empty_dirs) {
+        // Status just answered, so a failure here is a blip: those folders keep
+        // their regular section rather than failing the letters already read.
+        let ignored = crate::services::mobile_control::files::ignored_names(Path::new(&project_dir), rel, &empty_dirs);
+        for name in ignored.into_iter().flatten() {
             map.insert(name, "ignored".to_string());
         }
     }
@@ -721,17 +767,31 @@ fn holds_no_file(dir: &Path, budget: &mut usize) -> bool {
 
 /// Stages a specific path (file or directory) via `git add`.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn git_add_path(project_dir: String, rel_path: String) -> Result<(), String> {
-    app_core::rt::try_blocking("git", move || git_add_path_blocking(project_dir, rel_path)).await
+pub async fn git_add_path(project_dir: String, rel_path: String, unstage: Option<bool>, worktree: Option<GitWorktreeSelection>) -> Result<(), String> {
+    app_core::rt::try_blocking("git", move || {
+        change_index_path(project_dir, rel_path, unstage.unwrap_or(false), worktree.as_ref())
+    }).await
 }
 
-fn git_add_path_blocking(project_dir: String, rel_path: String) -> Result<(), String> {
-    let target = remote_target_for_dir(&project_dir);
-    let out = run_git(target.as_ref(), &project_dir, &["add", "--", &rel_path])?;
+fn change_index_path(project_dir: String, rel_path: String, unstage: bool, worktree: Option<&GitWorktreeSelection>) -> Result<(), String> {
+    let (dir, target) = selected_git_context(project_dir, worktree)?;
+    let verb = if unstage { "reset" } else { "add" };
+    // A row names one literal path. A wildcard in a filename must never
+    // stage or unstage a sibling. Path-limited reset only updates the index.
+    let pathspec = checkout_pathspec(&rel_path)?;
+    let out = run_git(target.as_ref(), &dir, &[verb, "--", &pathspec])?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
     Ok(())
+}
+
+fn checkout_pathspec(rel: &str) -> Result<String, String> {
+    use std::path::Component;
+    if rel.is_empty() || Path::new(rel).components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+        return Err("Expected a path within the selected checkout".into());
+    }
+    Ok(format!(":(literal){rel}"))
 }
 
 /// A single changed file with its line delta, used by the action-button change
@@ -742,6 +802,7 @@ pub struct FileChange {
     pub added: i64,
     pub deleted: i64,
     pub binary: bool,
+    pub needs_count: bool,
 }
 
 /// Per-file line stats (`git diff --numstat`) for one of three scopes:
@@ -755,25 +816,49 @@ pub async fn git_change_stats(
     project_dir: String,
     scope: String,
     worktree: Option<GitWorktreeSelection>,
+    rel_path: Option<String>,
+    branch_comparison: Option<BranchComparison>,
 ) -> Result<Vec<FileChange>, String> {
-    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
-    let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
-    let dir = Path::new(&project_dir);
-    if local_non_repo(target.as_ref(), &project_dir) {
+    if scope == "unpushed" {
+        if let Some(comparison) = branch_comparison {
+            return app_core::rt::try_blocking("git", move || {
+                branch_exchange::resolve_comparison(project_dir, worktree.as_ref(), comparison)
+            }).await;
+        }
+    }
+    let (project_dir, target) = app_core::rt::try_blocking("git", move || selected_git_context(project_dir, worktree.as_ref())).await?;
+    if scope == "untracked-count" {
+        let rel = rel_path.ok_or("Missing file path")?;
+        return untracked_count(ctx, project_dir, target, rel).await;
+    }
+    app_core::rt::try_blocking("git", move || change_list(&project_dir, target.as_ref(), &scope)).await
+}
+
+fn change_list(project_dir: &str, target: Option<&RemoteTarget>, scope: &str) -> Result<Vec<FileChange>, String> {
+    change_list_with_range(project_dir, target, scope, None)
+}
+
+fn change_list_with_range(
+    project_dir: &str,
+    target: Option<&RemoteTarget>,
+    scope: &str,
+    range: Option<String>,
+) -> Result<Vec<FileChange>, String> {
+    if local_non_repo(target, project_dir) {
         return Ok(vec![]);
     }
 
-    let numstat_args: Option<Vec<String>> = match scope.as_str() {
+    let numstat_args: Option<Vec<String>> = match scope {
         "staged" => Some(vec![
             "diff".into(),
             "--cached".into(),
             "--numstat".into(),
             "--".into(),
         ]),
-        "unpushed" => unpushed_base(target.as_ref(), &project_dir).map(|base| {
+        "unpushed" => range.or_else(|| unpushed_base(target, project_dir).map(|base| format!("{base}.."))).map(|range| {
             vec![
                 "diff".into(),
-                format!("{base}.."),
+                range,
                 "--numstat".into(),
                 "--".into(),
             ]
@@ -781,84 +866,66 @@ pub async fn git_change_stats(
         _ => Some(vec!["diff".into(), "--numstat".into(), "--".into()]),
     };
 
+    // A failed git run is an error, not an empty change list: the tree would
+    // otherwise read "no changes" over a repo git could not read at all.
     let mut changes: Vec<FileChange> = Vec::new();
-    let numstat = numstat_args.and_then(|args| {
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        run_git(target.as_ref(), &project_dir, &args).ok()
-    });
-    if let Some(out) = numstat {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                let mut parts = line.splitn(3, '\t');
-                let a = parts.next().unwrap_or("");
-                let d = parts.next().unwrap_or("");
-                let p = parts.next().unwrap_or("");
-                if p.is_empty() {
-                    continue;
-                }
-                changes.push(FileChange {
-                    path: normalize_numstat_path(p),
-                    added: a.parse().unwrap_or(0),
-                    deleted: d.parse().unwrap_or(0),
-                    binary: a == "-" || d == "-",
-                });
+    if let Some(args) = numstat_args {
+        let mut args: Vec<&str> = args.iter().map(String::as_str).collect();
+        // Separate old and new paths and keep the filename verbatim, since a
+        // displayed row is also a literal target for an index edit.
+        args.splice(1..1, ["-z", "--no-renames"]);
+        let out = run_git(target, project_dir, &args)?;
+        match failed_read(&out) {
+            None => {}
+            Some(ReadFailure::NotARepo) => return Ok(vec![]),
+            Some(ReadFailure::Error(why)) => return Err(why),
+        }
+        for entry in out.stdout.split(|&b| b == 0).filter(|s| !s.is_empty()) {
+            let line = std::str::from_utf8(entry).map_err(|_| "Filename is not valid UTF-8")?;
+            let mut parts = line.splitn(3, '\t');
+            let a = parts.next().unwrap_or("");
+            let d = parts.next().unwrap_or("");
+            let p = parts.next().unwrap_or("");
+            if p.is_empty() {
+                continue;
             }
+            changes.push(FileChange {
+                path: p.to_owned(),
+                added: a.parse().unwrap_or(0),
+                deleted: d.parse().unwrap_or(0),
+                binary: a == "-" || d == "-",
+                needs_count: false,
+            });
         }
     }
 
     // Untracked files never appear in `git diff`; list them separately and count
     // their lines as additions (the Add list shows them alongside modified files).
     if scope == "unstaged" {
-        if let Ok(out) = run_git(
-            target.as_ref(),
-            &project_dir,
+        let out = run_git(
+            target,
+            project_dir,
             &["ls-files", "--others", "--exclude-standard", "-z"],
-        ) {
-            if out.status.success() {
-                for chunk in out.stdout.split(|&b| b == 0) {
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    let rel = String::from_utf8_lossy(chunk).into_owned();
-                    // Untracked line counts read the file's bytes and apply the
-                    // same NUL/newline logic for both project kinds:
-                    //   * local  → `std::fs::read` under the project directory;
-                    //   * remote → the bytes over the pooled SFTP session, with
-                    //     the rel path confined under `spec.remote_path` (a path
-                    //     that escapes the root is treated as unreadable).
-                    // Any read/confinement error degrades to (0, false) rather
-                    // than failing the whole listing.
-                    let (added, binary) = match &target {
-                        None => count_added_lines(&dir.join(&rel)),
-                        Some(t) => count_added_lines_remote(pool, t, &rel).await,
-                    };
-                    changes.push(FileChange {
-                        path: rel,
-                        added,
-                        deleted: 0,
-                        binary,
-                    });
-                }
+        )?;
+        if !out.status.success() {
+            return Err(failure_message(&out));
+        }
+        for chunk in out.stdout.split(|&b| b == 0) {
+            if chunk.is_empty() {
+                continue;
             }
+            let rel = std::str::from_utf8(chunk).map_err(|_| "Filename is not valid UTF-8")?;
+            changes.push(FileChange {
+                path: rel.to_owned(),
+                added: 0,
+                deleted: 0,
+                binary: false,
+                needs_count: true,
+            });
         }
     }
 
     Ok(changes)
-}
-
-/// `git --numstat` renders renames as `old => new`, optionally with a braced
-/// common segment (`src/{a => b}/f.rs`). Reduce either form to the new path.
-fn normalize_numstat_path(p: &str) -> String {
-    let Some(arrow) = p.find(" => ") else {
-        return p.to_string();
-    };
-    if let (Some(lb), Some(rb)) = (p.find('{'), p.find('}')) {
-        if lb < arrow && arrow < rb {
-            return format!("{}{}{}", &p[..lb], &p[arrow + 4..rb], &p[rb + 1..]);
-        }
-    }
-    p[arrow + 4..].to_string()
 }
 
 /// Classify an untracked file's bytes into `(added_lines, binary)`, treating
@@ -873,32 +940,44 @@ fn count_lines_in_bytes(bytes: &[u8]) -> (i64, bool) {
     (newlines + trailing, false)
 }
 
-/// Line count of an untracked **local** file. An unreadable path degrades to
-/// `(0, false)` rather than failing the listing.
-fn count_added_lines(path: &Path) -> (i64, bool) {
-    match std::fs::read(path) {
-        Ok(bytes) => count_lines_in_bytes(&bytes),
-        Err(_) => (0, false),
-    }
-}
-
-/// Line count of an untracked **remote** file, read over the project's pooled
-/// SFTP session (mount-free remote). `rel` is the project-relative path from
-/// `git ls-files --others`; it is confined under `spec.remote_path` so a hostile
-/// path cannot escape the root. A confinement or read error degrades to
-/// `(0, false)`, mirroring the local reader.
-async fn count_added_lines_remote(
-    pool: &crate::services::remote::RemotePoolState,
-    target: &RemoteTarget,
-    rel: &str,
-) -> (i64, bool) {
-    let Ok(path) = crate::commands::fs::remote_join_confined(&target.spec.remote_path, rel) else {
-        return (0, false);
+async fn untracked_count(ctx: Ctx, dir: String, target: Option<RemoteTarget>, rel: String) -> Result<Vec<FileChange>, String> {
+    const LIMIT: u64 = 256 * 1024;
+    // Only count literal untracked rows Git currently lists in this checkout.
+    let (rel, target, local_bytes) = app_core::rt::try_blocking("git", move || {
+        let pathspec = checkout_pathspec(&rel)?;
+        let list = run_git(target.as_ref(), &dir, &["ls-files", "--others", "--exclude-standard", "-z", "--", &pathspec])?;
+        if !list.status.success() || list.stdout.strip_suffix(&[0]) != Some(rel.as_bytes()) {
+            return Err("File is no longer an untracked entry".into());
+        }
+        let local_bytes = if target.is_none() && !(cfg!(unix) && rel.contains('\\')) {
+            crate::services::home_io::HomeFile::open_existing(Path::new(&dir), &rel)
+                .and_then(|f| f.read_capped(LIMIT))
+        } else {
+            None
+        };
+        Ok((rel, target, local_bytes))
+    }).await?;
+    let bytes = match target {
+        None => local_bytes,
+        Some(target) => {
+            let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+            let path = crate::commands::fs::remote_join_confined(&target.spec.remote_path, &rel)?;
+            let Some(sftp) = crate::commands::fs::pooled(pool, &target).await else { return Ok(vec![]) };
+            let read = async {
+                let mut fs = sftp.fs();
+                let meta = fs.symlink_metadata(&path).await.ok()?;
+                if !meta.file_type()?.is_file() || meta.len()? > LIMIT { return None; }
+                let root = fs.canonicalize(&target.spec.remote_path).await.ok()?;
+                let real = fs.canonicalize(&path).await.ok()?;
+                if !real.starts_with(root) { return None; }
+                crate::services::sftp::read_file_up_to(&sftp, &path, LIMIT).await.ok().flatten()
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), read).await.ok().flatten()
+        }
     };
-    match crate::commands::fs::remote_read(pool, target, &path).await {
-        Ok(bytes) => count_lines_in_bytes(&bytes),
-        Err(_) => (0, false),
-    }
+    let Some(bytes) = bytes else { return Ok(Vec::new()) };
+    let (added, binary) = count_lines_in_bytes(&bytes);
+    Ok(vec![FileChange { path: rel, added, deleted: 0, binary, needs_count: false }])
 }
 
 /// The ref every "unpushed" view (tree markers, Push list, pill dot) measures
@@ -1010,8 +1089,12 @@ pub async fn git_push(
     project_dir: String,
     project_id: Option<String>,
     worktree: Option<GitWorktreeSelection>,
+    branch_action: Option<BranchAction>,
 ) -> Result<String, String> {
     app_core::rt::try_blocking("git", move || {
+        if let Some(action) = branch_action {
+            return branch_exchange::apply(project_dir, project_id, worktree.as_ref(), action);
+        }
         if worktree.is_none() {
             return git_push_blocking(project_dir, project_id);
         }
@@ -1041,12 +1124,8 @@ pub async fn git_release_preview(
             return Err("Releases are tagged from local projects only.".to_string());
         }
         require_hook_trust(None, &project_dir)?;
-        let (token, origins) = release_creds(project_id.as_deref());
-        Ok(crate::services::git_release::preview(
-            Path::new(&project_dir),
-            token.as_deref(),
-            &origins,
-        ))
+        let auth = release_creds(project_id.as_deref());
+        Ok(crate::services::git_release::preview(Path::new(&project_dir), &auth))
     })
     .await
 }
@@ -1070,11 +1149,10 @@ pub async fn git_release_tag(
         }
         require_hook_trust(None, &project_dir)?;
         let dir = Path::new(&project_dir);
-        let (token, origins) = release_creds(project_id.as_deref());
-        let plan =
-            crate::services::git_release::plan(dir, tag.trim(), false, token.as_deref(), &origins, &|_| true)
-                .map_err(|f| f.message)?;
-        crate::services::git_release::release(dir, &plan, &plan.tag, token.as_deref(), &origins)
+        let auth = release_creds(project_id.as_deref());
+        let plan = crate::services::git_release::plan(dir, tag.trim(), false, &auth, &|_| true)
+            .map_err(|f| f.message)?;
+        crate::services::git_release::release(dir, &plan, &plan.tag, &auth)
             .map(|_| {
                 format!(
                     "Tagged {} at {} and pushed it to {}.",
@@ -1094,12 +1172,12 @@ pub async fn git_release_tag(
     .await
 }
 
-/// The project's effective token and the origins it may go to; no project
-/// (a nested repo) means no token, so the user's own helpers answer.
-fn release_creds(project_id: Option<&str>) -> (Option<String>, Vec<String>) {
+/// The project's tokens, each for its own origin; no project (a nested repo)
+/// means no token, so the user's own helpers answer.
+fn release_creds(project_id: Option<&str>) -> GitAuth {
     match project_id {
         Some(id) => crate::services::git_push_mcp::creds(id),
-        None => (None, Vec::new()),
+        None => GitAuth::none(),
     }
 }
 
@@ -1110,26 +1188,26 @@ fn release_creds(project_id: Option<&str>) -> (Option<String>, Vec<String>) {
 /// than 2.37 ignores the key and fails as before.
 const PUSH_ARGS: [&str; 3] = ["-c", "push.autoSetupRemote=true", "push"];
 
-/// `git push` in a local directory, authenticating an https remote with `token`
-/// when one is set — scoped to `project_id`'s token origins (see
-/// [`scoped_token_config`]). Hardened like every local git call, and gated on
+/// `git push` in a local directory, authenticating an https remote with the
+/// project's tokens, each offered only to its own origin (see
+/// [`GitAuth::git_args`]). Hardened like every local git call, and gated on
 /// the repo's hooks (`pre-push`) being approved. Shared by the local-project push
 /// and the mirror-side push below, so both sides get identical auth.
-fn push_local(
-    dir: &std::path::Path,
-    token: Option<&str>,
-    project_id: Option<&str>,
-) -> Result<std::process::Output, String> {
+fn push_local(dir: &std::path::Path, auth: &GitAuth) -> Result<std::process::Output, String> {
     crate::services::exec_trust::require(crate::services::exec_trust::TrustKind::GitHooks, dir)?;
-    let mut args: Vec<String> = Vec::new();
-    if token.is_some() {
-        let origins = crate::commands::git_hosting::token_origins(project_id, None);
-        args.extend(scoped_token_config(&origins, "x-access-token"));
-    }
-    args.extend(PUSH_ARGS.map(str::to_string));
-    let mut cmd = hooked_git_command_in(dir, &args);
-    if let Some(tok) = token {
-        cmd.env(crate::app_env!("GIT_TOKEN"), tok);
+    exchange_local(dir, auth, &PUSH_ARGS)
+}
+
+fn exchange_local(dir: &Path, auth: &GitAuth, git_args: &[&str]) -> Result<std::process::Output, String> {
+    let mut args = auth.git_args("x-access-token");
+    args.extend(git_args.iter().map(|arg| arg.to_string()));
+    let mut cmd = if git_args.first() == Some(&"fetch") {
+        hardened_git_command_in(dir, &args)
+    } else {
+        hooked_git_command_in(dir, &args)
+    };
+    if !auth.is_empty() {
+        auth.apply_env(&mut cmd);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
     }
     // Bounded (#2349), like every other local git call: a FIFO planted in the
@@ -1148,10 +1226,10 @@ fn git_push_blocking(project_dir: String, project_id: Option<String>) -> Result<
         // is the right machine's secret.
         match crate::commands::git_publish::mirror_origin_repo(&target.project_id) {
             Some(mirror) => {
-                let token = crate::commands::git_hosting::effective_git_creds(&target.project_id).1;
+                let auth = crate::commands::git_hosting::project_auth(&target.project_id);
                 let before = pushed_tip(&mirror);
                 local_repo = Some(mirror.clone());
-                let out = push_local(&mirror, token.as_deref(), Some(&target.project_id))?;
+                let out = push_local(&mirror, &auth)?;
                 (out, before)
             }
             // No mirror-side origin (or no mirror: a remote-only project): the
@@ -1164,14 +1242,12 @@ fn git_push_blocking(project_dir: String, project_id: Option<String>) -> Result<
             None => (run_git_hooked(Some(&target), &project_dir, &PUSH_ARGS)?, None),
         }
     } else {
-        // Local project: effective per-project → global token (if any).
-        let token = project_id
-            .as_deref()
-            .and_then(|id| crate::commands::git_hosting::effective_git_creds(id).1);
+        // Local project: its own token, else the host defaults.
+        let auth = project_id.as_deref().map(crate::commands::git_hosting::project_auth).unwrap_or_default();
         let dir = std::path::PathBuf::from(&project_dir);
         let before = pushed_tip(&dir);
         local_repo = Some(dir.clone());
-        (push_local(&dir, token.as_deref(), project_id.as_deref())?, before)
+        (push_local(&dir, &auth)?, before)
     };
     push_outcome(&out, local_repo.as_deref(), before)
 }
@@ -1663,6 +1739,11 @@ fn git_branches_blocking_selected(
     }
     let fmt = "--format=%(if)%(HEAD)%(then)*%(else) %(end)\u{1f}%(refname:short)\u{1f}%(refname)\u{1f}%(upstream:short)\u{1f}%(upstream:track,nobracket)";
     let out = run_git(target.as_ref(), &project_dir, &["branch", "-a", fmt])?;
+    match failed_read(&out) {
+        None => {}
+        Some(ReadFailure::NotARepo) => return Ok(vec![]),
+        Some(ReadFailure::Error(why)) => return Err(why),
+    }
     let text = String::from_utf8_lossy(&out.stdout);
     let mut branches = Vec::new();
     for line in text.lines() {
@@ -1696,10 +1777,16 @@ pub async fn git_checkout(
     project_dir: String,
     target: String,
     worktree: Option<GitWorktreeSelection>,
+    create_branch: Option<bool>,
 ) -> Result<String, String> {
-    app_core::rt::try_blocking("git", move || match worktree {
-        None => git_checkout_blocking(project_dir, target),
-        Some(selection) => git_checkout_blocking_selected(project_dir, target, Some(selection)),
+    app_core::rt::try_blocking("git", move || {
+        if create_branch == Some(true) {
+            return branch_exchange::create_branch(project_dir, worktree.as_ref(), &target);
+        }
+        match worktree {
+            None => git_checkout_blocking(project_dir, target),
+            Some(selection) => git_checkout_blocking_selected(project_dir, target, Some(selection)),
+        }
     })
     .await
 }
@@ -1806,6 +1893,11 @@ fn git_reword_head_blocking_selected(
     Ok(())
 }
 
+/// What `git_diff_file` answers for a file that is not under git — the diff
+/// viewer matches on this phrase (git's own `fatal: not a git repository`
+/// carries it too).
+const NOT_A_REPO: &str = "not a git repository";
+
 /// Returns the unified diff for a single file relative to `project_dir`.
 ///
 /// Runs `git diff -- <rel_path>` (working-tree changes against the index/HEAD).
@@ -1814,15 +1906,34 @@ fn git_reword_head_blocking_selected(
 /// <rel_path>`, which renders the whole file as added. `--no-index` exits
 /// non-zero whenever there are differences, so for the fallback we treat any
 /// non-empty stdout as success regardless of exit status.
+///
+/// A tracked file whose only change is staged (`git add`) has no working-tree
+/// diff; the index diff stands in. A file outside any repository answers
+/// [`NOT_A_REPO`].
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn git_diff_file(project_dir: String, rel_path: String) -> Result<String, String> {
-    app_core::rt::try_blocking("git", move || git_diff_file_blocking(project_dir, rel_path)).await
+pub async fn git_diff_file(project_dir: String, rel_path: String, staged: Option<bool>, worktree: Option<GitWorktreeSelection>) -> Result<String, String> {
+    app_core::rt::try_blocking("git", move || {
+        if staged == Some(true) {
+            let (dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
+            let pathspec = checkout_pathspec(&rel_path)?;
+            let out = run_git(target.as_ref(), &dir, &["diff", "--cached", "--", &pathspec])?;
+            if !out.status.success() { return Err(failure_message(&out)); }
+            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+        }
+        git_diff_file_blocking(project_dir, rel_path)
+    }).await
 }
 
 fn git_diff_file_blocking(project_dir: String, rel_path: String) -> Result<String, String> {
     let target = remote_target_for_dir(&project_dir);
     let out = run_git(target.as_ref(), &project_dir, &["diff", "--", &rel_path])?;
     if !out.status.success() {
+        // Outside a repository `git diff` falls back to its two-path
+        // `--no-index` mode and answers with a usage text; say what is wrong.
+        let inside = run_git(target.as_ref(), &project_dir, &["rev-parse", "--git-dir"])?;
+        if !inside.status.success() {
+            return Err(NOT_A_REPO.to_string());
+        }
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -1830,12 +1941,21 @@ fn git_diff_file_blocking(project_dir: String, rel_path: String) -> Result<Strin
         return Ok(stdout);
     }
 
-    // Tracked diff is empty. A tracked file is simply unchanged; an untracked
-    // one shows whole, as added. `--no-index` exits non-zero when differences
-    // exist, which is the normal case here, so treat any non-empty stdout as
-    // success.
+    // Tracked diff is empty. A tracked file is simply unchanged — unless its
+    // change is staged (`git add`ed, or a staged rename): the index diff shows
+    // that. An untracked one shows whole, as added. `--no-index` exits
+    // non-zero when differences exist, which is the normal case here, so treat
+    // any non-empty stdout as success.
     let tracked = run_git(target.as_ref(), &project_dir, &["ls-files", "--", &rel_path])?;
     if tracked.status.success() && !tracked.stdout.is_empty() {
+        let staged = run_git(
+            target.as_ref(),
+            &project_dir,
+            &["diff", "--cached", "--", &rel_path],
+        )?;
+        if staged.status.success() && !staged.stdout.is_empty() {
+            return Ok(String::from_utf8_lossy(&staged.stdout).to_string());
+        }
         return Ok(stdout);
     }
     let fallback = run_git(
@@ -2098,6 +2218,42 @@ pub(crate) fn selected_git_context(
     Ok((ctx.cwd, ctx.target))
 }
 
+/// Routing for a hosting exchange. A selected worktree takes precedence over
+/// the default mirror that owns the hosting origin.
+pub(crate) struct GitExchangeContext {
+    pub(crate) dir: String,
+    pub(crate) target: Option<RemoteTarget>,
+    pub(crate) mirror_project_id: Option<String>,
+}
+
+pub(crate) fn git_exchange_context(
+    project_dir: String,
+    selection: Option<&GitWorktreeSelection>,
+) -> Result<GitExchangeContext, String> {
+    let remote = remote_target_for_dir(&project_dir);
+    if selection.is_none() {
+        if let Some(target) = remote {
+            if let Some(mirror) = crate::commands::git_publish::mirror_origin_repo(&target.project_id) {
+                return Ok(GitExchangeContext {
+                    dir: mirror.to_string_lossy().into_owned(),
+                    target: None,
+                    mirror_project_id: Some(target.project_id),
+                });
+            }
+            return Ok(GitExchangeContext {
+                dir: project_dir,
+                target: Some(target),
+                mirror_project_id: None,
+            });
+        }
+        return Ok(GitExchangeContext { dir: project_dir, target: None, mirror_project_id: None });
+    }
+
+    let (dir, target) = selected_git_context(project_dir, selection)?;
+    let mirror_project_id = remote.filter(|_| target.is_none()).map(|remote| remote.project_id);
+    Ok(GitExchangeContext { dir, target, mirror_project_id })
+}
+
 /// Everything a worktree command needs once the site question is settled.
 pub(crate) struct WorktreeCtx {
     /// `Some` → git runs over SSH on that host (and `remote_git_command` cds
@@ -2305,9 +2461,12 @@ pub(crate) fn git_worktree_list_blocking(
         return Ok(vec![]);
     }
     let out = run_worktree_git(&ctx, &["worktree", "list", "--porcelain"])?;
-    if !out.status.success() {
-        // Lenient, like git_log (e.g. empty repo).
-        return Ok(vec![]);
+    // "Not a repo" is no worktrees; any other failure is no reading (the phone's
+    // git sheet and the agent "+" menu used to read it as a repo with none).
+    match failed_read(&out) {
+        None => {}
+        Some(ReadFailure::NotARepo) => return Ok(vec![]),
+        Some(ReadFailure::Error(why)) => return Err(why),
     }
     let mut list = parse_worktree_porcelain(&String::from_utf8_lossy(&out.stdout));
     for wt in list.iter_mut() {

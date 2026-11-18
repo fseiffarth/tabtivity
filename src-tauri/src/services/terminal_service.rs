@@ -531,6 +531,9 @@ fn sanitize_untrusted_layout_with(tabs: &mut [TabEntry], custom: &HashMap<String
         tab.extra.remove(ENV_KEY);
         tab.extra.remove(EMBED_EXEC_KEY);
         tab.extra.remove(API_KEY_KEY);
+        // Agent-authored tab notes are the host's: a folder or bundle cannot
+        // author them (`services::cockpit_meta`).
+        crate::services::cockpit_meta::strip(tab);
         if let Some(spec) = custom.get(&tab.cmd).filter(|spec| !spec.env.is_empty()) {
             let env = spec.env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
             tab.extra.insert(ENV_KEY.to_string(), Value::Object(env));
@@ -643,6 +646,10 @@ pub(crate) fn persisted_env_denied(key: &str) -> bool {
         // Windows' counterparts of the above: the command search, the
         // shells' startup and module autoload, the user's home and config homes.
         "PATHEXT", "COMSPEC", "PSMODULEPATH", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+        "HOMEDRIVE", "HOMEPATH",
+        // A CLI's own home, which an agent tab points into its scope home
+        // (`agent_home::home_override_env`).
+        "CODEX_HOME",
     ];
     const PREFIXES: &[&str] = &["LD_", "DYLD_", "GIT_", "SSH_ASKPASS"];
     // Any letter case: Windows environment names are case-insensitive
@@ -1110,7 +1117,9 @@ mod tests {
                 .extra
                 .insert("env".to_string(), serde_json::json!({ "FOO": "bar", "PATH": "/tmp/evil" }));
             tabs[0].extra.insert(API_KEY_KEY.to_string(), serde_json::json!(true));
+            tabs[0].extra.insert(crate::services::cockpit_meta::KEY.to_string(), serde_json::json!({"v":1,"revision":9}));
             sanitize_untrusted_layout_with(&mut tabs, &no_custom());
+            assert!(!tabs[0].extra.contains_key(crate::services::cockpit_meta::KEY), "'{cmd}' loses cockpitMeta");
             assert_eq!(tabs[0].cmd, cmd, "'{cmd}' stays known");
             assert!(!tabs[0].extra.contains_key("env"), "'{cmd}' loses env");
             assert!(!tabs[0].extra.contains_key("embedExec"), "'{cmd}' loses embedExec");
@@ -1210,6 +1219,9 @@ mod tests {
                 "PsModulePath": "C:\\evil\\modules",
                 "PATHEXT": ".EVIL",
                 "UserProfile": "C:\\evil",
+                "HomeDrive": "D:",
+                "homepath": "\\evil",
+                "Codex_Home": "C:\\evil\\.codex",
                 "xdg_config_home": "/tmp/cfg",
                 crate::app_env!("HOST_SESSION").to_ascii_lowercase(): "1",
                 "Keep_Me": "yes",

@@ -197,8 +197,8 @@ contains:
   `header-center`).
 - Tab bar (from `TabBar.tsx`).
 - Indicators, each owning its own surface and lifecycle: `MailIndicator` (✉),
-  `CalendarIndicator`, `TodoIndicator`, `MachinesIndicator` (the fleet, with a
-  live CPU/GPU bar per machine), `VpnIndicator` (machine-wide OpenVPN — project
+  `CalendarIndicator`, `TodoIndicator`, `MachinesIndicator` (the fleet: a dropdown, and a Machines view
+  with one merged machine list and a live CPU/GPU bar per machine), `VpnIndicator` (machine-wide OpenVPN — project
   UI must not imply the tunnel is project-scoped), `MobileIndicator`,
   `BatteryIndicator`, `AppResourceDisplay`, and `AppTimerDisplay`.
 - Custom minimize, maximize/restore, and close buttons.
@@ -274,6 +274,18 @@ Toolbar behavior:
   `FileBrowser`. Viewer tabs (`kind: "files"` with a `viewer`) render the native
   viewer for their file type; full-surface tabs render a workspace app.
 - Tab layout is auto-saved to the session file whenever tabs change.
+- An agent tab's right-click menu has **Mark as unread** (`TabMarkMenuItems`,
+  `activity.markTabUnread`): the tab reads as a finished turn again until it is
+  opened or typed into, on every surface that judges unread (`agentRoster`
+  included); a popout forwards the mark to the main window's store.
+- Agent tabs of one local project can message each other through the `tabs`
+  MCP lane (`services/mcp/tabs_mcp.rs`, in-memory mailbox; the cockpit's
+  Messages fold shows every message, an opt-in per-project wake types a fixed
+  notice into idle tabs): `docs/context/tab_messaging_mcp.md`. With the
+  experimental `turn_checkpoints` flag, a local agent tab's folder is
+  snapshotted at each turn start and end into a store outside the project
+  (`services/checkpoints/`, restore from the Chat):
+  `docs/context/checkpoints.md`.
 - If no tabs exist for the active scope, the stack shows an empty Subwindow with
   a `+`.
 - A project-switch toast notification appears briefly after switching projects.
@@ -390,12 +402,14 @@ Themes are `THEMES` in `src/types/index.ts` — Fancy Dark, Plain Dark (the
 default), Plain Light, Fancy Light, and Light Lavender.
 
 **Experimental flags** (`src/lib/experimental.ts`) gate surfaces that are not
-finished: `mail_client`, `web_browser`, `deck_presenter`, `python_run_debug`,
-and `terminal_webgl`. An unset flag falls back to
+finished: `web_browser`, `deck_presenter`, `python_run_debug`,
+and `terminal_webgl`. Mail (`mail_client`) and the assistant (`assistant`) are
+shipped, on unless switched off, with their switches on their own Settings
+pages; they ride the same flag rule only for its tri-state. An unset flag falls back to
 `settings.debug`, so everything is on in a development build and off in a
 release one — except `terminal_webgl`, which stays opt-in because WebGL can fall
 back to software rendering while DMABUF is disabled, making a visible terminal
-slower rather than faster. `EXPERIMENTAL_TAB_KINDS` marks the flags that own a
+slower rather than faster. On a Windows webview (WebView2) it is always on and has no switch. `EXPERIMENTAL_TAB_KINDS` marks the flags that own a
 tab end to end and whose "off" closes something already open; the live sweep and
 the restore filter both do nothing until settings have actually loaded, because
 unknown must not read as off.
@@ -509,8 +523,9 @@ without it.
 With that switch on, the phone's chat treats files as the desktop's does: a
 picture or PDF an answer names follows it as a message of its own, a path in
 the answer opens the file, and **Files (N)** over the chat also lists what the
-agent changed and what its answers name. A file deleted since, or one in
-another worktree, stays in **Diffs**.
+agent changed and what its answers mention. A file deleted since, or one in
+another worktree, stays in **Diffs**. The list holds the current conversation
+only: after a clear or a resume, an earlier conversation's files drop out.
 
 Marking up is a loop, not one shot (`docs/done/pdf_markup_rounds_plan.md`):
 **Submit keeps the view open.** The round's marks stay on show, dimmed, and are
@@ -618,6 +633,30 @@ it, a VM belongs to the one that booted it (the other is refused), a remote
 project's background sync runs in one of them, and a sync setting changed
 in both at once asks to be done again (`docs/context/web_client.md`). Takes
 effect when the host (re)starts.
+
+**Linked desktops (one phone app, several computers — in progress).**
+**Settings → Mobile → Linked desktops** edits
+`tabtivity_mobile_host.linked_desktops`: up to eight other computers' phone-host
+origins (`https://<machine>.<same tailnet>.ts.net[:port]`, never `*.c.ts.net`,
+never this host's own), each listed on both computers. The sidecar re-reads and
+re-validates the list on every request (`mobile_control/linked.rs`; a bad entry
+is dropped alone, the hosted gateway ignores the list). Only the phone's HTML
+documents change: with a list they allow the listed origins to frame them and to
+be framed (`frame-ancestors` / `frame-src` / `connect-src`), delegate the
+microphone and speech recognition to them, and answer their `/healthz` probe
+with CORS; the PDF frame names them among its ancestors; `/api/*`, `/assets/*`
+and `/desktop/*` stay closed, and with no list every header is byte-identical to
+before. A link is a framing permission, never a session: a framed page signs in
+as a paired device of its own computer, under that computer's own lock and
+access lists. Phases 0–2 of `docs/phone_multi_desktop_plan.md` are built (also a
+host on an explicit Serve port names its session cookie after the port, so two
+hosts on one machine keep separate sign-ins), and so is a minimal Phase 3: the
+phone's switcher shell with one framed desktop (`mobile-web/src/shell/`,
+`docs/phone_multi_desktop_handoff.md`). A framed page guards its own input
+against clickjacking by the computer framing it (`shell/frameGuard.ts`): taps
+and keys pass only once IntersectionObserver v2 has reported it visible for
+500 ms; a browser without that report (iOS Safari, Firefox) fails closed with a
+card that opens the computer on its own. None of it has run on a real phone yet.
 
 ### Hosted server: signing in with your organisation's account
 
@@ -856,7 +895,7 @@ list. Where a link still needs an app, `src/lib/linkTarget.ts::routeUri` decides
 
 | Surface | Frontend | Backend | Notes |
 |---------|----------|---------|-------|
-| Mail | `components/mail/`, `stores/mail.ts` | `commands/mail.rs`, `services/mail_{engine,store,crypt,crypto,pgp,sanitize,filters,authres,ai}.rs` | IMAP/SMTP. Behind `mail_client`. |
+| Mail | `components/mail/`, `stores/mail.ts` | `commands/mail.rs`, `services/mail_{engine,store,crypt,crypto,pgp,sanitize,filters,authres,ai}.rs` | IMAP/SMTP. Switch `mail_client` (Settings → Mail, on by default). |
 | Calendar | `components/calendar/`, `stores/calendar/calendar.ts` | `commands/calendar.rs`, `commands/caldav.rs`, `services/caldav.rs` | Month / time-grid / agenda, alarms, `.ics` import+export, CalDAV accounts. |
 | To-do board | `components/todo/`, `stores/todo.ts` | shares `calendar.json` | Cards **are** calendar tasks — one store, not a second one. |
 | Browser | `components/browser/`, `stores/browser.ts` | `commands/browser.rs`, `services/browser_engine.rs`, `services/web_safety.rs` | Reader mode, no scripts. Behind `web_browser`. |
@@ -1018,8 +1057,8 @@ Tabby is a chat assistant that searches and reads the web and sees nothing
 else on the computer. Design, the two layers and the accepted limits:
 `docs/context/assistant.md`; user-facing text: `docs/help/assistant.md`.
 
-- **Switch.** Settings → System → Experimental, `settings.json["assistant"]`
-  (absent = off); the backend refuses its commands, spawns and web lane while
+- **Switch.** Settings → Agents → the assistant's page, `settings.json["assistant"]`
+  (absent = on); the backend refuses its commands, spawns and web lane while
   it is off. `settings.json["assistant_settings"]` holds the default CLI and
   model and the search backend (`search.kind` `searxng` or `ollama`,
   `searxng_url`); the Ollama key lives only in the keychain.
@@ -1055,6 +1094,7 @@ returns true. The panel uses backend commands from `commands/ollama.rs`:
 | `load_ollama_model` | Loads a model into memory (`device`: `gpu` / `cpu`, default auto) with `keep_alive = -1` and waits; emits `ollama-load-progress` (`loading` → `success`/`error`). |
 | `load_installed_ollama_model` | The phone's load: only a name `/api/tags` lists (exact or `:latest`, never a prefix or a cloud model), Ollama picks the device, answers at once with the listed name and loads on a detached thread with the same events; refusals are bare codes (`ollama_not_running`, `model_not_installed`, `model_not_local`). |
 | `stop_ollama_model` | Unloads a model from memory with `keep_alive = 0`. |
+| `restart_ollama_server` | Stops the local Ollama server, whoever started it, and starts it again (`systemctl restart` for the system service). Refuses a server on another machine with `ollama_remote`. |
 | `delete_ollama_model` | Deletes a local model through `/api/delete`. |
 | `prepare_local_agent` | Writes an isolated per-model Vibe config and returns `VIBE_HOME` plus alias. |
 
@@ -1087,8 +1127,10 @@ keeps global `~/.vibe/config.toml` untouched.
 
 Beyond these, a **rebindable** set lives in `src/lib/shortcuts/shortcuts.ts` and is edited
 in Settings → Shortcuts, persisted as `settings.keyboard_shortcuts` overrides:
-toggle subwindow fullscreen, cycle to the next project, previous/next tab in a
-subwindow, cycle the focused subwindow up/down, cycle tabs, hide the focused
+toggle subwindow fullscreen, cycle to the next / previous project (AltGr+Tab / AltGr+Shift+Tab, plus
+Alt+Shift+→ / ←; on macOS the arrows),
+next/previous tab of the whole project (Ctrl+Tab / Ctrl+Shift+Tab, across
+subwindows), previous/next tab in a subwindow, cycle the focused subwindow up/down, cycle tabs, hide the focused
 subwindow, toggle its file viewer, close the focused subwindow, close the active
 tab, and close all tabs in a project. On macOS the Meta key is reserved for Cmd
 shortcuts, so the chord labels differ there.
@@ -1133,33 +1175,43 @@ target has no `.git/`, Tabtivity initializes git and commits the registration.
 
 ### Scaffold Files
 
-New and imported projects receive these files when missing:
+A new or imported project receives a lean default set, each file only when it is
+missing (nothing is overwritten):
 
 | File | Purpose |
 |------|---------|
-| `AGENTS.md` | Canonical agent instructions — the single source of truth; links every sibling agent doc. |
-| `CLAUDE.md` | Claude Code pointer: `@AGENTS.md` import plus Claude-specific overrides. |
-| `GEMINI.md` | Gemini CLI pointer: `@AGENTS.md` import plus Gemini-specific overrides. |
-| `.claude/settings.json` | Claude permission allow/deny rules scoped to the project. |
-| `.gitignore` | Common ignores for Python, Node, macOS, logs, and build output. |
-| `TODO.md` | Concrete task backlog with grouped IDs. |
-| `ROADMAP.md` | High-level project direction and sequencing. |
-| `STATUS.md` | Current-state and validation snapshot. |
+| `AGENTS.md` | Canonical agent instructions — the single source of truth. Every agent CLI Tabtivity wraps reads it by itself (Gemini through the `context.fileName` Tabtivity sets in its own agent homes, never in the project), so no pointer files are written. |
 | `README.md` | Project overview. |
-| `DOCUMENTATION.md` | Architecture, behavior, and persistence notes. |
+| `.gitignore` | Common ignores for Python, Node, macOS, logs, and build output (git projects only); a folder holding `.tex` files also gets the LaTeX build files (`*.aux`, `*.synctex.gz`, …), and Repair adds them later. |
 
-`AGENTS.md` carries the actual template; `CLAUDE.md` and `GEMINI.md` are
-pointers that `@AGENTS.md`-import it (real import syntax in both CLIs, so the
-text is loaded rather than merely referenced) and link the sibling agent files.
-Writing guidance in one file is the point — three interchangeable stubs meant it
-got written three times, or into whichever file that day's agent happened to
-read.
+These are created **on demand** from the file tree's *Project docs* group (below),
+each from a short template: `PROJECT.md` (what the project is), `TODO.md`
+(task backlog), `ROADMAP.md` (direction and sequencing), `STATUS.md` (current
+state and validation) and `DOCUMENTATION.md` (architecture and behavior notes).
+`REMARKS.md` is made by the remarks feature on the first remark. Tabtivity no
+longer writes `CLAUDE.md`, `GEMINI.md` or `.claude/settings.json`; a project
+that already holds them keeps them, untouched.
 
-A **scaffold repair** (Settings → Scaffold repair) additionally upgrades an agent
-doc still byte-identical to its old pre-`AGENTS.md` stub, or empty — provably
-untouched text — and reports it as `updated_files`. Anything a user or agent
-wrote is left alone, and `project_scaffold_missing` counts a legacy stub as
-missing so the pill's tag agrees with what a repair would actually do.
+The **Project docs** group sits at the top of the file tree's root (and in the
+Files browser tab and the phone's file library), governed by the project setting
+*Separate project docs section*. Its header reads `present/total` for the default
+docs plus `· n template` while a doc is still the text Tabtivity wrote; such a
+doc shows a `template` pill and is dimmed, an edited doc looks like any file, and
+an old `CLAUDE.md`/`GEMINI.md` nests under `AGENTS.md` with a `pointer` pill. A doc
+that is not there but can be made shows as a ghost row (`+ TODO.md  create`);
+clicking it (on the phone: its menu → *Create*) writes that one file from its
+template, never over anything, and opens it. The fold is remembered per project.
+Under the docs, *Agent memory (n)* lists what the agent CLIs (Claude Code, Codex)
+remember about the project — read-only, opened in a preview dialog; the CLIs
+maintain those files themselves.
+
+A **scaffold repair** (Settings → Scaffold repair) adds the missing defaults and
+additionally upgrades `AGENTS.md` when it is still byte-identical to an earlier
+Tabtivity template, or empty — provably untouched text — and reports it as
+`updated_files`. Anything a user or agent wrote is left alone. The amber *no
+scaffold* tag counts only missing defaults (a legacy-template `AGENTS.md` is not
+missing); clicking it names them and offers Repair. Remote-only projects get the
+lean set on the host at creation but no status or ghost rows.
 
 The root terminal also gets context files in `~/tabtivity/root/`:
 `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`.
@@ -1169,10 +1221,13 @@ The root terminal also gets context files in `~/tabtivity/root/`:
 A *box* temporarily joins two or more projects for side-by-side work — the box
 folder plus every member root in one file view, cross-project copy-paste, PDF
 merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
-`BoxEditorDialog.tsx`, `stores/boxes.ts`, `commands/boxes.rs`;
+`BoxMemberChecklist.tsx`, `BoxEditorDialog.tsx` — the box sheet —
+`stores/boxes.ts`, `stores/boxSlice.ts`, `commands/boxes.rs`;
 `docs/context/project_boxes.md` holds the design rationale). Backend commands:
-`get_boxes`, `save_boxes`, `create_box`, `rename_box`, `delete_box`,
-`set_box_members`, `ensure_box_folder`, `refresh_box_agent_docs`.
+`get_boxes`, `save_boxes`, `create_box`, `rename_box`, `patch_box`,
+`delete_box`, `set_box_members` (a whole-list write, kept for an older running
+frontend and as the fallback when the backend lacks `patch_box`'s `order`),
+`ensure_box_folder`, `refresh_box_agent_docs`.
 
 - **Data model (N:M).** Boxes live in their own `~/.local/share/tabtivity/boxes.json`
   (`Vec<ProjectBox>` = `{id, name, member_ids, position, folder?, relations}`)
@@ -1184,25 +1239,79 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
   ids that no longer reference a known project.
 - **Switcher (overlay model).** Member pills always render individually, with
   one colour swatch per box they are in (`lib/theme/boxColor`, a stable hue per
-  box id); no box takes width in the scrolling strip. Every box stands as a
+  box id; a click on the swatches opens that box, a small list when there are
+  several); no box takes width in the scrolling strip. Every box stands as a
   small pill of its own in the fixed leading segment beside the scope chip —
   its mark in the box's colour, one click into the box, a standing drop
-  target, right-click for rename / a Members checklist / edit / delete — up to
-  `MAX_BOX_PILLS`; the rest stay in the chip's dropdown (which always lists
-  every box) and the chip shows "+N". `Ctrl+Shift+PageDown/PageUp` cycle the
-  boxes. Empty and one-member boxes survive and are still listed — the ONLY way
-  a box disappears is an explicit, confirmed **Dissolve** / **Delete box** (the
-  folder and agent docs stay on disk).
-- **Box/unbox gestures.** Five ways in/out: the pill context menu's *Boxes*
-  group (checkbox row per box, additive toggle), the box pill's context menu's
-  *Members* checklist (toggles on the spot, stays open), Ctrl/Cmd-click
-  multi-select → "Box these (N)…", the box editor dialog (rename, full member
-  list, dissolve; opened from the box pill's menu, the pill menu, multi-select,
-  or the switcher "+"), and drag-and-drop (plain or Alt drop on any box pill —
-  or, when boxes overflow the row, on a row of the chip's list, which springs
-  open under a drag — = additive add; Alt-drop one pill on another = new box of
-  the two). While a box slice is selected the switcher's "+" lists non-members
-  to add, and each member pill's ✕ removes only that membership.
+  target, right-click for rename / a Members checklist / edit / dissolve. The
+  row's budget follows the header width tier (6 / 6 / 3 / 1 pills; the selected
+  box always keeps its pill); the rest stay in the chip's dropdown (which
+  always lists every box), reached by the fold pill `▣▾ +N` after the shown
+  pills. With no box a dashed ghost `+ Box` pill stands there instead.
+  **The slice** (`stores/boxSlice.ts`: `sliceBoxId`, `lastUnslicedScope`,
+  `selectBox`, `leaveBox`; session-only) is the box whose members the strip
+  shows; the selected pill carries an always-visible ✕ (`leaveBox`: clear the
+  slice and, from inside the box scope, return to the project the unsliced
+  strip last stood on) and the strip is tinted in the box colour. In the list
+  a ✓ marks the scope box and bold the slice. The strip, the keyboard ring
+  (`keyboardSteering.projectStations`, `cycleProject`) and the station badges
+  share one list (`stripProjects`). `Ctrl+Shift+PageDown/PageUp` (`cycleBox`)
+  walk `[project you came from, box1 … boxN]` and step back out past either
+  end. Empty and one-member boxes survive and are still listed — the ONLY way a
+  box disappears is an explicit, confirmed **Dissolve box…** (the folder and
+  agent docs stay on disk; dissolving the box you are in leaves it first).
+  Box pill status bars count the box's own scope AND its member projects'
+  scopes.
+- **Create and membership.** Every create door (the `+` menu row, the chip
+  list's New Box, the ghost pill, "Box these (N)…", "New box with X…", Ctrl+K →
+  New box…, Alt-drag one pill onto another) goes through
+  `useQuickCreateBox()`: a name prompt pre-filled with the next free "Box N",
+  then `createBoxQuick` (`create_box` with optional `memberIds`/`color`) and the
+  slice enters the box. Names are trimmed, non-empty, at most 80 characters, no
+  control characters and unique case-insensitively — checked only when the
+  name changes (`clean_box_name`, `boxNameProblem`), so a legacy empty or
+  duplicate name still loads and saves. Membership is edited by one shared
+  checklist, `BoxMemberChecklist` (box pill menu: projects; project pill menu:
+  boxes): closed projects included and labelled, scrolls, filter field past 8
+  rows, each toggle one singular `patch_box` add/remove (optimistic, reverted
+  on failure). The box sheet applies every change at once the same way (a
+  tick is one `addToBox` / `removeFromBox`, a colour pick one `setBoxColor`, the
+  name `rename_box` on Enter or blur; no Save, no draft), never the whole
+  list, so a member added meanwhile survives (the side panel's drag reorder is
+  likewise a `patch_box` `order`: the named members take the slots they hold,
+  any other member keeps its slot); against an older running backend both
+  `saveBox` and `createBoxQuick` fall back to the singular calls. Other
+  gestures: Ctrl/Cmd-click multi-select → "Box these (N)…", drag-and-drop
+  (plain or Alt drop on any box pill, or on a row of the chip's list, which
+  springs open under a drag — additive add; Alt-drop one pill on another = new
+  box of the two, entered and put into inline rename). While a box slice is
+  selected the switcher's "+" lists non-members to add, and each member pill's
+  menu has an explicit "Remove … from …" row beside the ✕.
+- **The box sheet** (`BoxEditorDialog.tsx`, "Edit box…"): one box — name
+  (checked as you type, only when changed), colour, the member list (closed
+  projects too; badges closed / container / VM / remote and the swatches of the
+  other boxes holding the project; a filter field), one trust line per kind of
+  member that runs outside its container or VM or needs a connection, the
+  folder with Open, the phone-access switch and the **Dissolve box…** footer.
+  There is no create mode: boxes are born through the name prompt. Save is one
+  `saveBox` diff against what the sheet opened with. The phone row is the
+  Settings → Mobile switch (acts at once, keeps the box's per-phone list); with
+  no tmux (Windows) or persistent local sessions off it is replaced by a line
+  saying why, except for a box whose access is already on, which keeps its
+  switch so the access can always be revoked. An empty box shows "No projects
+  yet" + **Add projects…** (`BoxEmptyLine`, in the strip and the side panel; the
+  button is left out in a popout, which has no sheet host).
+- **Finding boxes.** Focusing the header search (`ProjectSearch.tsx`) with
+  nothing typed lists the boxes (coloured `BoxSwatch`, member names), with "All
+  projects" first while a box is sliced; a query matches a box by its name or a
+  member's name, and project rows wear the swatches of their boxes. Ctrl+K
+  (`CommandPalette.tsx`) has a Boxes group (a pick runs `boxSlice.selectBox`,
+  i.e. the slice plus `openBox`), the actions "New box…", "Show all projects"
+  (only while sliced) and, once something is typed, "Add (current project) to
+  (box)"; tab rows of box scopes carry the box name (`scopeDisplayName`). A
+  popout whose scope is `box:<id>` shows the box swatch and name in its title
+  bar. With four or more projects and no box, the feature hint `box-create`
+  points at the ghost pill.
 - **Box folder, agent docs + member symlinks.** Opening a box (`openBox` →
   `ensure_box_folder`) lazily creates a folder under `~/tabtivity/boxes/<name>/`
   (unique name resolved against other boxes and existing dirs) and
@@ -1222,15 +1331,36 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
   (disjoint from project ids and `"root"`). The scope is first-class now: its
   tabs persist under `<state_dir>/sessions/box_<id>/terminals.json` and restore
   lazily on the next open (nothing restorable seeds one shell at the box
-  folder). New tabs default to the box folder; the box "+" menu also offers
-  per-member rows ("Files — ⟨m⟩" / "Shell — ⟨m⟩" / "Claude — ⟨m⟩") whose tabs
-  land at the member root — resume-safe, since Claude keys history by cwd. The
+  folder). Where a new tab starts is computed per tab group
+  (`stores/boxes.ts` `newTabTarget`): the root directory of the member that
+  owns the group's active tab (`memberOfCwd`: path-component prefix, longest
+  member root wins), else the box folder; the `+` button, Ctrl+Shift+N/M,
+  Ctrl+1-9, steering and the popout `+` all land in the same `TabBar`
+  computation, and the menu header names the target. Agents, Shell and Files
+  rows carry a "Start in…" fly-out (another member or the whole box; a member's
+  Files row opens a `projectfiles` tab, the box's the plain `files` tab); tabs
+  at a member root are resume-safe, since Claude keys history by cwd. Monitor,
+  Disk usage and other non-launch kinds keep the box folder. Tabs in
+  a member show a `TabMemberChip` (dot in `memberColor(projectId)`, a square
+  for the whole box; shell, agent, `files`, `projectfiles` kinds only; derived
+  from `tab.cwd`, nothing stored), in the main strip and the popout's. The side
+  panel lists one collapsible section per member (`ProjectFilesPane.tsx`,
+  `stores/boxAccordion.ts`): any number expanded at once (a header click
+  toggles only that one), headers with colour dot, git dot and agent count; the
+  collapse state is per-viewer `localStorage` keyed by box id. With at most one
+  section open the panel follows the active tab's member; with several it opens
+  that member beside them. A `⋯` on a member
+  header (`BoxMemberMenu.tsx`) offers Files/Git, Remote/Local, the file manager,
+  project settings, **Open as tab** (a `projectfiles` tab at the member's
+  root) and **Fold the other projects** / **Open all projects**; the toolbar's
+  search is one shared field above the sections that searches every expanded
+  member (`sharedSearch` on `FileTree`). The
   spawn gate (`pty_spawn`) and file confinement (`compute_allowed_roots`)
   accept the box folder ∪ member roots ∪ remote members' mirrors, and fail
   closed on an unknown box. Local shells in a box scope get tmux persistence
   like root/project shells. **Trust (v1):** box tabs run local + uncontained —
   a member's container/VM boundary does not extend to the shared scope; the box
-  editor shows a notice when a member is containerized/VM.
+  sheet shows a notice when a member is containerized/VM.
 
 ### Trust Tiers
 
@@ -1363,6 +1493,10 @@ and the host-aware variants, never inferred from path conventions.
   Byte-sync is opt-in per path from an explicit manifest and does **not** read
   `.gitignore`, so a pull is previewed and confirmed before it drags a big host
   tree down.
+  Transfers run four files at a time (`sync_pool`, within a 128 MiB budget), and a
+  both-sides-changed file stays orange unless the project's opt-in *take the newer
+  copy* switch is on (`sync_take_newer`: newer mtime wins, the loser is backed up
+  and logged in `local_loss`). Details: `docs/remote_sync_guide.md`.
 - **Remote-only.** A remote project created with *Keep a local copy* off has no
   mirror at all: `RemoteSpec.remote_only` (written by the backend from the
   create request's top-level `remoteOnly`, never taken from the renderer's
@@ -1452,6 +1586,7 @@ Tauri v2 Application
 |   +-- hooks/                useKeyboard, useClampToViewport, useWindowFocused
 |   +-- types/index.ts        Shared TypeScript types
 +-- mobile-web/               The companion PWA — its own Vite bundle
+                              (`steering/`: Bluetooth-keyboard steering, docs/context/phone_steering.md)
 ```
 
 **IPC pattern:** Rust ↔ React via Tauri `invoke` for request/response and Tauri
@@ -1916,8 +2051,10 @@ Ollama integration test skips itself when no local server or model is available.
   with DMABUF off. DMABUF stays disabled — a 2026-08-05 re-test on WebKitGTK
   2.52.3 was faster but produced flicker, missing PDF images, and a renderer
   crash.
-- A native scrollbar's shape is unreachable from CSS on WebKitGTK, so Tabtivity
-  hides the engine's bar and draws its own (`lib/theme/customScrollbar.ts`).
+- Scrollbars are the engine's, styled once in `styles/base.css` through the
+  `::-webkit-scrollbar` pseudo-elements. Setting `scrollbar-width`,
+  `scrollbar-color` or `scrollbar-gutter` on a surface switches WebKitGTK to
+  its native 21px bar there.
 
 ## Practical Development Notes
 

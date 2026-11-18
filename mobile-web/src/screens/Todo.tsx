@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { CheckboxIcon, ClockIcon } from "../../../src/components/common/icons/Icon";
+import { ChevronDownIcon, ChevronRightIcon, CheckIcon, CloseIcon, FilterIcon, MoreIcon, PlusIcon, SearchIcon } from "../glyphs";
 import { api, normalizeTodoBoard, reloadIfApplied, wasApplied, type TodoBoard, type TodoCard, type TodoColumn, type TodoTaskInput } from "../api";
 import { describeFailure, failureCode } from "../connection";
 import { isOnServer } from "../hostKind";
@@ -14,6 +15,8 @@ import { fallbackColumnId } from "../../../shared/todoColumns";
 import { ConfirmSheet, NameSheet, type Confirm, type NameAsk } from "../components/ConfirmSheet";
 import { useBackLayer } from "../backStack";
 import { HintQueue, type HintKey } from "../components/HintMessage";
+import { ScreenHead } from "../components/ScreenHead";
+import { OptionSheet, type SheetOption } from "../components/OptionSheet";
 
 type Editing = TodoCard | "new" | null;
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
@@ -55,11 +58,11 @@ function dueInfo(due: string, t: Translate, lang: Language, now = new Date()): {
 // The editor offers None/High/Normal/Low, so a bare "Priority 1" on a card is
 // the one number on the board nobody can read back. iCalendar's own banding
 // (1–4 high, 5 normal, 6–9 low) turns it back into the word that was picked.
-function priorityChip(priority: number): { label: TranslationKey; glyph: string; tone: string } | null {
+function priorityChip(priority: number): { label: TranslationKey; tone: string } | null {
   if (priority <= 0) return null;
-  if (priority <= 4) return { label: "tasksView.priorityHigh", glyph: "▲", tone: "high" };
-  if (priority <= 5) return { label: "tasksView.priorityNormal", glyph: "■", tone: "normal" };
-  return { label: "tasksView.priorityLow", glyph: "▼", tone: "low" };
+  if (priority <= 4) return { label: "tasksView.priorityHigh", tone: "high" };
+  if (priority <= 5) return { label: "tasksView.priorityNormal", tone: "normal" };
+  return { label: "tasksView.priorityLow", tone: "low" };
 }
 
 // The derived fields have to come off, `rank` included: the desktop's task input
@@ -106,6 +109,7 @@ export function Todo({ card }: { card?: string }) {
   // nothing the head does not still count.
   const [folded, setFolded] = useState<string[]>(() => readOrder("todoCollapsedColumns"));
   const [busy, setBusy] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   // The board's two questions — a second tap before a delete, a name for a
   // column — as the phone's own sheets (`ConfirmSheet`), never `window.*`.
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -182,25 +186,39 @@ export function Todo({ card }: { card?: string }) {
   const shown = matching.filter((task) =>
     !(hideDone && task.done) && !(hideArchived && archivedColumns.has(task.column)));
 
+  const projectName = projectFilter === "none" ? t("todoBoard.filterNoProject") : board?.projects.find((project) => project.id === projectFilter)?.name ?? projectFilter;
+  const filtersOn = (projectFilter ? 1 : 0) + (tagFilter ? 1 : 0);
+  const filterLabel = t(filtersOn > 0 ? "mobile.todo.filtersOn" : "mobile.todo.filters", { count: filtersOn });
+  const chips = [
+    ...(projectFilter ? [{ key: "project", name: t("mobile.todo.chipProject", { name: projectName }), clear: () => setProjectFilter("") }] : []),
+    ...(tagFilter ? [{ key: "tag", name: t("mobile.todo.chipTag", { name: `#${tagFilter}` }), clear: () => setTagFilter("") }] : []),
+  ];
+  const filterOptions: SheetOption[] = [
+    { key: "project:", label: t("todoBoard.filterAnyProject"), group: t("todoDialog.project"), current: !projectFilter },
+    { key: "project:none", label: t("todoBoard.filterNoProject"), group: t("todoDialog.project"), current: projectFilter === "none" },
+    ...(board?.projects ?? []).map((project) => ({ key: `project:${project.id}`, label: project.name, group: t("todoDialog.project"), current: projectFilter === project.id })),
+    { key: "tag:", label: t("todoBoard.filterAnyTag"), group: t("todoDialog.tags"), current: !tagFilter },
+    ...tags.map((tag) => ({ key: `tag:${tag}`, label: `#${tag}`, group: t("todoDialog.tags"), current: tagFilter === tag })),
+  ];
+
   return <main className="screen todo-screen">
-    <header><h1>{t("todo.overlayTitle")}</h1><button onClick={load} disabled={busy}>↻</button></header>
+    <ScreenHead title={t("todo.overlayTitle")} onRefresh={load} refreshing={busy} untested={isUntested("mobile.design.todo") || isUntested("mobile.todo.fold")} />
     {error && <p className="error">{boardError(error.reason, t)}</p>}
     {board?.desktop_available === false && <p className="notice">{t(isOnServer() ? "mobile.headless.ownerServer" : "mobile.headless.owner")} {(isOnServer() ? isUntested("mobile.server.noWindow") : isUntested("mobile.headless.todo")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
-    {/* The search is the first thing under the header: it is what a board of
-        forty cards is opened with, and it used to sit below a standing notice
-        that says the same sentence every visit. That notice is now the last
-        thing on the screen, where it is still there to explain an empty board
-        but costs nothing at the top. */}
     <HintQueue hints={TODO_TIPS} />
-    <input className="todo-mobile-search" type="search" value={search} placeholder={t("todoBoard.searchPlaceholder")} onChange={(event) => setSearch(event.target.value)} />
-    <div className="todo-mobile-filters"><select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="">{t("todoBoard.filterAnyProject")}</option><option value="none">{t("todoBoard.filterNoProject")}</option>{board?.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="">{t("todoBoard.filterAnyTag")}</option>{tags.map((tag) => <option key={tag} value={tag}>#{tag}</option>)}</select><label className="todo-inline-check"><input type="checkbox" checked={hideDone} onChange={(event) => toggleHideDone(event.target.checked)} /> {t("todoBoard.hideDone")}</label><label className="todo-inline-check"><input type="checkbox" checked={hideArchived} onChange={(event) => toggleHideArchived(event.target.checked)} /> {t("mobile.todo.hideArchived")}</label></div>
-    {/* The fold is a gesture with no affordance of its own beyond the caret, so
-        it is said once, in the sibling of the two drag hints. */}
-    <p className="reorder-hint">{t("mobile.todo.foldHint")} {isUntested("mobile.todo.fold") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>
-    {/* Adding a column is a structural act, and it used to sit in a bar of its
-        own between the filters and the board — a full row of top chrome above
-        the first thing anyone came here to read. At the foot of the column list
-        it is where a new column would appear, and costs the board nothing. */}
+    {/* The search is what a board of forty cards is opened with. Project, tag and
+        the two hide switches sit behind the button in its field; only a project
+        or tag filter shows again, as a chip, because it is the one a reader can
+        forget is holding cards back. */}
+    <div className="todo-mobile-search">
+      <SearchIcon size="18px" />
+      <input type="search" value={search} placeholder={t("todoBoard.searchPlaceholder")} onChange={(event) => setSearch(event.target.value)} />
+      <button type="button" className="todo-filter-button" aria-label={filterLabel} title={filterLabel} onClick={() => setFilterOpen(true)}>
+        <FilterIcon size="20px" />
+        {filtersOn > 0 && <span className="tool-badge" aria-hidden="true">{filtersOn}</span>}
+      </button>
+    </div>
+    {chips.length > 0 && <div className="todo-filter-chips">{chips.map((chip) => <button type="button" key={chip.key} className="tool-chip" aria-label={t("mobile.todo.removeFilter", { name: chip.name })} onClick={chip.clear}>{chip.name}<CloseIcon size="14px" /></button>)}</div>}
     <section className="todo-columns">{columns.map((column, index) => <TodoColumnView
       key={column.id} column={column} index={index} columns={columns}
       tasks={shown.filter((task) => task.column === column.id).sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || a.title.localeCompare(b.title))}
@@ -208,11 +226,15 @@ export function Todo({ card }: { card?: string }) {
       folded={folded.includes(column.id)} fold={(value) => fold(column.id, value)}
       move={move} toggle={toggle} edit={setEditing} columnAction={columnAction}
       confirm={setConfirm} askName={setNameAsk}
-    />)}<button className="todo-add-column" disabled={busy} onClick={() => setNameAsk({
-      title: t("todoBoard.addColumn"), label: t("todoBoard.columnNamePlaceholder"), action: t("common.add"),
-      run: (name) => columnAction({ type: "column_create", name }),
-    })}>{t("mobile.todo.addColumn")}</button></section>
-    <button className="primary todo-fab" aria-label={t("mobile.todo.addCard")} title={t("mobile.todo.addCard")} disabled={busy || !board?.calendars.length} onClick={() => setEditing("new")}>＋</button>
+    />)}
+      {/* Adding a column is a rare, structural act: the foot row of the list, where
+          a new column would appear. */}
+      <div className="tool-group"><button type="button" className="tool-row todo-add-column" disabled={busy} onClick={() => setNameAsk({
+        title: t("todoBoard.addColumn"), label: t("todoBoard.columnNamePlaceholder"), action: t("common.add"),
+        run: (name) => columnAction({ type: "column_create", name }),
+      })}><PlusIcon size="18px" />{t("todoBoard.addColumn")}</button></div>
+    </section>
+    <button className="primary todo-fab" aria-label={t("mobile.todo.addCard")} title={t("mobile.todo.addCard")} disabled={busy || !board?.calendars.length} onClick={() => setEditing("new")}><PlusIcon /></button>
     {editing && board && <TaskEditor
       board={board} task={editing === "new" ? null : editing} busy={busy}
       close={() => setEditing(null)}
@@ -232,7 +254,20 @@ export function Todo({ card }: { card?: string }) {
     />}
     {nameAsk && <NameSheet ask={nameAsk} busy={busy} onClose={() => setNameAsk(null)} />}
     {confirm && <ConfirmSheet confirm={confirm} busy={busy} onClose={() => setConfirm(null)} />}
-    <p className="notice todo-mobile-note">{t("mobile.todo.note")}</p>
+    {filterOpen && <OptionSheet
+      title={t("mobile.todo.filters")} options={filterOptions} waiting="" busy={false}
+      onPick={(key) => {
+        if (key.startsWith("project:")) setProjectFilter(key.slice(8));
+        else setTagFilter(key.slice(4));
+      }}
+      onClose={() => setFilterOpen(false)}
+      footer={<button type="button" className="todo-filter-reset" disabled={filtersOn === 0} onClick={() => { setProjectFilter(""); setTagFilter(""); }}>{t("common.reset")}</button>}
+    >
+      <div className="todo-filter-switches">
+        <label className="todo-inline-check"><input type="checkbox" checked={hideDone} onChange={(event) => toggleHideDone(event.target.checked)} /> {t("todoBoard.hideDone")}</label>
+        <label className="todo-inline-check"><input type="checkbox" checked={hideArchived} onChange={(event) => toggleHideArchived(event.target.checked)} /> {t("mobile.todo.hideArchived")}</label>
+      </div>
+    </OptionSheet>}
   </main>;
 }
 
@@ -257,54 +292,90 @@ function TodoColumnView({ column, index, columns, tasks, cardCount, busy, folded
     });
   };
   const accent = column.color || "#7c6cff";
-  // The name is the fold's target rather than the caret beside it: a thumb aims
-  // at a word, not at a chevron, and the controls to its right stay reachable on
-  // a folded column — reordering and renaming are most of what is done to one.
-  return <section className={folded ? "todo-mobile-column folded" : "todo-mobile-column"} style={{ borderTopColor: accent }}>
-    <div className="todo-mobile-column-head"><h2><button type="button" className="todo-column-fold" aria-expanded={!folded} onClick={() => fold(!folded)}><span className="todo-fold-caret" aria-hidden="true">{folded ? "▸" : "▾"}</span>{column.name}</button> <small className="todo-column-count">{cardCount}</small></h2><div>
-      <button onClick={rename} disabled={busy} aria-label={t("mobile.todo.renameColumnNamed", { name: column.name })}>✎</button>
-      <button onClick={() => columnAction({ type: "column_move", column_id: column.id, delta: -1 })} disabled={busy || index === 0} aria-label={t("mobile.todo.moveColumnLeft", { name: column.name })}>‹</button>
-      <button onClick={() => columnAction({ type: "column_move", column_id: column.id, delta: 1 })} disabled={busy || index === columns.length - 1} aria-label={t("mobile.todo.moveColumnRight", { name: column.name })}>›</button>
-      <button className="danger" onClick={remove} disabled={busy || columns.length <= 1} aria-label={t("mobile.todo.deleteColumnNamed", { name: column.name })}>×</button>
-    </div></div>
-    {/* A folded column says how many cards are behind it, so a search whose hits
-        are all in one still reads as a search that found something. The head's
-        count is every matching card; this one is what the fold is holding. */}
-    {folded && tasks.length > 0 && <p className="todo-column-empty">{t(tasks.length === 1 ? "mobile.todo.foldedCardsOne" : "mobile.todo.foldedCards", { count: tasks.length })}</p>}
-    {/* An empty column says which kind of empty it is: a column with cards the
-        filters are holding back reads as a broken board otherwise. */}
-    {!folded && tasks.length === 0 && <p className="todo-column-empty">{t(cardCount > 0 ? "mobile.todo.hiddenByFilters" : "mobile.todo.noCards")}</p>}
-    {!folded && tasks.map((task, index) => <article className={task.done ? "todo-mobile-card done" : "todo-mobile-card"} key={task.id} style={{ "--todo-accent": accent } as CSSProperties}>
-      <div className="todo-mobile-card-title"><button className="todo-check" onClick={() => toggle(task)} disabled={busy} aria-label={t(task.done ? "mobile.todo.markNotDone" : "mobile.todo.markDone", { name: task.title })}>{task.done ? "✓" : ""}</button><strong>{task.title}</strong></div>
-      {task.notes.trim() && <p className="todo-mobile-notes">{task.notes.trim()}</p>}
-      <TodoMeta task={task} />
-      {/* Progress is on every card and was on none of them: a bar reads at a
-          glance where "40%" among four other chips does not. Only where it says
-          something — a done card is already struck through. */}
-      {!task.done && task.percent > 0 && <div className="todo-mobile-progress" role="progressbar" aria-valuenow={task.percent} aria-valuemin={0} aria-valuemax={100} aria-label={t("mobile.todo.progressOf", { name: task.title })}>
-        <span className="todo-progress-track"><span className="todo-progress-fill" style={{ width: `${task.percent}%`, backgroundColor: accent }} /></span>
-        <small>{task.percent}%</small>
-      </div>}
-      <div className="todo-mobile-actions"><button type="button" onClick={() => edit(task)} disabled={busy}>{t("mobile.todo.editCard")}</button><button type="button" disabled={busy || index === 0} onClick={() => move(task, column.id, index - 1)} aria-label={t("mobile.todo.moveCardUp", { name: task.title })}>↑</button><button type="button" disabled={busy || index === tasks.length - 1} onClick={() => move(task, column.id, index + 1)} aria-label={t("mobile.todo.moveCardDown", { name: task.title })}>↓</button><select aria-label={t("mobile.todo.moveCardTo", { name: task.title })} disabled={busy} value={task.column} onChange={(event) => move(task, event.target.value)}>{columns.map((next) => <option key={next.id} value={next.id} disabled={!moveAccepted(task, next.id, columns)}>{next.name}</option>)}</select></div>
-    </article>)}
+  const [menu, setMenu] = useState(false);
+  const [cardMenu, setCardMenu] = useState<{ task: TodoCard; index: number } | null>(null);
+  const empty = !folded && tasks.length === 0;
+  const menuOptions: SheetOption[] = [
+    { key: "rename", label: t("mobile.todo.renameColumnNamed", { name: column.name }), current: false, section: "edit" },
+    { key: "fold", label: t(folded ? "mobile.todo.unfold" : "mobile.todo.fold"), current: false, section: "edit" },
+    { key: "left", label: t("mobile.todo.moveColumnLeft", { name: column.name }), current: false, section: "edit", disabled: index === 0 },
+    { key: "right", label: t("mobile.todo.moveColumnRight", { name: column.name }), current: false, section: "edit", disabled: index === columns.length - 1 },
+    ...(columns.length > 1 ? [{ key: "delete", label: t("mobile.todo.deleteColumnNamed", { name: column.name }), current: false, section: "danger", danger: true }] : []),
+  ];
+  const pickColumn = (key: string) => {
+    setMenu(false);
+    if (key === "rename") rename();
+    else if (key === "fold") fold(!folded);
+    else if (key === "left") columnAction({ type: "column_move", column_id: column.id, delta: -1 });
+    else if (key === "right") columnAction({ type: "column_move", column_id: column.id, delta: 1 });
+    else if (key === "delete") remove();
+  };
+  const cardOptions = (task: TodoCard, at: number): SheetOption[] => [
+    { key: "edit", label: t("common.edit"), current: false, section: "card" },
+    { key: "up", label: t("mobile.todo.moveCardUp", { name: task.title }), current: false, section: "card", disabled: at === 0 },
+    { key: "down", label: t("mobile.todo.moveCardDown", { name: task.title }), current: false, section: "card", disabled: at === tasks.length - 1 },
+    ...columns.filter((next) => next.id !== task.column).map((next) => ({
+      key: `to:${next.id}`, label: t("mobile.todo.moveToColumn", { name: next.name }), current: false, section: "move", disabled: !moveAccepted(task, next.id, columns),
+    })),
+  ];
+  const pickCard = (key: string) => {
+    if (!cardMenu) return;
+    const { task, index: at } = cardMenu;
+    setCardMenu(null);
+    if (key === "edit") edit(task);
+    else if (key === "up") move(task, column.id, at - 1);
+    else if (key === "down") move(task, column.id, at + 1);
+    else if (key.startsWith("to:")) move(task, key.slice(3));
+  };
+  // The name is the fold's target rather than the chevron beside it: a thumb aims
+  // at a word, not at a chevron. The dot, the state word and the ⋯ stay outside
+  // the heading, so its name is the column's name and its count.
+  return <section className={folded ? "todo-mobile-column folded" : empty ? "todo-mobile-column empty" : "todo-mobile-column"} style={{ "--todo-accent": accent } as CSSProperties}>
+    <div className="todo-mobile-column-head">
+      <span className="todo-column-dot" aria-hidden="true" />
+      <h2><button type="button" className="todo-column-fold" aria-expanded={!folded} onClick={() => fold(!folded)}>{column.name}{(folded || tasks.length > 0) && (folded ? <ChevronRightIcon className="todo-fold-caret" size="14px" /> : <ChevronDownIcon className="todo-fold-caret" size="14px" />)}</button> <small className="todo-column-count">{cardCount}</small></h2>
+      {/* An empty column says which kind of empty it is: a column with cards the
+          filters are holding back reads as a broken board otherwise. */}
+      {empty && <span className="todo-column-empty">{t(cardCount > 0 ? "mobile.todo.hiddenByFilters" : "mobile.todo.noCards")}</span>}
+      <button type="button" className="todo-column-more" onClick={() => setMenu(true)} disabled={busy} aria-label={t("mobile.todo.columnMenu", { name: column.name })} title={t("mobile.todo.columnMenu", { name: column.name })}><MoreIcon size="20px" /></button>
+    </div>
+    {!folded && tasks.length > 0 && <div className="tool-group todo-card-group">{tasks.map((task, at) => <article className={task.done ? "todo-mobile-card done" : "todo-mobile-card"} key={task.id}>
+      <button type="button" className="todo-check" onClick={() => toggle(task)} disabled={busy} aria-label={t(task.done ? "mobile.todo.markNotDone" : "mobile.todo.markDone", { name: task.title })}><span className="todo-check-mark" aria-hidden="true">{task.done && <CheckIcon size="14px" />}</span></button>
+      <button type="button" className="todo-card-body" onClick={() => edit(task)} disabled={busy}>
+        <strong>{task.title}</strong>
+        {task.notes.trim() && <span className="todo-mobile-notes">{task.notes.trim()}</span>}
+      </button>
+      <button type="button" className="todo-card-more" onClick={() => setCardMenu({ task, index: at })} disabled={busy} aria-label={t("mobile.todo.cardMenu", { name: task.title })} title={t("mobile.todo.cardMenu", { name: task.title })}><MoreIcon size="20px" /></button>
+      <TodoMeta task={task} accent={accent} />
+    </article>)}</div>}
+    {menu && <OptionSheet title={column.name} options={menuOptions} waiting="" busy={busy} onPick={pickColumn} onClose={() => setMenu(false)} />}
+    {cardMenu && <OptionSheet title={cardMenu.task.title} options={cardOptions(cardMenu.task, cardMenu.index)} waiting="" busy={busy} onPick={pickCard} onClose={() => setCardMenu(null)} />}
   </section>;
 }
 
 // Ordered by what decides whether the card is today's problem: the deadline,
 // then how it was ranked, then the checklist, and the tags last — there can be
 // any number of them, and none of them is urgent.
-function TodoMeta({ task }: { task: TodoCard }) {
+function TodoMeta({ task, accent }: { task: TodoCard; accent: string }) {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
   const due = task.due ? dueInfo(task.due, t, lang) : null;
   const priority = priorityChip(task.priority);
   const steps = task.subtasks.length;
-  if (!due && !priority && !steps && task.tags.length === 0) return null;
+  // Progress is on every card and was on none of them: a bar reads at a glance
+  // where "40%" among four other chips does not. Only where it says something —
+  // a done card is already struck through.
+  const progress = !task.done && task.percent > 0;
+  if (!due && !priority && !steps && task.tags.length === 0 && !progress) return null;
   return <div className="todo-mobile-meta">
     {due && <small className={`todo-chip due ${due.tone}`}><ClockIcon /> {due.label}</small>}
-    {priority && <small className={`todo-chip prio ${priority.tone}`}>{priority.glyph} {t(priority.label)}</small>}
+    {priority && <small className={`todo-chip prio ${priority.tone}`}>{t(priority.label)}</small>}
     {steps > 0 && <small className="todo-chip steps"><CheckboxIcon /> {task.subtasks.filter((step) => step.done).length}/{steps}</small>}
     {task.tags.map((tag) => <small className="todo-chip tag" key={tag}>#{tag}</small>)}
+    {progress && <span className="todo-mobile-progress" role="progressbar" aria-valuenow={task.percent} aria-valuemin={0} aria-valuemax={100} aria-label={t("mobile.todo.progressOf", { name: task.title })}>
+      <span className="todo-progress-track"><span className="todo-progress-fill" style={{ width: `${task.percent}%`, backgroundColor: accent }} /></span>
+      <small>{task.percent}%</small>
+    </span>}
   </div>;
 }
 
@@ -342,7 +413,7 @@ function TaskEditor({ board, task, busy, close, save, remove }: {
     const subtasks = [...draft.subtasks]; [subtasks[at], subtasks[target]] = [subtasks[target], subtasks[at]]; patch({ subtasks });
   };
   return <div className="todo-editor-backdrop" role="presentation"><form className="todo-editor todo-editor-full" onSubmit={(event) => { event.preventDefault(); if (draft.title.trim()) void save({ ...draft, title: draft.title.trim() }); }}>
-    <div className="todo-editor-heading"><h2>{t(task ? "mobile.todo.editTask" : "mobile.todo.addCard")}</h2><button type="button" onClick={close} disabled={busy}>×</button></div>
+    <div className="todo-editor-heading"><h2>{t(task ? "mobile.todo.editTask" : "mobile.todo.addCard")}</h2><button type="button" className="sheet-close" onClick={close} disabled={busy} aria-label={t("common.close")}><CloseIcon size="1em" /></button></div>
     <label>{t("todoDialog.titleLabel")}<input value={draft.title} maxLength={300} autoFocus required onChange={(event) => patch({ title: event.target.value })} /></label>
     <label>{t("todoDialog.notes")}<textarea value={draft.notes} maxLength={16 * 1024} rows={3} onChange={(event) => patch({ notes: event.target.value })} /></label>
     <fieldset><legend>{t("mobile.todo.due")}</legend><div className="todo-due-fields"><input type="date" value={date} onChange={(event) => { setDate(event.target.value); if (!event.target.value) setWithTime(false); }} />{withTime && <TimeFieldCore value={time} use24h={phoneUse24h()} aria-label={t("dateTime.time")} onChange={setTime} />}</div><label className="todo-inline-check"><input type="checkbox" checked={withTime} onChange={(event) => { if (event.target.checked && !date) setDate(todayStr()); setWithTime(event.target.checked); }} /> {t("todoDialog.setTime")}</label></fieldset>

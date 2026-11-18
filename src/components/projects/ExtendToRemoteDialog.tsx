@@ -7,7 +7,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useBigFoldersStore } from "../../stores/bigFolders";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
-import { joinRemotePath, sanitizeName } from "../../lib/projects/scaffold";
+import { hostFolderNameProblem, joinRemotePath, sanitizeName } from "../../lib/projects/scaffold";
 import { useRemoteSession, type RemoteStep } from "./useRemoteSession";
 import { RemoteProjectSection } from "./RemoteProjectSection";
 import { targetLabel } from "../../lib/remote/machineLabel";
@@ -59,6 +59,11 @@ export function ExtendToRemoteDialog({
   // The remote path leaf and local-mirror-relative name both use the project's
   // sanitized name, matching direct remote creation (kind "new").
   const safeName = sanitizeName(project.name);
+  // The folder made on the host: the sanitized name until the user types
+  // their own (`null` = not edited).
+  const [hostFolder, setHostFolder] = useState<string | null>(null);
+  const hostFolderName = hostFolder === null ? safeName : hostFolder.trim();
+  const hostFolderProblem = hostFolderNameProblem(hostFolderName);
   const extendProjectToRemote = useProjectsStore((s) => s.extendProjectToRemote);
 
   const remote = useRemoteSession({ kind: "new" });
@@ -136,7 +141,8 @@ export function ExtendToRemoteDialog({
   };
 
   const submit = async () => {
-    const spec = buildRemoteSpec(safeName);
+    if (hostFolderProblem) return;
+    const spec = buildRemoteSpec(hostFolderName);
     if (!spec) {
       setError(t("extendRemote.connectFirstError"));
       return;
@@ -210,7 +216,7 @@ export function ExtendToRemoteDialog({
     }
   };
 
-  const remotePath = joinRemotePath(remoteChosenPath || "/", safeName || project.name);
+  const remotePath = joinRemotePath(remoteChosenPath || "/", hostFolderName || "<name>");
   // The local files stay in place, so the mirror is the project's current dir.
   const localPath = resolveProjectDirectory(project);
 
@@ -290,11 +296,35 @@ export function ExtendToRemoteDialog({
 
         <RemoteProjectSection
           kind="new"
-          safeName={safeName}
+          hostFolder={hostFolderName}
           onClose={onClose}
           onUseThisFolder={useThisRemoteFolder}
           remote={remote}
         />
+
+        {step === "details" && (
+          <label>
+            <span>
+              {t("projectDialog.hostFolderLabel")} <UntestedTag id="projectDialog.hostFolder" />
+            </span>
+            <input
+              value={hostFolder ?? safeName}
+              aria-invalid={!!hostFolderProblem}
+              aria-describedby={hostFolderProblem ? "extend-hostFolder-error" : undefined}
+              placeholder={safeName || undefined}
+              spellCheck={false}
+              disabled={busy}
+              onChange={(e) => setHostFolder(e.target.value === safeName ? null : e.target.value)}
+            />
+            {hostFolderProblem ? (
+              <span id="extend-hostFolder-error" className="ssh-optional-hint">
+                {t(hostFolderProblem === "required" ? "projectDialog.hostFolderRequired" : "projectDialog.hostFolderInvalid")}
+              </span>
+            ) : (
+              <span className="ssh-optional-hint">{t("projectDialog.hostFolderHint")}</span>
+            )}
+          </label>
+        )}
 
         {step === "details" && (
           <div className="project-dialog-path extend-summary">
@@ -329,7 +359,7 @@ export function ExtendToRemoteDialog({
             <button
               type="button"
               onClick={() => void submit()}
-              disabled={busy || !remoteReady}
+              disabled={busy || !remoteReady || !!hostFolderProblem}
               title={t(remoteReady ? "extendRemote.readyTitle" : "extendRemote.notReadyTitle")}
             >
               {busy ? t("extendRemote.extending") : t("extendRemote.extendToRemote")}

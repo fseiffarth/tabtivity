@@ -132,6 +132,8 @@ fn launch_tracked(
         window_id,
         origin: origin.to_string(),
         launch_id,
+        // `since` is the launcher's own start time (0 = unreadable).
+        pid_start: (since != 0).then_some(since),
     };
     {
         let mut reg = registry.lock_ok();
@@ -219,6 +221,101 @@ fn launch_family_now(id: &str, since: u64) -> Vec<FamilyMember> {
         .into_iter()
         .map(|p| FamilyMember { pid: p.pid, start: p.start })
         .collect()
+}
+
+/// The family a row's exit watcher judges by: its marked processes (Linux), or
+/// on macOS for an `.app` the bundle's own processes started since the launch
+/// (2442o) — `open -a` hands the app to LaunchServices, so nothing the app
+/// starts carries the launch marker, and the app is not `open`'s child. Asked
+/// again for a few seconds while a cold-starting app has no process yet; an
+/// app that was already running (a hand-off) started before the launch and
+/// is no member, as on Linux, and neither is a helper it starts for the
+/// request ([`bundle_members`]).
+fn exit_family(entry: &TrackedWindow, track: Option<&LaunchTrack>) -> Vec<FamilyMember> {
+    let Some(track) = track else { return Vec::new() };
+    #[cfg(target_os = "macos")]
+    if is_app_bundle(&entry.exec) {
+        let bundle = Path::new(&entry.exec);
+        for _ in 0..20 {
+            let family = bundle_family_now(bundle, track.since);
+            if !family.is_empty() {
+                return family;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        return Vec::new();
+    }
+    match &entry.launch_id {
+        Some(launch_id) => launch_family_now(launch_id, track.since),
+        None => Vec::new(),
+    }
+}
+
+/// Whether `exec` names a macOS application bundle (`….app`).
+#[cfg(any(target_os = "macos", test))]
+fn is_app_bundle(exec: &str) -> bool {
+    Path::new(exec)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+}
+
+/// The processes of `bundle` alive now that started at or after `since`, from
+/// one walk of the process table (pid, executable path, start). Pure: a
+/// process belongs when its executable sits inside `<bundle>/Contents/` (the
+/// main binary and every helper an Electron or Chromium app starts); the lead
+/// is then the oldest, the app itself.
+///
+/// Empty unless one of them is the app's own executable (directly in
+/// `Contents/MacOS/`): an Electron or Chromium app that was already running
+/// answers the request by starting a helper (a renderer, in
+/// `Contents/Frameworks/<Name> Helper.app/`). That helper alone is a hand-off
+/// — the running instance's process, not this launch's — and a row owned by
+/// it would have Close signal a renderer of an app the row never started.
+#[cfg(any(target_os = "macos", test))]
+fn bundle_members(
+    procs: impl IntoIterator<Item = (u32, PathBuf, u64)>,
+    bundle: &Path,
+    since: u64,
+) -> Vec<FamilyMember> {
+    let contents = bundle.join("Contents");
+    let own_dir = contents.join("MacOS");
+    let mut app_started = false;
+    let members: Vec<FamilyMember> = procs
+        .into_iter()
+        .filter(|(_, path, start)| *start >= since && path.starts_with(&contents))
+        .map(|(pid, path, start)| {
+            app_started |= path.parent() == Some(own_dir.as_path());
+            FamilyMember { pid, start }
+        })
+        .collect();
+    if app_started { members } else { Vec::new() }
+}
+
+#[cfg(target_os = "macos")]
+fn bundle_family_now(bundle: &Path, since: u64) -> Vec<FamilyMember> {
+    let bundle = bundle.canonicalize().unwrap_or_else(|_| bundle.to_path_buf());
+    let procs = crate::sysstat::parent_map().into_keys().filter_map(|pid| {
+        let path = pid_executable(pid)?;
+        let start = crate::sysstat::process_start(pid)?;
+        Some((pid, path, start))
+    });
+    bundle_members(procs, &bundle, since)
+}
+
+/// The executable `pid` runs (`proc_pidpath`), already resolved by the kernel.
+#[cfg(target_os = "macos")]
+fn pid_executable(pid: u32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `buf` is a live, writable buffer of exactly the length passed;
+    // the call writes at most that many bytes and returns how many.
+    let len = unsafe { libc::proc_pidpath(pid as libc::c_int, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    if len <= 0 {
+        return None;
+    }
+    buf.truncate(len as usize);
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buf)))
 }
 
 /// What happens to a tracked window's registry row when the child Tabtivity
@@ -323,10 +420,7 @@ fn watch_child_exit(
         };
         // Probes run OUTSIDE the lock: a walk of the process table and one
         // X11/OS window enumeration.
-        let family = match (&entry.launch_id, &track) {
-            (Some(launch_id), Some(track)) => launch_family_now(launch_id, track.since),
-            _ => Vec::new(),
-        };
+        let family = exit_family(&entry, track.as_ref());
         let (windows, clients) = window_scan();
         let adopted = if entry.window_id.is_none() {
             let pids: Vec<u32> = family.iter().map(|m| m.pid).collect();
@@ -356,6 +450,7 @@ fn watch_child_exit(
                 ExitAction::KeepDemoted(adopt) => {
                     if let Some(entry) = reg.windows.get_mut(&id) {
                         entry.pid = 0;
+                        entry.pid_start = None;
                         if adopt.is_some() {
                             entry.window_id = adopt;
                         }
@@ -367,6 +462,7 @@ fn watch_child_exit(
                 ExitAction::KeepFamily { lead, adopt } => {
                     if let Some(entry) = reg.windows.get_mut(&id) {
                         entry.pid = lead;
+                        entry.pid_start = family_start(&family, lead);
                         if adopt.is_some() {
                             entry.window_id = adopt;
                         }
@@ -706,6 +802,7 @@ fn open_file_blocking(
             launch_exec,
             path,
             pid,
+            (since != 0).then_some(since),
             project_id,
             window_id,
             origin,
@@ -729,6 +826,7 @@ fn open_file_blocking(
         "open-file".to_string(),
         path,
         0,
+        None,
         project_id,
         window_id,
         origin,
@@ -1725,7 +1823,8 @@ fn windows_script_command(script_path: &str, args: Option<&str>) -> Command {
 /// as `$0`, never inside the `-c` string, so a path with quotes cannot break it.
 #[cfg(not(target_os = "windows"))]
 fn unix_script_command(script_path: &str, args: Option<&str>) -> Command {
-    let mut cmd = Command::new("bash");
+    // Resolved here, not left to the child: the caller sets its `PATH`.
+    let mut cmd = crate::paths::command_no_window("bash");
     match args.map(str::trim).filter(|a| !a.is_empty()) {
         Some(extra) => {
             cmd.arg("-c")
@@ -2224,12 +2323,35 @@ pub fn close_tracked_window(
     if entry.pid == 0 {
         return Err("not closeable: no tracked pid".into());
     }
+    leader_unchanged(&entry, crate::services::proc_table::start_time(entry.pid))?;
     crate::terminal::reap_child_subtree(entry.pid, crate::terminal::ReapMode::Graceful);
     registry.lock_ok().windows.remove(&id);
     if let Some(notify) = notify {
         notify(entry.project_id.clone());
     }
     Ok(())
+}
+
+/// The start time the launch family recorded for `pid`, when it is a member.
+fn family_start(family: &[FamilyMember], pid: u32) -> Option<u64> {
+    family.iter().find(|m| m.pid == pid).map(|m| m.start)
+}
+
+/// Whether the process now under `row.pid` (its start time, `now`) is still the
+/// one the row recorded — the check [`close_tracked_window`] makes before it
+/// signals a subtree, so an app that exited and whose pid was reused is never
+/// taken for the row. Linux and macOS (the systems with a start time to
+/// compare; macOS since 2442o): there a row without a recorded start, or whose
+/// recorded start no longer matches, is refused. On Windows the check is
+/// skipped and Close keeps its behaviour of signalling the recorded pid.
+fn leader_unchanged(row: &TrackedWindow, now: Option<u64>) -> Result<(), String> {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+        return Ok(());
+    }
+    match (row.pid_start, now) {
+        (Some(recorded), Some(now)) if recorded == now => Ok(()),
+        _ => Err("not closeable: the app is no longer tracked".into()),
+    }
 }
 
 /// Backstop for the exit watcher: drop Apps-view rows in the given scope whose
@@ -2411,7 +2533,10 @@ fn prune_candidates(
             // The exit watcher owns a launcher that just died.
             Some(LaunchTrack { family: None, .. }) => {}
             Some(LaunchTrack { family: Some(family), .. }) => match live_lead(family) {
-                Some(lead) => w.pid = lead,
+                Some(lead) => {
+                    w.pid = lead;
+                    w.pid_start = family_start(family, lead);
+                }
                 None => dead.push((w.id.clone(), w.window_id, w.pid)),
             },
             None if !alive(w.pid) => dead.push((w.id.clone(), w.window_id, w.pid)),
@@ -2444,6 +2569,7 @@ fn apply_prune(reg: &mut WindowRegistry, dead: Vec<DeadRow>, list: &WindowList) 
             None => {
                 if let Some(w) = windows.get_mut(&id) {
                     w.pid = 0;
+                    w.pid_start = None;
                 }
             }
         }
@@ -2455,6 +2581,7 @@ fn track_opened_file(
     exec: String,
     path: String,
     pid: u32,
+    pid_start: Option<u64>,
     project_id: Option<String>,
     window_id: Option<u64>,
     origin: String,
@@ -2476,6 +2603,7 @@ fn track_opened_file(
         window_id,
         origin,
         launch_id: None,
+        pid_start,
     };
     registry.lock_ok().windows.insert(id, win.clone());
     Ok(win)
@@ -2648,6 +2776,7 @@ pub fn row_for_raised_window(
         window_id: Some(window_id),
         origin: ORIGIN_PROJECT_IDE.to_string(),
         launch_id: None,
+        pid_start: None,
     }
 }
 
@@ -2922,6 +3051,7 @@ mod tests {
             window_id,
             origin: origin.to_string(),
             launch_id: None,
+            pid_start: None,
         }
     }
 
@@ -3242,10 +3372,94 @@ mod tests {
         let list = || WindowList::Complete(Vec::new());
         prune_dead_windows_with(&mut reg, Some("p1"), |_| false, live_lead, list, false);
         assert_eq!(reg.windows["w0"].pid, 301);
+        assert_eq!(reg.windows["w0"].pid_start, Some(6), "the new lead's own start time");
         // Family dead, no window: gone.
         prune_dead_windows_with(&mut reg, Some("p1"), |_| true, |_| None, list, false);
         assert!(reg.windows.is_empty());
         assert!(reg.launches.is_empty(), "its launch bookkeeping goes with it");
+    }
+
+    /// 2442o: an `open -a` launch's family is the bundle's processes started
+    /// since the launch — the app and its helpers, never an instance that was
+    /// already running nor another app.
+    #[test]
+    fn a_bundle_launch_family_is_the_bundles_new_processes() {
+        let bundle = Path::new("/Applications/Code.app");
+        let procs = vec![
+            (10, PathBuf::from("/Applications/Code.app/Contents/MacOS/Electron"), 500),
+            (11, PathBuf::from("/Applications/Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"), 520),
+            (12, PathBuf::from("/Applications/Code.app/Contents/MacOS/Electron"), 100),
+            (13, PathBuf::from("/Applications/Codex.app/Contents/MacOS/Codex"), 600),
+            (14, PathBuf::from("/usr/bin/open"), 490),
+        ];
+        let family = bundle_members(procs, bundle, 480);
+        assert_eq!(family, vec![FamilyMember { pid: 10, start: 500 }, FamilyMember { pid: 11, start: 520 }]);
+        assert_eq!(family_lead(&family), Some(10), "the app, not its helper");
+        assert!(bundle_members(Vec::new(), bundle, 0).is_empty());
+        // A hand-off: the app was running since 100 and answered the request
+        // by starting a helper at 520. That helper is the running instance's,
+        // so the launch has no family (the row is demoted, as on Linux).
+        let handoff = vec![
+            (12, PathBuf::from("/Applications/Code.app/Contents/MacOS/Electron"), 100),
+            (11, PathBuf::from("/Applications/Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"), 520),
+        ];
+        assert!(bundle_members(handoff, bundle, 480).is_empty());
+        assert!(is_app_bundle("/Applications/Code.app") && is_app_bundle("/A/X.APP"));
+        assert!(!is_app_bundle("/usr/bin/code") && !is_app_bundle("/A/app"));
+    }
+
+    #[test]
+    fn close_refuses_a_leader_whose_pid_was_reused() {
+        let mut row = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        row.pid = 100;
+        // Same process: allowed (on Linux and macOS; Windows compares nothing).
+        row.pid_start = Some(77);
+        assert!(leader_unchanged(&row, Some(77)).is_ok());
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
+            // The pid now belongs to a process that started later.
+            let err = leader_unchanged(&row, Some(78)).unwrap_err();
+            assert!(err.contains("no longer tracked"), "{err}");
+            // The process is gone, or its start cannot be read.
+            assert!(leader_unchanged(&row, None).is_err());
+            // A row from before the start was recorded.
+            row.pid_start = None;
+            let err = leader_unchanged(&row, Some(77)).unwrap_err();
+            assert!(err.contains("no longer tracked"), "{err}");
+        } else {
+            // Windows keeps today's behaviour: no start to compare.
+            assert!(leader_unchanged(&row, Some(78)).is_ok());
+            row.pid_start = None;
+            assert!(leader_unchanged(&row, None).is_ok());
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn close_accepts_a_live_leader_with_its_recorded_start() {
+        let me = std::process::id();
+        let start = crate::services::proc_table::start_time(me).expect("own start time");
+        let mut row = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        row.pid = me;
+        row.pid_start = Some(start);
+        assert!(leader_unchanged(&row, crate::services::proc_table::start_time(me)).is_ok());
+        row.pid_start = Some(start + 1);
+        assert!(leader_unchanged(&row, crate::services::proc_table::start_time(me)).is_err());
+    }
+
+    #[test]
+    fn a_demoted_row_keeps_no_start_and_a_family_row_takes_its_lead_s() {
+        let family = [member(300, 5), member(301, 6)];
+        assert_eq!(family_start(&family, 301), Some(6));
+        assert_eq!(family_start(&family, 999), None);
+        // The pid-0 demotion of apply_prune drops the start with the pid.
+        let mut w = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        w.pid = 100;
+        w.pid_start = Some(9);
+        let mut reg = registry_of(vec![w]);
+        // A Wayland list is silent about a row without an X window id.
+        apply_prune(&mut reg, vec![("w0".into(), None, 100)], &WindowList::XWaylandOnly(Vec::new()));
+        assert_eq!(reg.windows["w0"].pid, 0);
+        assert_eq!(reg.windows["w0"].pid_start, None);
     }
 
     #[test]
@@ -4040,7 +4254,9 @@ mod tests {
     #[test]
     fn unix_script_command_runs_bare_without_args() {
         let cmd = unix_script_command("/p/run.sh", Some("   "));
-        assert_eq!(cmd.get_program().to_string_lossy(), "bash");
+        // Resolved, not the bare name (`augment_command_path` sets the PATH).
+        assert!(std::path::Path::new(cmd.get_program()).is_absolute(), "{:?}", cmd.get_program());
+        assert_eq!(std::path::Path::new(cmd.get_program()).file_stem(), Some(std::ffi::OsStr::new("bash")));
         let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(args, vec!["/p/run.sh"]);
     }

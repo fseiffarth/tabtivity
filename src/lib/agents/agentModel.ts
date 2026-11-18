@@ -27,18 +27,45 @@ export function claudeModelLabel(tag: string): string {
   return `${match[1][0].toUpperCase()}${match[1].slice(1)} ${match[2].slice(1).replace(/-/g, ".")}`;
 }
 
+/** The effort words Antigravity's ids end in, as its footer prints them. */
+const ANTIGRAVITY_EFFORT = /^(?:low|medium|high|xhigh|max)$/u;
+
+/**
+ * An Antigravity Gemini id in its footer's words: `gemini-3.8-flash-high` →
+ * `Gemini 3.8 Flash · high`, `gemini-3.1-flash-lite` → `Gemini 3.1 Flash Lite`.
+ * Its store names the model and effort as one id (`google_chat::agy_model`)
+ * while the footer prints `Gemini 3.8 Flash · high`; without this the same
+ * tab's tag changed with the source it was read from. Only that shape is
+ * worded — any other id (`claude-sonnet-4-6`) is left as it is, since the
+ * dialog's name for it (`Claude Sonnet 4.6 (Thinking)`) is not in the id.
+ */
+export function antigravityModelLabel(id: string): string {
+  const match = /^gemini-(\d+(?:\.\d+)?)((?:-[a-z]+)*)$/.exec(id);
+  if (!match) return id;
+  const words = match[2].split("-").filter(Boolean);
+  const effort = words.length > 0 && ANTIGRAVITY_EFFORT.test(words[words.length - 1]) ? words.pop() : undefined;
+  const name = ["Gemini", match[1], ...words.map((word) => `${word[0].toUpperCase()}${word.slice(1)}`)].join(" ");
+  return effort ? `${name} · ${effort}` : name;
+}
+
+/** Which CLI's words a stored model id is put in (`transcriptModelTag`). */
+export type ModelTagFamily = "claude" | "antigravity";
+
 /**
  * The tag for the model a stored session last answered with, when no screen
  * says which one it shows: the id shortened (`shortModelName`), and a Claude
- * session's put in its status line's words (`claudeModelLabel`). The one
- * fallback for every surface — the desktop's tab tag (and so the phone's tab
- * cards) and the phone's model chip — so a quiet tab is not `Fable 5.1` on its
- * card and `Fable` over its keyboard. Idempotent: a shortened id passes
- * through unchanged.
+ * or Antigravity session's put in its status line's words
+ * (`claudeModelLabel`, `antigravityModelLabel`). The one fallback for every
+ * surface — the desktop's tab tag (and so the phone's tab cards) and the
+ * phone's model chip — so a quiet tab is not `Fable 5.1` on its card and
+ * `Fable` over its keyboard. Idempotent: a shortened id passes through
+ * unchanged.
  */
-export function transcriptModelTag(id: string, claude: boolean): string {
+export function transcriptModelTag(id: string, family?: ModelTagFamily): string {
   const short = shortModelName(id);
-  return claude ? claudeModelLabel(short) : short;
+  if (family === "claude") return claudeModelLabel(short);
+  if (family === "antigravity") return antigravityModelLabel(short);
+  return short;
 }
 
 /**

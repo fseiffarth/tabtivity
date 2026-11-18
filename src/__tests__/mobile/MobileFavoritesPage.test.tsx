@@ -58,10 +58,11 @@ describe("Favorites page", () => {
     expect(folder.querySelector<HTMLElement>(".files-icon")?.getAttribute("style")).toContain("background");
   });
 
-  it("opens a file by its folder's listing, under its fresh token and back to the page", async () => {
+  it("opens a file by its one row, under its fresh token and back to the page", async () => {
     toggleFavorite("p1", PDF);
     const fresh = { name: "paper.pdf", kind: "application/pdf", size: 3, modified: 5, token: "fresh" };
     const fetch = host({
+      "/api/v1/projects/p1/files/entry": () => reply({ entry: fresh }),
       "/api/v1/projects/p1/files": () => reply({ entries: [fresh], truncated: false }),
       "/api/v1/projects/p1": () => reply(detail("Alpha")),
     });
@@ -70,15 +71,43 @@ describe("Favorites page", () => {
     const viewer = await screen.findByTestId("viewer");
     expect(viewer.dataset.ref).toBe("fresh");
     expect(JSON.parse(viewer.dataset.scope ?? "{}")).toEqual({ files: "p1" });
-    expect(fetch.mock.calls.map(([url]) => String(url))).toContain("/api/v1/projects/p1/files?dir=t-docs");
+    const asked = fetch.mock.calls.map(([url]) => String(url));
+    expect(asked).toContain("/api/v1/projects/p1/files/entry?name=paper.pdf&dir=t-docs");
+    expect(asked).not.toContain("/api/v1/projects/p1/files?dir=t-docs");
     fireEvent.click(screen.getByRole("button", { name: "Close viewer" }));
     expect(screen.queryByTestId("viewer")).toBeNull();
     expect(screen.getByRole("button", { name: PAPER })).toBeTruthy();
   });
 
+  it("asks an older desktop with no row route by listing the folder, as before", async () => {
+    toggleFavorite("p1", PDF);
+    const fresh = { name: "paper.pdf", kind: "application/pdf", size: 3, modified: 5, token: "fresh" };
+    const fetch = host({
+      "/api/v1/projects/p1/files/entry": () => new Response(null, { status: 404 }),
+      "/api/v1/projects/p1/files": () => reply({ entries: [fresh], truncated: false }),
+      "/api/v1/projects/p1": () => reply(detail("Alpha")),
+    });
+    render(<FavoritesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: PAPER }));
+    expect((await screen.findByTestId("viewer")).dataset.ref).toBe("fresh");
+    expect(fetch.mock.calls.map(([url]) => String(url))).toContain("/api/v1/projects/p1/files?dir=t-docs");
+  });
+
+  it("does not open a file that now stands where a starred folder was", async () => {
+    toggleFavorite("p1", FOLDER);
+    host({
+      "/api/v1/projects/p1/files/entry": () => reply({ entry: { name: "src", kind: "text/plain; charset=utf-8", size: 1, modified: 1, token: "t-file" } }),
+      "/api/v1/projects/p1": () => reply(detail("Alpha")),
+    });
+    render(<FavoritesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: SRC }));
+    expect((await screen.findByRole("dialog", { name: "src" })).textContent).toContain("was moved or deleted");
+  });
+
   it("opens a folder as the library standing in it", async () => {
     toggleFavorite("p1", FOLDER);
     host({
+      "/api/v1/projects/p1/files/entry": () => reply({ entry: { name: "src", kind: "dir", size: 0, modified: 1, token: "t-src2" } }),
       "/api/v1/projects/p1/files": () => reply({ entries: [{ name: "src", kind: "dir", size: 0, modified: 1, token: "t-src2" }], truncated: false }),
       "/api/v1/projects/p1": () => reply(detail("Alpha")),
     });
@@ -91,6 +120,7 @@ describe("Favorites page", () => {
   it("dims a moved favorite and offers to remove it", async () => {
     toggleFavorite("p1", PDF);
     host({
+      "/api/v1/projects/p1/files/entry": () => reply({ error: "file_not_found" }, 404),
       "/api/v1/projects/p1/files": () => reply({ entries: [], truncated: false }),
       "/api/v1/projects/p1": () => reply(detail("Alpha")),
     });

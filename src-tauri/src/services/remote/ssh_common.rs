@@ -1775,9 +1775,9 @@ pub fn parse_keygen_fingerprints(text: &str) -> Vec<HostKeyFingerprint> {
 /// `ssh-keyscan`, bounded by its own `-T` timeout so an unreachable host fails
 /// fast instead of hanging the modal.
 ///
-/// Returns the raw keyscan text alongside the fingerprints: accepting the host
-/// means appending exactly those lines to known_hosts, and re-scanning at that
-/// point would leave a window where the key shown is not the key stored.
+/// Returns the raw keyscan text alongside the fingerprints. Accepting the host
+/// ([`trust_host_key`]) scans again and keeps only a key whose fingerprint the
+/// user was shown, so the key stored is always the key shown.
 pub fn scan_host_keys(
     host: &str,
     port: Option<u16>,
@@ -1807,24 +1807,32 @@ pub fn scan_host_keys(
     Ok((scan, keys))
 }
 
-/// Record the user's acceptance of a host's key by appending the scanned
-/// known_hosts lines — the same thing `accept-new` would have done, done
-/// deliberately after the fingerprint was shown. Idempotent-ish: a duplicate line
-/// is harmless to OpenSSH, and the [`host_key_known`] gate stops calling this once
-/// the entry exists.
+/// Record the user's acceptance of a host's key by appending its known_hosts
+/// line — the same thing `accept-new` would have done, done deliberately after
+/// the fingerprint was shown. Idempotent-ish: a duplicate line is harmless to
+/// OpenSSH, and the [`host_key_known`] gate stops calling this once the entry
+/// exists.
 ///
-/// `scan` must be the text [`scan_host_keys`] returned, so the key stored is the
-/// key the user was shown.
-pub fn trust_host_key(scan: &str) -> Result<(), String> {
+/// Nothing the caller sends is written. The host is scanned again here, and
+/// only a line that is plainly this host's key (see [`plain_host_key_line`])
+/// *and* whose SHA256 fingerprint is one of `fingerprints` — the ones the user
+/// was shown — is stored. A host that now offers a different key stores
+/// nothing, so the re-scan opens no window for a key nobody saw.
+pub fn trust_host_key(host: &str, port: Option<u16>, fingerprints: &[String]) -> Result<(), String> {
     use std::io::Write;
 
-    let lines: Vec<&str> = scan
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .collect();
+    if fingerprints.is_empty() {
+        return Err("nothing to trust — no host key fingerprint was shown".to_string());
+    }
+    validate_arg("host", host)?;
+    let (resolved, resolved_port) = resolve_host_port(host, port);
+    let (scan, _) = scan_host_keys(host, port)?;
+    let lines = trusted_host_key_lines(&scan, &known_hosts_key(&resolved, resolved_port), fingerprints);
     if lines.is_empty() {
-        return Err("nothing to trust — the host key scan was empty".to_string());
+        return Err(format!(
+            "{resolved}:{resolved_port} no longer offers the key you were shown — nothing was \
+             trusted. Check its fingerprint again."
+        ));
     }
     let dir = crate::paths::home_dir().join(".ssh");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create ~/.ssh: {e}"))?;
@@ -1843,6 +1851,50 @@ pub fn trust_host_key(scan: &str) -> Result<(), String> {
         writeln!(f, "{line}").map_err(|e| format!("write known_hosts: {e}"))?;
     }
     Ok(())
+}
+
+/// The lines of an `ssh-keyscan` `scan` that may be stored for `host_field`
+/// (the [`known_hosts_key`] of the resolved host): each one plain (see
+/// [`plain_host_key_line`]) and carrying a key whose fingerprint is in `shown`.
+/// Pure, so the shapes it refuses are unit-tested.
+fn trusted_host_key_lines(scan: &str, host_field: &str, shown: &[String]) -> Vec<String> {
+    scan.lines()
+        .filter_map(|line| plain_host_key_line(line, host_field))
+        .filter(|(_, fingerprint)| shown.iter().any(|s| s == fingerprint))
+        .map(|(line, _)| line)
+        .collect()
+}
+
+/// One known_hosts line in the only shape trust writes: `<host field> <key
+/// type> <base64 key>`, rebuilt from those three tokens (any comment dropped).
+/// Refused: a marker (`@cert-authority`, `@revoked`), a host field other than
+/// exactly `host_field` — so no list, wildcard, negation or hashed entry — a
+/// key that does not decode, or one whose own type differs from the line's.
+/// Answers the line and the key's `SHA256:` fingerprint as `ssh-keygen -l`
+/// prints it.
+fn plain_host_key_line(line: &str, host_field: &str) -> Option<(String, String)> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    if host_field.is_empty() || host_field.contains(['*', '?', '!', ',', '@', '|']) {
+        return None;
+    }
+    let mut tok = line.split_whitespace();
+    let (host, key_type, blob) = (tok.next()?, tok.next()?, tok.next()?);
+    if host != host_field {
+        return None;
+    }
+    let key = base64::engine::general_purpose::STANDARD.decode(blob).ok()?;
+    // The key blob starts with its own type as an SSH string (u32 length + name).
+    let len = u32::from_be_bytes(key.get(..4)?.try_into().ok()?) as usize;
+    if key.get(4..4usize.checked_add(len)?)? != key_type.as_bytes() {
+        return None;
+    }
+    let fingerprint = format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD.encode(Sha256::digest(&key))
+    );
+    Some((format!("{host} {key_type} {blob}"), fingerprint))
 }
 
 #[cfg(test)]
@@ -2707,6 +2759,50 @@ mod tests {
             known_hosts_key("build.example", 2222),
             "[build.example]:2222"
         );
+    }
+
+    /// Trust writes only what was scanned for this very host and shown: a
+    /// marker line, a wildcard / list / negated / hashed host field, another
+    /// host, a key with a different fingerprint or a mislabelled key type are
+    /// all dropped, and a kept line loses its comment.
+    #[test]
+    fn trusted_host_key_lines_keep_only_the_shown_key_for_this_host() {
+        // A real ed25519 public key and the fingerprint `ssh-keygen -l` prints.
+        const KEY: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIGt7p/AMDVVgFojBxp+JQdWHrxf3xt9uM4upA0SVBD4a";
+        let shown = vec!["SHA256:+VRwsU3cnccea0hm3dopkqFqj/CPojow4BlTfqYufBQ".to_string()];
+        let host = "[build.example]:2222";
+        // A well-formed ed25519 key that was not shown: the same type, other bytes.
+        let other = {
+            use base64::Engine;
+            let mut blob = vec![0, 0, 0, 11];
+            blob.extend_from_slice(b"ssh-ed25519");
+            blob.extend_from_slice(&[0, 0, 0, 32]);
+            blob.extend_from_slice(&[7u8; 32]);
+            base64::engine::general_purpose::STANDARD.encode(blob)
+        };
+        let scan = format!(
+            "# build.example:2222 SSH-2.0-OpenSSH\n\
+             {host} ssh-ed25519 {KEY} comment\n\
+             @cert-authority * ssh-ed25519 {KEY}\n\
+             @revoked {host} ssh-ed25519 {KEY}\n\
+             * ssh-ed25519 {KEY}\n\
+             {host},other.example ssh-ed25519 {KEY}\n\
+             !{host} ssh-ed25519 {KEY}\n\
+             |1|c2FsdA==|aGFzaA== ssh-ed25519 {KEY}\n\
+             other.example ssh-ed25519 {KEY}\n\
+             {host} ssh-rsa {KEY}\n\
+             {host} ssh-ed25519 {other}\n\
+             {host} ssh-ed25519 not-base64\n"
+        );
+        assert_eq!(
+            trusted_host_key_lines(&scan, host, &shown),
+            vec![format!("{host} ssh-ed25519 {KEY}")]
+        );
+        // The unshown key is well-formed: it is dropped by its fingerprint alone.
+        assert!(plain_host_key_line(&format!("{host} ssh-ed25519 {other}"), host).is_some());
+        // Nothing shown, nothing kept; a wildcard "host" is never a field to match.
+        assert!(trusted_host_key_lines(&scan, host, &[]).is_empty());
+        assert!(trusted_host_key_lines(&format!("* ssh-ed25519 {KEY}"), "*", &shown).is_empty());
     }
 
     #[test]

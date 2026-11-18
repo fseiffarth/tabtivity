@@ -44,13 +44,59 @@ pub fn path_finder(os: OsKind) -> &'static str {
 /// root-owned system directories first — see [`helper_program`].
 pub fn command_no_window(bin: impl AsRef<OsStr>) -> Command {
     let bin = bin.as_ref();
+    let path = effective_path();
     let mut cmd = match helper_program(bin) {
         Some(program) => Command::new(program),
-        None => Command::new(bin),
+        None => command_on_path(bin, path.as_deref()),
     };
-    augment_command_path(&mut cmd);
+    if let Some(path) = path {
+        cmd.env("PATH", path);
+    }
     hide_command_window(&mut cmd);
     cmd
+}
+
+/// `Command::new(bin)` for a bare name the child will look up on `path`,
+/// with the lookup done here (Unix). The standard library spawns through
+/// `posix_spawn` only when it has nothing to do in the child, and a bare name
+/// paired with a changed `PATH` is something: it must search the child's
+/// `PATH`, so it falls back to `fork`. A `fork` of this process copies its
+/// page tables under the address-space lock while every other thread waits on
+/// that lock for its next page fault — measured on a 6 GB process, twelve
+/// spawns took 7 s and stalled another thread for 1–2 s at a time; the same
+/// twelve by absolute path took 15 ms. The Machines menu's sweep spawns
+/// several per host, which froze the window for half a minute.
+///
+/// The child still sees `bin` as its `argv[0]`. A `PATH` with a relative
+/// entry keeps the bare name: that lookup depends on the child's directory.
+pub(crate) fn command_on_path(bin: &OsStr, path: Option<&OsStr>) -> Command {
+    #[cfg(unix)]
+    if let Some(program) = path.and_then(|path| program_on_path(bin, path)) {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new(program);
+        cmd.arg0(bin);
+        return cmd;
+    }
+    let _ = path;
+    Command::new(bin)
+}
+
+/// The file `execvp` would run for the bare name `bin` on `path`: the first
+/// executable regular file. `None` for a name with a separator, an empty
+/// name, a miss, or a `path` with any relative entry.
+#[cfg(unix)]
+fn program_on_path(bin: &OsStr, path: &OsStr) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    if bin.is_empty() || bin.as_encoded_bytes().contains(&b'/') {
+        return None;
+    }
+    let dirs: Vec<PathBuf> = std::env::split_paths(path).collect();
+    if dirs.iter().any(|dir| !dir.is_absolute()) {
+        return None;
+    }
+    dirs.into_iter().map(|dir| dir.join(bin)).find(|candidate| {
+        fs::metadata(candidate).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    })
 }
 
 pub(crate) fn hide_command_window(_cmd: &mut Command) {
@@ -250,6 +296,10 @@ const MACOS_EXTRA_DIRS: &[&str] = &[
     "/Library/TeX/texbin",
 ];
 
+/// Where Ollama.app (ollama.com's `install.sh`, the download, Homebrew's
+/// cask) keeps the `ollama` CLI on macOS.
+pub const MACOS_OLLAMA_CLI_DIR: &str = "/Applications/Ollama.app/Contents/Resources";
+
 fn supplemental_path_dirs_for(
     os: OsKind,
     home: &Path,
@@ -278,6 +328,10 @@ fn supplemental_path_dirs_for(
             dirs.push(PathBuf::from(
                 "/Applications/Docker.app/Contents/Resources/bin",
             ));
+            // Ollama's own `install.sh` on macOS puts Ollama.app here and links
+            // its CLI into /usr/local/bin only through `sudo` when that dir is
+            // not the user's — which a headless install has no terminal for.
+            dirs.push(PathBuf::from(MACOS_OLLAMA_CLI_DIR));
         }
         OsKind::Windows => {
             if let Some(local) = local_app_data {
@@ -308,6 +362,9 @@ fn supplemental_path_dirs_for(
                         .join("bin"),
                 );
                 dirs.push(local.join("bin"));
+                // Where winget links the portable packages it installs; a
+                // fresh install is invisible to this process until relaunch.
+                dirs.push(local.join("Microsoft").join("WinGet").join("Links"));
             }
             if let Some(roaming) = app_data {
                 dirs.push(PathBuf::from(roaming).join("npm"));
@@ -326,11 +383,34 @@ fn supplemental_path_dirs_for(
                 // `qemu-system-*.exe` and `qemu-img.exe` here and adds nothing
                 // to PATH; the VM tier resolves them through this.
                 dirs.push(PathBuf::from(pf).join("qemu"));
+                // Docker Desktop and OpenVPN's installers add their `bin` to the
+                // machine PATH for *new* processes only.
+                dirs.push(PathBuf::from(pf).join("Docker").join("Docker").join("resources").join("bin"));
+                dirs.push(PathBuf::from(pf).join("OpenVPN").join("bin"));
             }
         }
         OsKind::Unix => {}
     }
     dirs
+}
+
+/// Directories searched *after* the inherited PATH: install dirs whose tools
+/// a version manager on PATH must keep shadowing. `%ProgramFiles%\nodejs` is
+/// where winget's `OpenJS.NodeJS.LTS` (the setup wizard's Node install) puts
+/// `node.exe`/`npm.cmd`; its MSI adds that dir to the machine PATH for *new*
+/// processes only, so without this every npm-based CLI install failed with
+/// "npm not found" until Tabtivity was relaunched. Behind PATH, not ahead of
+/// it: nvm-windows, Volta or fnm on the inherited PATH still pick the Node.
+fn fallback_path_dirs_for(os: OsKind, program_files: Option<&OsStr>) -> Vec<PathBuf> {
+    match (os, program_files) {
+        (OsKind::Windows, Some(pf)) => vec![PathBuf::from(pf).join("nodejs")],
+        _ => Vec::new(),
+    }
+}
+
+/// [`fallback_path_dirs_for`] this host.
+fn fallback_path_dirs() -> Vec<PathBuf> {
+    fallback_path_dirs_for(OsKind::current(), std::env::var_os("ProgramFiles").as_deref())
 }
 
 /// Directories prepended to every child process PATH. GUI-launched applications
@@ -349,6 +429,43 @@ pub fn extra_path_dirs() -> Vec<PathBuf> {
     if OsKind::current() != OsKind::Windows {
         dirs.extend(nvm_default_node_bin());
     }
+    if OsKind::current() == OsKind::Macos {
+        dirs.extend(version_manager_dirs(&home_dir(), &|var| std::env::var_os(var)));
+    }
+    dirs
+}
+
+/// The bin and shim dirs of the common version managers (2442y), which a
+/// Finder-launched app never sees because only the user's shell rc adds them:
+/// Volta, bun, pnpm, fnm's default alias, mise, asdf, pyenv, rbenv. Each
+/// honours the manager's own home variable. After Homebrew and the rest of
+/// the fixed list, so a tool found there keeps winning; a dir that does not
+/// exist costs one failed lookup. macOS only, like the rest of the Mac list
+/// (on Linux an extra dir would change which binary wins). Login-shell PATH
+/// import, the full fix, is deferred (32z). Pure over `env`.
+fn version_manager_dirs(home: &Path, env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let var = |name: &str, default: PathBuf| env(name).filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or(default);
+    let mut dirs = vec![
+        var("VOLTA_HOME", home.join(".volta")).join("bin"),
+        var("BUN_INSTALL", home.join(".bun")).join("bin"),
+        var("PNPM_HOME", home.join("Library").join("pnpm")),
+    ];
+    match env("FNM_DIR").filter(|v| !v.is_empty()) {
+        Some(dir) => dirs.push(PathBuf::from(dir).join("aliases").join("default").join("bin")),
+        None => {
+            for base in [
+                home.join("Library").join("Application Support").join("fnm"),
+                home.join(".local").join("share").join("fnm"),
+                home.join(".fnm"),
+            ] {
+                dirs.push(base.join("aliases").join("default").join("bin"));
+            }
+        }
+    }
+    dirs.push(var("MISE_DATA_DIR", home.join(".local").join("share").join("mise")).join("shims"));
+    dirs.push(var("ASDF_DATA_DIR", home.join(".asdf")).join("shims"));
+    dirs.push(var("PYENV_ROOT", home.join(".pyenv")).join("shims"));
+    dirs.push(var("RBENV_ROOT", home.join(".rbenv")).join("shims"));
     dirs
 }
 
@@ -435,6 +552,7 @@ pub fn effective_path() -> Option<std::ffi::OsString> {
     let current = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = extra_path_dirs();
     paths.extend(std::env::split_paths(&current));
+    paths.extend(fallback_path_dirs());
     std::env::join_paths(&paths).ok()
 }
 
@@ -455,10 +573,9 @@ fn resolve_in_dirs(
     exists: &impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     for dir in dirs {
-        let base = dir.join(bin);
-        if exists(&base) {
-            return Some(base);
-        }
+        // Extensions first: npm's Windows global dir holds `claude` (a POSIX
+        // sh script `CreateProcess` rejects with error 193) beside `claude.cmd`
+        // and `claude.ps1`, and the bare file must not shadow the launchable one.
         for ext in exts {
             if ext.is_empty() {
                 continue;
@@ -467,6 +584,10 @@ fn resolve_in_dirs(
             if exists(&cand) {
                 return Some(cand);
             }
+        }
+        let base = dir.join(bin);
+        if exists(&base) {
+            return Some(base);
         }
     }
     None
@@ -522,6 +643,7 @@ fn executable_search_dirs() -> Vec<PathBuf> {
     let shims = crate::services::agent_bin::bin_dir();
     let mut dirs: Vec<PathBuf> = extra_path_dirs().into_iter().filter(|d| *d != shims).collect();
     dirs.extend(std::env::split_paths(&current).filter(|d| *d != shims));
+    dirs.extend(fallback_path_dirs());
     dirs
 }
 
@@ -535,6 +657,25 @@ pub fn resolve_executable(bin: &str) -> Option<PathBuf> {
         std::env::var_os("PATHEXT").as_deref(),
         &|path| path.is_file(),
     )
+}
+
+/// The first `bin` in the directories of `path` (a `PATH` value) other than
+/// `skip`, by `os`'s rules ([`resolve_executable`]'s: PATHEXT first on
+/// Windows). Only `path` is walked, none of the directories this process
+/// would add itself: what `command -v` finds for a shell that dropped one
+/// directory from its PATH. For the agent shim's own lookup past the shim
+/// directory (`services::agent_shim::nested_real_cli`), where the caller's
+/// environment is an agent's and the added directories would be read off it.
+pub(crate) fn resolve_on_path_skipping(
+    os: OsKind,
+    path: &OsStr,
+    skip: &Path,
+    bin: &str,
+    pathext: Option<&OsStr>,
+    exists: &impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let dirs: Vec<PathBuf> = std::env::split_paths(path).filter(|d| d != skip).collect();
+    resolve_executable_in_dirs(os, &dirs, bin, pathext, exists)
 }
 
 /// One pass over the search path, for a caller asking about many binaries at
@@ -642,8 +783,12 @@ fn command_for_program_for(os: OsKind, program: &Path) -> Command {
         cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(program);
         cmd
-    } else {
+    } else if os == OsKind::Windows {
         Command::new(program)
+    } else {
+        // A bare name is looked up here: `augment_command_path` below sets
+        // the child's `PATH`, which would otherwise be a `fork` of the app.
+        command_on_path(program.as_os_str(), effective_path().as_deref())
     };
     augment_command_path(&mut cmd);
     hide_command_window(&mut cmd);
@@ -693,6 +838,34 @@ pub fn resolve_offpath_binary(bin: &str) -> Option<PathBuf> {
         std::env::var_os("PATHEXT").as_deref(),
         &|p| p.is_file(),
     )
+}
+
+/// `\\?\C:\dir` -> `C:\dir` and `\\?\UNC\srv\share` -> `\\srv\share`, or `None`
+/// when `raw` carries no verbatim prefix or is too long for the plain spelling
+/// (a path at or past `MAX_PATH` only works verbatim).
+fn strip_verbatim_prefix(raw: &str) -> Option<String> {
+    if raw.len() >= 260 {
+        return None;
+    }
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{rest}"));
+    }
+    let rest = raw.strip_prefix(r"\\?\")?;
+    let mut chars = rest.chars();
+    let drive = chars.next()?;
+    (drive.is_ascii_alphabetic() && chars.next() == Some(':') && chars.next() == Some('\\'))
+        .then(|| rest.to_string())
+}
+
+/// A `canonicalize`d path spelled the way programs expect. Windows returns
+/// `\\?\C:\…`, which `cmd.exe` refuses as a working directory, Git for Windows
+/// does not understand in `GIT_CEILING_DIRECTORIES` and the UI would show to the
+/// user. Unchanged elsewhere, and for a path only the verbatim form can name.
+pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return path;
+    }
+    path.to_str().and_then(strip_verbatim_prefix).map(PathBuf::from).unwrap_or(path)
 }
 
 pub fn home_dir() -> PathBuf {
@@ -828,7 +1001,11 @@ fn non_empty(value: Option<String>) -> Option<String> {
 /// A process that left the group and still holds a pipe cannot hold the call:
 /// the readers get a short grace after the child is gone, then whatever they
 /// read is all there is.
-pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) -> std::io::Result<std::process::Output> {
+///
+/// Never a `pre_exec` hook here: it forces a `fork` of the whole app
+/// ([`command_on_path`] has the numbers), and the Machines sweep runs every
+/// `ssh` through this.
+pub(crate) fn output_within(command: Command, limit: std::time::Duration) -> std::io::Result<std::process::Output> {
     use app_core::sync::LockExt;
     use std::time::{Duration, Instant};
     type Drained = (std::sync::Arc<std::sync::Mutex<Vec<u8>>>, std::thread::JoinHandle<()>);
@@ -856,6 +1033,10 @@ pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) ->
         }
         std::mem::take(&mut *bytes.lock_ok())
     }
+    #[cfg(target_os = "linux")]
+    let mut command = die_with_parent(command);
+    #[cfg(not(target_os = "linux"))]
+    let mut command = command;
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -865,8 +1046,6 @@ pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) ->
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    #[cfg(target_os = "linux")]
-    die_with_parent(&mut command);
     let mut child = command.spawn()?;
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
@@ -895,28 +1074,85 @@ pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) ->
     Ok(std::process::Output { status, stdout: collect(stdout), stderr: collect(stderr) })
 }
 
-/// Linux: arm `SIGKILL` for `command`'s child when this process dies
-/// ([`output_within`]). The kernel sends it when the spawning *thread* ends;
-/// `output_within` waits for the child on that thread, so the thread outlives
-/// it. The parent is checked right after arming, so a process that died
-/// between fork and exec is caught too (the child was reparented by then).
+/// A program the spawn paths put in front of another (`setpriv`, `setsid`):
+/// the root-owned system copy ([`system_executable`]). Test builds also take
+/// an unverified one from the same directories: the agent fence shows every
+/// root-owned file as `nobody`, which would leave the wrapped paths untested
+/// where the tests are written.
 #[cfg(target_os = "linux")]
-fn die_with_parent(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    let parent = std::process::id() as libc::pid_t;
-    // SAFETY: the closure runs between fork and exec and makes only
-    // async-signal-safe syscalls; it allocates nothing.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() != parent {
-                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
-            }
-            Ok(())
-        });
+pub(crate) fn spawn_wrapper(bin: &str) -> Option<PathBuf> {
+    let found = system_executable(bin);
+    #[cfg(test)]
+    let found = found.or_else(|| SYSTEM_BIN_DIRS.iter().map(|dir| Path::new(dir).join(bin)).find(|path| path.is_file()));
+    found
+}
+
+/// Linux: `command` started through the system's `setpriv --pdeathsig KILL`,
+/// so its child gets `SIGKILL` when this process dies ([`output_within`]).
+/// The kernel sends it when the spawning *thread* ends; `output_within`
+/// waits for the child on that thread, so the thread outlives it.
+///
+/// `setpriv` arms the signal and execs the program (same pid, same process
+/// group), so nothing else changes for the caller. It replaces a `pre_exec`
+/// `prctl`, which made every such spawn a `fork` of the whole app — see
+/// [`command_on_path`] for what that cost. Without a root-owned `setpriv`
+/// the command runs unarmed, as on the other OSes.
+///
+/// The signal is armed when `setpriv` starts, a moment after the spawn: a
+/// parent thread that ends within that moment is not covered (a `pre_exec`
+/// check of the parent pid was). Callers wait on the child, so theirs never
+/// ends first.
+///
+/// Carried over: program, arguments, environment changes and directory. Not
+/// carried over: stdio (set it on the result), `env_clear`, `pre_exec`, uid/gid
+/// (no caller uses them), and `arg0` — the program then sees its own path as `argv[0]`.
+/// (`services::sheet_reader` execs its own image through `/proc/self/fd/0`
+/// rather than `/proc/self/exe`, which would name `setpriv` here.)
+#[cfg(target_os = "linux")]
+pub(crate) fn die_with_parent(command: Command) -> Command {
+    static SETPRIV: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    let Some(setpriv) = SETPRIV.get_or_init(|| spawn_wrapper("setpriv")) else {
+        return command;
+    };
+    // A program that is not there fails the spawn itself (`NotFound`, which
+    // callers tell apart); behind the wrapper it would be an exit status.
+    if !program_exists(&command) {
+        return command;
     }
+    let mut armed = Command::new(setpriv);
+    armed.args(["--pdeathsig", "KILL", "--"]).arg(command.get_program()).args(command.get_args());
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => armed.env(key, value),
+            None => armed.env_remove(key),
+        };
+    }
+    if let Some(dir) = command.get_current_dir() {
+        armed.current_dir(dir);
+    }
+    armed
+}
+
+/// Whether `command`'s program is there to run: a path to an executable file,
+/// or a bare name found on the `PATH` the child will have. A `PATH` with a
+/// relative entry answers no (the lookup depends on the child's directory).
+#[cfg(target_os = "linux")]
+fn program_exists(command: &Command) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let program = command.get_program();
+    if program.as_encoded_bytes().contains(&b'/') {
+        let path = match command.get_current_dir() {
+            Some(dir) => dir.join(program),
+            None => PathBuf::from(program),
+        };
+        return fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+    }
+    let path = command
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new("PATH"))
+        .map(|(_, value)| value.map(OsStr::to_owned))
+        .unwrap_or_else(|| std::env::var_os("PATH"));
+    path.is_some_and(|path| program_on_path(program, &path).is_some())
 }
 
 /// Render a (typically canonicalized) path as the string handed to the frontend.
@@ -1032,8 +1268,28 @@ pub fn excluded_rel_set(excluded: &[String]) -> std::collections::HashSet<String
         .collect()
 }
 
+/// Whether Windows takes the path segment `segment` for a device, on every OS
+/// (a project synced to Windows must never carry one): its part before the
+/// first dot, trailing spaces dropped, any case, is `CON`, `PRN`, `AUX`,
+/// `NUL`, `CONIN$`, `CONOUT$`, or `COM`/`LPT` followed by one of `0`–`9`,
+/// `¹`, `²`, `³` (Win32 reads the superscripts as digits). `nul`, `CON.txt`,
+/// `com1.tar.gz` and `LPT³` are; `CONSOLE.txt` and `COM10` are not. A file
+/// named one can be created handle-relative, but Explorer can neither open
+/// nor delete it.
+pub fn is_windows_device_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment).trim_end().to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    let (Some(prefix), Some(port)) = (stem.get(..3), stem.get(3..)) else {
+        return false;
+    };
+    matches!(prefix, "COM" | "LPT")
+        && matches!(port, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
 
@@ -1120,6 +1376,25 @@ mod tests {
         let present = dirs[0].join("vibe.exe");
         let found = resolve_in_dirs(&dirs, "vibe", &["exe", "cmd", "bat"], &|p| p == present);
         assert_eq!(found, Some(present));
+    }
+
+    #[test]
+    fn resolve_in_dirs_prefers_a_windows_extension_over_the_bare_shim_script() {
+        let dirs = vec![PathBuf::from("npm")];
+        let bare = dirs[0].join("codex");
+        let cmd = dirs[0].join("codex.cmd");
+        let found = resolve_in_dirs(&dirs, "codex", &["exe", "cmd"], &|p| p == bare || p == cmd);
+        assert_eq!(found, Some(cmd));
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_stripped_only_where_the_plain_spelling_works() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users\a").as_deref(), Some(r"C:\Users\a"));
+        assert_eq!(strip_verbatim_prefix(r"\\?\UNC\srv\share\x").as_deref(), Some(r"\\srv\share\x"));
+        assert_eq!(strip_verbatim_prefix(r"C:\Users\a"), None);
+        assert_eq!(strip_verbatim_prefix(r"\\?\GLOBALROOT\Device"), None);
+        let long = format!(r"\\?\C:\{}", r"dir\".repeat(80));
+        assert_eq!(strip_verbatim_prefix(&long), None);
     }
 
     #[test]
@@ -1249,6 +1524,43 @@ mod tests {
         assert_eq!(resolve_nvm_version(None, &aliases, &[]), None);
     }
 
+    /// 2442y: the version managers a Finder-launched app cannot see, each at
+    /// its default home or the one its variable names.
+    #[test]
+    fn version_manager_dirs_follow_each_managers_home() {
+        let home = Path::new("/Users/alice");
+        let none = version_manager_dirs(home, &|_| None);
+        for rel in [
+            ".volta/bin",
+            ".bun/bin",
+            "Library/pnpm",
+            "Library/Application Support/fnm/aliases/default/bin",
+            ".local/share/fnm/aliases/default/bin",
+            ".fnm/aliases/default/bin",
+            ".local/share/mise/shims",
+            ".asdf/shims",
+            ".pyenv/shims",
+            ".rbenv/shims",
+        ] {
+            let want = rel.split('/').fold(home.to_path_buf(), |p, c| p.join(c));
+            assert!(none.contains(&want), "{rel}: {none:?}");
+        }
+        let set = |name: &str| match name {
+            "VOLTA_HOME" => Some(std::ffi::OsString::from("/v")),
+            "FNM_DIR" => Some(std::ffi::OsString::from("/f")),
+            "PYENV_ROOT" => Some(std::ffi::OsString::from("/py")),
+            "ASDF_DATA_DIR" => Some(std::ffi::OsString::new()),
+            _ => None,
+        };
+        let custom = version_manager_dirs(home, &set);
+        assert!(custom.contains(&Path::new("/v").join("bin")));
+        assert!(custom.contains(&Path::new("/py").join("shims")));
+        assert!(custom.contains(&Path::new("/f").join("aliases").join("default").join("bin")));
+        assert!(!custom.iter().any(|d| d.starts_with(home.join(".fnm"))), "FNM_DIR replaces the defaults");
+        // An empty variable is the default, not the current directory.
+        assert!(custom.contains(&home.join(".asdf").join("shims")));
+    }
+
     #[test]
     fn supplemental_paths_cover_all_supported_os_families() {
         let home = Path::new("/home/alice");
@@ -1264,6 +1576,8 @@ mod tests {
         assert!(mac.contains(&home.join(".docker").join("bin")));
         assert!(mac.contains(&home.join(".orbstack").join("bin")));
         assert!(mac.contains(&PathBuf::from("/Applications/Docker.app/Contents/Resources/bin")));
+        assert!(mac.contains(&PathBuf::from(MACOS_OLLAMA_CLI_DIR)));
+        assert!(!unix.contains(&PathBuf::from(MACOS_OLLAMA_CLI_DIR)));
         // The container dirs are the Mac's alone: Linux keeps its list unchanged.
         assert!(!unix.contains(&home.join(".docker").join("bin")));
         assert!(!unix.contains(&home.join(".orbstack").join("bin")));
@@ -1292,6 +1606,24 @@ mod tests {
             path.starts_with(r"C:\Program Files")
                 && path.ends_with(Path::new("MiKTeX/miktex/bin/x64"))
         }));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("Microsoft/WinGet/Links"))));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("Docker/Docker/resources/bin"))));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("OpenVPN/bin"))));
+    }
+
+    #[test]
+    fn winget_node_is_searched_after_path_on_windows_only() {
+        let pf = OsStr::new(r"C:\Program Files");
+        assert_eq!(
+            fallback_path_dirs_for(OsKind::Windows, Some(pf)),
+            vec![PathBuf::from(pf).join("nodejs")]
+        );
+        assert!(fallback_path_dirs_for(OsKind::Windows, None).is_empty());
+        assert!(fallback_path_dirs_for(OsKind::Macos, Some(pf)).is_empty());
+        assert!(fallback_path_dirs_for(OsKind::Unix, Some(pf)).is_empty());
+        // Never ahead of PATH: a version manager's Node keeps winning.
+        let ahead = supplemental_path_dirs_for(OsKind::Windows, Path::new(r"C:\Users\alice"), None, None, Some(pf));
+        assert!(!ahead.iter().any(|d| d.ends_with("nodejs")));
     }
 
     #[test]
@@ -1343,6 +1675,18 @@ mod tests {
         assert_eq!(exe.get_program(), OsStr::new(r"C:\tools\fmt.exe"));
     }
 
+    /// `command_for_program` sets the child's `PATH`, which would make a bare
+    /// name a `fork` of the whole app: the name is resolved first.
+    #[cfg(unix)]
+    #[test]
+    fn a_bare_program_is_resolved_before_its_path_is_set() {
+        let cmd = command_for_program(Path::new("sh"));
+        assert!(Path::new(cmd.get_program()).is_absolute(), "{:?}", cmd.get_program());
+        assert_eq!(Path::new(cmd.get_program()).file_name(), Some(OsStr::new("sh")));
+        let kept = command_for_program(Path::new("/no/such/dir/tool"));
+        assert_eq!(kept.get_program(), OsStr::new("/no/such/dir/tool"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn spawn_reaped_then_reports_the_exit_to_the_callback() {
@@ -1372,17 +1716,165 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
         let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
-        // Dead: gone from the table, or a zombie waiting for its new parent.
-        let gone = |pid: u32| {
+        // Dead: gone from the table, or a zombie (`Z`) or dying (`X`) task
+        // waiting for its new parent. A loaded CI runner (the whole suite
+        // in parallel) can take seconds to schedule the killed task's exit,
+        // so the wait is generous; a live state is reported on failure.
+        let state = |pid: u32| {
             std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .map(|stat| stat.rsplit(") ").next().is_some_and(|rest| rest.starts_with('Z')))
-                .unwrap_or(true)
+                .ok()
+                .and_then(|stat| stat.rsplit(") ").next().and_then(|rest| rest.chars().next()))
         };
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let gone = |pid: u32| state(pid).is_none_or(|s| matches!(s, 'Z' | 'X' | 'x'));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !gone(pid) && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(gone(pid), "the backgrounded sleep {pid} outlived the deadline");
+        assert!(gone(pid), "the backgrounded sleep {pid} outlived the deadline (state {:?})", state(pid));
+    }
+
+    /// A bare name is spawned by the path `execvp` would pick, so the
+    /// standard library can `posix_spawn` it instead of forking the whole app
+    /// (`command_on_path`); the child still sees the bare name as `argv[0]`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn command_no_window_spawns_a_bare_name_by_its_path() {
+        let mut cmd = command_no_window("sh");
+        assert!(Path::new(cmd.get_program()).is_absolute(), "{:?}", cmd.get_program());
+        assert_eq!(Path::new(cmd.get_program()).file_stem(), Some(OsStr::new("sh")));
+        let out = cmd.args(["-c", "cat /proc/$$/cmdline"]).output().expect("sh");
+        assert!(out.stdout.starts_with(b"sh\0-c\0"), "{:?}", String::from_utf8_lossy(&out.stdout));
+    }
+
+    /// `execvp`'s answer, or none: first executable regular file wins; a
+    /// non-executable file, a directory, a name with a separator and a PATH
+    /// with a relative entry (cwd-dependent) all leave the lookup to the child.
+    #[cfg(unix)]
+    #[test]
+    fn program_on_path_answers_what_execvp_would_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let (plain, dirs, exec) = (root.path().join("plain"), root.path().join("dirs"), root.path().join("exec"));
+        for dir in [&plain, &dirs, &exec] {
+            fs::create_dir(dir).unwrap();
+        }
+        fs::write(plain.join("tool"), "").unwrap();
+        fs::create_dir(dirs.join("tool")).unwrap();
+        fs::write(exec.join("tool"), "").unwrap();
+        fs::set_permissions(exec.join("tool"), fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([&plain, &dirs, &exec]).unwrap();
+        assert_eq!(program_on_path(OsStr::new("tool"), &path), Some(exec.join("tool")));
+        assert_eq!(program_on_path(OsStr::new("missing"), &path), None);
+        assert_eq!(program_on_path(OsStr::new("exec/tool"), &path), None);
+        assert_eq!(program_on_path(OsStr::new(""), &path), None);
+        let relative = std::env::join_paths([PathBuf::from("bin"), exec.clone()]).unwrap();
+        assert_eq!(program_on_path(OsStr::new("tool"), &relative), None);
+    }
+
+    /// `setpriv` arms the death signal and then execs the program, so the
+    /// child is armed once its name is the program's: a thread that ended
+    /// before that would leave nothing to signal.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn wait_until_armed(child: &std::process::Child, comm: &str) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::fs::read_to_string(format!("/proc/{}/comm", child.id())).is_ok_and(|name| name.trim() != comm) {
+            assert!(std::time::Instant::now() < until, "the wrapper never exec'd {comm}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// A missing program is still the spawn's `NotFound`, not a `setpriv`
+    /// exit status; one that is there is wrapped.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn die_with_parent_wraps_only_a_program_that_is_there() {
+        if spawn_wrapper("setpriv").is_none() {
+            eprintln!("skipped: no setpriv");
+            return;
+        }
+        for missing in ["no-such-binary-for-this-test", "/no/such/dir/tool"] {
+            let mut kept = die_with_parent(Command::new(missing));
+            assert_eq!(kept.get_program(), OsStr::new(missing));
+            assert_eq!(kept.spawn().expect_err("spawn").kind(), std::io::ErrorKind::NotFound);
+        }
+        let wrapped = die_with_parent(Command::new("sh"));
+        assert_eq!(Path::new(wrapped.get_program()).file_name(), Some(OsStr::new("setpriv")));
+    }
+
+    /// The death signal still holds without `pre_exec`: a child started
+    /// through `die_with_parent` is killed once its spawning thread is gone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_die_with_parent_child_dies_with_its_spawning_thread() {
+        if spawn_wrapper("setpriv").is_none() {
+            eprintln!("skipped: no setpriv");
+            return;
+        }
+        let mut child = std::thread::spawn(|| {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("30").env("DIE_WITH_PARENT_PROBE", "1");
+            let child = die_with_parent(cmd).spawn().unwrap();
+            wait_until_armed(&child, "sleep");
+            child
+        })
+        .join()
+        .unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(status.signal(), Some(libc::SIGKILL), "{status:?}");
+                return;
+            }
+            assert!(std::time::Instant::now() < until, "the child outlived its spawning thread");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// Source scan: a `pre_exec` hook makes `Command::spawn` `fork` the whole
+    /// app, which on a multi-GB process stalls every other thread (the window
+    /// included) for up to seconds per spawn (`command_on_path`). App-process
+    /// code spawns without one; the allowed files run in a small process of
+    /// their own or say where they do it why they still need it. A pty
+    /// slave's `spawn_command` is one too (`portable-pty` runs a hook in it):
+    /// `terminal::pty_child` is the one way to start a program in a pty.
+    #[test]
+    fn no_pre_exec_in_app_process_code() {
+        const PRE_EXEC_ALLOWED: &[&str] = &[
+            // The shell-tab shim is its own small process.
+            "agent_shim.rs",
+        ];
+        const SPAWN_COMMAND_ALLOWED: &[&str] = &["pty_child.rs"];
+        let (mut pre_exec, mut spawn_command) = (Vec::new(), Vec::new());
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut todo = vec![manifest.join("src"), manifest.join("..").join("src-core").join("src")];
+        while let Some(dir) = todo.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default().to_string();
+                if path.is_dir() {
+                    if name != "tests" {
+                        todo.push(path);
+                    }
+                    continue;
+                }
+                if !name.ends_with(".rs") || name == "tests.rs" {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).unwrap();
+                // Production code only: stop at the file's test module.
+                let body = text.split("#[cfg(test)]").next().unwrap_or_default();
+                let body = body.split("#[cfg(all(test").next().unwrap_or_default();
+                if body.contains(".pre_exec(") && !PRE_EXEC_ALLOWED.contains(&name.as_str()) {
+                    pre_exec.push(path.display().to_string());
+                }
+                if body.contains(".spawn_command(") && !SPAWN_COMMAND_ALLOWED.contains(&name.as_str()) {
+                    spawn_command.push(path.display().to_string());
+                }
+            }
+        }
+        assert!(pre_exec.is_empty(), "pre_exec in app-process code (forks the whole app): {pre_exec:?}");
+        assert!(spawn_command.is_empty(), "a pty spawn outside terminal::pty_child (forks the whole app): {spawn_command:?}");
     }
 
     /// A process that leaves the group and keeps a pipe open cannot hold a

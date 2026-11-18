@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useRef, useState } from "react";
 
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { useT } from "../../lib/i18n";
@@ -81,6 +82,17 @@ export function SyncConfirmDialog() {
     if (p && p.projectId !== activeId) cancel();
   }, [activeId, cancel]);
 
+  // The tracked-only case's "Sync Git now": its own busy/error, cleared once the
+  // ask closes (not on every store update — the preview landing is one).
+  const [gitBusy, setGitBusy] = useState(false);
+  const [gitError, setGitError] = useState<string | null>(null);
+  const open = !!pending;
+  useEffect(() => {
+    if (open) return;
+    setGitBusy(false);
+    setGitError(null);
+  }, [open]);
+
   const modalRef = useModalFocus(cancel, !!pending);
   if (!pending) return null;
   const { direction, isDir, relPath, label, relPaths, force, preview, doomed, loading, error } =
@@ -100,6 +112,30 @@ export function SyncConfirmDialog() {
   // Nothing to move — offer only a way out rather than a confirm button that
   // would transfer nothing.
   const empty = !!preview && preview.files === 0;
+  // Everything in scope is git-tracked and lockstep owns it: nothing may move as
+  // a byte copy, and the only transport that can deliver it is Git sync. Offer
+  // that instead of a dialog whose one button is Cancel.
+  const onlyTracked = !!preview && preview.files === 0 && preview.tracked > 0;
+  const syncGitNow = async () => {
+    setGitBusy(true);
+    setGitError(null);
+    try {
+      const state = await invoke<{ status?: string; detail?: string | null }>("git_peer_sync_now", {
+        projectId: pending.projectId,
+      });
+      // `Ok` is not "in step": a diverged or refused fast-forward comes back as a
+      // state, and closing on it would hide the one reason the files never land.
+      if (state?.status === "desynchronized") {
+        setGitError(t("syncConfirm.syncGitStuck", { detail: state.detail ?? "" }));
+        setGitBusy(false);
+        return;
+      }
+      cancel();
+    } catch (e) {
+      setGitError(t("syncConfirm.syncGitFailed", { error: String(e) }));
+      setGitBusy(false);
+    }
+  };
   // Does the receiving side actually hold anything this would replace? Only an
   // EXACT preview can answer: `exact: false` means the tree was too big to stat
   // up front, and a missing preview means the check hasn't landed (or failed).
@@ -247,12 +283,16 @@ export function SyncConfirmDialog() {
         <h2>
           {t(pull ? "syncConfirm.pullTitle" : "syncConfirm.pushTitle")} <UntestedTag id="syncConfirmDialog.2" />
         </h2>
-        <p>
-          {t(BODY_KEYS[pull ? "pull" : "push"][replaces ? "over" : "new"][scope], {
-            name: label,
-            count: relPaths?.length ?? 0,
-          })}
-        </p>
+        {/* A settled "nothing moves" has no headline to give: "will be copied to
+            the host" above "No loose files will transfer" contradicts itself. */}
+        {!empty && (
+          <p>
+            {t(BODY_KEYS[pull ? "pull" : "push"][replaces ? "over" : "new"][scope], {
+              name: label,
+              count: relPaths?.length ?? 0,
+            })}
+          </p>
+        )}
         <div className="file-delete-path">
           {relPaths
             ? relPaths.slice(0, 8).join(", ") +
@@ -264,11 +304,19 @@ export function SyncConfirmDialog() {
         {error && <p className="sync-confirm-note">{t("syncConfirm.previewFailed", { error })}</p>}
         {preview && <PreviewFacts preview={preview} pull={pull} />}
         {force && <p className="sync-confirm-note">{t("syncConfirm.forceNote")}</p>}
+        {gitError && (
+          <p className="sync-confirm-note">{gitError}</p>
+        )}
 
         <div className="file-delete-actions">
           <button type="button" onClick={cancel}>
-            {t("common.cancel")}
+            {t(empty ? "common.close" : "common.cancel")}
           </button>
+          {onlyTracked && (
+            <button type="button" disabled={gitBusy} onClick={() => void syncGitNow()}>
+              {t("syncConfirm.syncGit")} <UntestedTag id="syncConfirmDialog.4" />
+            </button>
+          )}
           {!empty && (
             <button
               type="button"

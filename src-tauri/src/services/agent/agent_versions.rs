@@ -64,18 +64,20 @@ pub const PROBE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// add an agent: run its `--version`, paste the output as the comment, add the
 /// line. Do not add one from a README.
 const VERSION_ARGV: &[(&str, &[&str])] = &[
-    // "opencode v2.2.5"
+    // "opencode v2.3.2"
     ("opencode", &["--version"]),
-    // "2.1.284 (Claude Code)"
+    // "2.1.319 (Claude Code)"
     ("claude", &["--version"]),
-    // "codex-cli 0.166.0"
+    // "codex-cli 0.170.0"
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
-    // "1.4.12" (1.2.9 through 1.4.11 printed the same bare shape)
+    // "1.5.0" (1.2.9 through 1.4.12 printed the same bare shape)
     ("antigravity", &["--version"]),
     // "Muse Code 1.3.0 (1.3.0-R3057.1)" — only with [`VERSION_ENV`]'s flag.
     ("muse", &["--version"]),
+    // "vibe 3.1.2" (Windows, uv tool shim, 2026-11-15)
+    ("vibe", &["--version"]),
 ];
 
 /// Environment a version probe sets for one agent, keyed like [`VERSION_ARGV`].
@@ -121,43 +123,53 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "opencode",
-        version: "2.2.5",
+        version: "2.3.2",
         surface: "§1.5 — launch flags, session plugin, stored messages and tools, TUI screens, Tabby's tool pin",
     },
     Verified {
         agent: "claude",
-        version: "2.1.316",
+        version: "2.1.327",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
         agent: "codex",
-        version: "0.166.0",
+        version: "0.170.0",
         surface: "§1.2 — mobile mode lines and Shift+Tab (agentModes.ts)",
     },
     Verified {
         agent: "codex",
-        version: "0.166.0",
+        version: "0.170.0",
         surface: "§1.2 — decision lamp: title repaints, numbered approval rows",
     },
     Verified {
         agent: "codex",
-        version: "0.166.0",
+        version: "0.170.0",
         surface: "§1.2 — the two-step /model sheet read off the screen",
     },
     Verified {
         agent: "codex",
-        version: "0.166.0",
+        version: "0.170.0",
         surface: "§1.2 — resume writer lock: a second writer refused, a killed one released",
     },
     Verified {
         agent: "antigravity",
-        version: "1.4.12",
+        version: "1.5.11",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
         agent: "copilot",
-        version: "1.0.105",
+        version: "1.0.114",
         surface: "§1.5 — -p/--session-id/--continue, session-state store, authTokens login layout",
+    },
+    Verified {
+        agent: "muse",
+        version: "1.4.23",
+        surface: "§1.5 — launcher's no-update switch, --model/--reasoning-effort, login file, the ⟩ menu lamp",
+    },
+    Verified {
+        agent: "vibe",
+        version: "3.1.3",
+        surface: "§1.5 — hooks.toml session hooks, --resume <id> and the unified store, VIBE_ACTIVE_MODEL, .vibe/AGENTS.md",
     },
 ];
 
@@ -729,6 +741,7 @@ mod tests {
     fn parses_the_version_lines_the_recipes_were_verified_against() {
         assert_eq!(parse_version("2.1.263 (Claude Code)").as_deref(), Some("2.1.263"));
         assert_eq!(parse_version("codex-cli 0.153.4").as_deref(), Some("0.153.4"));
+        assert_eq!(parse_version("vibe 3.1.2").as_deref(), Some("3.1.2"));
         assert_eq!(
             parse_version("0.0.393 Commit: ea52078").as_deref(),
             Some("0.0.393")
@@ -820,13 +833,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
-        let (state, stale) = drift("codex", Some("0.166.0"));
+        let (state, stale) = drift("codex", Some("0.170.0"));
         assert_eq!(state, DriftState::Match);
         assert!(stale.is_empty());
-        let (state, stale) = drift("codex", Some("0.166.1"));
+        let (state, stale) = drift("codex", Some("0.170.1"));
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
-        assert!(stale.iter().all(|note| note.version == "0.166.0" && note.direction == Direction::Newer));
+        assert!(stale.iter().all(|note| note.version == "0.170.0" && note.direction == Direction::Newer));
     }
 
     #[test]
@@ -838,10 +851,14 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.316")).0, DriftState::Match);
-        // `muse` has a recipe but no recorded check — the honest answer is
-        // "nobody has verified this", not a tick.
-        assert_eq!(drift("muse", Some("1.3.0")).0, DriftState::Unverified);
+        assert_eq!(drift("claude", Some("2.1.327")).0, DriftState::Match);
+        // A recipe with no recorded check — the honest answer is "nobody has
+        // verified this", not a tick.
+        assert_eq!(drift_in(&[], "muse", Some("1.3.0")).0, DriftState::Unverified);
+        // Muse's first check was 1.4.15 (now 1.4.23); the 1.3.0 many still run is older.
+        let (state, stale) = drift("muse", Some("1.3.0"));
+        assert_eq!(state, DriftState::Moved);
+        assert!(stale.iter().all(|note| note.direction == Direction::Older));
         assert_eq!(drift("claude", None).0, DriftState::Unknown);
     }
 

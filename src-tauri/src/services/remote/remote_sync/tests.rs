@@ -91,7 +91,7 @@ fn a_failed_manifest_save_after_a_transfer_never_reads_clean() {
     let host_now = Some((20, Some(200)));
     let local_now = Some((20, Some(201)));
     let m = cache.get_mut("p").unwrap();
-    record_pull(m, "f", 20, Some(200), 20, Some(201));
+    record_pull(m, "f", (20, Some(200)), (20, Some(201)));
     let err = save_or_mark_stale_at(&path, m, &["f".to_string()]).unwrap_err();
     assert_eq!(err, CHANGED_ELSEWHERE);
     // The caller's copy no longer vouches for the record.
@@ -109,7 +109,7 @@ fn a_failed_manifest_save_after_a_transfer_never_reads_clean() {
     // base would have read green against them).
     assert_eq!(compute_state(f, Some((10, Some(100))), Some((10, Some(100))), false), SyncState::Amber);
     // A later successful save goes through as usual.
-    record_pull(fresh, "f", 20, Some(200), 20, Some(201));
+    record_pull(fresh, "f", (20, Some(200)), (20, Some(201)));
     save_or_mark_stale_at(&path, fresh, &["f".to_string()]).expect("current again");
     assert_eq!(compute_state(&cache["p"]["f"], host_now, local_now, false), SyncState::Green);
 }
@@ -125,7 +125,7 @@ fn an_unwritable_manifest_forgets_the_unsaved_record() {
     let path = blocker.join("sync.json");
     let mut cache = HashMap::new();
     let m = ensure_loaded_at(&mut cache, "p", &path);
-    record_push(m, "f", 20, Some(200), 20, Some(201));
+    record_push(m, "f", (20, Some(200)), (20, Some(201)));
     assert!(save_or_mark_stale_at(&path, m, &["f".to_string()]).is_err());
     let host_now = Some((20, Some(200)));
     assert_eq!(compute_state(&m["f"], host_now, Some((20, Some(201))), false), SyncState::Amber);
@@ -235,7 +235,7 @@ fn the_mirror_walk_stops_at_a_nested_repo_or_worktree() {
     std::fs::write(nested.join("lib.rs"), b"x").unwrap();
 
     let mut out = Vec::new();
-    walk_mirror_inner(root, root, &mut out).unwrap();
+    walk_mirror_inner(root, root, &|_| false, &mut out).unwrap();
     out.sort();
     assert_eq!(
         out,
@@ -256,7 +256,7 @@ fn the_mirror_walk_does_not_stop_at_the_project_root_itself() {
     std::fs::write(root.join("sub/b.txt"), b"x").unwrap();
 
     let mut out = Vec::new();
-    walk_mirror_inner(root, root, &mut out).unwrap();
+    walk_mirror_inner(root, root, &|_| false, &mut out).unwrap();
     out.sort();
     assert_eq!(out, vec!["a.txt".to_string(), "sub/b.txt".to_string()]);
 }
@@ -765,6 +765,7 @@ fn rsync_pull_flags_land_only_listed_regular_files_within_the_listed_sizes() {
 
 /// The host tree both pull-path tests walk: two small files and one over
 /// the RAM cap, in walk order.
+#[cfg(unix)]
 fn host_tree_with_a_big_file(host: &Path) -> Vec<HostFile> {
     std::fs::create_dir_all(host.join("d")).unwrap();
     std::fs::write(host.join("a.txt"), b"a").unwrap();
@@ -1146,6 +1147,29 @@ fn host_new_candidates_caps_after_sorting() {
 }
 
 #[test]
+fn lockstep_unrecorded_lists_tracked_files_without_a_record() {
+    let mut m = Manifest::new();
+    m.insert(
+        "seeded.md".into(),
+        SyncEntry {
+            selected: true,
+            ..Default::default()
+        },
+    );
+    let tracked: HashSet<String> = ["seeded.md", "rgt/new.py", "DATASETS.md", "", "a.py"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    // The seeded file already has its row; the empty path is never a file.
+    assert_eq!(
+        lockstep_unrecorded(&m, &tracked, 100),
+        vec!["DATASETS.md".to_string(), "a.py".to_string(), "rgt/new.py".to_string()],
+    );
+    assert_eq!(lockstep_unrecorded(&m, &tracked, 1), vec!["DATASETS.md".to_string()]);
+    assert!(lockstep_unrecorded(&m, &HashSet::new(), 100).is_empty());
+}
+
+#[test]
 fn local_new_candidates_sorts_and_caps() {
     let m = Manifest::new();
     let all = vec!["b".to_string(), "c".to_string(), "a".to_string()];
@@ -1246,7 +1270,7 @@ fn compute_state_none_when_unselected() {
 #[test]
 fn record_pull_marks_selected_and_stamps_bases() {
     let mut m = Manifest::new();
-    record_pull(&mut m, "src/main.rs", 42, Some(7), 42, Some(9));
+    record_pull(&mut m, "src/main.rs", (42, Some(7)), (42, Some(9)));
     let e = m.get("src/main.rs").unwrap();
     assert!(e.selected);
     assert_eq!(e.host_size, 42);
@@ -1496,6 +1520,45 @@ fn is_auto_project_wide_root_marker_and_exclusions() {
     assert!(is_auto(&m, "vendor/keep/x.rs")); // explicit ON still wins
 }
 
+/// The auto walk may skip a folder only when no file below it is auto.
+#[test]
+fn the_auto_walk_skips_only_folders_with_no_auto_file_below() {
+    let dir = |auto_sync, auto_off, excluded| SyncEntry {
+        selected: true,
+        is_dir: true,
+        auto_sync,
+        auto_off,
+        excluded,
+        ..Default::default()
+    };
+    let mut m = Manifest::new();
+    m.insert("".to_string(), dir(true, false, false));
+    m.insert("data".to_string(), dir(false, false, true));
+    m.insert("data/configs".to_string(), dir(true, false, false));
+    m.insert("vendor".to_string(), dir(false, true, false));
+    // A file's own marker reaches nothing below it: a folder that took the
+    // path over still inherits the root's auto.
+    m.insert("was_file".to_string(), SyncEntry { auto_off: true, ..Default::default() });
+    m.insert("logs/keep.txt".to_string(), SyncEntry { auto_sync: true, ..Default::default() });
+    m.insert("logs".to_string(), dir(false, true, false));
+
+    let skip = auto_walk_skip(&m);
+    for (folder, file, skipped) in [
+        ("src", "src/main.rs", false),
+        ("data", "data/configs/a.yaml", false),
+        ("data/raw", "data/raw/big.bin", true),
+        ("data/configs", "data/configs/a.yaml", false),
+        ("vendor", "vendor/lib.rs", true),
+        ("vendor/deep", "vendor/deep/x.rs", true),
+        ("was_file", "was_file/x", false),
+        ("logs", "logs/keep.txt", false),
+        ("logs/old", "logs/old/a.log", true),
+    ] {
+        assert_eq!(skip(folder), skipped, "{folder}");
+        assert_eq!(is_auto(&m, file), !skipped, "{file}");
+    }
+}
+
 /// Why `commands::projects::clear_host_bound_state` must exist.
 ///
 /// A manifest entry is a claim about **one specific host**. Point the project at a
@@ -1643,7 +1706,7 @@ mod mirror_reads {
         std::fs::write(secret.path(), b"host login").unwrap();
         // The walk's view: a regular file in a regular folder.
         let mut listed = Vec::new();
-        walk_mirror_inner(root.path(), root.path(), &mut listed).unwrap();
+        walk_mirror_inner(root.path(), root.path(), &|_| false, &mut listed).unwrap();
         assert_eq!(listed, vec!["d/f.txt".to_string()]);
         // The leaf is swapped for a link to a file the agent cannot see.
         std::fs::remove_file(root.path().join("d").join("f.txt")).unwrap();
@@ -1676,5 +1739,105 @@ mod mirror_reads {
         assert_eq!(mirror_skips(&id).items, vec![skip("b")]);
         assert!(clear_mirror_skip(&id, "b"));
         assert_eq!(mirror_skips(&id), MirrorSkips::default());
+    }
+}
+
+/// A manual pull whose listed total exceeds the disk's free space is refused before
+/// a byte is written; one that fits (or whose disk cannot be read) is not. The
+/// mirror need not exist yet: the nearest existing ancestor is asked.
+#[test]
+fn a_pull_larger_than_the_free_space_is_refused_up_front() {
+    let dir = tempfile::tempdir().unwrap();
+    let mirror = dir.path().join("not").join("created").join("yet");
+    let refusal = pull_space_refusal(&mirror, u64::MAX).expect("a pull of u64::MAX bytes cannot fit");
+    assert!(refusal.contains("sync_pull_needs_space"), "{refusal}");
+    assert!(refusal.contains("TiB"), "{refusal}");
+    assert_eq!(pull_space_refusal(&mirror, 0), None);
+    assert_eq!(pull_space_refusal(dir.path(), 1), None);
+    assert_eq!(human_bytes(1536), "1.5 KiB");
+    assert_eq!(human_bytes(12), "12 B");
+}
+
+/// A re-pull replaces the mirror's own files, so the room it asks for is only their
+/// growth: a mirror already holding every file never asks for more than it has.
+#[test]
+fn a_pull_counts_only_what_the_mirror_does_not_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let mirror = dir.path();
+    std::fs::create_dir_all(mirror.join("d")).unwrap();
+    std::fs::write(mirror.join("d").join("held.bin"), vec![0u8; 100]).unwrap();
+    std::fs::write(mirror.join("shrunk.bin"), vec![0u8; 50]).unwrap();
+    let files = vec![
+        ("d/held.bin".to_string(), 100u64),
+        ("shrunk.bin".to_string(), 10),
+        ("d/grown.bin".to_string(), 30),
+        ("new.bin".to_string(), 7),
+    ];
+    assert_eq!(pull_bytes_needed(mirror, &files), 37, "held and shrunk add nothing");
+    assert_eq!(pull_bytes_needed(mirror, &[("../out.bin".to_string(), 5)]), 5, "an unconfined path counts in full");
+    assert_eq!(pull_bytes_needed(mirror, &[("d/held.bin".to_string(), 160)]), 60);
+}
+
+/// A same-size pair found different is remembered for exactly the stats it had:
+/// a moved mtime or size on either side, another file or another project reads
+/// the bytes again.
+#[test]
+fn a_known_different_pair_is_remembered_only_for_its_stats() {
+    let known = KnownDifferent::default();
+    let (host, local) = ((10, Some(100)), (10, Some(200)));
+    assert!(!known.holds("p", "a.bin", host, local));
+    known.note("p", "a.bin", host, local);
+    assert!(known.holds("p", "a.bin", host, local));
+    assert!(!known.holds("p", "a.bin", (10, Some(101)), local), "the host copy was rewritten");
+    assert!(!known.holds("p", "a.bin", host, (10, Some(201))), "the local copy was rewritten");
+    assert!(!known.holds("p", "b.bin", host, local));
+    assert!(!known.holds("q", "a.bin", host, local));
+    // The newer verdict replaces the older one.
+    known.note("p", "a.bin", (10, Some(101)), local);
+    assert!(!known.holds("p", "a.bin", host, local));
+    assert!(known.holds("p", "a.bin", (10, Some(101)), local));
+}
+
+/// 2442j: on Windows a host name the filesystem would not keep as itself is
+/// refused, never written under another name; Linux and macOS keep it.
+#[test]
+fn windows_hostile_mirror_names_are_refused_on_windows_only() {
+    for bad in ["aux.py", "src/nul", "COM1.txt", "lpt3", "notes.txt:hidden", "GIT~1/config", "trail.", "trail /x"] {
+        assert!(rel_components_for(true, bad).is_err(), "{bad:?}");
+        assert!(rel_components_for(false, bad).is_ok(), "{bad:?} is an ordinary name off Windows");
+    }
+    for ok in ["auxiliary.py", "src/null.c", "COM10", "draft~final.md", "a/b.txt", ".hidden"] {
+        assert!(rel_components_for(true, ok).is_ok(), "{ok:?}");
+    }
+}
+
+/// 2442j's case policy: the spelling already in the mirror stays, and a
+/// host path that differs from it only in case — the file or a folder above
+/// it — is refused, never written over it.
+#[test]
+fn a_case_only_collision_is_refused_and_the_first_spelling_stays() {
+    use std::ffi::{OsStr, OsString};
+    let root = Path::new("/m");
+    // What a case-insensitive filesystem holds: `Docs/README.md`.
+    let real = |p: &Path| -> Option<OsString> {
+        let rel = p.strip_prefix(root).ok()?.to_string_lossy().to_lowercase().replace('\\', "/");
+        match rel.as_str() {
+            "docs" => Some("Docs".into()),
+            "docs/readme.md" => Some("README.md".into()),
+            _ => None,
+        }
+    };
+    let check = |rel: &str| {
+        let parts: Vec<&OsStr> = rel.split('/').map(OsStr::new).collect();
+        refuse_case_collisions(root, &parts, rel, &real)
+    };
+    assert!(check("Docs/README.md").is_ok(), "the same spelling is the same file");
+    assert!(check("Docs/new.md").is_ok(), "a new file in the folder");
+    let err = check("Docs/readme.md").unwrap_err();
+    assert!(err.contains("'README.md'"), "{err}");
+    assert!(check("docs/other.md").unwrap_err().contains("'Docs'"), "a folder differing in case is refused too");
+    // Off Windows the filesystem is never asked.
+    if !cfg!(windows) {
+        assert_eq!(real_name_on_disk(Path::new("/")), None);
     }
 }

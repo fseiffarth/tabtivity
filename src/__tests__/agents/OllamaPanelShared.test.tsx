@@ -7,6 +7,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (e: { payload: unknown }) => void>(),
+  orphans: [] as { digest: string; size: number; path: string }[],
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -14,7 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "ollama_is_installed") return true;
     if (cmd === "list_ollama_models_detailed") return [];
     if (cmd === "list_pending_ollama_pulls") return [];
-    if (cmd === "list_orphan_partial_blobs") return [];
+    if (cmd === "list_orphan_partial_blobs") return h.orphans;
     return null;
   }),
 }));
@@ -41,6 +42,7 @@ beforeEach(() => {
     },
   );
   h.handlers.clear();
+  h.orphans = [];
   __resetOllamaActivityForTests();
 });
 afterEach(() => {
@@ -71,5 +73,20 @@ describe("Settings Ollama panel", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
     act(() => screen.getByRole("button", { name: "Resume" }).click());
     expect(useOllamaActivityStore.getState().paused).toEqual([]);
+  });
+
+  it("does not list a live pull's layer as an orphan", async () => {
+    h.orphans = [
+      { digest: "5c19f6282f4f", size: 2, path: "/b/sha256-5c19f6282f4f-partial" },
+      { digest: "aaaaaaaaaaaa", size: 1, path: "/b/sha256-aaaaaaaaaaaa-partial" },
+    ];
+    render(<OllamaPanel onBack={() => {}} onClose={() => {}} />);
+    await flush();
+    expect(screen.getByText("layer 5c19f6282f4f…")).toBeTruthy();
+    const pull = h.handlers.get("ollama-pull-progress")!;
+    act(() => pull({ payload: { model: "qwen:7b", status: "pulling 5c19f6282f4f", completed: 1, total: 4 } }));
+    await flush();
+    expect(screen.queryByText("layer 5c19f6282f4f…")).toBeNull();
+    expect(screen.getByText("layer aaaaaaaaaaaa…")).toBeTruthy();
   });
 });

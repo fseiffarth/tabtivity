@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { CalendarTask, Occurrence } from "../../types";
 import { useCalendarStore } from "../../stores/calendar/calendar";
+import { useViewShown } from "../../stores/rootOverlay";
 import { useSettingsStore } from "../../stores/settings";
 import { useTodoStore } from "../../stores/todo";
 import { formatTime, timePart } from "../../lib/calendar/calendarTime";
@@ -53,7 +54,7 @@ export function TodoAgendaRail({ tasks, defaultCalendarId, intakeColumnId }: Pro
   const events = useCalendarStore((s) => s.events);
   const calendars = useCalendarStore((s) => s.calendars);
   const calendarApp = useSettingsStore((s) => s.settings?.calendar_global_app ?? true);
-  const overlayOpen = useTodoStore((s) => s.overlayOpen);
+  const overlayOpen = useViewShown("todo");
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -135,7 +136,7 @@ export function TodoAgendaRail({ tasks, defaultCalendarId, intakeColumnId }: Pro
       {section(t("todoAgenda.today"), window_.today)}
       {section(t("todoAgenda.tomorrow"), window_.tomorrow)}
 
-      {/* Only when the calendar overlay can actually open — `CalendarOverlayHost`
+      {/* Only when the Calendar view can actually open — `viewEnabled("calendar")`
           computes `live = enabled && open`, so without the setting this button
           would be one that visibly does nothing. */}
       {calendarApp && (
@@ -143,7 +144,6 @@ export function TodoAgendaRail({ tasks, defaultCalendarId, intakeColumnId }: Pro
           type="button"
           className="cal-link-btn todo-agenda-open"
           onClick={() => {
-            useTodoStore.getState().closeOverlay();
             useCalendarStore.getState().openOverlay();
           }}
         >

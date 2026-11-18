@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { isAgentSort, sortAgentTabs } from "../../../shared/agentSort";
 import { claudeModelLabel, shortModelName } from "../../lib/agents/agentModel";
 
-interface Row { id: string; decision?: boolean; working?: boolean; drafted?: boolean; workingAt?: number; doneAt?: number }
-const keys = (row: Row) => ({ decision: row.decision, working: !!row.working, drafted: row.drafted, workingAt: row.workingAt, doneAt: row.doneAt });
+interface Row { id: string; decision?: boolean; ready?: boolean; working?: boolean; drafted?: boolean; workingAt?: number; doneAt?: number }
+const keys = (row: Row) => ({ decision: row.decision, ready: row.ready, working: !!row.working, drafted: row.drafted, workingAt: row.workingAt, doneAt: row.doneAt });
 const ids = (rows: Row[]) => rows.map((row) => row.id);
 
 describe("agent tab sorting (shared by the desktop and the phone)", () => {
@@ -36,6 +36,21 @@ describe("agent tab sorting (shared by the desktop and the phone)", () => {
     ];
     expect(ids(sortAgentTabs(asking, "lastWorking", keys)))
       .toEqual(["asking-2", "asking-1", "busy-2", "busy-1"]);
+  });
+
+  it("puts the ready tabs under the questions and over the working ones, newest finished turn first", () => {
+    const ready: Row[] = [
+      ...rows,
+      { id: "ready-old", ready: true, doneAt: 200 },
+      { id: "ready-new", ready: true, doneAt: 800 },
+      { id: "ready-unseen", ready: true },
+      { id: "asking", decision: true },
+      { id: "ready-draft", ready: true, drafted: true, doneAt: 100 },
+    ];
+    expect(ids(sortAgentTabs(ready, "lastWorking", keys)))
+      .toEqual(["asking", "ready-new", "ready-old", "ready-draft", "ready-unseen", "busy", "old", "recent", "quiet", "quiet-2"]);
+    // The other orders have no tiers, so being ready moves nothing there.
+    expect(ids(sortAgentTabs(ready, "native", keys))).toEqual(ids(ready));
   });
 
   it("lifts a tab holding a phone draft under the working ones, newest finished turn first among them", () => {

@@ -42,6 +42,8 @@ export interface TranscriptTurn {
   plan?: boolean;
   /** On an `answer`: the questions it asked, as answered. */
   questions?: readonly AskedQuestion[];
+  /** On a `questions` turn: still waiting for the reply (Codex's async question). */
+  asking?: boolean;
   /** A prompt sent from this phone the session has not recorded yet, by its
    * id; `failed` once the link lost it, `retrying` while a resend waits;
    * `held` while the desktop still holds it and its words can change;
@@ -84,15 +86,34 @@ export function commandArgsInline(args: string): boolean {
   return args.length <= 24 && !/\s/.test(args);
 }
 
-export function transcriptTurns(entries: readonly TranscriptEntry[]): TranscriptTurn[] {
+/** `transcriptTurns` by the `entries` array it was given. Every reader of a
+ * session (the chat, read-aloud, hands-free, the voice landing, the link
+ * list) asks for the turns of the same array on each update; an entries array
+ * is never changed in place once built (a change is a new array), and no
+ * caller changes the turns it gets back, so one pass serves them all. */
+const turnsCache = new WeakMap<readonly TranscriptEntry[], readonly TranscriptTurn[]>();
+
+export function transcriptTurns(entries: readonly TranscriptEntry[]): readonly TranscriptTurn[] {
+  const cached = turnsCache.get(entries);
+  if (cached) return cached;
+  const turns = buildTurns(entries);
+  turnsCache.set(entries, turns);
+  return turns;
+}
+
+function buildTurns(entries: readonly TranscriptEntry[]): TranscriptTurn[] {
   const seen = new Map<string, number>();
-  return entries.map((entry, index) => {
+  return entries.flatMap((entry, index): TranscriptTurn[] => {
+    // The question the agent is blocked on is the live card's (`askedQuestion`):
+    // a bubble of it beside the card would show it twice. Once answered the
+    // record loses the mark and is the ordinary card.
+    if (entry.blocking === true) return [];
     // A record without a time falls back to its position; two records that
     // share one stay apart by a count.
     const base = entry.at ? `${entry.kind}:${entry.at}` : `${entry.kind}#${index}`;
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
-    return {
+    return [{
       key: count === 0 ? base : `${base}~${count}`,
       kind: entry.kind,
       text: entry.text,
@@ -102,8 +123,8 @@ export function transcriptTurns(entries: readonly TranscriptEntry[]): Transcript
       command: entry.kind === "prompt" ? slashCommand(entry.text) : null,
       ...(entry.kind === "agent" ? { subagent: entry.subagent, role: entry.role, ...(entry.finished ? { finished: true } : {}), ...(entry.running ? { running: true } : {}), ...(entry.background ? { background: true } : {}), ...(entry.workflow ? { workflow: true } : {}), ...(entry.worktree ? { worktree: entry.worktree } : {}) } : {}),
       ...(entry.kind === "answer" && entry.plan === true ? { plan: true } : {}),
-      ...(entry.kind === "answer" && entry.questions?.length ? { questions: entry.questions } : {}),
+      ...(entry.kind === "answer" && entry.questions?.length ? { questions: entry.questions, ...(entry.asking ? { asking: true } : {}) } : {}),
       ...(entry.pending !== undefined ? { pending: entry.pending, failed: entry.failed === true, retrying: entry.retrying === true, ...(entry.held ? { held: true } : {}), ...(entry.queued ? { queued: true } : {}) } : {}),
-    };
+    }];
   });
 }

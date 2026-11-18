@@ -10,13 +10,16 @@ const h = vi.hoisted(() => ({
   listens: [] as string[],
   unlistens: [] as string[],
   handlers: new Map<string, (e: { payload: unknown }) => void>(),
+  versionStatus: null as unknown,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) =>
     cmd === "list_ollama_models_detailed"
       ? Promise.resolve([{ name: "qwen:7b", running: true }])
-      : Promise.resolve(null),
+      : cmd === "ollama_version_status"
+        ? Promise.resolve(h.versionStatus)
+        : Promise.resolve(null),
   ),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -47,11 +50,11 @@ beforeEach(() => {
 });
 
 describe("ollamaActivity", () => {
-  it("registers the two listeners once however many surfaces ask", async () => {
+  it("registers the listeners once however many surfaces ask", async () => {
     const a = initLocalModelEvents();
     const b = initLocalModelEvents();
     await flush();
-    expect(h.listens.sort()).toEqual(["ollama-load-progress", "ollama-pull-progress"]);
+    expect(h.listens.sort()).toEqual(["ollama-load-progress", "ollama-pull-progress", "ollama-release-checked"]);
     a();
     await flush();
     expect(h.unlistens).toEqual([]);
@@ -61,7 +64,7 @@ describe("ollamaActivity", () => {
     expect(h.unlistens).toEqual([]);
     b();
     await flush();
-    expect(h.unlistens.sort()).toEqual(["ollama-load-progress", "ollama-pull-progress"]);
+    expect(h.unlistens.sort()).toEqual(["ollama-load-progress", "ollama-pull-progress", "ollama-release-checked"]);
   });
 
   it("keeps downloads, pauses and loads in the store", async () => {
@@ -121,6 +124,24 @@ describe("ollamaActivity", () => {
     expect(useOllamaActivityStore.getState().version).toMatchObject({ latest: "0.15.0", update_available: false });
   });
 
+  it("takes a stored release check, and re-reads it when the daily check announces one", async () => {
+    const s = useOllamaActivityStore.getState();
+    const base = { install_cmd: "x", shell_kind: "", error: null };
+    // A stored answer wins over a carried-over one: the backend compared it.
+    s.setVersion({ current: "0.14.0", latest: "0.15.0", update_available: true, ...base });
+    s.mergeInstalledVersion({ current: "0.14.0", latest: "0.16.0", update_available: true, ...base });
+    expect(useOllamaActivityStore.getState().version).toMatchObject({ latest: "0.16.0", update_available: true });
+
+    const dispose = initLocalModelEvents();
+    await flush();
+    useOllamaActivityStore.setState({ installed: true });
+    h.versionStatus = { current: "0.14.0", latest: "0.17.0", update_available: true, ...base };
+    h.handlers.get("ollama-release-checked")?.({ payload: null });
+    await flush();
+    expect(useOllamaActivityStore.getState().version).toMatchObject({ latest: "0.17.0", update_available: true });
+    dispose();
+  });
+
   it("resets for tests", async () => {
     initLocalModelEvents();
     useOllamaActivityStore.setState({ installed: true, paused: ["x"], downloads: { y: { pct: 1, status: "pulling" } } });
@@ -133,6 +154,6 @@ describe("ollamaActivity", () => {
     h.listens.length = 0;
     initLocalModelEvents();
     await flush();
-    expect(h.listens).toHaveLength(2);
+    expect(h.listens).toHaveLength(3);
   });
 });

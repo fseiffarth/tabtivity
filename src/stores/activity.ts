@@ -262,6 +262,12 @@ export function noteScheduleProposal(ptyId: string): void {
   useActivityStore.getState().recompute();
 }
 const inputByPty: Record<string, number> = {};
+/// When the user marked the tab unread again (`markTabUnread`, the tab menu's
+/// "Mark as unread"). Holds as a `done` until somebody next deliberately opens
+/// the tab (`readAtByPty`) or types into it (`noteUserInput`); like every
+/// silence-born flag it stays dark while the tab is the visible one, so marking
+/// the tab in front of you lights it the moment you look away.
+const unreadMarkByPty: Record<string, number> = {};
 /// When the user cut the agent's turn off (an interrupt key while it was
 /// working, or on a pending prompt — see `noteUserInput`). An interrupted turn
 /// fires no Stop, so without this the tab went back to looking idle, exactly as
@@ -318,6 +324,8 @@ const backgroundAtByPty: Record<string, number> = {};
 /// answer a question — so it stood until the user typed. Agents with no hooks
 /// never raise this, and keep the screen check.
 const awaitingHookByPty: Record<string, number> = {};
+/** The input a pending `settleAnswer` belongs to, per PTY: a newer one takes over. */
+const answerSettleByPty: Record<string, number> = {};
 /// When the tab was last opened or resized — what makes its TUI repaint (see
 /// `REPAINT_SETTLE_MS`).
 const repaintAtByPty: Record<string, number> = {};
@@ -332,6 +340,12 @@ export function agentTurnStartedAt(ptyId: string): number | undefined {
 export function noteBackgroundWork(ptyId: string, at = Date.now()): void {
   if ((backgroundAtByPty[ptyId] ?? 0) < at) backgroundAtByPty[ptyId] = at;
   scheduleRecompute();
+}
+
+/** When work the tab's session left running (a subagent, a background shell)
+ *  was last seen alive, if ever: the stop sweep leaves such a tab running. */
+export function lastBackgroundWorkAt(ptyId: string): number | undefined {
+  return backgroundAtByPty[ptyId];
 }
 
 /** Whether a `working` after a Stop is the agent woken by the work it left
@@ -374,6 +388,7 @@ const PTY_MAPS: Record<string, unknown>[] = [
   seenAtByPty,
   bellByPty,
   proposalByPty,
+  unreadMarkByPty,
   inputByPty,
   interruptedByPty,
   readAtByPty,
@@ -382,6 +397,7 @@ const PTY_MAPS: Record<string, unknown>[] = [
   turnStartByPty,
   backgroundAtByPty,
   awaitingHookByPty,
+  answerSettleByPty,
   repaintAtByPty,
 ];
 
@@ -650,6 +666,28 @@ export function lastPtyOutputAt(ptyId: string): number | undefined {
   return lastOutputByPty[ptyId];
 }
 
+/** Mark an agent tab's output unread again: it reads as a finished turn
+ *  (`done`) until it is next opened or typed into. A popout forwards it to the
+ *  main window, whose store alone classifies. */
+export function markTabUnread(ptyId: string): void {
+  if (!splitPtyId(ptyId)) return;
+  if (isDetachedWindow()) {
+    void emit(DETACHED_ACTIVITY_EVENT, { ptyId, kind: "unread" });
+    return;
+  }
+  unreadMarkByPty[ptyId] = Date.now();
+  useActivityStore.getState().recompute();
+}
+
+/** When the user marked the tab unread (`markTabUnread`), while nobody has
+ *  opened it since; undefined otherwise. For the surfaces that judge "unread"
+ *  for themselves (`agentRoster`), which must honour the mark on the tab left
+ *  visible here too. */
+export function tabMarkedUnreadAt(ptyId: string): number | undefined {
+  const at = unreadMarkByPty[ptyId];
+  return at !== undefined && at > (readAtByPty[ptyId] ?? 0) ? at : undefined;
+}
+
 /** When the tab was last deliberately opened by a person (ms epoch), on either
  *  surface, or undefined if nobody has this session. Read-only view of
  *  `readAtByPty` for the surfaces that must decide "has anyone seen this turn?"
@@ -688,7 +726,7 @@ export function lastTabReadAt(ptyId: string): number | undefined {
  *  verdict, or for a tab with no hooks, bytes that read as working — marks the
  *  tab interrupted (see `interruptedByPty`). One on an idle composer (clearing
  *  the line) does not. */
-export function noteUserInput(ptyId: string, interrupt = false) {
+export function noteUserInput(ptyId: string, interrupt = false, dialog?: DialogInput) {
   // Group B #234: a popout's terminal reports to the classifier that lives in
   // the main window — the popout's own maps are never read by anything.
   if (isDetachedWindow()) {
@@ -696,6 +734,8 @@ export function noteUserInput(ptyId: string, interrupt = false) {
     return;
   }
   const now = Date.now();
+  // Typing into a tab reads it: a "Mark as unread" is retired.
+  delete unreadMarkByPty[ptyId];
   const turn = turnVerdict(ptyId, now);
   if (interrupt) {
     const inFlight = turn
@@ -704,15 +744,92 @@ export function noteUserInput(ptyId: string, interrupt = false) {
     if (inFlight) interruptedByPty[ptyId] = now;
   }
   inputByPty[ptyId] = now;
+  // Moving the highlight answers nothing: the question stands, hook or screen.
+  if (
+    !interrupt &&
+    dialog?.navigate &&
+    (turn?.state === "decision" || useActivityStore.getState().attentionByTab[ptyId] === "decision")
+  ) {
+    scheduleRecompute();
+    return;
+  }
   tailByPty[ptyId] = "";
   if (turn && (turn.state === "decision" || (interrupt && turn.state === "working"))) {
-    delete turnByPty[ptyId];
-    // The agent's next hook says what came of it (see `awaitingHookByPty`).
-    awaitingHookByPty[ptyId] = now;
+    if (!interrupt && turn.state === "decision" && dialog?.stillAsking) settleAnswer(ptyId, now, dialog.stillAsking);
+    else retireVerdict(ptyId, now);
   }
   // A retired verdict, a dropped tail or a fresh interrupted mark all move the
   // lamps; the trailing recompute picks them up.
   scheduleRecompute();
+}
+
+/** What a keystroke's caller can say about the dialog it may be answering
+ *  (`noteUserInput`). Given only by a pane the user is looking at: a hidden
+ *  pane's xterm is not fed, so its screen is stale. */
+export interface DialogInput {
+  /** An arrow, Tab or page key (`isDialogNavigationInput`). */
+  navigate?: boolean;
+  /** Whether the pane still shows a dialog, read off its live screen; null
+   *  when it cannot tell (no terminal). */
+  stillAsking?: () => boolean | null;
+}
+
+/** Arrows, Tab / Shift+Tab, Page Up / Down, Home / End: keys that move within
+ *  a dialog and never answer it. */
+export function isDialogNavigationInput(data: string): boolean {
+  return data === "\t" || /^\x1b(?:\[(?:1;\d+)?[A-DHFZ]|O[A-DHF]|\[[1456]~)$/u.test(data);
+}
+
+/** The agent's next hook says what came of an answered decision (see
+ *  `awaitingHookByPty`). */
+function retireVerdict(ptyId: string, at: number) {
+  delete turnByPty[ptyId];
+  awaitingHookByPty[ptyId] = at;
+}
+
+const SETTLE_POLLS = 10;
+const SETTLE_GAP_MS = 300;
+
+/**
+ * A keystroke on a decision keeps the verdict while the pane still shows a
+ * dialog. One question of several answered is the next question (Claude's
+ * AskUserQuestion pages through its questions and a review under the one
+ * `PermissionRequest`), and typing into its free-text row is still the
+ * question; neither fires a hook. Claude repaints by cell diff, so what it
+ * writes after the key never holds a whole dialog: the live screen is read
+ * instead, as the Reader reads it. Two reads with no dialog retire the verdict
+ * (an answer, a Cancel — which fires no hook at all); a hook since the input
+ * ends the wait; a dialog still up after ~3 s keeps it.
+ */
+function settleAnswer(ptyId: string, at: number, stillAsking: () => boolean | null) {
+  answerSettleByPty[ptyId] = at;
+  let empty = 0;
+  let polls = 0;
+  const poll = () => {
+    if (answerSettleByPty[ptyId] !== at) return;
+    // A hook since the input (the next dialog's request, the tool's end) has
+    // said what came of it.
+    const verdict = turnByPty[ptyId];
+    if (verdict?.state !== "decision" || verdict.at > at) {
+      delete answerSettleByPty[ptyId];
+      return;
+    }
+    const asking = stillAsking();
+    empty = asking === false ? empty + 1 : 0;
+    if (asking === null || empty >= 2) {
+      delete answerSettleByPty[ptyId];
+      retireVerdict(ptyId, at);
+      useActivityStore.getState().recompute();
+      return;
+    }
+    polls += 1;
+    if (polls >= SETTLE_POLLS) {
+      delete answerSettleByPty[ptyId];
+      return;
+    }
+    setTimeout(poll, SETTLE_GAP_MS);
+  };
+  setTimeout(poll, SETTLE_GAP_MS);
 }
 
 /** Record that a tab's agent session (re)started — its `SessionStart` hook
@@ -753,6 +870,19 @@ export function noteTurnCutOff(ptyId: string) {
   if (!splitPtyId(ptyId)) return;
   interruptedByPty[ptyId] = Date.now();
   useActivityStore.getState().recompute();
+}
+
+/** Record that the tab only reattached a session whose agent is mid-turn right
+ *  now (`pty_spawn`'s `turn`: the headless owner kept it running while no
+ *  window was open, or the window crashed). Its hook record is current, not a
+ *  leftover, and the watcher reports only changes: take its state as the
+ *  agent's verdict, as if the hook had just written it. */
+export function noteLiveTurn(ptyId: string, state: "working" | "decision") {
+  if (isDetachedWindow()) {
+    void emit(DETACHED_ACTIVITY_EVENT, { ptyId, kind: state === "working" ? "live-working" : "live-decision" });
+    return;
+  }
+  noteAgentTurn(ptyId, state);
 }
 
 /** Record that the tab's pane was resized: its agent repaints the screen, which
@@ -929,10 +1059,12 @@ function attentionFor(
   const bell = bellByPty[ptyId] ?? 0;
   const quiet = now - Math.max(out, bell);
   // A decision is read from the hook where the agent has one for it (Claude's
-  // permission notice) AND from the screen regardless: Codex has no such hook,
-  // so its approval menu sitting in a quiet tail is still the only sign — even
-  // under a "working" verdict, which its tool-use hook left standing while
-  // the tool waits on the user. Not after a Stop, though: a finished turn is
+  // and Codex's permission request, Vibe's, Copilot's and OpenCode's own) AND
+  // from the screen regardless: a Codex that has not trusted that hook yet,
+  // Antigravity and Muse have none, so the approval menu sitting in a quiet
+  // tail is still the only sign — even under a "working" verdict, which the
+  // tool-use hook left standing while the tool waits on the user. Not after a
+  // Stop, though: a finished turn is
   // back at its input box, so nothing on screen can be a pending approval —
   // and what IS on screen is the agent's own reply, which quotes menus (a
   // diff of this very classifier, a report on a prompt) often enough to light
@@ -972,6 +1104,7 @@ function attentionFor(
   // Past here everything is inferred from silence, which a watched tab's own
   // screen already tells the user better than a lamp could.
   if (lookedAt) return null;
+  if (tabMarkedUnreadAt(ptyId) !== undefined) return "done";
   if ((proposalByPty[ptyId] ?? 0) > seen) return "done";
   // With a hook verdict the question is only whether the finish is unread:
   // Stop fired after the user last had eyes on the tab. A verdict needs no

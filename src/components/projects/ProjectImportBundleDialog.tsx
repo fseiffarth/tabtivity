@@ -11,8 +11,11 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import type {
   BundleInfo,
   ImportBundleResult,
+  InspectedBundle,
   ProjectEntry,
+  SetInfo,
 } from "../../types";
+import { ProjectSetImportDialog } from "./ProjectSetImportDialog";
 import { ErrorNote } from "../common/ErrorNote";
 import { exportExtensions } from "../../lib/brandMigration";
 import { useBoxesStore } from "../../stores/boxes";
@@ -38,6 +41,8 @@ export function ProjectImportBundleDialog({
 }) {
   const t = useT();
   const [info, setInfo] = useState<BundleInfo | null>(null);
+  /** The picked file holds several projects: the set dialog takes over. */
+  const [projectSet, setProjectSet] = useState<SetInfo | null>(null);
   const [name, setName] = useState("");
   const [parent, setParent] = useState("");
   const [picking, setPicking] = useState(false);
@@ -65,9 +70,15 @@ export function ProjectImportBundleDialog({
     setBusy(true);
     setError("");
     try {
-      const read = await invoke<BundleInfo>("inspect_project_export", {
+      const inspected = await invoke<InspectedBundle>("inspect_project_bundle", {
         bundlePath: picked,
       });
+      if (inspected.kind === "set") {
+        setInfo(null);
+        setProjectSet(inspected.set);
+        return;
+      }
+      const read = inspected.info;
       setInfo(read);
       setName(read.name);
       setParent(read.suggestedParent);
@@ -112,6 +123,10 @@ export function ProjectImportBundleDialog({
       setBusy(false);
     }
   };
+
+  if (projectSet) {
+    return <ProjectSetImportDialog set={projectSet} onClose={onClose} onProject={onProject} />;
+  }
 
   return createPortal(
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>

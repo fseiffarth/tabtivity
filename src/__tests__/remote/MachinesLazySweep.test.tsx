@@ -3,7 +3,9 @@
  *
  *  - the list is on screen from memory, with no host asked anything, until the
  *    surface has settled (`SWEEP_SETTLE_MS`);
- *  - a pointer that only crosses the header logs in nowhere;
+ *  - a pointer that only crosses the header logs in nowhere, and one that does
+ *    not rest on the button (`HOVER_INTENT_MS`) does not even mount the list;
+ *  - reopening within the utilization poll's period reads no usage again;
  *  - each row takes its state when its OWN host answers, so one dead machine
  *    (a `ConnectTimeout` at least) holds up neither the other rows nor their
  *    busy readings; until then a row with no answer says "checking", one with an
@@ -27,17 +29,23 @@ import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHostBusyStore } from "../../stores/remote/hostBusy";
+import { targetKey } from "../../lib/remote/machineSync";
 
 const invokeMock = vi.mocked(invoke);
 const realProbeAll = useGlobalMachinesStore.getState().probeAll;
 const SETTLE_MS = 150;
+const INTENT_MS = 100;
 
 type Probe = { ok: boolean; unreachable: boolean; error: string };
 const UP: Probe = { ok: true, unreachable: false, error: "" };
 const DEAD: Probe = { ok: false, unreachable: true, error: "Connection timed out" };
 
+/** The pointer comes to rest on the button: the list opens after the intent. */
 function hover(container: HTMLElement) {
   fireEvent.mouseEnter(container.querySelector(".global-apps-menu")!);
+  act(() => {
+    vi.advanceTimersByTime(INTENT_MS);
+  });
 }
 
 const badges = (container: HTMLElement) =>
@@ -76,6 +84,51 @@ describe("Machines menu: list first, states after", () => {
   }
 
   const probesSent = () => invokeMock.mock.calls.filter(([cmd]) => cmd === "ssh_probe").length;
+  const usageReads = () =>
+    invokeMock.mock.calls.filter(([cmd]) => cmd === "global_machine_usage_check").length;
+
+  it("mounts nothing for a pointer that passes over the button without resting", async () => {
+    seed(["pass-1", "pass-2"]);
+    const { container } = render(<MachinesIndicator />);
+    const anchor = container.querySelector(".global-apps-menu")!;
+
+    fireEvent.mouseEnter(anchor);
+    act(() => {
+      vi.advanceTimersByTime(INTENT_MS - 1);
+    });
+    fireEvent.mouseLeave(anchor, { clientY: 10 });
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(useHeaderHoverMenuStore.getState().openId).toBeNull();
+    expect(container.querySelectorAll(".machines-indicator-row")).toHaveLength(0);
+    expect(probesSent()).toBe(0);
+  });
+
+  it("reads a Detailed machine's usage once per poll period, however often it reopens", async () => {
+    const id = "util-1";
+    useSettingsStore.setState({
+      settings: { machines_enabled: true, careful_hosts: { [targetKey({ host: `${id}.example.org` })]: false } } as never,
+      loaded: true,
+    });
+    seed([id], { [id]: "connected" }, { [id]: true });
+    invokeMock.mockImplementation(((cmd: string) =>
+      Promise.resolve(cmd === "ssh_probe" ? UP : null)) as never);
+    const { container } = render(<MachinesIndicator />);
+
+    hover(container);
+    await act(async () => {
+      vi.advanceTimersByTime(SETTLE_MS);
+    });
+    expect(usageReads()).toBe(1);
+
+    act(() => useHeaderHoverMenuStore.getState().close("machines"));
+    hover(container);
+    await act(async () => {
+      vi.advanceTimersByTime(SETTLE_MS);
+    });
+    expect(usageReads()).toBe(1);
+  });
 
   it("shows the list at once and asks no host until it has settled", async () => {
     seed(["show-1", "show-2"]);

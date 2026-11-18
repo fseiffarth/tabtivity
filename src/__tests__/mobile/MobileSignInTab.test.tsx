@@ -46,7 +46,27 @@ describe("reading a session's login state", () => {
   it("lets go once the sign-in went through, and ignores what scrolled away", () => {
     expect(readSignedOut(rows("Not logged in · Please run /login", "Login successful. Press Enter to continue"))).toBe(false);
     expect(readSignedOut(rows("Not logged in", ...Array.from({ length: 20 }, (_, i) => `line ${i}`)))).toBe(false);
+    expect(readSignedOut(rows("Login expired · Please run /login"))).toBe(true);
+    expect(readSignedOut(rows("Session has expired. Sign in again."))).toBe(true);
+    expect(readSignedOut(rows("OAuth token has expired"))).toBe(true);
     expect(readSignedOut(rows("All tests pass."))).toBe(false);
+  });
+
+  it("ignores the same words inside an agent's answer", () => {
+    expect(readSignedOut(rows(
+      "Cost",
+      "One more first-run step, and a new user who skips it lands in tabs that are not signed in. Ticked-by-default",
+      "rows keep that close to one click.",
+    ))).toBe(false);
+    expect(readSignedOut(rows("● If the token expired, you need to sign in again from Settings."))).toBe(false);
+    expect(readSignedOut(rows("  the tab is not logged in until the copy finishes"))).toBe(false);
+    // An answer quoting the message, and a diff of a test that spells it.
+    expect(readSignedOut(rows("  including Claude's \"Not logged in · Please run /login\", the login-method"))).toBe(false);
+    expect(readSignedOut(rows("      38 +    expect(readSignedOut(rows(\"Not logged in · Please run /login\"))).toBe(true);"))).toBe(false);
+    expect(readSignedOut(rows("  menu, and Antigravity's \"Authentication expired\"."))).toBe(false);
+    // The CLI's own messages still count behind its glyphs and labels.
+    expect(readSignedOut(rows("  ⎿  Not logged in · Please run /login"))).toBe(true);
+    expect(readSignedOut(rows("● Error: not logged in"))).toBe(true);
   });
 
   it("reads a success, never a 'not logged in'", () => {

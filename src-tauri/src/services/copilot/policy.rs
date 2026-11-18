@@ -13,6 +13,19 @@ pub enum PolicyError {
     SecretFile,
 }
 
+pub fn error_code(error: PolicyError) -> String {
+    match error {
+        PolicyError::Disabled => "copilot_disabled",
+        PolicyError::Remote => "copilot_remote_project",
+        PolicyError::NoConsent => "copilot_no_consent",
+        PolicyError::LocalOnly => "copilot_local_only",
+        PolicyError::InvalidPath => "copilot_invalid_path",
+        PolicyError::OutsideProject => "copilot_outside_project",
+        PolicyError::SecretFile => "copilot_secret_file",
+    }
+    .into()
+}
+
 /// `directory` and `remote` must come from the backend project resolver, not
 /// the command's payload or the file's apparent path. Recheck on every sync.
 pub fn authorize_project(
@@ -26,7 +39,8 @@ pub fn authorize_project(
     {
         return Err(PolicyError::Disabled);
     }
-    if remote {
+    if remote || settings.completion_project_policies.as_ref()
+        .and_then(|policies| policies.get(project_id)).is_some_and(|policy| policy.remote.is_some()) {
         return Err(PolicyError::Remote);
     }
     let policy = settings
@@ -65,9 +79,17 @@ pub fn text_consented(settings: &Settings, project_id: &str) -> bool {
         .is_some_and(|policy| policy.copilot_text)
 }
 
+/// Prose by its file name: these need the project's text consent whatever
+/// language the editor names. Judged on the path `authorize_document`
+/// returned; the renderer's language can add to it, never lift it. Pure.
+pub fn text_file(file: &Path) -> bool {
+    let extension = file.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase();
+    matches!(extension.as_str(), "md" | "markdown" | "mdx" | "tex" | "txt" | "rst")
+}
+
 /// Files that hold credentials rather than code or prose. No consent covers
 /// them: a project's `.env` or a key file never reaches the cloud.
-fn secret_shaped(file: &Path) -> bool {
+pub(super) fn secret_shaped(file: &Path) -> bool {
     let Some(name) = file.file_name().and_then(|name| name.to_str()) else {
         return true;
     };
@@ -167,6 +189,14 @@ mod tests {
     }
 
     #[test]
+    fn remote_consent_cannot_authorize_a_local_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = settings(dir.path());
+        config.completion_project_policies.as_mut().unwrap().get_mut("one").unwrap().remote = Some("remote-endpoint".into());
+        assert_eq!(authorize_project(&config, "one", dir.path(), false), Err(PolicyError::Remote));
+    }
+
+    #[test]
     fn consent_cannot_follow_a_repointed_project() {
         let one = tempfile::tempdir().unwrap();
         let two = tempfile::tempdir().unwrap();
@@ -208,6 +238,16 @@ mod tests {
             "completion_project_policies":{"one":{"directory":"/p","copilot":true,"copilot_text":true}}
         })).unwrap();
         assert!(text_consented(&raw, "one"));
+    }
+
+    #[test]
+    fn prose_files_are_judged_by_their_extension() {
+        for name in ["notes.md", "README.MD", "a.markdown", "page.mdx", "paper.tex", "todo.txt", "index.rst"] {
+            assert!(text_file(Path::new(name)), "{name}");
+        }
+        for name in ["main.rs", "app.ts", "Makefile", "notes.md.rs", "tex", ".txt.py"] {
+            assert!(!text_file(Path::new(name)), "{name}");
+        }
     }
 
     #[test]

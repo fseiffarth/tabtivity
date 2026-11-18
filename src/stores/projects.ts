@@ -41,6 +41,7 @@ import {
 import { restorableSavedTabs, savedLayoutTreeOf } from "./tabs/savedLayout";
 import type { LocalLaunch } from "./tabs/types";
 import { useRunHostPrefStore } from "./remote/runHostPref";
+import type { AgentPrivacyChange } from "../lib/projects/localModelsOnly";
 import { useTimerStore } from "./timer";
 import { useSettingsStore, whenSettingsLoaded } from "./settings";
 import { mayAutoTouch, targetOfSpec } from "../lib/remote/hpc/hpcHost";
@@ -65,6 +66,8 @@ import { connectionStillOpen, openConnectionInRoot } from "../lib/remote/remoteC
 import { loginDedupeKey, sshLogin, vpnLogin } from "../lib/remote/loginTarget";
 import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../lib/projects/scaffold";
 import type { SavedPasswordState } from "../lib/projects/useSavedCredential";
+import type { UntestedId } from "../lib/untested";
+import { localSessionsAvailableNow, mayOwnWindowsLocalSession } from "../lib/terminal/localSessions";
 import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
 import { translate, useI18nStore, translateNow } from "../lib/i18n";
@@ -937,14 +940,18 @@ export function projectTmuxTargets(
     const persistent =
       !!tab.tmuxSession &&
       (shouldPersistTab(tab.kind, hostId, project.remote, tab.ephemeral) ||
-        shouldPersistLocalTab(
+        // Windows: whatever the settings say now, a local agent tab may own a
+        // host session (its wrap was stamped when it was drawn).
+        (IS_HOST_WINDOWS
+          ? mayOwnWindowsLocalSession(tab.kind, project.id, localRunning)
+          : shouldPersistLocalTab(
           tab.kind,
           project.id,
           localRunning,
           localPersistenceEnabled,
           !!project[MOBILE_ACCESS_KEY],
           isResumableAgentTab(tab) || isRelaunchableLocalTab(tab) || isSavedWhileLive(tab),
-        ));
+        )));
     const session = tab.tmuxAttach ?? (persistent ? tab.tmuxSession : undefined);
     if (!session) continue;
     const targetHost = localRunning ? null : (hostId ?? "primary");
@@ -1088,6 +1095,11 @@ interface ProjectsStore {
   loaded: boolean;
   rootDir: string | null;
   switchToast: string | null;
+  /** One action offered on the toast that says `text` ("Undo" after a ✕ took a
+   *  project out of a box). Bound to the toast's own text, so a later toast
+   *  set by anyone else never inherits the button. `untested` names the
+   *  button's `UntestedTag`, if it has one. */
+  switchToastAction: { text: string; label: string; run: () => void; untested?: UntestedId } | null;
   /** A transient one-off action notice (e.g. "VPN connected · proj", a scaffold
    *  repair summary). Kept separate from `switchToast` so a project switch
    *  doesn't clobber it (and vice-versa). */
@@ -1147,6 +1159,12 @@ interface ProjectsStore {
    *  `agent_remote_control` setting. */
   setProjectRemoteControl: (id: string, remoteControl: boolean | null) => Promise<void>;
   setProjectScheduleMcp: (id: string, level: "off" | "propose" | "apply") => Promise<void>;
+  setProjectTabMessagesWake: (id: string, on: boolean) => Promise<void>;
+  /** Local models only / Cut network (`services::agent_privacy`). The backend
+   *  refuses (rejects with a message naming the project) when the project
+   *  cannot be covered, and ends the running agent tabs that are not a verified
+   *  local launch; those tabs are closed here too. */
+  setProjectAgentPrivacy: (id: string, localModelsOnly: boolean, cutNetwork: boolean) => Promise<AgentPrivacyChange>;
   /** The agent-push policy (`services::git_push_mcp`): level and protected
    *  branches; an omitted argument leaves that field alone. */
   setProjectGitPushMcp: (id: string, level?: GitPushMcpLevel, protectedBranches?: string[]) => Promise<void>;
@@ -1167,6 +1185,12 @@ interface ProjectsStore {
    *  Distinct from the project name: this labels the host, shown wherever a
    *  project's hosts are listed side by side (System Monitor, pill lamps). */
   setProjectRemoteLabel: (id: string, label: string) => Promise<void>;
+  /** Set (or clear, on blank) the **agent folder** of a remote project's primary
+   *  machine (`RemoteSpec.agent_dir`): where agent CLIs install and keep their
+   *  sessions instead of the login's home. Rejects an invalid path (not absolute,
+   *  `~`, `..`) with the backend's message. A worker's twin is
+   *  `patch_compute_host`'s `agentDir`. */
+  setProjectRemoteAgentDir: (id: string, agentDir: string) => Promise<void>;
   /** Set (or clear, on blank) the **SSH login name** a remote project's primary
    *  host is reached as. The address is fixed at creation, so this is the only way
    *  to correct a project created without a user (ssh then authenticates as the
@@ -1281,6 +1305,64 @@ export async function restoreProjectScope(project: ProjectEntry): Promise<void> 
 /** In-flight `restoreProjectScope` calls, keyed by scope. */
 const restoringScopes = new Set<string>();
 
+/**
+ * Stop the tabs of a CLOSED project that entering a box brought back
+ * (`openBox` restores closed members box-locally, their agents included). The
+ * project stays closed, as it was; what ends is what runs for it here: its
+ * local sessions, its PTYs, its panes. The layout is saved first, so the next
+ * entry into the box (or opening the project) restores the same tabs.
+ *
+ * `deactivateProject` cannot do this: it returns at once for a project that is
+ * already inactive, which is exactly this one. With `ask`, the stop dialog
+ * lists the tabs first (the pill menu's "Close project"); without, it is the
+ * box being left, which the user decided stops them (2026-11-16).
+ *
+ * `false` when there was nothing to stop or the user said no.
+ */
+export async function stopClosedProjectScope(id: string, opts: { ask: boolean }): Promise<boolean> {
+  if (deactivatingProjects.has(id)) return false;
+  const project = useProjectsStore.getState().projects.find((entry) => entry.id === id);
+  const tabsStore = useTabsStore.getState();
+  if (!project || project.status !== "inactive") return false;
+  if (!Object.prototype.hasOwnProperty.call(tabsStore.tabsByScope, id)) return false;
+  deactivatingProjects.add(id);
+  try {
+    const tabs = tabsStore.tabsByScope[id] ?? [];
+    const ptyTabs = tabs.filter((tab) => isPtyTabKind(tab.kind));
+    // Local sessions only, as closing a project: one on a remote host is left
+    // running (see `deactivateProject`).
+    const localTargets = projectTmuxTargets(project, tabs, localSessionsAvailableNow()).filter(
+      (target) => target.hostId === null,
+    );
+    if (opts.ask && (ptyTabs.length > 0 || localTargets.length > 0)) {
+      const ok = await useStopProjectStore.getState().request(
+        project.name,
+        ptyTabs.map((tab) => ({
+          key: tab.key,
+          label: tab.label,
+          kind: tab.kind,
+          location: effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
+        })),
+        localTargets.length,
+        0,
+      );
+      if (!ok) return false;
+    }
+    // Best effort from here on: nothing may veto leaving a box.
+    await tabsStore.persistScope(id, project.local_file).catch(() => {});
+    await Promise.allSettled(
+      localTargets.map((target) => invoke<void>("local_tmux_kill", { session: target.session })),
+    );
+    await invoke<string[]>("pty_kill_scope", { scope: id }).catch(() => {});
+    await tabsStore.unloadScope(id);
+    backgroundRestored.delete(id);
+    if (project.remote) dropRemotePool(id);
+    return true;
+  } finally {
+    deactivatingProjects.delete(id);
+  }
+}
+
 /** Project scopes this session has already tried to restore in the background.
  *  Tried, not restored: a project whose saved layout held nothing restorable
  *  creates no `tabsByScope` key (see `restoreProjectScope`), so without this it
@@ -1309,12 +1391,25 @@ const backgroundRestored = new Set<string>();
  * its pool comes up, exactly as it does on a switch today.
  */
 export async function restoreActiveProjectScopes(): Promise<void> {
-  for (const project of useProjectsStore.getState().projects) {
-    if (project.status !== "active") continue;
-    if (backgroundRestored.has(project.id)) continue;
-    backgroundRestored.add(project.id);
-    await restoreProjectScope(project).catch(() => {});
+  try {
+    for (const project of useProjectsStore.getState().projects) {
+      if (project.status !== "active") continue;
+      if (backgroundRestored.has(project.id)) continue;
+      backgroundRestored.add(project.id);
+      await restoreProjectScope(project).catch(() => {});
+    }
+  } finally {
+    activeScopesRestored = true;
   }
+}
+
+let activeScopesRestored = false;
+
+/** Whether the launch's pass over the active projects
+ *  ({@link restoreActiveProjectScopes}) has finished: the stop sweep's restore
+ *  wake ranks every restored agent tab at once, so it waits for this. */
+export function activeProjectScopesRestored(): boolean {
+  return activeScopesRestored;
 }
 
 /** §9.5: the ONE "patch one project entry in local state" helper behind every
@@ -1368,6 +1463,17 @@ async function removeProjectVia(id: string, unregister: () => Promise<unknown>):
   // kept the tunnel up for projects that weren't even connected. `releaseVpn`
   // counts actual holders.)
   releaseVpn(id, entry.remote?.openvpn?.config);
+  // End the LOCAL sessions its tabs own first, as `deactivateProject` does:
+  // closing a tab only detaches it (a pty_kill ends the client), and with the
+  // project gone no tab would ever reattach — a host agent would run on,
+  // orphaned. Best effort: ending an absent session is a no-op, and a failure
+  // must not keep the project from being removed. Remote sessions are left,
+  // as a stop leaves them.
+  {
+    const tabs = useTabsStore.getState().tabsByScope[id] ?? [];
+    const local = projectTmuxTargets(entry, tabs, localSessionsAvailableNow()).filter((target) => target.hostId === null);
+    await Promise.allSettled(local.map((target) => invoke<void>("local_tmux_kill", { session: target.session })));
+  }
   // Drop its tabs/PTYs/sessions (in memory; the backend discards the file).
   useTabsStore.getState().closeAllTabs(id);
   backgroundRestored.delete(id);
@@ -1405,6 +1511,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   loaded: false,
   rootDir: null,
   switchToast: null,
+  switchToastAction: null,
   connToast: null,
   sidePanelFolderByProject: {},
   switchGeneration: 0,
@@ -1688,7 +1795,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     }
   },
 
-  clearSwitchToast: () => set({ switchToast: null }),
+  clearSwitchToast: () => set({ switchToast: null, switchToastAction: null }),
 
   clearConnToast: () => set({ connToast: null }),
 
@@ -1744,9 +1851,8 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       const loaded = Object.prototype.hasOwnProperty.call(tabsStore.tabsByScope, id);
       const tabs = tabsStore.tabsByScope[id] ?? [];
       const ptyTabs = tabs.filter((tab) => isPtyTabKind(tab.kind));
-      const localPersistenceEnabled =
-        !IS_HOST_WINDOWS &&
-        useSettingsStore.getState().settings?.persist_local_sessions !== false;
+      const localPersistenceEnabled = localSessionsAvailableNow();
+      // (Read on Unix only: Windows targets key on the tab, see projectTmuxTargets.)
       const tmuxTargets = projectTmuxTargets(project, tabs, localPersistenceEnabled);
       // Closing a project stops what runs HERE. A persistent session on a remote
       // host is left running: surviving the desktop going away is what it is for,
@@ -1976,6 +2082,45 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     patchProject(id, (project) => ({ ...project, schedule_mcp: level }));
   },
 
+  setProjectTabMessagesWake: async (id, on) => {
+    await invoke("set_project_tab_messages_wake", { projectId: id, on });
+    patchProject(id, (project) => ({ ...project, tab_messages_wake: on || undefined }));
+  },
+
+  setProjectAgentPrivacy: async (id, localModelsOnly, cutNetwork) => {
+    const change = await invoke<AgentPrivacyChange>("set_project_agent_privacy", {
+      projectId: id,
+      localModelsOnly,
+      cutNetwork,
+    });
+    patchProject(id, (project) => {
+      const next = { ...project };
+      delete next.agent_privacy;
+      if (change.local_models_only || change.cut_network) {
+        next.agent_privacy = { local_models_only: change.local_models_only, cut_network: change.cut_network };
+      }
+      return next;
+    });
+    // The agents the backend ended lose their tabs too, not left dead: exactly the
+    // ones it names (PTY ids `<scope>:<tab key>`, in the project's own scope and in
+    // any other whose fence showed the folder: a parent project's, a box's, the root
+    // console's). Not every agent tab of the project: a verified local tab the
+    // backend kept alive (the switch turned off and on again with one open) would
+    // vanish while its process kept running.
+    if (change.local_models_only) {
+      const tabs = useTabsStore.getState();
+      const ended = new Set(change.closed_tabs);
+      for (const [scope, list] of Object.entries(tabs.tabsByScope)) {
+        for (const tab of list) {
+          if (ended.has(`${scope}:${tab.key}`)) {
+            tabs.removeTabInScope(scope, tab.key);
+          }
+        }
+      }
+    }
+    return change;
+  },
+
   setProjectGitPushMcp: async (id, level, protectedBranches) => {
     const policy = await invoke<GitPushMcpPolicy>("set_project_git_push_mcp", { projectId: id, level: level ?? null, protected: protectedBranches ?? null });
     patchProject(id, (project) => ({ ...project, git_push_mcp: policy }));
@@ -2027,6 +2172,14 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       label,
     });
     patchProjectRemote(id, (remote) => ({ ...remote, label: result ?? undefined }));
+  },
+
+  setProjectRemoteAgentDir: async (id, agentDir) => {
+    const result = await invoke<string | null>("set_project_remote_agent_dir", {
+      projectId: id,
+      agentDir,
+    });
+    patchProjectRemote(id, (remote) => ({ ...remote, agent_dir: result ?? undefined }));
   },
 
   setProjectRemoteUser: async (id, user) => {

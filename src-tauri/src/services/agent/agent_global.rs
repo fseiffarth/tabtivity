@@ -25,7 +25,8 @@
 //!
 //! [`import_from_user_home`] fills the layer from the user's own `~/.claude`,
 //! `~/.codex` and `~/.gemini`, plus the hook and plugin files the other CLIs
-//! read (Cursor, Droid, Copilot, OpenCode, Pi, Mistral Vibe) — so a tool the
+//! read (Cursor, Droid, Copilot, OpenCode, Pi, Mistral Vibe, Antigravity) and the shared
+//! `~/.agents/skills` (Codex, Copilot, OpenCode) — so a tool the
 //! user wired into their agents themselves (rtk's `rtk init -g`, say) reaches
 //! every Tabtivity agent too. One click, the one direction that is safe.
 //! Tabtivity's own session hooks are filtered out of what it imports; they are
@@ -62,6 +63,9 @@ const MERGED: &[(&str, Format)] = &[
     (".claude/settings.json", Format::Json),
     (".claude.json", Format::Json),
     (".codex/config.toml", Format::Toml),
+    // Codex reads hooks from here beside `config.toml` (`rtk init -g --codex`
+    // writes its hook here); Tabtivity registers its own in `config.toml`.
+    (".codex/hooks.json", Format::Json),
     (".gemini/settings.json", Format::Json),
     (".cursor/hooks.json", Format::Json),
     (".factory/hooks.json", Format::Json),
@@ -163,7 +167,16 @@ pub fn apply_to_home(state_dir: &Path, home: &Path) -> io::Result<()> {
                     }
                 }
             }
-            dst.write(&bytes)?;
+            // One file that cannot be written must not cost the rest of the
+            // layer — the merged configs below carry settings like Codex's
+            // Windows sandbox. A copy placed before stays recorded as ours.
+            if let Err(e) = dst.write(&bytes) {
+                eprintln!("agent_global: copy {rel} into {}: {e}", home.display());
+                if previous.files.contains(rel) {
+                    placed.push(rel.clone());
+                }
+                continue;
+            }
         }
         // Also repairs a copy an earlier spawn left non-executable.
         let _ = dst.set_exec_bits(exec_bits(&src));
@@ -537,8 +550,14 @@ const IMPORT_DIRS: &[&str] = &[
     ".codex/prompts",
     ".codex/rules",
     ".codex/skills",
+    // The shared user-skill folder Codex, Copilot and OpenCode read beside
+    // their own (Claude only offers to import from it).
+    ".agents/skills",
     ".gemini/commands",
     ".gemini/hooks",
+    // Antigravity's plugins (`rtk init -g --agent antigravity`); its hooks
+    // file beside them is Tabtivity's per home.
+    ".gemini/config/plugins",
     ".copilot/hooks",
     ".config/opencode/plugins",
     ".pi/agent/extensions",
@@ -807,6 +826,12 @@ pub fn import_from_user_home_in(state_dir: &Path, user_home: &Path) -> io::Resul
             report.configs += 1;
         }
     }
+    if let Some(mut hooks) = read_json(&user_home.join(".codex/hooks.json")).filter(Value::is_object) {
+        strip_app_json_hooks(&mut hooks, &hooks_dir);
+        if hooks.as_object().is_some_and(|o| !o.is_empty()) && write_layer_json(&layer, ".codex/hooks.json", &hooks) {
+            report.configs += 1;
+        }
+    }
     if let Some(mut settings) = read_json(&user_home.join(".gemini/settings.json")).filter(Value::is_object) {
         strip_app_json_hooks(&mut settings, &hooks_dir);
         if write_layer_json(&layer, ".gemini/settings.json", &settings) {
@@ -840,26 +865,95 @@ pub fn import_from_user_home() -> io::Result<ImportReport> {
 /// Marks that the first start of the Tabtivity-wide layer has run.
 const IMPORTED_MARKER: &str = ".agent_global_imported";
 
+/// Whether the first start of the layer has run, or the user answered the
+/// first-start question (`services::agent_import_offer`).
+pub(crate) fn import_marked_in(state_dir: &Path) -> bool {
+    state_dir.join(IMPORTED_MARKER).exists()
+}
+
+pub(crate) fn mark_imported_in(state_dir: &Path) {
+    let _ = std::fs::write(state_dir.join(IMPORTED_MARKER), b"");
+}
+
+/// Whether the layer under `state_dir` holds no file yet.
+pub(crate) fn layer_is_empty_in(state_dir: &Path) -> bool {
+    layer_files(&global_dir_in(state_dir)).is_empty()
+}
+
+/// The config folders of `user_home` that hold something
+/// [`import_from_user_home_in`] takes, home-relative (`.claude`, `.codex`,
+/// `.config/opencode`, …) and sorted: what the first-start question names.
+/// Presence only — nothing is copied, and the one file read is
+/// `~/.claude.json`, for whether it names an MCP server.
+pub(crate) fn import_sources_in(user_home: &Path) -> Vec<String> {
+    fn root(rel: &str) -> String {
+        let mut parts = rel.split('/');
+        let first = parts.next().unwrap_or(rel);
+        match (first, parts.next()) {
+            (".config", Some(second)) => format!(".config/{second}"),
+            _ => first.to_string(),
+        }
+    }
+    // A regular file directly in `dir` with one of `extensions`.
+    fn holds_file(dir: &Path, extensions: &[&str]) -> bool {
+        std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                let path = entry.path();
+                path.is_file()
+                    && path.extension().and_then(|e| e.to_str()).is_some_and(|e| extensions.contains(&e))
+            })
+        })
+    }
+    // An entry `take_dir` would not skip.
+    fn holds_entry(dir: &Path) -> bool {
+        std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.flatten().any(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        })
+    }
+    let mut found = std::collections::BTreeSet::new();
+    let claude = user_home.join(".claude");
+    let claude_mcp = read_json(&user_home.join(".claude.json"))
+        .and_then(|v| v.get("mcpServers").cloned())
+        .is_some_and(|s| s.as_object().is_some_and(|o| !o.is_empty()));
+    if holds_file(&claude, CLAUDE_TOP_EXTENSIONS) || claude.join("settings.json").is_file() || claude_mcp {
+        found.insert(".claude".to_string());
+    }
+    for dir in INSTRUCTION_DIRS {
+        if holds_file(&user_home.join(dir), &["md"]) {
+            found.insert(root(dir));
+        }
+    }
+    let files = [".codex/config.toml", ".codex/hooks.json", ".gemini/settings.json", ".vibe/hooks.toml"];
+    for rel in IMPORT_FILES.iter().chain(IMPORT_JSON).chain(&files) {
+        if user_home.join(rel).is_file() {
+            found.insert(root(rel));
+        }
+    }
+    for rel in IMPORT_DIRS {
+        if holds_entry(&user_home.join(rel)) {
+            found.insert(root(rel));
+        }
+    }
+    found.into_iter().collect()
+}
+
 /// The import, done once for the user at the first start with the layer, so
 /// agents keep their instructions, skills, hooks and MCP servers without a
 /// trip to Settings. Skipped when the layer already holds files (the user
 /// filled it); never repeated, so later edits to the layer are the user's.
+/// Only for an install that ran before: a fresh one is asked first
+/// (`services::agent_import_offer`).
 pub fn import_once_in(state_dir: &Path, user_home: &Path) {
-    let marker = state_dir.join(IMPORTED_MARKER);
-    if marker.exists() {
+    if import_marked_in(state_dir) {
         return;
     }
-    if layer_files(&global_dir_in(state_dir)).is_empty() {
+    if layer_is_empty_in(state_dir) {
         if let Err(e) = import_from_user_home_in(state_dir, user_home) {
             eprintln!("agent_global: first import: {e}");
             return;
         }
     }
-    let _ = std::fs::write(&marker, b"");
-}
-
-pub fn import_once() {
-    import_once_in(&storage::state_dir(), &crate::paths::home_dir());
+    mark_imported_in(state_dir);
 }
 
 /// What the Settings row shows.
@@ -1018,6 +1112,24 @@ mod tests {
         apply_to_home(&state, &home).unwrap();
         assert!(!home.join(".claude/skills/a/SKILL.md").exists());
         assert!(home.join(".claude/CLAUDE.md").is_file());
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_written_does_not_cost_the_rest_of_the_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        let layer = global_dir_in(&state);
+        write(&layer.join(".claude/CLAUDE.md"), "global");
+        write(&layer.join(".claude/skills/a/SKILL.md"), "skill");
+        write(&layer.join(".codex/config.toml"), "[windows]\nsandbox = \"elevated\"\n");
+        // A directory where the first file goes: its write fails.
+        write(&home.join(".claude/CLAUDE.md/inside"), "x");
+        apply_to_home(&state, &home).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join(".claude/skills/a/SKILL.md")).unwrap(), "skill");
+        let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(codex.contains("sandbox = \"elevated\""), "{codex}");
+        assert!(home.join(MANIFEST).is_file());
     }
 
     #[cfg(unix)]
@@ -1211,6 +1323,26 @@ mod tests {
     }
 
     #[test]
+    fn import_sources_name_only_folders_holding_something_to_take() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user");
+        assert!(import_sources_in(&user).is_empty());
+        write(&user.join(".claude").join("CLAUDE.md"), "mine");
+        write(&user.join(".config").join("opencode").join("plugins").join("rtk.ts"), "x");
+        // Not config: a transcript folder, a CLI's own bundled skills, state.
+        write(&user.join(".gemini").join("tmp").join("chat.json"), "{}");
+        write(&user.join(".codex").join("skills").join(".system").join("a.md"), "x");
+        write(&user.join(".claude.json"), r#"{"numStartups":3}"#);
+        assert_eq!(import_sources_in(&user), [".claude", ".config/opencode"]);
+        // Nothing was copied anywhere by asking.
+        assert!(!tmp.path().join("state").exists());
+
+        let mcp = tmp.path().join("mcp");
+        write(&mcp.join(".claude.json"), r#"{"mcpServers":{"x":{"command":"y"}}}"#);
+        assert_eq!(import_sources_in(&mcp), [".claude"]);
+    }
+
+    #[test]
     fn first_start_imports_once_and_never_over_a_filled_layer() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
@@ -1244,11 +1376,22 @@ mod tests {
         write(&user.join(".claude/history.jsonl"), "{}");
         write(&user.join(".claude/skills/s/SKILL.md"), "skill");
         write(&user.join(".codex/skills/.system/x.md"), "bundled");
+        write(&user.join(".agents/skills/shared/SKILL.md"), "shared skill");
         write(&user.join(".codex/AGENTS.md"), "codex\n@/home/u/.codex/RTK.md");
         write(&user.join(".codex/RTK.md"), "rtk");
         write(&user.join(".codex/auth.json"), "{}");
         // What `rtk init -g` leaves for the other CLIs.
         write(&user.join(".gemini/hooks/rtk-hook-gemini.sh"), "#!/bin/bash\nexec rtk hook gemini");
+        write(&user.join(".gemini/config/plugins/rtk/plugin.json"), r#"{"name": "rtk"}"#);
+        write(&user.join(".gemini/config/plugins/rtk/hooks.json"), r#"{"rtk-rewrite": {"enabled": true}}"#);
+        write(
+            &user.join(".codex/hooks.json"),
+            &json!({"hooks": {
+                "SessionStart": [{"hooks": [{"type": "command", "command": hooks}]}],
+                "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook codex"}]}]
+            }})
+            .to_string(),
+        );
         write(
             &user.join(".cursor/hooks.json"),
             r#"{"version": 1, "hooks": {"preToolUse": [{"command": "rtk hook cursor", "matcher": "Shell"}]}}"#,
@@ -1281,12 +1424,13 @@ mod tests {
             ),
         );
         let report = import_from_user_home_in(&state, &user).unwrap();
-        assert_eq!(report, ImportReport { files: 7, configs: 5 });
+        assert_eq!(report, ImportReport { files: 10, configs: 6 });
         let layer = global_dir_in(&state);
         assert!(layer.join(".claude/CLAUDE.md").is_file());
         assert!(layer.join(".claude/RTK.md").is_file());
         assert!(layer.join(".claude/statusline.sh").is_file());
         assert!(layer.join(".claude/skills/s/SKILL.md").is_file());
+        assert!(layer.join(".agents/skills/shared/SKILL.md").is_file());
         assert!(!layer.join(".claude/.credentials.json").exists());
         assert!(!layer.join(".claude/history.jsonl").exists());
         assert!(!layer.join(".codex/skills/.system").exists());
@@ -1302,6 +1446,11 @@ mod tests {
         assert_eq!(doc["mcp_servers"]["m"]["command"].as_str(), Some("x"));
         assert!(layer.join(".codex/RTK.md").is_file());
         assert!(layer.join(".gemini/hooks/rtk-hook-gemini.sh").is_file());
+        assert!(layer.join(".gemini/config/plugins/rtk/plugin.json").is_file());
+        assert!(layer.join(".gemini/config/plugins/rtk/hooks.json").is_file());
+        let codex_hooks = read_json(&layer.join(".codex/hooks.json")).unwrap();
+        assert!(codex_hooks["hooks"].get("SessionStart").is_none());
+        assert_eq!(codex_hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "rtk hook codex");
         assert_eq!(
             read_json(&layer.join(".cursor/hooks.json")).unwrap()["hooks"]["preToolUse"][0]["command"],
             "rtk hook cursor"
@@ -1311,6 +1460,37 @@ mod tests {
         let vibe_hooks = vibe["hooks"].as_array_of_tables().unwrap();
         assert_eq!(vibe_hooks.len(), 1);
         assert_eq!(vibe_hooks.get(0).unwrap()["name"].as_str(), Some("rtk-rewrite"));
+    }
+
+    #[test]
+    fn import_skips_a_codex_hooks_file_holding_only_app_hooks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let user = tmp.path().join("user");
+        let hooks = state.join("hooks").join(concat!(crate::app_slug!(), "_session_start.sh"));
+        write(
+            &user.join(".codex/hooks.json"),
+            &json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": hooks.to_string_lossy()}]}]}})
+                .to_string(),
+        );
+        import_from_user_home_in(&state, &user).unwrap();
+        assert!(!global_dir_in(&state).join(".codex/hooks.json").exists());
+    }
+
+    #[test]
+    fn a_codex_hook_from_the_layer_joins_the_homes_own_and_leaves_with_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        let rtk = json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook codex"}]});
+        write(&global_dir_in(&state).join(".codex/hooks.json"), &json!({"hooks": {"PreToolUse": [rtk.clone()]}}).to_string());
+        let own = json!({"matcher": "*", "hooks": [{"type": "command", "command": "own"}]});
+        write(&home.join(".codex/hooks.json"), &json!({"hooks": {"PreToolUse": [own.clone()]}}).to_string());
+        apply_to_home(&state, &home).unwrap();
+        assert_eq!(read_json(&home.join(".codex/hooks.json")).unwrap()["hooks"]["PreToolUse"], json!([own.clone(), rtk]));
+        std::fs::remove_file(global_dir_in(&state).join(".codex/hooks.json")).unwrap();
+        apply_to_home(&state, &home).unwrap();
+        assert_eq!(read_json(&home.join(".codex/hooks.json")).unwrap()["hooks"]["PreToolUse"], json!([own]));
     }
 
     #[test]

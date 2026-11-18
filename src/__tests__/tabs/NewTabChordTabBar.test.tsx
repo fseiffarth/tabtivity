@@ -25,11 +25,12 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { TabBar } from "../../components/tabs/TabBar";
-import { findGroup, useTabsStore } from "../../stores/tabs";
+import { EMPTY_GROUP_ID, findGroup, useTabsStore } from "../../stores/tabs";
+import { useBoxesStore } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { requestNewTab } from "../../lib/shortcuts/newTabChord";
-import type { ProjectEntry, Settings } from "../../types";
+import type { ProjectBox, ProjectEntry, Settings } from "../../types";
 
 const proj: ProjectEntry = {
   id: "p1",
@@ -208,5 +209,106 @@ describe("steering's new tabs land beside the active one", () => {
     });
     expect(order(groupId)).toHaveLength(5);
     expect(order(groupId)[4].key).toBe(activeTab(groupId)?.key);
+  });
+});
+
+// Decision 3 (box redesign): inside a box a new tab starts in the ACTIVE tab's
+// member (its root folder), else the box folder; outside a box nothing changes.
+describe("new tabs in a box start in the active tab's member", () => {
+  const member = (id: string): ProjectEntry => ({
+    id,
+    name: id,
+    status: "active",
+    position: 1,
+    local_file: `/w/${id}/project.json`,
+    directory: `/w/${id}`,
+  });
+  const box: ProjectBox = { id: "b1", name: "thesis", member_ids: ["api", "paper"], position: 1, folder: "/boxes/thesis" };
+  const BOX = "box:b1";
+
+  /** A box scope whose group holds one tab, `cwd`/`kind`, active. */
+  async function renderBox(cwd: string | null, kind: "shell" | "embed" | "files" = "shell") {
+    useProjectsStore.setState({ projects: [member("api"), member("paper")], activeId: "api", loaded: true });
+    useBoxesStore.setState({ boxes: [box] });
+    useTabsStore.getState().setScope(BOX);
+    if (cwd !== null) {
+      useTabsStore.getState().addTab({ label: "first", cmd: "", args: [], env: {}, cwd, kind });
+    }
+    const groupId = cwd === null ? EMPTY_GROUP_ID : useTabsStore.getState().focusedGroupId!;
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<TabBar groupId={groupId} projectCwd="/boxes/thesis" showGroupClose={false} />));
+    });
+    return { groupId, container };
+  }
+  const newest = () => useTabsStore.getState().tabs[useTabsStore.getState().tabs.length - 1];
+
+  it("opens Ctrl+Shift+N and Ctrl+1 in the member of the active tab", async () => {
+    await renderBox("/w/api");
+    await act(async () => {
+      requestNewTab({ kind: "shell" });
+    });
+    expect(newest()).toMatchObject({ kind: "shell", cwd: "/w/api", label: "Shell" });
+    await act(async () => {
+      requestNewTab({ kind: "agent", slot: 0 });
+    });
+    // No " — api" suffix: the tab strip's chip names the member.
+    expect(newest()).toMatchObject({ kind: "agent", cmd: "codex", cwd: "/w/api", label: "Codex" });
+  });
+
+  it("follows the member root, not the active tab's own folder", async () => {
+    // A viewer tab's cwd is its file's folder, here deep inside paper.
+    await renderBox("/w/paper/chapters/one", "embed");
+    await act(async () => {
+      requestNewTab({ kind: "shell" });
+    });
+    expect(newest().cwd).toBe("/w/paper");
+  });
+
+  it("uses the box folder after a tab in the box folder, in an unknown folder, and in an empty group", async () => {
+    await renderBox("/boxes/thesis");
+    await act(async () => {
+      requestNewTab({ kind: "shell" });
+    });
+    expect(newest().cwd).toBe("/boxes/thesis");
+    cleanup();
+    useTabsStore.setState({ tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {}, tabs: [], layout: null });
+    await renderBox("/elsewhere/else");
+    await act(async () => {
+      requestNewTab({ kind: "shell" });
+    });
+    expect(newest().cwd).toBe("/boxes/thesis");
+    cleanup();
+    useTabsStore.setState({ tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {}, tabs: [], layout: null });
+    const { groupId } = await renderBox(null);
+    await act(async () => {
+      requestNewTab({ kind: "shell" }, { groupId });
+    });
+    expect(newest().cwd).toBe("/boxes/thesis");
+  });
+
+  it("lands steering's tab beside the active one, in the member too", async () => {
+    await renderBox("/w/paper");
+    useTabsStore.getState().addTab({ label: "b", cmd: "", args: [], env: {}, cwd: "/w/paper", kind: "shell" });
+    await act(async () => {
+      requestNewTab({ kind: "shell" }, { besideActive: true });
+    });
+    expect(newest().cwd).toBe("/w/paper");
+  });
+
+  it("keeps the monitor, which has no launch directory, on the box folder", async () => {
+    await renderBox("/w/api");
+    await act(async () => {
+      requestNewTab({ kind: "monitor" });
+    });
+    expect(newest()).toMatchObject({ kind: "monitor", cwd: "/boxes/thesis" });
+  });
+
+  it("still opens at the bar's folder outside a box", async () => {
+    await renderBar();
+    await act(async () => {
+      requestNewTab({ kind: "shell" });
+    });
+    expect(newest().cwd).toBe("/p/p1");
   });
 });

@@ -15,6 +15,19 @@ afterEach(() => {
 });
 
 describe(`${BRAND.display} Mobile chat links`, () => {
+  it("explains internal destinations without offering to open them externally", () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const url = `${BRAND.slug}://settings/git/access-token`;
+    render(<Chat text={`[Configure Git access token](${url})`} />);
+    fireEvent.keyDown(screen.getByText("Configure Git access token"), { key: "Enter" });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByTestId("link-sheet-url").textContent).toBe(url);
+    expect(screen.getByText(/Navigation to this destination is not available on the phone yet/)).toBeTruthy();
+    expect(screen.queryByText("Open link")).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    expect(chatLinkUrl(url)).toBeNull();
+  });
+
   it("accepts only absolute http(s) addresses without credentials", () => {
     expect(chatLinkUrl("https://example.com/x")).toBe("https://example.com/x");
     expect(chatLinkUrl("http://example.com")).toBe("http://example.com/");

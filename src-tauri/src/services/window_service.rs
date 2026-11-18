@@ -280,6 +280,7 @@ mod tests {
             window_id: wid,
             origin: origin.to_string(),
             launch_id: None,
+            pid_start: None,
         }
     }
 

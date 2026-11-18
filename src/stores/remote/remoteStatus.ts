@@ -90,10 +90,15 @@ function setHostField(
   value: ConnState,
 ): Partial<RemoteStatusStore> {
   if (hostId === PRIMARY_HOST) {
-    const prev = s.byProject[projectId] ?? OFF;
+    const known = s.byProject[projectId];
+    // A lamp already showing this is no news; a first "off" still is (it
+    // settles a lamp nobody had read).
+    if (known?.[field] === value) return {};
+    const prev = known ?? OFF;
     return { byProject: { ...s.byProject, [projectId]: { ...prev, [field]: value } } };
   }
   const hosts = s.byHost[projectId] ?? {};
+  if (hosts[hostId]?.[field] === value) return {};
   const prev = hosts[hostId] ?? OFF;
   return {
     byHost: {

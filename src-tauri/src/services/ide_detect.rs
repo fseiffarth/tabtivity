@@ -289,16 +289,16 @@ impl IdeId {
     /// editions (`jetbrains-pycharm-ce`, `jetbrains-idea-ce`).
     fn window_classes(self) -> &'static [&'static str] {
         match self {
-            IdeId::PyCharm => &["jetbrains-pycharm", "pycharm64"],
-            IdeId::CLion => &["jetbrains-clion", "clion64"],
-            IdeId::WebStorm => &["jetbrains-webstorm", "webstorm64"],
-            IdeId::PhpStorm => &["jetbrains-phpstorm", "phpstorm64"],
-            IdeId::RubyMine => &["jetbrains-rubymine", "rubymine64"],
-            IdeId::Rider => &["jetbrains-rider", "rider64"],
-            IdeId::RustRover => &["jetbrains-rustrover", "rustrover64"],
-            IdeId::GoLand => &["jetbrains-goland", "goland64"],
-            IdeId::AndroidStudio => &["jetbrains-studio", "studio64"],
-            IdeId::Idea => &["jetbrains-idea", "idea64"],
+            IdeId::PyCharm => &["jetbrains-pycharm", "pycharm64", "pycharm"],
+            IdeId::CLion => &["jetbrains-clion", "clion64", "clion"],
+            IdeId::WebStorm => &["jetbrains-webstorm", "webstorm64", "webstorm"],
+            IdeId::PhpStorm => &["jetbrains-phpstorm", "phpstorm64", "phpstorm"],
+            IdeId::RubyMine => &["jetbrains-rubymine", "rubymine64", "rubymine"],
+            IdeId::Rider => &["jetbrains-rider", "rider64", "rider"],
+            IdeId::RustRover => &["jetbrains-rustrover", "rustrover64", "rustrover"],
+            IdeId::GoLand => &["jetbrains-goland", "goland64", "goland"],
+            IdeId::AndroidStudio => &["jetbrains-studio", "studio64", "android studio"],
+            IdeId::Idea => &["jetbrains-idea", "idea64", "intellij idea"],
             IdeId::VisualStudio => &["devenv"],
             // The `code` launcher may be any of these (`path_candidates`).
             IdeId::VsCode => &["code", "code - insiders", "vscodium", "codium", "cursor"],
@@ -307,7 +307,7 @@ impl IdeId {
             IdeId::Zed => &["dev.zed.zed", "zed"],
             IdeId::Xcode => &["xcode"],
             IdeId::Eclipse => &["eclipse"],
-            IdeId::SublimeText => &["sublime_text"],
+            IdeId::SublimeText => &["sublime_text", "sublime text"],
             IdeId::RStudio => &["rstudio"],
             IdeId::Spyder => &["spyder"],
         }
@@ -866,22 +866,25 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// `dir/name` when it is a file — with the Windows launcher extensions tried
-/// too (`code.cmd`, `pycharm.cmd`, `devenv.exe`).
+/// `dir/name` when it is a file; on Windows `name` with a launcher extension
+/// (`code.cmd`, `pycharm.cmd`, `devenv.exe`) instead.
 fn script_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    script_in_for(cfg!(windows), dir, name, &|p| p.is_file())
+}
+
+/// [`script_in`] with the OS and the file check injected. On Windows the bare
+/// name never counts: Toolbox writes `Rider` (a POSIX sh script for Git Bash)
+/// beside `Rider.cmd`, VS Code's `bin` holds `code` beside `code.cmd`, and
+/// `CreateProcess` refuses the bare one ("not a valid Win32 application").
+fn script_in_for(windows: bool, dir: &Path, name: &str, is_file: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    if windows {
+        return ["exe", "cmd", "bat"]
+            .iter()
+            .map(|ext| dir.join(format!("{name}.{ext}")))
+            .find(|candidate| is_file(candidate));
+    }
     let exact = dir.join(name);
-    if exact.is_file() {
-        return Some(exact);
-    }
-    if cfg!(windows) {
-        for ext in ["exe", "cmd", "bat"] {
-            let candidate = dir.join(format!("{name}.{ext}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    is_file(&exact).then_some(exact)
 }
 
 fn toolbox_scripts_dir() -> Option<PathBuf> {
@@ -1350,7 +1353,9 @@ mod tests {
     #[test]
     fn path_outranks_toolbox_outranks_installed() {
         let scripts = TempDir::new().unwrap();
-        touch(scripts.path(), "clion", "#!/bin/sh");
+        // What Toolbox writes on each OS.
+        let script = if cfg!(windows) { "clion.cmd" } else { "clion" };
+        touch(scripts.path(), script, "#!/bin/sh");
         let installed = vec![app("CLion", "/opt/clion/bin/clion.sh")];
         let none = |_: &str| None;
         let probe = HostProbe {
@@ -1360,7 +1365,7 @@ mod tests {
         };
         let got = resolve_launcher(IdeId::CLion, &HashMap::new(), &installed, &probe).unwrap();
         assert_eq!(got.source, LauncherSource::Toolbox);
-        assert_eq!(got.exec, scripts.path().join("clion").to_string_lossy());
+        assert_eq!(got.exec, scripts.path().join(script).to_string_lossy());
 
         let probe = HostProbe {
             on_path: &none,
@@ -1370,6 +1375,19 @@ mod tests {
         let got = resolve_launcher(IdeId::CLion, &HashMap::new(), &installed, &probe).unwrap();
         assert_eq!(got.source, LauncherSource::Installed);
         assert_eq!(got.display_name, "CLion");
+    }
+
+    #[test]
+    fn windows_never_picks_the_bare_sh_script_beside_a_cmd() {
+        let dir = Path::new("scripts");
+        // Toolbox's Windows scripts dir: `Rider` (sh, for Git Bash) and `Rider.cmd`.
+        let toolbox = |p: &Path| p == dir.join("rider") || p == dir.join("rider.cmd");
+        assert_eq!(script_in_for(true, dir, "rider", &toolbox), Some(dir.join("rider.cmd")));
+        assert_eq!(script_in_for(false, dir, "rider", &toolbox), Some(dir.join("rider")));
+        let bare_only = |p: &Path| p == dir.join("rider");
+        assert_eq!(script_in_for(true, dir, "rider", &bare_only), None);
+        let exe = |p: &Path| p == dir.join("devenv.exe");
+        assert_eq!(script_in_for(true, dir, "devenv", &exe), Some(dir.join("devenv.exe")));
     }
 
     #[test]
@@ -1439,6 +1457,11 @@ mod tests {
             (IdeId::VsCode, "code\0Code\0", "my-app - Visual Studio Code"),
             (IdeId::VsCode, "Code.exe", "my-app (Workspace) - Visual Studio Code"),
             (IdeId::VsCode, "vscodium\0VSCodium\0", "main.py — my-app — VSCodium"),
+            // macOS: the owning app's name (2442o).
+            (IdeId::VsCode, "Code", "main.py — my-app"),
+            (IdeId::Idea, "IntelliJ IDEA", "my-app – Main.java"),
+            (IdeId::PyCharm, "PyCharm", "my-app – main.py"),
+            (IdeId::AndroidStudio, "Android Studio", "my-app – MainActivity.kt"),
         ] {
             assert!(window_shows_project(ide, class, title, &proj), "{class:?} {title:?}");
         }

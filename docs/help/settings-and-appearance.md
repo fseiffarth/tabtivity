@@ -49,6 +49,15 @@ theme, accent, colours and corners) to **Load** later.
   you have not looked at. They reload where you left off; terminals and agents
   keep running, and tabs with unsaved work, a running build or playing media
   stay loaded.
+- **Stop agent tabs beyond**, **Stop agent tabs unused for** and **Stop agent
+  tabs while free memory is under** end the process of an idle agent tab
+  (default: more than 30 running, 2 hours unused, under 4 GiB free) while
+  keeping the tab. Its label dims with a pause mark; showing it resumes its
+  conversation, and so does a scheduled prompt or opening it on the phone.
+  Tabs at work, asking a question or on screen are never stopped, nor tabs of
+  CLIs that cannot resume their own conversation. After a restart only the
+  most recently used come back running, up to the first limit. Set any of the
+  three to Off.
 - **Shell scrollback** sets how many lines each shell keeps (agent tabs keep a
   fixed amount).
 - **What open tabs hold** estimates each tab's memory, largest first; **Show**
@@ -74,7 +83,11 @@ settings.
 **Settings → General → Updates → Check now** looks for a newer release on
 GitHub — only when you ask; Tabtivity never checks in the background.
 **Download**, then **Install**; your tabs stay open and you restart when it
-suits you. A copy installed from the `.deb` (or another package manager)
+suits you. A finished download survives a restart: Tabtivity checks it again
+against the release's signed checksum and offers **Install** without
+downloading twice (a newer release, or running the new build, retires it). On
+Windows the installer asks for administrator consent. A copy installed from the
+`.deb` (or another package manager)
 downloads the new build but leaves installing it to you. The page also lists
 anything still found under Tabtivity's old name (Eldrun).
 
@@ -88,8 +101,10 @@ more). **Show contextual hints** and **Reset hints** control the small tips.
 Each tip has **Turn off hints** (this switch turns them on again), **Skip**
 (closes it for now, its chance unchanged) and **Read**:
 every Read halves that tip's chance of showing again, until **Reset hints**
-brings them all back. On the phone the same buttons sit on each tip card, and
-**This device → Tips** turns tips on again or resets them.
+brings them all back. Tips take turns: whichever way you close one, the next
+one comes up, and it returns only after the others had theirs. On the phone the
+same buttons sit on each tip card, and **This device → Tips** turns tips on
+again or resets them.
 **Feature Guide** is a glossary of the interface.
 
 New features that have not been checked by hand yet wear an **untested** pill;

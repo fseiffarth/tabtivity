@@ -12,8 +12,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../../mobile-web/src/api";
-import { finishOidcReturn, hasPairedDevice, logoutAuth, oidcProvider, pair, resumeAuth, startOidc } from "../../../mobile-web/src/auth";
-import { BRAND } from "../../lib/brand";
+import { checkedLoginPayload, finishOidcReturn, hasPairedDevice, loginPayload, logoutAuth, oidcProvider, pair, resumeAuth, startOidc } from "../../../mobile-web/src/auth";
+import { BRAND, NAMES } from "../../lib/brand";
 
 // ── A minimal IndexedDB: one database, named stores, get/put by key ─────────
 type Req<T> = { result: T; error: unknown; onsuccess: null | (() => void); onerror: null | (() => void) };
@@ -88,6 +88,14 @@ const body = (fetchMock: ReturnType<typeof vi.fn>, method: string, url: string) 
   return call ? JSON.parse(String((call[1] as RequestInit).body)) : undefined;
 };
 
+const EXPIRES_AT = 1_900_000_000;
+/** A challenge as `MobileAuth::challenge` answers it for this page. */
+const challengeFor = (nonce: string, deviceId = "dev-1") => ({
+  nonce,
+  payload: loginPayload(location.origin, deviceId, nonce, EXPIRES_AT),
+  expires_at: EXPIRES_AT,
+});
+
 async function seedDevice(deviceId = "dev-1") {
   stores.set("keys", new Map([["device", { deviceId, privateKey }]]));
 }
@@ -116,7 +124,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
   it("signs the challenge payload and posts the base64url signature with the nonce", async () => {
     await seedDevice();
     const fetchMock = fetchAnswering({
-      "POST /api/v1/auth/challenge": json({ nonce: "n-42", payload: "sign me" }),
+      "POST /api/v1/auth/challenge": json(challengeFor("n-42")),
       "POST /api/v1/auth/session": json({ ok: true }),
     });
     await expect(resumeAuth()).resolves.toEqual({ kind: "paired" });
@@ -124,7 +132,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
     expect(subtle.sign).toHaveBeenCalledWith(
       { name: "ECDSA", hash: "SHA-256" },
       privateKey,
-      new TextEncoder().encode("sign me"),
+      new TextEncoder().encode(loginPayload(location.origin, "dev-1", "n-42", EXPIRES_AT)),
     );
     // No `+`, `/` or `=` padding: the wire form is base64url.
     expect(body(fetchMock, "POST", "/api/v1/auth/session")).toEqual({
@@ -133,6 +141,34 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
       signature: "-__-",
     });
     await expect(hasPairedDevice()).resolves.toBe(true);
+  });
+
+  it("builds the signed text itself: the brand's sign-in context, origin, device, nonce, expiry", () => {
+    expect(loginPayload("https://phone.example", "dev-1", "abc_-9", 42)).toBe(
+      `${NAMES.mobileAuthContext}\nhttps://phone.example\ndev-1\nabc_-9\n42`,
+    );
+  });
+
+  it.each([
+    ["a secrets enrolment text", { payload: `${BRAND.slug}-secrets-v1:enrol\nhttps://x\ndev-1\nEVIL` }],
+    ["another origin", { payload: loginPayload("https://elsewhere.example", "dev-1", "n-7", EXPIRES_AT) }],
+    ["another device", { payload: loginPayload(location.origin, "dev-2", "n-7", EXPIRES_AT) }],
+    ["a nonce with a line break", { nonce: "n\nx" }],
+    ["an expiry that is not a whole number", { expires_at: 1.5 }],
+    ["no expiry", { expires_at: undefined }],
+  ])("refuses to sign a challenge carrying %s, and posts no session", async (_label, change) => {
+    await seedDevice();
+    const challenge = { ...challengeFor("n-7"), ...change };
+    const fetchMock = fetchAnswering({
+      "POST /api/v1/auth/challenge": json(challenge),
+      "POST /api/v1/auth/session": json({ ok: true }),
+    });
+    // Not a rejection of this device: re-pairing would only hand the same
+    // server a fresh key to misuse.
+    await expect(resumeAuth()).resolves.toMatchObject({ kind: "unavailable" });
+    expect(subtle.sign).not.toHaveBeenCalled();
+    expect(body(fetchMock, "POST", "/api/v1/auth/session")).toBeUndefined();
+    expect(checkedLoginPayload(challenge, location.origin, "dev-1")).toBeNull();
   });
 
   it.each([
@@ -176,7 +212,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
       if (key === "POST /api/v1/auth/challenge") {
         challenges += 1;
         if (challenges <= 3) throw new DOMException("signal timed out", "TimeoutError");
-        return json({ nonce: "n-4", payload: "p" })();
+        return json(challengeFor("n-4"))();
       }
       if (key === "POST /api/v1/auth/session") return json({ ok: true })();
       throw new Error(`unexpected ${key}`);
@@ -201,7 +237,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
       if (key === "POST /api/v1/auth/challenge") {
         challenges += 1;
         if (challenges === 1) throw new DOMException("signal timed out", "TimeoutError");
-        return json({ nonce: "n-2", payload: "p" })();
+        return json(challengeFor("n-2"))();
       }
       if (key === "POST /api/v1/auth/session") return json({ ok: true })();
       throw new Error(`unexpected ${key}`);
@@ -224,7 +260,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
       const key = `${init?.method ?? "GET"} ${String(input)}`;
       if (key === "POST /api/v1/auth/challenge") {
         challenges += 1;
-        return json({ nonce: `n-${challenges}`, payload: "p" })();
+        return json(challengeFor(`n-${challenges}`))();
       }
       sessions += 1;
       nonces.push(JSON.parse(String(init?.body)).nonce);
@@ -242,7 +278,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
   it("does not retry an answer that came from the sidecar itself", async () => {
     await seedDevice();
     const fetchMock = fetchAnswering({
-      "POST /api/v1/auth/challenge": json({ nonce: "n", payload: "p" }),
+      "POST /api/v1/auth/challenge": json(challengeFor("n")),
       "POST /api/v1/auth/session": json({ error: "desktop_unavailable" }, 503),
     });
     await expect(resumeAuth()).resolves.toMatchObject({ kind: "unavailable", reason: "desktop_down" });
@@ -256,7 +292,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
       const key = `${init?.method ?? "GET"} ${String(input)}`;
       if (key === "POST /api/v1/auth/challenge") {
         challenges += 1;
-        return challenges === 1 ? new Response("Bad Gateway", { status: 502 }) : json({ nonce: "n", payload: "p" })();
+        return challenges === 1 ? new Response("Bad Gateway", { status: 502 }) : json(challengeFor("n"))();
       }
       return json({ ok: true })();
     }));
@@ -294,7 +330,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
         challenges += 1;
         if (challenges <= 3) return new Response("Bad Gateway", { status: 502 });
         if (challenges <= 5) throw new TypeError("Failed to fetch");
-        return json({ nonce: "n", payload: "p" })();
+        return json(challengeFor("n"))();
       }
       return json({ ok: true })();
     }));
@@ -315,7 +351,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
       const key = `${init?.method ?? "GET"} ${String(input)}`;
       if (key === "POST /api/v1/auth/challenge") {
         challenges += 1;
-        return json({ nonce: `n-${challenges}`, payload: "p" })();
+        return json(challengeFor(`n-${challenges}`))();
       }
       nonces.push(JSON.parse(String(init?.body)).nonce);
       return nonces.length === 1 ? json({ error: "invalid_challenge" }, 401)() : json({ ok: true })();
@@ -334,7 +370,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
     let sessions = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const key = `${init?.method ?? "GET"} ${String(input)}`;
-      if (key === "POST /api/v1/auth/challenge") return json({ nonce: "n", payload: "p" })();
+      if (key === "POST /api/v1/auth/challenge") return json(challengeFor("n"))();
       sessions += 1;
       return json({ error: "invalid_challenge" }, 401)();
     }));
@@ -349,7 +385,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
   it("sends a device whose signature the session post rejects to pairing at once", async () => {
     await seedDevice();
     const fetchMock = fetchAnswering({
-      "POST /api/v1/auth/challenge": json({ nonce: "n", payload: "p" }),
+      "POST /api/v1/auth/challenge": json(challengeFor("n")),
       "POST /api/v1/auth/session": json({ error: "invalid_signature" }, 401),
     });
     await expect(resumeAuth()).resolves.toEqual({ kind: "unpaired" });
@@ -367,7 +403,7 @@ describe(`${BRAND.display} Mobile auth — resume`, () => {
   it("names a closed desktop app as desktop_down when the sidecar says so", async () => {
     await seedDevice();
     fetchAnswering({
-      "POST /api/v1/auth/challenge": json({ nonce: "n", payload: "p" }),
+      "POST /api/v1/auth/challenge": json(challengeFor("n")),
       "POST /api/v1/auth/session": json({ error: "desktop_unavailable" }, 503),
     });
     await expect(resumeAuth()).resolves.toMatchObject({ kind: "unavailable", reason: "desktop_down" });
@@ -414,7 +450,7 @@ describe(`${BRAND.display} Mobile auth — pair and logout`, () => {
           init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
         });
       }
-      if (key === "POST /api/v1/auth/challenge") return json({ nonce: "n", payload: "p" })();
+      if (key === "POST /api/v1/auth/challenge") return json(challengeFor("n"))();
       return json({ ok: true })();
     }));
     const logout = logoutAuth();

@@ -103,7 +103,8 @@ fn plugin_body(live_dir: &str) -> String {
     let lit = |s: &str| serde_json::to_string(s).expect("a string serializes");
     format!(
         "// {DISPLAY}: records which OpenCode session this tab is in, so the tab is\n\
-         // restored into it (`--session`) rather than the folder's newest one.\n\
+         // restored into it (`--session`) rather than the folder's newest one, and\n\
+         // the session's turn (working / decision / done) for the tab's marks.\n\
          // Managed by {DISPLAY}; do not edit.\n\
          import {{ mkdirSync, renameSync, writeFileSync }} from \"node:fs\";\n\
          import {{ join }} from \"node:path\";\n\
@@ -111,30 +112,61 @@ fn plugin_body(live_dir: &str) -> String {
          const DIR = {dir};\n\
          const TAB = /^[0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}}$/;\n\
          const SESSION = /^ses_[A-Za-z0-9]{{1,64}}$/;\n\
+         const CLAIM = {claim};\n\
+         // The bus events that move the turn (V1 `event` hook, V2 subscription):\n\
+         // a question waits on the user, an answer resumes, the end of a run is done.\n\
+         const TURN = {{\n\
+         \x20 \"permission.asked\": \"decision\", \"question.asked\": \"decision\", \"form.created\": \"decision\",\n\
+         \x20 \"permission.replied\": \"working\", \"question.replied\": \"working\", \"question.rejected\": \"working\",\n\
+         \x20 \"form.replied\": \"working\", \"form.cancelled\": \"working\",\n\
+         \x20 \"session.idle\": \"done\", \"session.error\": \"done\", \"session.execution.succeeded\": \"done\",\n\
+         \x20 \"session.execution.failed\": \"done\", \"session.execution.interrupted\": \"done\",\n\
+         }};\n\
          \n\
          const TabSession = async () => {{\n\
          \x20 const uid = process.env[{uid}] ?? \"\";\n\
          \x20 // The tab's own OpenCode only: one nested under it inherits the claim,\n\
          \x20 // one under another CLI's tab carries that CLI's name.\n\
-         \x20 if (process.env[{agent}] !== \"opencode\" || !TAB.test(uid) || process.env[{claim}]) return {{}};\n\
-         \x20 process.env[{claim}] = \"1\";\n\
+         \x20 if (process.env[{agent}] !== \"opencode\" || !TAB.test(uid) || process.env[CLAIM]) return {{}};\n\
+         \x20 process.env[CLAIM] = \"1\";\n\
          \x20 const children = new Set();\n\
          \x20 let recorded = \"\";\n\
+         \x20 const put = (suffix, text) => {{\n\
+         \x20   try {{\n\
+         \x20     mkdirSync(DIR, {{ recursive: true }});\n\
+         \x20     const tmp = join(DIR, `.${{uid}}.${{process.pid}}.tmp`);\n\
+         \x20     writeFileSync(tmp, text);\n\
+         \x20     renameSync(tmp, join(DIR, uid + suffix));\n\
+         \x20     return true;\n\
+         \x20   }} catch {{\n\
+         \x20     return false;\n\
+         \x20   }}\n\
+         \x20 }};\n\
+         \x20 // Only the session the tab is in moves its turn: a subagent's child\n\
+         \x20 // session and every other one have ids of their own.\n\
+         \x20 const turn = (id, word) => {{\n\
+         \x20   if (recorded && id === recorded) put(\".turn\", `${{word}} ${{Math.floor(Date.now() / 1000)}}`);\n\
+         \x20 }};\n\
          \x20 return {{\n\
+         \x20   // V1 passes `{{type, properties}}`, V2 `{{type, data}}`.\n\
          \x20   event: async ({{ event }}) => {{\n\
-         \x20     const info = event?.properties?.info;\n\
-         \x20     if (String(event?.type).startsWith(\"session.\") && info?.parentID && typeof info.id === \"string\") children.add(info.id);\n\
+         \x20     const type = String(event?.type);\n\
+         \x20     const props = event?.properties ?? event?.data ?? {{}};\n\
+         \x20     const info = props.info;\n\
+         \x20     if (type.startsWith(\"session.\") && info?.parentID && typeof info.id === \"string\") children.add(info.id);\n\
+         \x20     const word = type === \"session.status\" ? (props.status?.type === \"idle\" ? \"done\" : undefined) : TURN[type];\n\
+         \x20     if (word) turn(props.sessionID ?? props.form?.sessionID, word);\n\
          \x20   }},\n\
          \x20   \"chat.message\": async (input) => {{\n\
          \x20     const id = input?.sessionID;\n\
-         \x20     if (typeof id !== \"string\" || id === recorded || children.has(id) || !SESSION.test(id)) return;\n\
-         \x20     try {{\n\
-         \x20       mkdirSync(DIR, {{ recursive: true }});\n\
-         \x20       const tmp = join(DIR, `.${{uid}}.${{process.pid}}.tmp`);\n\
-         \x20       writeFileSync(tmp, id);\n\
-         \x20       renameSync(tmp, join(DIR, uid));\n\
-         \x20       recorded = id;\n\
-         \x20     }} catch {{}}\n\
+         \x20     if (typeof id !== \"string\" || children.has(id) || !SESSION.test(id)) return;\n\
+         \x20     if (id !== recorded && put(\"\", id)) recorded = id;\n\
+         \x20     turn(id, \"working\");\n\
+         \x20   }},\n\
+         \x20   // Every command the shell tool runs carries the claim, also where the\n\
+         \x20   // shell's environment is not this process's.\n\
+         \x20   \"shell.env\": async (_input, output) => {{\n\
+         \x20     if (output?.env) output.env[CLAIM] = \"1\";\n\
          \x20   }},\n\
          \x20 }};\n\
          }};\n\
@@ -147,6 +179,14 @@ fn plugin_body(live_dir: &str) -> String {
          \x20 async setup(ctx) {{\n\
          \x20   const hooks = await TabSession();\n\
          \x20   if (!hooks[\"chat.message\"]) return;\n\
+         \x20   // V2 gives the shell tool a per-session copy of the environment, so the\n\
+         \x20   // claim set above never reached it and a nested `opencode run` took the\n\
+         \x20   // record over (2.3.0): each shell gets it here.\n\
+         \x20   try {{\n\
+         \x20     await ctx.shell.hook(\"create.before\", async (input) => {{\n\
+         \x20       if (input?.env) input.env[CLAIM] = \"1\";\n\
+         \x20     }});\n\
+         \x20   }} catch {{}}\n\
          \x20   await ctx.session.hook(\"prompt\", async (input) => {{\n\
          \x20     // Query the session itself: restored children need not emit a\n\
          \x20     // session-created event after this plugin was loaded.\n\
@@ -154,6 +194,13 @@ fn plugin_body(live_dir: &str) -> String {
          \x20     if (session.parentID) return;\n\
          \x20     await hooks[\"chat.message\"](input);\n\
          \x20   }});\n\
+         \x20   // Unfiltered: a type a release does not know may fail a filtered one.\n\
+         \x20   try {{\n\
+         \x20     const events = await ctx.event.subscribe();\n\
+         \x20     (async () => {{\n\
+         \x20       for await (const event of events) await hooks.event({{ event }});\n\
+         \x20     }})().catch(() => {{}});\n\
+         \x20   }} catch {{}}\n\
          \x20 }},\n\
          }};\n",
         plugin_id = lit(concat!(crate::app_slug!(), ".session")),
@@ -356,6 +403,15 @@ pub fn resolve(opts: PtyOptions) -> PtyOptions {
     )
 }
 
+/// Whether a respawn of the cloud tab `uid` resumes its own session: its
+/// plugin recorded one and the store still has it — [`resolve`]'s `own`.
+/// Without one the respawn starts fresh or continues the folder's newest
+/// session (`agent_resume_pinned`).
+pub fn resume_pinned(project_id: Option<&str>, uid: &str) -> bool {
+    let (_, db) = home_and_store(project_id, false);
+    recorded_session(project_id, uid).is_some_and(|id| opencode_store::resumable_session(&db, &id))
+}
+
 /// The agent home a tab's OpenCode runs in, and the store that home keeps: a
 /// local-model tab's are apart from the scope's.
 fn home_and_store(project_id: Option<&str>, local_model: bool) -> (PathBuf, PathBuf) {
@@ -492,6 +548,8 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
+            mcp_mark: None,
         };
         o.env.insert(crate::app_env!("TAB_UID").to_string(), UID.to_string());
         o
@@ -728,8 +786,14 @@ mod tests {
             await legacy['chat.message']({sessionID: 'ses_legacy'});
             assert.equal(readFileSync(record, 'utf8'), 'ses_legacy');
         "#).unwrap();
+        run_node_check(dir.path(), &live);
+    }
+
+    /// Run `check.mjs` in `dir` with node: the records folder, the tab's
+    /// variable names and its key as arguments. Skipped without node.
+    fn run_node_check(dir: &Path, live: &Path) {
         let output = std::process::Command::new("node")
-            .arg(dir.path().join("check.mjs")).arg(&live)
+            .arg(dir.join("check.mjs")).arg(live)
             .args([crate::app_env!("TAB_UID"), TAB_AGENT_ENV, CLAIM_ENV, UID])
             .output();
         match output {
@@ -737,5 +801,109 @@ mod tests {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => eprintln!("OpenCode plugin runtime check skipped: node unavailable"),
             Err(error) => panic!("OpenCode plugin runtime check: {error}"),
         }
+    }
+
+    /// The turn record from the events OpenCode 2.2.7 / 2.3.0 fired in the
+    /// probe (`scripts/verify-cli/opencode/hooks.py`): the prompt is working,
+    /// a permission or question asked is a decision, its answer working, the
+    /// end of a run done. Only the session the tab is in counts — a
+    /// subagent's child and any other session say nothing — and a nested
+    /// OpenCode (the claim in its environment, which V2 puts in every shell
+    /// itself) records nothing at all.
+    #[test]
+    fn the_plugin_writes_the_turn_of_the_tabs_own_session_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("records");
+        std::fs::write(dir.path().join("plugin.mjs"), plugin_body(&live.to_string_lossy())).unwrap();
+        std::fs::write(dir.path().join("check.mjs"), r#"
+            import assert from 'node:assert/strict';
+            import { existsSync, readFileSync, rmSync } from 'node:fs';
+            import { join } from 'node:path';
+            import plugin from './plugin.mjs';
+            const [dir, uidKey, agentKey, claimKey, uid] = process.argv.slice(2);
+            const turnFile = join(dir, uid + '.turn');
+            const word = () => existsSync(turnFile) ? readFileSync(turnFile, 'utf8').split(' ')[0] : null;
+            const reset = () => rmSync(turnFile, { force: true });
+            process.env[uidKey] = uid;
+            process.env[agentKey] = 'opencode';
+            delete process.env[claimKey];
+
+            // V2: a pushable event stream, the prompt hook, the shell hook.
+            const queue = []; let wake;
+            const stream = { async *[Symbol.asyncIterator]() { for (;;) { while (queue.length) yield queue.shift(); await new Promise((r) => { wake = r; }); } } };
+            const settle = () => new Promise((r) => setTimeout(r, 20));
+            const emit = async (type, data) => { queue.push({ type, data }); wake?.(); await settle(); };
+            let prompt, shell;
+            await plugin.setup({
+                session: {
+                    hook: async (name, cb) => { assert.equal(name, 'prompt'); prompt = cb; },
+                    get: async ({ sessionID }) => ({ id: sessionID, parentID: sessionID === 'ses_child' ? 'ses_main' : undefined }),
+                },
+                shell: { hook: async (name, cb) => { assert.equal(name, 'create.before'); shell = cb; } },
+                event: { subscribe: async () => stream },
+            });
+            // Nothing before the tab's first prompt: no session is the tab's yet.
+            await emit('permission.asked', { sessionID: 'ses_main' });
+            assert.equal(word(), null);
+            await prompt({ sessionID: 'ses_main' });
+            assert.equal(word(), 'working');
+            assert.match(readFileSync(turnFile, 'utf8'), /^working \d+$/);
+            for (const [type, want] of [
+                ['permission.asked', 'decision'], ['permission.replied', 'working'],
+                ['form.created', 'decision'], ['form.replied', 'working'],
+                ['session.execution.succeeded', 'done'],
+                ['form.created', 'decision'], ['form.cancelled', 'working'], ['session.execution.interrupted', 'done'],
+                ['session.execution.failed', 'done'],
+            ]) {
+                await emit(type, type === 'form.created' ? { form: { sessionID: 'ses_main' } } : { sessionID: 'ses_main' });
+                assert.equal(word(), want, type);
+            }
+            // A subagent's child session and another session move nothing; nor
+            // does an event the turn does not know.
+            reset();
+            await prompt({ sessionID: 'ses_child' });
+            await emit('permission.asked', { sessionID: 'ses_child' });
+            await emit('session.execution.succeeded', { sessionID: 'ses_other' });
+            await emit('session.step.started', { sessionID: 'ses_main' });
+            assert.equal(word(), null);
+            // Every shell the tool starts carries the claim.
+            const spawn = { env: { PATH: '/bin' } };
+            await shell(spawn);
+            assert.equal(spawn.env[claimKey], '1');
+
+            // A nested OpenCode inherits the claim: it hooks nothing.
+            let hooked = false;
+            await plugin.setup({ session: { hook: async () => { hooked = true; } }, shell: { hook: async () => { hooked = true; } }, event: { subscribe: async () => { hooked = true; } } });
+            assert.equal(hooked, false);
+
+            // V1: the `event` hook with `{type, properties}`, `session.status`
+            // and the idle and error events, `question.*`, `shell.env`.
+            delete process.env[claimKey];
+            reset();
+            const v1 = await plugin.server();
+            await v1.event({ event: { type: 'session.created', properties: { info: { id: 'ses_kid', parentID: 'ses_v1' } } } });
+            await v1['chat.message']({ sessionID: 'ses_kid' });
+            assert.equal(word(), null);
+            await v1['chat.message']({ sessionID: 'ses_v1' });
+            assert.equal(word(), 'working');
+            for (const [type, props, want] of [
+                ['question.asked', { sessionID: 'ses_v1' }, 'decision'], ['question.replied', { sessionID: 'ses_v1' }, 'working'],
+                ['permission.asked', { sessionID: 'ses_v1' }, 'decision'], ['permission.replied', { sessionID: 'ses_v1' }, 'working'],
+                ['session.status', { sessionID: 'ses_v1', status: { type: 'busy' } }, 'working'],
+                ['session.status', { sessionID: 'ses_v1', status: { type: 'idle' } }, 'done'],
+                ['permission.asked', { sessionID: 'ses_kid' }, 'done'],
+                ['question.asked', { sessionID: 'ses_v1' }, 'decision'], ['question.rejected', { sessionID: 'ses_v1' }, 'working'],
+                ['session.error', { sessionID: 'ses_v1' }, 'done'],
+                ['permission.asked', { sessionID: 'ses_v1' }, 'decision'], ['session.idle', { sessionID: 'ses_v1' }, 'done'],
+            ]) {
+                await v1.event({ event: { type, properties: props } });
+                assert.equal(word(), want, `${type} ${JSON.stringify(props)}`);
+            }
+            const out = { env: {} };
+            await v1['shell.env']({ cwd: '/' }, out);
+            assert.equal(out.env[claimKey], '1');
+            process.exit(0);
+        "#).unwrap();
+        run_node_check(dir.path(), &live);
     }
 }

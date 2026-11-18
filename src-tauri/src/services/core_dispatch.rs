@@ -287,6 +287,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("disk_usage_scan", "root", LocalUnlessRemote("projectId")),
     ("exec_trust_approve", "dir", UserPath),
     ("export_project", "req.destPath", UserPath),
+    ("export_project_set", "req.destPath", UserPath),
     ("git_clone", "dest", UserPath),
     ("git_folder_origin", "sourceDir", UserPath),
     ("git_fork_clone", "dest", UserPath),
@@ -295,6 +296,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("import_project_export", "req.bundlePath", UserPath),
     ("import_project_export", "req.targetParent", UserPathOpt),
     ("import_project_export", "req.mirrorParent", UserPathOpt),
+    ("inspect_project_bundle", "bundlePath", UserPath),
     ("inspect_project_export", "bundlePath", UserPath),
     ("move_remote_mirror", "parentDir", UserPath),
     ("preview_project_scaffold", "sourceDir", UserPath),
@@ -307,6 +309,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("run_script_detached", "scriptPath", UserPath),
     ("run_script_detached", "cwd", UserPathOpt),
     ("set_remote_mirror_dir", "path", UserPath),
+    ("skills_copy", "from", SkillTarget),
+    ("skills_copy", "to", SkillTarget),
     ("skills_install", "target", SkillTarget),
     ("skills_list_installed", "target", SkillTarget),
     ("skills_uninstall", "target", SkillTarget),
@@ -320,6 +324,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("tex_preview_snippet", "dir", UserPath),
     ("watch_dir", "path", UserPath),
     ("watch_dir", "repoDir", UserPathOpt),
+    // Only the key of the watch to release (`fs_watch::Watches`): never opened.
+    ("unwatch_dir", "path", BodyConfined),
     ("format_source", "path", Hint),
     ("formatter_available", "path", Hint),
     ("create_project", "req.mirrorParent", UserPathOpt),
@@ -406,6 +412,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("git_add_all", "worktree", WorktreeOf("projectDir")),
     ("git_branches", "worktree", WorktreeOf("projectDir")),
     ("git_change_stats", "worktree", WorktreeOf("projectDir")),
+    ("git_add_path", "worktree", WorktreeOf("projectDir")),
+    ("git_diff_file", "worktree", WorktreeOf("projectDir")),
     ("git_checkout", "worktree", WorktreeOf("projectDir")),
     ("git_commit", "worktree", WorktreeOf("projectDir")),
     ("git_commit_message", "worktree", WorktreeOf("projectDir")),
@@ -437,6 +445,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     // (`open_confined` / `confine_project_path` /
     // `sqlite::confine`; a remote project's path is held to its remote root).
     ("copilot_complete", "path", BodyConfined), // `policy::authorize_document` under the project root
+    ("complete_text", "fileName", BodyConfined), // a label in the prompt sent to Ollama; never opened
     ("file_mtime", "path", BodyConfined),
     ("file_size", "path", BodyConfined),
     ("file_source", "path", BodyConfined), // only says which side holds it
@@ -447,6 +456,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("read_spreadsheet", "path", BodyConfined),
     ("sqlite_page", "path", BodyConfined),
     ("sqlite_tables", "path", BodyConfined),
+    ("tfevents_discover", "path", BodyConfined), // `fs::byte_route` + `confine_abs`
+    ("tfevents_read", "path", BodyConfined), // `fs::read_range_routed` (`open_confined`)
     ("write_file_text", "path", BodyConfined),
     // Relative paths inside a held `ProjectDir` (`enforce_confinement`, or a
     // pathspec git resolves inside the repo).
@@ -459,6 +470,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("dir_size_breakdown", "relPath", BodyConfined),
     ("extract_archive", "relPath", BodyConfined),
     ("git_add_path", "relPath", BodyConfined),
+    ("git_change_stats", "relPath", BodyConfined),
     ("git_blame", "relPath", BodyConfined),
     ("git_diff_file", "relPath", BodyConfined),
     ("git_file_at_rev", "relPath", BodyConfined),
@@ -479,6 +491,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     // A skill catalog's folder, a source's cache and an installed skill's
     // name: `services::skills` takes each as plain components inside the
     // source's clone or the target's `.claude/skills` (for every caller).
+    ("skills_copy", "folder", BodyConfined),
     ("skills_get_detail", "relPath", BodyConfined),
     ("skills_get_detail", "sourceId", BodyConfined),
     ("skills_install", "relPath", BodyConfined),
@@ -496,12 +509,22 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("git_worktree_lock", "path", BodyConfined),
     ("git_worktree_remove", "path", BodyConfined),
     ("git_worktree_unlock", "path", BodyConfined),
+    // The resolver hand-over: the relative paths are vetted by
+    // `sync_handoff::safe_rel` and written/read only through `home_io` handles
+    // below the project's agent home, never a project folder.
+    ("sync_handoff_export", "files", BodyConfined),
+    ("sync_handoff_load_resolved", "relPath", BodyConfined),
+    // A SHA-256 of the text the resolver shows, compared with the record.
+    ("sync_handoff_load_resolved", "localHash", NotAPath),
     // ── On a remote host ────────────────────────────────────────────────
+    ("compile_tex_host", "path", Remote), // checked inside the project root (`tex/host.rs`)
     ("hpc_ws_anchor", "mirrorPath", Remote),
     ("hpc_ws_anchor", "workspacePath", Remote),
     ("hpc_ws_link", "workspacePath", Remote),
     ("hpc_ws_move_root", "newRoot", Remote),
     ("hpc_ws_pull_logs", "logsDir", Remote), // read over SFTP into the mirror
+    ("set_project_remote_agent_dir", "agentDir", Remote), // a folder on the host; only ever the home an agent runs with there
+    ("patch_compute_host", "agentDir", Remote),
     ("remote_download_size", "relPath", Remote),
     ("remote_download_to", "relPath", Remote),
     ("remote_remember_path", "path", Remote),
@@ -545,11 +568,23 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     // recorded `cwd`.
     ("agent_tab_changes", "tabDir", NotAPath),
     ("agent_tab_transcript", "tabDir", NotAPath),
+    ("agent_tab_artifact", "tabDir", NotAPath),
+    // A link target as the agent wrote it: only cut after `brain/<the tab's own conversation>/`
+    // and opened by name below the scope's agent home (`services::agent_artifacts`).
+    ("agent_tab_artifact", "target", NotAPath),
     ("agent_tab_chats", "tabDir", NotAPath),
     ("agent_tab_resume_chat", "tabDir", NotAPath),
+    // The stop sweep's resume check: the same store keys as the Resume menu.
+    ("agent_tab_resume_pinned", "cwd", NotAPath),
     ("claude_folder_trusted", "cwd", NotAPath),
     ("agent_tab_changes", "localModel", NotAPath),
     ("agent_tab_transcript", "localModel", NotAPath),
+    // `tabDir` is more than the reader's key here: the body runs `git status` in it and writes
+    // the names it lists into the agent home, so it is held like any folder. The target CLI's
+    // binary is checked against the registry and never put into a path.
+    ("agent_cli_handoff_prepare", "tabDir", UserPathOpt),
+    ("agent_cli_handoff_prepare", "localModel", NotAPath),
+    ("agent_cli_handoff_prepare", "target", NotAPath),
     ("claude_folder_trusted", "localOnly", NotAPath),
     ("copilot_set_project_policy", "localOnly", NotAPath),
     ("set_remote_mirror_dir", "keepLocalCopy", NotAPath), // a bool: the E8 reverse conversion
@@ -962,6 +997,21 @@ mod tests {
         assert!(args["repoDir"].is_null(), "{args}");
     }
 
+    /// The CLI hand-off runs `git status` in the tab's folder and writes what it
+    /// lists into the agent home: a user cannot point it outside their roots.
+    #[test]
+    fn a_users_cli_handoff_folder_is_held_to_their_roots() {
+        let call = serde_json::json!({ "agent": "claude", "sessionId": "s", "target": "codex", "previewOnly": true });
+        assert_held("agent_cli_handoff_prepare", call.clone(), "tabDir");
+        let mut inside = call.clone();
+        inside["tabDir"] = Value::String(inside_path("proj"));
+        confine_for_user(Role::User, "agent_cli_handoff_prepare", &mut inside).unwrap();
+        let mut empty = call;
+        empty["tabDir"] = Value::String(String::new());
+        confine_for_user(Role::User, "agent_cli_handoff_prepare", &mut empty).unwrap();
+        assert!(empty["tabDir"].is_null(), "{empty}");
+    }
+
     #[test]
     fn a_users_scan_root_is_held_unless_it_is_a_remote_projects() {
         assert_held("disk_usage_scan", serde_json::json!({ "scanId": "s" }), "root");
@@ -1031,6 +1081,17 @@ mod tests {
         }
         let mut ok = serde_json::json!({ "target": { "kind": "project", "dir": inside_path("p") }, "name": "s" });
         confine_for_user(Role::User, "skills_uninstall", &mut ok).unwrap();
+        // A copy holds both ends: either one personal, or a project outside
+        // the user's roots, is refused.
+        let project = serde_json::json!({ "kind": "project", "dir": inside_path("p") });
+        assert_held("skills_copy", serde_json::json!({ "from": project.clone(), "to": { "kind": "project" }, "folder": "s" }), "to.dir");
+        assert_held("skills_copy", serde_json::json!({ "from": { "kind": "project" }, "to": project.clone(), "folder": "s" }), "from.dir");
+        for (from, to) in [(serde_json::json!({ "kind": "personal" }), project.clone()), (project.clone(), serde_json::json!({ "kind": "personal" }))] {
+            let mut call = serde_json::json!({ "from": from, "to": to, "folder": "s" });
+            assert!(confine_for_user(Role::User, "skills_copy", &mut call).is_err());
+        }
+        let mut both = serde_json::json!({ "from": project, "to": { "kind": "project", "dir": inside_path("q") }, "folder": "s" });
+        confine_for_user(Role::User, "skills_copy", &mut both).unwrap();
     }
 
     #[test]

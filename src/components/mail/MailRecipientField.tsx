@@ -1,3 +1,4 @@
+import { isTabKey } from "../../lib/shortcuts/keyNames";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import {
@@ -122,7 +123,7 @@ export function MailRecipientField({
               e.preventDefault();
               const step = e.key === "ArrowDown" ? 1 : -1;
               setActive((i) => (i + step + items.length) % items.length);
-            } else if (e.key === "Enter" || e.key === "Tab") {
+            } else if (e.key === "Enter" || isTabKey(e)) {
               e.preventDefault();
               accept(items[active]);
             } else if (e.key === "Escape") {

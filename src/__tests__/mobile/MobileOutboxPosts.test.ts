@@ -12,12 +12,22 @@ const ENTRIES: TranscriptEntry[] = [
   { kind: "prompt", text: "plot it", at: "2026-09-15T05:00:00Z" },
   { kind: "answer", text: "Sending.", at: "2026-09-15T05:02:00.400Z" },
   { kind: "answer", text: "Sent.", at: "2026-09-15T05:04:00Z" },
+  { kind: "prompt", text: "and the table", at: "2026-09-15T05:10:00Z" },
+  { kind: "answer", text: "Here.", at: "2026-09-15T05:11:00Z" },
 ];
 
 describe("outboxPosts places the agent's files among the session's messages", () => {
-  it("puts a file after the last record written at or before it, in the same second included", () => {
-    expect(names(outboxPosts(ENTRIES, [picture("a.png", "2026-09-15T05:02:00Z")]))).toEqual({ 1: [["a.png"]] });
+  it("puts a file at the end of the turn it was sent in, never between its answers", () => {
+    // Sent in the same second as "Sending." — still after "Sent.", the turn's last record.
+    expect(names(outboxPosts(ENTRIES, [picture("a.png", "2026-09-15T05:02:00Z")]))).toEqual({ 2: [["a.png"]] });
     expect(names(outboxPosts(ENTRIES, [picture("b.png", "2026-09-15T05:09:00Z")]))).toEqual({ 2: [["b.png"]] });
+    expect(names(outboxPosts(ENTRIES, [picture("c.png", "2026-09-15T05:10:30Z")]))).toEqual({ 4: [["c.png"]] });
+  });
+
+  it("follows a running turn's newest record down", () => {
+    const running = ENTRIES.slice(0, 2);
+    expect(names(outboxPosts(running, [picture("a.png", "2026-09-15T05:03:00Z")]))).toEqual({ 1: [["a.png"]] });
+    expect(names(outboxPosts(ENTRIES.slice(0, 3), [picture("a.png", "2026-09-15T05:03:00Z")]))).toEqual({ 2: [["a.png"]] });
   });
 
   it("makes one post of one send, and a new one after a pause or a record", () => {
@@ -27,9 +37,12 @@ describe("outboxPosts places the agent's files among the session's messages", ()
       picture("b.png", `2026-09-15T05:02:${String(10 + POST_GAP).padStart(2, "0")}Z`),
       picture("a.png", "2026-09-15T05:02:10Z"),
       picture("e.png", "2026-09-15T05:04:31Z"),
+      picture("f.png", "2026-09-15T05:03:59Z"),
+      picture("g.png", "2026-09-15T05:04:01Z"),
     ]);
-    expect(names(posts)).toEqual({ 1: [["a.png", "b.png"], ["c.png"]], 2: [["d.png", "e.png"]] });
-    expect(posts.get(1)?.[0].key).toBe("outbox:a.png");
+    // f and g are two seconds apart, but "Sent." stands between them.
+    expect(names(posts)).toEqual({ 2: [["a.png", "b.png"], ["c.png"], ["f.png"], ["g.png"], ["d.png", "e.png"]] });
+    expect(posts.get(2)?.[0].key).toBe("outbox:a.png");
   });
 
   it("leaves files older than the first shown record, and every file when no record has a time", () => {
@@ -39,7 +52,7 @@ describe("outboxPosts places the agent's files among the session's messages", ()
   });
 
   it("lets a record without a time stand at the one before it", () => {
-    const entries: TranscriptEntry[] = [ENTRIES[0], { kind: "answer", text: "no stamp" }, ENTRIES[2]];
+    const entries: TranscriptEntry[] = [ENTRIES[0], { kind: "answer", text: "no stamp" }, ENTRIES[3], ENTRIES[4]];
     expect(names(outboxPosts(entries, [picture("a.png", "2026-09-15T05:01:00Z")]))).toEqual({ 1: [["a.png"]] });
   });
 });

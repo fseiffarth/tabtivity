@@ -333,6 +333,7 @@ pub fn project_search_blocking(
     let root_raw = PathBuf::from(&project_dir);
     let project_root = root_raw
         .canonicalize()
+        .map(crate::paths::without_verbatim_prefix)
         .map_err(|e| format!("invalid project_dir '{project_dir}': {e}"))?;
     // The folder scope, checked like the host's and then held inside the
     // project after symlinks resolve.
@@ -342,6 +343,7 @@ pub fn project_search_blocking(
             let joined = rel.split('/').fold(project_root.clone(), |p, seg| p.join(seg));
             let scoped = joined
                 .canonicalize()
+                .map(crate::paths::without_verbatim_prefix)
                 .map_err(|e| format!("invalid search folder '{rel}': {e}"))?;
             if !scoped.starts_with(&project_root) {
                 return Err(format!("search folder '{rel}' is outside the project"));

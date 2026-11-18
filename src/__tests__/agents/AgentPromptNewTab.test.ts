@@ -10,6 +10,13 @@ describe("promptChartNewTabAgent", () => {
     expect(promptChartNewTabAgent({ default_agent_cmd: "codex", prompt_chart_agent: "gemini" })).toBe("gemini");
     expect(promptChartNewTabAgent({ default_agent_cmd: "codex", prompt_chart_agent: "  " })).toBe("codex");
   });
+
+  it("launches a default agent's registry id as its binary", () => {
+    expect(promptChartNewTabAgent({ default_agent_cmd: "antigravity" })).toBe("agy");
+    expect(agentItemFor(promptChartNewTabAgent({ default_agent_cmd: "antigravity" })).label).toBe("Google Antigravity");
+    // The chart's own pick is already a binary and stays one.
+    expect(promptChartNewTabAgent({ default_agent_cmd: "antigravity", prompt_chart_agent: "agy" })).toBe("agy");
+  });
 });
 
 describe("agentItemFor", () => {

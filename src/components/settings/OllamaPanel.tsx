@@ -9,6 +9,7 @@ import {
   ToggleRow,
 } from "../layout/settingsUi";
 import { formatBytes as fmtBytes } from "../../lib/formatBytes";
+import { placementLabel } from "../../lib/agents/ollamaPlacement";
 import { UntestedTag } from "../common/UntestedTag";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dropdown } from "../common/Dropdown";
@@ -19,6 +20,7 @@ import { runOllamaUpdateCheck, upgradeOllamaInTab } from "../../lib/agents/ollam
 import { runInstallInTab, type InstallShellKind } from "../../lib/installCommand";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { copyText } from "../../lib/terminal/copyText";
 import { runWithProgress } from "../../lib/runWithProgress";
 import type { SubPanelProps } from "./subPanelProps";
 
@@ -30,6 +32,7 @@ interface OllamaModelInfo {
   family: string | null;
   running: boolean;
   size_vram: number;
+  loaded_size?: number;
 }
 
 /** How a chosen models-download location would be applied (mirrors backend
@@ -52,7 +55,25 @@ interface RegistryModel {
   sizes: string[];
   pulls: string;
   updated: string;
+  /** A GGUF repo on Hugging Face (`hf.co/<user>/<repo>`): its `sizes` are
+   *  quantization tags. */
+  hugging_face: boolean;
+  /** Parameter count from the Hugging Face search ("7.6B"); null otherwise. */
+  params: string | null;
+  /** A gated Hugging Face repo: pulls only once Ollama's key is on the account. */
+  gated: boolean;
 }
+
+/** One page of Hugging Face search results (mirrors backend HfSearchPage). */
+interface HfSearchPage {
+  models: RegistryModel[];
+  nextCursor: string | null;
+}
+
+/** Where the browse list searches: ollama.com, or GGUF repos on Hugging Face
+ *  (pulled by Ollama as `hf.co/<user>/<repo>:<quant>`). */
+const REGISTRY_SOURCES = ["ollama", "hf"] as const;
+type RegistrySource = (typeof REGISTRY_SOURCES)[number];
 
 /** A tag's headline facts (mirrors backend RegistryDetails), fetched lazily so a
  *  row that carries no size badge on the search card can still show its
@@ -78,6 +99,41 @@ const REGISTRY_TYPES = ["tools", "vision", "thinking", "embedding", "audio"] as 
 
 /** Where a model runs, also a `c=` value on ollama.com — one or neither. */
 const REGISTRY_RUNS = ["local", "cloud"] as const;
+
+/** Ollama's refusal of a gated/private Hugging Face repo pulled as `hf.co/…`:
+ *  the Hub's auth realm is on `huggingface.co`, and Ollama signs a challenge
+ *  only for the host the pull started on (`hf.rs` `model_row`). */
+const HF_REALM_MISMATCH = /realm host "huggingface\.co" does not match original host "hf\.co"/i;
+
+/** TEMP diagnostic for the filter chips (see `diagChip` in the panel): the
+ *  trace lives here, not in the panel, so a remount mid-click keeps it. */
+const chipDiagBus = {
+  run: null as null | { t0: number; lines: string[]; timer: number },
+  last: [] as string[],
+  subs: new Set<(lines: string[]) => void>(),
+  eventIds: new WeakMap<Event, number>(),
+  nextId: 0,
+};
+function chipDiagNote(line: string) {
+  const bus = chipDiagBus;
+  const run = bus.run ?? (bus.run = { t0: performance.now(), lines: [], timer: 0 });
+  run.lines.push(`+${Math.round(performance.now() - run.t0)}ms ${line}`);
+  window.clearTimeout(run.timer);
+  run.timer = window.setTimeout(() => {
+    bus.last = run.lines;
+    bus.run = null;
+    for (const sub of bus.subs) sub(run.lines);
+  }, 600);
+}
+function chipDiagEvent(ev: Event): string {
+  let id = chipDiagBus.eventIds.get(ev);
+  if (id === undefined) {
+    id = ++chipDiagBus.nextId;
+    chipDiagBus.eventIds.set(ev, id);
+  }
+  const m = ev as MouseEvent & { pointerType?: string };
+  return `ev#${id} ${ev.type} trusted=${ev.isTrusted} detail=${m.detail} pointer=${m.pointerType || "-"} t=${ev.timeStamp.toFixed(1)}`;
+}
 
 /** Download-size caps, Ollama's `s=` search param (GB; "over64" is the top bucket). */
 const REGISTRY_DOWNLOAD_SIZES = ["8", "16", "32", "64", "over64"] as const;
@@ -115,6 +171,43 @@ interface OllamaInstallStrategy {
   command: string;
   auto: boolean;
   download_url: string;
+}
+
+/** `ollama_public_key`: the key a gated Hugging Face repo needs on the account. */
+type OllamaPublicKey = { status: "ok" | "missing" | "unreadable" | "remote" | ""; path: string; key: string };
+
+/** Copy Ollama's public key for the user's Hugging Face account, or say why
+ *  it cannot: no key yet, not readable here, or a server on another machine. */
+function CopyOllamaKey() {
+  const t = useT();
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const copy = async () => {
+    setBusy(true);
+    try {
+      const k = await invoke<OllamaPublicKey>("ollama_public_key");
+      if (k.status === "ok") {
+        await copyText(k.key);
+        setNote(t("ollama.hfKeyCopied"));
+      } else if (k.status === "missing") setNote(t("ollama.hfKeyMissing"));
+      else if (k.status === "unreadable") setNote(t("ollama.hfKeyUnreadable", { path: k.path }));
+      else if (k.status === "remote") setNote(t("ollama.hfKeyRemote"));
+      else setNote(t("ollama.hfKeyFailed"));
+    } catch {
+      setNote(t("ollama.hfKeyFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ollama-catalog-hint ollama-key-copy">
+      <button type="button" className="ollama-action-btn" disabled={busy} onClick={() => void copy()}>
+        {t("ollama.hfCopyKey")}
+      </button>
+      <UntestedTag id="ollama.hfCopyKey" />
+      {note && <span>{note}</span>}
+    </div>
+  );
 }
 
 export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
@@ -176,7 +269,17 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const paused = useOllamaActivityStore((s) => s.paused);
   // Orphaned partial layers in Ollama's blob cache with no recoverable model
   // name — surfaced only so the user can delete them to reclaim space.
-  const [orphans, setOrphans] = useState<{ digest: string; size: number; path: string }[]>([]);
+  const [allOrphans, setOrphans] = useState<{ digest: string; size: number; path: string }[]>([]);
+  // The short digests of the layers live pulls are writing (Ollama's
+  // "pulling <digest>" phase). Their `-partial` files belong to a named
+  // download, so they are not orphans, and Delete must never be offered on a
+  // file Ollama is still writing. Joined so the re-read below keys on content.
+  const liveLayers = Object.values(pullProgress)
+    .map((p) => /^pulling ([0-9a-f]{12})/.exec(p.status ?? "")?.[1])
+    .filter((d): d is string => d !== undefined)
+    .sort()
+    .join(",");
+  const orphans = allOrphans.filter((o) => !liveLayers.split(",").includes(o.digest));
   // Live registry browser (ollama.com/search): query, filters, lazy-loaded pages.
   const [regQuery, setRegQuery] = useState("");
   const [regQueryLive, setRegQueryLive] = useState(""); // debounced
@@ -184,6 +287,9 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const [regRuns, setRegRuns] = useState(""); // "" = either, else a REGISTRY_RUNS value
   const [regDownload, setRegDownload] = useState(""); // "" = any, else a REGISTRY_DOWNLOAD_SIZES value
   const [sortBy, setSortBy] = useState<SortKey>("popular");
+  const [regSource, setRegSource] = useState<RegistrySource>("ollama");
+  // Hugging Face pages by cursor, not number: the next page's token.
+  const hfCursor = useRef<string | null>(null);
   const [regModels, setRegModels] = useState<RegistryModel[]>([]);
   const [regPage, setRegPage] = useState(0);
   const [regLoading, setRegLoading] = useState(false);
@@ -268,8 +374,8 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The installed Ollama version — a local read, no network (the registry half
-  // only runs when the user presses "Check for updates").
+  // The installed Ollama version — a local read, no network; the newest release
+  // comes from the last stored check (the daily one or "Check for updates").
   useEffect(() => {
     if (!installed) return;
     ollamaVersionStatus(false)
@@ -310,6 +416,18 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       .then(setOrphans)
       .catch(() => {});
   }, [installed]);
+
+  // A live layer that finished was renamed out of `-partial`, and one a pull
+  // stopped writing is an orphan again: re-read whenever the live set moves.
+  const prevLiveLayers = useRef(liveLayers);
+  useEffect(() => {
+    if (prevLiveLayers.current === liveLayers) return;
+    prevLiveLayers.current = liveLayers;
+    if (installed !== true) return;
+    invoke<{ digest: string; size: number; path: string }[]>("list_orphan_partial_blobs")
+      .then(setOrphans)
+      .catch(() => {});
+  }, [liveLayers, installed]);
 
   // Delete an orphaned partial layer to reclaim its disk space. The list is
   // re-read afterwards rather than trimmed optimistically: a delete the OS
@@ -484,6 +602,10 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     );
   };
 
+  // Ollama's error text, except the Hugging Face realm-host refusal, which
+  // says nothing a user can act on: name the fix instead.
+  const actionError = (e: unknown) => (HF_REALM_MISMATCH.test(String(e)) ? t("ollama.hfRealmHost") : String(e));
+
   const withBusy = async (key: string, fn: () => Promise<void>) => {
     setBusy((prev) => ({ ...prev, [key]: true }));
     setError(null);
@@ -491,7 +613,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       await fn();
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setError(actionError(e));
     } finally {
       setBusy((prev) => ({ ...prev, [key]: false }));
       if (key.endsWith(":pull")) clearPullProgress(key.slice(0, -":pull".length));
@@ -512,7 +634,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       setRegQuery(""); // clear only on success; errors keep the typed ref
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setError(actionError(e));
     } finally {
       setBusy((prev) => ({ ...prev, [key]: false }));
       clearPullProgress(model);
@@ -525,7 +647,54 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // Filters and sort are ollama.com's own (see `search_ollama_registry`), so
   // every page arrives filtered and in order and scrolling just appends.
   const regCapabilities = [...regTypes, regRuns].filter(Boolean);
-  const regFilterKey = `${regCapabilities.join(",")}|${regDownload}|${sortBy}`;
+  const regFilterKey = `${regSource}|${regCapabilities.join(",")}|${regDownload}|${sortBy}`;
+
+  // ── TEMP diagnostic: filter chips that toggle back in the cockpit window ──
+  // Records, for ~0.6 s after a chip click, every native click the document
+  // sees on a chip, every run of a chip's handler (same event ids, so a
+  // handler run twice for one event shows) and every filter-state change, each
+  // tagged with this panel instance's id (a remount shows as a new id). The
+  // trace renders under the filter row. Remove once the cause is found.
+  const diagPanelId = useRef(Math.random().toString(36).slice(2, 6));
+  const [chipDiag, setChipDiag] = useState<string[]>(chipDiagBus.last);
+  useEffect(() => {
+    chipDiagBus.subs.add(setChipDiag);
+    return () => {
+      chipDiagBus.subs.delete(setChipDiag);
+    };
+  }, []);
+  const diagNote = (line: string) => chipDiagNote(`panel=${diagPanelId.current} ${line}`);
+  const diagEvent = chipDiagEvent;
+  const diagChip = (key: string, ev: Event) => {
+    const stack = (new Error().stack ?? "")
+      .split("\n")
+      .slice(2, 6)
+      .map((l) => l.trim().replace(/\(?https?:\/\/[^/]+\//, "("))
+      .join(" < ");
+    diagNote(`handler "${key}" ${diagEvent(ev)} | ${stack}`);
+  };
+  useEffect(() => {
+    const onDoc = (ev: Event) => {
+      const chip = ev.target instanceof Element ? ev.target.closest(".ollama-filters .seg > button") : null;
+      if (chip) diagNote(`document ${diagEvent(ev)} on "${chip.textContent ?? ""}"`);
+    };
+    for (const type of ["pointerdown", "click"]) document.addEventListener(type, onDoc, true);
+    return () => {
+      for (const type of ["pointerdown", "click"]) document.removeEventListener(type, onDoc, true);
+    };
+    // Mount-only: `diagNote` reads refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (chipDiagBus.run) diagNote(`state ${regFilterKey}`);
+  }, [regFilterKey]);
+  useEffect(() => {
+    // Only inside a click's trace: a remount mid-click shows, an open does not.
+    if (chipDiagBus.run) diagNote("mounted");
+    return () => {
+      if (chipDiagBus.run) diagNote("unmounted");
+    };
+  }, []);
 
   // Fetch one page of ollama.com/search results. `reset` replaces the list
   // (new query/filter/sort); otherwise it appends, de-duping by name across
@@ -540,13 +709,24 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       setRegDone(false);
     }
     try {
-      const result = await invoke<RegistrySearchPage>("search_ollama_registry", {
-        query: regQueryLive.trim(),
-        capabilities: regCapabilities,
-        size: regDownload,
-        sort: sortBy,
-        page,
-      });
+      // Hugging Face's filters are not ollama.com's: only the query and sort apply.
+      const result: RegistrySearchPage =
+        regSource === "hf"
+          ? await invoke<HfSearchPage>("search_huggingface_models", {
+              query: regQueryLive.trim(),
+              sort: sortBy,
+              cursor: reset ? null : hfCursor.current,
+            }).then((p) => {
+              if (seq === regSeq.current) hfCursor.current = p.nextCursor;
+              return { models: p.models, hasMore: p.nextCursor !== null };
+            })
+          : await invoke<RegistrySearchPage>("search_ollama_registry", {
+              query: regQueryLive.trim(),
+              capabilities: regCapabilities,
+              size: regDownload,
+              sort: sortBy,
+              page,
+            });
       if (seq !== regSeq.current) return;
       setRegPage(page);
       setRegDone(!result.hasMore);
@@ -870,8 +1050,14 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         </div>
         {meta && <div className="ollama-catalog-hint">{meta}</div>}
         {m.description && <div className="ollama-catalog-desc">{m.description}</div>}
-        {(caps.length > 0 || m.community) && (
+        {(caps.length > 0 || m.community || m.hugging_face) && (
           <div className="ollama-caps">
+            {m.hugging_face && (
+              <span className="ollama-cap" title={t("ollama.hfTitle", { user: m.name.split("/")[1] ?? "" })}>
+                {t("ollama.hfBadge")}
+              </span>
+            )}
+            {m.params && <span className="ollama-cap">{m.params}</span>}
             {m.community && (
               <span className="ollama-cap" title={t("ollama.communityTitle", { user: m.name.split("/")[0] })}>
                 {t("ollama.communityBadge")}
@@ -889,6 +1075,12 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             {n}
           </div>
         ))}
+        {m.gated && (
+          <>
+            <div className="ollama-catalog-hint">{t("ollama.hfGated")}</div>
+            <CopyOllamaKey />
+          </>
+        )}
         <div
           className="ollama-catalog-foot"
           onMouseEnter={() => fetchTagInfo(fullName)}
@@ -943,8 +1135,16 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   ) => (
     <div className="ollama-filter-group">
       <span className="ollama-filter-label">{label}</span>
-      <div className="ollama-seg" role="group" aria-label={label}>
-        <button type="button" className={anyActive ? "active" : ""} aria-pressed={anyActive} onClick={onAny}>
+      <div className="seg" role="group" aria-label={label}>
+        <button
+          type="button"
+          className={anyActive ? "active" : ""}
+          aria-pressed={anyActive}
+          onClick={(e) => {
+            diagChip(`${label}/any`, e.nativeEvent);
+            onAny();
+          }}
+        >
           {t("ollama.any")}
         </button>
         {items.map((it) => (
@@ -953,7 +1153,10 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             type="button"
             className={it.active ? "active" : ""}
             aria-pressed={it.active}
-            onClick={it.toggle}
+            onClick={(e) => {
+              diagChip(it.key, e.nativeEvent);
+              it.toggle();
+            }}
           >
             {it.label}
           </button>
@@ -1058,6 +1261,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       </div>
 
       {error && <ErrorNote className="project-dialog-error" error={error} />}
+      {error === t("ollama.hfRealmHost") && <CopyOllamaKey />}
 
       {(() => {
         // Interrupted entries not currently being (re)pulled — these get a
@@ -1118,7 +1322,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       title={t("ollama.deletePartialTitle")}
                       onClick={() => deletePausedPull(model)}
                     >
@@ -1144,7 +1348,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn"
+                      className="btn-quiet"
                       title={t("ollama.dismissTitle")}
                       onClick={() => dismissPull(model)}
                     >
@@ -1170,7 +1374,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <div className="ollama-model-actions">
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       title={t("ollama.deleteLayerTitle")}
                       onClick={() => deleteOrphan(o.path)}
                     >
@@ -1202,7 +1406,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <span className="ollama-model-name">{m.name}</span>
                   {m.running && (
                     <span className={`ollama-live${m.size_vram > 0 ? " gpu" : ""}`}>
-                      {t("ollama.inMemory")} · {m.size_vram > 0 ? `GPU ${fmtBytes(m.size_vram)}` : "CPU"}
+                      {t("ollama.inMemory")} · {placementLabel(m, fmtBytes)}
                     </span>
                   )}
                 </div>
@@ -1240,7 +1444,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <span className="ollama-model-actions-end">
                     <button
                       type="button"
-                      className={`ollama-ghost-btn${updateVerdicts[m.name]?.update_available ? " primary" : ""}`}
+                      className={`btn-quiet${updateVerdicts[m.name]?.update_available ? " is-notable" : ""}`}
                       disabled={busy[`${m.name}:pull`]}
                       title={t("ollama.updateTitle")}
                       onClick={() =>
@@ -1253,7 +1457,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       disabled={busy[`${m.name}:del`]}
                       title={t("ollama.deleteModelTitle")}
                       onClick={() =>
@@ -1380,7 +1584,25 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       </div>
 
       <div className="ollama-filters">
-        {filterGroup(
+        <div className="ollama-filter-group">
+          <span className="ollama-filter-label">
+            {t("ollama.filterSource")} <UntestedTag id="ollama.filterSource" />
+          </span>
+          <div className="seg" role="group" aria-label={t("ollama.filterSource")}>
+            {REGISTRY_SOURCES.map((src) => (
+              <button
+                key={src}
+                type="button"
+                className={regSource === src ? "active" : ""}
+                aria-pressed={regSource === src}
+                onClick={() => setRegSource(src)}
+              >
+                {t(`ollama.source.${src}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+        {regSource === "ollama" && filterGroup(
           t("ollama.filterType"),
           regTypes.size === 0,
           () => setRegTypes(new Set()),
@@ -1391,7 +1613,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             toggle: () => toggleType(cap),
           })),
         )}
-        {filterGroup(
+        {regSource === "ollama" && filterGroup(
           t("ollama.filterRuns"),
           regRuns === "",
           () => setRegRuns(""),
@@ -1402,7 +1624,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             toggle: () => setRegRuns((prev) => (prev === where ? "" : where)),
           })),
         )}
-        {filterGroup(
+        {regSource === "ollama" && filterGroup(
           t("ollama.filterDownload"),
           regDownload === "",
           () => setRegDownload(""),
@@ -1423,6 +1645,17 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           />
         </label>
       </div>
+      {chipDiag.length > 0 && (
+        <div className="ollama-chip-diag">
+          <div className="ollama-chip-diag-head">
+            {t("ollama.chipDiag")}
+            <button type="button" className="ollama-action-btn" onClick={() => setChipDiag([])}>
+              {t("common.close")}
+            </button>
+          </div>
+          <pre>{chipDiag.join("\n")}</pre>
+        </div>
+      )}
 
       {regError && (
         <div className="ollama-reg-error">

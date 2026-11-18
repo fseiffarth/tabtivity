@@ -34,6 +34,8 @@ export interface ProjectTypeTag {
   /** 6-digit hex; text + border use it solid, background gets an alpha tint. */
   color: string;
   title: string;
+  /** Present only when the caller made the tag clickable (the files view's "no scaffold" tag opens its popover). Hover cards and the switcher pass none and keep a plain label. */
+  onClick?: (ev: { currentTarget: { getBoundingClientRect(): DOMRect } }) => void;
 }
 
 /** Derive the colored type tags for a project. The git axis contributes a base
@@ -43,6 +45,7 @@ export function projectTypeTags(
   project: ProjectEntry,
   scaffoldMissing: boolean,
   t: Translate,
+  opts?: { onScaffoldClick?: ProjectTypeTag["onClick"] },
 ): ProjectTypeTag[] {
   const tags: ProjectTypeTag[] = [];
   const gitType = typeof project.git_type === "string" ? project.git_type : "local";
@@ -118,6 +121,7 @@ export function projectTypeTags(
       label: t("projectType.tagNoScaffold"),
       color: "#d29922",
       title: t("projectType.titleMissingScaffold"),
+      ...(opts?.onScaffoldClick ? { onClick: opts.onScaffoldClick } : {}),
     });
   }
   return tags;

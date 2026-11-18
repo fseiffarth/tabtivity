@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
     time::{Duration, Instant},
 };
 
@@ -15,7 +14,7 @@ use sha2::Sha256;
 
 use super::host_live::{HostLive, HostSsh, SharedHostLive};
 use super::protocol::TAB_COLORS;
-use crate::paths::output_within;
+use crate::services::session_mux::{MuxKind, SessionInfo};
 use crate::schema::project::{ComputeHost, RemoteSpec};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -49,6 +48,10 @@ struct ProjectRecord {
     /// mirror, never a parse error for the file.
     #[serde(default, deserialize_with = "lenient_string")]
     mirror: Option<String>,
+    /// The entry's `agent_privacy` record, read with `agent_privacy::privacy_of_value`
+    /// (a malformed value counts as Local models only).
+    #[serde(default)]
+    agent_privacy: Option<Value>,
     // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_ACCESS_KEY
     #[serde(default, rename = "tabtivity_mobile_access")]
     app_mobile_access: bool,
@@ -171,6 +174,28 @@ struct SavedTab {
     /// scope is resolved ([`assistant_chat`]).
     #[serde(default)]
     assistant: Option<Value>,
+    /// The label Tabtivity gave an agent tab and the name its first prompt
+    /// gave it (`src/lib/agents/autoTabName.ts`): see [`public_label_of`].
+    /// Loose, so an odd shape never drops the file.
+    #[serde(default)]
+    auto_label: Option<Value>,
+    #[serde(default)]
+    task_name: Option<Value>,
+}
+
+/// The name the phone shows for a tab: the name its first prompt gave an
+/// agent tab while the tab still carries the label Tabtivity gave it, else
+/// its label. The desktop keeps the label on the tab and shows the task name
+/// only on hover; the phone names the tab by it.
+fn public_label_of(tab: &SavedTab) -> String {
+    let auto_label = tab.auto_label.as_ref().and_then(Value::as_str);
+    let task = tab
+        .task_name
+        .as_ref()
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && auto_label == Some(tab.label.as_str()));
+    task.unwrap_or(&tab.label).chars().take(120).collect()
 }
 
 /// [`ResolvedTab::since`] off the saved record: its stamped launch moment,
@@ -189,7 +214,7 @@ fn fresh_since(tab: &SavedTab) -> Option<i64> {
 }
 
 #[derive(Debug, Clone)]
-struct LiveTmux {
+pub(super) struct LiveTmux {
     activity: u64,
     cwd: PathBuf,
 }
@@ -228,6 +253,15 @@ pub struct PublicProject {
     /// type, like `host`; absent for every other project.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remote_only: bool,
+    /// The project is set to Local models only (`services::agent_privacy`): the ＋ sheet
+    /// offers the local-model rows alone, as the desktop's menu does. A plain flag; the
+    /// setting itself, the project's id and folder never cross. Absent when off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub local_models_only: bool,
+    /// With `local_models_only`: Cut network is on (the sheet then offers OpenCode and
+    /// only the drivers verified with the network cut). Absent when off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cut_network: bool,
     pub live_sessions: usize,
     pub last_activity: Option<u64>,
     /// Root only: how many staged root-agent proposals wait for a decision.
@@ -244,6 +278,13 @@ pub struct PublicProject {
     /// readings the activity list uses. Absent when none is in any of the three.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agents: Option<AgentCounts>,
+    /// A box row only: its member projects' row ids, in the box's order — the
+    /// same opaque ids the list gives those projects, so the phone's box layout
+    /// can fold them under the box. Built from every member here and narrowed
+    /// per request (`host::projects`) to the rows this phone may list: a member
+    /// without its own Mobile switch never crosses, not even as an id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<String>>,
 }
 
 /// A project row's agent tabs by state, for the phone's project list.
@@ -615,6 +656,10 @@ struct ScopeSource {
     /// The project lives only on its host ([`host_pinned`]): a VM, or a
     /// remote-only project, which has no mirror and runs nothing here.
     pinned: bool,
+    /// A box's member project ids, raw, in the box's order; empty otherwise.
+    member_ids: Vec<String>,
+    /// The project's Local models only / Cut network setting; off for every other scope.
+    privacy: crate::services::agent_privacy::Privacy,
 }
 
 /// A remote project's hosts as its `projects.json` record names them — never
@@ -721,14 +766,10 @@ pub struct Catalog {
 /// Changes the phone makes itself go through `load_fresh` / `invalidate`.
 const CATALOG_TTL: Duration = Duration::from_millis(3_000);
 
-/// How long `tmux ls` may take before it is killed. It answers in
-/// milliseconds; one that has not in this long is talking to a hung server,
-/// and the load — which runs under the catalog mutex, in front of every
-/// catalog-backed route — must not wait on it forever.
-const TMUX_LS_TIMEOUT: Duration = Duration::from_secs(3);
-
 /// After tmux could not be asked, how long before it is asked again. Without
-/// this every load in the meantime would pay `TMUX_LS_TIMEOUT` again, one
+/// this every load in the meantime would pay the listing's deadline
+/// (`session_mux::tmux::LIST_TIMEOUT`: the load runs under the catalog
+/// mutex, in front of every catalog-backed route) again, one
 /// after another under the mutex, and a hung tmux would still stall the
 /// phone — just three seconds at a time.
 const TMUX_RETRY: Duration = Duration::from_secs(5);
@@ -747,9 +788,19 @@ pub struct CatalogCache {
     /// (set once in `host::run_with`). Cloned per load — the load itself never
     /// touches a socket. Absent: no host tab is reachable.
     host_live: Option<SharedHostLive>,
+    /// A test's own live sessions, in place of this machine's mux.
+    #[cfg(all(test, windows))]
+    pinned_live: Option<HashMap<String, LiveTmux>>,
 }
 
 impl CatalogCache {
+    /// A cache whose every load joins against `live` instead of asking this
+    /// machine's mux (tests elsewhere in the sidecar with a mux of their own).
+    #[cfg(all(test, windows))]
+    pub(super) fn with_live(live: HashMap<String, LiveTmux>) -> Self {
+        Self { pinned_live: Some(live), ..Self::default() }
+    }
+
     /// A cache whose loads read the refresher's host snapshot from `live`.
     pub fn with_host_live(live: SharedHostLive) -> Self {
         Self { host_live: Some(live), ..Self::default() }
@@ -775,6 +826,10 @@ impl CatalogCache {
     /// Bypasses the TTL, for the one caller that is waiting on a change it knows
     /// is not in the snapshot yet (a tab the desktop has just been told to open).
     pub fn load_fresh(&mut self, state_dir: &Path, host_key: &[u8]) -> Result<Catalog, String> {
+        #[cfg(all(test, windows))]
+        if let Some(live) = self.pinned_live.clone() {
+            return self.load_fresh_with(state_dir, host_key, move || Ok(live));
+        }
         self.load_fresh_with(state_dir, host_key, live_tmux)
     }
 
@@ -782,7 +837,7 @@ impl CatalogCache {
     /// not be asked — the last answer it gave.
     ///
     /// "Could not be asked" (the spawn failed, the listing errored, it hung
-    /// past `TMUX_LS_TIMEOUT`) used to read as "no sessions": every tab went
+    /// past its deadline) used to read as "no sessions": every tab went
     /// `available: false`, and each open terminal's re-check then closed it
     /// with `access_revoked`, which does not retry — one failed fork took down
     /// every terminal on every phone. The previous answer is carried forward
@@ -965,6 +1020,23 @@ fn root_open(state_dir: &Path, env: &RootEnv) -> bool {
         Some("destructive" | "off")
     );
     staged && (env.fenced)()
+}
+
+/// The phones that may open the root console, `[MOBILE_HOST_KEY].root_devices`.
+/// Unlike a project's or the assistant's list this one is **opt-in**: absent,
+/// empty, malformed or unreadable is no phone, so a phone paired later is off
+/// root until the user ticks it. Narrows [`root_open`], never opens it.
+pub fn root_devices(state_dir: &Path) -> Vec<String> {
+    fs::read(state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|settings| {
+            settings
+                .get(crate::brand::MOBILE_HOST_KEY)
+                .and_then(|host| host.get("root_devices"))
+                .map(crate::schema::projects::mobile_device_list)
+        })
+        .unwrap_or_default()
 }
 
 /// The assistant scope's own id, as the desktop's tab store and bridge spell it.
@@ -1328,93 +1400,86 @@ fn create_verdict(host: ProjectHost, folder: bool, pinned: bool, machines: bool)
     }
 }
 
-/// `tmux ls` through Tabtivity's effective PATH, the one the desktop's own tmux
-/// spawns use (`services::tmux_local`). A headless sidecar (launchd/systemd
-/// user service) inherits a bare PATH, so a bare `tmux` misses Homebrew's on a
-/// Mac, or picks `/usr/bin/tmux` against a server a `~/.local/bin/tmux` started
-/// — and tmux refuses a client of another protocol version.
-fn tmux_ls_command(format: &str) -> Command {
-    let mut command = crate::services::tmux_local::tmux_command();
-    command.args(["ls", "-F", format]);
-    command
+/// Whether a failed `tmux ls` is tmux saying there is no server (zero
+/// sessions) rather than not answering — `session_mux::tmux::says_no_server`.
+pub(crate) use crate::services::session_mux::tmux::says_no_server as tmux_says_no_server;
+
+/// The mux's listing as the catalog joins it: name → activity and cwd.
+fn live_of(sessions: Vec<SessionInfo>) -> HashMap<String, LiveTmux> {
+    sessions
+        .into_iter()
+        .map(|session| (session.name, LiveTmux { activity: session.activity, cwd: PathBuf::from(session.cwd) }))
+        .collect()
 }
 
-/// Whether a failed `tmux ls` is tmux saying there is no server — which is
-/// how it says "zero sessions": the server exits with its last session, and a
-/// client that finds none exits non-zero. The same three wordings the
-/// desktop's own tmux calls take for "already gone"
-/// (`tmux_local::kill_failure_is_already_gone`): `no server running on …`
-/// (the socket is there, nobody behind it), `error connecting to … (No such
-/// file or directory)` (no socket at all, tmux ≥ 3.x), and the older `failed
-/// to connect to server`. Any other failure — a permission error, an
-/// exhausted table, a server too busy to accept — is tmux not answering.
-fn tmux_says_no_server(stderr: &str) -> bool {
-    stderr.contains("no server running")
-        || stderr.contains("failed to connect to server")
-        || (stderr.contains("error connecting to")
-            && (stderr.contains("No such file or directory") || stderr.contains("Connection refused")))
-}
-
-/// One `tmux ls` exit, read as an answer or as a failure to get one.
-fn live_from_ls(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<HashMap<String, LiveTmux>, String> {
-    if !success {
-        let stderr = String::from_utf8_lossy(stderr);
-        if tmux_says_no_server(&stderr) {
-            return Ok(HashMap::new());
-        }
-        return Err(format!("tmux ls failed: {}", stderr.trim()));
-    }
-    Ok(String::from_utf8_lossy(stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut p = line.splitn(3, '\t');
-            let name = p.next()?.to_string();
-            let activity = p.next()?.parse().ok()?;
-            let cwd = PathBuf::from(p.next()?);
-            Some((name, LiveTmux { activity, cwd }))
-        })
-        .collect())
-}
-
-/// The live tmux sessions, or `Err` when tmux could not be asked. The two
+/// The live local sessions, or `Err` when the mux could not be asked. The two
 /// are different facts and are kept apart all the way up (`CatalogCache::live`):
-/// an empty map is tmux answering "none".
+/// an empty map is the mux answering "none" (`SessionMux::list`'s contract,
+/// under `tmux::LIST_TIMEOUT`).
 fn live_tmux() -> Result<HashMap<String, LiveTmux>, String> {
-    // Windows has no tmux, and local tabs there are never wrapped in one
-    // (`CenterPanel` disables local persistence on Windows), so there is nothing
-    // to list — and a spawn per catalog read would only ever fail. The desktop's
-    // Mobile settings say so rather than leaving an empty terminal list to explain
-    // itself.
-    if terminals_support() == TERMINALS_UNSUPPORTED {
+    live_on(&*crate::services::session_mux::mux())
+}
+
+/// [`live_tmux`] on `mux`. The session host's `list` never starts it: no
+/// host running is no session (`MuxError::NoServer` → `Ok(vec![])`).
+pub(super) fn live_on(mux: &dyn crate::services::session_mux::SessionMux) -> Result<HashMap<String, LiveTmux>, String> {
+    // A machine with no session backend at all has nothing to list — and a
+    // call per catalog read would only ever fail. The session host's setting
+    // does not decide this: switched off, a running host's live sessions stay
+    // listed (and attachable) until they end, while `terminals` says
+    // `unsupported` and the phone offers no new ones.
+    if !lists_sessions_on(mux.kind(), || mux.holds_sessions()) {
         return Ok(HashMap::new());
     }
-    let format ="#{session_name}\t#{session_activity}\t#{pane_current_path}";
-    match output_within(tmux_ls_command(format), TMUX_LS_TIMEOUT) {
-        Ok(out) => live_from_ls(out.status.success(), &out.stdout, &out.stderr),
-        // No tmux on Tabtivity's PATH: no session was ever started in one.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
-        Err(error) => Err(format!("tmux ls: {error}")),
+    mux.list().map(live_of).map_err(|error| error.to_string())
+}
+
+/// Whether a catalog load asks `kind`'s mux for its live sessions: tmux
+/// always (a missing tmux lists none, and `tmux -V` is never run for it);
+/// the session host whenever it may hold sessions, setting or not. Pure.
+fn lists_sessions_on(kind: MuxKind, holds_sessions: impl FnOnce() -> bool) -> bool {
+    match kind {
+        MuxKind::Tmux => true,
+        MuxKind::WinHost => holds_sessions(),
     }
 }
 
 /// The project detail's `terminals` value where the host's tabs attach
 /// through tmux: the phone offers ＋, Schedule and Mark up's Submit.
 pub const TERMINALS_TMUX: &str = "tmux";
-/// … and where the host has no tmux (Windows): the phone hides those three
-/// and says why in one line. An older desktop sends no field, which the
-/// phone reads as `tmux`.
+/// … where they attach through Windows' native session host (plan
+/// `docs/windows_session_host_plan.md`; not returned until the host lands).
+/// An older phone reads any value but `unsupported` as supported.
+pub const TERMINALS_NATIVE: &str = "native";
+/// … and where the host has no session backend (Windows today): the phone
+/// hides those three and says why in one line. An older desktop sends no
+/// field, which the phone reads as `tmux`.
 pub const TERMINALS_UNSUPPORTED: &str = "unsupported";
 
-/// Whether this host's terminals reach a phone — the one predicate behind
-/// `live_tmux`'s short-circuit and the detail payload's `terminals` field, so
-/// the two cannot drift. Pure, so both answers have a test on every OS.
-fn terminals_support_on(windows: bool) -> &'static str {
-    if windows { TERMINALS_UNSUPPORTED } else { TERMINALS_TMUX }
+/// Whether this host's terminals reach a phone, from its session mux — the
+/// one predicate behind `live_tmux`'s short-circuit and the detail payload's
+/// `terminals` field, so the two cannot drift. tmux answers `tmux` whether or
+/// not it is installed (a missing tmux simply lists no session); the session
+/// host answers `native` only once it is available. `available` is asked
+/// for the session host alone: tmux's (`tmux -V`, no deadline) would only
+/// stall an async handler for an answer that changes nothing. Pure, so every
+/// answer has a test on every OS.
+fn terminals_support_on(kind: MuxKind, available: impl FnOnce() -> bool) -> &'static str {
+    match kind {
+        MuxKind::Tmux => TERMINALS_TMUX,
+        MuxKind::WinHost if available() => TERMINALS_NATIVE,
+        MuxKind::WinHost => TERMINALS_UNSUPPORTED,
+    }
 }
 
 /// `terminals_support_on` for the host this build runs on.
 pub fn terminals_support() -> &'static str {
-    terminals_support_on(cfg!(target_os = "windows"))
+    terminals_support_of(&*crate::services::session_mux::mux())
+}
+
+/// [`terminals_support`] for `mux`.
+pub(super) fn terminals_support_of(mux: &dyn crate::services::session_mux::SessionMux) -> &'static str {
+    terminals_support_on(mux.kind(), || mux.available())
 }
 
 /// Whether a paired phone may see and open shell tabs. Off unless
@@ -1428,6 +1493,21 @@ pub fn shells_open(state_dir: &Path) -> bool {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|settings| settings.get(crate::brand::MOBILE_HOST_KEY)?.get("shell_tabs")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// Whether a paired phone may list and attach the desktop's pictures — the
+/// clipboard image and the newest screenshots, downloads and pictures
+/// (composer **+ → From the desktop**). Off unless
+/// `tabtivity_mobile_host.desktop_images` is set: those folders are the
+/// user's, not a project's, and a lost phone should not reach them by default
+/// (threat model gap 65). Read per request, like `files::files_open`, so
+/// turning it off closes both routes at once. Unreadable settings refuse.
+pub fn desktop_images_open(state_dir: &Path) -> bool {
+    fs::read(state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|settings| settings.get(crate::brand::MOBILE_HOST_KEY)?.get("desktop_images")?.as_bool())
         .unwrap_or(false)
 }
 
@@ -1470,16 +1550,17 @@ struct Listing<'a> {
     host_tabs: bool,
 }
 
-/// Whether this build lists remote-host tabs: where its own tabs reach the
-/// phone through tmux (not Windows, which has no ControlMaster either).
+/// Whether this build lists remote-host tabs: not on Windows, which has no
+/// ssh ControlMaster for the bridge to ride (`host_live`) — a fact about
+/// ssh, not about the local session backend.
 fn host_tabs_here() -> bool {
-    host_tabs_on(terminals_support())
+    host_tabs_on(cfg!(target_os = "windows"))
 }
 
-/// [`host_tabs_here`] for a `terminals_support_on` answer, so the Windows
-/// answer has a test on every OS.
-fn host_tabs_on(terminals: &str) -> bool {
-    terminals == TERMINALS_TMUX
+/// [`host_tabs_here`] for a platform, so the Windows answer has a test on
+/// every OS.
+fn host_tabs_on(windows: bool) -> bool {
+    !windows
 }
 
 /// The remote host a saved tab of `source` runs on, when the phone lists it
@@ -1553,6 +1634,22 @@ fn read_session(state_dir: &Path, raw_id: &str) -> SessionFile {
         .unwrap_or(SessionFile { tab_layout: vec![] })
 }
 
+/// The local sessions the saved tabs of scope `raw_id` minted: each tab's own
+/// session (never one it only attached to), and only a name the app derives for
+/// that scope and kind ([`expected_tmux`]). What ending a scope for good — a
+/// dissolved box — must end, including for a scope no window has loaded.
+pub(crate) fn saved_scope_sessions(state_dir: &Path, raw_id: &str) -> Vec<String> {
+    // project-tree-read: ok — the state-dir terminal-session snapshot.
+    let tabs = read_session(state_dir, raw_id).tab_layout;
+    tabs.into_iter()
+        .filter(|tab| tab.tmux_attach.is_none())
+        .filter_map(|tab| {
+            let name = tab.tmux_session?;
+            expected_tmux(raw_id, &tab.kind, &name).then_some(name)
+        })
+        .collect()
+}
+
 /// The hosts `host_live`'s refresher probes: those of Mobile-enabled remote
 /// projects with at least one listable host tab, by [`host_of_tab`] — the
 /// catalog's own rule. Each host once (by `target_key`). Empty where host
@@ -1608,14 +1705,16 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             status: "active".into(),
             kind: ScopeKind::Root,
             roots: vec![root.dir.clone()],
-            // Root has its own switch and gate; per-phone root is out of
-            // scope (docs/done/mobile_device_scoped_access_plan.md).
-            devices: None,
+            // Root has its own switch and gate, and a per-phone list that is
+            // opt-in: a phone is off root until the user names it.
+            devices: Some(root_devices(state_dir)),
             host: ProjectHost::Local,
             cwd_alias: None,
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: Vec::new(),
+            privacy: Default::default(),
         });
     }
     if assistant_open(state_dir) {
@@ -1636,6 +1735,8 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: Vec::new(),
+            privacy: Default::default(),
         });
     }
     for project in &projects {
@@ -1673,6 +1774,8 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: host == ProjectHost::Container && container_shells(project),
             hosts: ProjectHosts::of(project),
             pinned: host_pinned(project),
+            member_ids: Vec::new(),
+            privacy: crate::services::agent_privacy::privacy_of_value(project.agent_privacy.as_ref()),
         });
     }
     for b in &boxes {
@@ -1716,6 +1819,8 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: b.member_ids.clone(),
+            privacy: Default::default(),
         });
     }
     Ok(sources)
@@ -1913,11 +2018,14 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             kind: ScopeKind::Project,
             host: ProjectHost::Local,
             remote_only: false,
+            local_models_only: false,
+            cut_network: false,
             live_sessions: 1,
             last_activity: None,
             pending_reviews: None,
             git: None,
             agents: None,
+            members: None,
         },
         raw_id: "raw-p".into(),
         root: PathBuf::from("/"),
@@ -2115,7 +2223,7 @@ fn resolve_scope(
         };
         let public = PublicTab {
             id: key_id(host_key, "tab", &[&source.raw_id, tmux]),
-            label: tab.label.chars().take(120).collect(),
+            label: public_label_of(&tab),
             kind: kind.to_string(),
             agent_label: agent.then(|| agent_label_of(&tab)),
             agent_status: None,
@@ -2188,12 +2296,16 @@ fn resolve_scope(
         kind: source.kind,
         host: source.host,
         remote_only: source.pinned && source.host == ProjectHost::Remote,
+        local_models_only: source.privacy.local_models_only,
+        cut_network: source.privacy.local_models_only && source.privacy.cut_network,
         live_sessions: tabs.iter().filter(|t| t.public.available).count(),
         last_activity,
         pending_reviews: (source.kind == ScopeKind::Root)
             .then(|| crate::services::root_mcp_review::pending_count(state_dir)),
         git: None,
         agents: None,
+        members: (source.kind == ScopeKind::Box)
+            .then(|| source.member_ids.iter().map(|id| key_id(host_key, "project", &[id])).collect()),
     };
     Some(ResolvedProject {
         public,

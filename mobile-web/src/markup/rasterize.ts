@@ -14,6 +14,10 @@ export const INK: Record<MarkColor, string> = {
   blue: "#2663eb",
   black: "#121212",
   yellow: "#ffd91a",
+  green: "#16a34a",
+  orange: "#ea7a0c",
+  purple: "#7c3aed",
+  pink: "#ec4899",
 };
 /** How strongly a highlighter box — and the marker — covers the page. */
 export const HIGHLIGHT_ALPHA = 0.4;
@@ -181,12 +185,128 @@ export function badgeSize(page: PageLayer): number {
   return Math.max(page.size[0], page.size[1]) / 84;
 }
 
-/** Draws every mark of `page`, `scale` canvas pixels per page unit. */
-export function drawPage(ctx: Paint, page: PageLayer, scale: number): void {
+/** Draws the marks of `page` from the `from`-th up to the `to`-th (all by
+ * default), `scale` canvas pixels per page unit. */
+export function drawPage(ctx: Paint, page: PageLayer, scale: number, from = 0, to = page.marks.length): void {
   ctx.save();
   ctx.scale(scale, scale);
   const badge = badgeSize(page);
-  for (const mark of page.marks) drawMark(ctx, mark, badge);
+  for (let i = from; i < to; i++) drawMark(ctx, page.marks[i], badge);
+  ctx.restore();
+}
+
+/** How strongly the marks of earlier rounds show — sent, never sent again. */
+export const SENT_ALPHA = 0.35;
+
+/** The sent marks dimmed, then the unsent ones over them — the layer both
+ * hosts show while marking. */
+export function paintLayer(ctx: Paint, page: PageLayer | undefined, sent: PageLayer | undefined, scale: number): void {
+  if (sent) {
+    ctx.save();
+    ctx.globalAlpha = SENT_ALPHA;
+    drawPage(ctx, sent, scale);
+    ctx.restore();
+  }
+  if (page) drawPage(ctx, page, scale);
+}
+
+/** `paintLayer` for the length of a gesture that repaints a page on every
+ * pointer move: the sent marks and the page's marks the gesture has not
+ * changed are painted once, onto a copy, and each move copies that and draws
+ * only the rest — in the layer's own paint order, so overlapping and
+ * see-through marks come out as a whole repaint would. The copy is rebuilt
+ * (never patched) when the unchanged marks shrink, the sent side or the size
+ * changes; `drop` gives its backing store back as the gesture ends. */
+export class CommittedMarks {
+  private held: { sent: PageLayer | undefined; source: readonly Mark[]; count: number; w: number; h: number; canvas: HTMLCanvasElement } | null = null;
+
+  /** `paintLayer(ctx, page, sent, scale)` onto `canvas`' context `ctx`.
+   * `base` is the page as it stood before the gesture: the marks `page`
+   * shares with it, from the first, are the unchanged ones. */
+  paint(ctx: CanvasRenderingContext2D, canvas: { width: number; height: number }, page: PageLayer | undefined, base: PageLayer | undefined, sent: PageLayer | undefined, scale: number): void {
+    const marks = page?.marks ?? [];
+    let held = this.held;
+    if (!held || held.sent !== sent || held.w !== canvas.width || held.h !== canvas.height || !sharesPrefix(held.source, held.count, marks)) {
+      this.drop();
+      const count = page && base ? commonPrefix(marks, base.marks) : 0;
+      if (count === 0 && !sent) {
+        paintLayer(ctx, page, sent, scale);
+        return;
+      }
+      const copy = document.createElement("canvas");
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const copyCtx = copy.getContext("2d");
+      if (!copyCtx) {
+        paintLayer(ctx, page, sent, scale);
+        return;
+      }
+      if (sent) {
+        copyCtx.save();
+        copyCtx.globalAlpha = SENT_ALPHA;
+        drawPage(copyCtx, sent, scale);
+        copyCtx.restore();
+      }
+      if (page && count) drawPage(copyCtx, page, scale, 0, count);
+      held = { sent, source: marks, count, w: canvas.width, h: canvas.height, canvas: copy };
+      this.held = held;
+    }
+    ctx.drawImage(held.canvas, 0, 0);
+    if (page && held.count < marks.length) drawPage(ctx, page, scale, held.count);
+  }
+
+  drop(): void {
+    const held = this.held;
+    if (held) {
+      held.canvas.width = 0;
+      held.canvas.height = 0;
+    }
+    this.held = null;
+  }
+}
+
+/** How many marks `a` and `b` share, object for object, from the first. */
+function commonPrefix(a: readonly Mark[], b: readonly Mark[]): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+/** Whether `marks` still begin with the first `count` of `source`. */
+function sharesPrefix(source: readonly Mark[], count: number, marks: readonly Mark[]): boolean {
+  if (marks.length < count) return false;
+  for (let i = 0; i < count; i++) if (source[i] !== marks[i]) return false;
+  return true;
+}
+
+/** The newest piece of a stroke in progress, `scale` canvas pixels per page
+ * unit: the curve from the midpoint before the last sample, through it, to
+ * the midpoint after it — the curves `drawPage` draws the finished stroke
+ * with, so nothing jumps when the pen lifts. The first sample is a dot. */
+export function paintStrokePiece(ctx: Paint, scale: number, mark: InkMark): void {
+  const points = mark.points;
+  if (!points.length) return;
+  const at = points.length - 1;
+  const mid = (a: readonly number[], b: readonly number[]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  ctx.save();
+  ctx.scale(scale, scale);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = INK[mark.color];
+  ctx.beginPath();
+  if (at === 0) {
+    ctx.lineWidth = inkWidth(mark.width, points[0][2]);
+    ctx.moveTo(points[0][0], points[0][1]);
+    ctx.lineTo(points[0][0], points[0][1]);
+  } else {
+    const control = points[at - 1];
+    const from = at >= 2 ? mid(points[at - 2], control) : [control[0], control[1]];
+    const to = mid(control, points[at]);
+    ctx.lineWidth = inkWidth(mark.width, control[2]);
+    ctx.moveTo(from[0], from[1]);
+    ctx.quadraticCurveTo(control[0], control[1], to[0], to[1]);
+  }
+  ctx.stroke();
   ctx.restore();
 }
 

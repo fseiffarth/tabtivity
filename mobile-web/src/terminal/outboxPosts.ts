@@ -11,9 +11,12 @@ import type { OutboxFile, TranscriptEntry } from "../api";
  * from and no other in the project.
  *
  * Placement is by time: every stored record carries one (`TranscriptEntry.at`)
- * and every file its mtime, so a post goes after the last record written at or
- * before it — between the "I'll send it" and the "sent" the agent wrote around
- * its `tabtivity-send` call. A record without a time stands at the one before it.
+ * and every file its mtime, so a file belongs to the turn of the last record
+ * written at or before it. The post goes at that turn's end, after its final
+ * answer and before the next prompt — not between the "I'll send it" and the
+ * "sent" the agent wrote around its `tabtivity-send` call, where it would split
+ * the answer's output. While the turn runs, the post moves down with its newest
+ * record. A record without a time stands at the one before it.
  *
  * A file older than the first shown record is left to the gallery: it belongs
  * to a turn not shown (the answer was truncated) or to another session in the
@@ -55,16 +58,25 @@ export function outboxPosts(entries: readonly TranscriptEntry[], files: readonly
   // A prompt still queued on the desktop stands at the end with its send's
   // time: nothing the agent sent meanwhile belongs below it.
   const times = entries.map((entry) => (entry.queued ? null : (last = entrySeconds(entry) ?? last)));
+  // The last record of each record's turn: the one before the next prompt.
+  const turnEnd: number[] = new Array(entries.length);
+  for (let i = entries.length - 1, next = entries.length; i >= 0; i -= 1) {
+    turnEnd[i] = next - 1;
+    if (entries[i].kind === "prompt") next = i;
+  }
   const oldestFirst = [...files].sort((a, b) => a.modified - b.modified || a.name.localeCompare(b.name));
-  let open: { index: number; post: OutboxPost; last: number } | null = null;
+  // `after`: the record the file followed, so a record between two files
+  // still parts their sends though both posts land at the turn's end.
+  let open: { after: number; post: OutboxPost; last: number } | null = null;
   for (const file of oldestFirst) {
-    let index = -1;
+    let after = -1;
     for (let i = 0; i < times.length; i += 1) {
       const time = times[i];
-      if (time !== null && time <= file.modified) index = i;
+      if (time !== null && time <= file.modified) after = i;
     }
-    if (index < 0) continue;
-    if (open && open.index === index && file.modified - open.last <= POST_GAP) {
+    if (after < 0) continue;
+    const index = turnEnd[after];
+    if (open && open.after === after && file.modified - open.last <= POST_GAP) {
       open.post.files.push(file);
       open.last = file.modified;
       continue;
@@ -73,7 +85,7 @@ export function outboxPosts(entries: readonly TranscriptEntry[], files: readonly
     const list = posts.get(index);
     if (list) list.push(post);
     else posts.set(index, [post]);
-    open = { index, post, last: file.modified };
+    open = { after, post, last: file.modified };
   }
   return posts;
 }

@@ -31,6 +31,13 @@ describe("introRoute", () => {
     expect(effectiveGoals([])).toEqual(["explore"]);
   });
 
+  it("the import question's page joins right after Welcome, only when asked for", () => {
+    expect(introRoute(["organize"], { computer: true })).toEqual(["welcome", "computer", "goals", "forYou", "askApp", "done"]);
+    expect(introRoute([], { computer: true }).slice(0, 3)).toEqual(["welcome", "computer", "goals"]);
+    expect(introRoute([], { computer: false })).toEqual(introRoute([]));
+    expect(introRoute([])).not.toContain("computer");
+  });
+
   it("a goal without setup pages skips straight to For you", () => {
     expect(introRoute(["organize"])).toEqual(["welcome", "goals", "forYou", "askApp", "done"]);
     expect(introRoute(["phone"])).toEqual(["welcome", "goals", "forYou", "askApp", "done"]);
@@ -109,7 +116,7 @@ describe("recommendedLessons", () => {
   it("firstRecommendedLesson is the first group's best lesson", () => {
     expect(firstRecommendedLesson(["organize"])).toBe("mail");
     expect(firstRecommendedLesson(["code"])).toBe("install-agent");
-    expect(firstRecommendedLesson(["phone", "localAi"])).toBe("local-model");
+    expect(firstRecommendedLesson(["localAi", "phone"])).toBe("mobile");
   });
 });
 

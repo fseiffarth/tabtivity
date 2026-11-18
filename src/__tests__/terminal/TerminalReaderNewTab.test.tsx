@@ -44,7 +44,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} dispose() {} } }
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 vi.mock("../../stores/settings", () => ({
-  useSettingsStore: vi.fn((sel: (s: object) => unknown) => sel({ settings: { color_scheme: "dark" } })),
+  useSettingsStore: Object.assign(vi.fn((sel: (s: object) => unknown) => sel({ settings: { color_scheme: "dark" } })), { getState: () => ({ settings: { color_scheme: "dark" } }) }),
   resolveTheme: (s: string) => s,
 }));
 vi.mock("../../components/terminal/TerminalReaderView", () => ({

@@ -11,15 +11,22 @@ export function shownShells(shells: readonly RunningShell[] | undefined, waited:
 }
 
 /** The desktop Reader's "Shell is running…" lines, one per shell: the agent's
- * own few words on what it does (else the command's first line), and on a tap
- * the whole command, as the desktop Reader's line opens it. */
-export function RunningShells({ shells, untested }: { shells: readonly RunningShell[]; untested?: string }) {
+ * own few words on what it does (else the command's first line), whether it
+ * runs in the background, and on a tap the whole command, as the desktop
+ * Reader's line opens it. The phone's command is the sidecar's masked copy
+ * (`services::mobile_control::shell_mask`: project-relative, other host paths
+ * cut to their leaf, secrets hidden). The Terminal view shows the screen. */
+export function RunningShells({ shells, untested, onShowTerminal }: {
+  shells: readonly RunningShell[];
+  untested?: string;
+  onShowTerminal?: () => void;
+}) {
   return <>
-    {shells.map((shell, index) => <ShellRow key={`${shell.at ?? ""}:${shell.description ?? ""}:${index}`} shell={shell} untested={untested} />)}
+    {shells.map((shell, index) => <ShellRow key={`${shell.at ?? ""}:${shell.description ?? ""}:${index}`} shell={shell} untested={untested} onShowTerminal={onShowTerminal} />)}
   </>;
 }
 
-function ShellRow({ shell, untested }: { shell: RunningShell; untested?: string }) {
+function ShellRow({ shell, untested, onShowTerminal }: { shell: RunningShell; untested?: string; onShowTerminal?: () => void }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const commandId = useId();
@@ -35,6 +42,7 @@ function ShellRow({ shell, untested }: { shell: RunningShell; untested?: string 
       {shell.command && <button type="button" className="transcript-shell-toggle" aria-expanded={open} aria-controls={commandId}
         aria-label={t(open ? "terminal.reader.shellHide" : "terminal.reader.shellShow")} title={t(open ? "terminal.reader.shellHide" : "terminal.reader.shellShow")}
         onClick={() => setOpen((shown) => !shown)}><span aria-hidden="true">{open ? "▴" : "▾"}</span></button>}
+      {onShowTerminal && <button type="button" className="transcript-shell-toggle transcript-shell-terminal" onClick={onShowTerminal}>{t("mobile.focus.shellInTerminal")}</button>}
     </div>
     {open && shell.command && <pre id={commandId} className="transcript-shell-command">{shell.command}{shell.cut && "…"}</pre>}
   </div>;

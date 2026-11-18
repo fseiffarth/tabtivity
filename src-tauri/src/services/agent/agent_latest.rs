@@ -2,10 +2,13 @@
 //! CLI updates" — the agent twin of the local-model update check.
 //!
 //! [`crate::services::agent_versions`] answers what is *installed* and never
-//! reaches the network; this module answers what is *out there*, and only when
-//! the user clicks. One GET per checked CLI, to the registry its vendor
-//! publishes to: npm, PyPI, a GitHub release, or the vendor's own release
-//! manifest. No token, no account, no
+//! reaches the network; this module answers what is *out there*: when the user
+//! clicks, and once a day for each installed CLI on its own
+//! (`commands::agents::start_daily_update_check`, [`due_agents`]), so the
+//! Models & agents menu and a new tab of the CLI can say a release is out.
+//! One GET per checked CLI, to the registry its vendor
+//! publishes to: npm, PyPI, a GitHub release, the vendor's own release
+//! manifest, or the install script that names its build. No token, no account, no
 //! machine detail — the request names the app (GitHub refuses one without a
 //! User-Agent) and nothing else.
 //!
@@ -17,7 +20,7 @@
 //!
 //! The installed side is read where `agent_versions` has no recipe for it from
 //! the package metadata next to the executable — npm's `package.json`, a Python
-//! `*.dist-info` — so nothing is spawned.
+//! `*.dist-info`, a `versions/<version>/` folder — so nothing is spawned.
 //!
 //! What a click found stays in `<state_dir>/agent_latest.json` ([`Store`]), so
 //! the card still says it after the panel closes or the app restarts. Reading
@@ -42,6 +45,16 @@ pub enum Source {
     /// A vendor's own release host (`<base>/manifests/<platform>.json`), the
     /// file its native installer reads.
     Manifest(&'static str),
+    /// A vendor's release channel: one JSON file whose `version` names the
+    /// release with its build (`1.4.23-R8977.1`), which the CLI's own
+    /// `--version` leads without (`Muse Code 1.4.23 (1.4.23-R8977.1)` reads as
+    /// `1.4.23`), so the `-R<build>` is dropped.
+    Channel(&'static str),
+    /// A vendor's install script with its release baked in: the version is the
+    /// path segment after `marker` in the download URL it names. Its installs
+    /// live at `…/versions/<version>/<exe>`, which is read back for the
+    /// installed side ([`installed_version_near`]).
+    InstallScript { url: &'static str, marker: &'static str },
 }
 
 /// Per registry `id`. Each row was checked against the registry on 2026-10-02:
@@ -77,6 +90,21 @@ pub const SOURCES: &[(&str, Source)] = &[
     (
         "antigravity",
         Source::Manifest("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app"),
+    ),
+    // On no public registry: the channel its launcher reads (`muse-stable`,
+    // 1.4.23-R8977.1 on 2026-11-17). Without a row here Manage CLIs never knew
+    // a newer Muse and offered no Update at all.
+    ("muse", Source::Channel("https://api.meta.ai/muse-code/channels/muse-stable")),
+    // On no public registry, and `cursor-agent update` asks Cursor's signed-in
+    // API. The public installer names the build it downloads
+    // (`downloads.cursor.com/lab/2026.11.11-b912975/<os>/<arch>/…`, 2026-11-13);
+    // one build number for every platform.
+    (
+        "cursor-agent",
+        Source::InstallScript {
+            url: "https://cursor.com/install",
+            marker: "https://downloads.cursor.com/lab/",
+        },
     ),
 ];
 
@@ -117,17 +145,24 @@ fn url_for(source: Source) -> String {
             let platform = manifest_platform(std::env::consts::OS, std::env::consts::ARCH);
             format!("{base}/manifests/{platform}.json")
         }
+        Source::Channel(url) | Source::InstallScript { url, .. } => url.to_string(),
     }
 }
 
 /// The version inside one registry answer.
 pub fn parse_latest(source: Source, body: &str) -> Option<String> {
+    if let Source::InstallScript { marker, .. } = source {
+        let rest = body.split_once(marker)?.1;
+        return parse_version(rest.split(['/', '"', '\'', '$', '\n']).next()?);
+    }
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
     let raw = match source {
         Source::Npm(_) | Source::Manifest(_) => json["version"].as_str()?,
+        Source::Channel(_) => json["version"].as_str()?.split("-R").next()?,
         Source::PyPi(_) => json["info"]["version"].as_str()?,
         // `v1.53.0`, or a monorepo's `cli/v2.2.1`: the part after the last slash.
         Source::GitHub(_) => json["tag_name"].as_str()?.rsplit('/').next()?,
+        Source::InstallScript { .. } => return None,
     };
     parse_version(raw)
 }
@@ -192,9 +227,13 @@ pub async fn fetch_latest(source: Source) -> Result<String, String> {
         }
         // Fall through to the API, which still answers while its quota lasts.
     }
+    let accept = match source {
+        Source::InstallScript { .. } => "text/plain, */*",
+        _ => "application/json",
+    };
     let mut response = client()?
         .get(url_for(source))
-        .header("Accept", "application/json")
+        .header("Accept", accept)
         .send()
         .await
         // Display without the URL chain: the host is the whole message.
@@ -234,8 +273,24 @@ pub fn installed_version_near(exe: &Path, source: Source) -> Option<String> {
     starts.iter().find_map(|start| match source {
         Source::Npm(pkg) => npm_version_near(start, pkg),
         Source::PyPi(project) => dist_info_version_near(start, project),
-        Source::GitHub(_) | Source::Manifest(_) => None,
+        Source::InstallScript { .. } => versions_dir_version(start),
+        Source::GitHub(_) | Source::Manifest(_) | Source::Channel(_) => None,
     })
+}
+
+/// The build a versioned install's executable (`…/versions/<build>/<exe>`,
+/// reached through its launcher link) belongs to.
+pub fn installed_build(exe: &Path) -> Option<String> {
+    versions_dir_version(&exe.canonicalize().ok()?)
+}
+
+/// A versioned install (`…/versions/<version>/<exe>`): the folder's name.
+fn versions_dir_version(exe: &Path) -> Option<String> {
+    let dir = exe.parent()?;
+    if dir.parent()?.file_name()? != "versions" {
+        return None;
+    }
+    parse_version(dir.file_name()?.to_str()?)
 }
 
 fn ancestors(start: &Path) -> impl Iterator<Item = &Path> {
@@ -317,9 +372,15 @@ pub struct Checked {
     pub checked_at: u64,
 }
 
-/// `<state_dir>/agent_latest.json`, keyed by registry `id`. Deleting it costs
-/// one click per card.
+/// `<state_dir>/agent_latest.json`, keyed by registry `id` — and by
+/// [`OLLAMA_KEY`] for Ollama's own release. Deleting it costs one click per
+/// card.
 pub type Store = HashMap<String, Checked>;
+
+/// The store key of Ollama's own newest release (`commands::ollama`), which the
+/// daily check asks about beside the CLIs'. No agent in the registry has this
+/// `id`, and nothing iterates the store, so it never reads as a CLI row.
+pub const OLLAMA_KEY: &str = "ollama";
 
 pub fn store_path() -> PathBuf {
     crate::storage::state_dir().join("agent_latest.json")
@@ -356,6 +417,34 @@ pub fn remember_in(path: &Path, agent_id: &str, found: Option<Result<String, Str
 
 pub fn remember(agent_id: &str, found: Option<Result<String, String>>) -> Checked {
     remember_in(&store_path(), agent_id, found)
+}
+
+/// How old a CLI's last check may get before the daily check asks again.
+pub const DAILY_EVERY_SECS: u64 = 24 * 60 * 60;
+
+/// The installed CLIs the daily check should ask about now: each one with a
+/// known registry whose last check — a click or an earlier daily run, failed
+/// or not — is `every` seconds old or was never made. A failed check counts as
+/// a check, so a registry that is down is asked once a day, not every tick.
+pub fn due_agents<'a>(
+    store: &Store,
+    installed: impl IntoIterator<Item = &'a str>,
+    now: u64,
+    every: u64,
+) -> Vec<&'a str> {
+    installed
+        .into_iter()
+        .filter(|id| source_for(id).is_some())
+        .filter(|id| is_due(store, id, now, every))
+        .collect()
+}
+
+/// Whether `key`'s last check — failed or not — is `every` seconds old or was
+/// never made.
+pub fn is_due(store: &Store, key: &str, now: u64, every: u64) -> bool {
+    store
+        .get(key)
+        .is_none_or(|checked| now.saturating_sub(checked.checked_at) >= every)
 }
 
 /// One installed CLI against its newest published release.
@@ -425,8 +514,68 @@ mod tests {
             .as_deref(),
             Some("1.4.11")
         );
+        // Muse's channel (2026-11-17): the build is not part of the version
+        // its `--version` is read as, so an installed 1.4.23 is up to date.
+        let muse = source_for("muse").unwrap();
+        assert_eq!(url_for(muse), "https://api.meta.ai/muse-code/channels/muse-stable");
+        assert_eq!(
+            parse_latest(
+                muse,
+                r#"{"channel":"muse-stable","version":"1.4.23-R8977.1","manifest_url":"https://x","state":"public"}"#
+            )
+            .as_deref(),
+            Some("1.4.23")
+        );
+        assert_eq!(
+            crate::services::agent_versions::parse_version("Muse Code 1.4.23 (1.4.23-R8977.1)").as_deref(),
+            Some("1.4.23")
+        );
+        assert_eq!(parse_latest(muse, r#"{"channel":"muse-stable"}"#), None);
         assert_eq!(parse_latest(Source::Npm("x"), r#"{"error":"Not found"}"#), None);
         assert_eq!(parse_latest(Source::Npm("x"), "<html>"), None);
+    }
+
+    #[test]
+    fn reads_cursors_release_out_of_its_install_script() {
+        let cursor = source_for("cursor-agent").unwrap();
+        assert_eq!(url_for(cursor), "https://cursor.com/install");
+        // The lines of `cursor.com/install` that name the build (2026-11-13).
+        let script = concat!(
+            "TEMP_EXTRACT_DIR=\"$HOME/.local/share/cursor-agent/versions/.tmp-2026.11.11-b912975-$(date +%s)\"\n",
+            "DOWNLOAD_URL=\"https://downloads.cursor.com/lab/2026.11.11-b912975/${OS}/${ARCH}/agent-cli-package.tar.gz\"\n",
+        );
+        assert_eq!(parse_latest(cursor, script).as_deref(), Some("2026.11.11-b912975"));
+        assert_eq!(parse_latest(cursor, "<html>moved</html>"), None);
+        assert_eq!(parse_latest(cursor, r#"{"version":"1.0.0"}"#), None);
+        // Dates order numerically, so a later build is an update.
+        let report = UpdateReport::new(
+            "cursor-agent",
+            Some("2026.09.28-64d2043".into()),
+            &Checked { latest: Some("2026.11.11-b912975".into()), error: None, checked_at: 1 },
+        );
+        assert!(report.checkable && report.update_available);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_cursors_installed_build_from_its_versions_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let build = tmp.path().join(".local").join("share").join("cursor-agent").join("versions").join("2026.09.28-64d2043");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("cursor-agent"), "").unwrap();
+        let bin = tmp.path().join(".local").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let link = bin.join("cursor-agent");
+        std::os::unix::fs::symlink(build.join("cursor-agent"), &link).unwrap();
+        let cursor = source_for("cursor-agent").unwrap();
+        assert_eq!(installed_version_near(&link, cursor).as_deref(), Some("2026.09.28-64d2043"));
+        assert_eq!(current_version("cursor-agent", &link, None).as_deref(), Some("2026.09.28-64d2043"));
+        // A dangling link is not a version; neither is an executable outside `versions/`.
+        std::fs::remove_file(build.join("cursor-agent")).unwrap();
+        assert_eq!(installed_version_near(&link, cursor), None);
+        let elsewhere = tmp.path().join("cursor-agent");
+        std::fs::write(&elsewhere, "").unwrap();
+        assert_eq!(installed_version_near(&elsewhere, cursor), None);
     }
 
     #[test]
@@ -582,6 +731,39 @@ mod tests {
         assert!(load_in(&path).is_empty());
         let checked = remember_in(&path, "codex", Some(Ok("0.170.0".to_string())));
         assert_eq!(checked.latest.as_deref(), Some("0.170.0"));
+    }
+
+    #[test]
+    fn the_daily_check_asks_only_about_installed_cli_checked_over_a_day_ago() {
+        let mut store = Store::new();
+        let day = DAILY_EVERY_SECS;
+        let now = 10 * day;
+        store.insert("claude".into(), Checked { latest: Some("2.1.0".into()), error: None, checked_at: now - 60 });
+        store.insert("codex".into(), Checked { latest: Some("0.1.0".into()), error: None, checked_at: now - day });
+        // A failed check still counts: the next ask is a day later, not a tick later.
+        store.insert(
+            "gemini".into(),
+            Checked { latest: None, error: Some("down".into()), checked_at: now - 120 },
+        );
+        let installed = ["claude", "codex", "gemini", "aider", "no-such-cli"];
+        assert_eq!(due_agents(&store, installed, now, day), vec!["codex", "aider"]);
+        assert!(due_agents(&Store::new(), ["no-such-cli"], now, day).is_empty(), "no registry, nothing to ask");
+        // A clock set back is never "overdue".
+        assert!(due_agents(&store, ["claude"], 0, day).is_empty());
+    }
+
+    #[test]
+    fn ollama_is_due_daily_beside_the_clis() {
+        let day = DAILY_EVERY_SECS;
+        let now = 10 * day;
+        let mut store = Store::new();
+        assert!(is_due(&store, OLLAMA_KEY, now, day), "never checked");
+        store.insert(OLLAMA_KEY.into(), Checked { latest: Some("0.35.1".into()), error: None, checked_at: now - 60 });
+        assert!(!is_due(&store, OLLAMA_KEY, now, day));
+        assert!(is_due(&store, OLLAMA_KEY, now + day, day));
+        // Its key is no registry agent's, so it is never asked about as a CLI.
+        assert!(source_for(OLLAMA_KEY).is_none());
+        assert!(due_agents(&Store::new(), [OLLAMA_KEY], now, day).is_empty());
     }
 
     #[test]

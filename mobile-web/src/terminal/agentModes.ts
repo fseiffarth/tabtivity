@@ -25,17 +25,16 @@
  * a session that ignores it and then reported a failed switch.
  *
  * Deliberately absent:
- *   - Vibe / Copilot / Crush / Cline — full-screen (alternate-screen) TUIs;
- *     the Focus view already hands those to the Terminal view. Copilot has
- *     drawn one unconditionally since 1.0.12, and Qwen Code does too by
- *     default since `ui.useTerminalBuffer` (0.23). Plain `opencode` is one of
- *     them; only `opencode --mini` writes scrollback, and only that is what
+ *   - Vibe / Crush / Cline — full-screen (alternate-screen) TUIs;
+ *     the Focus view already hands those to the Terminal view. Qwen Code
+ *     draws one by default since `ui.useTerminalBuffer` (0.23). Plain
+ *     `opencode` is one of them; only `opencode --mini` writes scrollback, and only that is what
  *     the OpenCode family below reads.
  *   - Agents whose mode is not on Shift+Tab: Amp (Ctrl+S), Goose and
  *     mini-SWE-agent (a slash command each), Aider (the prompt prefix is the
  *     mode). A walk of Shift+Tab presses would never reach one of theirs.
- *   - Kimi Code, Cursor agent, Grok Build, Antigravity — their mode readouts
- *     are known from source only; they wait for a live capture.
+ *   - Kimi Code, Cursor agent, Grok Build — their mode readouts are known
+ *     from source only; they wait for a live capture.
  * See `docs/mobile_focus_cli_survey.md` for what each CLI draws.
  */
 
@@ -170,7 +169,44 @@ const OPENCODE: ModeFamily = {
   ],
 };
 
-const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE];
+/** Google Antigravity: its footer prefixes the model with the mode's word
+ * (`plan · Gemini 3.1 Pro · low`), and Shift+Tab (legacy backtab) cycles. Two
+ * cycles are known. Under an API key (the verify runs, 1.5.9) it is default →
+ * accept-edits → plan → default, and default is `silent`: it draws no word, nor
+ * do `--mode auto` and `--dangerously-skip-permissions`, read as default too. A
+ * signed-in account (1.5.9, 2026-11-18, the user's own session) makes Auto the
+ * default ("Auto is now the default agent mode") and draws it — `auto · Gemini
+ * 3.8 Flash · high` — on a cycle of accept-edits → auto → plan. Every mode is
+ * `labelled` — "plan" and "auto" are other families' words too. */
+const ANTIGRAVITY: ModeFamily = {
+  agent: /antigravity/iu,
+  choices: [
+    { value: "default", label: "mobile.mode.default", description: "mobile.mode.defaultHint", silent: true },
+    { value: "accept-edits", label: "mobile.mode.acceptEdits", description: "mobile.mode.acceptEditsHint", aliases: ["accept edits"], labelled: true },
+    { value: "auto", label: "mobile.mode.auto", description: "mobile.mode.autoHint", labelled: true },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", labelled: true },
+  ],
+};
+
+
+/** GitHub Copilot CLI: the execution mode its footer names first
+ * (`Interactive · Manual Approval · …`) and Shift+Tab cycles — Interactive,
+ * Plan, Autopilot, round again — verified on 1.0.112 with the legacy backtab.
+ * Its approval setting (`Manual Approval`, `Assisted Permissions`, `Allow All`)
+ * is the second segment and a `/permissions` command, not on that cycle, so it
+ * is not a choice here. The footer always names a mode (none while a turn
+ * runs, when it shows the working hint instead), so none is `silent`. "plan"
+ * is `labelled`: it is Claude Code's, Codex's, Qwen's and Gemini's word too. */
+const COPILOT: ModeFamily = {
+  agent: /copilot/iu,
+  choices: [
+    { value: "interactive", label: "mobile.mode.interactive", description: "mobile.mode.interactiveHint" },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", labelled: true },
+    { value: "autopilot", label: "mobile.mode.autopilot", description: "mobile.mode.autopilotHint" },
+  ],
+};
+
+const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE, ANTIGRAVITY, COPILOT];
 
 function claims(choice: Pick<ModeChoice, "value" | "aliases">, mode: string) {
   return choice.value === mode || (choice.aliases?.includes(mode) ?? false);
@@ -222,6 +258,12 @@ function familyChoices(mode?: string, agentLabel?: string): ModeRow[] {
 export function modeFixed(agentLabel?: string): boolean {
   if (!agentLabel) return false;
   return FAMILIES.some((family) => family.fixed && family.agent.test(agentLabel));
+}
+
+/** Only these families have a verified mode key or a fixed mode readout.
+ * Unknown CLIs must not receive a guessed Shift+Tab. */
+export function modeOffered(agentLabel: string): boolean {
+  return FAMILIES.some((family) => family.agent.test(agentLabel));
 }
 
 /** Which listed choice the session is in right now, by value or alias.

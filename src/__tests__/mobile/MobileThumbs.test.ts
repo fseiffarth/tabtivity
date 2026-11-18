@@ -122,6 +122,30 @@ describe("thumbnails — the cache", () => {
 });
 
 describe("thumbnails — the queue", () => {
+  it("starts nothing new while held, finishes what runs, and goes on once every hold is let go", async () => {
+    const queue = new ThumbQueue(2);
+    const started: string[] = [];
+    const gates = new Map<string, () => void>();
+    const task = (name: string) => () => new Promise<string>((resolve) => {
+      started.push(name);
+      gates.set(name, () => resolve(name));
+    });
+    const a = queue.run(task("a"));
+    const release = queue.hold();
+    const other = queue.hold();
+    queue.run(task("b"));
+    expect(started).toEqual(["a"]);
+    gates.get("a")?.();
+    expect(await a.done).toBe("a");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(started).toEqual(["a"]);
+    release();
+    release();
+    expect(started).toEqual(["a"]);
+    other();
+    expect(started).toEqual(["a", "b"]);
+  });
+
   it("makes at most two at once, in order; a waiting one can leave the line, a running one is stopped", async () => {
     const queue = new ThumbQueue(2);
     const started: string[] = [];

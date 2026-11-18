@@ -3,7 +3,9 @@
  * tree: the context menu offers them once `clipboard_file_paths` reports them,
  * one item opens the paste-rename prompt and lands through the OS-drop import
  * (`import_external_file`, a copy — the source stays put), several paste in
- * bulk with " copy" names on collision.
+ * bulk with " copy" names on collision. The tree's own Copy puts its files on
+ * the system clipboard too (`copy_files_to_clipboard`) without listing them a
+ * second time.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
@@ -24,6 +26,7 @@ vi.mock("../../stores/settings", () => {
 });
 
 import { useProjectsStore } from "../../stores/projects";
+import { useFileClipboardStore } from "../../stores/fileClipboard";
 import { SidePanel } from "../../components/layout/SidePanel";
 
 const mockUseProjectsStore = vi.mocked(useProjectsStore);
@@ -81,6 +84,7 @@ function importCalls() {
 describe("paste from the system clipboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useFileClipboardStore.getState().clear();
     const state = {
       projects: [ACTIVE_PROJECT],
       activeId: "proj-1",
@@ -118,6 +122,30 @@ describe("paste from the system clipboard", () => {
       replace: false,
       destName: "notes copy.txt",
     });
+  });
+
+  it("Copy also puts the file on the system clipboard, and the menu lists it once", async () => {
+    // What the backend's clipboard would report back after the tree's Copy.
+    setupInvoke([{ path: "/tmp/test-project/notes.txt", name: "notes.txt", isDir: false }]);
+    await openRowMenu();
+    const copy = (await screen.findAllByRole("button")).find(
+      (button) => button.firstChild?.textContent === "Copy",
+    )!;
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("copy_files_to_clipboard", {
+      paths: ["/tmp/test-project/notes.txt"],
+    });
+    const row = screen.getByText("notes.txt").closest(".file-entry")!;
+    await act(async () => {
+      fireEvent.contextMenu(row);
+    });
+    expect(await screen.findByText(/Paste “notes.txt”/)).toBeTruthy();
+    const probes = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === "clipboard_file_paths").length;
+    await waitFor(() => expect(probes()).toBe(2));
+    await act(async () => {});
+    expect(screen.queryByText(/from the system clipboard/)).toBeNull();
   });
 
   it("several copied items paste in one go, each under a free name", async () => {

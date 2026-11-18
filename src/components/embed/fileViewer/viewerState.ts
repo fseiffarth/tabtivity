@@ -35,6 +35,9 @@ export function seedViewerState(tabKey: string | undefined): ViewerState | undef
   return pending ? { ...stored, ...pending } : stored;
 }
 
+/** What `useViewerState` hands a viewer: the seeded state and the stable `persist`. */
+export type ViewerPos = ReturnType<typeof useViewerState>;
+
 export function useViewerState(tabKey: string | undefined) {
   const [initial] = useState<ViewerState | undefined>(() => seedViewerState(tabKey));
   const persist = useCallback(

@@ -9,8 +9,9 @@ import type { TranslationKey } from "../i18n";
  * Each row is data only — the id, the selector of the control the bubble points
  * at, and the side it prefers. The text lives in `i18n/en.ts` under
  * `hint.f.<id>.title` / `hint.f.<id>.body` (other languages fall back to
- * English until translated). Order is rank: earlier rows win when several
- * targets are visible at once.
+ * English until translated). Order is rank: when several targets are visible
+ * at once, earlier rows win among hints that came up equally long ago, so a tip
+ * already shown waits for the others' turns (`pickHint`).
  *
  * The id is persisted in `settings.hints_seen`, so renaming one replays it for
  * everyone. Selectors are classes of live chrome and rot when it is renamed;
@@ -29,6 +30,9 @@ export interface FeatureHintSpec {
   /** Always-on chrome (header, project bar, tab bar): visible in every session,
    *  so it ranks below the hints for what the user has opened right now. */
   ambient?: boolean;
+  /** Extra eligibility beyond "the anchor is on screen" (the paced draw and the
+   *  hidden-anchor check still apply). Absent means always eligible. */
+  when?: (ctx: { projectCount: number; boxCount?: number }) => boolean;
 }
 
 export const FEATURE_HINTS = [
@@ -61,6 +65,14 @@ export const FEATURE_HINTS = [
   { id: "pill-box-drag", anchor: ".project-pill", ambient: true },
   { id: "root-console", anchor: ".box-chip-main", ambient: true },
   { id: "box-list", anchor: ".box-chip-caret-btn", ambient: true },
+  // Working across several projects and no box yet: points at the ghost pill,
+  // which stands on the row only while there are no boxes.
+  {
+    id: "box-create",
+    anchor: ".box-ghost-pill",
+    ambient: true,
+    when: (c) => c.projectCount >= 4 && c.boxCount === 0,
+  },
   { id: "add-menu", anchor: "[data-hint-anchor=\"add-project\"]", ambient: true },
   { id: "add-hpc", anchor: "[data-hint-anchor=\"add-project\"]", ambient: true },
   // --- Tabs ------------------------------------------------------------------

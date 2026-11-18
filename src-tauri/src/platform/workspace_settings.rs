@@ -177,6 +177,90 @@ pub fn restore_ops(record: &[Recorded]) -> Vec<Op> {
         .collect()
 }
 
+/// The table entry for `schema`/`key` in any desktop's table. The restore
+/// file is read without knowing the desktop (a leftover from a run under
+/// another session), so the allowlist is the union of the tables.
+fn known_key(schema: &str, key: &str) -> Option<&'static SettingKey> {
+    [&CINNAMON, &GNOME]
+        .into_iter()
+        .flat_map(|d| d.keys.iter())
+        .find(|k| k.schema == schema && k.key == key)
+}
+
+/// Whether `value` has the GVariant type `want` stands for: an unsigned
+/// integer, a boolean, or a string list.
+fn value_fits(want: Want, value: &str) -> bool {
+    let value = value.trim();
+    match want {
+        Want::AtLeast(_) => !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) && value.parse::<u32>().is_ok(),
+        Want::Exactly(w) if w == "true" || w == "false" => value == "true" || value == "false",
+        Want::Exactly(_) => false,
+        Want::BrandNames => is_string_list(value),
+    }
+}
+
+/// Whether `value` is exactly a GVariant string list as `gsettings get`
+/// prints it: `@as []`, `[]`, or `['a', 'b']` with `\'` and `\\` escapes.
+fn is_string_list(value: &str) -> bool {
+    let value = value.trim();
+    if value == "@as []" || value == "[]" {
+        return true;
+    }
+    let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
+        return false;
+    };
+    let mut chars = inner.chars().peekable();
+    loop {
+        while chars.next_if(|c| *c == ' ').is_some() {}
+        if chars.next() != Some('\'') {
+            return false;
+        }
+        loop {
+            match chars.next() {
+                Some('\\') => {
+                    if chars.next().is_none() {
+                        return false;
+                    }
+                }
+                Some('\'') => break,
+                Some(_) => {}
+                None => return false,
+            }
+        }
+        while chars.next_if(|c| *c == ' ').is_some() {}
+        match chars.next() {
+            None => return true,
+            Some(',') => {}
+            Some(_) => return false,
+        }
+    }
+}
+
+/// Whether a restore-file record is one this backend could have written: its
+/// (schema, key) is in a desktop's table and its original (when there is one,
+/// `None` being a reset) has that key's type. A changed file must not make the
+/// restore set any other GSettings key of the user — a custom keybinding's
+/// `command` is a command line the desktop runs.
+pub fn is_known_record(r: &Recorded) -> bool {
+    let Some(k) = known_key(&r.schema, &r.key) else { return false };
+    r.original.as_deref().is_none_or(|v| value_fits(k.want, v))
+}
+
+/// `record` without the entries [`is_known_record`] refuses (each reported).
+fn only_known(record: &[Recorded]) -> Vec<Recorded> {
+    record
+        .iter()
+        .filter(|r| {
+            let known = is_known_record(r);
+            if !known {
+                eprintln!("workspace settings restore: ignoring {} {}", r.schema, r.key);
+            }
+            known
+        })
+        .cloned()
+        .collect()
+}
+
 /// Take `table`'s settings over (or, with `None`, only restore a leftover
 /// file). Returns the record [`give_back`] restores.
 ///
@@ -272,6 +356,9 @@ pub fn give_back(record: &[Recorded], path: &Path, mut set: impl FnMut(&Op) -> R
 /// Put `record` back, last write first; the keys whose restore failed, in
 /// `record`'s order.
 fn restore(record: &[Recorded], set: &mut impl FnMut(&Op) -> Result<(), String>) -> Vec<Recorded> {
+    // Whatever file the record came from, only the tables' own keys are set.
+    let record = only_known(record);
+    let record = record.as_slice();
     let ops = restore_ops(record);
     let mut failed: Vec<Recorded> = Vec::new();
     for (op, r) in ops.iter().zip(record.iter().rev()) {
@@ -737,6 +824,84 @@ mod tests {
         give_back(&record, &path, set(&s, &log));
         assert_eq!(value(&s, MUT, "dynamic-workspaces").as_deref(), Some("true"));
         assert!(!path.exists());
+    }
+
+    fn rec(schema: &str, key: &str, original: Option<&str>) -> Recorded {
+        Recorded { schema: schema.into(), key: key.into(), original: original.map(String::from) }
+    }
+
+    #[test]
+    fn a_planted_restore_file_sets_only_the_tables_keys_with_values_of_their_type() {
+        let kb = "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/";
+        let s = store(&[
+            (MUT, "dynamic-workspaces", "false"),
+            (GWM, "num-workspaces", "5"),
+            (GWM, "workspace-names", "['A', 'B']"),
+            ("org.cinnamon.muffin", "dynamic-workspaces", "false"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(RESTORE_FILE);
+        let planted = RestoreFile {
+            desktop: "gnome".into(),
+            keys: vec![
+                // Not a key of any table: a command line the desktop would run.
+                rec(kb, "command", Some("'sh -c evil'")),
+                rec("org.gnome.desktop.wm.preferences", "button-layout", Some("'x'")),
+                // A table key with a value of another type.
+                rec(MUT, "dynamic-workspaces", Some("'sh -c evil'")),
+                rec(GWM, "num-workspaces", Some("2; reboot")),
+                rec(GWM, "workspace-names", Some("['A'], ['B']")),
+                // A valid record rides along and is still restored.
+                rec("org.cinnamon.muffin", "dynamic-workspaces", Some("true")),
+            ],
+        };
+        std::fs::write(&path, serde_json::to_vec(&planted).unwrap()).unwrap();
+        let log = RefCell::new(Vec::new());
+        assert!(take_over(None, &path, get(&s), set(&s, &log)).unwrap().is_empty());
+        assert_eq!(
+            *log.borrow(),
+            vec![Op::Set {
+                schema: "org.cinnamon.muffin".into(),
+                key: "dynamic-workspaces".into(),
+                value: "true".into()
+            }],
+            "one call: the record that is a table key with a bool"
+        );
+        assert_eq!(value(&s, MUT, "dynamic-workspaces").as_deref(), Some("false"));
+        assert_eq!(value(&s, GWM, "num-workspaces").as_deref(), Some("5"));
+        assert!(!path.exists(), "the refused records are dropped, not carried");
+
+        // The same through a desktop's take_over, and for a reset.
+        std::fs::write(&path, serde_json::to_vec(&planted).unwrap()).unwrap();
+        log.borrow_mut().clear();
+        take_over(Some(&GNOME), &path, get(&s), set(&s, &log)).unwrap();
+        assert!(log.borrow().iter().all(|op| match op {
+            Op::Set { schema, key, .. } | Op::Reset { schema, key } => schema != kb && key != "command" && key != "button-layout",
+        }));
+        assert!(is_known_record(&rec(GWM, "workspace-names", None)), "a reset of a table key");
+        assert!(!is_known_record(&rec(kb, "command", None)), "a reset of any other key");
+    }
+
+    #[test]
+    fn a_value_must_have_its_keys_type() {
+        let counts = Want::AtLeast(2);
+        assert!(value_fits(counts, "3") && value_fits(counts, " 12 "));
+        for bad in ["", "-1", "3 4", "0x3", "'3'", "99999999999", "2; x"] {
+            assert!(!value_fits(counts, bad), "{bad:?}");
+        }
+        let flag = Want::Exactly("false");
+        assert!(value_fits(flag, "true") && value_fits(flag, "false"));
+        assert!(!value_fits(flag, "1") && !value_fits(flag, "'true'"));
+        let names = Want::BrandNames;
+        for good in ["@as []", "[]", "['A']", "['A', 'B']", "['Can\\'t', 'x']", "['']", "['a\\\\']"] {
+            assert!(value_fits(names, good), "{good:?}");
+        }
+        for bad in ["['A'", "'A'", "['A' 'B']", "['A',]", "[1, 2]", "['A'], ['B']", "['A\\']", "['A'; x]", "[,'A']"] {
+            assert!(!value_fits(names, bad), "{bad:?}");
+        }
+        // What the backend itself writes always passes.
+        let tricky = vec!["Can't".to_string(), "back\\slash".to_string(), "".to_string()];
+        assert!(value_fits(names, &workspace_names_value(&tricky)));
     }
 
     #[test]

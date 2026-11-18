@@ -68,6 +68,7 @@ import { BRAND } from "../../lib/brand";
 
 const ESC = String.fromCharCode(27);
 const UP = `${ESC}[A`;
+const DOWN = `${ESC}[B`;
 
 
 /** Claude Code's `/model` picker, its highlight on the current model. */
@@ -174,6 +175,61 @@ describe(`${BRAND.display} Mobile — the model sheet before the session draws i
     // Answered as soon as it was drawn: a list that never settled is not kept.
     await settle(700);
     expect(kept).toEqual([]);
+  });
+
+  it("only ever acts on the live tab: no saved-defaults fold, no request for them (gap 81)", async () => {
+    const asked: string[] = [];
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      asked.push(`${init?.method ?? "GET"} ${String(input)}`);
+      return inner(input, init);
+    });
+    render(<Terminal tab={claudeTab} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await settle(400);
+    await paint(PICKER);
+    expect(rows().length).toBeGreaterThan(0);
+    expect(document.querySelector("details.launch-defaults")).toBeNull();
+    expect(screen.queryByText(/Default for new tabs/u)).toBeNull();
+    expect(asked.filter((call) => call.includes("launch-defaults"))).toEqual([]);
+  });
+
+  it("lists the remembered rows until a windowed picker's walk has shown every live one", async () => {
+    // Claude Code in an 80×24 pane draws three rows of the four.
+    const windowed = (rows: string[], below?: number) => [
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new sessions.",
+      "",
+      ...rows,
+      ...(below ? [`      \u2026 +${below} model`] : []),
+      "",
+      "   Enter to set as default \u00b7 s to use this session only \u00b7 Esc to cancel",
+    ].join("\n");
+    const DEFAULT = "1.  Default (recommended)  Sonnet 5.5 \u00b7 Efficient for routine tasks";
+    const FABLE = "2.  Fable 5.1              For your toughest challenges";
+    const OPUS = "3.  Opus 5.5               For complex work and everyday tasks";
+    const SONNET = "4.  Sonnet 5.5 \u2714           Most efficient for simpler tasks";
+    render(<Terminal tab={claudeTab} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await settle(400);
+    FakeWebSocket.sent = [];
+
+    await paint(windowed([`   \u2191 ${FABLE}`, `     ${OPUS}`, `   \u276f ${SONNET}`]));
+    // Up to the first row in one run; meanwhile the sheet still lists the
+    // whole remembered list, the live current model marked in it.
+    expect(await keysSent(() => FakeWebSocket.sent, 3, 600)).toEqual([UP, UP, UP]);
+    expect(rows()).toEqual(["Default (recommended)", "Opus 5.5", "Sonnet 5.5"]);
+    expect(document.querySelector(".option-list button.current")?.textContent).toContain("Sonnet 5.5");
+    FakeWebSocket.sent = [];
+    await paint(windowed([`   \u276f ${DEFAULT}`, `     ${FABLE}`, `   \u2193 ${OPUS}`], 1));
+    // Every row seen: back down to the current model.
+    expect(await keysSent(() => FakeWebSocket.sent, 3, 600)).toEqual([DOWN, DOWN, DOWN]);
+    expect(rows()).toEqual(["Default (recommended)", "Opus 5.5", "Sonnet 5.5"]);
+    await paint(windowed([`   \u2191 ${FABLE}`, `     ${OPUS}`, `   \u276f ${SONNET}`]));
+    expect(rows()).toEqual(["Default (recommended)", "Fable 5.1", "Opus 5.5", "Sonnet 5.5 \u2714"]);
+    expect(screen.queryByText(/Last list from this CLI version/u)).toBeNull();
   });
 
   it("keeps the live list once it has settled, when it differs from the remembered one", async () => {

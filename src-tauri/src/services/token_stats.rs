@@ -1026,6 +1026,12 @@ pub fn scan_with(state_dir: &Path, scopes: &[String], limits: Limits, now_ms: i6
         let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
             continue;
         };
+        // The probe home's runs (a warm-up, `/usage`) are no scope's: counted
+        // as the root console's they would credit tokens to a scope the user
+        // never ran. They were never counted before the probe home existed.
+        if agent_home::is_probe_home(&dir) {
+            continue;
+        }
         let scope = match by_home.get(&dir) {
             Some(id) if dir != host => (*id).to_string(),
             _ => storage::ROOT_SCOPE.to_string(),
@@ -1619,6 +1625,21 @@ mod tests {
         );
         assert_eq!(total(&stats, "root", &ck(metric::TOKENS_OUT, OPUS)), 3);
         assert_eq!(total(&stats, "gone-project", &ck(metric::TOKENS_OUT, OPUS)), 4);
+    }
+
+    #[test]
+    fn the_probe_homes_runs_count_for_no_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let probe = agent_home::probe_home_in(tmp.path());
+        write(
+            &probe.join(".claude/projects/-cron/s.jsonl"),
+            &[claude("m1", "r1", OPUS, T1, [1, 0, 0, 9])],
+        );
+        let host = agent_home::host_home_in(tmp.path());
+        write(&host.join(".claude/projects/-x/s.jsonl"), &[claude("m2", "r2", OPUS, T1, [1, 0, 0, 3])]);
+        let stats = run(tmp.path());
+        // The Host session's home is the root console's; the probe home's is nobody's.
+        assert_eq!(total(&stats, "root", &ck(metric::TOKENS_OUT, OPUS)), 3);
     }
 
     #[test]

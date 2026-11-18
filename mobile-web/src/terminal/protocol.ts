@@ -29,7 +29,7 @@ export type TerminalEvent =
    * frames. An event type this bundle does not know is ignored, which is
    * what lets either side be the newer one. */
   | { type: "features"; visibility: boolean; send_now?: boolean }
-  /** The answer to `send_now`: whether the Esc went in. */
+  /** The answer to `send_now`: whether the keys went in (Claude's Ctrl+X Ctrl+S, the others' Esc). */
   | { type: "send_now"; sent: boolean }
   /** The desktop's AI switch is off: the input frame the next `ack` covers
    * was dropped, not written to the agent. */

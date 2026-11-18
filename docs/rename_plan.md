@@ -1,6 +1,10 @@
 # Rename Eldrun → Tabtivity — plan
 
-Status: plan only — nothing implemented. Third revision, 2026-10-01: changed
+Status (2026-11-14): Phases 0–4 are done (release A is live; the repo is renamed).
+Phase M and Phase 5 (release B) are open. The one-shot tooling
+(`scripts/brand-flip.sh`, `scripts/rename-codemods/`, the old-name dev
+launchers) is deleted, so the plan's mentions of it below are history. The rest
+of this file keeps the original plan wording. Third revision, 2026-10-01: changed
 from "keep old names forever" to a **full replacement** in two releases (see
 "Approach"). The two earlier code reviews built the inventory below; their
 notes are under "History" at the end. Name chosen 2026-10-01 (see "Name").
@@ -176,7 +180,7 @@ below gives each of these its own step.
 | Docker labels `eldrun.owner=eldrun`, `eldrun.project=`, `eldrun.spec=`; image `eldrun-agent-sandbox:latest` | `sandbox.rs:108,116,260` | New containers get new labels; the startup sweep matches both. `docker tag` the old image to the new name, so nothing rebuilds. | Match only new labels; remove the old image tag. |
 | VM names `eldrun-vm`, guest user `eldrun`, cloud-init `instance-id: eldrun-1` | `vm.rs:62`, `projects.rs:3829`, `iso9660.rs:240` | Only the defaults for new VMs change. Existing VMs keep the values stored in their project records; they are data, not lookups. **Never change an existing instance-id:** cloud-init would treat the VM as new and run first boot again. | Nothing to drop. |
 | Ollama drop-ins `/etc/systemd/system/ollama.service.d/eldrun-{igpu,models}.conf` | `ollama.rs:2436,2568` | They need root, so the step waits until the user next changes a setting that writes them (that already asks for root). It then writes the new names and removes the old files. Dual read until then. | Drop the old names. |
-| Dev launcher `EldrunDev.desktop`, dev scripts `start-eldrun-*.sh`, `eldrun-dev.cmd` | repo root, `scripts/`, `dev_build.rs:456` | Rename the scripts at the flip, keeping one-line forwarding stubs. Rewrite the installed launcher (Eldrun's own file). | Delete the stubs. |
+| Dev launcher `EldrunDev.desktop`, dev scripts `start-eldrun-*.sh`, `eldrun-dev.cmd` | repo root, `scripts/`, `dev_build.rs:456` | Rename the scripts at the flip, keeping one-line forwarding stubs. Rewrite the installed launcher (Eldrun's own file). | Delete the stubs. **Done early (2026-11-14)**: stubs deleted with `brand-flip.sh` and `scripts/rename-codemods/`. |
 | CLI shims `eldrun-send` etc. | `scripts/eldrun-send.*`, shim install, the SessionStart hook text | Ship `tabtivity-send`; keep the old name as an alias that logs a hit. Update the hook text and agent docs to the new name. | Remove the alias. |
 | Env vars `ELDRUN_*` (~60) | backend, scripts, shims, `.githooks/pre-push:167` | Export both; read new, then old, through `brand::env(..)`. Change this repo's hooks to the new names. | Stop exporting the old names. External user scripts can't be logged, so the release notes for B list the renamed variables. |
 | Crate `eldrun_lib` | `Cargo.toml` | Rename at the flip; nothing persists it. | — |
@@ -266,6 +270,7 @@ below gives each of these its own step.
 - Also build the deb/NSIS old-package replacement and the shim alias.
 
 ### Phase 3: release A — the flip to Tabtivity
+Done (`docs/rename_phase3_handoff.md`); `scripts/brand-flip.sh` was deleted afterwards.
 - Gate: the domains and GitHub org are registered, and the trademark search is
   clean (see "Name"). Phase 2 has been run against a copy of a real state dir.
 - Add `scripts/brand-flip.sh <Display> <slug>` and run it as

@@ -23,16 +23,10 @@ use std::collections::HashMap;
 
 use openssh_sftp_client::Sftp;
 
-use crate::commands::projects::{
-    CLAUDE_SETTINGS, GITIGNORE_DEFAULT, SCAFFOLD_COMMIT_IDENTITY, SCAFFOLD_COMMIT_MSG,
-    SCAFFOLD_FILES,
-};
+use crate::commands::projects::{GITIGNORE_DEFAULT, SCAFFOLD_COMMIT_IDENTITY, SCAFFOLD_COMMIT_MSG};
 use crate::services::remote::RemoteTarget;
 use crate::services::remote_sync::join_remote;
-
-/// The scaffold's settings folder and the file inside it.
-const CLAUDE_DIR: &str = ".claude";
-const CLAUDE_SETTINGS_FILE: &str = ".claude/settings.json";
+use crate::services::scaffold;
 
 /// What one `lstat` (never following a link) found at a scaffold path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,13 +43,9 @@ pub enum Presence {
 /// Which scaffold paths to create on the host, and which to leave alone.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScaffoldWritePlan {
-    /// `.claude` is absent and is created first, as a folder.
-    pub make_claude_dir: bool,
     /// Project-relative files to create, create-new, with their content.
     pub write: Vec<(String, &'static str)>,
-    /// Project-relative scaffold paths left alone: something is already there,
-    /// or `.claude` is not a real folder (its `settings.json` is then skipped
-    /// rather than written through a link).
+    /// Project-relative scaffold paths left alone: something is already there.
     pub kept: Vec<String>,
 }
 
@@ -72,21 +62,20 @@ pub struct ScaffoldOutcome {
 
 /// Every path [`plan_scaffold_writes`] asks about, in the order it uses them.
 pub fn scaffold_paths(with_git: bool) -> Vec<&'static str> {
-    let mut paths: Vec<&'static str> = SCAFFOLD_FILES.iter().map(|(name, _)| *name).collect();
+    let mut paths: Vec<&'static str> = scaffold::defaults().map(|doc| doc.name).collect();
     if with_git {
         paths.push(".gitignore");
     }
-    paths.push(CLAUDE_DIR);
-    paths.push(CLAUDE_SETTINGS_FILE);
     paths
 }
 
-/// The scaffold `scaffold_project` writes locally (the docs, `.gitignore` when
-/// the project has git, `.claude/settings.json`), planned against what is
+/// The scaffold `scaffold_project` writes locally (the catalog's default docs
+/// and the `.gitignore` when the project has git), planned against what is
 /// already on the host. Pure.
 pub fn plan_scaffold_writes(with_git: bool, lstat: impl Fn(&str) -> Presence) -> ScaffoldWritePlan {
     let mut plan = ScaffoldWritePlan::default();
-    let mut files: Vec<(&'static str, &'static str)> = SCAFFOLD_FILES.to_vec();
+    let mut files: Vec<(&'static str, &'static str)> =
+        scaffold::defaults().map(|doc| (doc.name, doc.template)).collect();
     if with_git {
         files.push((".gitignore", GITIGNORE_DEFAULT));
     }
@@ -95,16 +84,6 @@ pub fn plan_scaffold_writes(with_git: bool, lstat: impl Fn(&str) -> Presence) ->
             Presence::Absent => plan.write.push((name.to_string(), content)),
             _ => plan.kept.push(name.to_string()),
         }
-    }
-    match lstat(CLAUDE_DIR) {
-        Presence::Absent => {
-            plan.make_claude_dir = true;
-            plan.write.push((CLAUDE_SETTINGS_FILE.to_string(), CLAUDE_SETTINGS));
-        }
-        Presence::Dir if lstat(CLAUDE_SETTINGS_FILE) == Presence::Absent => {
-            plan.write.push((CLAUDE_SETTINGS_FILE.to_string(), CLAUDE_SETTINGS));
-        }
-        _ => plan.kept.push(CLAUDE_SETTINGS_FILE.to_string()),
     }
     plan
 }
@@ -164,8 +143,8 @@ async fn create_new_on(sftp: &Sftp, path: &str, content: &str) -> Result<bool, S
 /// Write the scaffold into the host folder `root` (which must already be a
 /// folder) on an open session, never over anything already there.
 pub async fn write_scaffold(sftp: &Sftp, root: &str, with_git: bool) -> Result<ScaffoldOutcome, String> {
-    let mut fs = sftp.fs();
-    let root_meta = fs
+    let root_meta = sftp
+        .fs()
         .metadata(root)
         .await
         .map_err(|e| format!("sftp stat of the project folder failed: {e}"))?;
@@ -181,24 +160,7 @@ pub async fn write_scaffold(sftp: &Sftp, root: &str, with_git: bool) -> Result<S
 
     let mut kept = plan.kept.clone();
     let mut written = Vec::new();
-    let mut claude_ok = true;
-    if plan.make_claude_dir {
-        let dir = join_remote(root, CLAUDE_DIR);
-        if let Err(e) = fs.create_dir(&dir).await {
-            // Raced by something else at that name: a real folder is fine,
-            // anything else leaves `settings.json` alone.
-            match lstat_on(sftp, &dir).await? {
-                Presence::Dir => {}
-                Presence::Absent => return Err(format!("sftp mkdir of '{dir}' failed: {e}")),
-                _ => claude_ok = false,
-            }
-        }
-    }
     for (rel, content) in &plan.write {
-        if rel == CLAUDE_SETTINGS_FILE && !claude_ok {
-            kept.push(rel.clone());
-            continue;
-        }
         if create_new_on(sftp, &join_remote(root, rel), content).await? {
             written.push(rel.clone());
         } else {
@@ -262,75 +224,60 @@ mod tests {
         plan.write.iter().map(|(p, _)| p.as_str()).collect()
     }
 
-    /// An empty host folder gets the whole local scaffold: every doc, the
-    /// `.gitignore` when the project has git, `.claude/settings.json` after
-    /// its folder — the same set `scaffold_project` writes.
+    /// An empty host folder gets the lean scaffold `scaffold_project` writes:
+    /// the catalog's default docs and the `.gitignore` when the project has
+    /// git. Never a pointer file, never `.claude/`, never the on-demand docs.
     #[test]
-    fn an_empty_host_folder_gets_the_whole_scaffold() {
+    fn an_empty_host_folder_gets_the_lean_scaffold() {
         let plan = plan_scaffold_writes(true, presence(&[]));
-        assert!(plan.make_claude_dir);
         assert!(plan.kept.is_empty());
-        let mut expected: Vec<&str> = SCAFFOLD_FILES.iter().map(|(n, _)| *n).collect();
-        expected.extend([".gitignore", ".claude/settings.json"]);
-        assert_eq!(written(&plan), expected);
+        assert_eq!(written(&plan), ["AGENTS.md", "README.md", ".gitignore"]);
         let gitignore = plan.write.iter().find(|(p, _)| p == ".gitignore").unwrap();
         assert_eq!(gitignore.1, GITIGNORE_DEFAULT);
+        let agents = plan.write.iter().find(|(p, _)| p == "AGENTS.md").unwrap();
+        assert_eq!(agents.1, scaffold::AGENTS_SCAFFOLD);
+        for gone in ["CLAUDE.md", "GEMINI.md", "PROJECT.md", "TODO.md", ".claude/settings.json"] {
+            assert!(!written(&plan).contains(&gone), "{gone} is no longer scaffolded");
+        }
 
         let no_git = plan_scaffold_writes(false, presence(&[]));
-        assert!(!written(&no_git).contains(&".gitignore"), "no .gitignore without git");
+        assert_eq!(written(&no_git), ["AGENTS.md", "README.md"], "no .gitignore without git");
         assert!(!scaffold_paths(false).contains(&".gitignore"));
+        assert_eq!(scaffold_paths(true), ["AGENTS.md", "README.md", ".gitignore"]);
     }
 
     /// Anything already at a scaffold name — a file, a folder, a link (dangling
-    /// or not), a FIFO — is left alone, and a `.claude` that is not a real
-    /// folder never has `settings.json` written through it.
+    /// or not), a FIFO — is left alone.
     #[test]
     fn nothing_already_on_the_host_is_overwritten() {
         for found in [Presence::File, Presence::Dir, Presence::Other] {
-            let plan = plan_scaffold_writes(true, presence(&[("CLAUDE.md", found), (".gitignore", found)]));
-            assert!(!written(&plan).contains(&"CLAUDE.md"), "{found:?}");
+            let plan = plan_scaffold_writes(true, presence(&[("AGENTS.md", found), (".gitignore", found)]));
+            assert!(!written(&plan).contains(&"AGENTS.md"), "{found:?}");
             assert!(!written(&plan).contains(&".gitignore"), "{found:?}");
-            assert!(plan.kept.contains(&"CLAUDE.md".to_string()));
+            assert!(plan.kept.contains(&"AGENTS.md".to_string()));
             assert!(written(&plan).contains(&"README.md"), "the rest is still written");
         }
-        for claude in [Presence::File, Presence::Other] {
-            let plan = plan_scaffold_writes(true, presence(&[(".claude", claude)]));
-            assert!(!plan.make_claude_dir, "{claude:?}");
-            assert!(!written(&plan).contains(&".claude/settings.json"), "{claude:?}");
-            assert!(plan.kept.contains(&".claude/settings.json".to_string()));
-        }
-        let real_dir = plan_scaffold_writes(true, presence(&[(".claude", Presence::Dir)]));
-        assert!(!real_dir.make_claude_dir);
-        assert!(written(&real_dir).contains(&".claude/settings.json"));
-        let has_settings = plan_scaffold_writes(
-            true,
-            presence(&[(".claude", Presence::Dir), (".claude/settings.json", Presence::Other)]),
-        );
-        assert!(!written(&has_settings).contains(&".claude/settings.json"));
     }
 
     /// A rerun over a finished scaffold writes nothing (the command is safe to
     /// retry), and still commits the plain files an interrupted run left.
     #[test]
     fn a_rerun_writes_nothing_and_still_commits_the_scaffold() {
-        let mut done: Vec<(&str, Presence)> = scaffold_paths(true).into_iter().map(|p| (p, Presence::File)).collect();
-        done.retain(|(p, _)| *p != ".claude");
-        done.push((".claude", Presence::Dir));
+        let done: Vec<(&str, Presence)> = scaffold_paths(true).into_iter().map(|p| (p, Presence::File)).collect();
         let lstat = presence(&done);
         let plan = plan_scaffold_writes(true, &lstat);
-        assert!(plan.write.is_empty() && !plan.make_claude_dir, "{plan:?}");
+        assert!(plan.write.is_empty(), "{plan:?}");
         let commit = committable_paths(&plan, &[], &lstat);
-        assert!(commit.contains(&"PROJECT.md".to_string()));
-        assert!(commit.contains(&".claude/settings.json".to_string()));
-        assert!(!commit.contains(&".claude".to_string()), "a folder is never staged by name");
+        assert!(commit.contains(&"AGENTS.md".to_string()));
+        assert!(commit.contains(&".gitignore".to_string()));
 
         // Something that is not a plain file at a scaffold name is never staged.
-        let lstat = presence(&[("AGENTS.md", Presence::Other), ("TODO.md", Presence::Dir)]);
+        let lstat = presence(&[("AGENTS.md", Presence::Other), ("README.md", Presence::Dir)]);
         let plan = plan_scaffold_writes(true, &lstat);
         let fresh: Vec<String> = plan.write.iter().map(|(p, _)| p.clone()).collect();
         let commit = committable_paths(&plan, &fresh, &lstat);
         assert!(!commit.contains(&"AGENTS.md".to_string()));
-        assert!(!commit.contains(&"TODO.md".to_string()));
-        assert!(commit.contains(&"README.md".to_string()));
+        assert!(!commit.contains(&"README.md".to_string()));
+        assert!(commit.contains(&".gitignore".to_string()));
     }
 }

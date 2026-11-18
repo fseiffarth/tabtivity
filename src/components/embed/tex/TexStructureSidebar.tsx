@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import type { InternalViewer } from "../../../lib/viewers/fileUtils";
+import { useDividerDrag } from "../../layout/useDividerDrag";
 import { FileIcon } from "../../common/icons/FileIcon";
 import { ChevronLeftIcon, ChevronRightIcon, FileImageIcon } from "../../common/icons/Icon";
 import type {
@@ -246,9 +246,9 @@ export function TexStructureSidebar({
   activePath: string;
   /** Current sidebar width in px. */
   width: number;
-  /** Switch the center to `path`, rendered with `viewer`; `line` (1-based) puts
+  /** Switch the center to `path`; `line` (1-based) puts
    *  the caret there, for a jump to a file's first error. */
-  onSelect: (path: string, viewer: InternalViewer, line?: number) => void;
+  onSelect: (path: string, line?: number) => void;
   /** The last build's errors and warnings, keyed by absolute path. Absent (or
    *  empty) until this document has been compiled once this sitting — the
    *  sidebar never claims a file is clean, only that a build reported nothing
@@ -266,27 +266,28 @@ export function TexStructureSidebar({
   const [liveWidth, setLiveWidth] = useState<number | null>(null);
   const shownWidth = liveWidth ?? width;
 
+  // The shared divider gesture: it ends on whatever this engine sends for a
+  // release (WebKitGTK often a `pointercancel`), so the edge cannot stay glued
+  // to the cursor.
+  const beginDividerDrag = useDividerDrag();
   const startResize = useCallback(
     (e: React.PointerEvent) => {
       e.preventDefault();
-      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
       const startX = e.clientX;
       const startW = shownWidth;
       let last = startW;
-      const onMove = (ev: PointerEvent) => {
-        last = Math.max(140, Math.min(520, startW + (ev.clientX - startX)));
-        setLiveWidth(last);
-      };
-      const onUp = () => {
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        setLiveWidth(null);
-        if (last !== startW) onResize(last);
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
+      beginDividerDrag(e, {
+        onMove: (ev) => {
+          last = Math.max(140, Math.min(520, startW + (ev.clientX - startX)));
+          setLiveWidth(last);
+        },
+        onTeardown: () => setLiveWidth(null),
+        onCommit: () => {
+          if (last !== startW) onResize(last);
+        },
+      });
     },
-    [shownWidth, onResize],
+    [shownWidth, onResize, beginDividerDrag],
   );
 
   const root = structure.root;
@@ -310,7 +311,7 @@ export function TexStructureSidebar({
           style={{ paddingLeft: 8 + depth * 14 }}
           aria-current={active ? "true" : undefined}
           title={node.path}
-          onClick={() => onSelect(node.path, "tex")}
+          onClick={() => onSelect(node.path)}
         >
           <span className="tex-structure-icon" aria-hidden="true"><FileIcon ext={extOf(node.label)} /></span>
           <span className="tex-structure-label">{node.label}</span>
@@ -319,7 +320,7 @@ export function TexStructureSidebar({
           <TexDiagBadges
             diag={diag}
             name={node.label}
-            onJump={(line) => onSelect(node.path, "tex", line)}
+            onJump={(line) => onSelect(node.path, line)}
           />
         )}
       </div>
@@ -336,7 +337,7 @@ export function TexStructureSidebar({
           style={{ paddingLeft: 8 + depth * 14 }}
           aria-current={active ? "true" : undefined}
           title={g.path}
-          onClick={() => onSelect(g.path, g.viewer)}
+          onClick={() => onSelect(g.path)}
         >
           <span className="tex-structure-icon" aria-hidden="true"><FileImageIcon /></span>
           <span className="tex-structure-label">{g.label}</span>

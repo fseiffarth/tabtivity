@@ -139,14 +139,21 @@ function recordOf(prompt: PendingPrompt, entries: readonly TranscriptEntry[]): n
  * link said. A prompt the desktop held is the exception: it went in at the
  * agent's idle point, after every answer it had waited below, so its bubble
  * takes its record's place instead. */
-function takeRecords(entries: readonly TranscriptEntry[], pending: readonly PendingPrompt[]): { shown: TranscriptEntry[]; arrived: Set<number> } {
+function takeRecords(entries: readonly TranscriptEntry[], pending: readonly PendingPrompt[]): { shown: TranscriptEntry[]; arrived: Set<number>; places: Map<number, TranscriptEntry> } {
   const shown = [...entries];
   const arrived = new Set<number>();
+  const places = new Map<number, TranscriptEntry>();
   for (const prompt of pending) {
     const record = recordOf(prompt, shown);
     if (record >= 0) {
       if (prompt.held !== undefined) shown[record] = bubble(prompt, true);
-      else shown.splice(record, 1);
+      else {
+        // Not a copy of any prompt any more, so no later prompt takes it for
+        // its own record; `withPending` seats the bubble here and drops it.
+        const place: TranscriptEntry = { ...shown[record], kind: "answer" };
+        shown[record] = place;
+        places.set(prompt.id, place);
+      }
       arrived.add(prompt.id);
     }
   }
@@ -164,7 +171,7 @@ function takeRecords(entries: readonly TranscriptEntry[], pending: readonly Pend
       break;
     }
   }
-  return { shown, arrived };
+  return { shown, arrived, places };
 }
 
 /** `prompt`'s bubble, stamped with its place's time so the chat keys it the
@@ -201,7 +208,7 @@ export function arrivedPending(entries: readonly TranscriptEntry[], pending: rea
  */
 export function withPending(entries: readonly TranscriptEntry[], pending: readonly PendingPrompt[]): TranscriptEntry[] {
   if (pending.length === 0) return entries as TranscriptEntry[];
-  const { shown, arrived } = takeRecords(entries, pending);
+  const { shown, arrived, places } = takeRecords(entries, pending);
   let lastSlot = -1;
   const queued: TranscriptEntry[] = [];
   for (const prompt of pending) {
@@ -238,9 +245,23 @@ export function withPending(entries: readonly TranscriptEntry[], pending: readon
       });
       if (anchor >= 0) slot = anchor + 1;
     }
+    // Its record has arrived. Prompts the session recorded just before it
+    // (a `/model` typed at the desktop a moment earlier) were written before
+    // this one even if the phone had not read them when it sent, so they
+    // stand above the bubble. Agent messages do not: a bubble keeps its
+    // place below those (see above).
+    const place = places.get(prompt.id);
+    if (place) {
+      const end = shown.indexOf(place);
+      let next = slot;
+      while (next < end && shown[next].kind === "prompt") next += 1;
+      if (next === end) slot = end;
+    }
     slot = Math.max(slot, lastSlot + 1);
     shown.splice(slot, 0, bubble(prompt, arrived.has(prompt.id)));
     lastSlot = slot;
   }
-  return queued.length ? [...shown, ...queued] : shown;
+  const seats = new Set(places.values());
+  const seated = seats.size ? shown.filter((entry) => !seats.has(entry)) : shown;
+  return queued.length ? [...seated, ...queued] : seated;
 }

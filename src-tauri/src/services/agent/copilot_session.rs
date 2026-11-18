@@ -18,13 +18,24 @@
 //! hook (`agent_hint`) records the new id under the tab's key, the same live
 //! record the other CLIs use, and the next spawn pins that one.
 //!
+//! Turn state: a hook script of its own ([`write_turn_hook`],
+//! `copilot_session/turn.sh`) on the events the probe saw fire
+//! (`scripts/verify-cli/copilot/hooks.py`, 1.0.112) writes the tab's
+//! `live_sessions/<uid>.turn`, which `services::agent_turn` relays as it does
+//! for Claude and Codex. Registered by [`register_in_home`] in a hooks file of
+//! its own beside the hint's.
+//!
 //! AppHandle-free.
 
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
+use crate::services::agent_session::live_sessions_dir;
+use crate::services::agent_versions::Seen;
+use crate::services::home_io::HomeFile;
 use crate::services::{agent_session, home_io};
+use crate::storage;
 use crate::terminal::PtyOptions;
 
 /// The session's event log inside its folder.
@@ -120,6 +131,151 @@ pub fn resolve(mut opts: PtyOptions) -> PtyOptions {
     }
     opts.args = args;
     opts
+}
+
+// ── Turn state (the hook) ───────────────────────────────────────────────────
+
+/// Tabtivity's turn hooks, relative to an agent home: a file of its own in the
+/// user hooks folder (Copilot loads every `*.json` there), beside the hint's,
+/// rewritten whole when it differs.
+pub(crate) const TURN_HOOKS: &str = concat!(".copilot/hooks/", crate::app_slug!(), "-turn.json");
+#[cfg(not(windows))]
+const TURN_SCRIPT: &str = concat!(crate::app_slug!(), "_copilot_turn.sh");
+#[cfg(windows)]
+const TURN_SCRIPT: &str = concat!(crate::app_slug!(), "_copilot_turn.ps1");
+#[cfg_attr(windows, allow(dead_code))]
+const POSIX_TURN: &str = include_str!("copilot_session/turn.sh");
+#[cfg_attr(not(windows), allow(dead_code))]
+const POWERSHELL_TURN: &str = include_str!("copilot_session/turn.ps1");
+
+/// The events the probe saw fire with the session's id and the script maps
+/// to a word: a prompt and a finished tool (also how an approval ends) are
+/// working, a shown dialog (`notification`) a decision, `agentStop` and a
+/// failed model call done, the session's end idle. Left out: `sessionStart`
+/// (the hint's, which also moves the session record), `permissionRequest`
+/// (before the rules decide; the notification is the dialog), `preToolUse`,
+/// `subagentStart`/`subagentStop` and `preCompact` (no UI for them yet).
+pub(crate) const TURN_EVENTS: &[&str] = &[
+    "userPromptSubmitted",
+    "postToolUse",
+    "postToolUseFailure",
+    "notification",
+    "agentStop",
+    "errorOccurred",
+    "sessionEnd",
+];
+
+/// The oldest release the hooks probe ran against. An older or unknown one
+/// gets no turn hooks and keeps the terminal-output reading.
+pub const TURN_HOOKS_SINCE: &str = "1.0.112";
+
+/// Whether the release a probe last read takes the turn hooks.
+pub fn runs_turn_hooks(seen: Option<&Seen>) -> bool {
+    seen.and_then(|seen| seen.version.as_deref())
+        .is_some_and(|v| crate::services::agent_versions::version_cmp(v, TURN_HOOKS_SINCE) != std::cmp::Ordering::Less)
+}
+
+fn turn_script_path() -> PathBuf {
+    storage::state_dir().join("hooks").join(TURN_SCRIPT)
+}
+
+fn fill(template: &str, live_dir: &str, quote: fn(&str) -> String) -> String {
+    template
+        .replace("@DISPLAY@", crate::brand::DISPLAY)
+        .replace("@ENV@", concat!(crate::app_upper!(), "_"))
+        .replace("@LIVE_DIR@", &quote(live_dir))
+        .replace("@TURN_FILE@", TURN_HOOKS.rsplit('/').next().unwrap_or(TURN_HOOKS))
+}
+
+/// The POSIX turn script, recording under `live_dir`.
+#[cfg_attr(windows, allow(dead_code))]
+fn posix_turn_in(live_dir: &str) -> String {
+    fill(POSIX_TURN, live_dir, crate::quote::posix)
+}
+
+/// The PowerShell twin, for a Windows host.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn powershell_turn_in(live_dir: &str) -> String {
+    fill(POWERSHELL_TURN, live_dir, crate::quote::powershell).replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+/// Write the turn script beside the session hook. Idempotent; part of
+/// `agent_session::install_session_start_hook`.
+pub fn write_turn_hook() -> std::io::Result<()> {
+    let path = turn_script_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let live = live_sessions_dir().to_string_lossy().into_owned();
+    #[cfg(windows)]
+    let body = powershell_turn_in(&live);
+    #[cfg(not(windows))]
+    let body = posix_turn_in(&live);
+    if std::fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
+        std::fs::write(&path, body)?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&path)?.permissions();
+        if perm.mode() & 0o777 != 0o755 {
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&path, perm)?;
+        }
+    }
+    Ok(())
+}
+
+/// The command Copilot runs for `event`; the path is one quoted word.
+fn turn_command(script: &Path, event: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" {event}", script.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        format!("{} {event}", crate::quote::posix(&script.to_string_lossy()))
+    }
+}
+
+/// The hooks file: every [`TURN_EVENTS`] entry runs the script with its name.
+fn turn_hooks_json(script: &Path) -> String {
+    let key = if cfg!(windows) { "powershell" } else { "bash" };
+    let hooks: serde_json::Map<String, Value> = TURN_EVENTS
+        .iter()
+        .map(|event| {
+            let mut hook = json!({ "type": "command", "timeoutSec": 10 });
+            hook[key] = json!(turn_command(script, event));
+            (event.to_string(), json!([hook]))
+        })
+        .collect();
+    serde_json::to_string_pretty(&json!({ "version": 1, "hooks": hooks })).expect("plain JSON") + "\n"
+}
+
+/// Register the turn hooks in one agent home when the installed Copilot takes
+/// them (read from the version store, never waiting on a probe), and take the
+/// file out otherwise. Part of `agent_session::register_hooks_in_home`.
+pub fn register_in_home(home: &Path) {
+    let runs = runs_turn_hooks(crate::services::agent_versions::load().get("copilot"));
+    register_in_home_gated(home, runs, &turn_script_path());
+}
+
+fn register_in_home_gated(home: &Path, runs: bool, script: &Path) {
+    let Some(file) = HomeFile::open(home, TURN_HOOKS) else {
+        eprintln!("copilot_session: {TURN_HOOKS} in {} is not a plain path; skipped", home.display());
+        return;
+    };
+    let result = if runs {
+        let body = turn_hooks_json(script);
+        if file.read().as_deref() == Some(body.as_bytes()) { Ok(()) } else { file.write(body.as_bytes()) }
+    } else if file.exists() {
+        file.remove()
+    } else {
+        Ok(())
+    };
+    if let Err(e) = result {
+        eprintln!("copilot_session: turn hooks in {}: {e}", home.display());
+    }
 }
 
 // ── Folder sessions (the Resume menu) ───────────────────────────────────────
@@ -322,6 +478,8 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
+            mcp_mark: None,
         };
         if let Some(uid) = uid {
             opts.env.insert(crate::app_env!("TAB_UID").to_string(), uid.to_string());
@@ -352,6 +510,228 @@ mod tests {
         let mut other = opts(&["--continue"], Some(A));
         other.cmd = "claude".into();
         assert_eq!(resolve(other).args, vec!["--continue"]);
+    }
+
+    /// Run the POSIX turn script for `event` with `payload` on stdin, as
+    /// Copilot does, under the tab variables `vars`.
+    #[cfg(unix)]
+    fn fire(script: &Path, event: &str, payload: &str, vars: &[(&str, &str)]) {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(script).arg(event).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        for (k, v) in vars {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().unwrap();
+        // A script that refuses early never reads its stdin.
+        match child.stdin.take().unwrap().write_all(payload.as_bytes()) {
+            Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => panic!("{e}"),
+            _ => {}
+        }
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success() && out.stdout.is_empty(), "{event}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[cfg(unix)]
+    fn turn_word(live: &Path, uid: &str) -> Option<String> {
+        let text = std::fs::read_to_string(live.join(format!("{uid}.turn"))).ok()?;
+        assert!(crate::services::agent_turn::parse_turn_record(&text).is_some(), "{text}");
+        text.split_whitespace().next().map(str::to_string)
+    }
+
+    /// The payloads Copilot 1.0.112 sent in the hooks probe
+    /// (`scripts/verify-cli/copilot/hooks.py`), cut to the keys the script reads.
+    #[cfg(unix)]
+    fn payload(event: &str, session: &str) -> String {
+        let extra = match event {
+            "notification" => r#", "message": "Edit file: a.txt", "title": "Permission needed", "notification_type": "permission_prompt""#,
+            "errorOccurred" => r#", "errorContext": "model_call", "recoverable": true, "error": {"message": "x"}"#,
+            "postToolUse" => r#", "toolCallId": "c1", "toolName": "bash", "toolArgs": {"sessionId": "99999999-9999-4999-8999-999999999999"}, "toolResult": {"resultType": "success"}"#,
+            "agentStop" => r#", "stopReason": "end_turn", "stop_hook_active": false"#,
+            "sessionEnd" => r#", "reason": "user_exit""#,
+            _ => "",
+        };
+        format!(r#"{{"sessionId": "{session}", "timestamp": 1794840029431, "cwd": "/w"{extra}}}"#)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_turn_hook_writes_each_events_word_for_the_tabs_own_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        let script = dir.path().join("turn.sh");
+        std::fs::write(&script, posix_turn_in(&live.to_string_lossy())).unwrap();
+        let tab = [(crate::app_env!("TAB_UID"), A), (crate::app_env!("TAB_AGENT"), "copilot")];
+        for (event, want) in [
+            ("userPromptSubmitted", "working"),
+            ("notification", "decision"),
+            ("postToolUse", "working"),
+            ("postToolUseFailure", "working"),
+            ("agentStop", "done"),
+            ("userPromptSubmitted", "working"),
+            ("errorOccurred", "done"),
+            ("sessionEnd", "idle"),
+        ] {
+            fire(&script, event, &payload(event, A), &tab);
+            assert_eq!(turn_word(&live, A).as_deref(), Some(want), "{event}");
+        }
+        // An ask_user form is a decision too.
+        let ask = format!(r#"{{"sessionId": "{A}", "message": "Information requested", "notification_type": "elicitation_dialog"}}"#);
+        fire(&script, "notification", &ask, &tab);
+        assert_eq!(turn_word(&live, A).as_deref(), Some("decision"));
+        // Every registered event has a word in the script.
+        let body = std::fs::read_to_string(&script).unwrap();
+        for event in TURN_EVENTS {
+            assert!(body.contains(event), "{event}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_turn_hook_refuses_everything_but_the_tabs_own_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        let script = dir.path().join("turn.sh");
+        std::fs::write(&script, posix_turn_in(&live.to_string_lossy())).unwrap();
+        let tab = [(crate::app_env!("TAB_UID"), A), (crate::app_env!("TAB_AGENT"), "copilot")];
+        let start = payload("userPromptSubmitted", A);
+        // A `copilot -p` the tab's agent ran from its shell tool (1.0.112 sets
+        // COPILOT_AGENT_SESSION_ID for its tools' commands), a Copilot under
+        // another CLI's tab, a bad key.
+        let nested = [tab[0], tab[1], ("COPILOT_AGENT_SESSION_ID", A)];
+        fire(&script, "userPromptSubmitted", &start, &nested);
+        fire(&script, "userPromptSubmitted", &start, &[(crate::app_env!("TAB_UID"), A), (crate::app_env!("TAB_AGENT"), "claude")]);
+        fire(&script, "userPromptSubmitted", &start, &[(crate::app_env!("TAB_UID"), "../x"), (crate::app_env!("TAB_AGENT"), "copilot")]);
+        fire(&script, "userPromptSubmitted", &start, &[]);
+        assert!(!live.exists());
+        fire(&script, "agentStop", &payload("agentStop", A), &tab);
+        assert_eq!(turn_word(&live, A).as_deref(), Some("done"));
+        // A subagent's prompt and stop carry its own id; the nested run's too.
+        fire(&script, "userPromptSubmitted", &payload("userPromptSubmitted", B), &tab);
+        // Events the script maps to nothing, and the ones it reads a field of.
+        for (event, body) in [
+            ("permissionRequest", payload("userPromptSubmitted", A)),
+            ("preToolUse", payload("userPromptSubmitted", A)),
+            ("subagentStop", payload("agentStop", A)),
+            ("preCompact", payload("userPromptSubmitted", A)),
+            ("notification", payload("notification", A).replace("permission_prompt", "agent_completed")),
+            ("errorOccurred", payload("errorOccurred", A).replace("model_call", "tool_execution")),
+        ] {
+            fire(&script, event, &body, &tab);
+        }
+        // No session id at all, and one only inside a tool's arguments.
+        fire(&script, "userPromptSubmitted", r#"{"prompt": "hi"}"#, &tab);
+        fire(&script, "postToolUse", &payload("postToolUse", B).replace(&format!(r#""sessionId": "{B}", "#), ""), &tab);
+        assert_eq!(turn_word(&live, A).as_deref(), Some("done"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_turn_hook_follows_the_session_a_new_moved_the_record_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        let script = dir.path().join("turn.sh");
+        std::fs::write(&script, posix_turn_in(&live.to_string_lossy())).unwrap();
+        let tab = [(crate::app_env!("TAB_UID"), A), (crate::app_env!("TAB_AGENT"), "copilot")];
+        // `/new`: the hint's sessionStart recorded B; the launch key's old
+        // session ends in the background later (its sessionEnd comes after B's).
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join(A), B).unwrap();
+        fire(&script, "userPromptSubmitted", &payload("userPromptSubmitted", A), &tab);
+        assert_eq!(turn_word(&live, A), None);
+        fire(&script, "userPromptSubmitted", &payload("userPromptSubmitted", B), &tab);
+        assert_eq!(turn_word(&live, A).as_deref(), Some("working"));
+        fire(&script, "sessionEnd", &payload("sessionEnd", B), &tab);
+        fire(&script, "sessionEnd", &payload("sessionEnd", A), &tab);
+        assert_eq!(turn_word(&live, A).as_deref(), Some("idle"));
+        // A record that is not a session id falls back to the key.
+        std::fs::write(live.join(A), "ses_x").unwrap();
+        fire(&script, "agentStop", &payload("agentStop", A), &tab);
+        assert_eq!(turn_word(&live, A).as_deref(), Some("done"));
+        // So does a FIFO the agent planted there, without holding the hook.
+        std::fs::remove_file(live.join(A)).unwrap();
+        assert!(std::process::Command::new("mkfifo").arg(live.join(A)).status().unwrap().success());
+        fire(&script, "userPromptSubmitted", &payload("userPromptSubmitted", A), &tab);
+        assert_eq!(turn_word(&live, A).as_deref(), Some("working"));
+    }
+
+    #[test]
+    fn the_powershell_twin_maps_the_same_events() {
+        let body = powershell_turn_in(r"C:\state\live_sessions");
+        for event in TURN_EVENTS {
+            assert!(body.contains(&format!("'{event}'")), "{event}");
+        }
+        for needle in ["COPILOT_AGENT_SESSION_ID", "permission_prompt|elicitation_dialog", "model_call", crate::app_env!("TAB_AGENT")] {
+            assert!(body.contains(needle), "{needle}");
+        }
+        assert!(!body.contains('@'), "an unfilled placeholder");
+        assert!(!posix_turn_in("/state/live").contains('@'), "an unfilled placeholder");
+    }
+
+    #[test]
+    fn turn_hooks_are_registered_once_for_a_release_that_takes_them_and_taken_out_otherwise() {
+        let home = tempfile::tempdir().unwrap();
+        let script = home.path().join("hooks dir").join("turn.sh");
+        let file = home.path().join(".copilot").join("hooks").join(TURN_HOOKS.rsplit('/').next().unwrap());
+        register_in_home_gated(home.path(), true, &script);
+        let first = std::fs::read(&file).unwrap();
+        register_in_home_gated(home.path(), true, &script);
+        assert_eq!(std::fs::read(&file).unwrap(), first);
+        let root: Value = serde_json::from_slice(&first).unwrap();
+        assert_eq!(root["version"], 1);
+        let hooks = root["hooks"].as_object().unwrap();
+        assert_eq!(hooks.len(), TURN_EVENTS.len());
+        let key = if cfg!(windows) { "powershell" } else { "bash" };
+        for event in TURN_EVENTS {
+            let cmd = hooks[*event][0][key].as_str().unwrap();
+            assert!(cmd.ends_with(&format!(" {event}")) && cmd.contains("hooks dir"), "{cmd}");
+        }
+        // The user's own hooks file beside it is never touched.
+        let mine = file.with_file_name("mine.json");
+        std::fs::write(&mine, "{not json").unwrap();
+        register_in_home_gated(home.path(), false, &script);
+        assert!(!file.exists());
+        assert_eq!(std::fs::read_to_string(&mine).unwrap(), "{not json");
+        register_in_home_gated(home.path(), false, &script);
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn only_a_release_the_probe_ran_takes_the_turn_hooks() {
+        let seen = |v: &str| Seen { version: Some(v.to_string()), ..Default::default() };
+        assert!(runs_turn_hooks(Some(&seen("1.0.112"))));
+        assert!(runs_turn_hooks(Some(&seen("1.0.120"))));
+        assert!(!runs_turn_hooks(Some(&seen("1.0.110"))));
+        assert!(!runs_turn_hooks(Some(&Seen::default())));
+        assert!(!runs_turn_hooks(None));
+    }
+
+    /// Writes the app's Copilot hooks — the turn script and the hint that
+    /// records the session — into a scratch home for the hooks probe
+    /// (`scripts/verify-cli/copilot/hooks.py turn`): `COPILOT_PROBE_HOME`,
+    /// `COPILOT_PROBE_LIVE` (the record folder), `COPILOT_PROBE_HOOKS` (where
+    /// the scripts go).
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    fn writes_the_copilot_hooks_for_a_probe() {
+        use std::os::unix::fs::PermissionsExt;
+        let var = |k: &str| PathBuf::from(std::env::var(k).unwrap_or_else(|_| panic!("{k}")));
+        let (home, live, hooks) = (var("COPILOT_PROBE_HOME"), var("COPILOT_PROBE_LIVE"), var("COPILOT_PROBE_HOOKS"));
+        std::fs::create_dir_all(&hooks).unwrap();
+        let turn = hooks.join(TURN_SCRIPT);
+        let hint = hooks.join("hint.sh");
+        let (hint_body, hint_hooks) = crate::services::agent_hint::copilot_hint_for_probe(&live.to_string_lossy(), &hint);
+        std::fs::write(&turn, posix_turn_in(&live.to_string_lossy())).unwrap();
+        std::fs::write(&hint, hint_body).unwrap();
+        for script in [&turn, &hint] {
+            std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        register_in_home_gated(&home, true, &turn);
+        let hint_file = home.join(".copilot").join("hooks").join("hint.json");
+        std::fs::write(hint_file, hint_hooks).unwrap();
     }
 
     #[test]

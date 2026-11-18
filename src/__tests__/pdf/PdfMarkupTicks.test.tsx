@@ -37,13 +37,18 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
   layerPng: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
 }));
 
-import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupBar, PdfMarkupUndoConfirm } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupAgentPanel } from "../../components/embed/pdf/PdfMarkupAgentPanel";
+import { PdfMarkupDock } from "../../components/embed/pdf/PdfMarkupDock";
+/** The harness shows the agent panel open throughout. */
+const PINNED: ReadonlySet<string> = new Set(["ask-1:0"]);
 import { PdfTickBadges, tickBadgesByPage } from "../../components/embed/pdf/PdfMarkupTicks";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import { useActivityStore } from "../../stores/activity";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { SETTLE_MS } from "../../../mobile-web/src/markup/submitState";
+import { ARRIVAL_GUARD_MS } from "../../lib/viewers/markupQuestionPicks";
 import { EMPTY_LAYER, addMark, type Layer, type Mark } from "../../../mobile-web/src/markup/layer";
 import type { MarkupTick } from "../../lib/viewers/markupQuestions";
 
@@ -58,7 +63,7 @@ function agentTab(key: string, scheduleTargetId: string, label: string): TabEntr
   return { key, label, cmd: "claude", cwd: "/home/u/paper", kind: "agent", scheduleTargetId } as TabEntry;
 }
 
-function Harness({ onReload = () => {} }: { onReload?: () => void }) {
+function Harness({ onReload = () => {}, expose }: { onReload?: () => void; expose?: (markup: ReturnType<typeof usePdfMarkup>) => void }) {
   const markup = usePdfMarkup({
     projectId: "p1",
     scope: "p1",
@@ -69,10 +74,11 @@ function Harness({ onReload = () => {} }: { onReload?: () => void }) {
     docSize: 9_000,
     docVersion: 0,
   });
+  expose?.(markup);
   const badges = tickBadgesByPage(markup.edit.base, markup.ticks.groups).get(1) ?? [];
   return (
     <>
-      <PdfMarkupBar markup={markup} page={1} onReload={onReload} onDone={() => {}} />
+      <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={onReload} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={onReload} /></>
       <div data-testid="page-1">
         <PdfTickBadges badges={badges} size={SIZE} scale={1} disabled={markup.sending} onApprove={(marks) => markup.ticks.approve(1, marks)} />
       </div>
@@ -80,8 +86,15 @@ function Harness({ onReload = () => {} }: { onReload?: () => void }) {
   );
 }
 
+/** The clock runs ahead by this much: past the badges' arrival guard. */
+let skew = 0;
+const settle = () => { skew += ARRIVAL_GUARD_MS; };
+let clock: { mockRestore: () => void } | null = null;
+
 let ticks: MarkupTick[] | "missing" = [];
 let submitMode: { mode: string; undo: string | null } = { mode: "list", undo: null };
+/** Holds the next `pdf_markup_undo` answer until released, when a test sets it. */
+let undoGate: Promise<void> | null = null;
 /** Per-tab ticks, when a test needs them to differ by tab. */
 let ticksFor: ((target: string) => MarkupTick[]) | null = null;
 
@@ -95,9 +108,13 @@ const lastSaved = (): Layer | undefined => {
 };
 
 beforeEach(() => {
+  skew = 0;
+  const real = Date.now.bind(Date);
+  clock = vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
   ticks = [];
   ticksFor = null;
   submitMode = { mode: "list", undo: null };
+  undoGate = null;
   mocks.listeners.clear();
   mocks.invoke.mockReset();
   mocks.invoke.mockImplementation(async (command: string, args: { scheduleTargetId: string }) => {
@@ -108,6 +125,7 @@ beforeEach(() => {
       return ticksFor ? ticksFor(args.scheduleTargetId) : ticks;
     }
     if (command === "pdf_markup_submit") return { prompt: "Look at the marked copy.", marked: null, ...submitMode, noUndo: null };
+    if (command === "pdf_markup_undo") await undoGate;
     if (command === "pdf_markup_undo_preview" || command === "pdf_markup_undo") return { files: [{ path: "paper.tex", change: "modified" }], more: 0, pdf: "restored" };
     return null;
   });
@@ -121,7 +139,10 @@ beforeEach(() => {
   useActivityStore.setState({ busyByTab: {}, attentionByTab: {} });
   useSettingsStore.setState({ settings: null });
 });
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  clock?.mockRestore();
+});
 
 /** Submits the layer's two marks and answers the round id it went with. */
 async function submitted(): Promise<string> {
@@ -153,6 +174,7 @@ describe("desktop markup ticks", () => {
     expect(badges()[0].style.left).toBe(`${150 + 2}px`);
     expect(badges()[0].style.top).toBe(`${200 - 2 - 22}px`);
     expect(calls("markup_mcp_ticks")[calls("markup_mcp_ticks").length - 1]?.[1]).toEqual({ projectId: "p1", scheduleTargetId: "s1", path: PATH });
+    settle();
     fireEvent.click(badges()[0]);
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE]));
     expect(badges()).toHaveLength(0);
@@ -170,6 +192,7 @@ describe("desktop markup ticks", () => {
     ring();
     await waitFor(() => expect(badges()).toHaveLength(2));
     const first = badges()[0];
+    settle();
     fireEvent.click(first, { detail: 1 });
     fireEvent.click(first, { detail: 2 });
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([BOX]));
@@ -183,7 +206,7 @@ describe("desktop markup ticks", () => {
     function Grab() {
       const markup = usePdfMarkup({ projectId: "p1", scope: "p1", path: PATH, active: true, visible: true, pageCount: 3, docSize: 9_000, docVersion: 0 });
       approve = markup.ticks.approve;
-      return <PdfMarkupBar markup={markup} page={1} onReload={() => {}} onDone={() => {}} />;
+      return <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={() => {}} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={() => {}} /></>;
     }
     render(<Grab />);
     const round = await submitted();
@@ -217,6 +240,7 @@ describe("desktop markup ticks", () => {
     ticks = [{ round, page: 1, mark: 1 }, { round, page: 1, mark: 2 }, { round: "other", page: 1, mark: 3 }];
     ring();
     expect(await screen.findByText("2 done")).toBeTruthy();
+    settle();
     fireEvent.click(screen.getByRole("button", { name: "Approve all" }));
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([{ kind: "text", color: "black", at: [300, 300], size: 12, text: "keep" }]));
     expect(screen.queryByText(/done$/)).toBeNull();
@@ -232,9 +256,35 @@ describe("desktop markup ticks", () => {
     ring();
     await waitFor(() => expect(badges()).toHaveLength(2));
     expect(screen.getByText("2 done")).toBeTruthy();
+    settle();
     fireEvent.click(badges()[1], { detail: 1 });
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE, BOX]));
     expect(badges()).toHaveLength(1);
+  });
+
+  it("a badge and Approve all take no click in the first moment after a badge appears — Approve all waits for the newest", async () => {
+    render(<Harness />);
+    const round = await submitted();
+    ticks = [{ round, page: 1, mark: 1 }];
+    ring();
+    await waitFor(() => expect(badges()).toHaveLength(1));
+    const saves = mocks.saveLayer.mock.calls.length;
+    // A click right as it appears does nothing.
+    fireEvent.click(badges()[0], { detail: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Approve all" }));
+    expect(badges()).toHaveLength(1);
+    expect(mocks.saveLayer.mock.calls.length).toBe(saves);
+    settle();
+    // The box is ticked too: its badge arrives now, and Approve all waits for it.
+    ticks = [{ round, page: 1, mark: 1 }, { round, page: 1, mark: 2 }];
+    ring();
+    await waitFor(() => expect(screen.getByText("2 done")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Approve all" }));
+    expect(screen.getByText("2 done")).toBeTruthy();
+    settle();
+    fireEvent.click(screen.getByRole("button", { name: "Approve all" }));
+    await waitFor(() => expect(lastSaved()?.sent?.pages[1]).toBeUndefined());
+    expect(badges()).toHaveLength(0);
   });
 
   it("shows no badge while the sent marks are hidden", async () => {
@@ -278,5 +328,31 @@ describe("desktop markup ticks", () => {
     await waitFor(() => expect(badges()).toHaveLength(0));
     expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE, BOX]);
     expect(lastSaved()?.sent).not.toHaveProperty("log");
+  }, SETTLE_MS + 8_000);
+
+  it("forgets the undone round even when a newer Submit lands while the Undo is in flight", async () => {
+    submitMode = { mode: "apply", undo: UNDO_ID };
+    let markup!: ReturnType<typeof usePdfMarkup>;
+    render(<Harness expose={(m) => { markup = m; }} />);
+    const first = await submitted();
+    act(() => useActivityStore.setState({ busyByTab: { "p1:t1": true }, attentionByTab: {} }));
+    await screen.findByText("Agent is working…");
+    act(() => useActivityStore.setState({ busyByTab: {}, attentionByTab: {} }));
+    await screen.findByText(/^Agent finished/, undefined, { timeout: SETTLE_MS + 2_000 });
+    let release!: () => void;
+    undoGate = new Promise<void>((resolve) => { release = resolve; });
+    fireEvent.click(screen.getByRole("button", { name: "Undo the agent's changes from this round" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(calls("pdf_markup_undo")).toHaveLength(1));
+    // A second round goes out before the first Undo is answered.
+    submitMode = { mode: "apply", undo: "f".repeat(32) };
+    act(() => { markup.edit.add(1, SIZE, { kind: "box", color: "yellow", rect: [10, 300, 20, 20] }); });
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(calls("pdf_markup_submit")).toHaveLength(2));
+    const second = calls("pdf_markup_submit")[1][1].round as string;
+    await waitFor(() => expect(lastSaved()?.sent?.log?.map((entry) => entry.id)).toEqual([first, second]));
+    release();
+    await waitFor(() => expect(lastSaved()?.sent?.log?.map((entry) => entry.id)).toEqual([second]));
   }, SETTLE_MS + 8_000);
 });

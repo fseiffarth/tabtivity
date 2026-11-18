@@ -24,12 +24,11 @@ beforeEach(() => {
         target: "new.example:22",
         known: false,
         keys: [{ keyType: "ED25519", fingerprint: "SHA256:abc", bits: 256 }],
-        scan: "new.example ssh-ed25519 AAAA",
       });
     if (cmd === "ssh_trust_host_key") return Promise.resolve();
     return Promise.reject(new Error(`unexpected ${cmd}`));
   });
-  useHostKeyPromptStore.setState({ pending: null, status: "loading", error: "", keys: [], scan: "" });
+  useHostKeyPromptStore.setState({ pending: null, status: "loading", error: "", keys: [] });
 });
 
 const pendingOpens = () =>
@@ -48,7 +47,7 @@ describe("hostKeyConfirmOnce", () => {
     const attempt = vi.fn().mockRejectedValueOnce(REFUSAL).mockResolvedValueOnce("connected");
     const first = run(attempt);
     await pendingOpens();
-    await vi.waitFor(() => expect(useHostKeyPromptStore.getState().scan).not.toBe(""));
+    await vi.waitFor(() => expect(useHostKeyPromptStore.getState().keys).not.toHaveLength(0));
     await useHostKeyPromptStore.getState().accept();
     await expect(first).resolves.toBe("connected");
     expect(attempt).toHaveBeenCalledTimes(2);

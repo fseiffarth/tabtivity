@@ -38,6 +38,7 @@ const OFF_KEYS: Record<string, TranslationKey> = {
   "os-keychain": "transport.refusal.off.osKeychain",
   "headless-owner": "transport.refusal.off.headlessOwner",
   "local-cli-files": "transport.refusal.off.localCliFiles",
+  "daemon-loopback": "transport.refusal.off.daemonLoopback",
 };
 
 /** Whether `value` is a refusal this module can put into words. */

@@ -32,6 +32,7 @@ import { create } from "zustand";
 import type { MailHeader, MailPriority } from "../types/mail";
 import { mailPriorityPage } from "../lib/mail";
 import { useMailStore } from "./mail";
+import { isViewShown, useRootOverlayStore, viewShown } from "./rootOverlay";
 import { startPoll, type Poll } from "../lib/usePoll";
 import { storageKey } from "../lib/brand";
 
@@ -96,8 +97,12 @@ function writeCollapsedColumns(columns: Record<string, true>) {
 }
 
 interface TodoStore {
-  overlayOpen: boolean;
+  /** Show the To-do view of the console window (`rootOverlay.openView`; gated by
+   *  `todo_board`). Whether it is shown is the window's state,
+   *  `useViewShown("todo")` — not a flag of this store. */
   openOverlay: () => void;
+  /** Close the window if it is showing the board. Leaving the view (by any
+   *  door) drops an in-flight card drag, see the subscription at the foot. */
   closeOverlay: () => void;
 
   /**
@@ -107,7 +112,7 @@ interface TodoStore {
    * A one-shot *request*, not a selection: `TodoPane` consumes it and clears it,
    * so re-opening the board later does not re-raise a dialog the user closed. It
    * lives here rather than being a parameter of `openOverlay` because the pane
-   * mounts a frame after the flag flips — there is nobody to hand it to yet.
+   * mounts a frame after the view is shown — there is nobody to hand it to yet.
    */
   focusTaskId: string | null;
   openCard: (taskId: string) => void;
@@ -178,16 +183,19 @@ interface TodoStore {
 }
 
 export const useTodoStore = create<TodoStore>((set, get) => ({
-  overlayOpen: false,
-  openOverlay: () => set({ overlayOpen: true }),
-  closeOverlay: () =>
-    // Drop any in-flight drag with the surface it was happening on: the
-    // pointerdown-bound release handler survives the unmount and would otherwise
-    // commit a move onto a board nobody is looking at.
-    set({ overlayOpen: false, cardDrag: null, focusTaskId: null }),
+  openOverlay: () => useRootOverlayStore.getState().openView("todo"),
+  closeOverlay: () => {
+    if (isViewShown("todo")) useRootOverlayStore.getState().close();
+  },
 
   focusTaskId: null,
-  openCard: (focusTaskId) => set({ overlayOpen: true, focusTaskId }),
+  openCard: (focusTaskId) => {
+    // Set before the view is shown: the pane that mounts with it consumes it.
+    set({ focusTaskId });
+    useRootOverlayStore.getState().openView("todo");
+    // A board that cannot open (`todo_board` off) leaves no request behind.
+    if (!isViewShown("todo")) set({ focusTaskId: null });
+  },
   clearFocusTask: () => set({ focusTaskId: null }),
 
   search: "",
@@ -360,3 +368,14 @@ export function releaseUrgentMailPoll(unfocused = false): void {
   urgentMailUnsub?.();
   urgentMailUnsub = null;
 }
+
+// Leaving the To-do view by any door (its own ×, a switch to another view, the
+// window's Escape): drop any in-flight drag with the surface it was happening
+// on — the pointerdown-bound release handler survives the unmount and would
+// otherwise commit a move onto a board nobody is looking at — and any card
+// request the pane never consumed.
+useRootOverlayStore.subscribe((s, prev) => {
+  if (viewShown(prev, "todo") && !viewShown(s, "todo")) {
+    useTodoStore.setState({ cardDrag: null, focusTaskId: null });
+  }
+});

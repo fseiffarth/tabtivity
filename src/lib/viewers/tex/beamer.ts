@@ -100,6 +100,8 @@ export function overlaySpecAt(text: string, pos: number): { body: string; end: n
 /** Does `text` load the beamer class? `%` comments are dropped first so a
  *  commented-out `\documentclass{beamer}` under an `article` line does not count. */
 export function isBeamerDocument(text: string): boolean {
+  // Asked on every keystroke: most documents never name the class at all.
+  if (!text.includes("beamer")) return false;
   const code = text.replace(/(^|[^\\])%[^\n]*/g, "$1");
   return /\\documentclass\s*(?:\[[^\]]*\])?\s*\{\s*beamer\s*\}/.test(code);
 }

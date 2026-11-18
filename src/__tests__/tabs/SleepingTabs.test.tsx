@@ -363,6 +363,33 @@ describe("sleeping terminal tabs (§5.3, S10)", () => {
     for (const k of shellKeys) expect(isMounted(k), k).toBe(true);
   });
 
+  it("a cockpit view opening wakes no sleeping root terminal; Root's view does, and so does a root tab drawn in Now", async () => {
+    await mount();
+    await advance(DELAY * 2);
+    // The subwindow's active tab is never asleep; the others are.
+    const asleep = shellKeys.filter((k) => !isMounted(k));
+    expect(asleep.length).toBeGreaterThanOrEqual(2);
+
+    // Projects / Usage / Now draw no root layout: what sleeps keeps sleeping.
+    await act(async () => {
+      useRootOverlayStore.setState({ open: true, view: "projects" });
+    });
+    await advance(DELAY * 2);
+    for (const k of asleep) expect(isMounted(k), k).toBe(false);
+
+    // The Now view's detail pane drawing one root tab (`shownKeys`) wakes just that one.
+    await act(async () => {
+      useOverlayAgentStore.setState({ shownKeys: new Set([asleep[0]]) });
+    });
+    expect(isMounted(asleep[0])).toBe(true);
+    expect(isMounted(asleep[1])).toBe(false);
+
+    await act(async () => {
+      useRootOverlayStore.setState({ view: "root" });
+    });
+    for (const k of shellKeys) expect(isMounted(k), k).toBe(true);
+  });
+
   it("never sleeps a terminal a popout shows (the main pane owns its PTY)", async () => {
     const key = shellKeys[0];
     useTabsStore.setState({

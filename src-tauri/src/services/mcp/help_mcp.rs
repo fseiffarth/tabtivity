@@ -64,10 +64,11 @@ const MAX_EXPANSIONS: usize = 3;
 pub const MAX_TOPICS: usize = 200;
 const TRUNCATED: &str = "\n\n[… truncated — read one section at a time with `section`]";
 
-/// The agent CLIs the help server is named to on their own command line
-/// (`root_mcp::apply_help_to_spawn_with`); tool-tagged local Vibe models get
-/// it through Vibe's env layer. Every other agent CLI gets the env pair only.
-pub const WIRED_CLIS: &[&str] = &["claude", "codex"];
+/// The agent CLIs every lane names its server to for one launch
+/// (`root_mcp::WIRED_CLIS`); tool-tagged local Vibe models get it through
+/// Vibe's env layer. Every other agent CLI gets the env pair, which the
+/// `<slug>-mcp` command reads.
+pub const WIRED_CLIS: &[&str] = crate::services::root_mcp::WIRED_CLIS;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Section {
@@ -641,37 +642,25 @@ pub fn handle_message(session: &Session, message: &Value) -> Option<Value> {
 }
 
 pub(crate) fn handle_with(session: &Session, index: &Index, message: &Value) -> Option<Value> {
-    let error = |id: Value, code: i64, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":text}}));
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return error(Value::Null, -32600, "invalid request");
-    }
-    let id = message.get("id").cloned()?;
-    if session.identity.caller != Caller::Helper || session.check().is_err() { return error(id, -32000, "access refused"); }
-    let ok = |value: Value| Some(json!({"jsonrpc":"2.0","id":id,"result":value}));
-    match message["method"].as_str().unwrap_or_default() {
-        "initialize" => ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},
-            "serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},"instructions":INSTRUCTIONS})),
-        "ping" => ok(json!({})),
-        "tools/list" => ok(json!({"tools": tools()})),
-        "tools/call" => {
-            let name = message["params"]["name"].as_str().unwrap_or_default();
-            let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
-            ok(match call(index, name, &args) {
-                Ok(value) => {
-                    let text = value.to_string();
-                    if text.len() > security::MAX_RESPONSE {
-                        json!({"content":[{"type":"text","text":"response too large"}],"isError":true})
-                    } else {
-                        json!({"content":[{"type":"text","text":text}],"structuredContent":value,"isError":false})
-                    }
-                }
-                Err(e) => json!({"content":[{"type":"text","text":e}],"isError":true}),
-            })
+    use crate::services::root_mcp::{lane_method, rpc_error, rpc_request_id, rpc_result, tool_err, LaneInfo, LaneMethod};
+    let id = match rpc_request_id(message) { Err(reply) => return Some(reply), Ok(id) => id? };
+    if session.identity.caller != Caller::Helper || session.check().is_err() { return Some(rpc_error(id, -32000, "access refused")); }
+    let lane = LaneInfo { name: SERVER_NAME, instructions: INSTRUCTIONS, tools };
+    let (name, args) = match lane_method(&lane, &id, message) {
+        LaneMethod::Reply(reply) => return Some(reply),
+        LaneMethod::Call { name, args } => (name, args.unwrap_or(json!({}))),
+    };
+    Some(rpc_result(id, match call(index, name, &args) {
+        Ok(value) => {
+            let text = value.to_string();
+            if text.len() > security::MAX_RESPONSE {
+                tool_err("response too large")
+            } else {
+                json!({"content":[{"type":"text","text":text}],"structuredContent":value,"isError":false})
+            }
         }
-        _ => error(id, -32601, "method not found"),
-    }
+        Err(e) => tool_err(&e),
+    }))
 }
 
 #[cfg(test)]

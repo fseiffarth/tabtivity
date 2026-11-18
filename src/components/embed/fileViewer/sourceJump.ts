@@ -1,11 +1,16 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../../stores/tabs";
-import { useRootOverlayStore } from "../../../stores/rootOverlay";
-import { useEditorJumpStore, hasMountedEditor } from "../../../stores/viewers/editorJump";
+import { useTabsStore, type TabEntry } from "../../../stores/tabs";
+import { tabsOnScreen } from "../../../stores/rootOverlay";
+import { useEditorJumpStore, hasMountedEditor, listenEditorJump } from "../../../stores/viewers/editorJump";
+import { listenPdfReveal } from "../../../stores/viewers/pdfSync";
+import { listenTexCenter } from "../../../stores/viewers/texCenter";
 import { parseDetachedParam } from "../../../stores/detached";
 import { basename, dirname } from "../../../lib/paths";
 import { focusTexWorkspaceForSource } from "../../../lib/viewers/tex/openTexWorkspace";
 import { openLinkedFile, viewerForPath } from "./openLinked";
+import { useProjectsStore } from "../../../stores/projects";
+import { useFileSourcesStore } from "../../../stores/viewers/fileSources";
+import { otherSidePath } from "../../../lib/remote/fileSide";
 
 /** Tauri event carrying a reverse-search jump across the main/detached window
  *  boundary (#42). Only the main window listens; see {@link jumpToSource}. */
@@ -21,20 +26,59 @@ interface SourceJumpEnvelope {
   anchorPath?: string;
 }
 
-/** The key of an open editor tab for `path` (any viewer), or undefined. Lets a
- *  reverse-search source route into the subwindow that already holds the
+/** The key of an on-screen editor tab for `path` (any viewer), or undefined.
+ *  Lets a reverse-search source route into the subwindow that already holds the
  *  producing main `.tex`, via {@link openLinkedFile}'s same-group rule. */
 function tabKeyForPath(path: string): string | undefined {
+  return tabsOnScreen().find((t) => t.kind === "embed" && t.embedPath === path)?.key;
+}
+
+/**
+ * Show a remote project's file on the side the jump names, in the tab that is
+ * already open for it, instead of a second tab.
+ *
+ * A PDF read from the host names its `.tex` by the HOST path; the `.tex` tab the
+ * user has open usually holds the local MIRROR path (or holds the host path but
+ * is switched to Local). Matching on the exact path missed it, and the jump
+ * opened a duplicate tab on the remote copy. Here, for `input` and the document
+ * root `anchorPath` (the workspace tab's key), the open tab of that file is put
+ * on the jump's side first:
+ *  - a tab on the exact path whose Local/Remote switch points the other way is
+ *    switched back to the path's own side;
+ *  - else a tab on the OTHER side's path is pointed at this one
+ *    (`setTabEmbedPath`), which makes it read that side — what flipping its
+ *    switch shows, kept across a restart like any path a tab was opened on.
+ * The routing that follows then finds it by path as usual. Local projects, and
+ * paths under neither root of a remote one, are left alone. A compile's PDF
+ * goes through here too (`TexView`'s `openPdf`): a host build names the host
+ * PDF while the open PDF tab may hold the mirror's.
+ */
+export function alignFileTabSide(input: string, anchorPath?: string) {
   const store = useTabsStore.getState();
-  const holds = (t: TabEntry) => t.kind === "embed" && t.embedPath === path;
-  // The root console's tabs are on screen too while it floats; a PDF there
-  // anchors its source into the console, not into the project underneath.
-  return (
-    store.tabs.find(holds)?.key ??
-    (useRootOverlayStore.getState().open
-      ? store.tabsByScope[ROOT_SCOPE]?.find(holds)?.key
-      : undefined)
+  const projects = useProjectsStore.getState().projects;
+  const tabs = tabsOnScreen().filter(
+    (t): t is TabEntry & { embedPath: string } => t.kind === "embed" && !!t.embedPath,
   );
+  const targets = anchorPath && anchorPath !== input ? [input, anchorPath] : [input];
+  for (const target of targets) {
+    for (const tab of tabs) {
+      const project = projects.find((p) => p.id === (tab.scope ?? store.scope));
+      const other = otherSidePath(project, target);
+      if (!other) continue;
+      if (tab.embedPath === target) {
+        const controls = useFileSourcesStore.getState().controlsByTab[tab.key];
+        if (controls) {
+          if (controls.current !== other.side) controls.set(other.side);
+        } else if (tab.viewerState?.fileSide && tab.viewerState.fileSide !== other.side) {
+          // Not mounted (a hidden group): its flip is only the persisted one,
+          // which it would come back on.
+          store.setViewerState(tab.key, { fileSide: other.side });
+        }
+      } else if (tab.embedPath === other.twin && !tabs.some((t) => t.embedPath === target)) {
+        store.setTabEmbedPath(tab.key, target);
+      }
+    }
+  }
 }
 
 /** True when this webview is the MAIN window (no `?detached=` param) — the one
@@ -59,7 +103,9 @@ function isTexSource(path: string): boolean {
  * the source, and report whether it did. On a hit it focuses the workspace and
  * switches its center to `input` ({@link focusTexWorkspaceForSource}) and posts
  * the scroll to the editor-jump store; `fallback` runs only when no workspace
- * owns the file. Non-`.tex` sources skip straight to the fallback.
+ * owns the file. Non-`.tex` sources skip straight to the fallback. `root` is
+ * the source's main document when the caller already resolved it (a PDF click's
+ * anchor), which saves resolving it again.
  *
  * This has to run BEFORE the standalone `hasMountedEditor`/tab probes: a
  * workspace child sits mounted-but-hidden in the LRU, so it already satisfies
@@ -70,13 +116,14 @@ function routeSourceJump(
   input: string,
   line: number,
   column: number,
+  root: string | undefined,
   fallback: () => void,
 ) {
   if (!isTexSource(input)) {
     fallback();
     return;
   }
-  focusTexWorkspaceForSource(input)
+  focusTexWorkspaceForSource(input, root)
     .then((handled) => {
       if (handled) useEditorJumpStore.getState().requestJump(input, line, column);
       else fallback();
@@ -104,7 +151,8 @@ function openStandaloneSourceTab(input: string, line: number, column: number, an
  *  of {@link jumpToSource}, and what {@link listenSourceJump} runs for a jump
  *  broadcast from a detached PDF window. */
 function applySourceJump(input: string, line: number, column: number, anchorPath?: string) {
-  routeSourceJump(input, line, column, () =>
+  alignFileTabSide(input, anchorPath);
+  routeSourceJump(input, line, column, anchorPath, () =>
     openStandaloneSourceTab(input, line, column, anchorPath),
   );
 }
@@ -116,7 +164,7 @@ function applySourceJump(input: string, line: number, column: number, anchorPath
  * store, since the tab may already be open and won't remount.
  *
  * #42 cross-window: the PDF may be popped out into a detached window, either on
- * its own (source editor docked in the main window) or alongside the source in a
+ * its own (source editor in the main window) or alongside the source in a
  * split view. Decide where to run the jump:
  *  - The source editor is already mounted in THIS window (e.g. a split PDF|TeX,
  *    possibly popped out) → just scroll it. This is the path a detached window
@@ -136,10 +184,13 @@ function applySourceJump(input: string, line: number, column: number, anchorPath
  * happens to be focused.
  */
 export function jumpToSource(input: string, line: number, column = 0, anchorPath?: string) {
+  // An open tab of this file showing the other side of a remote project is
+  // switched to this side first, so the routing below lands on it.
+  alignFileTabSide(input, anchorPath);
   // A `.tex` source owned by an open workspace is centered there first (in this
   // window, or wherever the workspace lives — the store write reaches it); only a
   // source no workspace owns falls through to the standalone routing below.
-  routeSourceJump(input, line, column, () =>
+  routeSourceJump(input, line, column, anchorPath, () =>
     jumpToStandaloneSource(input, line, column, anchorPath),
   );
 }
@@ -186,4 +237,18 @@ export async function listenSourceJump(): Promise<() => void> {
   } catch {
     return () => {};
   }
+}
+
+/**
+ * EVERY window: apply what the other windows broadcast on the TeX ↔ PDF channels
+ * (#42). A window is a separate webview with its own stores, so the far side of
+ * a jump is reached only this way: a forward reveal, re-read or compile notice
+ * for a PDF shown here (`pdfSync`), a caret jump for an editor mounted here
+ * (`editorJump`), a center switch or recompile for a workspace rendered here
+ * (`texCenter`). One registration per window, so a new window kind cannot
+ * forget a channel. Returns an unlisten.
+ */
+export async function listenTexPdfChannels(): Promise<() => void> {
+  const unlisten = await Promise.all([listenPdfReveal(), listenEditorJump(), listenTexCenter()]);
+  return () => unlisten.forEach((off) => off());
 }

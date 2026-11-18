@@ -6,6 +6,7 @@
 import { translate, type TranslationKey, type useT } from "../../lib/i18n";
 import type { SettingsSearchResult } from "./settingsUi";
 import { scoreSearch, searchTerms, type SearchField } from "./settingsSearch";
+import { formatAppLink } from "../../lib/navigation/appLinks";
 
 export type SettingsPanelKind = "main" | "global" | "filetypes" | "ollama" | "agents" | "shortcuts" | "git" | "vpn" | "remoteHosts" | "archive" | "scaffoldRepair" | "updates" | "help";
 
@@ -21,6 +22,7 @@ export const MAIN_SECTIONS = [
   "hintsOnboarding",
   "downloads",
   "browser",
+  "mail",
   "calendar",
   "usageStats",
   "pdfMarkup",
@@ -50,7 +52,7 @@ export function sectionOfAnchor(anchor: string | undefined): MainSection {
  *  `settings.group.<key>`; entry labels `settings.<section>` / `nav.<panel>.title`. */
 export const SETTINGS_GROUPS: { key: "general" | "workspace" | "agents" | "remote" | "system"; entries: NavEntry[] }[] = [
   { key: "general", entries: ["general", "layout", "clock", "hintsOnboarding", "shortcuts", "updates", "help"] },
-  { key: "workspace", entries: ["global", "filetypes", "downloads", "browser", "calendar", "usageStats", "archive", "scaffoldRepair"] },
+  { key: "workspace", entries: ["global", "filetypes", "downloads", "browser", "mail", "calendar", "usageStats", "archive", "scaffoldRepair"] },
   { key: "agents", entries: ["agents", "ollama", "pdfMarkup", "rootConsole", "assistant", "voice"] },
   { key: "remote", entries: ["remoteFeatures", "git", "remoteHosts", "vpn", "vm", "mobile"] },
   { key: "system", entries: ["performance", "resourceMonitor", "experimental"] },
@@ -59,6 +61,8 @@ export const SETTINGS_GROUPS: { key: "general" | "workspace" | "agents" | "remot
 /** One searchable setting on a page, found by its label key and by what the
  *  label alone does not say. */
 interface SearchItem {
+  /** Stable public link name; label keys are the default. */
+  id?: string;
   key: TranslationKey;
   /** Substituted into `key`'s text. */
   params?: Record<string, string>;
@@ -85,6 +89,7 @@ interface SearchPage {
 
 const ACCOUNTS: TranslationKey[] = ["agents.groupAccounts"];
 const apiKeyItem = (provider: string, aliases: TranslationKey): SearchItem => ({
+  id: `settings.searchProviderKey.${provider.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
   key: "settings.searchProviderKey",
   params: { provider },
   target: provider,
@@ -104,6 +109,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
       { key: "settings.themeVars" },
       { key: "settings.language", aliases: "settings.searchAlias.language" },
       { key: "settings.showUntestedTags" },
+      { key: "settings.privacyCurtain" },
       { key: "settings.runScriptsBg" },
       { key: "settings.persistLocal", aliases: "settings.searchAlias.persistLocal" },
     ],
@@ -111,6 +117,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   layout: {
     items: [
       { key: "settings.windowZoom", aliases: "settings.searchAlias.zoom" },
+      { key: "settings.sidePanelAutoHide" },
       { key: "settings.closeSubwindowOnLastTab" },
       { key: "settings.minSubWidth" },
       { key: "settings.minSubHeight" },
@@ -124,15 +131,16 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   browser: {
     labels: ["settings.browserHome", "settings.browserSearch", "settings.browserLinkTarget", "settings.browserRestoreNavigate", "settings.browserLivePages"],
   },
+  mail: { labels: ["settings.mailClient", "settings.mailCheckInterval"] },
   calendar: {
     labels: ["settings.calendarGlobalApp", "settings.todoBoard", "settings.weekStartsOn", "settings.defaultView", "settings.dayGridStart", "settings.defaultReminder"],
   },
   usageStats: { labels: ["settings.dailyRecap", "settings.openUsageStats"] },
-  pdfMarkup: { labels: ["settings.pdfMarkupDirect", "settings.pdfMarkupInstruction", "markup.ask.label", "settings.pdfMarkupApply"] },
+  pdfMarkup: { labels: ["settings.pdfMarkupDirect", "settings.pdfMarkupInstruction", "markup.ask.label", "settings.pdfMarkupApply", "settings.pdfMarkupAutoReload", "settings.pdfMarkupSubagents"] },
   rootConsole: {
     labels: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
   },
-  assistant: { labels: ["assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"] },
+  assistant: { labels: ["settings.assistantSwitch", "assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"] },
   voice: { aliases: "settings.searchAlias.voice", labels: ["settings.voice.model", "settings.voice.lang", "settings.voice.gpu"] },
   remoteFeatures: { labels: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"] },
   vm: { aliases: "settings.searchAlias.vm", labels: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"] },
@@ -148,9 +156,9 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   },
   resourceMonitor: { labels: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"] },
   experimental: {
-    labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter"],
+    labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.windowsSessionHost", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter", "settings.voiceHandsFree", "settings.turnCheckpoints"],
   },
-  git: { keywords: ["nav.git.blurb"], aliases: "settings.searchAlias.git" },
+  git: { keywords: ["nav.git.blurb"], aliases: "settings.searchAlias.git", items: [{ id: "access-token", key: "git.accessToken" }] },
   vpn: { keywords: ["nav.vpn.blurb"], aliases: "settings.searchAlias.vpn" },
   remoteHosts: { keywords: ["nav.remoteHosts.blurb"], aliases: "settings.searchAlias.remoteHosts" },
   global: { keywords: ["nav.global.blurb"] },
@@ -211,6 +219,29 @@ export const pageLabelKey = (entry: NavEntry) =>
   (isMainSection(entry) ? `settings.${entry}` : `nav.${entry}.title`) as TranslationKey;
 export const pageValue = (entry: NavEntry) => (isMainSection(entry) ? anchorOf(entry) : entry);
 
+/** Public destinations use stable keys, never translated text or setting values. */
+export function settingsLinkTargets(t: ReturnType<typeof useT>) {
+  return SETTINGS_GROUPS.flatMap((group) => group.entries.flatMap((entry) => {
+    const index = SEARCH_INDEX[entry];
+    const items: SearchItem[] = [...(index.labels ?? []).map((key) => ({ key })), ...(index.items ?? [])];
+    return [
+      { entry, id: undefined as string | undefined, label: t(pageLabelKey(entry)), path: undefined as string[] | undefined, open: undefined as boolean | undefined, url: formatAppLink({ kind: "settings", page: entry }) },
+      ...items.map((item) => {
+        const id = item.id ?? (item.params?.provider ? `${item.key}.${item.params.provider.toLowerCase()}` : item.key);
+        const label = t(item.key, item.params);
+        return { entry, id, label, path: [...(item.within ?? []).map((key) => t(key)), item.target ?? label], open: item.open,
+          url: formatAppLink({ kind: "settings", page: entry, setting: id }) };
+      }),
+    ];
+  }));
+}
+
+export function settingsLinkTarget(page: string, setting: string | undefined, t: ReturnType<typeof useT>) {
+  const targets = settingsLinkTargets(t);
+  return targets.find((target) => target.entry === page && target.id === setting)
+    ?? targets.find((target) => target.entry === page && target.id === undefined);
+}
+
 /** The search: the pages and the settings that match every word typed, best
  *  first. Text is matched in the UI language and in English, so an English
  *  setting name finds its page in any language. `shown` drops a page that
@@ -242,7 +273,7 @@ export function searchSettings(
           ...fields([...(index.keywords ?? []), groupKey], 1),
         ]);
         if (pageScore !== null) {
-          results.push({ value: `search:${results.length}`, label: pageLabel, trail: t(groupKey), page, score: pageScore });
+          results.push({ value: `search:${results.length}`, label: pageLabel, trail: t(groupKey), page, score: pageScore, url: formatAppLink({ kind: "settings", page: entry }) });
         }
         const items: SearchItem[] = [...(index.labels ?? []).map((key) => ({ key })), ...(index.items ?? [])];
         for (const item of items) {
@@ -261,6 +292,7 @@ export function searchSettings(
             page,
             path: [...within.map((key) => t(key)), item.target ?? label],
             open: item.open,
+            url: formatAppLink({ kind: "settings", page: entry, setting: item.id ?? (item.params?.provider ? `${item.key}.${item.params.provider.toLowerCase()}` : item.key) }),
             score,
           });
         }

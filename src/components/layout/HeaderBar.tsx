@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { IS_MAC } from "../../lib/platform";
 import { startWindowDrag } from "../../lib/window/startWindowDrag";
+import { useFullscreenMode } from "../../lib/window/fullscreenMode";
+import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { Clock } from "../header/Clock";
 import { StatusCluster } from "../header/StatusCluster";
 import { WindowControls } from "../header/WindowControls";
 import { HeaderSlot } from "../header/HeaderSlot";
-import { headerWidthTier, isHeaderPinned, orderedHeaderIds, useHeaderPinDefaults } from "../../lib/headerPins";
+import { headerWidthTier, isHeaderPinned, orderedHeaderIds, useHeaderPinDefaults, type HeaderWidthTier } from "../../lib/headerPins";
 import { APP_ICONS } from "../header/appIcons";
 import { useSettingsStore } from "../../stores/settings";
+import { useT } from "../../lib/i18n";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
 const NON_DRAG_SELECTOR = [
@@ -33,14 +36,75 @@ function handleDrag(e: React.MouseEvent) {
   if (!target.closest(NON_DRAG_SELECTOR)) startWindowDrag();
 }
 
+/** How long the fullscreen bar stays down after the pointer leaves it. */
+const AUTOHIDE_LEAVE_MS = 450;
+/** Something in the bar still needs it open: the pointer is on it, or a menu
+ *  dropped out of it (hover menu or a click-opened one). */
+function barBusy(header: HTMLElement | null): boolean {
+  if (!header) return false;
+  return (
+    header.matches(":hover") ||
+    useHeaderHoverMenuStore.getState().openId !== null ||
+    header.querySelector("[role='menu'], .tab-new-menu, .project-switcher-add-menu") !== null
+  );
+}
+
 export function HeaderBar() {
+  // In the window's own fullscreen mode the bar steps out of the layout (the
+  // content takes the whole screen) and slides down while the pointer is at the
+  // top edge. Windowed, it is the ordinary always-visible bar.
+  const inFullscreen = useFullscreenMode((s) => s.on);
+  // Pinned (Settings `header_fullscreen_pinned`, the bar's own pin button): the
+  // bar stays an ordinary docked bar in fullscreen too.
+  const pinned = useSettingsStore((s) => s.settings?.header_fullscreen_pinned ?? false);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  const fullscreen = inFullscreen && !pinned;
+  const t = useT();
+  const [revealed, setRevealed] = useState(false);
+  const hideTimer = useRef<number | null>(null);
+  const clearHide = () => {
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  };
+  const reveal = () => {
+    clearHide();
+    setRevealed(true);
+  };
+  const scheduleHide = () => {
+    clearHide();
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null;
+      // Busy (a menu is open, the pointer came back): look again shortly.
+      if (barBusy(headerRef.current)) scheduleHide();
+      else setRevealed(false);
+    }, AUTOHIDE_LEAVE_MS);
+  };
+  // The pointer at the top edge brings the bar down. Not while steering has
+  // hidden the pointer (`data-steer-pointer`): a pointer parked up there gets
+  // mouse events from the engine whenever a steering key changes what lies
+  // under it, and the bar would drop over the tab strip on a tab switch. A
+  // real move clears the flag (SteeringLegend, capture phase, before this),
+  // so moving there still reveals — hence onMouseMove as well.
+  const revealFromEdge = () => {
+    if (document.documentElement.dataset.steerPointer === "hidden") return;
+    reveal();
+    scheduleHide();
+  };
+  useEffect(() => {
+    if (!fullscreen) {
+      clearHide();
+      setRevealed(false);
+    }
+    return clearHide;
+  }, [fullscreen]);
   const order = useSettingsStore((s) => s.settings?.header_order);
   const pins = useSettingsStore((s) => s.settings?.header_pins);
   const pinDefaults = useHeaderPinDefaults();
   const headerRef = useRef<HTMLElement>(null);
-  const [widthTier, setWidthTier] = useState<0 | 1 | 2 | 3>(0);
+  const [widthTier, setWidthTier] = useState<HeaderWidthTier>(0);
   // The bar gives way by its own width (`headerWidthTier`): the badges and the
-  // clock fold in CSS off `data-width-tier`, the cluster through its prop.
+  // clock fold in CSS off `data-width-tier`, the cluster and the project strip's
+  // box pills (`boxPillBudget`) through their props.
   useEffect(() => {
     const header = headerRef.current;
     if (!header || typeof ResizeObserver === "undefined") return;
@@ -56,11 +120,19 @@ export function HeaderBar() {
   // Layout, from `workspace_capabilities`.)
 
   return (
+    <>
+    {fullscreen && !revealed && (
+      <div className="header-hotzone" aria-hidden="true" onMouseEnter={revealFromEdge} onMouseMove={revealFromEdge} />
+    )}
     <header
       ref={headerRef}
-      className={`app-header${IS_MAC ? " is-mac" : ""}`}
+      className={`app-header${IS_MAC ? " is-mac" : ""}${
+        fullscreen ? ` is-autohide${revealed ? " is-revealed" : ""}` : ""
+      }`}
       data-width-tier={widthTier}
       onMouseDown={handleDrag}
+      onMouseEnter={fullscreen ? reveal : undefined}
+      onMouseLeave={fullscreen ? scheduleHide : undefined}
     >
       {/* The bar opens on the project strip itself: its leading box chip is the
           leftmost thing in the window. Its Tabtivity logo is the window's move
@@ -74,7 +146,7 @@ export function HeaderBar() {
           controls. Everything global now sits on the right, so the strip's only
           neighbours are separators. */}
       <div className="header-center no-drag">
-        <ProjectSwitcher open />
+        <ProjectSwitcher open widthTier={widthTier} />
       </div>
       {/* Right of the strip, in two groups separated by gap rather than by more
           hairlines: the global *apps and menus* (kept as their own buttons —
@@ -102,8 +174,18 @@ export function HeaderBar() {
             controls: machine-level, like the readouts it follows. */}
         <Clock />
         <span className="project-switcher-separator" aria-hidden="true" />
+        {inFullscreen && (
+          <button
+            className="wm-btn wm-pin"
+            onClick={() => void updateSettings({ header_fullscreen_pinned: !pinned })}
+            title={t(pinned ? "header.unpinFullscreen" : "header.pinFullscreen")}
+            aria-label={t(pinned ? "header.unpinFullscreen" : "header.pinFullscreen")}
+            aria-pressed={pinned}
+          />
+        )}
         <WindowControls />
       </div>
     </header>
+    </>
   );
 }

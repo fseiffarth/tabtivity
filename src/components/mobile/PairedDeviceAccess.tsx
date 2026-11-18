@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../../lib/brand";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { useProjectsStore } from "../../stores/projects";
+import { useSettingsStore } from "../../stores/settings";
 import { useBoxesStore } from "../../stores/boxes";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { ErrorNote } from "../common/ErrorNote";
@@ -19,9 +20,11 @@ const SECTION_LABEL: Record<Section, TranslationKey> = {
   mail: "mobile.device.mail",
 };
 
-/** A project or box as far as phone access goes. */
+/** A project, a box or the root console as far as phone access goes. Root's
+ *  switch is `root_access` and its list is opt-in and may be empty
+ *  (`root_devices`), where a project's is absent for every phone. */
 interface Scope {
-  kind: "project" | "box";
+  kind: "project" | "box" | "root";
   id: string;
   name: string;
   enabled: boolean;
@@ -96,12 +99,22 @@ export function PairedDeviceAccess({
   const boxes = useBoxesStore((state) => state.boxes);
   const setProjectMobileAccess = useProjectsStore((state) => state.setProjectMobileAccess);
   const setBoxMobileAccess = useBoxesStore((state) => state.setBoxMobileAccess);
+  const settings = useSettingsStore((state) => state.settings);
+  const updateSettings = useSettingsStore((state) => state.updateSettings);
+  const hostSettings = settings?.[MOBILE_HOST_KEY];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState<{ x: number; y: number } | null>(null);
 
   const hidden = new Set(device.hidden_sections ?? []);
   const scopes: Scope[] = [
+    {
+      kind: "root",
+      id: "root",
+      name: t("mobile.device.rootName"),
+      enabled: hostSettings?.root_access === true,
+      devices: hostSettings?.root_devices ?? [],
+    },
     ...projects.map((project): Scope => ({
       kind: "project",
       id: project.id,
@@ -131,10 +144,27 @@ export function PairedDeviceAccess({
       setBusy(false);
     }
   };
-  const write = (scope: Scope, next: { enabled: boolean; devices: string[] | null }) =>
-    scope.kind === "project"
+  const write = (scope: Scope, next: { enabled: boolean; devices: string[] | null }) => {
+    if (scope.kind === "root") {
+      // Root's switch is Settings → Mobile's own; only the phones are written
+      // here. An empty list is stored as no list (both mean no phone).
+      const list = next.devices ?? [];
+      return updateSettings({
+        [MOBILE_HOST_KEY]: { ...(hostSettings ?? { enabled: false }), root_devices: list.length > 0 ? list : undefined },
+      });
+    }
+    return scope.kind === "project"
       ? setProjectMobileAccess(scope.id, next.enabled, next.devices)
       : setBoxMobileAccess(scope.id, next.enabled, next.devices);
+  };
+  /** What this phone's list becomes without / with it, for root: a plain list
+   *  edit that keeps the (opt-in) switch as it is. */
+  const rootList = (scope: Scope) => listOf(scope.devices) ?? [];
+  const nextFor = (scope: Scope, add: boolean) => {
+    if (scope.kind !== "root") return add ? withDevice(scope, device.id, pairedIds) : withoutDevice(scope, device.id, pairedIds);
+    const rest = rootList(scope).filter((id) => id !== device.id && pairedIds.includes(id));
+    return { enabled: scope.enabled, devices: add ? [...rest, device.id] : rest };
+  };
 
   const toggleSection = (section: Section) =>
     void run(async () => {
@@ -182,16 +212,17 @@ export function PairedDeviceAccess({
           <span className="settings-list-label">
             {scope.name}
             {scope.kind === "box" && <span className="tab-menu-hint"> {t("mobile.device.box")}</span>}
+            {scope.kind === "root" && <UntestedTag id="mobile.rootPhones" />}
           </span>
           <button
             type="button"
             className="settings-btn sm"
             disabled={busy}
-            title={t(listOf(scope.devices) === null ? "mobile.device.disconnectAllTitle" : "mobile.device.disconnectTitle", {
+            title={t(scope.kind !== "root" && listOf(scope.devices) === null ? "mobile.device.disconnectAllTitle" : "mobile.device.disconnectTitle", {
               name: scope.name,
               device: device.name,
             })}
-            onClick={() => void run(() => write(scope, withoutDevice(scope, device.id, pairedIds)))}
+            onClick={() => void run(() => write(scope, nextFor(scope, false)))}
           >
             {t("mobile.device.disconnect")}
           </button>
@@ -221,15 +252,17 @@ export function PairedDeviceAccess({
                 <button
                   type="button"
                   key={`${scope.kind}:${scope.id}`}
-                  disabled={busy}
+                  disabled={busy || (scope.kind === "root" && !scope.enabled)}
                   onClick={() => {
                     setAdding(null);
-                    void run(() => write(scope, withDevice(scope, device.id, pairedIds)));
+                    void run(() => write(scope, nextFor(scope, true)));
                   }}
                 >
                   {scope.name}
                   {scope.kind === "box" && <span className="tab-menu-hint">{t("mobile.device.box")}</span>}
-                  {!scope.enabled && <span className="tab-menu-hint">{t("mobile.device.turnsOn")}</span>}
+                  {scope.kind === "root"
+                    ? !scope.enabled && <span className="tab-menu-hint">{t("mobile.device.rootSwitchOff")}</span>
+                    : !scope.enabled && <span className="tab-menu-hint">{t("mobile.device.turnsOn")}</span>}
                 </button>
               ))}
             </div>

@@ -147,7 +147,7 @@ pub fn components(path: &str) -> Result<Vec<&str>, String> {
 /// the long name it stands for (`GIT~1` for `.git`, `ENV~1` for `.env`) past
 /// the name checks; a trailing dot or space is dropped by Win32 when the file
 /// is made, so such a name is an alias too. Pure, so Linux runs its test.
-fn windows_part_refusal(part: &str) -> Option<&'static str> {
+pub(crate) fn windows_part_refusal(part: &str) -> Option<&'static str> {
     if part.contains(':') {
         return Some("`path` may not contain `:`: on Windows it names a drive or a hidden stream");
     }

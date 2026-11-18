@@ -81,7 +81,13 @@ export function useRowDrag(
     let pointerX = event.clientX;
     let slot = dropSlot(rowBoxes(), key, pointerY, pointerX);
     let frame = 0;
-    const track = () => { slot = dropSlot(rowBoxes(), key, pointerY, pointerX); setDrag({ key, slot }); };
+    // Every pointer move asks; only a new slot is news to the list's screen.
+    const track = () => {
+      const next = dropSlot(rowBoxes(), key, pointerY, pointerX);
+      if (next?.anchor === slot?.anchor && next?.place === slot?.place) return;
+      slot = next;
+      setDrag({ key, slot });
+    };
     const edgeScroll = () => {
       frame = 0;
       const dy = pointerY < EDGE_MARGIN ? -EDGE_STEP : pointerY > window.innerHeight - EDGE_MARGIN ? EDGE_STEP : 0;
@@ -130,6 +136,7 @@ export function useRowDrag(
       onPointerDown: (event) => startDrag(event, key),
       onKeyDown: (event) => {
         // Left and right too: on a wide screen the cards stand two to a line.
+        if (event.defaultPrevented) return;
         const step = event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : 0;
         if (!step) return;
         event.preventDefault();

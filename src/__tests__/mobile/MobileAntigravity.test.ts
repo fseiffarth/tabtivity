@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import captured152 from "../fixtures/antigravity152.json";
+import captured159 from "../fixtures/antigravity159.json";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import {
   antigravityEffortKeys,
   antigravityFooter,
+  isAntigravityHintRow,
   isAntigravityTab,
   readAntigravityEffort,
   readAntigravityPicker,
@@ -405,5 +408,91 @@ describe(`${BRAND.display} Mobile — Antigravity 1.4.11, captured`, () => {
     ]);
     expect(readAntigravityPicker(screen)!.options).toHaveLength(5);
     expect(readAntigravityEffort(screen)).toEqual({ current: 0, stops: [{ label: "low" }, { label: "high" }] });
+  });
+});
+
+// Captured from the installed Linux 1.5.2 binary in a private home.
+describe(`${BRAND.display} Mobile — Antigravity 1.5.2, captured`, () => {
+  for (const width of [80, 42] as const) {
+    it(`reads the model picker and both two-stop gauge positions at ${width} columns`, () => {
+      const screen = capturedScreen(captured152[`model@${width}x24`]);
+      expect(readAntigravityPicker(screen)?.options).toHaveLength(5);
+      const before = readAntigravityEffort(screen);
+      expect(before?.stops.map((stop) => stop.label)).toEqual(["low", "high"]);
+      const after = readAntigravityEffort(capturedScreen(captured152[`gauge-right@${width}x24`]));
+      expect(after?.current).toBe(1);
+      expect(sessionStatus(capturedScreen(captured152[`idle@${width}x24`]), LABEL)?.model).toBe("Gemini 3.1 Pro");
+    });
+  }
+  it("reads the three-stop gauge after startup model and effort flags", () => {
+    const screen = capturedScreen(captured152["three-stop@80x24"]);
+    expect(readAntigravityEffort(screen)?.stops.map((stop) => stop.label)).toEqual(["low", "medium", "high"]);
+    expect(readAntigravityEffort(screen)?.current).toBe(1);
+  });
+});
+
+// Captured from the installed Linux 1.5.9 binary in a private home: a turn
+// held by the stub (`STUB:SLOW`), two prompts typed meanwhile, then `/model`.
+// With prompts queued the footer's left column reads `Press up to edit queued
+// messages`; a 56-column pane leaves two spaces before the model, a 44-column
+// one drops the model altogether.
+describe(`${BRAND.display} Mobile — Antigravity 1.5.9, queued prompts`, () => {
+  const model = { model: "Gemini 3.1 Pro", effort: "low" };
+  it("reads the footer beside the queued-messages hint at 80 columns", () => {
+    expect(sessionStatus(capturedScreen(captured159["queued@80"]), LABEL)).toEqual(model);
+    expect(sessionStatus(capturedScreen(captured159["queued_model@80"]), LABEL)).toEqual(model);
+  });
+
+  it("reads it across the two-space gap a 56-column pane leaves, not as the token 'Gemini'", () => {
+    expect(sessionStatus(capturedScreen(captured159["queued@56"]), LABEL)).toEqual(model);
+    const open = capturedScreen(captured159["queued_model@56"]);
+    expect(sessionStatus(open, LABEL)).toEqual(model);
+    // The dialog is still found, and the frame still starts at the box above it.
+    expect(readAntigravityPicker(open)?.options).toHaveLength(7);
+    expect(inputFrameStart(open, LABEL)).toBe(readAntigravityPicker(open)!.frameStart);
+  });
+
+  it("names no model when a 44-column pane draws only the hint", () => {
+    expect(sessionStatus(capturedScreen(captured159["queued@44"]), LABEL)).toEqual({});
+    const open = capturedScreen(captured159["queued_model@44"]);
+    expect(sessionStatus(open, LABEL)).toEqual({});
+    expect(inputFrameStart(open, LABEL)).toBe(readAntigravityPicker(open)!.frameStart);
+  });
+
+  it("takes a hint for a footer only when it is a known one", () => {
+    expect(antigravityFooter("  Press up to edit queued messages  Gemini 3.1 Pro · low")).toEqual(model);
+    expect(antigravityFooter("esc to cancel  Claude Sonnet 4.6 (Thinking)")).toEqual({ model: "Claude Sonnet 4.6 (Thinking)" });
+    expect(antigravityFooter("  Press up to edit queued messages")).toBeNull();
+    expect(isAntigravityHintRow("  Press up to edit queued messages")).toBe(true);
+    expect(isAntigravityHintRow("  Press up to edit queued messages  Gemini 3.1 Pro · low")).toBe(false);
+    expect(isAntigravityHintRow("Keyboard: ↑/↓ Navigate  ←/→ Effort")).toBe(false);
+    // Some other row with a two-space gap is still no footer.
+    expect(antigravityFooter("Gemini API key  Gemini 3.1 Pro (Low)")).toBeNull();
+  });
+
+  it("takes the slider's note for the stop it is on for no footer", () => {
+    // What the phone's chip once read: the note is indented like a footer
+    // with no left column, and it is only letters and spaces.
+    expect(antigravityFooter("            Deeper reasoning for complex problems")).toBeNull();
+    expect(antigravityFooter("            Balanced speed and reasoning quality for most tasks")).toBeNull();
+    expect(antigravityFooter("            Faster responses, lighter reasoning — great for simpler tasks")).toBeNull();
+    const open = capturedScreen([
+      ">",
+      "Switch Model",
+      "",
+      "  Search:",
+      "",
+      "  Gemini 3.8 Flash             (current)",
+      "> Gemini 4 Carbon",
+      "",
+      "  Effort  ◂        ●━━━━━━━━━━━━━━◉──────────────○        ▸",
+      "                  low          medium          high",
+      "            Deeper reasoning for complex problems",
+    ]);
+    expect(sessionStatus(open, LABEL)?.model).toBeUndefined();
+    // Names the footer does print still read: digits, acronyms, a parenthetical.
+    for (const name of ["Gemini 4 Carbon", "GPT-OSS 120B (Medium)", "Claude Opus 4.6 (Thinking)"]) {
+      expect(antigravityFooter(`? for shortcuts                       ${name} · high`)?.model).toBe(name);
+    }
   });
 });

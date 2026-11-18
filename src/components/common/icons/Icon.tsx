@@ -141,6 +141,16 @@ export function CommentIcon(p: IconProps) {
   );
 }
 
+/** A speech bubble with ＋ — a new conversation (the old one kept). */
+export function NewChatIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M4.5 6A1.5 1.5 0 016 4.5h12A1.5 1.5 0 0119.5 6v9a1.5 1.5 0 01-1.5 1.5h-8l-4 3.5v-3.5A1.5 1.5 0 014.5 15z" />
+      <path d="M12 7.5v6M9 10.5h6" />
+    </Frame>
+  );
+}
+
 /** A push pin — keep docked / pinned. */
 export function PinIcon(p: IconProps) {
   return (
@@ -464,6 +474,16 @@ export function WindowIcon(p: IconProps) {
   );
 }
 
+/** A window with its left column marked off — show or hide a side list. */
+export function SidebarIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="1.5" />
+      <path d="M9.5 4.5v15" />
+    </Frame>
+  );
+}
+
 /** A screen with an arrow leaving it to the right — "move to the next monitor". */
 export function NextScreenIcon(p: IconProps) {
   return (
@@ -778,6 +798,15 @@ export function ChevronLeftIcon(p: IconProps) {
   );
 }
 
+/** ⌄ — a control that drops something below it. */
+export function ChevronDownIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="m6 9 6 6 6-6" />
+    </Frame>
+  );
+}
+
 /** › — a row that opens something. */
 export function ChevronRightIcon(p: IconProps) {
   return (
@@ -892,6 +921,24 @@ export function GridIcon(p: IconProps) {
   );
 }
 
+/** ☰ with bullets — a list of rows (the phone Home's list layout). */
+export function ListIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+    </Frame>
+  );
+}
+
+/** ☆ — a starred place (the phone's Favorites). */
+export function StarIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z" />
+    </Frame>
+  );
+}
+
 /** A gauge — CPU, RAM and GPU folded into one mark (`AppResourceDisplay`). */
 export function MeterIcon(p: IconProps) {
   return (
@@ -961,6 +1008,28 @@ export function RingIcon(p: IconProps) {
   return (
     <Frame {...p}>
       <circle cx="12" cy="12" r="4.4" />
+    </Frame>
+  );
+}
+
+/** ⓘ — information: a ring with an "i". */
+export function InfoIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5.2" />
+      <circle cx="12" cy="7.9" r="1.05" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** Two sliders — filters. */
+export function FilterIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M4 8h9M17 8h3M4 16h3M11 16h9" />
+      <circle cx="15" cy="8" r="2" />
+      <circle cx="9" cy="16" r="2" />
     </Frame>
   );
 }

@@ -71,6 +71,7 @@ fn tracked(
         window_id,
         origin: origin.to_string(),
         launch_id: None,
+        pid_start: None,
     }
 }
 

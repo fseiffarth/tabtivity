@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { useExecTrustStore } from "../../stores/execTrust";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import type { GitPushMcpLevel as Level, GitPushProposal } from "../../types";
@@ -101,15 +102,33 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
     finally { setBusy(false); }
   };
   const decide = (approve: boolean) => run("git_push_mcp_decide", { approve });
+  // The pre-push hook would run on this computer unapproved: show it in the
+  // shared hook dialog, record the approval, and let the push run again.
+  const hooksTrust = proposal.hooks_trust ?? null;
+  const reviewHooks = async () => {
+    if (!hooksTrust) return;
+    if (!(await useExecTrustStore.getState().ask(hooksTrust))) return;
+    setBusy(true);
+    try {
+      await invoke("exec_trust_approve", { kind: hooksTrust.kind, dir: hooksTrust.dir, fingerprint: hooksTrust.fingerprint });
+    } catch (cause) { setError(String(cause)); setBusy(false); return; }
+    await decide(true);
+  };
   const pending = proposal.status === "pending";
   const finished = !pending && proposal.status !== "running";
   const release = proposal.kind === "release";
   const ciRepo = proposal.kind === "ci_repo";
   const output = proposal.output || proposal.preflight_output;
+  const files = proposal.files ?? [];
+  const filesTotal = proposal.files_total ?? files.length;
+  // A card something other than the user closed (a newer request, the remote
+  // already holding the commit, the agent's withdrawal) says why until cleared.
+  const systemClosed = proposal.status === "dismissed" && proposal.dismissed_by === "system";
   return <div className="git-push-proposal" data-status={proposal.status} onClick={(event) => event.stopPropagation()}>
     <div className="git-push-proposal-head">
       <span className="agent-schedule-pill">{t(statusLabel(proposal))}</span>
       {ciRepo ? <UntestedTag id="gitPushMcp.ciAllow" /> : <UntestedTag id={release ? "gitRelease" : "gitPushMcp"} />}
+      {(files.length > 0 || systemClosed) && <UntestedTag id="gitPushMcp.settled" />}
       {ciRepo ? <strong>{t("gitPushMcp.ciAllowTitle", { repo: proposal.repo ?? "…" })}</strong> : release ? <>
         <strong>{proposal.tag ?? "…"}</strong>
         <small>{t("gitPushMcp.releaseOn", { branch: proposal.branch ?? "…" })}</small>
@@ -122,24 +141,32 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
     </div>
     {proposal.url && <small className="git-push-proposal-url" title={proposal.url}>{proposal.url}</small>}
     {proposal.needs_url_confirm && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.confirmUrl")}</small>}
-    {proposal.to_default && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.toDefault")} <UntestedTag id="gitPushMcp.toDefault" /></small>}
+    {proposal.to_default && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.toDefault")}{filesTotal > 0 && <> {t("gitPushMcp.filesTouched", { count: filesTotal })}</>} <UntestedTag id="gitPushMcp.toDefault" /></small>}
     {ciRepo && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.ciAllowHelp")}</small>}
+    {hooksTrust && pending && <small className="git-push-proposal-confirm">{t(hooksTrust.changed ? "gitPushMcp.hooksChanged" : "gitPushMcp.hooksReview")} <UntestedTag id="gitPushMcp.hooksReview" /></small>}
     {proposal.note && <p className="git-push-proposal-note">{t("gitPushMcp.note", { note: proposal.note })}</p>}
     {proposal.commits.length > 0 && <ul className="git-push-proposal-commits">
       {proposal.commits.map((line) => <li key={line}><code>{line}</code></li>)}
     </ul>}
     {proposal.diffstat && <small>{proposal.diffstat}</small>}
-    {proposal.message && !pending && <p className="git-push-proposal-message">{proposal.message}</p>}
+    {files.length > 0 && <ul className="git-push-proposal-commits git-push-proposal-files" aria-label={t("gitPushMcp.filesLabel")}>
+      {files.map((line, index) => <li key={`${index}:${line}`}><code>{line}</code></li>)}
+      {filesTotal > files.length && <li><small>{t("gitPushMcp.filesMore", { count: filesTotal - files.length })}</small></li>}
+    </ul>}
+    {proposal.message && !pending && <p className="git-push-proposal-message">
+      {systemClosed ? <>{t("gitPushMcp.closedWithoutYou", { reason: proposal.message })}</> : proposal.message}
+    </p>}
     {output && <>
       <button className="settings-btn sm" type="button" onClick={() => setShowOutput((v) => !v)}>{t(showOutput ? "gitPushMcp.hideOutput" : "gitPushMcp.showOutput")}</button>
       {showOutput && <pre className="git-push-proposal-output">{output}</pre>}
     </>}
     {pending && <div className="git-push-proposal-actions">
-      <button className="settings-btn sm primary" disabled={busy} onClick={() => void decide(true)}>{t(ciRepo ? "gitPushMcp.ciAllow" : release ? "gitPushMcp.release" : proposal.needs_url_confirm ? "gitPushMcp.confirmAndPush" : "gitPushMcp.push")}</button>
+      {hooksTrust ? <button className="settings-btn sm primary" disabled={busy} onClick={() => void reviewHooks()}>{t("gitPushMcp.reviewHooks")}</button>
+      : <button className="settings-btn sm primary" disabled={busy} onClick={() => void decide(true)}>{t(ciRepo ? "gitPushMcp.ciAllow" : release ? "gitPushMcp.release" : proposal.needs_url_confirm ? "gitPushMcp.confirmAndPush" : "gitPushMcp.push")}</button>}
       <button className="settings-btn sm" disabled={busy} onClick={() => void decide(false)}>{t("gitPushMcp.dismiss")}</button>
     </div>}
     {finished && <div className="git-push-proposal-actions">
-      <button className="settings-btn sm" disabled={busy} onClick={() => void run("git_push_mcp_clear", {})}>{t("gitPushMcp.dismiss")}</button>
+      <button className="settings-btn sm" disabled={busy} onClick={() => void run("git_push_mcp_clear", {})}>{t(systemClosed ? "gitPushMcp.clear" : "gitPushMcp.dismiss")}</button>
     </div>}
     {error && <small role="alert">{error}</small>}
   </div>;
@@ -147,11 +174,12 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
 
 /** Every proposal of a project that is still worth showing: pending and
  *  running ones, and the last decided ones until they age out or the user
- *  dismisses them. */
+ *  dismisses them. A card the user dismissed hides; one the system closed
+ *  stays, with its reason, until cleared. */
 export function GitPushProposals({ projectId }: { projectId: string | null | undefined }) {
   const rows = useGitPushProposals(projectId);
   const [overrides, setOverrides] = useState<Record<string, GitPushProposal>>({});
-  const shown = rows.map((row) => overrides[row.id] ?? row).filter((row) => !row.cleared && row.status !== "dismissed" && row.status !== "expired");
+  const shown = rows.map((row) => overrides[row.id] ?? row).filter((row) => !row.cleared && row.status !== "expired" && (row.status !== "dismissed" || row.dismissed_by === "system"));
   // A push or release the user approved here closes its card once it went
   // through (a failed one stays until dismissed); an agent-applied one stays.
   const [approved, setApproved] = useState<Set<string>>(() => new Set());

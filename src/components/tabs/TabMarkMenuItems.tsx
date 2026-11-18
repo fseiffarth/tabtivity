@@ -1,10 +1,11 @@
 import { useEffect } from "react";
-import { CheckboxIcon, CheckIcon, SquareIcon } from "../common/icons/Icon";
+import { CheckboxIcon, CheckIcon, DotIcon, SquareIcon } from "../common/icons/Icon";
 
 import { useT } from "../../lib/i18n";
 import { TAB_MARKS, tabMarkGlyph } from "../../lib/tabMarks";
 import { boardColumns, fallbackColumnId, taskFromTab } from "../../lib/todoBoard";
 import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
+import { markTabUnread, useActivityStore } from "../../stores/activity";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useSettingsStore } from "../../stores/settings";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -53,6 +54,9 @@ async function createCardFor(tab: TabEntry, scope: string, openAfter: boolean) {
  * The card rows show only while the to-do board is switched on. A link whose
  * card is gone (deleted on the board) reads as no link: the menu offers a new
  * card rather than opening nothing.
+ *
+ * An agent tab whose output is read also gets "Mark as unread"
+ * (`activity.markTabUnread`, which a popout forwards to the main window).
  */
 export function TabMarkMenuItems({
   tab,
@@ -75,6 +79,13 @@ export function TabMarkMenuItems({
   }, [boardOn, tab.todoId, calendarLoaded]);
   // Until the calendar has loaded, trust the link rather than flash "Create".
   const linked = !!tab.todoId && (cardExists || !calendarLoaded);
+  const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
+  const ptyId = `${scope}:${tab.key}`;
+  // Offered only while nothing unread is already flagged on it.
+  const flagged = useActivityStore((s) => {
+    const kind = s.attentionByTab[ptyId];
+    return kind === "done" || kind === "decision";
+  });
 
   return (
     <>
@@ -103,6 +114,20 @@ export function TabMarkMenuItems({
           </button>
         );
       })}
+      {isAgent && !flagged && (
+        <button
+          type="button"
+          className="tab-new-menu-item"
+          onClick={() => {
+            markTabUnread(ptyId);
+            onDone();
+          }}
+        >
+          <span className="tab-new-menu-dot tab-new-menu-dot--accent"><DotIcon /></span>
+          {t("tabBar.markUnread")}
+          <UntestedTag id="tabBar.markUnread" />
+        </button>
+      )}
       {boardOn &&
         (linked ? (
           <>

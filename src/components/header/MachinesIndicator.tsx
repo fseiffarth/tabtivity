@@ -29,12 +29,15 @@ import { useHeaderStatusReport } from "../../stores/headerStatus";
 import type { ConnState } from "../../stores/remote/remoteStatus";
 import type { GlobalMachine, MachineImportEntry, ProjectEntry } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
-import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
-import { MachinesOverlayFrame } from "./MachinesOverlay";
+import { isViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { MachinesViewFrame } from "./MachinesView";
+import { MachinesViewList, ProjectConnectButton, type MachineLampTone, type MachineTableRow } from "./MachinesTable";
+import { EntryMenu, type MenuEntry } from "../cockpit/EntryMenu";
+import { machineGroupOf, type MachineRow } from "../../lib/cockpit/machines";
 import { MachinesGlyph } from "./HeaderGlyphs";
 import { BRAND } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
-import { CloseIcon, GripIcon, MoreIcon, PencilIcon, RefreshIcon } from "../common/icons/Icon";
+import { CloseIcon, GripIcon, MoreIcon, PencilIcon, PlusIcon, RefreshIcon } from "../common/icons/Icon";
 
 const MENU_ID = "machines";
 
@@ -134,6 +137,31 @@ const STATE_TIP: Record<RowState, TranslationKey> = {
   unknown: "machines.tip.unknown",
 };
 
+/** The view's state word (`MachinesTable`), short: the list has a column for it. */
+const VIEW_STATE_WORD: Record<RowState | ConnState | "checking", TranslationKey> = {
+  connected: "machinesView.state.connected",
+  stale: "machinesView.state.stale",
+  connecting: "machinesView.state.connecting",
+  error: "machinesView.state.error",
+  reachable: "machinesView.state.reachable",
+  unreachable: "machinesView.state.unreachable",
+  unknown: "machinesView.state.unknown",
+  checking: "machinesView.state.checking",
+  off: "machinesView.state.off",
+};
+
+/** The view's lamp: green only for a session, blue for "answers, no session". */
+const VIEW_LAMP: Record<RowState | ConnState, MachineLampTone> = {
+  connected: "connected",
+  stale: "error",
+  connecting: "connecting",
+  error: "error",
+  reachable: "up",
+  unreachable: "off",
+  unknown: "off",
+  off: "off",
+};
+
 /** How long a probe answer is worth reusing. The sweep runs when this menu
  *  opens, and opening a menu twice in a minute is a glance, not a question —
  *  `ssh_probe` is a full authenticated login per host, so a fleet of seventeen
@@ -151,6 +179,22 @@ const UTIL_POLL_MS = 10_000;
  *  it. It also means a pointer merely crossing the header logs in nowhere. */
 const SWEEP_SETTLE_MS = 150;
 
+/** How long the pointer rests on the header button before the dropdown opens.
+ *  This list is the heaviest thing on the bar (every row, its lamps and
+ *  readings), so a pointer only crossing it on the way to another icon must not
+ *  mount it: with a fast sweep each crossing was a full mount and unmount, the
+ *  window stalled on it, and the close came late enough to read as a hang.
+ *  Focus still opens it at once. */
+const HOVER_INTENT_MS = 100;
+
+/** When each machine's utilization read last started (module level, like
+ *  `probeBrakes`, so the dropdown and the overlay share it). The poll's own
+ *  period is the floor: reopening the menu within `UTIL_POLL_MS` reuses the
+ *  bars it already has instead of logging into every Detailed machine again.
+ *  The slack keeps a tick that fires a little early from skipping a round. */
+const utilLastAt = new Map<string, number>();
+const UTIL_SLACK_MS = 1_000;
+
 /** The open-sweep's two brakes, one pair for both surfaces (the dropdown and
  *  the overlay). In flight: a second open while the first sweep is still
  *  running must not stack a second round trip per host (`stores/remote/hostBusy`'s
@@ -162,7 +206,9 @@ const SWEEP_SETTLE_MS = 150;
  *  returns. */
 const probeBrakes = { inFlight: false, lastAt: new Map<string, number>() };
 
-type HandCheck = { ok: boolean; at: number; error?: string };
+/** `unreachable`: the probe never reached the host. `ok` false without it is a
+ *  host that answered and rejected the credential — up, not down. */
+type HandCheck = { ok: boolean; at: number; error?: string; unreachable?: boolean };
 
 /** Per-row manual checks — the only reachability a tagged HPC machine ever has,
  *  since every sweep skips it by design — and when the last sweep landed. Kept
@@ -258,29 +304,27 @@ export { targetLabel };
  * since no sweep writes `status` any more.
  *
  * **Two surfaces, one list.** A hover shows the dropdown; a click on the button
- * (or the dropdown's ⤢ door) opens the Machines overlay (`MachinesOverlayHost`,
- * framed by `header/MachinesOverlay`), where the same rows are tiles in a grid
- * — the Models & agents overlay's `.models-tile` look. Both are this component
- * (`surface`), so every rule above holds in both; the overlay only drops what
- * belongs to a narrow pop-up: the ▸ fold (a tile has the room to show its
- * details). Reordering is in both: the grip drags a row up and down the
- * dropdown, and a tile across the grid.
+ * (or the dropdown's ⤢ door) opens the Machines view of the console window
+ * (`MachinesView`, framed by `header/MachinesView`). Both are this component
+ * (`surface`), so every rule above holds in both. The view draws its machines as
+ * one list (`header/MachinesTable`): the project hosts merged in, sorted by state
+ * then name, each global machine's row carrying the same state, actions
+ * (`machineInfo`), ⋯ menu and forms (`renderRowForm`) as its dropdown row.
+ * Reordering (the grip) is the dropdown's only: the view is sorted.
  */
 export function MachinesIndicator() {
   return <MachinesSurface surface="menu" />;
 }
 
-/** The Machines overlay, at the shell (`layout/AppShell`). Renders nothing
- *  while closed, so none of its probes or polls run then. */
-export function MachinesOverlayHost() {
-  const open = useMachinesOverlayStore((s) => s.open);
-  if (!open) return null;
-  return <MachinesSurface surface="overlay" />;
+/** The Machines view of the console window (`layout/RootOverlay`). Mounted only
+ *  while the view is shown, so none of its probes or polls run otherwise. */
+export function MachinesView() {
+  return <MachinesSurface surface="view" />;
 }
 
-function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
+function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
   const t = useT();
-  const isOverlay = surface === "overlay";
+  const isView = surface === "view";
   // On by default (Settings' "Remote features"); switched off, this fleet-wide
   // SSH list leaves the header.
   const enabled = useSettingsStore((s) => s.settings?.machines_enabled ?? true);
@@ -349,22 +393,23 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     (p.compute_hosts ?? []).some((h) => sameTarget(h, m));
 
   // The shared menu store makes the status controls mutually exclusive.
-  // The overlay is open for as long as it is mounted (its host renders nothing
-  // while closed), so every "while open" effect below simply runs in it.
+  // The view is open for as long as it is mounted (the window mounts only the
+  // shown view), so every "while open" effect below simply runs in it.
   const menuOpen = useHeaderHoverMenuStore((s) => s.openId === MENU_ID);
-  const open = isOverlay || menuOpen;
+  const open = isView || menuOpen;
   const openMenu = useHeaderHoverMenuStore((s) => s.open);
   const closeMenu = useHeaderHoverMenuStore((s) => s.close);
   /** Before a hand-off to a window of its own (the usage report, a project's
    *  machine picker, the extend dialog): the hover dropdown is put away, the
-   *  overlay is not. It is a window the user opened, and each of those dialogs
-   *  lands on top of it (portaled, or mounted after it at the shell), so closing
-   *  it left the user nowhere to come back to once the dialog was done. */
+   *  view is not. It is a window the user opened, and each of those dialogs
+   *  lands on top of it (portaled, or mounted after the window at the shell), so
+   *  closing it left the user nowhere to come back to once the dialog was done. */
   const dismiss = () => {
-    if (!isOverlay) closeMenu(MENU_ID);
+    if (!isView) closeMenu(MENU_ID);
   };
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
+  const openTimer = useRef<number | undefined>(undefined);
   // While an import/export panel is up — or a native file dialog is open, which
   // takes the focus and the pointer away from the menu — it must NOT close under
   // the user mid-flow. A ref (read synchronously by the dismiss handlers) rather
@@ -401,6 +446,8 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // says which of the two ways the machine would join, which a drop could only
   // imply.
   const [attachId, setAttachId] = useState<string | null>(null);
+  // The view toolbar's ⋯ (import, export, the all-machine actions).
+  const [toolsMenu, setToolsMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Reorder-by-drag, on POINTER events — not HTML5 DnD, which is what broke the
   // first attempt (a native drag out of a hover-menu hangs under WebKitGTK, and
@@ -427,41 +474,41 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   const dragRects = useRef<
     { id: string; left: number; top: number; width: number; height: number }[]
   >([]);
-  const dragStartX = useRef(0);
   const dragStartY = useRef(0);
   const reorderDragRef = useRef(false);
 
   const reveal = useCallback(() => {
     window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
     openMenu(MENU_ID);
   }, [openMenu]);
+  /** The pointer's way in (`HOVER_INTENT_MS`). Back in while the list is still
+   *  up (inside the close grace) it simply stays up. */
+  const revealOnRest = useCallback(() => {
+    window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
+    if (useHeaderHoverMenuStore.getState().openId === MENU_ID) return;
+    openTimer.current = window.setTimeout(() => openMenu(MENU_ID), HOVER_INTENT_MS);
+  }, [openMenu]);
   const scheduleClose = useCallback((e?: { clientY: number }) => {
+    window.clearTimeout(openTimer.current);
     window.clearTimeout(closeTimer.current);
     if (keepOpenRef.current || reorderDragRef.current) return;
     closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), headerMenuCloseDelay(e));
   }, [closeMenu]);
 
-  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(closeTimer.current);
+      window.clearTimeout(openTimer.current);
+    },
+    [],
+  );
 
   /** Where the dragged row would land, from the pointer's Y: the number of OTHER
    *  rows whose midpoint the cursor has passed — i.e. an index into the list
    *  without the dragged row, which is exactly what `commitMove` splices at. */
-  const dropSlot = (id: string, clientX: number, clientY: number) => {
-    if (isOverlay) {
-      // A grid has no single axis to pass midpoints on: the slot is the tile
-      // whose centre is nearest the pointer (an index into the full list, which
-      // is the dragged tile's final index once `commitMove` splices it there).
-      let best = 0;
-      let bestD = Infinity;
-      dragRects.current.forEach((r, i) => {
-        const d = (clientX - (r.left + r.width / 2)) ** 2 + (clientY - (r.top + r.height / 2)) ** 2;
-        if (d < bestD) {
-          bestD = d;
-          best = i;
-        }
-      });
-      return best;
-    }
+  const dropSlot = (id: string, clientY: number) => {
     const rest = dragRects.current.filter((r) => r.id !== id);
     return rest.filter((r) => clientY > r.top + r.height / 2).length;
   };
@@ -602,7 +649,9 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     setIoMode("idle");
     setIoBusy(false);
     setIoError("");
-    setImportEntries([]);
+    // Same-value writes bail out; a fresh `[]` would not, and this runs on
+    // every close of the hover menu.
+    setImportEntries((prev) => (prev.length ? [] : prev));
     setImportUser("");
     setImportPassword("");
     setImportSave(false);
@@ -626,8 +675,15 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   /** The reachability a row should believe: a hand Check while it stands,
    *  otherwise the sweep's answer — and `undefined` (nobody asked) stays
    *  `undefined` rather than collapsing into "no". */
-  const reachOf = (id: string): boolean | undefined =>
-    checkStands(id) ? checked[id]?.ok : reachable[id];
+  const reachOf = (id: string): boolean | undefined => {
+    if (!checkStands(id)) return reachable[id];
+    const c = checked[id];
+    if (c?.ok) return true;
+    if (c?.unreachable) return false;
+    // Answered but not authenticated: the host is up, so an older sweep's
+    // `false` no longer holds (it painted a connected row `stale`).
+    return reachable[id] === false ? undefined : reachable[id];
+  };
   const stateOf = (m: GlobalMachine): RowState =>
     rowStateOf(status[m.id] ?? "off", reachOf(m.id));
 
@@ -638,13 +694,13 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
    *  sweep's map, and `status` means a session, which a probe is not. */
   const runCheck = async (m: GlobalMachine) => {
     setChecking((prev) => new Set(prev).add(m.id));
-    const r = await invoke<{ ok: boolean; error: string }>("ssh_probe", {
+    const r = await invoke<{ ok: boolean; unreachable: boolean; error: string }>("ssh_probe", {
       user: m.user,
       host: m.host,
       port: m.port,
       background: false,
     })
-      .then((res) => ({ ok: res.ok, error: res.error || undefined }))
+      .then((res) => ({ ok: res.ok, unreachable: res.unreachable, error: res.error || undefined }))
       // A guard refusal is not an error to print — it means the call was read as
       // background after all, and the row's honest answer is still "not checked".
       .catch((e) => ({ ok: false, error: hpcGuardRefusal(e) ? undefined : String(e) }));
@@ -730,6 +786,9 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     );
     if (due.length === 0) return;
     probeBrakes.inFlight = true;
+    // The sweep is stamped with when it STARTED: a hand Check pressed while it
+    // ran is newer than its answers and must stand over them.
+    const startedAt = now;
     setSweeping(() => Object.fromEntries(eligible.map((m) => [m.id, true as const])));
     void probeAll((id) => {
       setSweeping((prev) => {
@@ -739,12 +798,15 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
       });
       const gm = useGlobalMachinesStore.getState();
       const m = gm.machines.find((mm) => mm.id === id);
-      if (m && gm.status[id] === "connected") void useHostBusyStore.getState().probeGlobal(m);
+      // Not on a host the probe just found off the network: that would be a
+      // second doomed login, waiting out the same timeout again.
+      if (m && gm.status[id] === "connected" && gm.reachable[id] !== false)
+        void useHostBusyStore.getState().probeGlobal(m);
     })
       .then(() => {
         const at = Date.now();
         for (const m of eligible) probeBrakes.lastAt.set(m.id, at);
-        setSweepAt(at);
+        setSweepAt(startedAt);
       })
       // A rejected sweep must still release the in-flight brake, or the menu
       // would never probe again for the rest of the session.
@@ -765,9 +827,15 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     const gm = useGlobalMachinesStore.getState();
     const s = useSettingsStore.getState().settings;
     const recheck = useRemoteUsageStore.getState().recheck;
+    const now = Date.now();
     for (const m of gm.machines) {
       if ((gm.status[m.id] ?? "off") !== "connected") continue;
+      // A stale session (the sweep found the host off the network) would cost
+      // a login timeout every poll for a reading that cannot come back.
+      if (gm.reachable[m.id] === false) continue;
       if (!showsUtilization(s, m) || !mayAutoTouch(s, targetOfSpec(m))) continue;
+      if (now - (utilLastAt.get(m.id) ?? 0) < UTIL_POLL_MS - UTIL_SLACK_MS) continue;
+      utilLastAt.set(m.id, now);
       void recheck(
         { kind: "machine", key: machineKey(m.id), label: m.label || m.host, user: m.user, host: m.host, port: m.port },
         { background: true },
@@ -801,7 +869,6 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     e.preventDefault();
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragStartX.current = e.clientX;
     dragStartY.current = e.clientY;
     // Measure every row ONCE, up front: the DOM order is frozen for the duration
     // of the drag precisely so these stay true.
@@ -816,14 +883,14 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
       };
     });
     reorderDragRef.current = true;
-    setReorderDrag({ id, dx: 0, dy: 0, to: dropSlot(id, e.clientX, e.clientY) });
+    setReorderDrag({ id, dx: 0, dy: 0, to: dropSlot(id, e.clientY) });
   };
 
   const moveReorderDrag = (e: React.PointerEvent<HTMLElement>) => {
     if (!reorderDrag) return;
-    const dx = isOverlay ? e.clientX - dragStartX.current : 0;
+    const dx = 0;
     const dy = e.clientY - dragStartY.current;
-    const to = dropSlot(reorderDrag.id, e.clientX, e.clientY);
+    const to = dropSlot(reorderDrag.id, e.clientY);
     if (dx !== reorderDrag.dx || dy !== reorderDrag.dy || to !== reorderDrag.to) {
       setReorderDrag({ ...reorderDrag, dx, dy, to });
     }
@@ -834,12 +901,11 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     const { id } = reorderDrag;
     reorderDragRef.current = false;
     setReorderDrag(null);
-    if (commit) commitMove(id, dropSlot(id, e.clientX, e.clientY));
+    if (commit) commitMove(id, dropSlot(id, e.clientY));
   };
 
   /** Where a row that is NOT being dragged steps to while a drag is in flight:
-   *  the column shifts by the dragged row's height; the grid sends each tile into
-   *  the rect of the slot it will occupy once the dragged tile lands. */
+   *  the column shifts by the dragged row's height. */
   const partShift = (idx: number): { x: number; y: number } => {
     if (!reorderDrag) return { x: 0, y: 0 };
     const from = machines.findIndex((mm) => mm.id === reorderDrag.id);
@@ -851,11 +917,6 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
           ? idx + 1
           : idx;
     if (dest === idx) return { x: 0, y: 0 };
-    if (isOverlay) {
-      const a = dragRects.current[idx];
-      const b = dragRects.current[dest];
-      return a && b ? { x: b.left - a.left, y: b.top - a.top } : { x: 0, y: 0 };
-    }
     const dragH = dragRects.current[from]?.height ?? 0;
     return { x: 0, y: dest < idx ? -dragH : dragH };
   };
@@ -892,10 +953,10 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // Escape and an outside click close a keyboard-opened menu immediately.
   // `keepOpenRef` still wins for native dialogs, and a reorder drag cannot
   // unmount rows underneath its pointer capture.
-  // The dropdown's only: the overlay has its own Escape and backdrop
-  // (`MachinesOverlayFrame`), and a press anywhere in it is not "outside".
+  // The dropdown's only: the view is the window's, with its own Escape and
+  // backdrop (`layout/RootOverlay`), and a press anywhere in it is not "outside".
   useEffect(() => {
-    if (isOverlay || !menuOpen) return;
+    if (isView || !menuOpen) return;
     const onPointerDown = (e: PointerEvent) => {
       if (keepOpenRef.current || reorderDragRef.current) return;
       const el = anchorRef.current;
@@ -912,7 +973,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("keydown", onKey);
     };
-  }, [isOverlay, menuOpen, closeMenu]);
+  }, [isView, menuOpen, closeMenu]);
 
   // Group the machines by COLOUR so each lamp is drawn once, with a count —
   // exactly like a project pill's `RemoteConnMenu` aggregates its hosts. No
@@ -969,7 +1030,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // The header's instance reports; the overlay's is a second reader of the
   // same fleet and must not clear the key when it unmounts.
   useHeaderStatusReport(
-    isOverlay ? null : "machines",
+    isView ? null : "machines",
     !enabled
       ? null
       : {
@@ -1486,386 +1547,23 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     return lines.join("\n");
   };
 
-  // The rows as they sit in each surface: straight in the dropdown's column,
-  // one tile grid in the overlay (the Models overlay's `.models-home-grid`).
-  const tileGrid = (rows: ReactNode) =>
-    isOverlay ? <div className="models-home-grid machines-grid">{rows}</div> : rows;
+  /** Tag or untag a machine as an HPC login node. */
+  const toggleHpc = (m: GlobalMachine, tagged: boolean) => {
+    const target = targetOfSpec(m);
+    if (!target) return;
+    void (async () => {
+      await updateSettings(setHpcPatch(settings, target, tagged));
+      // Tagging DISARMS the machine on disk, so the stored state matches what
+      // the (now disabled) auto-connect toggle claims. Otherwise a `true`
+      // survives out of reach of every UI, for the sweep to keep filtering out
+      // — and untagging the machine later would silently re-arm a launch-time
+      // connect nobody asked for twice.
+      if (tagged && m.auto_connect) await setAutoConnect(m.id, false);
+    })();
+  };
 
-  const addControls = (
-    <>
-      <div className="tab-new-menu-group-label">{t("machines.addGroupLabel")}</div>
-      {adding ? (
-        <div className="vpn-indicator-row menu-form">
-          <label>
-            {t("machines.sshAddress")}
-            <input
-              placeholder={t("machines.addressPlaceholder")}
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void submitAdd();
-              }}
-              spellCheck={false}
-              autoFocus
-            />
-          </label>
-          <label>
-            {t("machines.username")}
-            <input
-              placeholder={t("machines.usernamePlaceholder")}
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          {!addViaTerminal && (
-            <label>
-              {t("machines.password")}
-              <PasswordInput
-                placeholder={t("machines.addPasswordPlaceholder")}
-                value={password}
-                autoComplete="off"
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void submitAdd();
-                }}
-              />
-            </label>
-          )}
-          {/* Kept on screen in the terminal path, and *disabled* rather than
-              hidden: a saved password belongs to the host, and a row that
-              vanishes reads as one that was discarded. It has nothing to act on
-              there — the flag only reaches the keychain through `ssh_connect`'s
-              `remember`, which a terminal login never calls — so an existing
-              credential is left exactly as it was found. */}
-          <label
-            className="vpn-indicator-auto"
-            title={t(
-              addViaTerminal
-                ? "machines.savePasswordTerminalTitle"
-                : "machines.savePasswordTitle",
-            )}
-          >
-            <Toggle
-              checked={savePassword}
-              disabled={addViaTerminal}
-              onChange={(e) => setSavePassword(e.target.checked)}
-              size="sm"
-            />
-            <span>
-              {t("machines.savePassword")}
-              <UntestedTag id="machinesIndicator.14" />
-            </span>
-          </label>
-          <label
-            className="vpn-indicator-auto"
-            title={t("machines.autoConnectAddTitle")}
-          >
-            <Toggle
-              checked={addAuto && !addHpc}
-              disabled={addHpc}
-              onChange={(e) => setAddAuto(e.target.checked)}
-              size="sm"
-            />
-            <span>
-              {t("machines.autoConnectLabel")}
-              {addHpc && (
-                <span className="machines-auto-blocked"> {t("machines.autoBlockedHpcAdd")}</span>
-              )}
-              <UntestedTag id="machinesIndicator.15" />
-            </span>
-          </label>
-          {/* The tag, at the moment it is actually known: logging in is when
-              the user knows what they are logging in to. Everything Tabtivity
-              would otherwise do to this machine on its own is gated behind it
-              (`lib/remote/hpc/hpcHost.ts`), so ticking it here means the very first
-              connect already behaves — nothing scans, nothing polls, and the
-              monitor reads it lightly from its first sample. */}
-          <label
-            className="vpn-indicator-auto"
-            title={t("machines.hpcAddTitle")}
-          >
-            <Toggle checked={addHpc} onChange={(e) => setAddHpc(e.target.checked)} size="sm" />
-            <span>
-              {t("machines.hpcToggleLabel")}
-              <UntestedTag id="machinesIndicator.16" />
-            </span>
-          </label>
-          <label>
-            {t("machines.labelOptional")}
-            <input
-              placeholder={t("machines.labelPlaceholder")}
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              spellCheck={false}
-            />
-          </label>
-          <TerminalSignInToggle
-            channel="ssh"
-            checked={addViaTerminal}
-            busy={addWaiting}
-            onChange={setAddViaTerminal}
-          />
-          {/* The login is a root-terminal tab, not something in this menu — which
-              closes the moment the pointer leaves it — so say where it went. */}
-          {addViaTerminal && addWaiting && (
-            <div className="settings-help" role="status">
-              {t("machines.terminalLoginHint.pre")}{" "}
-              <strong>{t("machines.rootTerminal")}</strong>{" "}
-              {t("machines.terminalLoginHint.post")}
-            </div>
-          )}
-          {addError && <ErrorNote className="vpn-indicator-error" error={addError} />}
-          <div className="vpn-indicator-actions">
-            {addViaTerminal ? (
-              <button
-                type="button"
-                className="vpn-indicator-connect"
-                disabled={addWaiting}
-                title={t("machines.loginInTerminalTitle")}
-                onClick={() => void startTerminalAdd()}
-              >
-                {addWaiting ? t("machines.waitingForLogin") : t("machines.loginInTerminal")}
-              </button>
-            ) : (
-              <button type="button" className="vpn-indicator-connect" disabled={addBusy} onClick={() => void submitAdd()}>
-                {addBusy ? t("machines.connecting") : t("machines.connectAndAdd")}
-              </button>
-            )}
-            {/* Only after the poll has given up: a login finished late is still a
-                login, and re-arming beats retyping the whole form. */}
-            {addViaTerminal && !addWaiting && addError && (
-              <button type="button" className="vpn-indicator-connect" onClick={retryTerminalAdd}>
-                {t("machines.loggedInAdd")}
-              </button>
-            )}
-            <button
-              type="button"
-              className="vpn-indicator-remove"
-              onClick={() => {
-                clearAddPoll();
-                setAddWaiting(false);
-                setAdding(false);
-              }}
-            >
-              {t("common.cancel")}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="vpn-indicator-row vpn-indicator-browse machines-io-buttons">
-          <button type="button" className="vpn-indicator-connect" onClick={() => setAdding(true)}>
-            {t("machines.addMachine")}
-          </button>
-          <button
-            type="button"
-            className="vpn-indicator-connect"
-            title={t("machines.importTitle")}
-            onClick={() => void startImport()}
-          >
-            {t("machines.import")}
-          </button>
-          <button
-            type="button"
-            className="vpn-indicator-connect"
-            disabled={machines.length === 0}
-            title={t("machines.exportTitle")}
-            onClick={startExport}
-          >
-            {t("machines.export")}
-          </button>
-        </div>
-      )}
-    </>
-  );
-
-  // The list itself, shared by both surfaces: the dropdown scrolls it under
-  // its pinned title, the overlay lays it out as a page of tiles.
-  const body = (
-    <>
-          {ioMode === "export" ? (
-            <div className="vpn-indicator-row menu-form machines-io-panel">
-              <div className="vpn-indicator-note">
-                {t("machines.exportNote")}
-                <UntestedTag id="machinesIndicator.1" />
-              </div>
-              {machines.length === 0 ? (
-                <div className="vpn-indicator-empty">{t("machines.nothingToExport")}</div>
-              ) : (
-                <>
-                <label
-                  className="vpn-indicator-auto machines-io-pick machines-io-pick-all"
-                  title={t(allExportSelected ? "machines.deselectAllTitle" : "machines.selectAllTitle")}
-                >
-                  <Toggle checked={allExportSelected} onChange={toggleExportSelAll} size="sm" />
-                  <span>{t(allExportSelected ? "machines.deselectAll" : "machines.selectAll")}</span>
-                </label>
-                {machines.map((m) => (
-                  <label
-                    key={m.id}
-                    className="vpn-indicator-auto machines-io-pick"
-                    title={targetLabel(m)}
-                  >
-                    <Toggle
-                      checked={exportSel.has(m.id)}
-                      onChange={() => toggleExportSel(m.id)}
-                      size="sm"
-                    />
-                    <span>
-                      {m.label || m.host}
-                      <span className="machines-io-addr">
-                        {`${m.host}${m.port ? `:${m.port}` : ""}`}
-                      </span>
-                    </span>
-                  </label>
-                ))}
-                </>
-              )}
-              {ioError && <ErrorNote className="vpn-indicator-error" error={ioError} />}
-              <div className="vpn-indicator-actions">
-                <button
-                  type="button"
-                  className="vpn-indicator-connect"
-                  disabled={ioBusy || exportSel.size === 0}
-                  onClick={() => void doExport()}
-                >
-                  {ioBusy ? t("machines.saving") : t("machines.exportN", { count: exportSel.size })}
-                </button>
-                <button type="button" className="vpn-indicator-remove" onClick={closeIo}>
-                  {t("common.cancel")}
-                </button>
-              </div>
-            </div>
-          ) : ioMode === "import" ? (
-            <div className="vpn-indicator-row menu-form machines-io-panel">
-              {importResult ? (
-                <>
-                  <div className="vpn-indicator-note">
-                    {t(
-                      importResult.length === 1 ? "machines.importedOne" : "machines.importedMany",
-                      { count: importResult.length },
-                    )}{" "}
-                    {t("machines.importedOutcome", {
-                      ok: importResult.filter((r) => r.ok).length,
-                      bad: importResult.filter((r) => !r.ok).length,
-                    })}
-                  </div>
-                  <div className="machines-io-results">
-                    {importResult.map((r, i) => (
-                      <div key={`${r.host}-${i}`} className="machines-io-result-row">
-                        <ConnLamp status={r.ok ? "connected" : "error"} label={r.host} />
-                        <span>{r.label || r.host}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="vpn-indicator-actions">
-                    <button type="button" className="vpn-indicator-connect" onClick={closeIo}>
-                      {t("machines.done")}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="vpn-indicator-note">
-                    {ioBusy && importEntries.length === 0
-                      ? t("machines.readingFile")
-                      : t(
-                          importEntries.length === 1
-                            ? "machines.importCountOne"
-                            : "machines.importCountMany",
-                          { count: importEntries.length },
-                        )}
-                    <UntestedTag id="machinesIndicator.2" />
-                  </div>
-                  {importEntries.length > 0 && (
-                    <div className="machines-io-preview">
-                      {importEntries.map((e, i) => (
-                        <div key={`${e.host}-${i}`} className="machines-io-addr">
-                          {`${e.user ? `${e.user}@` : ""}${e.host}${e.port ? `:${e.port}` : ""}`}
-                          {e.label ? ` — ${e.label}` : ""}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <label>
-                    {t("machines.username")}
-                    <input
-                      placeholder={t("machines.importUserPlaceholder")}
-                      value={importUser}
-                      onChange={(e) => setImportUser(e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                  </label>
-                  <label>
-                    {t("machines.password")}
-                    <PasswordInput
-                      placeholder={t("machines.importPasswordPlaceholder")}
-                      value={importPassword}
-                      autoComplete="off"
-                      onChange={(e) => setImportPassword(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void doImport();
-                      }}
-                    />
-                  </label>
-                  <label className="vpn-indicator-auto">
-                    <Toggle
-                      checked={importSave}
-                      onChange={(e) => setImportSave(e.target.checked)}
-                      size="sm"
-                    />
-                    <span>
-                      {t("machines.savePassword")}
-                      <UntestedTag id="machinesIndicator.3" />
-                    </span>
-                  </label>
-                  <label
-                    className="vpn-indicator-auto"
-                    title={t("machines.importAutoTitle")}
-                  >
-                    <Toggle
-                      checked={importAuto}
-                      onChange={(e) => setImportAuto(e.target.checked)}
-                      size="sm"
-                    />
-                    <span>
-                      {t("machines.autoConnectLabel")}
-                      <UntestedTag id="machinesIndicator.4" />
-                    </span>
-                  </label>
-                  {ioError && <ErrorNote className="vpn-indicator-error" error={ioError} />}
-                  <div className="vpn-indicator-actions">
-                    <button
-                      type="button"
-                      className="vpn-indicator-connect"
-                      disabled={ioBusy || importEntries.length === 0}
-                      onClick={() => void doImport()}
-                    >
-                      {ioBusy ? t("machines.connecting") : t("machines.connectAndImport")}
-                    </button>
-                    <button type="button" className="vpn-indicator-remove" onClick={closeIo}>
-                      {t("common.cancel")}
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ) : (
-            <>
-          {addControls}
-
-          {/* The drag this used to describe does not exist: attaching is the
-              row's ⇥ picker (see the component doc), and the only drag left is a
-              row's grip, which reorders. */}
-          <div className="vpn-indicator-note">
-            <strong>{t("machines.note.strong")}</strong>{" "}
-            {t(isOverlay ? "machines.note.overlay" : "machines.note.rest")}
-            <UntestedTag id="machinesIndicator.5" />
-          </div>
-
-          {machines.length > 0 && disconnectAllArm ? (
+  /** The armed "Disconnect all": what it ends, and the two answers. */
+  const disconnectAllConfirm = (
             <div className="vpn-indicator-row machines-fleet-actions">
               <div className="vpn-indicator-hint">
                 {t("machines.disconnectAllHint.pre")} <strong>{t("machines.tmuxJobs")}</strong>{" "}
@@ -1892,464 +1590,73 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                 </button>
               </div>
             </div>
-          ) : (
-            /* One icon bar for every fleet-wide action, in the same glyph
-               vocabulary a machine row uses for the same verbs (↻ retry, ⏻
-               disconnect) — so "all machines" reads as the row action applied
-               to the list, not as a different feature with its own wording.
-               The usage report joins it (▥, the system-monitor glyph): it used
-               to open itself after every remote connect, putting a modal in
-               front of someone who had asked for something else. It is on
-               demand now, and this is the only thing that opens it. Its subject
-               is THIS list — a section per machine, in this menu's order — plus
-               the active project's own hosts that aren't in it
-               (`RemoteUsageWarningDialog`); each is read afresh as the dialog
-               appears. */
-            <div className="vpn-indicator-row vpn-indicator-actions machines-fleet-actions machines-fleet-icons">
-              {machines.length > 0 && (
-                <button
-                  type="button"
-                  className="machines-row-action is-accent"
-                  disabled={retryAllBusy}
-                  aria-label={t("machines.retryAllAria")}
-                  title={t("machines.retryAllTitle")}
-                  onClick={() => void runRetryAll()}
-                >
-                  {retryAllBusy ? <MoreIcon /> : <RefreshIcon />}
-                </button>
-              )}
-              {machines.length > 0 && connectedCount > 0 && (
-                <button
-                  type="button"
-                  className="machines-row-action is-danger"
-                  aria-label={t("machines.disconnectAllAria")}
-                  title={t("machines.disconnectAllTitle")}
-                  onClick={() => setDisconnectAllArm(true)}
-                >
-                  ⏻
-                </button>
-              )}
-              <button
-                type="button"
-                className="machines-row-action"
-                aria-label={t("machines.usageAria")}
-                title={t("machines.usageTitle")}
-                onClick={() => {
-                  dismiss();
-                  openUsage();
-                }}
-              >
-                ▥
-              </button>
-              <UntestedTag id="machinesIndicator.7" />
-            </div>
-          )}
+  );
 
-          {machines.length === 0 && !machinesLoaded && <SkeletonRows count={3} />}
-          {machines.length === 0 && machinesLoaded && (
-            <div className="vpn-indicator-row">
-              <div className="vpn-indicator-empty">{t("machines.empty")}</div>
-            </div>
-          )}
-          {/* While a row is dragged, the others PART to open its landing slot: a
-              row the dragged one has passed slides back by exactly the dragged
-              row's height (removing it from above lifts them; inserting it above
-              drops them — the same distance either way, whatever their own
-              heights). It is a `transform`, so no layout moves and the rects
-              measured at pointerdown stay valid. */}
-          {tileGrid(machines.map((m, idx) => {
-            const st = status[m.id] ?? "off";
-            const hpc = isHpcHost(settings, targetOfSpec(m));
-            // The row's actual state, from BOTH maps — see `RowState`. This is
-            // the only place a stale green (a session we opened, on a host that
-            // no longer answers) can be caught: nothing downgrades `status` any
-            // more, because nothing but an explicit action writes it.
-            const state = stateOf(m);
-            // A row with an answer keeps showing it while the sweep re-asks; only
-            // one with nothing to show says the answer is on its way.
-            const awaitingSweep = state === "unknown" && sweeping[m.id] === true;
-            const badge = awaitingSweep ? "machines.badge.checking" : STATE_BADGE[state];
-            // "Not checked" has two different reasons and the row must say which:
-            // a tagged cluster is never in any sweep, so its answer will stay
-            // unknown until the Check button is pressed.
-            const stateTip = awaitingSweep
-              ? t("machines.tip.checking")
-              : state === "unknown" && hpc
-                ? t("machines.tip.unknownHpc")
-                : t(STATE_TIP[state]);
-            // Only a machine we hold a LIVE session on pulses: a reading taken
-            // before it dropped says nothing about it now — and a stale row is by
-            // definition one whose session may already be gone.
-            const busy = state === "connected" ? busyReading({ readings }, m) : null;
-            const usageReport =
-              state === "connected" && showsUtilization(settings, m) ? usageReports[machineKey(m.id)] : undefined;
-            const util = usageReport ? utilizationOf(usageReport) : null;
-            const name = m.label || m.host;
-            // `ConnLamp`'s own tooltip is "<label>: <colour>", and most states
-            // share their colour with another (red covers error and stale, grey
-            // covers all three sessionless ones) — for those the label carries
-            // the word the colour cannot.
-            const lampText = LAMP_SAYS_IT.has(state)
-              ? name
-              : `${name} — ${t(awaitingSweep ? "machines.badge.checking" : STATE_WORD[state])}`;
-            // Both error channels on one line, freshest first: this component's
-            // (the explicit HPC login), then a Check that still stands, then the
-            // store's — a failed connect, a failed probe, and now also
-            // `setAutoConnect`'s "auto-connect not saved: …".
-            const check = checked[m.id];
-            const rowError =
-              localErrors[m.id] ??
-              (checkStands(m.id) ? check?.error : undefined) ??
-              errors[m.id];
-            const shift = partShift(idx);
-            // A row shows its icon actions only while nothing has taken the row
-            // over: an armed confirm (remove/disconnect), the retry password
-            // field, or the edit form each replace them with worded buttons.
-            const rowFormOpen =
-              retryId === m.id ||
-              removeArm === m.id ||
-              disconnectArm === m.id ||
-              editId === m.id ||
-              attachId === m.id;
-            // The icon actions: on the head line's second row in the dropdown,
-            // at the tile's foot in the overlay (after its details).
-            const rowActions = !rowFormOpen && (
-              <div className="machines-row-actions">
-                {/* The connect, and — for a tagged cluster — the ONLY way it
-                    ever gets connected or probed from here at all. Every
-                    sweep skips it by design, so its row has to carry the
-                    gestures the fleet actions no longer make on its behalf:
-                    this button and the Check beside it. */}
-                <button
-                  type="button"
-                  className="machines-row-action is-accent"
-                  aria-label={t(
-                    state === "error"
-                      ? "machines.retryAria"
-                      : hpc
-                        ? "machines.hpcLoginAria"
-                        : st === "connected"
-                          ? "machines.reconnectAria"
-                          : "machines.connectAria",
-                  )}
-                  title={t(
-                    state === "error"
-                      ? "machines.retryTitle"
-                      : hpc
-                        ? "machines.hpcLoginTitle"
-                        : state === "stale"
-                          ? "machines.reconnectStaleTitle"
-                          : st === "connected"
-                            ? "machines.reconnectTitle"
-                            : "machines.connectTitle",
-                  )}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (state === "error") startRetry(m.id);
-                    // A tagged machine goes through this component's own
-                    // connect, which marks itself a gesture (`background:
-                    // false`) — the store's is a background-defaulted call
-                    // the backend is right to refuse on a login node.
-                    else if (hpc) void explicitConnect(m);
-                    else void connect(m.id);
-                  }}
-                  disabled={st === "connecting"}
-                >
-                  {st === "connected" || state === "error" ? <RefreshIcon /> : "▷"}
-                </button>
-                {/* Ask this one host whether it answers, because the user
-                    asked. It is the only reachability a tagged machine has
-                    (no sweep will ever probe one), and on any other machine
-                    it re-asks a question the 60s sweep interval is holding. */}
-                <button
-                  type="button"
-                  className="machines-row-action"
-                  aria-label={t("machines.checkAria")}
-                  title={t(hpc ? "machines.checkTitleHpc" : "machines.checkTitle")}
-                  disabled={checking.has(m.id)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void runCheck(m);
-                  }}
-                >
-                  {checking.has(m.id) ? <MoreIcon /> : "◎"}
-                </button>
-                {st === "connected" && (
-                  <button
-                    type="button"
-                    className="machines-row-action is-danger"
-                    aria-label={t("machines.disconnectAria")}
-                    title={t("machines.disconnectTitle")}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDisconnectArm(m.id);
-                    }}
-                  >
-                    ⏻
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="machines-row-action"
-                  aria-label={t("machines.attachAria")}
-                  title={t("machines.attachTitle")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setAttachId(m.id);
-                  }}
-                >
-                  ⇥
-                </button>
-                <button
-                  type="button"
-                  className="machines-row-action"
-                  aria-label={t("machines.editAria")}
-                  title={t("machines.editTitle")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    startEdit(m);
-                  }}
-                >
-                  <PencilIcon />
-                </button>
-                <button
-                  type="button"
-                  className="machines-row-action is-danger"
-                  aria-label={t("machines.removeAria")}
-                  title={t("machines.removeTitle")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRemoveArm(m.id);
-                  }}
-                >
-                  <CloseIcon />
-                </button>
-              </div>
-            );
-            return (
-              <div
-                key={m.id}
-                ref={(el) => {
-                  if (el) rowRefs.current.set(m.id, el);
-                  else rowRefs.current.delete(m.id);
-                }}
-                className={`vpn-indicator-row machines-indicator-row${isOverlay ? " models-tile machines-tile" : ""}${
-                  reorderDrag?.id === m.id ? " reorder-dragging" : reorderDrag ? " reorder-parting" : ""
-                }`}
-                style={
-                  reorderDrag?.id === m.id
-                    ? { transform: `translate(${reorderDrag.dx}px, ${reorderDrag.dy}px)` }
-                    : shift.x || shift.y
-                      ? { transform: `translate(${shift.x}px, ${shift.y}px)` }
-                      : undefined
-                }
-              >
-                <div className="vpn-indicator-head">
-                  {/* The same grip on a tile: the drag runs on both axes there. */}
-                <button
-                    type="button"
-                    className="machines-row-grip"
-                    aria-label={t("machines.gripAria")}
-                    title={t("machines.gripTitle")}
-                    onPointerDown={(e) => startReorderDrag(m.id, e)}
-                    onPointerMove={moveReorderDrag}
-                    onPointerUp={(e) => endReorderDrag(e, true)}
-                    onPointerCancel={(e) => endReorderDrag(e, false)}
-                    onKeyDown={(e) => {
-                      const back = e.key === "ArrowUp" || e.key === "ArrowLeft";
-                      if (!back && e.key !== "ArrowDown" && e.key !== "ArrowRight") return;
-                      e.preventDefault();
-                      nudgeMachine(m.id, back ? -1 : 1);
-                    }}
-                  >
-                    <GripIcon />
-                  </button>
-                  {/* The Models overlay tile's icon box. */}
-                  {isOverlay && (
-                    <span className="models-tile-icon machines-tile-icon" aria-hidden="true">
-                      <MachinesGlyph className="machines-tile-glyph" />
-                    </span>
-                  )}
-                  <ConnLamp
-                    status={STATE_LAMP[state]}
-                    busy={busy !== null}
-                    label={busy ? `${lampText} — ${busyLabel(busy)}` : lampText}
-                  />
-                  {/* The name is the shortcut to the machine's System Monitor,
-                      the same dialog the expanded row's button opens. */}
-                  <button
-                    type="button"
-                    className="vpn-indicator-config machines-name-btn"
-                    title={`${targetLabel(m)}\n${stateTip}\n${t("machines.systemMonitorTitle")}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openMonitor({ id: m.id, user: m.user, host: m.host, port: m.port, label: m.label });
-                    }}
-                  >
-                    {name}
-                  </button>
-                  {/* The HPC tag, on the row itself — the whole point of a tag
-                      that switches off background work is being able to see, at a
-                      glance over the machine list, which machines it is off for. */}
-                  {hpc && (
-                    <span className="hpc-badge" title={t("machines.hpcBadgeTitle")}>
-                      HPC
-                    </span>
-                  )}
-                  {/* The word the grey dot can't say. Only for the states a lamp
-                      colour leaves ambiguous, so a connected row stays clean and
-                      a long list stays scannable. Wearing `.hpc-badge`'s pill
-                      shape deliberately: this change owns no CSS, and the extra
-                      `machines-state-badge is-<state>` classes are the seam a
-                      per-state tint can be hung on later. */}
-                  {badge && (
-                    <span
-                      className={`hpc-badge machines-state-badge is-${state}`}
-                      title={stateTip}
-                    >
-                      {t(badge)}
-                    </span>
-                  )}
-                  {!isOverlay && (
-                    <button
-                      type="button"
-                      className="machines-row-expand-btn"
-                      aria-label={t(expandedIds.has(m.id) ? "machines.hideDetailsAria" : "machines.showDetailsAria")}
-                      aria-expanded={expandedIds.has(m.id)}
-                      title={t(expandedIds.has(m.id) ? "machines.hideDetailsTitle" : "machines.showDetailsTitle")}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleExpanded(m.id);
-                      }}
-                    >
-                      {expandedIds.has(m.id) ? "▾" : "▸"}
-                    </button>
-                  )}
-                  {!isOverlay && rowActions}
-                </div>
-                {/* A tile's second line, the Models overlay's `.models-tile-desc`:
-                    where the machine is and what its lamp means, in words — the
-                    dropdown keeps both in the name's tooltip. */}
-                {isOverlay && (
-                  <div className="models-tile-desc machines-tile-desc">
-                    <span className="models-tile-intro machines-tile-target">{targetLabel(m)}</span>
-                    <span className="models-tile-stat machines-tile-stat">
-                      {stateTip}
-                      {busy && (
-                        <span className="machines-tile-busy" title={busyLabel(busy)}>
-                          {t(busy.sessions === 1 ? "machines.sessionOne" : "machines.sessionMany", {
-                            count: busy.sessions,
-                          })}
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                )}
-                {/* Why the row says what it says — shown as soon as anything
-                    fails, not only once the user opens Retry. This is what tells
-                    apart a stale saved password from an unknown host key from the
-                    host simply being off the network, none of which a colour says
-                    on its own (see `stores/remote/globalMachines`' `errors`). No longer
-                    gated on `error`: the same map now also carries a failed
-                    *probe*'s reason (an unreachable row that can explain itself)
-                    and `setAutoConnect`'s "auto-connect not saved: …", which used
-                    to be nothing but a toggle springing silently back. Also still
-                    the only place an auto-connect failure at launch explains
-                    itself — `autoConnect` never opens a modal. */}
-                {/* CPU and GPU utilization, right on the row — only for a
-                    machine read in Detailed mode (see `showsUtilization`). */}
-                {util && !rowFormOpen && (
-                  <div className="machines-util" aria-label={t("machines.utilAria", { machine: name })}>
-                    <UtilBar
-                      label={t("machines.utilCpu")}
-                      pct={util.cpu}
-                      title={t("machines.utilCpuTitle", { pct: String(Math.round(util.cpu)) })}
-                    />
-                    {util.gpu !== null && (
-                      <UtilBar
-                        label={t("machines.utilGpu")}
-                        pct={util.gpu}
-                        title={t("machines.utilGpuTitle", { pct: String(Math.round(util.gpu)) })}
-                      />
-                    )}
-                    <UntestedTag id="machines.utilAria" />
-                  </div>
-                )}
-                {rowError && !rowFormOpen && (
-                  <div className="vpn-indicator-error machines-row-error">{rowError}</div>
-                )}
-                {(isOverlay || expandedIds.has(m.id)) && (
-                  <>
-                    {!isOverlay && <div className="vpn-indicator-holders">{targetLabel(m)}</div>}
-                    <button
-                      type="button"
-                      className="vpn-indicator-connect machines-monitor-btn"
-                      title={t("machines.systemMonitorTitle")}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openMonitor({ id: m.id, user: m.user, host: m.host, port: m.port, label: m.label });
-                      }}
-                    >
-                      {t("machines.systemMonitor")}
-                    </button>
-                    <label className="vpn-indicator-auto" title={t("machines.autoConnectTitle")}>
-                      <Toggle
-                        // The EFFECTIVE value, not the stored flag. A tagged
-                        // machine is never in the launch/VPN-up sweep whatever
-                        // `auto_connect` says (`stores/remote/globalMachines`'
-                        // `autoConnect` filters it out), so rendering a stored
-                        // `true` showed it armed-and-frozen: a promise the app
-                        // does not keep, on a control disabled from clearing it.
-                        checked={m.auto_connect === true && !hpc}
-                        onChange={(e) => void setAutoConnect(m.id, e.target.checked)}
-                        size="sm"
-                        disabled={hpc}
-                      />
-                      <span>
-                        {t("machines.autoConnectLabel")}
-                        {hpc && (
-                          <span className="machines-auto-blocked">
-                            {" "}
-                            {t("machines.autoBlockedHpc")}
-                          </span>
-                        )}
-                        <UntestedTag id="machinesIndicator.8" />
-                      </span>
-                    </label>
-                    {/* Where the tag is set for a machine already in the list. The
-                        login form has the same tick, so a cluster can be tagged as
-                        it is added; this is for one that is already here — and it
-                        is per machine, because that is the only scope at which the
-                        question ("is this a shared cluster?") has an answer. */}
-                    <label className="vpn-indicator-auto" title={t("machines.hpcToggleTitle")}>
-                      <Toggle
-                        checked={hpc}
-                        onChange={(e) => {
-                          const target = targetOfSpec(m);
-                          if (!target) return;
-                          const tagged = e.target.checked;
-                          void (async () => {
-                            await updateSettings(setHpcPatch(settings, target, tagged));
-                            // Tagging DISARMS the machine on disk, so the stored
-                            // state matches what the (now disabled) toggle above
-                            // claims. Otherwise a `true` survives out of reach of
-                            // every UI, for the sweep to keep filtering out — and
-                            // untagging the machine later would silently re-arm a
-                            // launch-time connect nobody asked for twice.
-                            if (tagged && m.auto_connect) await setAutoConnect(m.id, false);
-                          })();
-                        }}
-                        size="sm"
-                      />
-                      <span>
-                        {t("machines.hpcToggleLabel")}
-                        <UntestedTag id="machinesIndicator.9" />
-                      </span>
-                    </label>
-                  </>
-                )}
-                {isOverlay && rowActions}
-                {attachId === m.id ? (
+  /** What one global machine's row says and holds, for both surfaces. */
+  const machineInfo = (m: GlobalMachine) => {
+    const st = status[m.id] ?? "off";
+    const hpc = isHpcHost(settings, targetOfSpec(m));
+    // The row's actual state, from BOTH maps — see `RowState`. This is
+    // the only place a stale green (a session we opened, on a host that
+    // no longer answers) can be caught: nothing downgrades `status` any
+    // more, because nothing but an explicit action writes it.
+    const state = stateOf(m);
+    // A row with an answer keeps showing it while the sweep re-asks; only
+    // one with nothing to show says the answer is on its way.
+    const awaitingSweep = state === "unknown" && sweeping[m.id] === true;
+    const badge = awaitingSweep ? "machines.badge.checking" : STATE_BADGE[state];
+    // "Not checked" has two different reasons and the row must say which:
+    // a tagged cluster is never in any sweep, so its answer will stay
+    // unknown until the Check button is pressed.
+    const stateTip = awaitingSweep
+      ? t("machines.tip.checking")
+      : state === "unknown" && hpc
+        ? t("machines.tip.unknownHpc")
+        : t(STATE_TIP[state]);
+    // Only a machine we hold a LIVE session on pulses: a reading taken
+    // before it dropped says nothing about it now — and a stale row is by
+    // definition one whose session may already be gone.
+    const busy = state === "connected" ? busyReading({ readings }, m) : null;
+    const usageReport =
+      state === "connected" && showsUtilization(settings, m) ? usageReports[machineKey(m.id)] : undefined;
+    const util = usageReport ? utilizationOf(usageReport) : null;
+    const name = m.label || m.host;
+    // `ConnLamp`'s own tooltip is "<label>: <colour>", and most states
+    // share their colour with another (red covers error and stale, grey
+    // covers all three sessionless ones) — for those the label carries
+    // the word the colour cannot.
+    const lampText = LAMP_SAYS_IT.has(state)
+      ? name
+      : `${name} — ${t(awaitingSweep ? "machines.badge.checking" : STATE_WORD[state])}`;
+    // Both error channels on one line, freshest first: this component's
+    // (the explicit HPC login), then a Check that still stands, then the
+    // store's — a failed connect, a failed probe, and now also
+    // `setAutoConnect`'s "auto-connect not saved: …".
+    const check = checked[m.id];
+    const rowError =
+      localErrors[m.id] ??
+      (checkStands(m.id) ? check?.error : undefined) ??
+      errors[m.id];
+    // A row shows its icon actions only while nothing has taken the row
+    // over: an armed confirm (remove/disconnect), the retry password
+    // field, or the edit form each replace them with worded buttons.
+    const rowFormOpen =
+      retryId === m.id ||
+      removeArm === m.id ||
+      disconnectArm === m.id ||
+      editId === m.id ||
+      attachId === m.id;
+    return { st, hpc, state, awaitingSweep, badge, stateTip, busy, util, name, lampText, rowError, rowFormOpen };
+  };
+
+  /** The form that has taken a row over — hand it to a project, retry with a
+   *  password, confirm remove / disconnect, or edit — or null. One for both
+   *  surfaces: under the row in the dropdown, under the list row in the view. */
+  const renderRowForm = (m: GlobalMachine): ReactNode => {
+    const st = status[m.id] ?? "off";
+    const name = m.label || m.host;
+    return (
+      attachId === m.id ? (
                   <div className="vpn-indicator-row menu-form machines-attach-form">
                     <div className="vpn-indicator-hint">
                       {t("machines.attachQuestionPre")} <strong>{name}</strong>{" "}
@@ -2606,22 +1913,964 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                       </button>
                     </div>
                   </div>
-                ) : null}
+                ) : null
+    );
+  };
+
+
+  const addControls = (
+    <>
+      <div className="tab-new-menu-group-label">{t("machines.addGroupLabel")}</div>
+      {adding ? (
+        <div className="vpn-indicator-row menu-form">
+          <label>
+            {t("machines.sshAddress")}
+            <input
+              placeholder={t("machines.addressPlaceholder")}
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submitAdd();
+              }}
+              spellCheck={false}
+              autoFocus
+            />
+          </label>
+          <label>
+            {t("machines.username")}
+            <input
+              placeholder={t("machines.usernamePlaceholder")}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          {!addViaTerminal && (
+            <label>
+              {t("machines.password")}
+              <PasswordInput
+                placeholder={t("machines.addPasswordPlaceholder")}
+                value={password}
+                autoComplete="off"
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitAdd();
+                }}
+              />
+            </label>
+          )}
+          {/* Kept on screen in the terminal path, and *disabled* rather than
+              hidden: a saved password belongs to the host, and a row that
+              vanishes reads as one that was discarded. It has nothing to act on
+              there — the flag only reaches the keychain through `ssh_connect`'s
+              `remember`, which a terminal login never calls — so an existing
+              credential is left exactly as it was found. */}
+          <label
+            className="vpn-indicator-auto"
+            title={t(
+              addViaTerminal
+                ? "machines.savePasswordTerminalTitle"
+                : "machines.savePasswordTitle",
+            )}
+          >
+            <Toggle
+              checked={savePassword}
+              disabled={addViaTerminal}
+              onChange={(e) => setSavePassword(e.target.checked)}
+              size="sm"
+            />
+            <span>
+              {t("machines.savePassword")}
+              <UntestedTag id="machinesIndicator.14" />
+            </span>
+          </label>
+          <label
+            className="vpn-indicator-auto"
+            title={t("machines.autoConnectAddTitle")}
+          >
+            <Toggle
+              checked={addAuto && !addHpc}
+              disabled={addHpc}
+              onChange={(e) => setAddAuto(e.target.checked)}
+              size="sm"
+            />
+            <span>
+              {t("machines.autoConnectLabel")}
+              {addHpc && (
+                <span className="machines-auto-blocked"> {t("machines.autoBlockedHpcAdd")}</span>
+              )}
+              <UntestedTag id="machinesIndicator.15" />
+            </span>
+          </label>
+          {/* The tag, at the moment it is actually known: logging in is when
+              the user knows what they are logging in to. Everything Tabtivity
+              would otherwise do to this machine on its own is gated behind it
+              (`lib/remote/hpc/hpcHost.ts`), so ticking it here means the very first
+              connect already behaves — nothing scans, nothing polls, and the
+              monitor reads it lightly from its first sample. */}
+          <label
+            className="vpn-indicator-auto"
+            title={t("machines.hpcAddTitle")}
+          >
+            <Toggle checked={addHpc} onChange={(e) => setAddHpc(e.target.checked)} size="sm" />
+            <span>
+              {t("machines.hpcToggleLabel")}
+              <UntestedTag id="machinesIndicator.16" />
+            </span>
+          </label>
+          <label>
+            {t("machines.labelOptional")}
+            <input
+              placeholder={t("machines.labelPlaceholder")}
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              spellCheck={false}
+            />
+          </label>
+          <TerminalSignInToggle
+            channel="ssh"
+            checked={addViaTerminal}
+            busy={addWaiting}
+            onChange={setAddViaTerminal}
+          />
+          {/* The login is a root-terminal tab, not something in this menu — which
+              closes the moment the pointer leaves it — so say where it went. */}
+          {addViaTerminal && addWaiting && (
+            <div className="settings-help" role="status">
+              {t("machines.terminalLoginHint.pre")}{" "}
+              <strong>{t("machines.rootTerminal")}</strong>{" "}
+              {t("machines.terminalLoginHint.post")}
+            </div>
+          )}
+          {addError && <ErrorNote className="vpn-indicator-error" error={addError} />}
+          <div className="vpn-indicator-actions">
+            {addViaTerminal ? (
+              <button
+                type="button"
+                className="vpn-indicator-connect"
+                disabled={addWaiting}
+                title={t("machines.loginInTerminalTitle")}
+                onClick={() => void startTerminalAdd()}
+              >
+                {addWaiting ? t("machines.waitingForLogin") : t("machines.loginInTerminal")}
+              </button>
+            ) : (
+              <button type="button" className="vpn-indicator-connect" disabled={addBusy} onClick={() => void submitAdd()}>
+                {addBusy ? t("machines.connecting") : t("machines.connectAndAdd")}
+              </button>
+            )}
+            {/* Only after the poll has given up: a login finished late is still a
+                login, and re-arming beats retyping the whole form. */}
+            {addViaTerminal && !addWaiting && addError && (
+              <button type="button" className="vpn-indicator-connect" onClick={retryTerminalAdd}>
+                {t("machines.loggedInAdd")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="vpn-indicator-remove"
+              onClick={() => {
+                clearAddPoll();
+                setAddWaiting(false);
+                setAdding(false);
+              }}
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="vpn-indicator-row vpn-indicator-browse machines-io-buttons">
+          <button type="button" className="vpn-indicator-connect" onClick={() => setAdding(true)}>
+            {t("machines.addMachine")}
+          </button>
+          <button
+            type="button"
+            className="vpn-indicator-connect"
+            title={t("machines.importTitle")}
+            onClick={() => void startImport()}
+          >
+            {t("machines.import")}
+          </button>
+          <button
+            type="button"
+            className="vpn-indicator-connect"
+            disabled={machines.length === 0}
+            title={t("machines.exportTitle")}
+            onClick={startExport}
+          >
+            {t("machines.export")}
+          </button>
+        </div>
+      )}
+    </>
+  );
+
+  /** A row of the view's list (`MachinesTable`). A global machine brings its
+   *  state, actions, ⋯ menu and forms; a host only projects use offers their
+   *  connection hubs. */
+  const buildViewRow = (row: MachineRow): MachineTableRow => {
+    const m = row.globalId ? machines.find((mm) => mm.id === row.globalId) : undefined;
+    const sessionsText = (count: number) =>
+      t(count === 1 ? "machines.sessionOne" : "machines.sessionMany", { count });
+    if (!m) {
+      return {
+        key: row.key,
+        name: row.name,
+        group: machineGroupOf(row.lamp),
+        stateWord: t(VIEW_STATE_WORD[row.lamp]),
+        stateTip: t(VIEW_STATE_WORD[row.lamp]),
+        lamp: VIEW_LAMP[row.lamp],
+        hpc: false,
+        projects: row.projects,
+        activity: row.sessions > 0 ? sessionsText(row.sessions) : null,
+        primary: <ProjectConnectButton row={row} />,
+        menu: [],
+      };
+    }
+    const { st, hpc, state, awaitingSweep, stateTip, busy, util, name, rowError, rowFormOpen } = machineInfo(m);
+    const sessions = busy?.sessions ?? row.sessions;
+    const activity =
+      state === "connected" ? (
+        <>
+          {sessions > 0 && (
+            <span className="machines-table-sessions" title={busy ? busyLabel(busy) : undefined}>
+              {sessionsText(sessions)}
+            </span>
+          )}
+          {util && (
+            <span className="machines-util" aria-label={t("machines.utilAria", { machine: name })}>
+              <UtilBar
+                label={t("machines.utilCpu")}
+                pct={util.cpu}
+                title={t("machines.utilCpuTitle", { pct: String(Math.round(util.cpu)) })}
+              />
+              {util.gpu !== null && (
+                <UtilBar
+                  label={t("machines.utilGpu")}
+                  pct={util.gpu}
+                  title={t("machines.utilGpuTitle", { pct: String(Math.round(util.gpu)) })}
+                />
+              )}
+            </span>
+          )}
+        </>
+      ) : state === "unknown" && hpc && !awaitingSweep ? (
+        t("machinesView.hpcChecksOff")
+      ) : null;
+    const button = (label: TranslationKey, run: () => void, extra?: { disabled?: boolean; title?: string }) => (
+      <button type="button" className="settings-btn sm" disabled={extra?.disabled} title={extra?.title} onClick={run}>
+        {t(label)}
+      </button>
+    );
+    // The one main action: what a press on this row most likely means now.
+    const primary = rowFormOpen
+      ? null
+      : state === "error"
+        ? button("machinesView.retry", () => startRetry(m.id), { title: t("machines.retryTitle") })
+        : st === "connecting"
+          ? button("machinesView.connecting", () => {}, { disabled: true })
+          : state === "stale"
+            ? button("machinesView.reconnect", () => void connect(m.id), { title: t("machines.reconnectStaleTitle") })
+            : st === "connected"
+              ? row.disconnected.length > 0
+                ? <ProjectConnectButton row={row} />
+                : button("machinesView.disconnect", () => setDisconnectArm(m.id), { title: t("machines.disconnectTitle") })
+              : button("machinesView.connect", () => (hpc ? void explicitConnect(m) : void connect(m.id)), {
+                  title: t(hpc ? "machines.hpcLoginTitle" : "machines.connectTitle"),
+                });
+    const menu: MenuEntry[] = [
+      {
+        key: "check",
+        label: t("machinesView.menu.check"),
+        title: t(hpc ? "machines.checkTitleHpc" : "machines.checkTitle"),
+        disabled: checking.has(m.id),
+        run: () => void runCheck(m),
+      },
+      { key: "attach", label: t("machinesView.menu.attach"), title: t("machines.attachTitle"), run: () => setAttachId(m.id) },
+      {
+        key: "auto",
+        label: t("machines.autoConnectLabel"),
+        title: t(hpc ? "machines.autoBlockedHpc" : "machines.autoConnectTitle"),
+        checked: m.auto_connect === true && !hpc,
+        disabled: hpc,
+        separatorBefore: true,
+        run: () => void setAutoConnect(m.id, m.auto_connect !== true),
+      },
+      {
+        key: "hpc",
+        label: t("machines.hpcToggleLabel"),
+        title: t("machines.hpcToggleTitle"),
+        checked: hpc,
+        run: () => toggleHpc(m, !hpc),
+      },
+      ...(st === "connected" && row.disconnected.length > 0
+        ? [{ key: "disconnect", label: t("machinesView.menu.disconnect"), danger: true, separatorBefore: true, run: () => setDisconnectArm(m.id) }]
+        : []),
+      {
+        key: "edit",
+        label: t("machinesView.menu.edit"),
+        separatorBefore: !(st === "connected" && row.disconnected.length > 0),
+        run: () => startEdit(m),
+      },
+      { key: "remove", label: t("machinesView.menu.remove"), danger: true, run: () => setRemoveArm(m.id) },
+    ];
+    const viewState: keyof typeof VIEW_STATE_WORD = awaitingSweep ? "checking" : state;
+    return {
+      key: row.key,
+      name,
+      target: targetLabel(m),
+      group: machineGroupOf(state),
+      stateWord: t(VIEW_STATE_WORD[viewState]),
+      stateTip,
+      lamp: VIEW_LAMP[state],
+      hpc,
+      projects: row.projects,
+      activity,
+      primary,
+      onMonitor: () => openMonitor({ id: m.id, user: m.user, host: m.host, port: m.port, label: m.label }),
+      menu,
+      error: rowFormOpen ? undefined : rowError,
+      detail: rowFormOpen ? renderRowForm(m) : undefined,
+    };
+  };
+
+  // The list itself, shared by both surfaces: the dropdown scrolls it under
+  // its pinned title, the overlay lays it out as a page of tiles.
+  // Built only where it is placed (the open dropdown, the overlay): a closed
+  // header button re-renders on every probe answer, lamp and reading, and must
+  // not build every row each time.
+  const renderBody = () => (
+    <>
+          {ioMode === "export" ? (
+            <div className="vpn-indicator-row menu-form machines-io-panel">
+              <div className="vpn-indicator-note">
+                {t("machines.exportNote")}
+                <UntestedTag id="machinesIndicator.1" />
+              </div>
+              {machines.length === 0 ? (
+                <div className="vpn-indicator-empty">{t("machines.nothingToExport")}</div>
+              ) : (
+                <>
+                <label
+                  className="vpn-indicator-auto machines-io-pick machines-io-pick-all"
+                  title={t(allExportSelected ? "machines.deselectAllTitle" : "machines.selectAllTitle")}
+                >
+                  <Toggle checked={allExportSelected} onChange={toggleExportSelAll} size="sm" />
+                  <span>{t(allExportSelected ? "machines.deselectAll" : "machines.selectAll")}</span>
+                </label>
+                {machines.map((m) => (
+                  <label
+                    key={m.id}
+                    className="vpn-indicator-auto machines-io-pick"
+                    title={targetLabel(m)}
+                  >
+                    <Toggle
+                      checked={exportSel.has(m.id)}
+                      onChange={() => toggleExportSel(m.id)}
+                      size="sm"
+                    />
+                    <span>
+                      {m.label || m.host}
+                      <span className="machines-io-addr">
+                        {`${m.host}${m.port ? `:${m.port}` : ""}`}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+                </>
+              )}
+              {ioError && <ErrorNote className="vpn-indicator-error" error={ioError} />}
+              <div className="vpn-indicator-actions">
+                <button
+                  type="button"
+                  className="vpn-indicator-connect"
+                  disabled={ioBusy || exportSel.size === 0}
+                  onClick={() => void doExport()}
+                >
+                  {ioBusy ? t("machines.saving") : t("machines.exportN", { count: exportSel.size })}
+                </button>
+                <button type="button" className="vpn-indicator-remove" onClick={closeIo}>
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </div>
+          ) : ioMode === "import" ? (
+            <div className="vpn-indicator-row menu-form machines-io-panel">
+              {importResult ? (
+                <>
+                  <div className="vpn-indicator-note">
+                    {t(
+                      importResult.length === 1 ? "machines.importedOne" : "machines.importedMany",
+                      { count: importResult.length },
+                    )}{" "}
+                    {t("machines.importedOutcome", {
+                      ok: importResult.filter((r) => r.ok).length,
+                      bad: importResult.filter((r) => !r.ok).length,
+                    })}
+                  </div>
+                  <div className="machines-io-results">
+                    {importResult.map((r, i) => (
+                      <div key={`${r.host}-${i}`} className="machines-io-result-row">
+                        <ConnLamp status={r.ok ? "connected" : "error"} label={r.host} />
+                        <span>{r.label || r.host}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="vpn-indicator-actions">
+                    <button type="button" className="vpn-indicator-connect" onClick={closeIo}>
+                      {t("machines.done")}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="vpn-indicator-note">
+                    {ioBusy && importEntries.length === 0
+                      ? t("machines.readingFile")
+                      : t(
+                          importEntries.length === 1
+                            ? "machines.importCountOne"
+                            : "machines.importCountMany",
+                          { count: importEntries.length },
+                        )}
+                    <UntestedTag id="machinesIndicator.2" />
+                  </div>
+                  {importEntries.length > 0 && (
+                    <div className="machines-io-preview">
+                      {importEntries.map((e, i) => (
+                        <div key={`${e.host}-${i}`} className="machines-io-addr">
+                          {`${e.user ? `${e.user}@` : ""}${e.host}${e.port ? `:${e.port}` : ""}`}
+                          {e.label ? ` — ${e.label}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <label>
+                    {t("machines.username")}
+                    <input
+                      placeholder={t("machines.importUserPlaceholder")}
+                      value={importUser}
+                      onChange={(e) => setImportUser(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label>
+                    {t("machines.password")}
+                    <PasswordInput
+                      placeholder={t("machines.importPasswordPlaceholder")}
+                      value={importPassword}
+                      autoComplete="off"
+                      onChange={(e) => setImportPassword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void doImport();
+                      }}
+                    />
+                  </label>
+                  <label className="vpn-indicator-auto">
+                    <Toggle
+                      checked={importSave}
+                      onChange={(e) => setImportSave(e.target.checked)}
+                      size="sm"
+                    />
+                    <span>
+                      {t("machines.savePassword")}
+                      <UntestedTag id="machinesIndicator.3" />
+                    </span>
+                  </label>
+                  <label
+                    className="vpn-indicator-auto"
+                    title={t("machines.importAutoTitle")}
+                  >
+                    <Toggle
+                      checked={importAuto}
+                      onChange={(e) => setImportAuto(e.target.checked)}
+                      size="sm"
+                    />
+                    <span>
+                      {t("machines.autoConnectLabel")}
+                      <UntestedTag id="machinesIndicator.4" />
+                    </span>
+                  </label>
+                  {ioError && <ErrorNote className="vpn-indicator-error" error={ioError} />}
+                  <div className="vpn-indicator-actions">
+                    <button
+                      type="button"
+                      className="vpn-indicator-connect"
+                      disabled={ioBusy || importEntries.length === 0}
+                      onClick={() => void doImport()}
+                    >
+                      {ioBusy ? t("machines.connecting") : t("machines.connectAndImport")}
+                    </button>
+                    <button type="button" className="vpn-indicator-remove" onClick={closeIo}>
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+          {addControls}
+
+          {/* The drag this used to describe does not exist: attaching is the
+              row's ⇥ picker (see the component doc), and the only drag left is a
+              row's grip, which reorders. */}
+          <div className="vpn-indicator-note">
+            <strong>{t("machines.note.strong")}</strong>{" "}
+            {t("machines.note.rest")}
+            <UntestedTag id="machinesIndicator.5" />
+          </div>
+
+          {machines.length > 0 && disconnectAllArm ? (
+            disconnectAllConfirm
+          ) : (
+            /* One icon bar for every fleet-wide action, in the same glyph
+               vocabulary a machine row uses for the same verbs (↻ retry, ⏻
+               disconnect) — so "all machines" reads as the row action applied
+               to the list, not as a different feature with its own wording.
+               The usage report joins it (▥, the system-monitor glyph): it used
+               to open itself after every remote connect, putting a modal in
+               front of someone who had asked for something else. It is on
+               demand now, and this is the only thing that opens it. Its subject
+               is THIS list — a section per machine, in this menu's order — plus
+               the active project's own hosts that aren't in it
+               (`RemoteUsageWarningDialog`); each is read afresh as the dialog
+               appears. */
+            <div className="vpn-indicator-row vpn-indicator-actions machines-fleet-actions machines-fleet-icons">
+              {machines.length > 0 && (
+                <button
+                  type="button"
+                  className="machines-row-action is-accent"
+                  disabled={retryAllBusy}
+                  aria-label={t("machines.retryAllAria")}
+                  title={t("machines.retryAllTitle")}
+                  onClick={() => void runRetryAll()}
+                >
+                  {retryAllBusy ? <MoreIcon /> : <RefreshIcon />}
+                </button>
+              )}
+              {machines.length > 0 && connectedCount > 0 && (
+                <button
+                  type="button"
+                  className="machines-row-action is-danger"
+                  aria-label={t("machines.disconnectAllAria")}
+                  title={t("machines.disconnectAllTitle")}
+                  onClick={() => setDisconnectAllArm(true)}
+                >
+                  ⏻
+                </button>
+              )}
+              <button
+                type="button"
+                className="machines-row-action"
+                aria-label={t("machines.usageAria")}
+                title={t("machines.usageTitle")}
+                onClick={() => {
+                  dismiss();
+                  openUsage();
+                }}
+              >
+                ▥
+              </button>
+              <UntestedTag id="machinesIndicator.7" />
+            </div>
+          )}
+
+          {machines.length === 0 && !machinesLoaded && <SkeletonRows count={3} />}
+          {machines.length === 0 && machinesLoaded && (
+            <div className="vpn-indicator-row">
+              <div className="vpn-indicator-empty">{t("machines.empty")}</div>
+            </div>
+          )}
+          {/* While a row is dragged, the others PART to open its landing slot: a
+              row the dragged one has passed slides back by exactly the dragged
+              row's height (removing it from above lifts them; inserting it above
+              drops them — the same distance either way, whatever their own
+              heights). It is a `transform`, so no layout moves and the rects
+              measured at pointerdown stay valid. */}
+          {machines.map((m, idx) => {
+            const { st, hpc, state, badge, stateTip, busy, util, name, lampText, rowError, rowFormOpen } = machineInfo(m);
+            const shift = partShift(idx);
+            // The icon actions: on the head line's second row in the dropdown,
+            // at the tile's foot in the overlay (after its details).
+            const rowActions = !rowFormOpen && (
+              <div className="machines-row-actions">
+                {/* The connect, and — for a tagged cluster — the ONLY way it
+                    ever gets connected or probed from here at all. Every
+                    sweep skips it by design, so its row has to carry the
+                    gestures the fleet actions no longer make on its behalf:
+                    this button and the Check beside it. */}
+                <button
+                  type="button"
+                  className="machines-row-action is-accent"
+                  aria-label={t(
+                    state === "error"
+                      ? "machines.retryAria"
+                      : hpc
+                        ? "machines.hpcLoginAria"
+                        : st === "connected"
+                          ? "machines.reconnectAria"
+                          : "machines.connectAria",
+                  )}
+                  title={t(
+                    state === "error"
+                      ? "machines.retryTitle"
+                      : hpc
+                        ? "machines.hpcLoginTitle"
+                        : state === "stale"
+                          ? "machines.reconnectStaleTitle"
+                          : st === "connected"
+                            ? "machines.reconnectTitle"
+                            : "machines.connectTitle",
+                  )}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (state === "error") startRetry(m.id);
+                    // A tagged machine goes through this component's own
+                    // connect, which marks itself a gesture (`background:
+                    // false`) — the store's is a background-defaulted call
+                    // the backend is right to refuse on a login node.
+                    else if (hpc) void explicitConnect(m);
+                    else void connect(m.id);
+                  }}
+                  disabled={st === "connecting"}
+                >
+                  {st === "connected" || state === "error" ? <RefreshIcon /> : "▷"}
+                </button>
+                {/* Ask this one host whether it answers, because the user
+                    asked. It is the only reachability a tagged machine has
+                    (no sweep will ever probe one), and on any other machine
+                    it re-asks a question the 60s sweep interval is holding. */}
+                <button
+                  type="button"
+                  className="machines-row-action"
+                  aria-label={t("machines.checkAria")}
+                  title={t(hpc ? "machines.checkTitleHpc" : "machines.checkTitle")}
+                  disabled={checking.has(m.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void runCheck(m);
+                  }}
+                >
+                  {checking.has(m.id) ? <MoreIcon /> : "◎"}
+                </button>
+                {st === "connected" && (
+                  <button
+                    type="button"
+                    className="machines-row-action is-danger"
+                    aria-label={t("machines.disconnectAria")}
+                    title={t("machines.disconnectTitle")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDisconnectArm(m.id);
+                    }}
+                  >
+                    ⏻
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="machines-row-action"
+                  aria-label={t("machines.attachAria")}
+                  title={t("machines.attachTitle")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAttachId(m.id);
+                  }}
+                >
+                  ⇥
+                </button>
+                <button
+                  type="button"
+                  className="machines-row-action"
+                  aria-label={t("machines.editAria")}
+                  title={t("machines.editTitle")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startEdit(m);
+                  }}
+                >
+                  <PencilIcon />
+                </button>
+                <button
+                  type="button"
+                  className="machines-row-action is-danger"
+                  aria-label={t("machines.removeAria")}
+                  title={t("machines.removeTitle")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRemoveArm(m.id);
+                  }}
+                >
+                  <CloseIcon />
+                </button>
               </div>
             );
-          }))}
+            return (
+              <div
+                key={m.id}
+                ref={(el) => {
+                  if (el) rowRefs.current.set(m.id, el);
+                  else rowRefs.current.delete(m.id);
+                }}
+                className={`vpn-indicator-row machines-indicator-row${
+                  reorderDrag?.id === m.id ? " reorder-dragging" : reorderDrag ? " reorder-parting" : ""
+                }`}
+                style={
+                  reorderDrag?.id === m.id
+                    ? { transform: `translate(${reorderDrag.dx}px, ${reorderDrag.dy}px)` }
+                    : shift.x || shift.y
+                      ? { transform: `translate(${shift.x}px, ${shift.y}px)` }
+                      : undefined
+                }
+              >
+                <div className="vpn-indicator-head">
+                  {/* The same grip on a tile: the drag runs on both axes there. */}
+                <button
+                    type="button"
+                    className="machines-row-grip"
+                    aria-label={t("machines.gripAria")}
+                    title={t("machines.gripTitle")}
+                    onPointerDown={(e) => startReorderDrag(m.id, e)}
+                    onPointerMove={moveReorderDrag}
+                    onPointerUp={(e) => endReorderDrag(e, true)}
+                    onPointerCancel={(e) => endReorderDrag(e, false)}
+                    onKeyDown={(e) => {
+                      const back = e.key === "ArrowUp" || e.key === "ArrowLeft";
+                      if (!back && e.key !== "ArrowDown" && e.key !== "ArrowRight") return;
+                      e.preventDefault();
+                      nudgeMachine(m.id, back ? -1 : 1);
+                    }}
+                  >
+                    <GripIcon />
+                  </button>
+                  <ConnLamp
+                    status={STATE_LAMP[state]}
+                    busy={busy !== null}
+                    label={busy ? `${lampText} — ${busyLabel(busy)}` : lampText}
+                  />
+                  {/* The name is the shortcut to the machine's System Monitor,
+                      the same dialog the expanded row's button opens. */}
+                  <button
+                    type="button"
+                    className="vpn-indicator-config machines-name-btn"
+                    title={`${targetLabel(m)}\n${stateTip}\n${t("machines.systemMonitorTitle")}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openMonitor({ id: m.id, user: m.user, host: m.host, port: m.port, label: m.label });
+                    }}
+                  >
+                    {name}
+                  </button>
+                  {/* The HPC tag, on the row itself — the whole point of a tag
+                      that switches off background work is being able to see, at a
+                      glance over the machine list, which machines it is off for. */}
+                  {hpc && (
+                    <span className="hpc-badge" title={t("machines.hpcBadgeTitle")}>
+                      HPC
+                    </span>
+                  )}
+                  {/* The word the grey dot can't say. Only for the states a lamp
+                      colour leaves ambiguous, so a connected row stays clean and
+                      a long list stays scannable. Wearing `.hpc-badge`'s pill
+                      shape deliberately: this change owns no CSS, and the extra
+                      `machines-state-badge is-<state>` classes are the seam a
+                      per-state tint can be hung on later. */}
+                  {badge && (
+                    <span
+                      className={`hpc-badge machines-state-badge is-${state}`}
+                      title={stateTip}
+                    >
+                      {t(badge)}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="machines-row-expand-btn"
+                    aria-label={t(expandedIds.has(m.id) ? "machines.hideDetailsAria" : "machines.showDetailsAria")}
+                    aria-expanded={expandedIds.has(m.id)}
+                    title={t(expandedIds.has(m.id) ? "machines.hideDetailsTitle" : "machines.showDetailsTitle")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleExpanded(m.id);
+                    }}
+                  >
+                    {expandedIds.has(m.id) ? "▾" : "▸"}
+                  </button>
+                  {rowActions}
+                </div>
+                {/* Why the row says what it says — shown as soon as anything
+                    fails, not only once the user opens Retry. This is what tells
+                    apart a stale saved password from an unknown host key from the
+                    host simply being off the network, none of which a colour says
+                    on its own (see `stores/remote/globalMachines`' `errors`). No longer
+                    gated on `error`: the same map now also carries a failed
+                    *probe*'s reason (an unreachable row that can explain itself)
+                    and `setAutoConnect`'s "auto-connect not saved: …", which used
+                    to be nothing but a toggle springing silently back. Also still
+                    the only place an auto-connect failure at launch explains
+                    itself — `autoConnect` never opens a modal. */}
+                {/* CPU and GPU utilization, right on the row — only for a
+                    machine read in Detailed mode (see `showsUtilization`). */}
+                {util && !rowFormOpen && (
+                  <div className="machines-util" aria-label={t("machines.utilAria", { machine: name })}>
+                    <UtilBar
+                      label={t("machines.utilCpu")}
+                      pct={util.cpu}
+                      title={t("machines.utilCpuTitle", { pct: String(Math.round(util.cpu)) })}
+                    />
+                    {util.gpu !== null && (
+                      <UtilBar
+                        label={t("machines.utilGpu")}
+                        pct={util.gpu}
+                        title={t("machines.utilGpuTitle", { pct: String(Math.round(util.gpu)) })}
+                      />
+                    )}
+                    <UntestedTag id="machines.utilAria" />
+                  </div>
+                )}
+                {rowError && !rowFormOpen && (
+                  <div className="vpn-indicator-error machines-row-error">{rowError}</div>
+                )}
+                {expandedIds.has(m.id) && (
+                  <>
+                    <div className="vpn-indicator-holders">{targetLabel(m)}</div>
+                    <button
+                      type="button"
+                      className="vpn-indicator-connect machines-monitor-btn"
+                      title={t("machines.systemMonitorTitle")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openMonitor({ id: m.id, user: m.user, host: m.host, port: m.port, label: m.label });
+                      }}
+                    >
+                      {t("machines.systemMonitor")}
+                    </button>
+                    <label className="vpn-indicator-auto" title={t("machines.autoConnectTitle")}>
+                      <Toggle
+                        // The EFFECTIVE value, not the stored flag. A tagged
+                        // machine is never in the launch/VPN-up sweep whatever
+                        // `auto_connect` says (`stores/remote/globalMachines`'
+                        // `autoConnect` filters it out), so rendering a stored
+                        // `true` showed it armed-and-frozen: a promise the app
+                        // does not keep, on a control disabled from clearing it.
+                        checked={m.auto_connect === true && !hpc}
+                        onChange={(e) => void setAutoConnect(m.id, e.target.checked)}
+                        size="sm"
+                        disabled={hpc}
+                      />
+                      <span>
+                        {t("machines.autoConnectLabel")}
+                        {hpc && (
+                          <span className="machines-auto-blocked">
+                            {" "}
+                            {t("machines.autoBlockedHpc")}
+                          </span>
+                        )}
+                        <UntestedTag id="machinesIndicator.8" />
+                      </span>
+                    </label>
+                    {/* Where the tag is set for a machine already in the list. The
+                        login form has the same tick, so a cluster can be tagged as
+                        it is added; this is for one that is already here — and it
+                        is per machine, because that is the only scope at which the
+                        question ("is this a shared cluster?") has an answer. */}
+                    <label className="vpn-indicator-auto" title={t("machines.hpcToggleTitle")}>
+                      <Toggle
+                        checked={hpc}
+                        onChange={(e) => toggleHpc(m, e.target.checked)}
+                        size="sm"
+                      />
+                      <span>
+                        {t("machines.hpcToggleLabel")}
+                        <UntestedTag id="machinesIndicator.9" />
+                      </span>
+                    </label>
+                  </>
+                )}
+                {renderRowForm(m)}
+              </div>
+            );
+          })}
             </>
           )}
     </>
   );
 
-  if (isOverlay) return <MachinesOverlayFrame>{body}</MachinesOverlayFrame>;
+  if (isView) {
+    // The view's toolbar: Add machine, and a ⋯ for what acts on the whole list.
+    const viewTools: MenuEntry[] = [
+      { key: "import", label: t("machines.import"), title: t("machines.importTitle"), run: () => void startImport() },
+      {
+        key: "export",
+        label: t("machines.export"),
+        title: t("machines.exportTitle"),
+        disabled: machines.length === 0,
+        run: startExport,
+      },
+      ...(machines.length > 0
+        ? [
+            {
+              key: "retryAll",
+              label: t("machines.retryAllAria"),
+              title: t("machines.retryAllTitle"),
+              disabled: retryAllBusy,
+              separatorBefore: true,
+              run: () => void runRetryAll(),
+            },
+          ]
+        : []),
+      ...(connectedCount > 0
+        ? [{ key: "disconnectAll", label: t("machines.disconnectAllAria"), danger: true, run: () => setDisconnectAllArm(true) }]
+        : []),
+      {
+        key: "usage",
+        label: t("machines.usageAria"),
+        title: t("machines.usageTitle"),
+        separatorBefore: machines.length === 0,
+        run: () => openUsage(),
+      },
+    ];
+    const actions = (
+      <>
+        <button type="button" className="btn-primary machines-add-btn" onClick={() => setAdding(true)} disabled={adding}>
+          <PlusIcon />
+          {t("machines.addMachine")}
+        </button>
+        <button
+          type="button"
+          className="settings-btn icon"
+          aria-haspopup="menu"
+          aria-label={t("machinesView.toolsAria")}
+          onClick={(e) => {
+            if (toolsMenu) return setToolsMenu(null);
+            const r = e.currentTarget.getBoundingClientRect();
+            setToolsMenu({ x: r.left, y: r.bottom + 4 });
+          }}
+        >
+          <MoreIcon />
+        </button>
+        {toolsMenu && <EntryMenu x={toolsMenu.x} y={toolsMenu.y} entries={viewTools} onClose={() => setToolsMenu(null)} />}
+      </>
+    );
+    return (
+      <MachinesViewFrame actions={actions}>
+        {ioMode !== "idle" && <div className="machines-view-form">{renderBody()}</div>}
+        {ioMode === "idle" && adding && <div className="machines-view-form">{addControls}</div>}
+        {machines.length > 0 && disconnectAllArm && <div className="machines-view-form">{disconnectAllConfirm}</div>}
+        <MachinesViewList build={buildViewRow} loading={!machinesLoaded} />
+      </MachinesViewFrame>
+    );
+  }
 
   return (
     <div
       ref={anchorRef}
       className="global-apps-menu header-status-menu-anchor no-drag"
-      onMouseEnter={reveal}
+      onMouseEnter={revealOnRest}
       onMouseLeave={scheduleClose}
     >
       <button
@@ -2630,23 +2879,31 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
         aria-label={t("machines.ariaLabel")}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        title={t("machines.triggerTitle")}
-        // A click opens the Machines overlay — the Models & agents button's
+        // No native `title` on this button, nor on its lamps (`tooltip={false}`):
+        // the tooltip, a long sentence and every machine's name, is a GTK window
+        // under the resting pointer, and a pointer leaving the button straight
+        // down crossed it unseen, so the list stayed up 2–3 s. The list itself is
+        // the explanation; the sentence stays for screen readers.
+        aria-description={t("machines.triggerTitle")}
+        // A click opens the Machines view — the Models button's
         // pattern (`layout/LocalModelMenu`): hover is the glance, click is the
         // room. The dropdown goes with the click rather than staying up over
-        // the overlay it just raised. Focus alone still reveals the dropdown,
+        // the window it just raised. Focus alone still reveals the dropdown,
         // the keyboard's way to the glance.
         onClick={() => {
           window.clearTimeout(closeTimer.current);
           closeMenu(MENU_ID);
-          useMachinesOverlayStore.getState().openOverlay();
+          // A click while the view is up closes the window (the other header
+          // apps' toggle).
+          if (isViewShown("machines")) useRootOverlayStore.getState().close();
+          else useRootOverlayStore.getState().openView("machines");
         }}
         onFocus={reveal}
       >
         <span className="header-conn-lamps">
           {lampGroups.map((g) => (
             <span key={g.lamp} className="conn-lamp-count">
-              <ConnLamp status={g.lamp} busy={g.working.length > 0} label={lampLabel(g)} />
+              <ConnLamp status={g.lamp} busy={g.working.length > 0} label={lampLabel(g)} tooltip={false} />
               {g.machines.length > 1 && (
                 <span className="conn-lamp-count-num">{g.machines.length}</span>
               )}
@@ -2672,7 +2929,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
               title={t("machines.openOverlayTitle")}
               onClick={() => {
                 closeMenu(MENU_ID);
-                useMachinesOverlayStore.getState().openOverlay();
+                useRootOverlayStore.getState().openView("machines");
               }}
             >
               ⤢
@@ -2688,7 +2945,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             </button>
           </div>
           <div className="menu-scroll-region">
-            {body}
+            {renderBody()}
           </div>
         </div>
       )}

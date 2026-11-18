@@ -759,6 +759,31 @@ mod tests {
         assert!(stays.is_dir(), "never deleted");
     }
 
+    /// Gap 83: converting a Remote project that keeps a local copy moves the
+    /// mirror out under the project's mutation lock, so a FIFO an agent planted
+    /// in it must not hang the move (a hang would hold every manual sync).
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_fifo_does_not_hang_the_move_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        std::fs::create_dir_all(&mirror).unwrap();
+        std::fs::write(mirror.join("notes.txt"), "mine").unwrap();
+        crate::services::home_io::mkfifo(&mirror.join("pipe"));
+        // A leftover in the destination makes `rename` fail, so the copy runs.
+        let dest = tmp.path().join("out").join("proj (local copy)");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("leftover"), "x").unwrap();
+        let e = entry(Some(remote(serde_json::json!({}))), false);
+        let (m, d) = (mirror.clone(), dest.clone());
+        let out = crate::services::home_io::within_deadline(move || {
+            move_out_blocking(UnpairPlan { entry: e, mirror: m, kept_at: Some(d) })
+        });
+        assert!(out.moved && out.move_error.is_none(), "{:?}", out.move_error);
+        assert_eq!(std::fs::read_to_string(dest.join("notes.txt")).unwrap(), "mine");
+        assert!(!mirror.exists());
+    }
+
     #[test]
     fn a_mirror_changed_refusal_carries_its_sentinel() {
         assert!(mirror_changed_refusal().starts_with(&format!("{}_MIRROR_CHANGED:", crate::brand::UPPER)));

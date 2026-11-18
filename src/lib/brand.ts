@@ -112,6 +112,8 @@ function namesFor(b: BrandForms) {
     appTimerId: `__${b.slug}__`,
     /** The session hook script in `<state>/hooks` (POSIX). */
     sessionHookSh: `${b.slug}_session_start.sh`,
+    /** Domain-separation prefix of the phone's signed sign-in payload. */
+    mobileAuthContext: `${b.slug}-mobile-auth-v1`,
 
     /** The chat assistant's display name. Not derived from the slug (so it is
      *  exempt from the "moved with the rename" check): it moves when

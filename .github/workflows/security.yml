@@ -6,6 +6,9 @@ name: security
 # and a cron on ci-cd.yml would rebuild every package to learn nothing new.
 # The gitleaks scan lives in ci-cd.yml instead: history only changes on a push,
 # so it gains nothing from the cron, and there it can gate the release job.
+# As in ci-cd.yml, a pull request from this repository's own branch runs
+# nothing (every job's `if:`): every branch here has a push run of the same
+# commit. Only a fork's PR is scanned as a PR.
 on:
   push:
   pull_request:
@@ -22,6 +25,7 @@ env:
 jobs:
   dependencies:
     name: dependencies
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Blocking: a new advisory fails the run. Fix it by updating the crate or
@@ -45,23 +49,22 @@ jobs:
       #
       # Ignored, each with its reason — add one only with a comment like these:
       # - RUSTSEC-2023-0071 `rsa` Marvin timing oracle: `pgp` pulls `rsa` in
-      #   unconditionally and no patched version exists. Mitigated by defaulting
-      #   key generation to Curve25519; see the note on `pgp` in Cargo.toml.
-      # - RUSTSEC-2026-0367/0368/0369 `zip` 8.6 `extract()` symlink/SUID flaws,
-      #   patched in 9: our own `zip` is 9, but `calamine` (spreadsheet reading,
-      #   no newer release) still pulls 8.6. It only reads entries through
-      #   `ZipArchive` and never calls `extract()`. Drop these when `calamine`
-      #   moves to zip 9.
+      #   unconditionally, and even `pgp` 0.21.1 still requires `rsa` ^0.9, so
+      #   the fixed `rsa` 0.10 (stable since 2026-11-08) cannot be reached
+      #   without a `[patch]` that its API change would break. Mitigated by
+      #   defaulting key generation to Curve25519; see the note on `pgp` in
+      #   Cargo.toml. Drop this once a `pgp` release moves to `rsa` 0.10.
       # - RUSTSEC-2026-0387 `crypto-bigint` 0.5.5 timing variability in its
       #   "constant-time" arithmetic (published 2026-10-23; patched in 0.7.6):
       #   the RustCrypto 0.13 curve crates (`elliptic-curve`, `p256`, `k256`, …)
-      #   pin 0.5, as do `pgp` 0.20 and our own `p256` 0.13. The fix is a
-      #   RustCrypto generation bump (`pgp` 0.21, `p256` 0.14), which moves mail
-      #   encryption and phone pairing and needs a live check of both. A local
-      #   timing side channel on our ECC secret operations; drop this once that
-      #   bump has landed.
+      #   pin 0.5, as do `pgp` (0.21.1 still requires `elliptic-curve` and
+      #   `p256` ^0.13) and our own `p256` 0.13. The fix is a RustCrypto
+      #   generation bump (the 0.14 crates) that `pgp` has to follow first; it
+      #   moves mail encryption and phone pairing and needs a live check of
+      #   both. A local timing side channel on our ECC secret operations; drop
+      #   this once that bump has landed.
       - name: Audit Rust dependencies
-        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369 --ignore RUSTSEC-2026-0387
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387
 
       # The release binary, checksum pinned to the version, as for gitleaks in
       # ci-cd.yml.
@@ -103,6 +106,7 @@ jobs:
   # with no change here.
   workflows:
     name: workflows (zizmor)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -135,6 +139,7 @@ jobs:
   # the WebKitGTK packages nor a cargo build.
   codeql:
     name: codeql (${{ matrix.language }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:

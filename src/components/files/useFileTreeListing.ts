@@ -227,9 +227,9 @@ export function useFileTreeFsWatch({
   // on every event burst anywhere. A hidden tree now stops watching entirely and
   // catches up with ONE quiet re-list when its surface is next shown (the same
   // identity-preserving refresh an fs-change triggers, so nothing repaints when
-  // nothing changed). React runs effect cleanups before setups across the tree,
-  // so the deactivating tree's `unwatch_dir` lands before the activating tree's
-  // `watch_dir` claims the single backend watch slot.
+  // nothing changed). The backend keeps one watch per folder asked for, counted
+  // per asker, so trees mounted side by side (a box's open sections, a popout)
+  // each stay live and one tree's `unwatch_dir` never ends another's.
   const sawInactive = useRef(false);
   useEffect(() => {
     // Remote projects have no local fs watcher (inotify can't see the SFTP tree);
@@ -251,8 +251,8 @@ export function useFileTreeFsWatch({
     // add/commit/push (which only write `.git/`) re-read the markers too.
     invoke("watch_dir", { path: absDir, repoDir: projectDir }).catch(() => {});
     const unlisten = subscribeTauri(() => listen<string>("fs-change", (event) => {
-      // The payload is the watched folder as asked for (`fs_watch.rs`); the one
-      // backend slot is shared by every tree in every window, so an event for
+      // The payload is the watched folder as asked for (`fs_watch.rs`); every
+      // tree in every window hears every watch's events, so an event for
       // another tree's folder is not this tree's to re-list (perf plan §3.4).
       // Its `.git` changes arrive under the same payload, so they still count.
       if (typeof event?.payload === "string" && event.payload !== absDir) return;
@@ -264,7 +264,9 @@ export function useFileTreeFsWatch({
     return () => {
       if (timer) clearTimeout(timer);
       unlisten();
-      invoke("unwatch_dir").catch(() => {});
+      // By path: each tree holds its own watch (several are mounted at once in
+      // a box, in popouts and in Files tabs), and releases only that one.
+      invoke("unwatch_dir", { path: absDir }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectDir, relPath, remoteListing, active]);

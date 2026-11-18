@@ -53,9 +53,24 @@ runs project code holds the token:
    the hook tests). A Pusher exists only for a local project agent, which is
    always fenced on Linux and macOS, and the root console's unfenced Host
    session gets no Pusher. A fence that cannot run fails closed too
-   (`fence_unavailable`). Windows has no fence, so a repo with a hook gets
-   `fence_unavailable` with "push from the git bar". A repo without a hook
-   pushes on every platform. The scope used to come from the fence registry
+   (`fence_unavailable`). Windows has no fence: an agent there runs on the
+   host with the user's rights once the user accepted that, and the spawn
+   path stamps `PushBinding::unfenced_host` for exactly that decision
+   (`NotApplicable { reason: "platform" }`, local agent only — never an ssh
+   or docker wrap, whose boundary a host run would cross). Its preflight
+   (`HookBoundary::TrustedHost`, 2442g) runs the hook on the host, through
+   Git for Windows' `sh.exe` (`git_hardened::hook_command`), token removed as
+   everywhere, and only while `exec_trust` holds the user's approval of the
+   repo's hooks — the git bar's own gate. An unapproved or changed hook
+   never runs: the request waits `pending` on a "Review hooks…" card
+   (`Proposal::hooks_trust`, the gate's `TrustRequest`) that opens the shared
+   hook dialog; approving records it (`exec_trust_approve`) and `decide`
+   re-runs the request from its plan (`retry_after_hooks`), which may stage
+   an ordinary push card next. It used to refuse with "push once from the
+   git bar", which left the user hunting for a prompt that agent pushes
+   never raised. This gives the agent nothing it lacks (it can run the hook
+   itself), and keeps the rule that the app runs no project code the user
+   has not approved. A repo without a hook pushes on every platform. The scope used to come from the fence registry
    (`fenced_scope_of_tab`), which a stale `pty_kill` could clear after a
    pane remount — then the hook ran unfenced. Exit ≠ 0 refuses with
    the hook's output; five minutes is the cap. Commits the hook adds are
@@ -66,7 +81,8 @@ runs project code holds the token:
 2. **Transport, host, hooks off.** `push_transport_command`:
    `hardened_git_command_in` (pins `core.hooksPath=`, so
    `reference-transaction` is off too) with the scoped inline credential
-   helper for `token_origins(project)`, `GIT_TERMINAL_PROMPT=0`, `--no-verify`,
+   helpers of the project's `GitAuth` (`git_hosting`: the project's own token
+   for `token_origins(project)`, else each host default for its own host), `GIT_TERMINAL_PROMPT=0`, `--no-verify`,
    the URL positional and the one refspec `<sha>:refs/heads/B` — the SHA the
    plan validated (Apply) or the approved card showed (Propose), never the
    branch by name: `.git` refs stay writable in the fence, so the agent could
@@ -91,7 +107,11 @@ Decided on the host from the hardened git's view and `projects.json`; nothing
 from the in-folder `project.json`. The checked-out branch only (`branch` must
 name it), with a same-named upstream (`branch.B.remote` / `.merge`). Never a
 listed `protected` one. The remote's default branch — `ls-remote --symref
-HEAD`, falling back to `main`/`master` — is pushable but **always staged**,
+HEAD` — and `main`/`master` whatever the remote says, and any branch a workflow of
+the pushed commit names in its `on.push.branches` (a literal name or a literal
+prefix such as `release/**`; a bare `**`, a negation or no filter names nothing;
+read from the commit's committed blobs, `workflow_names_branch`; past 20 files or 64 KiB a file the check cannot read in full makes every branch need a card;
+gap 103) are pushable but **always staged**,
 whatever the level (`Plan::to_default`, `must_stage`; the card says so). Until
 2026-10-26 it was refused outright, which left the lane useless in every
 project that works on `main` alone: the agent fell back to a fenced
@@ -107,7 +127,7 @@ passed positionally so `pushurl` plays no part; because a repo-scope
 `url.*.insteadOf` / `pushInsteadOf` would still rewrite a positional URL, its
 presence refuses (`url_rewritten`). The first push to a URL stages for the
 user's confirmation whatever the level, and pressing Push records it as
-`confirmed_url`; a changed URL asks again. An https URL without a stored token
+`confirmed_url`; a changed URL asks again. An https URL whose host has no stored token
 is `auth_failed` up front.
 
 ## Levels, budget, proposals
@@ -119,12 +139,19 @@ tab's older still-pending ones of the same kind, and every tab's pending
 pushes of the same branch in the same checkout (`supersede_older`; the card
 no longer matches the branch), so a pending push never counts against a new
 push. A push that goes out dismisses the branch's other pending cards
-(`dismiss_pushed_branch`), and a card whose commit the branch's
-remote-tracking ref already holds — pushed from a terminal or the git bar —
-is dismissed when the card list or `git_push_status` is read
-(`settle_pushed_elsewhere`; local refs, no network). The ref is in the
-project folder, so an agent can forge it, but that only dismisses a card,
-never sends anything. A `git_push` creates a proposal record
+(`dismiss_pushed_branch`), and a card whose commit the remote already holds —
+pushed from a terminal or the git bar — is dismissed when the *window* refreshes
+the card list (`git_push_mcp_proposals` starts `settle_in_background`): one
+`ls-remote` of `refs/heads/<branch>` at the card's stored URL (never the
+agent-writable `remote.<name>.url` or the tracking ref, gap 89), 15 s, once per
+card per 30 s, settling only when the remote's tip is the card's commit or a
+descendant; an unconfirmed URL, no token or a failure leaves it pending, and
+`git_push_status` never asks. A card the system closed (`Proposal.dismissed_by` =
+`system`: settled, superseded, withdrawn by the agent) stays on the card list
+with its reason until cleared; the user's own dismissal hides. Every status
+write after admission is a compare-and-set (`update_from`); `decide` claims the
+card (`Running`) under the project lock, and `fail()` never replaces `Pushed`
+(gap 104). A `git_push` creates a proposal record
 and runs plan → preflight → stage-or-push on a worker under a per-project lock;
 the call waits up to 18 s (the listener's sockets live 30 s) and otherwise
 answers `running` with the id. **propose** stages after the preflight, so the
@@ -145,7 +172,7 @@ tab — the schedule lane types *prompts*, and a push outcome must not become on
 The audit ring keeps the session, tool and category; never the note or output.
 
 Output hygiene: last 8 KB, invisible controls stripped
-(`root_mcp_mail::strip_invisible`), the effective token, `ghp_`/`github_pat_`/
+(`root_mcp_mail::strip_invisible`), every token of the call's `GitAuth`, `ghp_`/`github_pat_`/
 `glpat-`-shaped tokens and URL userinfo replaced by `[redacted]`. <!-- privacy-check: ok — names token prefixes, holds none -->
 
 ## Wiring
@@ -290,7 +317,7 @@ the app.
    commit. Press "Confirm URL and push"; check GitHub, and that the agent's
    `git_push_status` reports `pushed`.
 3. In a project that works on `main`, ask it to push `main` at Apply: a card
-   says it is the default branch and waits for Push. List `main` as
+   says it always waits for you and lists the changed files (workflows first). List `main` as
    protected: expect `branch_protected`. Ask for a force-push or a tag: the
    tool cannot express either.
 4. Make `scripts/privacy-check.sh` exit 1: expect `preflight_failed` with its
@@ -299,7 +326,10 @@ the app.
    Revoke the session in MCP session access: further calls fail, the tab
    stays open, its card disappears.
 6. Repeat step 2 in Codex. On Windows (no fence), a repo with a `pre-push`
-   hook answers `fence_unavailable` ("push from the git bar").
+   hook nobody approved answers `fence_unavailable` ("push once from the git
+   bar"); after one git-bar push that approves the hooks, the agent's push
+   runs the hook (its output on the card) and goes out. Edit the hook: the
+   next agent push refuses again.
 7. Fresh settings (no `git_push_mcp` key): a new agent tab has the tools and
    a project with no block reads Propose on the pill menu.
 8. Release button: with everything pushed, press Release; the dialog

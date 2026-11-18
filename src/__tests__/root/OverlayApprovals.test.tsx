@@ -40,4 +40,17 @@ describe("overlay ✓ Approvals", () => {
     expect(screen.getAllByText("Trip").length).toBeGreaterThan(0);
     expect(screen.queryByText("todo_add")).toBeNull();
   });
+  it("with no domain it is the root console's pill: the whole queue, and the advisory when asked", () => {
+    render(<OverlayApprovals advisory />);
+    // Two proposals and one staged file, as the console's own count always was.
+    fireEvent.click(screen.getByRole("button", { name: /Approvals 3/ }));
+    expect(screen.getByText("todo_add")).toBeTruthy();
+    expect(screen.getByText("calendar_add_event")).toBeTruthy();
+    expect(screen.getByRole("note")).toBeTruthy();
+  });
+  it("shows no advisory note unless asked", () => {
+    render(<OverlayApprovals />);
+    fireEvent.click(screen.getByRole("button", { name: /Approvals 3/ }));
+    expect(screen.queryByRole("note")).toBeNull();
+  });
 });

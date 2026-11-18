@@ -23,7 +23,9 @@
 //! What is deliberately NOT recorded: byte-sync's own reconcile
 //! (`services::sync_auto`), which is non-destructive by construction — it pulls only
 //! when the local side is unchanged, pushes only when the host is, and skips a file
-//! that moved on both sides rather than picking a winner.
+//! that moved on both sides rather than picking a winner. The exception is a project
+//! whose "take the newer copy" switch is on (`services::sync_take_newer`): there the
+//! reconcile does pick a winner, and records each loser here with its backup.
 
 use std::path::PathBuf;
 use app_core::sync::LockExt;
@@ -49,6 +51,9 @@ pub enum LossKind {
     /// The file is still there, but content that was only on the local side was
     /// overwritten by the host's.
     Overwritten,
+    /// The host's copy was overwritten by the local one (the "take the newer copy"
+    /// switch, `services::sync_take_newer`, which keeps a backup of it here).
+    OverwrittenOnHost,
 }
 
 /// Which transport did it — the two have very different recovery stories, so the UI

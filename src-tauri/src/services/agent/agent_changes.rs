@@ -155,7 +155,7 @@ pub fn agent_session_changes(
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
         let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_changes(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit);
+        return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
     }
     let kind = match cmd {
         "claude" => Store::Claude,
@@ -194,7 +194,7 @@ pub fn stored_chat_changes(
             return AgentChanges::unavailable("no_transcript");
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_changes(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+        return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
     }
     let kind = match cmd {
         "claude" => Store::Claude,
@@ -227,7 +227,8 @@ pub fn local_opencode_changes(
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
     let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
-    opencode_changes(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit)
+    // A local-model tab runs here even in a remote project (`local_only`).
+    opencode_changes(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit)
 }
 
 /// Every file a tab's conversation changed, by the path its CLI named — the
@@ -397,7 +398,7 @@ fn claude_subagent_files(folder: &Path) -> Vec<std::path::PathBuf> {
 #[allow(clippy::too_many_arguments)]
 fn opencode_changes(
     db: &Path,
-    project_id: Option<&str>,
+    remote: bool,
     tab_dir: Option<&str>,
     since: Option<i64>,
     own: Option<&str>,
@@ -408,7 +409,7 @@ fn opencode_changes(
     let Some(dir) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
         return AgentChanges::unavailable("no_session");
     };
-    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+    if remote {
         return AgentChanges::unavailable("unsupported");
     }
     if !db.is_file() {

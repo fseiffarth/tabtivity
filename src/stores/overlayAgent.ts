@@ -80,6 +80,30 @@ function writePersistedWidth(width: number) {
 
 const EMPTY_DOCK: OverlayAgentDock = { key: null, open: false };
 
+/** Which shown set a tab of `scope` is recorded in, and under what id: root
+ *  and Tabby keep their bare-key sets (unchanged since before the cockpit);
+ *  any other scope is recorded by PTY id. */
+function shownSlot(
+  key: string,
+  scope: string,
+): { field: "shownKeys" | "assistantShownKeys" | "scopeShownKeys"; id: string } {
+  if (scope === ROOT_SCOPE) return { field: "shownKeys", id: key };
+  if (scope === ASSISTANT_SCOPE) return { field: "assistantShownKeys", id: key };
+  return { field: "scopeShownKeys", id: `${scope}:${key}` };
+}
+
+/** Whether an attach-only view other than the root console draws the tab
+ *  `key` of `scope` right now — the overlays' docked column (root), Tabby's
+ *  view, or the cockpit's detail pane (any other scope). */
+export function isShownElsewhere(
+  state: Pick<OverlayAgentState, "shownKeys" | "assistantShownKeys" | "scopeShownKeys">,
+  scope: string,
+  key: string,
+): boolean {
+  const { field, id } = shownSlot(key, scope);
+  return state[field].has(id);
+}
+
 interface OverlayAgentState {
   docks: Record<SteeringApp, OverlayAgentDock>;
   /** Dock root tab `key` in `app`'s column and show it. */
@@ -100,6 +124,12 @@ interface OverlayAgentState {
    *  right now (`AttachedAgentPane`). `CenterPanel`'s copy of the chat keeps
    *  the PTY and stays hidden regardless; this only keeps it from sleeping. */
   assistantShownKeys: ReadonlySet<string>;
+  /** The same for every other scope — a project's or a box's tab an
+   *  attach-only view draws right now (the cockpit's detail pane), as PTY ids
+   *  (`<scope>:<key>`), since a key is unique only within its scope.
+   *  `CenterPanel`'s owning pane stands down for these exactly as root's does
+   *  for `shownKeys`, and keeps a one-line placeholder in its slot. */
+  scopeShownKeys: ReadonlySet<string>;
   /** Tabby chat keys whose CLI may run this session. A restored chat is only a
    *  saved record until it is first shown (or just made): `CenterPanel` mounts
    *  the pane that owns its PTY, and so spawns the CLI, only for keys in this
@@ -112,7 +142,8 @@ interface OverlayAgentState {
    *  `startAssistantChat` restarts one; the overlay offers the same. */
   assistantEndedKeys: ReadonlySet<string>;
   markAssistantEnded: (key: string, ended: boolean) => void;
-  /** `scope` is the scope of `key`'s tab: root (the default) or Tabby. */
+  /** `scope` is the scope of `key`'s tab: root (the default), Tabby, or any
+   *  other scope (stored as `<scope>:<key>` in `scopeShownKeys`). */
   markShown: (key: string, scope?: string) => void;
   unmarkShown: (key: string, scope?: string) => void;
   /** The column's width (px), already clamped. */
@@ -148,6 +179,7 @@ export const useOverlayAgentStore = create<OverlayAgentState>((set) => ({
     }),
   shownKeys: new Set<string>(),
   assistantShownKeys: new Set<string>(),
+  scopeShownKeys: new Set<string>(),
   assistantStartedKeys: new Set<string>(),
   markAssistantStarted: (key) =>
     set((s) => {
@@ -165,18 +197,18 @@ export const useOverlayAgentStore = create<OverlayAgentState>((set) => ({
     }),
   markShown: (key, scope = ROOT_SCOPE) =>
     set((s) => {
-      const field = scope === ASSISTANT_SCOPE ? "assistantShownKeys" : "shownKeys";
-      if (s[field].has(key)) return s;
+      const { field, id } = shownSlot(key, scope);
+      if (s[field].has(id)) return s;
       const keys = new Set(s[field]);
-      keys.add(key);
+      keys.add(id);
       return { [field]: keys };
     }),
   unmarkShown: (key, scope = ROOT_SCOPE) =>
     set((s) => {
-      const field = scope === ASSISTANT_SCOPE ? "assistantShownKeys" : "shownKeys";
-      if (!s[field].has(key)) return s;
+      const { field, id } = shownSlot(key, scope);
+      if (!s[field].has(id)) return s;
       const keys = new Set(s[field]);
-      keys.delete(key);
+      keys.delete(id);
       return { [field]: keys };
     }),
   width: readPersistedWidth(),

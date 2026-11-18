@@ -32,6 +32,8 @@ export type PhoneUpload = {
   /** Unix seconds. */
   at: number;
   phone?: string;
+  /** `"folder"` for a New folder line (size 0); absent for a file. */
+  kind?: string;
 };
 
 /** Ids of upload rows this viewer pressed **Keep** on (a JSON string array). */
@@ -327,7 +329,7 @@ export function InboxIndicator() {
                       <div className="inbox-menu-open inbox-menu-upload" title={where}>
                         <span className="inbox-menu-name">{where}</span>
                         <span className="inbox-menu-size">
-                          {[formatBytes(upload.size), age(upload.at), upload.phone].filter(Boolean).join(" · ")}
+                          {[upload.kind === "folder" ? t("inbox.uploads.folder") : formatBytes(upload.size), age(upload.at), upload.phone].filter(Boolean).join(" · ")}
                         </span>
                       </div>
                       <button

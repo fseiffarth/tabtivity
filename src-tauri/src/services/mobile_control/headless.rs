@@ -297,7 +297,7 @@ pub fn prompts(state_dir: &Path, project_id: &str) -> Result<Vec<ProjectAgentPro
 // ── Transcript ──────────────────────────────────────────────────────────────
 
 /// The agents whose transcript Tabtivity reads at all (`TRANSCRIPT_AGENTS`).
-const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "agy"];
+const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "copilot", "opencode", "gemini", "agy", "muse"];
 
 /// `agentTranscriptFor` off the tab record: the same two "not yet" answers
 /// (`no_session` for a transcript family whose hook has not recorded a
@@ -331,7 +331,7 @@ pub fn transcript(
         );
     }
     let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
-    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy").then_some("")) else {
+    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy" | "muse").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };
@@ -356,7 +356,7 @@ pub fn transcript(
 // transcripts; a create is `workspace::create_tab_in` (the owner mints the
 // id, the tmux name and an agent's schedule binding) followed by a detached
 // spawn through the seam the host hands in — `launch_prep::prepare` plus
-// `tmux_local::spawn_detached_with` in production, a recorder in tests.
+// the session mux's `spawn_detached` in production, a recorder in tests.
 
 /// A built-in agent the phone may start with no window: the registry's
 /// label and binary under the opaque id the desktop mints for it
@@ -772,6 +772,7 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
             } else {
                 Vec::new()
             };
+            extra.insert("autoLabel".into(), json!(agent.public.label));
             extra.insert("kind".into(), json!("agent"));
             extra.insert("args".into(), json!(args));
             extra.insert("env".into(), json!({ crate::app_env!("TAB_UID"): uuid }));
@@ -909,6 +910,8 @@ fn options_for(state_dir: &Path, project_id: &str, tab: &TabEntry, restart: bool
         host_session: false,
         // The ＋ menu's login-or-key pick, as the window would pass it.
         api_key: tab.extra.get(crate::services::terminal_service::API_KEY_KEY).and_then(serde_json::Value::as_bool),
+        mux_wrapped: false,
+        mcp_mark: None,
     })
 }
 
@@ -955,6 +958,8 @@ fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
         host_session: false,
         api_key: None,
         assistant: launch,
+        mux_wrapped: false,
+        mcp_mark: None,
     }
 }
 
@@ -2170,6 +2175,7 @@ mod tests {
         };
         let before = crate::clock::now_ms() as i64;
         let record = tab_record(&CreateTabKind::Agent, Some(&agent), Path::new("/p"), "h");
+        assert_eq!(record.extra.get("autoLabel"), Some(&json!(agent.public.label)));
         let stamped = record.extra.get("launchedAt").and_then(serde_json::Value::as_i64).expect("stamped");
         assert!(stamped >= before && stamped <= crate::clock::now_ms() as i64);
         let shell = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
@@ -2297,11 +2303,14 @@ mod tests {
                 kind: ScopeKind::Assistant,
                 host: super::super::discovery::ProjectHost::Local,
                 remote_only: false,
+                local_models_only: false,
+                cut_network: false,
                 live_sessions: 0,
                 last_activity: None,
                 pending_reviews: None,
                 git: None,
                 agents: None,
+                members: None,
             },
             raw_id: "assistant".into(),
             root: state.path().to_path_buf(),
@@ -2506,11 +2515,14 @@ mod tests {
                 kind: ScopeKind::Project,
                 host,
                 remote_only: false,
+                local_models_only: false,
+                cut_network: false,
                 live_sessions: 0,
                 last_activity: None,
                 pending_reviews: None,
                 git: None,
                 agents: None,
+                members: None,
             },
             raw_id: raw_id.into(),
             root: root.to_path_buf(),
@@ -2582,6 +2594,66 @@ mod tests {
         let session: crate::schema::session::TerminalSession = storage::read_json(&session_file(state.path(), "local1")).unwrap();
         // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
         assert!(!session.tab_layout[0].extra.contains_key("location"));
+    }
+
+    /// With the Windows session host on (a real in-process host, ConPTY
+    /// children) a phone's agent create with no window runs detached in the
+    /// host at the headless size, through the same wrap the window's launch
+    /// takes; the catalog then lists it as live off the host's own listing,
+    /// and the scope says `native`.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_headless_create_runs_in_the_session_host_and_is_listed_native() {
+        use crate::services::session_host::win::test_support::{cmd_exe, test_host, wait_until_async};
+        use crate::services::session_mux::{winhost::WinHostMux, SessionMux};
+        use super::super::discovery::{live_on, terminals_support_of, CatalogCache, TERMINALS_NATIVE};
+        let th = test_host();
+        let mux: Arc<dyn SessionMux> = Arc::new(WinHostMux::with_launch(th.launch.clone()));
+        assert_eq!(terminals_support_of(&*mux), TERMINALS_NATIVE);
+        let state = state_dir();
+        let root = state.path().join("local1");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            state.path().join("projects.json"),
+            json!([{ "id": "local1", "name": "L", "status": "active", "directory": root, crate::brand::MOBILE_ACCESS_KEY: true }]).to_string(),
+        )
+        .unwrap();
+        let project = scope_of(ProjectHost::Local, "local1", &root, CreateVerdict::All);
+        let spawner = mux.clone();
+        let launcher: HeadlessLaunch = Arc::new(move |mut opts: PtyOptions| {
+            let mux = spawner.clone();
+            Box::pin(async move {
+                // A stand-in for the agent CLI, which `launch_prep::prepare`
+                // resolves in production; the wrap and the detached spawn are
+                // the production spawner's.
+                opts.cmd = cmd_exe();
+                opts.args = ["/q", "/k", "echo", "agent-up"].map(String::from).to_vec();
+                tokio::task::spawn_blocking(move || {
+                    mux.wrap(&mut opts);
+                    if !opts.mux_wrapped {
+                        return Err("the wrap did not mark the launch".to_string());
+                    }
+                    mux.spawn_detached(&opts).map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+            })
+        });
+        let created = create_tab(state.path(), b"k", &project, &agent_request("local1"), &[claude_choice()], &[], &launcher)
+            .await
+            .expect("create");
+        let name = created.tmux_session.clone();
+        let m = mux.clone();
+        assert!(wait_until_async(Duration::from_secs(20), || m.screen(&name).is_ok_and(|s| s.contains("agent-up"))).await);
+        assert_eq!(mux.window(&name), Ok((HEADLESS_COLS, HEADLESS_ROWS)));
+
+        let m = mux.clone();
+        let live = tokio::task::spawn_blocking(move || live_on(&*m)).await.unwrap().unwrap();
+        let catalog = CatalogCache::with_live(live).load(state.path(), b"k").unwrap();
+        let tab = catalog.projects.iter().flat_map(|p| &p.tabs).find(|t| t.tmux_name == name).expect("listed");
+        assert!(tab.public.available, "live off the host's listing");
+        let m = mux.clone();
+        tokio::task::spawn_blocking(move || m.kill(&name)).await.unwrap().unwrap();
     }
 
     /// A create the launch seam refuses is taken back out of the session file.
@@ -2695,6 +2767,8 @@ mod tests {
     #[test]
     fn a_transcript_answers_the_same_not_yet_reasons_as_the_window() {
         assert_eq!(transcript("p1", &tab("claude", None), None, None, None).reason.as_deref(), Some("no_session"));
+        // Copilot's session id comes from its hook too: not yet, not never.
+        assert_eq!(transcript("p1", &tab("copilot", None), None, None, None).reason.as_deref(), Some("no_session"));
         assert_eq!(transcript("p1", &tab("bash", None), None, None, None).reason.as_deref(), Some("unsupported"));
         // OpenCode is read by folder, so a tab without a session id (a
         // local-model one) still reaches the reader instead of waiting on one.

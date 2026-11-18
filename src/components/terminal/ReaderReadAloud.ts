@@ -16,7 +16,7 @@ import {
 import { useSettingsStore } from "../../stores/settings";
 import { useTauriListener } from "../../hooks/useTauriListener";
 
-/** A chunk the OS voice says whole; short, so a stop is heard at once. */
+/** A chunk the voice says whole; short, so a stop is heard at once. */
 const SPEAK_CHUNK = 300;
 /** More new answers than this at one turn's end are the agent talking between
  * tool calls, or a session swapped in: only the last is said. */
@@ -34,7 +34,7 @@ export interface SpokenTurn {
 /**
  * Read-aloud for the Chat (docs/desktop_voice_plan.md step 4): when the
  * agent's turn ends (`turnEnd`, from `useAgentTurn`), each new answer is
- * spoken by the OS voice (`voice_speak`) — once, and only a short new tail:
+ * spoken (`voice_speak`: a natural voice, else the OS voice) — once, and only a short new tail:
  * what the first read brought, or "earlier" reveals, is history. Nothing is
  * read while the user dictates, nor while the pane is hidden; an answer that
  * came while it was hidden is read when it is shown again. When a turn begins
@@ -91,7 +91,7 @@ export function useReaderReadAloud({ readId, enabled, visible, listening, turns,
     if (chunks.length === 0 || !offered) return;
     setProblem(null);
     const rate = Math.min(SPEAK_LIMITS.rate.max, Math.max(SPEAK_LIMITS.rate.min, settings?.voice_rate ?? 1));
-    void voiceSpeak(`${readId}#${id}`, chunks, lang(), rate).catch((error: unknown) => setProblem(voiceErrorKey(error)));
+    void voiceSpeak(`${readId}#${id}`, chunks, lang(), rate, false, settings?.voice_natural ?? true).catch((error: unknown) => setProblem(voiceErrorKey(error)));
   };
   const sayRef = useRef(say);
   sayRef.current = say;

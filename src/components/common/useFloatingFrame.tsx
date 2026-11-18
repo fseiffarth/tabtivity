@@ -5,14 +5,15 @@ import {
   rootOverlayFrameDrag,
   type RootOverlayDragMode,
   type RootOverlayFrame,
-} from "../../stores/rootOverlay";
+} from "../../lib/window/floatingFrame";
 import { bindDragRelease } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
 
 /**
- * The root console's move / resize / fill, for the header overlays (mail,
- * calendar, to-do board, models & agents) — the same frame math (`stores/rootOverlay`), the same
- * eight grips, the same "drag the title bar to move, double-click to fill".
+ * The move / resize / fill of the root console and the header overlays (mail,
+ * calendar, to-do board, models & agents) — one frame math
+ * (`lib/window/floatingFrame`), the same eight grips, the same "drag the title
+ * bar to move, double-click to fill".
  *
  * Local state rather than a store: nothing outside the overlay reads its frame.
  * It is remembered per overlay in localStorage — where a window sits on one
@@ -23,8 +24,9 @@ import { useT } from "../../lib/i18n";
 const DRAG_THRESHOLD_PX = 5;
 
 /** Presses on the title bar that keep their own meaning — a tab in an
- *  overlay's strip included. */
-const BAR_NO_DRAG = "button, input, a, .untested-tag, .tab";
+ *  overlay's strip included, and the console's ⚿ badge (not a button, but not a
+ *  handle either). */
+const BAR_NO_DRAG = "button, input, a, .untested-tag, .tab, .root-overlay-rights";
 
 const FRAME_GRIPS: RootOverlayDragMode[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
@@ -205,6 +207,8 @@ export function useFloatingFrame(storageKey: string) {
     frameStyle,
     /** Extra class for the frame element while a gesture is in flight. */
     frameClass: `floating-frame${framing ? " framing" : ""}`,
+    /** A move or resize gesture is in flight — an Escape then is the gesture's. */
+    framing,
     barProps,
     grips,
     fillButton,

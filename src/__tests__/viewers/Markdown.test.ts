@@ -50,8 +50,24 @@ describe("renderMarkdown", () => {
   });
 
   it("renders blockquotes and horizontal rules", () => {
-    expect(renderMarkdown("> quoted")).toContain("<blockquote>quoted</blockquote>");
+    expect(renderMarkdown("> quoted")).toContain("<blockquote><p>quoted</p></blockquote>");
     expect(renderMarkdown("---")).toContain("<hr />");
+  });
+
+  it("renders block content inside a blockquote", () => {
+    const html = renderMarkdown(
+      "> **At a glance**\n>\n> | a | b |\n> |---|---|\n> | 1 | 2 |\n>\n> - x\n> > nested",
+    );
+    expect(html).toMatch(/^<blockquote><p><strong>At a glance<\/strong><\/p>\s*<table/);
+    expect(html).toContain(">2</td>");
+    expect(html).toContain("<ul><li>x");
+    expect(html).toContain("<blockquote><p>nested</p></blockquote>");
+  });
+
+  it("gives a heading inside a blockquote a document-unique id", () => {
+    const html = renderMarkdown("# Intro\n\n> # Intro");
+    expect(html).toContain('id="intro"');
+    expect(html).toContain('id="intro-1"');
   });
 
   it("renders GFM pipe tables with alignment", () => {

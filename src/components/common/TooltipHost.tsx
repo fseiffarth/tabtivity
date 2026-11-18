@@ -1,3 +1,4 @@
+import { isTabKey } from "../../lib/shortcuts/keyNames";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { UntestedTag } from "./UntestedTag";
@@ -158,7 +159,7 @@ export function TooltipHost() {
       hide();
     }
     function key(event: KeyboardEvent) {
-      if (event.key === "Tab") keyboard = true;
+      if (isTabKey(event)) keyboard = true;
       if (event.key === "Escape") hide();
     }
     function scroll(event: Event) {

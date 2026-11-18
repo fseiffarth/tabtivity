@@ -97,3 +97,9 @@ c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/h
 c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:5675
 affbc76427b7fda3c833f2ebc159daa5116a32c9:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:6008
 84fa792336de2f04aea84284635173c2092f5d95:src/lib/i18n/it.ts:generic-api-key:10838
+# src-tauri/src/services/mobile_control/{shell_mask,host}/tests.rs: made-up
+# fixture credentials (a fake AWS key id, a fake bearer header, example.org
+# URLs) the phone's shell masker must hide
+4ba71fcaaf5c412c1bc517fe69e7c19e64489c58:src-tauri/src/services/mobile_control/host/tests.rs:curl-auth-header:911
+4ba71fcaaf5c412c1bc517fe69e7c19e64489c58:src-tauri/src/services/mobile_control/shell_mask/tests.rs:curl-auth-header:34
+4ba71fcaaf5c412c1bc517fe69e7c19e64489c58:src-tauri/src/services/mobile_control/shell_mask/tests.rs:aws-access-token:69

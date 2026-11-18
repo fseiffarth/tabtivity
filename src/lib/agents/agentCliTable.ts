@@ -45,5 +45,5 @@ export const AGENT_CLI_ROWS: readonly AgentCliRow[] = [
   { id: "amp", bin: "amp", label: "Amp", resume: null },
   { id: "kimi", bin: "kimi", label: "Kimi Code", resume: null },
   { id: "qoder", bin: "qoder", label: "Qoder", resume: null },
-  { id: "muse", bin: "muse", label: "Meta Muse Code", resume: null },
+  { id: "muse", bin: "muse", label: "Meta Muse Code", resume: ["resume", "--last"] },
 ];

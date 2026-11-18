@@ -16,7 +16,7 @@ use crate::{
         admin::{self, read_frame, write_frame},
         auth,
         config::{
-            detect_serve_settings_json, serve_status_json, verify_tailscale_serve,
+            detect_serve_settings_json, serve_status_json, tailscale_serve_command, verify_tailscale_serve,
             DetectedServeSettings, HostConfig,
         },
         discovery::opaque_control_id,
@@ -128,9 +128,21 @@ pub(crate) fn clipboard_png() -> Result<Vec<u8>, String> {
     }
 }
 
-/// Everything the phone may attach from this desktop, clipboard first.
+/// Whether "Desktop pictures on the phone" is on. The sidecar refuses both
+/// routes while it is off; the window repeats the check, as it does for
+/// shells, so a request already in flight when it was turned off finds
+/// nothing.
+fn desktop_images_switch_on() -> bool {
+    crate::services::mobile_control::discovery::desktop_images_open(&storage::state_dir())
+}
+
+/// Everything the phone may attach from this desktop, clipboard first; nothing
+/// while the switch is off.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_desktop_images() -> Vec<DesktopImage> {
+    if !desktop_images_switch_on() {
+        return Vec::new();
+    }
     let folders = desktop_image_folders();
     let (clipboard, files) = tokio::join!(clipboard_image_entry(), async {
         app_core::rt::spawn_blocking(move || {
@@ -155,6 +167,9 @@ pub async fn mobile_attach_desktop_image(
     chat_uid: Option<String>,
     image_id: String,
 ) -> Result<MobileInboxAttachment, String> {
+    if !desktop_images_switch_on() {
+        return Err("desktop_images_off".into());
+    }
     if !desktop_images::valid_id(&image_id) {
         return Err("image_not_found".into());
     }
@@ -273,6 +288,9 @@ pub struct PhoneUpload {
     /// The phone's device label, when the sidecar knew it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
+    /// `"folder"` for a **New folder** line (size 0); absent for a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// The folder of a local project by its raw id; `None` for an unknown or
@@ -332,6 +350,7 @@ fn phone_uploads_from(
                 size: record.size,
                 at: record.at,
                 phone: record.phone,
+                kind: record.kind,
             })
         })
         .collect())
@@ -380,7 +399,7 @@ pub async fn mobile_admin(ctx: Ctx, request: AdminRequest) -> Result<AdminRespon
 /// The admin plane of this state dir's sidecar.
 async fn admin_call_here(request: &AdminRequest) -> Result<AdminResponse, String> {
     admin::admin_call(
-        &storage::state_dir().join("mobile-control/admin.sock"),
+        &crate::services::mobile_control::config::admin_socket(&storage::state_dir()),
         request,
     )
     .await
@@ -418,7 +437,7 @@ const HOST_BINARY_NAME: &str = crate::brand::MOBILE_HOST_BIN;
 /// An install copies the running image byte for byte, so a copy of a different
 /// size, or one older than that image, is behind it. Comparing the bytes
 /// themselves is not worth a debug binary's 700 MB on every status poll.
-fn binary_behind(installed: &Path, running: &Path) -> bool {
+pub(crate) fn binary_behind(installed: &Path, running: &Path) -> bool {
     let (Ok(installed), Ok(running)) = (
         std::fs::metadata(installed),
         std::fs::metadata(running),
@@ -518,7 +537,7 @@ fn mobile_binary_source() -> Result<PathBuf, String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn mobile_binary_source() -> Result<PathBuf, String> {
+pub(crate) fn mobile_binary_source() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| e.to_string())
 }
 
@@ -630,6 +649,11 @@ const MOUNT_NAMESPACE_DIRECTIVES: &[&str] = &[
 
 /// Delete every `bin/<version>/` directory except `keep`.
 ///
+/// Only `bin/`: the Windows session host keeps its own versioned copies in
+/// the sibling `session-host/` and prunes them itself
+/// (`services::session_host::launch::prune_copies`), so a phone update never
+/// takes a running host — and the agents in it — away.
+///
 /// The sidecar is versioned per directory so an install can never write over the
 /// executable a running host is executing (see [`install_mobile_binary`]) — but
 /// nothing removed the superseded ones, so every Tabtivity version the user has
@@ -695,7 +719,14 @@ fn install_mobile_binary(source: &Path, target_dir: &Path) -> Result<PathBuf, St
 /// that file backs a running process, so callers stop the live host first.
 #[cfg(windows)]
 fn install_mobile_binary(source: &Path, target_dir: &Path) -> Result<PathBuf, String> {
-    let target = target_dir.join(HOST_BINARY_NAME);
+    install_binary_copy(source, target_dir, HOST_BINARY_NAME)
+}
+
+/// [`install_mobile_binary`] under any leaf name: the session host's copy
+/// (`services::session_host::launch`) is staged the same way.
+#[cfg(windows)]
+pub(crate) fn install_binary_copy(source: &Path, target_dir: &Path, leaf: &str) -> Result<PathBuf, String> {
+    let target = target_dir.join(leaf);
     let mut staged = tempfile::NamedTempFile::new_in(target_dir)
         .map_err(|error| format!("stage mobile host: {error}"))?;
     let mut source_file =
@@ -706,8 +737,25 @@ fn install_mobile_binary(source: &Path, target_dir: &Path) -> Result<PathBuf, St
         .as_file()
         .sync_all()
         .map_err(|error| format!("stage mobile host: {error}"))?;
-    if target.exists() {
-        let _ = std::fs::remove_file(&target);
+    // Leftovers of earlier moves-aside whose process has since exited.
+    if let Ok(entries) = std::fs::read_dir(target_dir) {
+        let prefix = format!("{leaf}.old-");
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    // A process still running from the target (a host the stop could not
+    // reach) makes it undeletable, but Windows lets a running image be
+    // renamed: move it aside so the new copy can take its name.
+    if target.exists() && std::fs::remove_file(&target).is_err() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let aside = target_dir.join(format!("{leaf}.old-{stamp}"));
+        std::fs::rename(&target, &aside)
+            .map_err(|error| format!("install mobile host: {} is in use: {error}", target.display()))?;
     }
     staged
         .persist(&target)
@@ -1231,6 +1279,14 @@ pub async fn mobile_verify_tailscale_serve(origin: String, port: u16) -> Result<
     verify_tailscale_serve(&origin, port)
 }
 
+/// The `tailscale serve` line the setup buttons run in a root terminal, with
+/// the CLI this machine resolves (the Mac app's bundled one off PATH, 2442s).
+/// `async`: the PATH probe stats directories.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mobile_tailscale_serve_command(port: u16) -> String {
+    tailscale_serve_command(port)
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_tailscale_serve_status() -> TailscaleServeStatus {
     match serve_status_json() {
@@ -1609,7 +1665,7 @@ const DESKTOP_BRIDGE_BIND_TRIES: u32 = 5;
 
 #[cfg(unix)]
 pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
-    let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
+    let socket = crate::services::mobile_control::config::desktop_socket(&storage::state_dir());
     app_core::rt::spawn(async move {
         use std::os::unix::fs::PermissionsExt;
         if let Some(parent) = socket.parent() {
@@ -1667,9 +1723,9 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
 #[cfg(windows)]
 pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
     use crate::services::mobile_control::admin::pipe;
-    let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
+    let socket = crate::services::mobile_control::config::desktop_socket(&storage::state_dir());
     app_core::rt::spawn(async move {
-        use tokio::net::windows::named_pipe::ServerOptions;
+        use crate::services::local_pipe;
         let name = pipe::pipe_name(&socket);
         // Either failure leaves every phone request that needs the desktop
         // reading `desktop_unavailable` for the whole session; say why.
@@ -1680,7 +1736,9 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
                 return;
             }
         };
-        let mut server = match ServerOptions::new().first_pipe_instance(true).create(&name) {
+        // The protected owner-only DACL (the default one is broader); a
+        // client of another user or integrity level never gets past accept.
+        let mut server = match local_pipe::create_server(&name, true) {
             Ok(server) => server,
             Err(error) => {
                 eprintln!("mobile host: desktop bridge cannot create its pipe: {error}");
@@ -1688,15 +1746,10 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
             }
         };
         loop {
-            if server.connect().await.is_err() {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                continue;
-            }
-            let Ok(next) = ServerOptions::new().create(&name) else {
+            let Ok(mut stream) = local_pipe::accept(&mut server, &name).await else {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 continue;
             };
-            let mut stream = std::mem::replace(&mut server, next);
             let ctx = ctx.clone();
             let state = state.clone();
             let token = token.clone();
@@ -1750,6 +1803,25 @@ mod prune_tests {
     fn prune_is_a_no_op_when_the_store_does_not_exist_yet() {
         let temp = tempfile::tempdir().expect("temp directory");
         prune_old_versions(&temp.path().join("nope"), "0.1.58");
+    }
+
+    /// The session host's copies sit beside `bin/`, never in it: a phone
+    /// install's prune leaves a running host's executable alone.
+    #[test]
+    fn prune_never_reaches_the_session_hosts_copies() {
+        use crate::services::session_host::copies;
+        let temp = tempfile::tempdir().expect("temp directory");
+        let control = temp.path();
+        let host_copy = copies::copy_path(control, "0.1.52");
+        std::fs::create_dir_all(host_copy.parent().unwrap()).expect("host copy directory");
+        std::fs::write(&host_copy, b"host").expect("host copy");
+        let bin = control.join("bin");
+        for version in ["0.1.52", "0.1.58"] {
+            std::fs::create_dir_all(bin.join(version)).expect("version directory");
+        }
+        prune_old_versions(&bin, "0.1.58");
+        assert!(!bin.join("0.1.52").exists());
+        assert!(host_copy.is_file(), "the session host's copy survives");
     }
 }
 

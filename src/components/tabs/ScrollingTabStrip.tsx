@@ -10,7 +10,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
  * wheel-to-horizontal, chevrons that appear only on overflow). Its own component
  * so each bar gets its own strip ref + scroll state, exactly as each main-window
  * `TabBar` instance does: every group's bar in a (possibly multi-pane) popout
- * (`DetachedCenterPanel`) and the mail window's bar (`MailOverlay`). The bar div
+ * (`DetachedCenterPanel`) and the Mail view's sub-bar strip (`MailView`). The bar div
  * and its drag handling stay with the caller; this only owns the scroll chrome.
  */
 export function ScrollingTabStrip({

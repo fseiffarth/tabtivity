@@ -211,6 +211,25 @@ describe("SyncTeX on the PDF side", () => {
     expect(highlight()).toBeNull();
   });
 
+  it("arms the reverse-search cursor on the scroller while Ctrl is held, on screen only", async () => {
+    const view = await shown();
+    const scroller = document.querySelector(".file-viewer-pdf-scroll")!;
+    // The page is clickable whenever reverse search is wired; the cursor is CSS
+    // under the scroller's mark, so arming renders no page.
+    expect(document.querySelector(".file-viewer-pdf-page.is-syncable")).not.toBeNull();
+    expect(scroller.hasAttribute("data-sync-armed")).toBe(false);
+    fireEvent.keyDown(window, { key: "Control", ctrlKey: true });
+    expect(scroller.hasAttribute("data-sync-armed")).toBe(true);
+    fireEvent.keyUp(window, { key: "Control" });
+    expect(scroller.hasAttribute("data-sync-armed")).toBe(false);
+    // A hidden pane tracks nothing, and drops a mark it was holding.
+    fireEvent.keyDown(window, { key: "Control", ctrlKey: true });
+    view.rerender(viewer("none", false));
+    expect(scroller.hasAttribute("data-sync-armed")).toBe(false);
+    fireEvent.keyDown(window, { key: "Control", ctrlKey: true });
+    expect(scroller.hasAttribute("data-sync-armed")).toBe(false);
+  });
+
   it("draws the highlight on a turned page where the box is once turned", async () => {
     io.rotate = 90;
     await shown();

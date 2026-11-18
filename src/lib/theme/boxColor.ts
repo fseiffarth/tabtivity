@@ -38,3 +38,14 @@ export function autoBoxColor(boxId: string): string {
 export function boxColor(box: Pick<ProjectBox, "id" | "color">): string {
   return isBoxColor(box.color) ? box.color : autoBoxColor(box.id);
 }
+
+/**
+ * The dot colour of a box *member* (a project): hashed from the project's id in
+ * the same hue space as the boxes', so a member wears one colour wherever it is
+ * named in a box (tab chip, "+" fly-out, side-panel header, phone). Members are
+ * always round dots and boxes rounded squares, so the shared space never makes
+ * the two read alike. Not user-pickable: there is nothing to store.
+ */
+export function memberColor(projectId: string): string {
+  return autoBoxColor(projectId);
+}

@@ -1537,6 +1537,8 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     `AGENTS.md`'s Project docs, named in the agent scaffold-fill prompt as
     the map to keep working, and in `STANDARD_PROJECT_FILES` so the tree
     sorts it with the other standard docs. Never overwritten when present.
+    *Superseded 2026-11-13 (`docs/scaffold_files_plan.md`): `PROJECT.md` is no
+    longer scaffolded; it is created on demand from the Project docs group.*
     - [x] 🤖 Automated test (scaffold tests in `commands/projects.rs`)
     - [ ] 🖐️ Manual test — create a new project and check `PROJECT.md`
       exists, links resolve in the viewer, and an existing project picks it
@@ -1589,6 +1591,8 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     `project_migration_apply` runs only the accepted ids and re-checks each
     condition on disk, so a stale accept is a no-op, never an overwrite.
     Frontend: `ProjectMigrationDialog.tsx` + pure `migration.ts` helpers.
+    *2026-11-13: the steps now follow the lean default set (`services::scaffold`);
+    the `.claude/settings.json` step is gone.*
     - [x] 🤖 Automated test (`commands/projects.rs` migration tests,
       `src/__tests__/projects/ProjectMigration.test.ts`)
     - [ ] 🖐️ Manual test — needs a backend restart (two new commands). On an
@@ -3001,3 +3005,72 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2428. **Native TensorBoard viewer: training curves from event files.** 📝
+    Planned (2026-11-05), not built: `docs/tensorboard_viewer_plan.md`.
+    `events.out.tfevents.*` opens in a viewer tab that parses the file in Rust
+    (TFRecord + Event protobuf, hand-written, no new crate) and draws scalars
+    as SVG charts: tag groups, runs legend, EMA smoothing, live refresh while
+    visible. A folder opens as several runs. Local, SSH and container projects
+    through the scoped byte read (+ a ranged SFTP read). Images/text, hparams
+    and histograms are later phases; profiler/graphs stay with the real
+    TensorBoard (`docs/localhost_viewer_plan.md`).
+    - [ ] 🤖 Automated test
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+### Print preview, TeX round trip, markup refactor (2026-11-13/14, unnumbered)
+
+- [x] Print from a page and edit the selected range (`5d11c28e6`, `8cec32b32`; never
+  live): right-click a PDF page → **Print from here** opens the preview with Pages =
+  Custom, range "<page>-"; with a custom range the strip shows only the printed
+  pages and edits fold back into the range (`spliceSelection`, `formatPageRange`);
+  the Print button counts sheets for several pages per sheet and for two-sided
+  jobs (`paperSheets`). Pill `pdfNotes.printFromHere`.
+  - [x] 🤖 Automated test (`src/__tests__/pdf/PrintDoc.test.ts`)
+  - [ ] 🖐️ Manual test — in a 30-page PDF right-click page 24 → Print from here:
+    the preview shows seven cards, Pages = Custom "24-". Type "3-5" instead
+    and delete a card: the range is rewritten ("3-4") so page 6 is not pulled in. Set 2 pages per sheet,
+    then Two-sided (native print path): the button reads "Print (N pages on M
+    sheets)". Odd/Even keep the whole strip with dimmed cards.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [x] TeX viewer and TeX ⇄ PDF round trip simplified and sped up (`fe629c117`,
+  `a70bc3e32`; never live): digest-cached forward search, a Ctrl/⌘ cursor armed by
+  an attribute, one document walk per workspace shared by its panes, reverse search
+  starting at its page; a root-console PDF offers Recompile; forward search finds a
+  PDF in the output folder from an earlier session.
+  - [x] 🤖 Automated test (`TexSharedCompletions.test.tsx`, `TexSync.test.ts`,
+    `synctex/tests.rs`)
+  - [ ] 🖐️ Manual test — in a TeX workspace: Ctrl+click in the source shows the PDF
+    spot, Ctrl+click in the PDF jumps back (also across a popped-out pane); a PDF
+    built with an output folder in an earlier session is found by forward search
+    after reopening; a PDF open in the root console offers Recompile; `\ref` and
+    `\cite` completion still lists the whole document in every pane; the
+    Structure sidebar's resize ends cleanly when the pointer is cancelled.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] Markup refactor step H (`useMarkupHost` for `PdfViewer` / `ImageView`) is
+  open; A–G are committed and never live. `docs/markup_refactor_plan.md` (status),
+  `docs/markup_refactor_handoff.md` ("Flagged for user" has the live click-through).
+  The PdfViewer split's phase 4 (document load and viewport hooks) stays
+  not-now: `docs/pdf_viewer_split_plan.md`.

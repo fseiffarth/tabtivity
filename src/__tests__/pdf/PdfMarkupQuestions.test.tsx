@@ -33,8 +33,13 @@ vi.mock("../../../mobile-web/src/markup/store", async (original) => ({
   saveLayer: vi.fn(async () => true),
 }));
 
-import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
-import { ARRIVAL_GUARD_MS, PdfMarkupQuestions, PdfQuestionPins } from "../../components/embed/pdf/PdfMarkupQuestions";
+import { PdfMarkupBar, PdfMarkupUndoConfirm } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupAgentPanel } from "../../components/embed/pdf/PdfMarkupAgentPanel";
+import { PdfMarkupDock } from "../../components/embed/pdf/PdfMarkupDock";
+/** The harness shows the agent panel open throughout. */
+const PINNED: ReadonlySet<string> = new Set(["ask-1:0"]);
+import { PdfMarkupQuestions, PdfQuestionPins } from "../../components/embed/pdf/PdfMarkupQuestions";
+import { ARRIVAL_GUARD_MS } from "../../lib/viewers/markupQuestionPicks";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import {
   answersOf,
@@ -92,8 +97,7 @@ function Harness({ visible = true }: { visible?: boolean }) {
   });
   return (
     <>
-      <PdfMarkupBar markup={markup} page={1} onReload={() => {}} onDone={() => {}} />
-      <PdfMarkupQuestions questions={markup.questions} pinned={new Set(["ask-1:0"])} />
+      <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={() => {}} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={() => {}} /></>
     </>
   );
 }

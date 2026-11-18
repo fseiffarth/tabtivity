@@ -6,7 +6,9 @@ import type { Settings } from "../types";
  * Which top-bar items stay in the bar and which fold behind the ‹ chevron.
  *
  * Every item a user may place has an id. By default the global apps and menus
- * (✉ 🗓 ☑ 📥 🧠 ? ⚙) and the VPN and Machines menus are pinned; the other
+ * (✉ 🗓 ☑ the cockpit, 📥, Agents, 🧠 ? ⚙) and the VPN and Machines menus are
+ * pinned — the six that open a view of the console window (mail, calendar,
+ * to-do, agents, models, machines) among them; the other
  * machine-state readouts (alerts, connection, battery, Mobile, CPU/RAM/GPU)
  * fold. `Settings.header_pins` holds only the user's overrides — `true` pins an
  * item, `false` folds it — so an id the user never touched follows this table
@@ -21,7 +23,9 @@ export const HEADER_ITEM_IDS = [
   "mail",
   "calendar",
   "todo",
+  "cockpit",
   "inbox",
+  "agents",
   "models",
   "help",
   "settings",
@@ -41,7 +45,9 @@ const PINNED_BY_DEFAULT: ReadonlySet<HeaderItemId> = new Set([
   "mail",
   "calendar",
   "todo",
+  "cockpit",
   "inbox",
+  "agents",
   "models",
   "help",
   "settings",
@@ -98,7 +104,7 @@ export function toggleHeaderPin(
  *  folded). An item's built-in place is the group listed here; a drag across
  *  the boundary moves it to the other one. */
 export const HEADER_GROUPS = {
-  apps: ["mail", "calendar", "todo", "inbox", "models", "help", "settings"],
+  apps: ["mail", "calendar", "todo", "cockpit", "inbox", "agents", "models", "help", "settings"],
   status: ["alerts", "conn", "battery", "mobile", "vpn", "machines", "resources", "devBuild"],
 } as const satisfies Record<string, readonly HeaderItemId[]>;
 
@@ -204,9 +210,23 @@ export function setHeaderPin(
  * Read off the window's real width by a ResizeObserver (`HeaderBar`), because
  * the window is what resizes and a media query answers for the screen's zoom.
  */
-export function headerWidthTier(width: number): 0 | 1 | 2 | 3 {
+export function headerWidthTier(width: number): HeaderWidthTier {
   if (width >= 1280) return 0;
   if (width >= 1100) return 1;
   if (width >= 900) return 2;
   return 3;
+}
+
+/** A {@link headerWidthTier} result. */
+export type HeaderWidthTier = 0 | 1 | 2 | 3;
+
+/**
+ * How many box pills stand on the project strip's leading row at a width tier:
+ * 6 at tiers 0-1 (as before), 3 at tier 2, 1 at tier 3 — the selected box, and
+ * only it, so with no box selected the row holds no pill there and the fold pill
+ * (`▣▾ N`) is the whole of it. The boxes past the budget stay one click away in
+ * the fold pill's list.
+ */
+export function boxPillBudget(tier: HeaderWidthTier): number {
+  return tier >= 3 ? 1 : tier === 2 ? 3 : 6;
 }

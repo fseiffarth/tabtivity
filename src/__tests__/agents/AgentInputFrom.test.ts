@@ -5,6 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...
 
 import { BRAND } from "../../lib/brand";
 import { forgetInputFrom, noteInputFrom } from "../../lib/agents/inputFrom";
+import { noteTabMessagesHumanInput, setTabMessagesWakeActive } from "../../lib/window/tabsMcp";
 
 describe(`input source — the screen ${BRAND.slug}-send routes to`, () => {
   beforeEach(() => {
@@ -45,5 +46,36 @@ describe(`input source — the screen ${BRAND.slug}-send routes to`, () => {
     await Promise.resolve();
     noteInputFrom("p:d1", "phone");
     expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports typing to tab messaging only while a project opts in to the wake", () => {
+    noteInputFrom("p:d1", "desktop");
+    expect(invoke.mock.calls.map((c) => c[0])).toEqual(["pty_input_from"]);
+    setTabMessagesWakeActive(true);
+    try {
+      noteInputFrom("p:d1", "desktop");
+      expect(invoke.mock.calls).toContainEqual(["tabs_mcp_human_input", { id: "p:d1" }]);
+    } finally {
+      setTabMessagesWakeActive(false);
+    }
+    noteInputFrom("p:d1", "phone");
+    expect(invoke.mock.calls.filter((c) => c[0] === "tabs_mcp_human_input")).toHaveLength(1);
+  });
+
+  it("throttles the typing report per tab", () => {
+    setTabMessagesWakeActive(true);
+    try {
+      noteTabMessagesHumanInput("p:e1", 10_000);
+      noteTabMessagesHumanInput("p:e1", 11_000);
+      noteTabMessagesHumanInput("p:e2", 11_000);
+      noteTabMessagesHumanInput("p:e1", 12_500);
+      expect(invoke.mock.calls).toEqual([
+        ["tabs_mcp_human_input", { id: "p:e1" }],
+        ["tabs_mcp_human_input", { id: "p:e2" }],
+        ["tabs_mcp_human_input", { id: "p:e1" }],
+      ]);
+    } finally {
+      setTabMessagesWakeActive(false);
+    }
   });
 });

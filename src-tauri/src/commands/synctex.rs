@@ -11,14 +11,13 @@ use std::path::{Path, PathBuf};
 
 pub use crate::services::synctex::{MapStatus, PageLines, SyncRect, SyncSource};
 use crate::services::fs_confine::{allowed_roots, confine_abs_within};
-use crate::services::synctex::{page_lines, resolve, status, view, MAX_MAP_BYTES};
+use crate::services::synctex::{map_candidates, page_lines, resolve, status, view, MAX_MAP_BYTES};
 
 /// Refuse `pdf` unless it, and each `.synctex(.gz)` beside it that exists, lies
 /// inside `roots`.
 fn confine_pdf(pdf: &Path, roots: &[PathBuf]) -> Result<(), String> {
     confine_abs_within(pdf, roots)?;
-    for ext in ["synctex.gz", "synctex"] {
-        let map = pdf.with_extension(ext);
+    for map in map_candidates(pdf).into_iter().flatten() {
         if std::fs::symlink_metadata(&map).is_ok() {
             confine_abs_within(&map, roots)?;
         }
@@ -26,11 +25,20 @@ fn confine_pdf(pdf: &Path, roots: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
-/// [`confine_pdf`] against the roots of `project_id`'s scope.
-fn confined(pdf: &str, project_id: Option<&str>) -> Result<PathBuf, String> {
-    let path = PathBuf::from(pdf);
-    confine_pdf(&path, &allowed_roots(project_id))?;
-    Ok(path)
+/// `read` on `pdf`, off the main thread (a sync command runs on it, and a large
+/// document's map is megabytes to inflate), once [`confine_pdf`] passed against
+/// the roots of `project_id`'s scope.
+async fn on_confined_pdf<T: Send + 'static>(
+    pdf: String,
+    project_id: Option<String>,
+    read: impl FnOnce(&Path) -> T + Send + 'static,
+) -> Result<T, String> {
+    app_core::rt::try_blocking("synctex", move || {
+        let pdf = PathBuf::from(pdf);
+        confine_pdf(&pdf, &allowed_roots(project_id.as_deref()))?;
+        Ok(read(&pdf))
+    })
+    .await
 }
 
 /// Read the SyncTeX map beside `pdf` and report the source lines behind each page.
@@ -41,20 +49,12 @@ fn confined(pdf: &str, project_id: Option<&str>) -> Result<PathBuf, String> {
 /// content fingerprinting. A path outside the project is refused.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_page_lines(pdf: String, project_id: Option<String>) -> Result<Vec<PageLines>, String> {
-    app_core::rt::blocking("synctex", move || {
-        let pdf = confined(&pdf, project_id.as_deref())?;
-        Ok(page_lines(&pdf, MAX_MAP_BYTES))
-    })
-    .await?
+    on_confined_pdf(pdf, project_id, |pdf| page_lines(pdf, MAX_MAP_BYTES)).await
 }
 
 /// Reverse search: which source line produced the point `(x, y)` (big points
 /// from the page top-left) on `page` of `pdf`. `Ok(None)` when there is no map
-/// or it has no answer, so the UI can degrade silently. The column is always 0
-/// (see {@link SyncSource}).
-///
-/// Async so the read + gunzip runs off the main thread: a sync `#[tauri::command]`
-/// is called on it, and a large document's map is megabytes.
+/// or it has no answer, so the UI can degrade silently.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_edit(
     pdf: String,
@@ -63,37 +63,25 @@ pub async fn synctex_edit(
     y: f64,
     project_id: Option<String>,
 ) -> Result<Option<SyncSource>, String> {
-    app_core::rt::blocking("synctex", move || {
-        let pdf = confined(&pdf, project_id.as_deref())?;
-        Ok(resolve(&pdf, page, x, y).map(|(input, line)| SyncSource {
-            input,
-            line,
-            column: 0,
-        }))
+    on_confined_pdf(pdf, project_id, move |pdf| {
+        resolve(pdf, page, x, y).map(|(input, line)| SyncSource { input, line })
     })
-    .await?
+    .await
 }
 
 /// Why a SyncTeX jump did nothing, or landed on the wrong line: whether a map
 /// exists beside `pdf`, whether the PDF outgrew it, and which local sources were
 /// saved after it ({@link MapStatus}). The viewer asks after a miss — and after
 /// a hit, to warn that the line it just jumped to belongs to the build before
-/// the edit — and words a "recompile" notice from the answer. Off the main
-/// thread for the same reason as `synctex_edit`: the first call after a compile
-/// inflates the map.
+/// the edit — and words a "recompile" notice from the answer.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_status(pdf: String, project_id: Option<String>) -> Result<MapStatus, String> {
-    app_core::rt::blocking("synctex", move || {
-        let pdf = confined(&pdf, project_id.as_deref())?;
-        Ok(status(&pdf))
-    })
-    .await?
+    on_confined_pdf(pdf, project_id, status).await
 }
 
 /// Forward search: where in `pdf` the source line `input:line` landed, as every
 /// box it produced ({@link view}); the frontend picks the one for the caret's
-/// column. Empty when there is no map or no answer. Off the main thread like
-/// `synctex_edit`.
+/// column. Empty when there is no map or no answer.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn synctex_view(
     pdf: String,
@@ -101,11 +89,7 @@ pub async fn synctex_view(
     line: u32,
     project_id: Option<String>,
 ) -> Result<Vec<SyncRect>, String> {
-    app_core::rt::blocking("synctex", move || {
-        let pdf = confined(&pdf, project_id.as_deref())?;
-        Ok(view(&pdf, &input, line))
-    })
-    .await?
+    on_confined_pdf(pdf, project_id, move |pdf| view(pdf, &input, line)).await
 }
 
 #[cfg(test)]

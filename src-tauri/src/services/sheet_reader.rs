@@ -28,7 +28,7 @@
 use std::ffi::OsString;
 use app_core::sync::LockExt;
 use std::io::{BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -124,25 +124,38 @@ static CLOSING: AtomicBool = AtomicBool::new(false);
 /// it off the main thread. The path must already be confined.
 pub fn read_in_child(path: &Path, sheet: Option<&str>) -> Result<SheetData, String> {
     format_of(path)?;
-    let mut cmd = Command::new(running_binary()?);
+    let (mut cmd, stdin) = running_binary()?;
     cmd.arg(MODE_FLAG).arg(path);
     if let Some(sheet) = sheet {
         cmd.arg(sheet);
     }
-    run_reader(cmd, WALL_TIME)
+    run_reader(cmd, stdin, WALL_TIME)
 }
 
-/// The running binary, as a path a child can exec now. On Linux the magic link,
-/// which still names the running image after a rebuild or an update replaced
-/// the file (`current_exe` then ends in ` (deleted)`).
-fn running_binary() -> Result<PathBuf, String> {
+/// A command that execs the running binary now, and what to give it as stdin.
+///
+/// Linux: the image is opened here through the magic link, which still names
+/// the running image after a rebuild or an update replaced the file
+/// (`current_exe` then ends in ` (deleted)`), and handed over as the child's
+/// stdin; the command execs `/proc/self/fd/0`, which resolves in the child's
+/// own table. That is not `/proc/self/exe`: the death signal is armed by
+/// `setpriv` ([`crate::paths::die_with_parent`]), and the link would name
+/// `setpriv` once the wrapper runs. Nor `/proc/<pid>/exe`: the daemon is
+/// not dumpable, so another process may not follow its link. The reader never
+/// reads stdin. No `pre_exec` anywhere: it would `fork` the whole app for
+/// every sheet opened (`paths::command_on_path` has the numbers).
+fn running_binary() -> Result<(Command, Stdio), String> {
     #[cfg(target_os = "linux")]
     {
-        Ok(PathBuf::from("/proc/self/exe"))
+        let image = std::fs::File::open("/proc/self/exe")
+            .map_err(|e| format!("spreadsheet reader: cannot open the binary: {e}"))?;
+        Ok((Command::new("/proc/self/fd/0"), Stdio::from(image)))
     }
     #[cfg(not(target_os = "linux"))]
     {
-        std::env::current_exe().map_err(|e| format!("spreadsheet reader: cannot find the binary: {e}"))
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("spreadsheet reader: cannot find the binary: {e}"))?;
+        Ok((Command::new(exe), Stdio::null()))
     }
 }
 
@@ -153,14 +166,22 @@ enum Waited {
 
 /// Run a prepared reader command: `cmd` must print a [`Reply`] as its last
 /// stdout line. Split from [`read_in_child`] so a test can hand in a stand-in.
-fn run_reader(mut cmd: Command, wall: Duration) -> Result<SheetData, String> {
+///
+/// Linux: the reader gets `SIGKILL` when the app dies. A clean quit already
+/// kills it ([`kill_all_for_exit`]); an app that is killed instead would leave
+/// it running to its CPU limit. The signal is armed by
+/// [`crate::paths::die_with_parent`], which sends it when the *thread* that
+/// spawned the child ends, not the process; this function waits for the child
+/// on the spawning thread, so that thread outlives it.
+fn run_reader(mut cmd: Command, stdin: Stdio, wall: Duration) -> Result<SheetData, String> {
     if CLOSING.load(Ordering::SeqCst) {
         return Err(ERR_CRASHED.to_string());
     }
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     crate::paths::hide_command_window(&mut cmd);
+    // Wrapped first: the wrapper command carries no stdio of its own.
     #[cfg(target_os = "linux")]
-    die_with_parent(&mut cmd);
+    let mut cmd = crate::paths::die_with_parent(cmd);
+    cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::null());
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("spreadsheet reader: cannot start: {e}"))?;
@@ -196,34 +217,6 @@ fn run_reader(mut cmd: Command, wall: Duration) -> Result<SheetData, String> {
         Ok(Drained::Overflow) => Err(ERR_TOO_LARGE.to_string()),
         Ok(Drained::Bytes(bytes)) if status.success() => parse_reply(&bytes),
         _ => Err(ERR_CRASHED.to_string()),
-    }
-}
-
-/// Linux: the reader gets `SIGKILL` when the app dies. A clean quit already
-/// kills it ([`kill_all_for_exit`]); an app that is killed instead would leave
-/// it running to its CPU limit. The death signal is armed in the child between
-/// fork and exec, and the parent is checked right after, so an app that died
-/// in between is caught too (the child was reparented by then).
-///
-/// The kernel sends the signal when the *thread* that spawned the child ends,
-/// not the process: [`run_reader`] waits for the child on the spawning thread,
-/// so that thread outlives it.
-#[cfg(target_os = "linux")]
-fn die_with_parent(cmd: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    let parent = std::process::id() as libc::pid_t;
-    // SAFETY: the closure runs between fork and exec and makes only
-    // async-signal-safe syscalls; it allocates nothing.
-    unsafe {
-        cmd.pre_exec(move || {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() != parent {
-                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
-            }
-            Ok(())
-        });
     }
 }
 
@@ -612,8 +605,9 @@ mod tests {
         let mut child = std::thread::spawn(|| {
             let mut cmd = Command::new("sleep");
             cmd.arg("30");
-            die_with_parent(&mut cmd);
-            cmd.spawn().unwrap()
+            let child = crate::paths::die_with_parent(cmd).spawn().unwrap();
+            crate::paths::tests::wait_until_armed(&child, "sleep");
+            child
         })
         .join()
         .unwrap();
@@ -786,12 +780,27 @@ mod tests {
         assert_eq!(cell_to_string(Data::Bool(false)), "FALSE");
     }
 
+    /// The real launch path: the running image through `running_binary`
+    /// (stdin-held image, `setpriv` death signal), not a stand-in program.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_running_image_answers_through_the_death_signal_wrapper() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        write_xlsx(&path, None, &row(1, &[num("A1", 7)]));
+        let (mut cmd, stdin) = running_binary().unwrap();
+        cmd.args(["--exact", "services::sheet_reader::tests::child_entry", "--test-threads=1", "--nocapture"]);
+        cmd.env(TEST_CHILD_ENV, &path);
+        let data = run_reader(cmd, stdin, Duration::from_secs(60)).unwrap();
+        assert_eq!(data.rows, vec![vec!["7"]]);
+    }
+
     #[test]
     fn the_child_answers_a_good_workbook() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("book.xlsx");
         write_xlsx(&path, None, &row(1, &[num("A1", 5)]));
-        let data = run_reader(test_child(&path), Duration::from_secs(60)).unwrap();
+        let data = run_reader(test_child(&path), Stdio::null(), Duration::from_secs(60)).unwrap();
         assert_eq!(data.rows, vec![vec!["5"]]);
     }
 
@@ -851,7 +860,7 @@ mod tests {
         let path = dir.path().join("bomb.xls");
         write_dimensions_bomb(&path);
         // This test process is still here to compare the result.
-        let got = run_reader(test_child(&path), Duration::from_secs(60));
+        let got = run_reader(test_child(&path), Stdio::null(), Duration::from_secs(60));
         // Linux caps the child's address space, so the reservation aborts it.
         #[cfg(target_os = "linux")]
         assert_eq!(got.unwrap_err(), ERR_CRASHED);
@@ -874,17 +883,17 @@ mod tests {
             cmd
         };
         let long = Duration::from_secs(30);
-        assert_eq!(run_reader(sh("kill -ABRT $$"), long).unwrap_err(), ERR_CRASHED);
-        assert_eq!(run_reader(sh("exit 101"), long).unwrap_err(), ERR_CRASHED);
-        assert_eq!(run_reader(sh("echo not json"), long).unwrap_err(), ERR_CRASHED);
-        assert_eq!(run_reader(sh("true"), long).unwrap_err(), ERR_CRASHED);
+        assert_eq!(run_reader(sh("kill -ABRT $$"), Stdio::null(), long).unwrap_err(), ERR_CRASHED);
+        assert_eq!(run_reader(sh("exit 101"), Stdio::null(), long).unwrap_err(), ERR_CRASHED);
+        assert_eq!(run_reader(sh("echo not json"), Stdio::null(), long).unwrap_err(), ERR_CRASHED);
+        assert_eq!(run_reader(sh("true"), Stdio::null(), long).unwrap_err(), ERR_CRASHED);
         // A reply that is a refusal comes through as that refusal.
         let refusal = format!(r#"echo; echo '{{"err":"{ERR_TOO_LARGE}"}}'"#);
-        assert_eq!(run_reader(sh(&refusal), long).unwrap_err(), ERR_TOO_LARGE);
+        assert_eq!(run_reader(sh(&refusal), Stdio::null(), long).unwrap_err(), ERR_TOO_LARGE);
 
         let started = Instant::now();
         assert_eq!(
-            run_reader(sh("exec sleep 30"), Duration::from_millis(300)).unwrap_err(),
+            run_reader(sh("exec sleep 30"), Stdio::null(), Duration::from_millis(300)).unwrap_err(),
             ERR_TIMEOUT
         );
         assert!(started.elapsed() < Duration::from_secs(10), "the hung child was killed");
@@ -892,7 +901,7 @@ mod tests {
         // More output than the cap reads as too large (and the child, its pipe
         // gone, stops).
         assert_eq!(
-            run_reader(sh("head -c 300000000 /dev/zero"), long).unwrap_err(),
+            run_reader(sh("head -c 300000000 /dev/zero"), Stdio::null(), long).unwrap_err(),
             ERR_TOO_LARGE
         );
     }
@@ -905,7 +914,7 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
             .arg(format!("echo $$ > '{}'; exec sleep 60", pid_file.display()));
-        let reader = std::thread::spawn(move || run_reader(cmd, Duration::from_secs(120)));
+        let reader = std::thread::spawn(move || run_reader(cmd, Stdio::null(), Duration::from_secs(120)));
         let started = Instant::now();
         let pid: u32 = loop {
             if let Some(pid) = std::fs::read_to_string(&pid_file)

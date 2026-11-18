@@ -189,7 +189,7 @@ fn a_killed_session_takes_its_grants_and_a_renamed_one_keeps_them() {
 fn no_session_name_no_tmux_binding() {
     assert_eq!(tmux_binding(None), None);
     let bound = tmux_binding(Some("c2-sess"));
-    assert_eq!(bound.is_some(), crate::services::tmux_local::tmux_available());
+    assert_eq!(bound.is_some(), crate::services::session_mux::mux().available());
 }
 
 #[test]

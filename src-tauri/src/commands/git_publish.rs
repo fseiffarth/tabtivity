@@ -422,10 +422,10 @@ fn publish_project_blocking(
         return Err("Project name does not yield a valid repository name".to_string());
     }
 
-    // Effective per-project → global token. When set, run the CLI as that token's
-    // account via the provider's token env var instead of relying on the ambient
-    // `… auth login`.
-    let (_profile, token) = crate::commands::git_hosting::effective_git_creds(&project_id);
+    // The project's own token, else the provider's host default. When set, run
+    // the CLI as that token's account via the provider's token env var instead
+    // of relying on the ambient `… auth login`.
+    let token = crate::commands::git_hosting::cli_token(Some(&project_id), provider.as_str());
 
     let stdout = match publish_site(&project, &project_id, publish_from.as_deref())? {
         // Local project's tree, or a remote project's lockstep mirror: run the CLI
@@ -630,7 +630,7 @@ fn set_project_visibility_blocking(
     // side that has one.
     let stdout = match origin_site(&project, &project_id)? {
         PublishSite::Local(dir) => {
-            let (_profile, token) = crate::commands::git_hosting::effective_git_creds(&project_id);
+            let token = crate::commands::git_hosting::cli_token(Some(&project_id), provider.as_str());
             local_set_visibility(provider, &dir, visibility, token.as_deref())?
         }
         PublishSite::Host => {
@@ -846,21 +846,15 @@ fn local_publish(
             }
             let mut out = run_provider_command(&mut create, provider, crate::services::git_bounded::LONG_TIMEOUT)?;
 
-            let mut args: Vec<String> = Vec::new();
-            if token.is_some() {
-                let origins = crate::commands::git_hosting::token_origins(
-                    Some(project_id),
-                    Some(provider.as_str()),
-                );
-                args.extend(crate::commands::git::scoped_token_config(
-                    &origins,
-                    provider.cred_username(),
-                ));
-            }
+            let auth = crate::commands::git_hosting::project_auth_for(
+                Some(project_id),
+                Some(provider.as_str()),
+            );
+            let mut args = auth.git_args(provider.cred_username());
             args.extend(["push", "-u", "origin", "HEAD"].map(String::from));
             let mut push = crate::commands::git::hooked_git_command_in(dir, &args);
-            if let Some(tok) = token {
-                push.env(crate::app_env!("GIT_TOKEN"), tok);
+            if !auth.is_empty() {
+                auth.apply_env(&mut push);
                 push.env("GIT_TERMINAL_PROMPT", "0");
             }
             out.push('\n');
@@ -955,7 +949,7 @@ fn command_result(output: std::process::Output) -> Result<String, String> {
 /// failures — not installed, not signed in — into an actionable message
 /// instead of the CLI's own terse (or, for a local "not installed", raw OS)
 /// wording. The dialog pre-empts both cases for anything running on this machine
-/// (`provider_cli_available`, `effective_git_creds`) — which since the local
+/// (`provider_cli_available`, `cli_token`) — which since the local
 /// default includes a remote project's mirror publish. Only the explicit
 /// **work-remote host** choice is never probed ahead of time, so this is the one
 /// place that failure surfaces for it: the CLI runs inside a shell script over

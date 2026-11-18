@@ -1,15 +1,20 @@
+import { PdfFileCover } from "./PdfFileCover";
 import { useState } from "react";
 import { ArrowUpRightIcon, TrashIcon } from "../../../src/components/common/icons/Icon";
 
 import { useT } from "../../../src/lib/i18n";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
-import { shareAs, useOutboxShare } from "../outboxShare";
+import { openableFile } from "./InboxPreview";
+import { CAPTION_CHARS, FileName, FileNameCover } from "./FileName";
+import { openingOutsideStrands } from "../platform";
+import { shareAs, shareSize, useOutboxShare } from "../outboxShare";
+import { ShareSizeSheet } from "./ShareSizeSheet";
 import { ageLabel } from "../terminal/fileLabels";
 import { formatBytes } from "../../../src/lib/formatBytes";
 
 /**
  * The files themselves: a thumbnail for every picture, a card for everything
- * else, newest first — the arrangement the gallery sheet (`OutboxGallery`)
+ * else (a PDF's first page, or the name itself as the cover), newest first — the arrangement the gallery sheet (`OutboxGallery`)
  * shows them in, opened from the Focus screen or the project screen, each
  * reading the same project outbox through its own scope.
  *
@@ -39,6 +44,7 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
   onDelete?: (file: OutboxFile) => Promise<void>;
 }) {
   const t = useT();
+  const strands = openingOutsideStrands();
   /** The one tile whose 🗑 was pressed — the confirm is per tile, and asking
    * about a second file drops the first question rather than stacking. */
   const [asking, setAsking] = useState<string | null>(null);
@@ -64,14 +70,18 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
   return <div className="outbox-gallery-grid">
     {files.map((file) => {
       const isImage = file.kind.startsWith("image/");
-      const download = !isImage && !file.kind.startsWith("text/") && file.kind !== "application/pdf";
+      const download = !openableFile(file);
       const label = t("mobile.outbox.open", { name: sentName(file) });
       const meta = `${ageLabel(Math.max(0, now - file.modified))} · ${formatBytes(file.size)}`;
+      // A picture or a PDF's first page is the cover, its name under it on up
+      // to two lines; anything else has no picture, so its name is the cover.
+      const preview = isImage
+        ? <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" />
+        : file.kind === "application/pdf" ? <PdfFileCover scope={scope} file={file} /> : null;
       const content = <>
-        {isImage
-          ? <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" />
-          : <span aria-hidden="true">{file.kind === "application/pdf" ? "PDF" : file.kind.startsWith("text/") ? "≡" : "↓"}</span>}
-        <strong>{sentName(file)}</strong>
+        {preview
+          ? <>{preview}<FileName name={sentName(file)} max={CAPTION_CHARS} /></>
+          : <FileNameCover name={sentName(file)} />}
         <span>{meta}</span>
       </>;
       return <div key={file.name} className="outbox-entry">
@@ -84,13 +94,16 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
               thumbnail has no ⋯: the only way to keep a picture the agent sent
               was to open it full screen first and find Save there. The link is
               the same `?download=1` byte stream the sheet's Save uses. */}
-          <a className="outbox-save" href={outboxFileUrl(scope, file, true)} download={sentName(file)} aria-label={t("mobile.outbox.saveFile", { name: sentName(file) })}><span aria-hidden="true">⤓</span>{t("mobile.outbox.save")}</a>
-          {shareAs(file) && <button
+          {/* Not in the installed app on an iPhone or iPad: a download there
+              covers the app with the bytes and no way back. Share's sheet,
+              named Save or share… there, holds Save to Files instead. */}
+          {!strands && <a className="outbox-save" href={outboxFileUrl(scope, file, true)} download={sentName(file)} aria-label={t("mobile.outbox.saveFile", { name: sentName(file) })}><span aria-hidden="true">⤓</span>{t("mobile.outbox.save")}</a>}
+          {shareAs(file) && shareSize(scope, file.size) && <button
             className="outbox-save"
             disabled={sharing.busy === file.name}
             onClick={() => void sharing.share(file)}
-            aria-label={t(sharing.ready === file.name ? "mobile.outbox.shareReadyFile" : "mobile.outbox.shareFile", { name: sentName(file) })}
-          ><span aria-hidden="true"><ArrowUpRightIcon /></span>{t(sharing.ready === file.name ? "mobile.outbox.shareReady" : "mobile.outbox.share")}</button>}
+            aria-label={t(sharing.ready === file.name ? "mobile.outbox.shareReadyFile" : strands ? "mobile.outbox.saveOrShareFile" : "mobile.outbox.shareFile", { name: sentName(file) })}
+          ><span aria-hidden="true"><ArrowUpRightIcon /></span>{t(sharing.ready === file.name ? "mobile.outbox.shareReady" : strands ? "mobile.outbox.saveOrShare" : "mobile.outbox.share")}</button>}
           {!isImage && <button className="outbox-details" onClick={() => onDetails(file)} aria-label={t("mobile.outbox.actions", { name: sentName(file) })}>⋯</button>}
           {onDelete && (asking === file.name
             ? <span className="outbox-confirm" role="group" aria-label={t("mobile.outbox.deleteAsk", { name: sentName(file) })}>
@@ -103,5 +116,6 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
         {sharing.failed === file.name && <span className="outbox-entry-error" role="alert">{t("mobile.outbox.shareError")}</span>}
       </div>;
     })}
+    <ShareSizeSheet files={sharing.asking} onShare={sharing.confirm} onClose={sharing.cancel} />
   </div>;
 }

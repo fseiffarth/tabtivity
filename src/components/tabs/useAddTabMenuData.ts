@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { CustomAgent } from "../../types";
+import type { CustomAgent, ProjectBox, ProjectEntry } from "../../types";
 import { useSettingsStore } from "../../stores/settings";
-import { boxMembersOfScope, useBoxesStore } from "../../stores/boxes";
+import { useBoxesStore } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
 import {
   DEFAULT_COMPACT_AGENT_IDS,
@@ -14,6 +14,7 @@ import {
 import { listLocalDrivers, type LocalDriverInfo } from "../../lib/agents/localDrivers";
 import { AGENT_REGISTRY_CHANGED_EVENT, noteInstalledAgents } from "../../lib/agents/agentRegistry";
 import { ROOT_SCOPE } from "../../stores/tabs";
+import { memberTableOf, type MemberTable } from "./TabMemberChip";
 
 /** The data behind an add-tab ("+") menu — see {@link useAddTabMenuData}. */
 export interface AddTabMenuData {
@@ -64,17 +65,23 @@ export interface AddTabMenuData {
    *  built-in registry). `null` until resolved — custom agents render enabled
    *  until a probe proves one missing. */
   installedCustom: Set<string> | null;
-  /** Box scope (#41 Phase 5): the active box's members with resolved roots for
-   *  the per-member rows. Empty outside a box scope — and in a popout, whose
-   *  projects/boxes stores may be empty (that window is inert to them), the
-   *  list is simply empty and no group renders. */
-  boxMembers: { id: string; name: string; dir: string }[];
+  /** Box scope: the active box with its members' resolved roots and its folder,
+   *  what the "Start in…" fly-outs list. `null` outside a box scope. A popout,
+   *  whose projects/boxes stores are inert, passes its seed (`seed`). */
+  memberTable: MemberTable | null;
+}
+
+/** A popout's one-time copy of its box and the member projects (`remoteInfo.box`
+ *  and `boxMembers`), used in place of the stores it is inert to. */
+export interface AddTabMenuSeed {
+  box: ProjectBox;
+  members: ProjectEntry[];
 }
 
 /**
  * The data plumbing behind an add-tab ("+") menu: agent-registry probe +
  * change listener, enabled/compact/custom agents, `probe_binaries` for custom
- * commands, local-model drivers, and box-member rows.
+ * commands, local-model drivers, and the box's member table.
  *
  * ONE implementation for the two "+" menus — the main window's `TabBar` and the
  * detached popout's `NewTabMenu` are separate React roots (an entry or a probe
@@ -87,7 +94,7 @@ export interface AddTabMenuData {
  */
 export function useAddTabMenuData(
   scope: string,
-  { active = true }: { active?: boolean } = {},
+  { active = true, seed }: { active?: boolean; seed?: AddTabMenuSeed } = {},
 ): AddTabMenuData {
   const isRoot = scope === ROOT_SCOPE;
   const tabsModel = useSettingsStore(
@@ -183,9 +190,12 @@ export function useAddTabMenuData(
 
   const boxes = useBoxesStore((st) => st.boxes);
   const projects = useProjectsStore((st) => st.projects);
-  const boxMembers = useMemo(
-    () => boxMembersOfScope(scope, boxes, projects),
-    [scope, boxes, projects],
+  const memberTable = useMemo(
+    () =>
+      seed
+        ? memberTableOf(scope, [seed.box], seed.members)
+        : memberTableOf(scope, boxes, projects),
+    [scope, boxes, projects, seed],
   );
 
   return {
@@ -200,6 +210,6 @@ export function useAddTabMenuData(
     customAgents,
     agentOrder,
     installedCustom,
-    boxMembers,
+    memberTable,
   };
 }

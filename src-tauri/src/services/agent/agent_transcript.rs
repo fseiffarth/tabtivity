@@ -82,6 +82,28 @@ const MAX_SHELL_CHARS: usize = 8_000;
 const MAX_SHELL_DESCRIPTION_CHARS: usize = 200;
 /// Longest question, option label or note of a question the agent asked.
 const MAX_QUESTION_CHARS: usize = 2_000;
+/// Most lines and characters of one option's preview (the sample a question
+/// shows beside a row, often a bit of code or a layout sketch): kept with its
+/// line breaks, so it is cut here and not by [`bounded_line`].
+const MAX_PREVIEW_LINES: usize = 40;
+const MAX_PREVIEW_CHARS: usize = 2_000;
+/// Longest name of a tool call the agent waits on; a longer one is no tool's.
+const MAX_TOOL_NAME_CHARS: usize = 120;
+/// Longest subject (file path, URL) of such a call, cut at one line.
+pub(crate) const MAX_TOOL_SUBJECT_CHARS: usize = 500;
+/// The most waiting calls one read lists, the newest.
+pub(crate) const MAX_WAITING_TOOLS: usize = 16;
+/// How many unanswered tool calls / asks the walk keeps at once (a bound on
+/// the per-record rescans, not on what is shown).
+const MAX_WALK_TOOLS: usize = 64;
+const MAX_WALK_ASKS: usize = 8;
+/// What one ask may hold: Claude's own tool takes 1-4 questions of 2-4 rows,
+/// so these are far past use; the file is the agent's, and an ask is sent
+/// again on every poll.
+const MAX_ASK_QUESTIONS: usize = 8;
+const MAX_ASK_OPTIONS: usize = 12;
+/// All the text one ask may hold, in characters.
+const MAX_ASK_CHARS: usize = 64_000;
 /// How deep a subagent's own subagents are followed.
 pub(crate) const MAX_SUBAGENT_DEPTH: usize = 8;
 
@@ -132,12 +154,28 @@ pub struct TranscriptEntry {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub workflow: bool,
     /// On an `answer` entry: the questions the agent asked the user (Claude's
-    /// `AskUserQuestion`), each with the answer it got. The entry is written
-    /// once the call has its result, so a question still waiting is the live
-    /// screen's and never in the chat twice; `text` is the same exchange as
-    /// plain text.
+    /// `AskUserQuestion`), each with the answer it got. Claude's entry is
+    /// written where the call has its result; a call still waiting is the
+    /// last entry of the read, marked [`blocking`](Self::blocking), and the
+    /// live card shows it, not the chat. `text` is the same exchange as plain
+    /// text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskedQuestion>,
+    /// On an `answer` entry with `questions`: still waiting for the user's
+    /// reply. Only Codex's async question (`request_user_input_async`) is
+    /// written before it is answered: the agent works on, the question waits
+    /// in Codex's queue (shift+← opens it) and nowhere on its screen, so the
+    /// chat is where it shows. Dropped, by Codex too, when the turn ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asking: bool,
+    /// On an `answer` entry with `questions`: the agent is blocked on this
+    /// question *on its own screen* (Claude's `AskUserQuestion` call that has
+    /// no result yet). The live card shows it, so the chat leaves it out; the
+    /// entry loses the mark once the call has its result and is then the
+    /// ordinary answered (or declined) card. Not [`asking`](Self::asking):
+    /// that is Codex's queue, answered by another route.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blocking: bool,
     /// On an `agent` entry: the folder the subagent works in — the worktree
     /// Claude made for it (`isolation: "worktree"`, named in its `.meta.json`),
     /// else the session's own folder when it was spawned. A path, so the
@@ -153,6 +191,9 @@ pub struct AskedQuestion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<String>,
     pub question: String,
+    /// Several rows may be ticked (Claude's `multiSelect`).
+    #[serde(rename = "multiSelect", default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_select: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<AskedOption>,
     /// What the user answered — a row's label, several joined by `, ` on a
@@ -168,6 +209,11 @@ pub struct AskedOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The sample the dialog shows beside the row, with its line breaks
+    /// (bounded by [`MAX_PREVIEW_LINES`] and [`MAX_PREVIEW_CHARS`]).
+    /// Preformatted text, never markdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub chosen: bool,
 }
@@ -240,6 +286,15 @@ pub struct AgentTranscript {
     /// line is not something that crosses to the browser.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shells: Vec<RunningShell>,
+    /// The other tool calls the agent waits on — every `tool_use` since the
+    /// last prompt that has no result yet and is no `Bash` call (those are
+    /// `shells`) nor an `AskUserQuestion` (a `blocking` entry), oldest first.
+    /// A running approved call has no result either, so a reader uses the
+    /// list as a permission dialog's subject only while the tab's lamp says
+    /// the agent asks. Desktop Reader only as it stands: the phone's API
+    /// masks every subject (`mobile_control`).
+    #[serde(default, rename = "waitingTools", skip_serializing_if = "Vec::is_empty")]
+    pub waiting_tools: Vec<WaitingTool>,
     /// The newest `/context` card Claude printed (its `local_command` stdout,
     /// colour codes stripped). The fullscreen renderer draws it in the
     /// alternate screen, which keeps no scrollback, so the Reader's Context
@@ -285,6 +340,47 @@ pub struct RunningShell {
     pub background: bool,
 }
 
+/// A tool call the agent waits on: which tool, and what it acts on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WaitingTool {
+    /// The tool's name as Claude calls it (`Edit`, `WebFetch`, `mcp__…`).
+    pub name: String,
+    /// What it acts on, for the few tools that name one ([`subject_kind`]):
+    /// a file path or a URL, cut at its bound. Empty for any other tool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subject: String,
+    /// When the call was written (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+}
+
+/// What a [`WaitingTool::subject`] is, so that whoever shows it to the phone
+/// masks it the way that kind needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubjectKind {
+    Path,
+    Url,
+}
+
+/// The kind of subject `tool` carries: the file tools a path, `WebFetch` a
+/// URL; any other tool none.
+pub(crate) fn subject_kind(tool: &str) -> Option<SubjectKind> {
+    match tool {
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => Some(SubjectKind::Path),
+        "WebFetch" => Some(SubjectKind::Url),
+        _ => None,
+    }
+}
+
+/// `name` could be a tool's name: letters, digits and `_ - . :` only, and not
+/// long. The phone's API lists no other (a transcript read off a remote host
+/// is not this machine's own).
+pub(crate) fn tool_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= MAX_TOOL_NAME_CHARS
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+}
+
 /// The shells a transcript says are running: calls still waiting on their
 /// result, and background ones that no notification has ended yet — each
 /// with the output file its CLI named, by which [`running_outputs`] tells
@@ -292,6 +388,8 @@ pub struct RunningShell {
 #[derive(Debug, Default)]
 struct ShellCalls {
     waiting: Vec<RunningShell>,
+    /// The other tool calls still waiting on their result ([`WaitingTool`]).
+    tools: Vec<WaitingTool>,
     background: Vec<(RunningShell, String)>,
 }
 
@@ -361,7 +459,7 @@ pub fn agent_session_transcript(
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
         let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_transcript(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
     }
     if matches!(cmd, "gemini" | "agy") {
         if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
@@ -372,9 +470,23 @@ pub fn agent_session_transcript(
             return AgentTranscript::unavailable("unsupported");
         }
         let home = crate::services::agent_home::scope_home(project_id);
-        let own = (cmd == "agy").then(|| crate::services::google_chat::recorded_conversation(project_id, launch_id)).flatten();
-        let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
-        return crate::services::google_chat::transcript(cmd, &home, directory, since, own, version, limit);
+        if cmd == "agy" {
+            // The tab's hook record, where it is authoritative (`google_chat::tab_choice`).
+            return crate::services::google_chat::antigravity_tab(&home, directory, project_id, launch_id, since, version, limit);
+        }
+        return crate::services::google_chat::transcript(cmd, &home, directory, since, None, version, limit);
+    }
+    if cmd == "muse" {
+        if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
+        let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
+            return AgentTranscript::unavailable("no_session");
+        };
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return AgentTranscript::unavailable("unsupported");
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        let own = crate::services::muse_session::recorded(project_id, launch_id);
+        return crate::services::muse_session::transcript(&home, directory, since, own.as_ref(), version, limit);
     }
     if cmd == "copilot" {
         return copilot_transcript(project_id, launch_id, subagent, version, limit);
@@ -417,20 +529,23 @@ pub fn stored_chat_transcript(
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
-    if matches!(cmd, "opencode" | "agy") {
+    if matches!(cmd, "opencode" | "agy" | "muse") {
         if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
             return AgentTranscript::unavailable("no_transcript");
         }
         let dir = tab_dir.unwrap_or_default();
-        if cmd == "agy" {
+        if matches!(cmd, "agy" | "muse") {
             if subagent.is_some() {
                 return AgentTranscript::unavailable("no_subagent");
             }
             let home = crate::services::agent_home::scope_home(project_id);
+            if cmd == "muse" {
+                return crate::services::muse_session::chat(&home, dir, chat, version, limit);
+            }
             return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_transcript(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
     }
     let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
         return AgentTranscript::unavailable("no_transcript");
@@ -988,6 +1103,8 @@ fn fresh_codex_session(project_id: Option<&str>, launch_id: &str) -> Option<Agen
 /// [`agent_session_transcript`] answers for `opencode`, read from the scope's
 /// local-model home, where such a tab's OpenCode keeps its sessions. `launch_id`
 /// names its recorded session; a tab from before it had one is read by folder.
+/// Such a tab runs on this machine even in a remote project (its spawn is
+/// `local_only`), so the project being remote does not put its store away.
 pub fn local_opencode_transcript(
     project_id: Option<&str>,
     tab_dir: Option<&str>,
@@ -1002,13 +1119,13 @@ pub fn local_opencode_transcript(
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
     let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
-    opencode_transcript(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
+    opencode_transcript(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn opencode_transcript(
     db: &Path,
-    project_id: Option<&str>,
+    remote: bool,
     tab_dir: Option<&str>,
     since: Option<i64>,
     own: Option<&str>,
@@ -1019,7 +1136,7 @@ fn opencode_transcript(
     let Some(dir) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
         return AgentTranscript::unavailable("no_session");
     };
-    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+    if remote {
         return AgentTranscript::unavailable("unsupported");
     }
     if !db.is_file() {
@@ -1027,6 +1144,13 @@ fn opencode_transcript(
     }
     crate::services::opencode_store::session_transcript(db, dir, since, own, subagent, version, limit)
         .unwrap_or_else(|| AgentTranscript::unavailable("read_failed"))
+}
+
+/// Whether a tab of `project_id` runs its agent on a remote host — every
+/// agent tab of a remote project but a local-model one — so its CLI's store
+/// is there and not here.
+pub(crate) fn runs_remote(project_id: Option<&str>) -> bool {
+    project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some())
 }
 
 /// The file's fingerprint: its length and modification time. Both move on
@@ -1114,7 +1238,8 @@ fn read_transcript_in(
     let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
     let context_card = newest_context_card(&lines, kind);
-    let (mut entries, calls, shell_calls) = parse_entries(lines.into_iter(), kind, sidechain);
+    let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain);
+    let waiting_tools = shell_calls.tools.clone();
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
     let mut spawned_tokens: Vec<String> = Vec::new();
@@ -1178,6 +1303,7 @@ fn read_transcript_in(
         effort,
         tokens,
         shells,
+        waiting_tools,
         context_card,
         cwd,
         running_cwds,
@@ -1552,16 +1678,21 @@ fn codex_context_left(info: &Value) -> Option<u8> {
 /// into one they ran together ("Let me check…" glued to the final answer).
 /// Beside them, each Claude `Agent` call's entry index and call id, for the
 /// caller to match to its subagent, and the shells it has started.
-fn parse_entries<'a>(
-    lines: impl Iterator<Item = &'a str>,
+fn parse_entries(
+    lines: &[&str],
     kind: TranscriptKind,
     sidechain: bool,
 ) -> (Vec<TranscriptEntry>, Vec<(usize, String)>, ShellCalls) {
+    // Branches Claude left: nothing on them is in its conversation any more.
+    let rewound = if kind == TranscriptKind::Claude && !sidechain { claude_rewound(lines) } else { Default::default() };
     let mut entries: Vec<TranscriptEntry> = Vec::new();
     let mut calls: Vec<(usize, String)> = Vec::new();
     // Shell calls since the last prompt, by call id: one an earlier turn
     // never got a result for (the CLI was killed mid-call) is not running.
     let mut shells: Vec<(String, RunningShell)> = Vec::new();
+    // The same for every other tool call, by call id (a subagent's file has
+    // none: its calls are not this session's screen).
+    let mut tools: Vec<(String, WaitingTool)> = Vec::new();
     // Every shell call read, for a background one's command; the calls sent
     // to the background, with their output files; and those a notification
     // has since ended.
@@ -1583,7 +1714,14 @@ fn parse_entries<'a>(
     // Questions asked, by call id, until their result comes: the exchange is
     // one entry, placed where the result lands — the agent waits on it, so
     // nothing of its own comes in between.
-    let mut asked: std::collections::HashMap<String, (Vec<AskedQuestion>, Option<String>)> = std::collections::HashMap::new();
+    // A call still waiting at the end is the agent blocked on its own screen
+    // (`blocking`): kept in ask order, dropped by the next typed prompt or an
+    // interrupt notice (the CLI went on, or the call can never be answered).
+    let mut asked: Vec<(String, Vec<AskedQuestion>, Option<String>)> = Vec::new();
+    // Codex's async questions by call: their entry, written when asked, and
+    // whether the turn they wait in is still going.
+    let mut async_asks: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut async_open: Vec<String> = Vec::new();
     for line in lines {
         let line = line.trim();
         if line.is_empty() {
@@ -1592,6 +1730,9 @@ fn parse_entries<'a>(
         let Ok(mut value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if !rewound.is_empty() && value.get("uuid").and_then(Value::as_str).is_some_and(|uuid| rewound.contains(uuid)) {
+            continue;
+        }
         if sidechain {
             if let Some(record) = value.as_object_mut() {
                 record.remove("isSidechain");
@@ -1599,9 +1740,11 @@ fn parse_entries<'a>(
         }
         if kind == TranscriptKind::Claude {
             for call in claude_tool_results(&value) {
-                if let Some((questions, at)) = asked.remove(&call) {
+                if let Some(pos) = asked.iter().position(|(asked_call, ..)| *asked_call == call) {
+                    let (_, questions, at) = asked.remove(pos);
                     entries.extend(question_entry(questions, value.get("toolUseResult"), at));
                 }
+                tools.retain(|(tool_call, _)| *tool_call != call);
                 returned.insert(call);
             }
             backgrounded.extend(claude_backgrounded(&value));
@@ -1609,8 +1752,32 @@ fn parse_entries<'a>(
             agents.read(&value, line);
             runs.extend(claude_workflow_launch(&value));
         }
+        if kind == TranscriptKind::Codex {
+            for (call, index, answer) in codex_async_replies(&value) {
+                async_open.retain(|open| *open != call);
+                if let Some(entry) = async_asks.get(&call).and_then(|&at| entries.get_mut(at)) {
+                    answer_async_question(entry, index, answer);
+                }
+            }
+            if codex_turn_ended(&value) {
+                async_open.clear();
+            }
+            if let Some((call, questions)) = codex_async_ask(&value) {
+                let at = value.get("timestamp").and_then(Value::as_str).map(str::to_string);
+                if let Some(entry) = transcript_entry("answer", &asked_text(&questions), at) {
+                    async_asks.insert(call.clone(), entries.len());
+                    async_open.push(call);
+                    // Bounded like Claude's asks: the reply's `retain` above
+                    // must not rescan an unbounded list per record.
+                    if async_open.len() > MAX_WALK_ASKS {
+                        async_open.remove(0);
+                    }
+                    entries.push(TranscriptEntry { questions, ..entry });
+                }
+            }
+        }
         let records = match kind {
-            TranscriptKind::Claude => claude_records(&value),
+            TranscriptKind::Claude => claude_records(&value, sidechain),
             TranscriptKind::Codex => codex_entry(&value).map(|(role, raw)| Record::Turn(role, raw)).into_iter().collect(),
             TranscriptKind::Copilot => copilot_records(&value),
         };
@@ -1629,18 +1796,53 @@ fn parse_entries<'a>(
                 Record::Turn(role, raw) => {
                     if typed && role == "prompt" {
                         shells.clear();
+                        tools.clear();
+                        asked.clear();
                         turn_start = entries.len();
                     }
+                    if role == "interrupted" {
+                        asked.clear();
+                        tools.clear();
+                    }
                     entries.extend(transcript_entry(role, &raw, at.clone()));
+                }
+                Record::CommandArgs(raw) => {
+                    // Only onto the bare command its warning just recorded
+                    // (that prompt, then Claude's answer).
+                    let Some(args) = clean_text(&raw) else { continue };
+                    let len = entries.len();
+                    if len >= 2 && entries[len - 1].kind == "answer" && entries[len - 1].text.starts_with("Unknown command: /") {
+                        let prompt = &mut entries[len - 2];
+                        if prompt.kind == "prompt" && prompt.text.starts_with('/') && !prompt.text.contains(char::is_whitespace) {
+                            prompt.text = format!("{} {args}", prompt.text);
+                            bound_entry(prompt, MAX_PROMPT_CHARS);
+                        }
+                    }
                 }
                 Record::Shell { call, mut shell } => {
                     shell.at = at.clone();
                     commands.insert(call.clone(), shell.clone());
                     shells.push((call, shell));
                 }
+                Record::Tool { call, mut tool } => {
+                    if !sidechain {
+                        tool.at = at.clone();
+                        tools.retain(|(tool_call, _)| *tool_call != call);
+                        tools.push((call, tool));
+                        // The file is the agent's: a hostile tail of unique
+                        // calls must not make every record rescan them all.
+                        tools.drain(..tools.len().saturating_sub(MAX_WALK_TOOLS));
+                    }
+                }
                 Record::Plan(raw) => entries.extend(transcript_entry("answer", &raw, at.clone()).map(|entry| TranscriptEntry { plan: true, ..entry })),
                 Record::Question { call, questions } => {
-                    asked.insert(call, (questions, at.clone()));
+                    // A subagent's own file: its questions are not this
+                    // session's screen.
+                    if !sidechain {
+                        asked.retain(|(asked_call, ..)| *asked_call != call);
+                        asked.push((call, questions, at.clone()));
+                        asked.drain(..asked.len().saturating_sub(MAX_WALK_ASKS));
+                    }
                 }
                 Record::Workflow { call, title } => {
                     if let Some(mut entry) = agent_entry(&title, Some("workflow"), at.clone()) {
@@ -1678,13 +1880,23 @@ fn parse_entries<'a>(
         entries[*index].finished = finished;
         entries[*index].background = background.is_some();
     }
+    for call in &async_open {
+        if let Some(entry) = async_asks.get(call).and_then(|&at| entries.get_mut(at)) {
+            entry.asking = true;
+        }
+    }
+    for (_, questions, at) in asked {
+        entries.extend(waiting_question_entry(questions, at));
+    }
+    let mut tools: Vec<WaitingTool> = tools.into_iter().filter(|(call, _)| !returned.contains(call)).map(|(_, tool)| tool).collect();
+    tools.drain(..tools.len().saturating_sub(MAX_WAITING_TOOLS));
     let waiting = shells.into_iter().filter(|(call, _)| !returned.contains(call)).map(|(_, shell)| shell).collect();
     let background = backgrounded
         .into_iter()
         .filter(|(call, _)| !ended.contains(call))
         .filter_map(|(call, output)| Some((RunningShell { background: true, ..commands.remove(&call)? }, output)))
         .collect();
-    (entries, calls, ShellCalls { waiting, background })
+    (entries, calls, ShellCalls { waiting, tools, background })
 }
 
 /// Claude's background subagents (`Agent` calls whose result is only the
@@ -1958,12 +2170,17 @@ fn claude_tool_results(value: &Value) -> Vec<String> {
 enum Record {
     /// A prompt or an answer.
     Turn(&'static str, String),
+    /// The words typed after a command Claude refused as unknown, recorded
+    /// apart from it ([`claude_unknown_command`]): they join that prompt.
+    CommandArgs(String),
     /// A plan put up for approval: an answer, marked as the plan.
     Plan(String),
     /// A subagent spawned by tool call `call`, sent to do `task`.
     Spawn { call: String, task: String, kind: Option<String> },
     /// A `Workflow` run started by tool call `call`, titled `title`.
     Workflow { call: String, title: String },
+    /// A tool call other than a shell, a question or a spawn's own record.
+    Tool { call: String, tool: WaitingTool },
     /// A shell command started by tool call `call`.
     Shell { call: String, shell: RunningShell },
     /// Questions put to the user by tool call `call`, not yet answered.
@@ -2030,7 +2247,7 @@ fn clean_text(raw: &str) -> Option<String> {
 /// the questions its `AskUserQuestion` calls asked. Thinking and other tool-use blocks are stepped over, as is a sidechain (a
 /// subagent's) record, and a `<synthetic>` one Claude writes for itself
 /// ("No response requested." on a resume) unless it reports an API error.
-fn claude_records(value: &Value) -> Vec<Record> {
+fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
     let sidechain = value.get("isSidechain").and_then(Value::as_bool) == Some(true);
     let placeholder = value.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
         && value.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true);
@@ -2041,11 +2258,12 @@ fn claude_records(value: &Value) -> Vec<Record> {
             .or_else(|| agent_session::claude_prompt_in_record(value).map(|text| Record::Turn("prompt", text)))
             .into_iter()
             .collect(),
-        // A slash command typed at the prompt, as current releases record it.
-        Some("system") if !sidechain => agent_session::claude_local_command(value)
-            .map(|text| Record::Turn("prompt", text))
-            .into_iter()
-            .collect(),
+        // A slash command typed at the prompt, as current releases record it,
+        // or one Claude refused as unknown.
+        Some("system") if !sidechain => match agent_session::claude_local_command(value) {
+            Some(text) => vec![Record::Turn("prompt", text)],
+            None => claude_unknown_command(value),
+        },
         // A prompt typed while Claude was working lives only here.
         Some("attachment") if !sidechain => agent_session::claude_queued_prompt(value)
             .map(|text| Record::Turn("prompt", text))
@@ -2055,7 +2273,7 @@ fn claude_records(value: &Value) -> Vec<Record> {
             let Some(content) = value.get("message").and_then(|m| m.get("content")) else {
                 return Vec::new();
             };
-            let (text, spawns) = match content {
+            let (text, tools) = match content {
                 Value::String(text) => (text.clone(), Vec::new()),
                 Value::Array(blocks) => (
                     blocks
@@ -2066,7 +2284,15 @@ fn claude_records(value: &Value) -> Vec<Record> {
                         .join("\n\n"),
                     blocks
                         .iter()
-                        .filter_map(|b| claude_plan(b).or_else(|| claude_spawn(b)).or_else(|| claude_workflow(b)).or_else(|| claude_shell(b)).or_else(|| claude_question(b)))
+                        .flat_map(|b| {
+                            let specific = claude_plan(b)
+                                .or_else(|| claude_spawn(b))
+                                .or_else(|| claude_workflow(b))
+                                .or_else(|| claude_shell(b))
+                                .or_else(|| claude_question(b))
+                                .or_else(|| subagent_file.then(|| claude_handback_answer(b)).flatten());
+                            claude_tool(b).into_iter().chain(specific)
+                        })
                         .collect(),
                 ),
                 _ => return Vec::new(),
@@ -2075,11 +2301,99 @@ fn claude_records(value: &Value) -> Vec<Record> {
             (!text.is_empty())
                 .then(|| Record::Turn("answer", text.to_string()))
                 .into_iter()
-                .chain(spawns)
+                .chain(tools)
                 .collect()
         }
         _ => Vec::new(),
     }
+}
+
+/// Claude can write a subagent's final report as the input to this tool
+/// instead of a text block. Read it from the subagent's own conversation.
+fn claude_handback_answer(block: &Value) -> Option<Record> {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use")
+        || block.get("name").and_then(Value::as_str) != Some("SubagentHandback")
+    {
+        return None;
+    }
+    Some(Record::Turn("answer", block.pointer("/input/message")?.as_str()?.to_string()))
+}
+
+/// The records on branches Claude abandoned, by uuid. Claude chains its
+/// records by `parentUuid` and shows the chain that ends in the newest one.
+/// When it takes a prompt back — an Esc before the turn answered puts the
+/// words back in its input box, unsent (2.1.318) — or the user rewinds to an
+/// earlier prompt, the next prompt hangs from the record the earlier prompt
+/// hung from. Everything under that earlier prompt is then off the
+/// conversation, and a chat that showed it would claim the agent had it.
+fn claude_rewound(lines: &[&str]) -> std::collections::HashSet<String> {
+    use std::collections::{HashMap, HashSet};
+    #[derive(Deserialize)]
+    struct Link {
+        uuid: Option<String>,
+        #[serde(rename = "parentUuid")]
+        parent: Option<String>,
+    }
+    let mut dead: HashSet<String> = HashSet::new();
+    // The prompt hanging from each parent: a later one from the same parent
+    // leaves it. Only prompt lines are parsed whole here.
+    let mut prompt_under: HashMap<String, String> = HashMap::new();
+    for line in lines {
+        if !line.contains("\"type\":\"user\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        if claude_interrupt(&value).is_some() || agent_session::claude_prompt_in_record(&value).is_none() {
+            continue;
+        }
+        let (Some(uuid), Some(parent)) = (value.get("uuid").and_then(Value::as_str), value.get("parentUuid").and_then(Value::as_str)) else {
+            continue;
+        };
+        if let Some(earlier) = prompt_under.insert(parent.to_string(), uuid.to_string()) {
+            dead.insert(earlier);
+        }
+    }
+    if dead.is_empty() {
+        return dead;
+    }
+    // A record is written after its parent: one pass in file order carries
+    // the mark down each dead branch.
+    for line in lines {
+        let Ok(link) = serde_json::from_str::<Link>(line.trim()) else { continue };
+        if let (Some(uuid), Some(parent)) = (link.uuid, link.parent) {
+            if dead.contains(&parent) {
+                dead.insert(uuid);
+            }
+        }
+    }
+    dead
+}
+
+/// A slash command Claude refused as unknown (2.1.323): it runs nothing and
+/// records no prompt, only its own warning — an `informational` system record
+/// `Unknown command: /simplity. Did you mean /simplify?` and, when words
+/// followed the command, a second one `Args from unknown skill: <words>`. The
+/// first becomes the command's prompt with Claude's words as the answer, the
+/// second the prompt's words ([`Record::CommandArgs`]), so the chat shows what
+/// was typed and why nothing came of it instead of waiting for a turn.
+fn claude_unknown_command(value: &Value) -> Vec<Record> {
+    if value.get("subtype").and_then(Value::as_str) != Some("informational") {
+        return Vec::new();
+    }
+    let Some(text) = value.get("content").and_then(Value::as_str).map(str::trim) else {
+        return Vec::new();
+    };
+    if let Some(args) = text.strip_prefix("Args from unknown skill:") {
+        return vec![Record::CommandArgs(args.trim().to_string())];
+    }
+    let Some(rest) = text.strip_prefix("Unknown command: /") else {
+        return Vec::new();
+    };
+    let name: String = rest.chars().take_while(|c| !c.is_whitespace() && *c != '.').collect();
+    if name.is_empty() {
+        return Vec::new();
+    }
+    vec![Record::Turn("prompt", format!("/{name}")), Record::Turn("answer", text.to_string())]
 }
 
 /// The notice Claude writes when the user cuts a turn off —
@@ -2127,6 +2441,33 @@ fn copilot_records(value: &Value) -> Vec<Record> {
     Vec::new()
 }
 
+/// Any `tool_use` block but a shell's (`shells`) and a question's (`blocking`
+/// entry): the tool and, for the file tools and `WebFetch`, what it acts on.
+/// A name that is no tool name (other characters, too long) is not listed.
+fn claude_tool(block: &Value) -> Option<Record> {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+        return None;
+    }
+    let name = block.get("name")?.as_str()?;
+    if !tool_name_ok(name) || matches!(name, "Bash" | "AskUserQuestion") {
+        return None;
+    }
+    let key = match subject_kind(name) {
+        Some(SubjectKind::Path) if name == "NotebookEdit" => "notebook_path",
+        Some(SubjectKind::Path) => "file_path",
+        Some(SubjectKind::Url) => "url",
+        None => "",
+    };
+    let subject = block
+        .get("input")
+        .and_then(|input| input.get(key))
+        .and_then(Value::as_str)
+        .and_then(clean_text)
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TOOL_SUBJECT_CHARS).collect())
+        .unwrap_or_default();
+    Some(Record::Tool { call: block.get("id")?.as_str()?.to_string(), tool: WaitingTool { name: name.to_string(), subject, at: None } })
+}
+
 /// An `ExitPlanMode` `tool_use` block: the plan Claude put up for approval.
 fn claude_plan(block: &Value) -> Option<Record> {
     if block.get("type").and_then(Value::as_str) != Some("tool_use")
@@ -2161,18 +2502,74 @@ fn claude_question(block: &Value) -> Option<Record> {
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter_map(|o| Some(AskedOption { label: field(o, "label")?, description: field(o, "description"), chosen: false }))
+                    .filter_map(|o| {
+                        Some(AskedOption {
+                            label: field(o, "label")?,
+                            description: field(o, "description"),
+                            preview: o.get("preview").and_then(Value::as_str).and_then(bounded_preview),
+                            chosen: false,
+                        })
+                    })
                     .collect(),
+                multi_select: q.get("multiSelect").and_then(Value::as_bool) == Some(true),
                 answer: None,
             })
         })
         .collect();
+    let questions = cap_questions(questions);
     (!questions.is_empty()).then_some(Record::Question { call, questions })
+}
+
+/// `questions` held to [`MAX_ASK_QUESTIONS`] questions of [`MAX_ASK_OPTIONS`]
+/// rows and [`MAX_ASK_CHARS`] characters of text in all: what comes past is
+/// dropped, the first question's first rows always kept.
+fn cap_questions(mut questions: Vec<AskedQuestion>) -> Vec<AskedQuestion> {
+    questions.truncate(MAX_ASK_QUESTIONS);
+    let mut used = 0usize;
+    let mut kept = 0;
+    for question in &mut questions {
+        used += question.header.as_deref().map_or(0, |h| h.chars().count()) + question.question.chars().count();
+        if kept > 0 && used > MAX_ASK_CHARS {
+            break;
+        }
+        question.options.truncate(MAX_ASK_OPTIONS);
+        let mut rows = 0;
+        for option in &question.options {
+            used += option.label.chars().count()
+                + option.description.as_deref().map_or(0, |d| d.chars().count())
+                + option.preview.as_deref().map_or(0, |p| p.chars().count());
+            if used > MAX_ASK_CHARS {
+                break;
+            }
+            rows += 1;
+        }
+        question.options.truncate(rows.max(usize::from(kept == 0 && !question.options.is_empty())));
+        kept += 1;
+    }
+    questions.truncate(kept);
+    questions
 }
 
 /// A question's text cleaned and cut at its bound; `None` when empty.
 fn bounded_line(raw: &str) -> Option<String> {
     Some(clean_text(raw)?.chars().take(MAX_QUESTION_CHARS).collect())
+}
+
+/// An option's preview cleaned (line breaks and tabs kept) and cut at
+/// [`MAX_PREVIEW_LINES`] lines and [`MAX_PREVIEW_CHARS`] characters; `None`
+/// when empty. Trailing blanks of each line go, its indentation stays.
+fn bounded_preview(raw: &str) -> Option<String> {
+    let text = clean_text(raw)?;
+    let lines: Vec<&str> = text.lines().take(MAX_PREVIEW_LINES).map(str::trim_end).collect();
+    Some(lines.join("\n").chars().take(MAX_PREVIEW_CHARS).collect())
+}
+
+/// The entry for a question whose call has no result yet: the agent waits on
+/// it on its own screen. `text` holds the questions alone; the entry is
+/// marked `blocking` and is placed after every other.
+fn waiting_question_entry(questions: Vec<AskedQuestion>, at: Option<String>) -> Option<TranscriptEntry> {
+    let text = questions.iter().map(|q| q.question.as_str()).collect::<Vec<_>>().join("\n\n");
+    transcript_entry("answer", &text, at).map(|entry| TranscriptEntry { questions, blocking: true, ..entry })
 }
 
 /// The entry for questions whose call has its result: each answer read off
@@ -2192,12 +2589,113 @@ fn question_entry(mut questions: Vec<AskedQuestion>, result: Option<&Value>, at:
             }
         }
     }
-    let text = questions
+    transcript_entry("answer", &asked_text(&questions), at).map(|entry| TranscriptEntry { questions, ..entry })
+}
+
+/// Questions and their answers as plain text, an entry's `text`.
+fn asked_text(questions: &[AskedQuestion]) -> String {
+    questions
         .iter()
         .map(|q| format!("{}\n→ {}", q.question, q.answer.as_deref().unwrap_or("—")))
         .collect::<Vec<_>>()
-        .join("\n\n");
-    transcript_entry("answer", &text, at).map(|entry| TranscriptEntry { questions, ..entry })
+        .join("\n\n")
+}
+
+/// The tool Codex (0.169.0) asks an async question with.
+const CODEX_ASYNC_ASK: &str = "request_user_input_async";
+/// The tag Codex wraps the user's reply to one in, as a user message.
+const CODEX_ASYNC_REPLY: &str = "send_user_message_question_reply";
+
+/// A Codex `request_user_input_async` call: its id and the questions, each a
+/// `title` with plain-string `options` (a `{label, description}` row read too).
+fn codex_async_ask(value: &Value) -> Option<(String, Vec<AskedQuestion>)> {
+    if value.get("type").and_then(Value::as_str) != Some("response_item") {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("function_call") || payload.get("name").and_then(Value::as_str) != Some(CODEX_ASYNC_ASK) {
+        return None;
+    }
+    let call = payload.get("call_id")?.as_str()?.to_string();
+    let args: Value = serde_json::from_str(payload.get("arguments")?.as_str()?).ok()?;
+    let questions: Vec<AskedQuestion> = args
+        .get("questions")?
+        .as_array()?
+        .iter()
+        .filter_map(|q| {
+            let question = bounded_line(q.get("title").or_else(|| q.get("question"))?.as_str()?)?;
+            let options = q
+                .get("options")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| {
+                            let (label, description) = match row {
+                                Value::String(label) => (label.as_str(), None),
+                                _ => (row.get("label")?.as_str()?, row.get("description").and_then(Value::as_str)),
+                            };
+                            Some(AskedOption { label: bounded_line(label)?, description: description.and_then(bounded_line), ..Default::default() })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let header = q.get("header").and_then(Value::as_str).and_then(bounded_line);
+            Some(AskedQuestion { header, question, options, ..Default::default() })
+        })
+        .collect();
+    let questions = cap_questions(questions);
+    (!questions.is_empty()).then_some((call, questions))
+}
+
+/// The user's reply to async questions: a user message holding
+/// `<send_user_message_question_reply>[{answer, question, questionItemId}]`,
+/// where `questionItemId` is itself JSON — `["request_user_input_async",
+/// "<call>", <index>]`. Each (call, question index, answer).
+fn codex_async_replies(value: &Value) -> Vec<(String, usize, String)> {
+    let payload = value.get("payload");
+    let user = value.get("type").and_then(Value::as_str) == Some("response_item")
+        && payload.and_then(|p| p.get("type")).and_then(Value::as_str) == Some("message")
+        && payload.and_then(|p| p.get("role")).and_then(Value::as_str) == Some("user");
+    let Some(blocks) = payload.filter(|_| user).and_then(|p| p.get("content")).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let (open, close) = (format!("<{CODEX_ASYNC_REPLY}>"), format!("</{CODEX_ASYNC_REPLY}>"));
+    let mut out = Vec::new();
+    for text in blocks.iter().filter_map(|b| b.get("text").and_then(Value::as_str)) {
+        let Some(body) = text.split_once(open.as_str()).and_then(|(_, rest)| rest.split_once(close.as_str())).map(|(body, _)| body) else {
+            continue;
+        };
+        let Ok(Value::Array(items)) = serde_json::from_str::<Value>(body.trim()) else { continue };
+        for item in &items {
+            let Some(answer) = item.get("answer").and_then(Value::as_str).and_then(bounded_line) else { continue };
+            let Some(Ok(Value::Array(id))) = item.get("questionItemId").and_then(Value::as_str).map(serde_json::from_str::<Value>) else {
+                continue;
+            };
+            if id.first().and_then(Value::as_str) != Some(CODEX_ASYNC_ASK) {
+                continue;
+            }
+            let (Some(call), Some(index)) = (id.get(1).and_then(Value::as_str), id.get(2).and_then(Value::as_u64)) else { continue };
+            out.push((call.to_string(), index as usize, answer));
+        }
+    }
+    out
+}
+
+/// A Codex turn ended (finished or cut off): an async question still waiting
+/// in it is dropped.
+fn codex_turn_ended(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("event_msg")
+        && matches!(value.pointer("/payload/type").and_then(Value::as_str), Some("task_complete" | "turn_aborted"))
+}
+
+/// One reply put on its question, the row it names marked.
+fn answer_async_question(entry: &mut TranscriptEntry, index: usize, answer: String) {
+    let Some(question) = entry.questions.get_mut(index) else { return };
+    for option in &mut question.options {
+        option.chosen = option.label == answer;
+    }
+    question.answer = Some(answer);
+    entry.text = asked_text(&entry.questions);
 }
 
 /// A `Bash` `tool_use` block: the command, and the description Claude gave it.

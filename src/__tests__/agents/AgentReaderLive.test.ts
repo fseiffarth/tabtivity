@@ -6,6 +6,29 @@ function plainBuffer(rows: string[]): ReadableBufferLike {
   return { length: rows.length, getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }) };
 }
 
+describe("readReaderLive on an idle Claude Code box under a wrapping terminal", () => {
+  const WIDTH = 76;
+  const rows: [string, boolean][] = [
+    [" Get to finished work sooner with Opus 5.5.", false],
+    ["", false],
+    [`${"─".repeat(WIDTH - 13)} my-project ─`, false],
+    ["❯ Try \"edit <filepath> to...\"", true],
+    ["─".repeat(WIDTH), false],
+    ["  ⏵⏵ auto mode on (shift+tab to cycle)", true],
+  ];
+  const buffer: ReadableBufferLike = {
+    length: rows.length,
+    getLine: (row) => rows[row] && { isWrapped: rows[row][1], translateToString: () => rows[row][0] },
+  };
+
+  it("finds the input box, so the chat does not point at the terminal", () => {
+    const live = readReaderLive(buffer, "Claude", WIDTH);
+    expect(live.stray).toBe(false);
+    expect(live.screen).toEqual([]);
+    expect(live.status?.mode).toBe("auto");
+  });
+});
+
 /** Claude Code's permission prompt, as the phone's Focus tests paint it. */
 const PERMISSION = [
   "> fix the strings",
@@ -232,6 +255,32 @@ describe("the desktop Reader's live screen", () => {
     expect(live.question?.options[0]).toMatchObject({ label: "Receive-only, all CLIs (Recommended)" });
   });
 
+  it("reads an idle box under Claude Code 2.1.318's diff panel as the input frame, not a stray screen", () => {
+    // 2.1.318 stops the divider above the box and draws the box and footer at
+    // full width: read whole, the panel's rows stayed in the Chat's reading.
+    const side = (left: string, right = "") => `${left.padEnd(95)}│${right.padEnd(76)}`;
+    const rows = [
+      side("", `${" ".repeat(74)}✕`),
+      side("● The first compile finished; the markup test run is going now on the final code."),
+      side(""),
+      side("  Read 1 file"),
+      ...Array.from({ length: 8 }, () => side("")),
+      side("", `${" ".repeat(26)}No changes this session`),
+      ...Array.from({ length: 8 }, () => side("")),
+      side("", "+4 files edited before this session (show)"),
+      side(""),
+      "─".repeat(172),
+      "❯ ",
+      "─".repeat(172),
+      "  user@host:~/projects/app (develop*) · Opus 5.5 [high]",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent",
+    ];
+    const live = readReaderLive(plainBuffer(rows), "Claude", 172);
+    expect(live.stray).toBe(false);
+    expect(live.question).toBeNull();
+    expect(live.status?.model).toBe("Opus 5.5");
+  });
+
   it("reads a permission prompt as its question, its context and its options", () => {
     const live = readReaderLive(plainBuffer(PERMISSION), "Claude");
     expect(live.question?.options.map((option) => option.label)).toEqual([
@@ -396,6 +445,16 @@ describe("the desktop Reader's live screen", () => {
     ]);
     expect(menu.ask[0]).toBe("Hooks need review");
     expect(answerKeys(hooks, hooks.options[1])).toEqual(["\u001b[B", "\r"]);
+  });
+
+  it("offers the hook path trust action without typing a chat prompt", () => {
+    const rows = ["Hooks", "SessionStart", "/tmp/config.toml", "Runs a session hook", "t trust this path · esc back"];
+    const live = readReaderLive(plainBuffer(rows), "Codex", 100);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["trust this path", "back"]);
+    expect(answerKeys(live.question!, live.question!.options[0])).toEqual(["t"]);
+    expect(answerKeys(live.question!, live.question!.options[1])).toEqual(["\u001b"]);
+    expect(live.ask.join(" ")).toContain("/tmp/config.toml");
+    expect(readReaderLive(plainBuffer(rows), "Claude", 100).question).toBeNull();
   });
 
   it("reads Codex's hooks page, which has no numbered rows, as a card of its footer's answers", () => {
@@ -641,7 +700,7 @@ describe("the desktop Reader's live screen", () => {
     ]), "gemma4:26b · OpenCode", 120);
     expect(idle.stray).toBe(false);
     expect(idle.working).toBeNull();
-    expect(idle.status).toEqual({ mode: "build", model: "gemma4:26b" });
+    expect(idle.status).toEqual({ mode: "build", model: "gemma4:26b", path: "~/projects/app" });
     const busy = readReaderLive(plainBuffer([
       "› Read a.txt and tell me its content in one sentence.",
       "┃",
@@ -675,6 +734,13 @@ describe("the desktop Reader's live screen", () => {
     expect(key.screen.join("\n")).toContain("Paste or type your API key below.");
   });
 
+  it("redraws when only the session folder or goal changes", () => {
+    const live = readReaderLive(plainBuffer([">", "? for shortcuts"]), "Claude");
+    const a = { ...live, status: { path: "/work/a", goal: true } };
+    expect(sameReaderLive(a, { ...a, status: { ...a.status, path: "/work/b" } })).toBe(false);
+    expect(sameReaderLive(a, { ...a, status: { ...a.status, goal: false } })).toBe(false);
+  });
+
   it("tells a redraw of the same state from a change", () => {
     const a = readReaderLive(plainBuffer(PERMISSION), "Claude");
     const b = readReaderLive(plainBuffer(PERMISSION), "Claude");
@@ -682,5 +748,72 @@ describe("the desktop Reader's live screen", () => {
     const busy = readReaderLive(plainBuffer(["✻ Thinking… (9s · esc to interrupt)", "> "]), "Claude");
     const later = readReaderLive(plainBuffer(["✻ Thinking… (10s · esc to interrupt)", "> "]), "Claude");
     expect(sameReaderLive(busy, later)).toBe(false);
+  });
+});
+
+describe("output above Claude Code's input box is not a dialog", () => {
+  // Claude Code takes its input box off the screen while a dialog is up, so a
+  // box on screen means the rows above it are output, whatever they look like.
+  const BOX = [
+    `${"─".repeat(60)} my-project ─`,
+    "❯ ",
+    "─".repeat(76),
+    "  ? for shortcuts",
+  ];
+  const answer = (list: string[]) => [
+    "❯ which container should I use?",
+    "",
+    "⏺ Three options, in the order I would try them:",
+    "",
+    ...list,
+    "",
+    "  The first is the simplest.",
+    "",
+    ...BOX,
+  ];
+
+  it("reads a `>`-led numbered list in an answer as output", () => {
+    const rows = answer(["  > 1. Use a map", "    2. Use a vec", "    3. Use a set"]);
+    const live = readReaderLive(plainBuffer(rows), "Claude", 76);
+    expect(live.question).toBeNull();
+    expect(live.ask).toEqual([]);
+    expect(live.stray).toBe(false);
+  });
+
+  it("reads other highlight marks in an answer as output too", () => {
+    for (const mark of ["→", "❯", "›", "▸"]) {
+      const rows = answer([`  ${mark} 1. Use a map`, "    2. Use a vec"]);
+      expect(readReaderLive(plainBuffer(rows), "Claude", 76).question, mark).toBeNull();
+    }
+  });
+
+  it("reads an answer's list whose last row sits right on the box", () => {
+    const rows = ["❯ pick one", "⏺ Options:", "  > 1. Use a map", "    2. Use a vec", ...BOX];
+    expect(readReaderLive(plainBuffer(rows), "claude", 76).question).toBeNull();
+  });
+
+  it("still reads the same rows as a dialog once no box is on screen", () => {
+    const rows = ["❯ which container should I use?", "", "⏺ Which one?", "", "  ❯ 1. Use a map", "    2. Use a vec", "    3. Use a set", "", "  Enter to select · ↑/↓ to navigate · Esc to cancel"];
+    const live = readReaderLive(plainBuffer(rows), "Claude", 76);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["Use a map", "Use a vec", "Use a set"]);
+    expect(live.question?.current).toBe(0);
+  });
+
+  it("keeps reading a permission dialog whose footer is followed by the session's rule", () => {
+    // Not an input box: a labelled rule alone, as Claude Code 2.1.314 draws it.
+    const rows = [...PERMISSION, `${"─".repeat(60)} my-project ─`];
+    expect(readReaderLive(plainBuffer(rows), "Claude", 76).question?.options).toHaveLength(3);
+  });
+
+  it("leaves other CLIs' boxes alone: Codex's `›` dialog still reads", () => {
+    const rows = [
+      "  Allow Codex to run `ls`?",
+      "",
+      "› 1. Yes, proceed (y)",
+      "  2. No, and tell Codex what to do differently (esc)",
+      "",
+      "  Press enter to confirm or esc to cancel",
+    ];
+    expect(readReaderLive(plainBuffer(rows), "Codex", 76).question?.options).toHaveLength(2);
   });
 });

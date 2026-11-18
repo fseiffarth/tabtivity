@@ -22,16 +22,21 @@ export interface PickedFile {
  * asked for it (the picker needs the gesture); what it is handed (`extra`)
  * goes into each row of that pick, as it stood at the tap.
  */
-export function usePhonePicks<R extends PickedFile>({ testId, tooLarge, send, oneByOne = false }: {
+export function usePhonePicks<R extends PickedFile>({ testId, tooLarge, send, oneByOne = false, maxSize = MAX_INBOX_FILE }: {
   testId: string;
   tooLarge: string;
   send: (file: File, row: R, settle: (patch: Partial<R>) => void) => Promise<void>;
   oneByOne?: boolean;
+  /** The largest file the desktop takes on this route (24 MB unless the
+   * route stages bigger ones, as **Upload here** does). */
+  maxSize?: number;
 }): {
   rows: R[];
   update: (id: number, patch: Partial<R>) => void;
   dismiss: (id: number) => void;
   open: (extra?: Partial<R>) => void;
+  /** Files that came another way (dropped on the list), sent as picks are. */
+  add: (files: ArrayLike<File>, extra?: Partial<R>) => void;
   input: ReactNode;
 } {
   const input = useRef<HTMLInputElement>(null);
@@ -45,12 +50,11 @@ export function usePhonePicks<R extends PickedFile>({ testId, tooLarge, send, on
     setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
   const dismiss = (id: number) => setRows((current) => current.filter((row) => row.id !== id));
 
-  const take = (files: ArrayLike<File> | null) => {
+  const take = (files: ArrayLike<File> | null, extra: Partial<R> = pending.current) => {
     if (!files) return;
-    const extra = pending.current;
     for (const file of Array.from(files)) {
       const row = { ...extra, id: ++seq.current, name: file.name || "attachment" } as R;
-      if (file.size > MAX_INBOX_FILE) {
+      if (file.size > maxSize) {
         setRows((current) => [...current, { ...row, state: "failed", failure: tooLarge }]);
         continue;
       }
@@ -72,8 +76,9 @@ export function usePhonePicks<R extends PickedFile>({ testId, tooLarge, send, on
     dismiss,
     open: (extra = {}) => {
       pending.current = extra;
-      pickPhoneFiles(input.current, take);
+      pickPhoneFiles(input.current, (files) => take(files));
     },
+    add: (files, extra = {}) => take(files, extra),
     input: view,
   };
 }

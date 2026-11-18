@@ -25,7 +25,7 @@
  * never destroy them.
  */
 import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentWindowLabel } from "../../lib/window/crossWindow";
 import {
   snapshotFrame,
   physToClient,
@@ -218,15 +218,6 @@ export function emitPdfDragMove(originLabel: string, p: PhysPoint): void {
 }
 export function emitPdfDragEnd(e: PdfDragEnd): void {
   post(PDF_DRAG_END, e);
-}
-
-/** This window's label, or `""` outside Tauri. */
-export function currentWindowLabel(): string {
-  try {
-    return getCurrentWindow().label;
-  } catch {
-    return "";
-  }
 }
 
 /**

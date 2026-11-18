@@ -1,8 +1,11 @@
 /**
- * Claude Code's prompt suggestion in the phone's Focus chat
+ * Claude Code's prompt suggestion on the phone
  * (`mobile-web/src/terminal/promptSuggestion.ts`). The CLI draws it dimmed in
- * its empty input box, which the chat hides; the composer is filled with it
- * once per suggestion. It is never sent on its own.
+ * its empty input box; the composer is filled with it once per suggestion, in
+ * the Chat and the Terminal view alike. It is never sent on its own.
+ *
+ * The terminal here is a stand-in, so nothing below proves a live attach keeps
+ * the dim attribute: `pty_bridge`'s `the_attach_client_receives_dim_text` does.
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -104,11 +107,11 @@ const paint = async (text: string) => {
   await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
 };
 
-const hint = () => screen.queryByRole("group", { name: "Claude suggests" });
+const hint = () => (field().classList.contains("suggested") ? field() : null);
 const field = () => screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement;
 const SUGGESTION = "make it ask for my name";
 
-describe(`${BRAND.display} Mobile Focus — Claude's prompt suggestion`, () => {
+describe(`${BRAND.display} Mobile composer — Claude's prompt suggestion`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
@@ -135,6 +138,25 @@ describe(`${BRAND.display} Mobile Focus — Claude's prompt suggestion`, () => {
     expect(field().value).toBe(SUGGESTION);
     expect(hint()).not.toBeNull();
     expect(FakeWebSocket.sent).toEqual([]);
+  });
+
+  it("reads the box as Claude Code 2.1.316 draws it, a no-break space after the marker", async () => {
+    await open(`${DIM}❯\u00a0${SUGGESTION}`);
+    expect(field().value).toBe(SUGGESTION);
+  });
+
+  it("fills the field in the Terminal view too, and keeps it over a change of view", async () => {
+    await open("❯ ");
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Terminal/ }));
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
+    await paint(idle(`${DIM}❯ ${SUGGESTION}`));
+    expect(field().value).toBe(SUGGESTION);
+    expect(hint()).not.toBeNull();
+    expect(FakeWebSocket.sent).toEqual([]);
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Chat/ }));
+    expect(field().value).toBe(SUGGESTION);
   });
 
   it("does not fill it again once the reader has emptied the field", async () => {

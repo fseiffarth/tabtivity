@@ -28,6 +28,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { basename, dirname, relativePathWithin } from "../paths";
+import { pythonLibRoots } from "../viewers/python";
+import type { FileEntry } from "../viewers/fileUtils";
 import { IS_WINDOWS } from "../platform";
 import { useTabsStore, type TabEntry, type TabLocation } from "../../stores/tabs";
 import { isRemoteLocation } from "../../stores/tabs/tabLocation";
@@ -156,6 +158,39 @@ export async function resolveInterpreter(
     // back to the system interpreter and let the terminal report the truth.
     return systemInterpreter(platform);
   }
+}
+
+/** How long a project's library folders are reused before they are looked up
+ *  again — long enough that a run of Ctrl+clicks is one lookup, short enough
+ *  that a venv created or re-pinned meanwhile is picked up. */
+const LIB_ROOTS_TTL_MS = 60_000;
+const libRootsCache = new Map<string, { at: number; roots: Promise<string[]> }>();
+
+/**
+ * The `site-packages` folders of the interpreter the project runs with (the
+ * backend's precedence, via {@link resolveInterpreter}), so go-to-definition can
+ * follow a name into an external library. Local projects only: a remote
+ * project's environment is on its host.
+ */
+export function pythonLibRootsFor(projectId: string | null, projectDir: string): Promise<string[]> {
+  if (!projectDir) return Promise.resolve([]);
+  const key = `${projectId ?? ""}\n${projectDir}`;
+  const hit = libRootsCache.get(key);
+  if (hit && Date.now() - hit.at < LIB_ROOTS_TTL_MS) return hit.roots;
+  const roots = resolveInterpreter(projectId, projectDir, currentPlatform())
+    .then((interp) =>
+      pythonLibRoots(interp, projectDir, async (dir) => {
+        try {
+          const entries = await invoke<FileEntry[]>("list_dir", { projectDir: dir, relPath: "" });
+          return entries.map((e) => e.name);
+        } catch {
+          return null; // missing or unreadable — just not this layout
+        }
+      }),
+    )
+    .catch(() => [] as string[]);
+  libRootsCache.set(key, { at: Date.now(), roots });
+  return roots;
 }
 
 /** The host's quoting family, from the one OS detector (`lib/platform`). */

@@ -58,7 +58,7 @@ vi.mock("../../stores/projects", () => {
   return {
     useProjectsStore: Object.assign(
       vi.fn((sel: (s: object) => unknown) => sel(state)),
-      { getState: () => state },
+      { getState: () => state, subscribe: () => () => {} },
     ),
     listenProjectRuntimeSwitched: vi.fn().mockResolvedValue(() => {}),
     // Machines is on by default, so the launch sweep runs and reaches this.

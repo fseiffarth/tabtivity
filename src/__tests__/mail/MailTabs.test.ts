@@ -5,6 +5,8 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import { MAIL_INBOX_TAB, useMailStore } from "../../stores/mail";
+import { isViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { useSettingsStore } from "../../stores/settings";
 
 const header = (id: string) => ({ id, account_id: "a1", subject: `S ${id}` }) as MailHeader;
 
@@ -15,8 +17,9 @@ beforeEach(() => {
     mailTabs: [],
     activeMailTab: MAIL_INBOX_TAB,
     selectedAccountId: "a1",
-    overlayOpen: false,
   });
+  useRootOverlayStore.setState({ open: false, view: "root" });
+    useSettingsStore.setState({ settings: { mail_client: true } as never });
 });
 
 describe("the mail window's tabs", () => {
@@ -81,8 +84,8 @@ describe("the mail window's tabs", () => {
     const draft = { id: "d1", account_id: "a1", to: [], cc: [], bcc: [], subject: "Offer", body_text: "", staged: [], origin: "agent" } as MailDraft;
     await useMailStore.getState().openAgentDraft(draft);
     await useMailStore.getState().openAgentDraft(draft);
-    const { mailTabs, activeMailTab, overlayOpen } = useMailStore.getState();
-    expect(overlayOpen).toBe(true);
+    const { mailTabs, activeMailTab } = useMailStore.getState();
+    expect(isViewShown("mail")).toBe(true);
     expect(mailTabs).toHaveLength(1);
     expect(mailTabs[0].kind === "compose" && mailTabs[0].draft?.id).toBe("d1");
     expect(activeMailTab).toBe(mailTabs[0].id);

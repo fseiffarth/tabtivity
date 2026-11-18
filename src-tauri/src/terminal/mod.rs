@@ -23,6 +23,8 @@ use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, P
 use serde::{Deserialize, Serialize};
 use app_core::{Caller, ClientId, CoreCtx};
 
+pub mod host_pty;
+pub(crate) mod pty_child;
 mod replay_trim;
 use replay_trim::{trim_replay, ScreenState, REPLAY_TRIM_FLOOR};
 
@@ -1176,6 +1178,23 @@ pub struct PtyOptions {
     /// refused at spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant: Option<crate::services::assistant::AssistantLaunch>,
+    /// This launch is a session mux's create-or-attach client: set by
+    /// `SessionMux::wrap` (and `tmux_local::wrap_pty_options_local`) and by
+    /// nothing else — never read from a payload, never written to one, so a
+    /// renderer cannot claim it and an older payload reads `false`. What
+    /// `PtyMeta::local_tmux` and the detached spawn's "already wrapped"
+    /// check go by, instead of guessing from `cmd == "tmux"`.
+    #[serde(skip)]
+    pub mux_wrapped: bool,
+    /// The MCP stamp a **newly created** local session gets
+    /// (`root_mcp_mark::Mark::render`, tmux user option
+    /// `root_mcp_mark::OPTION`): set by `launch_prep::prepare` only when its
+    /// listing found no such session, and by nothing else — never read from a
+    /// payload (`serde(skip)`), so a renderer cannot stamp a session. An
+    /// attach never carries one: the session keeps the stamp it was created
+    /// with.
+    #[serde(skip)]
+    pub mcp_mark: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1212,8 +1231,43 @@ pub struct TerminalReady {
 
 // ── Internal entry ─────────────────────────────────────────────────────────
 
+/// What the registry does with a PTY's master end: resize it and read its
+/// size. A portable-pty master is one; a pipe-backed PTY's
+/// ([`host_pty::HostPty`]) is the other.
+pub trait PtyMaster: Send {
+    fn resize(&self, size: PtySize) -> Result<(), String>;
+    fn get_size(&self) -> Result<PtySize, String>;
+}
+
+impl PtyMaster for Box<dyn MasterPty + Send> {
+    fn resize(&self, size: PtySize) -> Result<(), String> {
+        (**self).resize(size).map_err(|e| e.to_string())
+    }
+
+    fn get_size(&self) -> Result<PtySize, String> {
+        (**self).get_size().map_err(|e| e.to_string())
+    }
+}
+
+/// A master the registry can hold ([`PtyMaster`]).
+pub trait IntoPtyMaster {
+    fn into_pty_master(self) -> Box<dyn PtyMaster>;
+}
+
+impl IntoPtyMaster for Box<dyn MasterPty + Send> {
+    fn into_pty_master(self) -> Box<dyn PtyMaster> {
+        Box::new(self)
+    }
+}
+
+impl IntoPtyMaster for Box<dyn PtyMaster> {
+    fn into_pty_master(self) -> Box<dyn PtyMaster> {
+        self
+    }
+}
+
 struct PtyEntry {
-    master: Box<dyn MasterPty + Send>,
+    master: Box<dyn PtyMaster>,
     input_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     child: Box<dyn Child + Send + Sync>,
     dead: Arc<AtomicBool>,
@@ -1249,7 +1303,7 @@ pub struct PtyMeta {
     /// ([`PtyRegistry::release_client`]).
     pub client: Option<ClientId>,
     /// The local tmux session this PTY is a client of, when its spawn was
-    /// wrapped in one (`tmux_local::wrap_pty_options_local`) — what another
+    /// wrapped in one (`SessionMux::wrap`, `PtyOptions::mux_wrapped`) — what another
     /// client attaches to.
     pub local_tmux: Option<String>,
     /// Set on an attach PTY: the tab it shows. Such a PTY carries none of the
@@ -1472,7 +1526,7 @@ impl PtyRegistry {
     pub fn insert(
         &mut self,
         id: String,
-        master: Box<dyn MasterPty + Send>,
+        master: impl IntoPtyMaster,
         writer: Box<dyn Write + Send>,
         child: Box<dyn Child + Send + Sync>,
         dead: Arc<AtomicBool>,
@@ -1486,7 +1540,7 @@ impl PtyRegistry {
     pub fn insert_with(
         &mut self,
         id: String,
-        master: Box<dyn MasterPty + Send>,
+        master: impl IntoPtyMaster,
         writer: Box<dyn Write + Send>,
         child: Box<dyn Child + Send + Sync>,
         dead: Arc<AtomicBool>,
@@ -1525,7 +1579,7 @@ impl PtyRegistry {
         self.entries.insert(
             id,
             PtyEntry {
-                master,
+                master: master.into_pty_master(),
                 input_tx,
                 child,
                 dead,
@@ -1554,7 +1608,7 @@ impl PtyRegistry {
     pub fn insert_current_spawn(
         &mut self,
         id: String,
-        master: Box<dyn MasterPty + Send>,
+        master: impl IntoPtyMaster,
         writer: Box<dyn Write + Send>,
         child: Box<dyn Child + Send + Sync>,
         dead: Arc<AtomicBool>,
@@ -1586,6 +1640,16 @@ impl PtyRegistry {
         self.entries.get(id).is_some_and(|e| {
             e.ai || e.meta.attach_of.as_deref().and_then(|tab| self.entries.get(tab)).is_some_and(|t| t.ai)
         })
+    }
+
+    /// Every live PTY that runs an AI, with the tab it shows: itself, or for an
+    /// attach PTY the tab it attaches to.
+    pub fn ai_ids(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .filter(|(id, _)| self.is_ai(id))
+            .map(|(id, e)| (id.clone(), e.meta.attach_of.clone().unwrap_or_else(|| id.clone())))
+            .collect()
     }
 
     /// `None` when no such tab is live; `Some(None)` for a remote one.
@@ -1786,6 +1850,12 @@ impl PtyRegistry {
             .any(|(id, e)| pty_id_in_scope(id, scope) && !e.dead.load(Ordering::SeqCst))
     }
 
+    /// The local tmux session `id` is a client of, when its spawn was wrapped
+    /// in one (`PtyMeta::local_tmux`).
+    pub fn local_tmux_of(&self, id: &str) -> Option<String> {
+        self.entries.get(id).and_then(|e| e.meta.local_tmux.clone())
+    }
+
     /// OS process id of the child for `id`, if it is still tracked.
     pub fn pid(&self, id: &str) -> Option<u32> {
         self.entries.get(id).and_then(|e| e.child.process_id())
@@ -1862,6 +1932,10 @@ fn teardown_with(taken: Vec<TakenPty>, mode: ReapMode) {
         // a respawn that fails first ends it in `launch_prep`), so a stale
         // kill touches neither.
         if crate::services::launch_prep::on_tab_gone(&id, entry.seq) {
+            // The server it printed is gone with it: end the port forwards
+            // only this tab asked for (the registry at once, `ssh -O cancel`
+            // on a thread of its own).
+            crate::services::port_forward::close_for_tab(&id);
             // The tab is gone for good, so stop watching for its Codex session.
             crate::services::codex_bind::untrack_now(&id);
             // Containerized tab: killing the child above only killed the
@@ -1890,6 +1964,30 @@ pub fn spawn_pty(
     opts: PtyOptions,
     seq: u64,
 ) -> Result<(), String> {
+    spawn_pty_with(ctx, registry, opts, seq, false)
+}
+
+/// [`spawn_pty`] of a launch that may only attach to its live session
+/// (`PreparedLaunch::host_attach_only`): on Windows the session host gets
+/// `Attach` alone, never a create-or-attach `Spawn`. Elsewhere the same as
+/// [`spawn_pty`].
+pub fn spawn_pty_attach_only(
+    ctx: CoreCtx,
+    registry: Arc<Mutex<PtyRegistry>>,
+    opts: PtyOptions,
+    seq: u64,
+) -> Result<(), String> {
+    spawn_pty_with(ctx, registry, opts, seq, true)
+}
+
+#[cfg_attr(not(windows), allow(unused_variables))]
+fn spawn_pty_with(
+    ctx: CoreCtx,
+    registry: Arc<Mutex<PtyRegistry>>,
+    opts: PtyOptions,
+    seq: u64,
+    attach_only: bool,
+) -> Result<(), String> {
     // Record this PTY id so a later remount (HMR, webview reload) is a known
     // re-spawn. Agent-session resolution (Claude/Codex resume args) happens in
     // the caller (`commands::terminal::pty_spawn`) *before* any ssh wrapping, so
@@ -1899,15 +1997,143 @@ pub fn spawn_pty(
 
     // A server client's PTY is recorded as its (`release_client`), and one
     // that is a local tmux client can be attached to by another client
-    // (`join_tab`). The wrap leaves `cmd` = `tmux` and the session name in
-    // `tmux_session`; nothing else spawns a bare `tmux` with one.
+    // (`join_tab`). The wrap marks the launch (`PtyOptions::mux_wrapped`)
+    // and leaves the session name in `tmux_session`.
     let meta = PtyMeta {
         client: server_client(&ctx).cloned(),
-        local_tmux: opts.tmux_session.clone().filter(|_| opts.cmd == "tmux"),
+        local_tmux: local_mux_session(&opts),
         attach_of: None,
     };
+    // On Windows a launch the session host takes (`WinHostMux::wrap` marked
+    // it, its argv untouched) is a pipe-backed stream onto its session.
+    #[cfg(windows)]
+    if opts.mux_wrapped {
+        use crate::services::session_mux::winhost;
+        let open = move |o: &PtyOptions| winhost::open_tab(o, attach_only);
+        return spawn_via_host(ctx, registry, opts, meta, seq, open, winhost::end_session);
+    }
     let cmd = build_command(&opts);
     launch(ctx, registry, &opts.id, cmd, opts.cols, opts.rows, meta, Some(&opts), seq)
+}
+
+/// Whether this run already told the window it fell back
+/// ([`crate::services::session_host::route::FALLBACK_EVENT`]).
+#[cfg_attr(not(windows), allow(dead_code))]
+static HOST_FALLBACK_NOTICED: AtomicBool = AtomicBool::new(false);
+
+/// Spawn `opts` as a stream onto its session in the session host
+/// (`open_host`: connect, create-or-attach `Spawn`, `Attach`), applying the
+/// fallback rule (`session_host::route::decide`) when the host does not
+/// serve it: an absent host runs the tab in-process, as without the host, and
+/// tells the window once; a silent or refusing one fails the spawn with the
+/// rule's error code, never starting a second agent. A stream whose `Spawn`
+/// created the session and whose registration is then refused (a newer
+/// start of the tab won) ends that session through `end_session`: detaching
+/// alone would orphan it. Windows only outside tests, which drive it against
+/// the fake host on every OS.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn spawn_via_host(
+    ctx: CoreCtx,
+    registry: Arc<Mutex<PtyRegistry>>,
+    opts: PtyOptions,
+    mut meta: PtyMeta,
+    seq: u64,
+    open_host: impl FnOnce(&PtyOptions) -> Result<host_pty::HostPty, crate::services::session_host::route::HostFailure>,
+    end_session: fn(&str),
+) -> Result<(), String> {
+    use crate::services::session_host::route::{self, FallbackNotice, SpawnDecision};
+    if let Some(name) = opts.tmux_session.clone() {
+        note_host_spawn(&opts.id, seq, name);
+    }
+    match open_host(&opts) {
+        Ok(pty) => {
+            let created = pty.created;
+            let mut opened = Opened::from(pty);
+            if let Some(name) = opts.tmux_session.clone().filter(|_| created) {
+                let id = opts.id.clone();
+                opened.on_refused = Some(Box::new(move || {
+                    if !session_serves_a_newer_spawn(&id, seq, &name) {
+                        end_session(&name);
+                    }
+                }));
+            }
+            launch_opened(ctx, registry, &opts.id, opened, meta, Some(&opts), seq)
+        }
+        Err(failure) => match route::decide(&failure) {
+            SpawnDecision::FailClosed(code) => Err(route::spawn_error(code, &failure)),
+            SpawnDecision::FallBack => {
+                eprintln!("terminal '{}': the session host is absent ({failure}); running in-process", opts.id);
+                if !HOST_FALLBACK_NOTICED.swap(true, Ordering::SeqCst) {
+                    ctx.emit(route::FALLBACK_EVENT, FallbackNotice { id: opts.id.clone(), reason: failure.to_string() });
+                }
+                // An in-process ConPTY: no session to attach to.
+                meta.local_tmux = None;
+                let cmd = build_command(&opts);
+                launch(ctx, registry, &opts.id, cmd, opts.cols, opts.rows, meta, Some(&opts), seq)
+            }
+        },
+    }
+}
+
+/// The session host session each tab id's newest host spawn opens, with
+/// that spawn's seq: what a refused older spawn checks before ending the
+/// session it created ([`session_serves_a_newer_spawn`]).
+fn host_spawn_sessions() -> &'static Mutex<HashMap<String, (u64, String)>> {
+    static SESSIONS: OnceLock<Mutex<HashMap<String, (u64, String)>>> = OnceLock::new();
+    SESSIONS.get_or_init(Default::default)
+}
+
+/// Spawn `seq` of `id` opens host session `name` — recorded only while it is
+/// the id's newest spawn, so a stale one never shadows a newer one.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn note_host_spawn(id: &str, seq: u64, name: String) {
+    let mut map = host_spawn_sessions().lock_ok();
+    if crate::services::agent_fence::is_current_spawn(id, seq) {
+        map.insert(id.to_string(), (seq, name));
+    }
+}
+
+/// Whether host session `name`, which refused spawn `seq` of `id` created,
+/// is the one the id's current, newer spawn uses: two spawns raced, the
+/// older created it, the newer attached — ending it would kill the live
+/// tab's agent. Otherwise the record is dropped and the session is the
+/// refused spawn's alone to end.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn session_serves_a_newer_spawn(id: &str, seq: u64, name: &str) -> bool {
+    let mut map = host_spawn_sessions().lock_ok();
+    let serves = map.get(id).is_some_and(|(newer, used)| {
+        *newer != seq && used == name && crate::services::agent_fence::is_current_spawn(id, *newer)
+    });
+    if !serves && map.get(id).is_some_and(|(recorded, _)| *recorded == seq) {
+        map.remove(id);
+    }
+    serves
+}
+
+/// `pty_kill` of a tab with no PTY in the registry, while the id's newest
+/// spawn is a session host open in flight (Windows; [`note_host_spawn`]
+/// recorded it as it began): a host open takes seconds (a lazy start,
+/// `Spawn`) and would otherwise register after the tab closed, its agent
+/// running with no tab. Its generation is torn down now
+/// (`launch_prep::on_tab_gone`), so its registration is refused
+/// (`insert_current_spawn`) and a session its `Spawn` created is ended
+/// (`spawn_via_host`'s `on_refused`). Any other spawn — every one on Linux
+/// and macOS, a remount's or a popout's in-process one — is left alone, as
+/// before. Blocking; the seq it retired, if any.
+pub fn retire_inflight_spawn(id: &str) -> Option<u64> {
+    let seq = crate::services::agent_fence::latest_spawn(id)?;
+    let host_open = host_spawn_sessions().lock_ok().get(id).is_some_and(|(recorded, _)| *recorded == seq);
+    if !host_open {
+        return None;
+    }
+    crate::services::launch_prep::on_tab_gone(id, seq);
+    Some(seq)
+}
+
+/// The local session a spawn of `opts` is a client of: its `tmux_session`,
+/// when a session mux wrapped the launch — never guessed from `cmd`.
+fn local_mux_session(opts: &PtyOptions) -> Option<String> {
+    opts.tmux_session.clone().filter(|_| opts.mux_wrapped)
 }
 
 /// Give `ctx`'s server client a PTY of its own onto `opts.id`'s tab when the
@@ -1972,6 +2198,8 @@ pub fn join_tab(
         tmux_session: None,
         tmux_attach: None,
         host_bound_uid: None,
+        mux_wrapped: false,
+        mcp_mark: None,
     };
     let mut cmd = build_command(&attach);
     if !std::path::Path::new(&attach.cwd).is_dir() {
@@ -1999,23 +2227,68 @@ pub struct TabJoin {
     pub stale: Option<TakenPty>,
 }
 
-/// Open a PTY of `cols`×`rows`, run `cmd` in it, register it under `id` and
-/// stream it. `tab` is the tab's own spawn (its options): the bookkeeping that
-/// follows a tab's process — Codex binding, MCP tokens, the fence — runs for
-/// it alone; `None` is an attach PTY, whose events name `meta.attach_of`.
-/// `seq` is the spawn's generation (`PreparedLaunch::spawn_seq` for a tab).
-#[allow(clippy::too_many_arguments)]
-fn launch(
-    ctx: CoreCtx,
-    registry: Arc<Mutex<PtyRegistry>>,
-    id: &str,
-    cmd: CommandBuilder,
-    cols: u16,
-    rows: u16,
-    meta: PtyMeta,
-    tab: Option<&PtyOptions>,
-    seq: u64,
-) -> Result<(), String> {
+/// Revoke the lane token a tab's spawn held in `var` once the spawn ended, and
+/// tell the views of the lanes that keep per-tab state. Every variable of
+/// `root_mcp::LANE_TOKEN_ENVS` lands here, so a lane without its own arm is
+/// still revoked.
+fn lane_token_gone(ctx: &CoreCtx, var: &str, token: &str) {
+    use crate::services::root_mcp::{self as root_mcp, revoke_token};
+    match var {
+        root_mcp::TOKEN_ENV | root_mcp::SCHEDULE_TOKEN_ENV => {
+            let state = crate::storage::state_dir();
+            crate::services::root_mcp_review::on_spawn_gone(&state, token);
+            ctx.emit("root-mcp-review-changed", crate::services::root_mcp_review::pending_count(&state));
+        }
+        root_mcp::GIT_TOKEN_ENV => {
+            revoke_token(token);
+            ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+        }
+        root_mcp::MARKUP_TOKEN_ENV => {
+            // The tab's open markup question goes with its session; the
+            // sweep rings `markup-mcp-changed` through the change hook.
+            revoke_token(token);
+            crate::services::markup_mcp::sweep();
+        }
+        root_mcp::PRINT_TOKEN_ENV => {
+            // The tab's pending print requests close with its session;
+            // the sweep rings `print-mcp-changed` through the change hook.
+            revoke_token(token);
+            crate::services::print_mcp::sweep();
+        }
+        root_mcp::TABS_TOKEN_ENV => {
+            // The tab stops being listed to its siblings; its inbox stays for
+            // a respawn of the same saved tab. The sweep rings
+            // `tabs-mcp-changed` through the change hook.
+            revoke_token(token);
+            crate::services::tabs_mcp::sweep();
+        }
+        // Help, cockpit, and the assistant's web lane (a chat's token dies
+        // with its CLI): nothing else to tell.
+        _ => { revoke_token(token); }
+    }
+}
+
+/// A started terminal, not yet registered: a portable-pty pair with its
+/// child, or a pipe-backed stream onto a session host session
+/// ([`host_pty::HostPty`]).
+struct Opened {
+    master: Box<dyn PtyMaster>,
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn Child + Send + Sync>,
+    /// Run when the registry refuses it (a newer start of the tab won),
+    /// after its child is killed: what more there is to end.
+    on_refused: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl From<host_pty::HostPty> for Opened {
+    fn from(pty: host_pty::HostPty) -> Self {
+        Self { master: pty.master, reader: pty.reader, writer: pty.writer, child: pty.child, on_refused: None }
+    }
+}
+
+/// Open a PTY of `cols`×`rows` in this process and run `cmd` in it.
+fn open_native(cmd: CommandBuilder, cols: u16, rows: u16) -> Result<Opened, String> {
     let pty_system = NativePtySystem::default();
 
     // Never open a zero-size PTY. A 0-col/0-row size can slip in if the caller
@@ -2036,12 +2309,10 @@ fn launch(
         })
         .map_err(|e| format!("openpty: {e}"))?;
 
-    let child = pair
-        .slave
-        .spawn_command(cmd)
+    let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd)
         .map_err(|e| format!("spawn: {e}"))?;
 
-    let mut reader = pair
+    let reader = pair
         .master
         .try_clone_reader()
         .map_err(|e| format!("clone reader: {e}"))?;
@@ -2049,7 +2320,42 @@ fn launch(
         .master
         .take_writer()
         .map_err(|e| format!("take writer: {e}"))?;
+    Ok(Opened { master: pair.master.into_pty_master(), reader, writer, child, on_refused: None })
+}
 
+/// Open a PTY of `cols`×`rows`, run `cmd` in it, register it under `id` and
+/// stream it. `tab` is the tab's own spawn (its options): the bookkeeping that
+/// follows a tab's process — Codex binding, MCP tokens, the fence — runs for
+/// it alone; `None` is an attach PTY, whose events name `meta.attach_of`.
+/// `seq` is the spawn's generation (`PreparedLaunch::spawn_seq` for a tab).
+#[allow(clippy::too_many_arguments)]
+fn launch(
+    ctx: CoreCtx,
+    registry: Arc<Mutex<PtyRegistry>>,
+    id: &str,
+    cmd: CommandBuilder,
+    cols: u16,
+    rows: u16,
+    meta: PtyMeta,
+    tab: Option<&PtyOptions>,
+    seq: u64,
+) -> Result<(), String> {
+    let opened = open_native(cmd, cols, rows)?;
+    launch_opened(ctx, registry, id, opened, meta, tab, seq)
+}
+
+/// [`launch`] of a terminal already started: register it under `id` and
+/// stream it.
+fn launch_opened(
+    ctx: CoreCtx,
+    registry: Arc<Mutex<PtyRegistry>>,
+    id: &str,
+    opened: Opened,
+    meta: PtyMeta,
+    tab: Option<&PtyOptions>,
+    seq: u64,
+) -> Result<(), String> {
+    let Opened { master, mut reader, writer, child, on_refused } = opened;
     // The id the frontend knows this PTY by: the tab's, for an attach PTY too.
     let payload_id = meta.attach_of.clone().unwrap_or_else(|| id.to_string());
     let dead = Arc::new(AtomicBool::new(false));
@@ -2059,10 +2365,10 @@ fn launch(
     let refused = {
         let mut reg = registry.lock_ok();
         if tab.is_some() {
-            reg.insert_current_spawn(id.to_string(), pair.master, writer, child, dead.clone(), meta, seq)
+            reg.insert_current_spawn(id.to_string(), master, writer, child, dead.clone(), meta, seq)
                 .err()
         } else {
-            reg.insert_with(id.to_string(), pair.master, writer, child, dead.clone(), meta, seq);
+            reg.insert_with(id.to_string(), master, writer, child, dead.clone(), meta, seq);
             None
         }
     };
@@ -2071,6 +2377,9 @@ fn launch(
             reap_child_subtree(pid, ReapMode::Graceful);
         }
         let _ = child.kill();
+        if let Some(end) = on_refused {
+            end();
+        }
         return Err(format!("terminal '{id}': a newer start of this tab replaced this one"));
     }
 
@@ -2123,16 +2432,13 @@ fn launch(
     } else {
         route_open_at(&id, Some(&payload_id), route_seq);
     }
-    let env = tab.map(|opts| &opts.env);
-    let mcp_token = env.and_then(|env| {
-        env.get(crate::services::root_mcp::TOKEN_ENV)
-            .or_else(|| env.get(crate::services::root_mcp::SCHEDULE_TOKEN_ENV))
-            .cloned()
-    });
-    let help_token = env.and_then(|env| env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned());
-    let push_token = env.and_then(|env| env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned());
-    let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
-    let web_token = env.and_then(|env| env.get(crate::services::root_mcp::WEB_TOKEN_ENV).cloned());
+    // Every lane token this spawn holds (`root_mcp::LANE_TOKEN_ENVS`), each
+    // revoked when the spawn ends ([`lane_token_gone`]).
+    let lane_tokens: Vec<(&'static str, String)> = tab
+        .map(|opts| crate::services::root_mcp::LANE_TOKEN_ENVS.iter()
+            .filter_map(|var| opts.env.get(*var).map(|token| (*var, token.clone())))
+            .collect())
+        .unwrap_or_default();
     tokio::spawn(async move {
         let emitter = ctx.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
@@ -2172,30 +2478,13 @@ fn launch(
         if current_spawn_ended {
             if is_tab {
                 crate::services::agent_fence::on_tab_gone(&id, route_seq);
+                // The program ended by itself: the server it ran is gone too.
+                crate::services::port_forward::close_for_tab(&id);
             }
             // A login PTY whose login ended is no paste target any more.
             crate::commands::credentials::forget_login_pty_spawn(&id, route_seq);
-            if let Some(token) = help_token {
-                crate::services::root_mcp::revoke_token(&token);
-            }
-            if let Some(token) = push_token {
-                crate::services::root_mcp::revoke_token(&token);
-                ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
-            }
-            if let Some(token) = markup_token {
-                // The tab's open markup question goes with its session; the
-                // sweep rings `markup-mcp-changed` through the change hook.
-                crate::services::root_mcp::revoke_token(&token);
-                crate::services::markup_mcp::sweep();
-            }
-            if let Some(token) = web_token {
-                // The assistant's web lane: a chat's token dies with its CLI.
-                crate::services::root_mcp::revoke_token(&token);
-            }
-            if let Some(token) = mcp_token {
-                let state = crate::storage::state_dir();
-                crate::services::root_mcp_review::on_spawn_gone(&state, &token);
-                ctx.emit("root-mcp-review-changed", crate::services::root_mcp_review::pending_count(&state));
+            for (var, token) in &lane_tokens {
+                lane_token_gone(&ctx, var, token);
             }
             let exit = TerminalExit { id: payload_id, code: None };
             match exit_windows {
@@ -2319,6 +2608,16 @@ fn command_for_resolved(path: std::path::PathBuf) -> CommandBuilder {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase());
     match ext.as_deref() {
+        // An npm global shim just runs `node <script>.js %*`. Going through
+        // `cmd.exe /C` re-parses every argument's quotes, which mangles the JSON
+        // an agent is launched with (`--mcp-config {"mcpServers":…}`), so run
+        // node on the script itself and the argv arrives exactly as built.
+        Some("cmd") if npm_shim_target(&path).is_some() => {
+            let (node, script) = npm_shim_target(&path).expect("checked above");
+            let mut c = CommandBuilder::new(node);
+            c.arg(script);
+            c
+        }
         Some("cmd") | Some("bat") => {
             let mut c = CommandBuilder::new("cmd.exe");
             c.arg("/D");
@@ -2339,6 +2638,40 @@ fn command_for_resolved(path: std::path::PathBuf) -> CommandBuilder {
     }
 }
 
+/// The script an npm-generated `*.cmd` shim runs, as `(node, script)`. The shim's
+/// last line is `… "%_prog%" "%dp0%\node_modules\<pkg>\<entry>.js" %*`, with
+/// `_prog` the `node.exe` beside the shim when there is one and `node` from PATH
+/// otherwise. `None` for any other batch file, or when the script is missing, so
+/// those keep their `cmd.exe /C` launch.
+fn npm_shim_target(shim: &std::path::Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let text = std::fs::read_to_string(shim).ok()?;
+    let line = text.lines().rev().find(|l| l.contains("%*") && (l.contains("%dp0%") || l.contains("%~dp0")))?;
+    let after = line.split_once("%dp0%").or_else(|| line.split_once("%~dp0"))?.1;
+    let rel = after.trim_start_matches(['\\', '/']).split('"').next()?;
+    let lower = rel.to_ascii_lowercase();
+    if !(lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs")) || rel.contains("..") {
+        return None;
+    }
+    let dir = shim.parent()?;
+    // One component at a time: a `\` inside a single `join` is a separator on
+    // Windows only, and the shim is read (and tested) on every OS.
+    let script = rel.split(['\\', '/']).filter(|part| !part.is_empty()).fold(dir.to_path_buf(), |path, part| path.join(part));
+    if !script.is_file() {
+        return None;
+    }
+    let local_node = dir.join("node.exe");
+    let node = if local_node.is_file() { local_node } else { crate::paths::resolve_executable("node")? };
+    Some((node, script))
+}
+
+/// The command an in-process spawn of `opts` would run — program, args, cwd
+/// and the whole environment — for a session mux that runs it elsewhere
+/// (`session_mux::winhost`, which hands it to the Windows session host).
+#[cfg(windows)]
+pub(crate) fn launch_command(opts: &PtyOptions) -> CommandBuilder {
+    build_command(opts)
+}
+
 fn build_command(opts: &PtyOptions) -> CommandBuilder {
     let cmd_str = if opts.cmd.is_empty() {
         default_shell()
@@ -2355,7 +2688,17 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
     // Tabtivity's own helpers (the `ssh` of a remote tab, the local `tmux`) come
     // from the root-owned system dirs first, never a user-writable one (#861).
     let resolved = crate::paths::helper_program(std::ffi::OsStr::new(&cmd_str))
-        .or_else(|| crate::paths::resolve_offpath_binary(&cmd_str));
+        .or_else(|| crate::paths::resolve_offpath_binary(&cmd_str))
+        // Windows: a bare name left to `portable_pty`'s own PATH search takes
+        // the first file named exactly that — the `#!/bin/sh` agent shim in
+        // `<state>/bin` (first on every tab's PATH), or npm's `codex` script
+        // beside `codex.cmd` — and `CreateProcess` refuses both (error 193).
+        // `resolve_executable` skips the shim dir and tries PATHEXT first.
+        .or_else(|| {
+            (cfg!(windows) && !cmd_str.contains(['/', '\\']))
+                .then(|| crate::paths::resolve_executable(&cmd_str))
+                .flatten()
+        });
     let mut cmd = match resolved {
         Some(resolved) => command_for_resolved(resolved),
         None => CommandBuilder::new(&cmd_str),
@@ -2371,6 +2714,16 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
     }
     for (k, v) in &opts.env {
         cmd.env(k, v);
+    }
+    // A tab `services::agent_privacy` verified for a local-models-only project
+    // inherits no provider key from this process (the Linux fence unsets them
+    // again inside, for what a tmux server would add).
+    if crate::services::agent_privacy::stamped(opts) {
+        for name in crate::services::agent_privacy::unset_names(opts.env.keys()) {
+            if !opts.env.contains_key(&name) {
+                cmd.env_remove(name);
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -3444,6 +3797,8 @@ mod tests {
             env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false, agent: true,
             project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
             local_model: false, schedule_target_id: None, host_session: false, api_key: None,
+            mux_wrapped: false,
+            mcp_mark: None,
         };
         codex_bind::reserve_resume(&mut opts).expect("the respawn claims its session").keep();
         let claim = codex_bind::resume_seq(id);
@@ -3508,7 +3863,7 @@ mod tests {
         let mut cmd = CommandBuilder::new("sh");
         cmd.arg("-c");
         cmd.arg("sleep 300; true");
-        let child = pair.slave.spawn_command(cmd).expect("spawn sh");
+        let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd).expect("spawn sh");
         let leader = child.process_id().expect("leader pid");
         let writer = pair.master.take_writer().expect("take writer");
         let master = pair.master;
@@ -3578,7 +3933,7 @@ mod tests {
             let mut cmd = CommandBuilder::new("sh");
             cmd.arg("-c");
             cmd.arg("sleep 300; true");
-            let child = pair.slave.spawn_command(cmd).expect("spawn sh");
+            let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd).expect("spawn sh");
             leaders.push(child.process_id().expect("leader pid"));
             let writer = pair.master.take_writer().expect("take writer");
             registry.lock().unwrap().insert(
@@ -3752,6 +4107,273 @@ mod client_tests {
 
     fn web(n: u32) -> ClientId {
         ClientId::new(format!("web-{n}"))
+    }
+
+    /// What `join_tab` attaches to is the session a mux wrapped the launch
+    /// in — the explicit marker, not `cmd == "tmux"`. A payload can neither
+    /// set the marker nor lose an old shape for its absence.
+    #[test]
+    fn only_a_mux_wrapped_launch_is_a_local_session_client() {
+        let payload = serde_json::json!({
+            "id": "t", "cmd": "tmux", "args": ["new-session", "-A", "-s", "s"], "cwd": "", "cols": 80, "rows": 24,
+            "tmux_session": "s", "mux_wrapped": true,
+        });
+        let mut opts: PtyOptions = serde_json::from_value(payload).expect("an old payload still reads");
+        assert!(!opts.mux_wrapped, "a renderer cannot claim the wrap");
+        assert_eq!(local_mux_session(&opts), None, "a bare `tmux` cmd is no longer read as wrapped");
+        opts.mux_wrapped = true;
+        assert_eq!(local_mux_session(&opts).as_deref(), Some("s"));
+        assert!(serde_json::to_value(&opts).unwrap().get("mux_wrapped").is_none(), "never written out");
+        opts.tmux_session = None;
+        assert_eq!(local_mux_session(&opts), None);
+        // A wrap marks exactly what it took: nothing where no backend runs.
+        let mut opts: PtyOptions = serde_json::from_value(serde_json::json!({
+            "id": "t", "cmd": "bash", "args": [], "cwd": "", "cols": 80, "rows": 24, "tmux_session": "s",
+        }))
+        .unwrap();
+        let mux = crate::services::session_mux::mux();
+        mux.wrap(&mut opts);
+        assert_eq!(opts.mux_wrapped, mux.available());
+        // tmux rewrites the argv into its client; the Windows host only marks it.
+        let tmux = mux.kind() == crate::services::session_mux::MuxKind::Tmux;
+        assert_eq!(opts.cmd == "tmux", mux.available() && tmux);
+    }
+
+    /// A launch marked for the session host (fake host, every OS).
+    fn host_tab(id: &str, session: &str) -> PtyOptions {
+        let shell = if cfg!(windows) { ("cmd.exe", vec!["/c".to_string(), "exit".into()]) } else { ("sh", vec!["-c".to_string(), "exit 0".into()]) };
+        let mut opts: PtyOptions = serde_json::from_value(serde_json::json!({
+            "id": id, "cmd": shell.0, "args": shell.1, "cwd": std::env::temp_dir(), "cols": 80, "rows": 24,
+            "tmux_session": session,
+        }))
+        .unwrap();
+        opts.mux_wrapped = true;
+        opts
+    }
+
+    /// Create-or-attach `o`'s session (`fake_pty::spawn_req`) on the fake
+    /// host behind `io` and attach to it.
+    fn fake_open(
+        io: tokio::io::DuplexStream,
+        o: &PtyOptions,
+    ) -> Result<host_pty::HostPty, crate::services::session_host::route::HostFailure> {
+        use crate::services::session_host::{client::Client, fake_pty};
+        let name = o.tmux_session.clone().unwrap();
+        host_pty::open(
+            move || async move {
+                let fail = |e: crate::services::session_host::client::ClientError| {
+                    crate::services::session_host::route::HostFailure::Silent(e.to_string())
+                };
+                let mut c = Client::handshake(io, fake_pty::TOKEN, "t").await.map_err(fail)?;
+                let created = c.spawn(fake_pty::spawn_req(&name, false)).await.map_err(fail)?;
+                let attached = c.attach(&name, 80, 24, 0).await.map_err(fail)?;
+                Ok((attached, created))
+            },
+            Duration::from_secs(10),
+        )
+    }
+
+    /// Sessions `spawn_via_host` asked to end (its `end_session` in tests).
+    static ENDED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn record_ended(name: &str) {
+        ENDED.lock().unwrap().push(name.to_string());
+    }
+
+    /// A host spawn superseded by a newer start of the tab: the session its
+    /// `Spawn` created is ended (detaching alone would orphan it); one it
+    /// only attached to — somebody else's — is left running.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_superseded_host_spawn_ends_only_a_session_it_created() {
+        use crate::services::session_host::{client::Client, fake_pty};
+        let (host, _fake, _clock) = fake_pty::test_host();
+        let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
+        let events = RecordingEvents::new();
+        let spawn_stale = |tab: &'static str, session: &'static str| {
+            let ctx = ctx_as(Caller::Local(ClientId::main()), events.clone());
+            let opts = host_tab(tab, session);
+            let meta = PtyMeta { client: None, local_tmux: local_mux_session(&opts), attach_of: None };
+            let stale = crate::services::agent_fence::begin_spawn(tab);
+            crate::services::agent_fence::begin_spawn(tab);
+            let (reg, io) = (registry.clone(), fake_pty::connect_pair(&host));
+            tokio::task::spawn_blocking(move || {
+                spawn_via_host(ctx, reg, opts, meta, stale, move |o| fake_open(io, o), record_ended)
+            })
+        };
+        let refused = spawn_stale("host-s:new", "made-here").await.unwrap();
+        assert!(refused.unwrap_err().contains("newer start"));
+        assert!(ended("made-here"), "the session it created is ended");
+
+        let mut c = Client::handshake(fake_pty::connect_pair(&host), fake_pty::TOKEN, "t").await.unwrap();
+        c.spawn(fake_pty::spawn_req("theirs", false)).await.unwrap();
+        let refused = spawn_stale("host-s:old", "theirs").await.unwrap();
+        assert!(refused.is_err());
+        assert!(!ended("theirs"), "a session it only attached to runs on");
+        assert!(registry.lock().unwrap().input_sender("host-s:new").is_none());
+    }
+
+    fn ended(name: &str) -> bool {
+        ENDED.lock().unwrap().iter().any(|n| n == name)
+    }
+
+    /// A tab closed while its host open is in flight: `pty_kill` finds no
+    /// PTY and retires the spawn, so the late registration is refused and
+    /// the session its `Spawn` created is ended — no agent runs tabless.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tab_closed_while_its_host_open_is_in_flight_leaves_no_session() {
+        use crate::services::session_host::fake_pty;
+        let (host, _fake, _clock) = fake_pty::test_host();
+        let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
+        let ctx = ctx_as(Caller::Local(ClientId::main()), RecordingEvents::new());
+        let tab = "host-k:closing";
+        let opts = host_tab(tab, "closed-early");
+        let meta = PtyMeta { client: None, local_tmux: local_mux_session(&opts), attach_of: None };
+        let seq = crate::services::agent_fence::begin_spawn(tab);
+        let (reg, io) = (registry.clone(), fake_pty::connect_pair(&host));
+        let spawned = tokio::task::spawn_blocking(move || {
+            let open = move |o: &PtyOptions| {
+                let pty = fake_open(io, o);
+                // The tab closes while the open runs: `pty_kill` finds no PTY.
+                assert!(registry_is_empty_and_retire(tab), "the in-flight spawn is retired");
+                pty
+            };
+            spawn_via_host(ctx, reg, opts, meta, seq, open, record_ended)
+        })
+        .await
+        .unwrap();
+        assert!(spawned.unwrap_err().contains("newer start"), "the late registration is refused");
+        assert!(ended("closed-early"), "the session it created is ended");
+        assert!(registry.lock().unwrap().input_sender(tab).is_none());
+        assert_eq!(crate::services::agent_fence::latest_spawn(tab), None, "nothing of the tab is left");
+        assert_eq!(retire_inflight_spawn(tab), None, "a second kill finds nothing");
+    }
+
+    fn registry_is_empty_and_retire(tab: &str) -> bool {
+        retire_inflight_spawn(tab).is_some()
+    }
+
+    /// `pty_kill` of an id with no PTY leaves an in-flight spawn that is not
+    /// a session host open alone (a remount, a StrictMode double mount, a
+    /// popout handover, and every spawn off Windows): it still registers.
+    #[test]
+    fn a_kill_never_retires_an_in_flight_spawn_that_is_not_a_host_open() {
+        let tab = "host-k:in-process";
+        let seq = crate::services::agent_fence::begin_spawn(tab);
+        assert_eq!(retire_inflight_spawn(tab), None);
+        assert!(crate::services::agent_fence::is_current_spawn(tab, seq), "the spawn is untouched");
+        // A host open of an older spawn of the id does not count either.
+        note_host_spawn(tab, seq, "s".into());
+        let newer = crate::services::agent_fence::begin_spawn(tab);
+        assert_eq!(retire_inflight_spawn(tab), None, "the newest spawn is not the host open");
+        assert!(crate::services::agent_fence::is_current_spawn(tab, newer));
+        crate::services::agent_fence::abandon_spawn(tab, newer);
+    }
+
+    /// Two spawns of one tab raced: the older created the session, the newer
+    /// attached to it and is the live tab. The older's refusal must not end
+    /// the session the live tab runs in.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refused_older_spawn_never_ends_the_live_tabs_session() {
+        use crate::services::session_host::fake_pty;
+        let (host, _fake, _clock) = fake_pty::test_host();
+        let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
+        let events = RecordingEvents::new();
+        let tab = "host-r:raced";
+        let older = crate::services::agent_fence::begin_spawn(tab);
+        let newer = crate::services::agent_fence::begin_spawn(tab);
+        let spawn = |seq: u64, force_created: bool| {
+            let ctx = ctx_as(Caller::Local(ClientId::main()), events.clone());
+            let opts = host_tab(tab, "raced-shared");
+            let meta = PtyMeta { client: None, local_tmux: local_mux_session(&opts), attach_of: None };
+            let (reg, io) = (registry.clone(), fake_pty::connect_pair(&host));
+            tokio::task::spawn_blocking(move || {
+                let open = move |o: &PtyOptions| {
+                    let mut pty = fake_open(io, o)?;
+                    // The older's `Spawn` was the one that created it.
+                    pty.created |= force_created;
+                    Ok(pty)
+                };
+                spawn_via_host(ctx, reg, opts, meta, seq, open, record_ended)
+            })
+        };
+        spawn(newer, false).await.unwrap().expect("the newer spawn is the live tab");
+        assert!(spawn(older, true).await.unwrap().is_err(), "the older one is refused");
+        assert!(!ended("raced-shared"), "the live tab's session runs on");
+        assert!(registry.lock().unwrap().input_sender(tab).is_some());
+        registry.lock().unwrap().kill_all();
+    }
+
+    /// A tab the session host serves is a pipe-backed PTY in the registry:
+    /// its output reaches the tab's route, `pty_write`'s sender and
+    /// `resize_pty` reach the session, it is a reattachable local session
+    /// (`local_tmux_of`), and the session's end is the tab's `terminal-exit`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_backed_tab_streams_through_the_registry() {
+        use crate::services::session_host::fake_pty;
+        let (host, fake, _clock) = fake_pty::test_host();
+        let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
+        let events = RecordingEvents::new();
+        let ctx = ctx_as(Caller::Local(ClientId::main()), events.clone());
+        let tab = "host-t:agent";
+        let opts = host_tab(tab, "hs");
+        let meta = PtyMeta { client: None, local_tmux: local_mux_session(&opts), attach_of: None };
+        let seq = crate::services::agent_fence::begin_spawn(tab);
+        let io = fake_pty::connect_pair(&host);
+        let reg = registry.clone();
+        tokio::task::spawn_blocking(move || {
+            spawn_via_host(ctx, reg, opts, meta, seq, move |o| fake_open(io, o), |_| panic!("nothing to end"))
+        })
+        .await
+        .unwrap()
+        .expect("the host serves the tab");
+        assert_eq!(registry.lock().unwrap().local_tmux_of(tab).as_deref(), Some("hs"), "a reattachable local session");
+        assert_eq!(registry.lock().unwrap().pid(tab), None, "no local process to reap");
+        let child = fake.last();
+        child.emit(b"hello from the host");
+        fake_pty::eventually(|| route_scrollback(tab).data.contains("hello from the host")).await;
+
+        let sender = registry.lock().unwrap().input_sender(tab).unwrap();
+        sender.send(b"typed".to_vec()).await.unwrap();
+        fake_pty::eventually(|| child.input() == b"typed").await;
+        resize_pty(&registry, tab, 132, 43).unwrap();
+        fake_pty::eventually(|| child.sizes().last() == Some(&(132, 43))).await;
+
+        child.exit(0);
+        fake_pty::eventually(|| !events.payloads("terminal-exit").is_empty()).await;
+        assert_eq!(events.payloads("terminal-exit")[0]["id"], tab);
+        assert!(events.payloads(crate::services::session_host::route::FALLBACK_EVENT).is_empty());
+    }
+
+    /// The fallback rule at the spawn: a silent host fails the spawn with
+    /// its error code and registers nothing; an absent one runs the tab
+    /// in-process (no session) and says so once per run.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_absent_host_falls_back_once_and_a_silent_one_fails_closed() {
+        use crate::services::session_host::route::{HostFailure, ERR_SILENT, FALLBACK_EVENT};
+        let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
+        let events = RecordingEvents::new();
+        let spawn = |tab: &'static str, failure: HostFailure| {
+            let ctx = ctx_as(Caller::Local(ClientId::main()), events.clone());
+            let opts = host_tab(tab, "fallback-s");
+            let meta = PtyMeta { client: None, local_tmux: local_mux_session(&opts), attach_of: None };
+            let seq = crate::services::agent_fence::begin_spawn(tab);
+            let reg = registry.clone();
+            tokio::task::spawn_blocking(move || spawn_via_host(ctx, reg, opts, meta, seq, move |_| Err(failure), |_| {}))
+        };
+        let silent = spawn("host-f:silent", HostFailure::Silent("no answer".into())).await.unwrap();
+        assert_eq!(silent.unwrap_err(), format!("{ERR_SILENT}: no answer"));
+        assert!(registry.lock().unwrap().input_sender("host-f:silent").is_none(), "nothing started");
+
+        HOST_FALLBACK_NOTICED.store(false, Ordering::SeqCst);
+        spawn("host-f:absent", HostFailure::Absent("no copy".into())).await.unwrap().expect("in-process");
+        assert!(registry.lock().unwrap().input_sender("host-f:absent").is_some());
+        assert_eq!(registry.lock().unwrap().local_tmux_of("host-f:absent"), None, "an in-process tab holds no session");
+        spawn("host-f:absent2", HostFailure::Absent("no copy".into())).await.unwrap().expect("in-process");
+        let notices = events.payloads(FALLBACK_EVENT);
+        assert_eq!(notices.len(), 1, "once per run: {notices:?}");
+        assert_eq!(notices[0]["id"], "host-f:absent");
+        assert_eq!(notices[0]["reason"], "no copy");
+        registry.lock().unwrap().kill_all();
     }
 
     fn view(map: &mut HashMap<String, OutputRoute>, id: &str, viewer: &str, window: &str) {
@@ -4028,6 +4650,8 @@ mod client_tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            mux_wrapped: false,
+            mcp_mark: None,
         }
     }
 
@@ -4092,6 +4716,8 @@ mod client_tests {
             tmux_session: None,
             tmux_attach: None,
             host_bound_uid: None,
+            mux_wrapped: false,
+            mcp_mark: None,
         };
         let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
         let ctx = ctx_as(Caller::Local(ClientId::main()), RecordingEvents::new());
@@ -4181,6 +4807,9 @@ mod client_tests {
             tmux_session: Some(session.to_string()),
             tmux_attach: None,
             host_bound_uid: None,
+            // What `SessionMux::wrap` marks; the argv is this test's own server.
+            mux_wrapped: true,
+            mcp_mark: None,
         };
         let attach_argv = |s: &str| -> Vec<String> {
             ["-L", &socket, "-f", "/dev/null", "attach-session", "-t", &format!("={s}")]
@@ -4301,5 +4930,50 @@ mod client_tests {
         map.remove(tab);
         map.remove(&attach);
         map.remove(&attach3);
+    }
+}
+
+#[cfg(test)]
+mod npm_shim_tests {
+    use super::npm_shim_target;
+
+    /// What `cmd-shim` writes for `npm install -g @openai/codex`.
+    const SHIM: &str = r#"@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
+"#;
+
+    #[test]
+    fn an_npm_shim_resolves_to_node_and_its_script_and_anything_else_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("codex.cmd");
+        std::fs::write(&shim, SHIM).unwrap();
+        // The script is missing: stay on the `cmd.exe /C` launch.
+        assert!(npm_shim_target(&shim).is_none());
+        let script_dir = dir.path().join("node_modules").join("@openai").join("codex").join("bin");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        std::fs::write(script_dir.join("codex.js"), "").unwrap();
+        std::fs::write(dir.path().join("node.exe"), "").unwrap();
+        let (node, script) = npm_shim_target(&shim).expect("an npm shim");
+        assert_eq!(node, dir.path().join("node.exe"));
+        assert_eq!(script, script_dir.join("codex.js"));
+        // A hand-written batch file is not an npm shim.
+        let other = dir.path().join("tool.cmd");
+        std::fs::write(&other, "@echo off\r\necho hi\r\n").unwrap();
+        assert!(npm_shim_target(&other).is_none());
     }
 }

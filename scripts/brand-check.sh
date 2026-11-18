@@ -75,7 +75,7 @@ ALLOW=(
   'src/__tests__/fixtures/*'
   'src-tauri/tests/fixtures/*'
 
-  # --- Flip points: package and bundle metadata (scripts/brand-flip.sh). -----
+  # --- Flip points: package and bundle metadata. ------------------------------
   # They spell the current name because nothing can fill it in. Stays.
   # tauri.conf.json also names the OLD deb package it replaces (until
   # release B).
@@ -107,19 +107,17 @@ ALLOW=(
   'scripts/privacy-reviewed-binaries.txt'
 
   # --- Files NAMED after the app. --------------------------------------------
-  # The launchers, the Windows dev launcher and the send command's static
-  # scripts (embedded with `include_bytes!`, so they run with no repo around
-  # them and spell the names themselves). Stays.
+  # The launchers, the Windows dev launcher and the send and MCP commands'
+  # static scripts (embedded with `include_bytes!`, so they run with no repo
+  # around them and spell the names themselves). Stays.
   "start-$APP_SLUG-*.sh"
   "scripts/$APP_SLUG-dev.cmd"
   "scripts/$APP_SLUG-send.sh"
   "scripts/$APP_SLUG-send.ps1"
   "scripts/$APP_SLUG-send.cmd"
-  # Their forwarding stubs under the old name, for desktop entries and habits
-  # that still point there. Until release B.
-  # Spelled with the helper's old-name variable: this script is checked too.
-  "start-$APP_LEGACY_SLUG-*.sh"
-  "scripts/$APP_LEGACY_SLUG-dev.cmd"
+  "scripts/$APP_SLUG-mcp.sh"
+  "scripts/$APP_SLUG-mcp.ps1"
+  "scripts/$APP_SLUG-mcp.cmd"
 
   # --- Tooling that cannot source the brand helper. --------------------------
   # Git hooks: run in any state of the tree, so they stay self-contained, and
@@ -145,10 +143,6 @@ ALLOW=(
   # The privacy scan's per-user config dir (current name; the old one carries
   # an allow marker).
   'scripts/privacy-check.sh'
-
-  # --- The rename's own tooling. Removed when the rename is finished. --------
-  # The codemods search for the name by design.
-  'scripts/rename-codemods/*'
 )
 
 # ---------------------------------------------------------------------------

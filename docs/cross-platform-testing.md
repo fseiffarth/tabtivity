@@ -123,10 +123,18 @@ with no available update does not count as a passed upgrade-install test.
 | --- | --- | --- | --- |
 | | | | |
 
-The opening notes in [Group H](../todo/group-h-crossplatform.md) describe
-intentional differences: external-window embedding and sticky windows are not
-supported on Windows/macOS; macOS foreign-app parking is app-wide; Windows has
-no SSH ControlMaster-based link monitor; both have an interfaces-only network
-pane. Verify the stated fallback and mark the unsupported capability N/A. Do not
-mark a broken install, model pull or agent launch N/A just because it fails on
-one OS. This document records a test plan, not live verification.
+The opening notes in [Group H](../todo/group-h-crossplatform.md) are the list
+of intentional differences. The ones a tester meets first: external-window
+embedding and sticky windows are not supported on Windows/macOS; macOS
+foreign-app parking is app-wide; Windows has no agent fence (agents run with
+your rights after a one-time acceptance), no tmux (tabs do not persist, and the
+phone cannot drive terminals on a Windows host) and no SSH ControlMaster (no
+link monitor, port forwards or terminal sign-in). Verify the stated fallback
+and mark the unsupported capability N/A.
+
+Known open gaps are *not* intentional differences: they are listed in
+[the 2026-11-12 parity audit](cross_os_parity_2026_11_12.md) (Group H item
+2442). A check that fails for one of those reasons is a **FAIL** with the item
+id in the notes, not N/A. Do not mark a broken install, model pull or agent
+launch N/A just because it fails on one OS. This document records a test plan,
+not live verification.

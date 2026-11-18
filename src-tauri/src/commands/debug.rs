@@ -457,6 +457,11 @@ pub fn webview_renderer_restart(window: tauri::WebviewWindow) -> Result<(), Stri
 #[cfg(feature = "desktop")]
 #[cfg(target_os = "linux")]
 fn restart_renderer(window: &tauri::WebviewWindow, label: &str) -> Result<(), String> {
+    // Ending the process is safe; asking for its replacement is not without
+    // free descriptors (GLib aborts the app inside the spawn). Refuse before
+    // either, so the window keeps its working renderer.
+    crate::services::fd_limit::spawn_headroom()
+        .map_err(|why| format!("not replacing the renderer of '{label}': {why}"))?;
     crate::crash_log_append(&format!(
         "=== WEBVIEW '{label}' RENDERER REPLACED {} (memory watchdog: a reload did not free it) ===",
         crate::storage::iso_now()

@@ -1,6 +1,11 @@
 # Phone hands-free voice: steering everything while cooking or driving
 
 Status: plan only (2026-10-28), reviewed against the code the same day.
+Update 2026-11-09: a slim slice — "Tabby navigate" and the Tabby gate inside the
+Focus mic — is built in `docs/voice_nav_mode_plan.md` (not run live); it
+overrides, for that phrase only, the rule below that the command word must not be
+the assistant's name (the assistant's name may start a navigate command; the
+command word itself stays `{app}`). The rest of this plan is still as planned.
 Nothing of this plan is built. It builds on the phone's Focus hands-free
 loop that landed with `docs/desktop_voice_plan.md` step 5 (commit
 76ea8097, not run live). It draws on three read-only research reports from

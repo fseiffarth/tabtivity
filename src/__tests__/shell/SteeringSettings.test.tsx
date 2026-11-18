@@ -1,5 +1,5 @@
 /**
- * Steering through the settings dialog: `,` opens it and stays in steering on
+ * Steering through the settings dialog: `/` opens it and stays in steering on
  * its region — ←/→ step the left-hand list's pages, ↑/↓ walk the page's
  * controls, Enter presses (a dropdown option hands the cursor back to its
  * dropdown), `/` hands the caret to the dialog's search, Escape closes an open
@@ -170,7 +170,7 @@ describe("steering through settings", () => {
   it("opens settings on its region and walks its pages and controls", async () => {
     render(<Harness />);
     press({ key: " ", shiftKey: true });
-    press({ key: "," });
+    press({ key: "/" });
     expect(dialog()).not.toBeNull();
     expect(steering()).toMatchObject({ active: true, level: "region", region: "settings", regionReturn: "tabs" });
     await settle();
@@ -208,7 +208,7 @@ describe("steering through settings", () => {
   it("Escape closes an open dropdown first, then settings, back on the level it came from", async () => {
     render(<Harness />);
     press({ key: " ", shiftKey: true });
-    press({ key: "," });
+    press({ key: "/" });
     await settle();
     press({ key: "ArrowRight" });
     await settle();
@@ -231,7 +231,7 @@ describe("steering through settings", () => {
   it("/ hands the caret to the settings search; the chord over settings comes back to it", async () => {
     render(<Harness />);
     press({ key: " ", shiftKey: true });
-    press({ key: "," });
+    press({ key: "/" });
     await settle();
     press({ key: "/" });
     expect(steering().active).toBe(false);

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { COMMIT_CHOICES, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
@@ -14,8 +13,11 @@ const COMMIT_HINTS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit
  * conversation at once, the draft kept; Commit opens a menu of the three
  * commit prompts, each sent as a prompt of its own, the draft kept too.
  * `prefixes` are the commands this CLI takes as a lead (`draftPrefixes`).
+ * Clear and Commit act on the conversation rather than the draft, so they
+ * stand apart at the row's right end, beside the mic and Send (2026-11-04:
+ * back from the top bar, where they read as view controls).
  */
-export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onClear, onCommit, actionSlot, extra }: {
+export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onClear, onCommit, onCheckpoint, checkpointNote, checkpointError, extra }: {
   prefixes: readonly string[];
   /** The command the draft leads with, if it is one of `prefixes`. */
   active: string | null;
@@ -24,8 +26,12 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
   onClear: () => void;
   /** Unset: no Commit chip (a Tabby chat has no files). */
   onCommit?: (choice: CommitChoice) => void;
-  /** Clear and Commit stay in the toolbar while the view below changes. */
-  actionSlot?: HTMLElement | null;
+  /** Set: a Checkpoint chip (per-turn checkpoints, experimental) takes a manual
+   *  checkpoint of the folder; `checkpointNote` is what it answers with. */
+  onCheckpoint?: () => void;
+  checkpointNote?: "done" | "failed";
+  /** Why the folder's last checkpoint failed: the chip says so until one lands. */
+  checkpointError?: string | null;
   /** Chips of the composer's own after the prefixes (read-aloud, hands-free). */
   extra?: ReactNode;
 }) {
@@ -59,6 +65,7 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
       <button
         key={command}
         type="button"
+        data-reader-fact={plan ? "plan" : "goal"}
         className={`terminal-reader-chip${active === command ? " active" : ""}`}
         disabled={disabled}
         aria-pressed={active === command}
@@ -76,15 +83,27 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
         className="terminal-reader-chip"
         disabled={disabled}
         onMouseDown={keepFocus}
+        data-reader-fact="clear"
         onClick={onClear}
         title={t("mobile.composer.clearChat")}
       >
         {t("mobile.composer.clearChip")}
       </button>
+      {onCheckpoint && <button
+        type="button"
+        className="terminal-reader-chip"
+        disabled={disabled}
+        onMouseDown={keepFocus}
+        onClick={onCheckpoint}
+        title={checkpointError ? t("checkpoints.now.failingHint", { error: checkpointError }) : t("checkpoints.now.hint")}
+      >
+        {t(checkpointNote === "done" ? "checkpoints.now.done" : checkpointNote === "failed" ? "checkpoints.now.failed" : checkpointError ? "checkpoints.now.failing" : "checkpoints.now")} <UntestedTag id="checkpoints.now" />
+      </button>}
       {onCommit && <button
         type="button"
         className={`terminal-reader-chip${commitOpen ? " active" : ""}`}
         disabled={disabled}
+        data-reader-fact="commit"
         aria-haspopup="menu"
         aria-expanded={commitOpen}
         onMouseDown={keepFocus}
@@ -114,6 +133,6 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
   return <div className="terminal-reader-chips">
     {prefixesRow}
     {extra}
-    {actionSlot ? createPortal(actions, actionSlot) : actions}
+    {actions}
   </div>;
 }

@@ -6,7 +6,9 @@
  * PDF first pages), its markup layers (marks, with the PDF's words they were
  * anchored to), unsent drafts, held prompts and what the files library
  * remembers (favorites, recents, folder colours, file cards and the folders it
- * stood in, all by file and folder name) in IndexedDB and localStorage.
+ * stood in, all by file and folder name), and the slash commands typed into the
+ * composer (with their arguments), in IndexedDB and localStorage — and the
+ * desktop switcher's list of linked desktops and their names (`shell/`).
  *
  * Never for an offline or timed-out phone: that one is still paired, and only
  * a rejection of the device's own identity is an answer. Each store is emptied
@@ -16,13 +18,17 @@ import { forgetDrafts } from "./drafts";
 import { forgetFiles } from "./filesPlace";
 import { forgetLastPlace } from "./lastPlace";
 import { forgetLayers } from "./markup/store";
+import { forgetSlashCommands } from "./slashCommands";
 import { forgetHeld } from "./terminal/heldPrompts";
 import { forgetCovers } from "./thumbs";
+import { forgetLinkedDesktops } from "./shell/linkedDesktops";
 
 export async function forgetDeviceData(): Promise<void> {
   forgetLastPlace();
   forgetDrafts();
   forgetHeld();
   forgetFiles();
+  forgetSlashCommands();
+  forgetLinkedDesktops();
   await Promise.allSettled([forgetCovers(), forgetLayers()]);
 }

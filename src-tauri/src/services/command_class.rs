@@ -50,17 +50,20 @@
 //!   store) are `Admin`. Completion, chat and local-model tabs stay `Core`;
 //!   because Ollama auto-loads whatever a request names, P2 limits those
 //!   requests to the admin-allowed model list server-side (plan §3.3).
+//!   `ollama_public_key` is `Admin` too: the shared server's key only matters
+//!   to whoever pulls a gated Hugging Face repo through it.
 //! - **`list_recent_downloads` is `Client`**: Recent Downloads are always the
 //!   device the user sits at, never the server's folders.
 //! - **`pty_drop_files` is `Client`**: it reads the absolute paths an OS file
 //!   manager drop hands the window, which name files on the machine the user
 //!   sits at; a daemon would read its own disk outside the user's roots. A
 //!   browser client has no such paths and leaves the drop out.
-//! - **`pty_paste_clipboard_image` is `Client`**: it reads the OS clipboard
-//!   of the machine the user sits at; a daemon has none.
-//!   `pty_paste_image` is its `Core` half: a browser client reads the picture
-//!   from its own clipboard and sends the bytes, which the daemon files into
-//!   the tab's inbox as the window files the OS clipboard's.
+//! - **`pty_paste_clipboard_image` and `read_clipboard_text` are `Client`**:
+//!   they read the OS clipboard of the machine the user sits at; a daemon has
+//!   none. `pty_paste_image` is the image paste's `Core` half: a browser
+//!   client reads the picture from its own clipboard and sends the bytes,
+//!   which the daemon files into the tab's inbox as the window files the OS
+//!   clipboard's.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
 //!   `Client` as §3.3 lists them. `models_host_load` is `Core`: the same
@@ -103,6 +106,9 @@ pub enum OffReason {
     /// Reads the CLI config or login files of *this computer's* own user; on a
     /// server the user signs in through sign-in tabs instead (§5.1).
     LocalCliFiles,
+    /// Binds a listener on the machine's own loopback (a port forward); a
+    /// daemon's loopback is not the browser user's.
+    DaemonLoopback,
 }
 
 impl CommandClass {
@@ -130,6 +136,7 @@ impl OffReason {
             OffReason::WholeDocumentSave => "whole-document-save",
             OffReason::HeadlessOwner => "headless-owner",
             OffReason::LocalCliFiles => "local-cli-files",
+            OffReason::DaemonLoopback => "daemon-loopback",
         }
     }
 }
@@ -198,6 +205,10 @@ use CommandClass::{Admin, Client, Core, Off};
 /// defines it, which is also how `lib.rs` lists them; keep a new command's row
 /// next to its neighbours.
 static TABLE: &[(&str, CommandClass)] = &[
+    // commands/agent_privacy.rs
+    // Desktop only (decision D4): the phone reads the setting from the project
+    // record and has no setter; a browser client hides the control.
+    ("set_project_agent_privacy", Client),
     // commands/agent_prompts.rs
     ("agent_prompt_archive", Core),
     ("agent_prompt_blame", Core),
@@ -216,11 +227,16 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_global_open", Client),
     ("agent_global_set_codex_auto_review", Core),
     ("agent_global_status", Core),
+    ("agent_import_offer", Off(OffReason::LocalCliFiles)),
+    ("agent_import_offer_answer", Off(OffReason::LocalCliFiles)),
     ("agent_is_installed", Core),
     ("agent_login_import", Off(OffReason::LocalCliFiles)),
     ("agent_logins", Core),
     ("agent_login_sign_out", Core),
     ("agent_login_scope_sign_out", Core),
+    ("claude_token_clear", Core),
+    ("claude_token_save", Core),
+    ("claude_token_status", Core),
     ("agent_login_use_admin_key", Core),
     ("agent_api_key_clear", Core),
     ("agent_api_key_set", Core),
@@ -253,8 +269,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_tab_model", Core),
     ("agent_tab_recent_prompts", Core),
     ("agent_tab_transcript", Core),
+    ("agent_cli_handoff_prepare", Core),
+    ("agent_tab_artifact", Core),
     ("agent_transcript_unwatch", Core),
     ("agent_tab_undo_clear", Core),
+    ("agent_tab_resume_pinned", Core),
     ("agent_tab_chats", Core),
     ("agent_tab_resume_chat", Core),
     ("agent_tab_move_session", Core),
@@ -274,6 +293,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("list_agents", Core),
     ("node_runtime_status", Core),
     ("probe_binaries", Core),
+    ("probe_remote_agent_binaries", Core),
+    ("install_agent_project_command", Admin),
     ("remember_model_rows", Core),
     ("remembered_model_rows", Core),
     ("uninstall_agent", Admin),
@@ -375,8 +396,16 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/clipboard.rs
     ("clipboard_file_paths", Client),
     ("clipboard_has_image", Client),
+    ("copy_files_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
+    ("read_clipboard_text", Client),
     ("save_clipboard_image", Client),
+    // commands/cockpit_results.rs — `client` (plan decision 12): the click of the
+    // window the agent's tab is shown in, judged against this machine's registry.
+    ("cockpit_result_target", Client),
+    // — and the dismissal of an agent's reported question (decision 20): the user's
+    // own click, one compare-and-swap on the attention id, nothing else written.
+    ("cockpit_attention_dismiss", Client),
     // commands/connect.rs — this desktop as a server's client (plan §7.2):
     // the machine the user sits at, never exposed.
     ("connect_forget", Client),
@@ -393,6 +422,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copilot_cancel", Core),
     ("copilot_close_editor", Core),
     ("copilot_complete", Core),
+    ("copilot_diagnostics", Core),
     ("copilot_finish_sign_in", Core),
     ("copilot_message_action", Core),
     ("copilot_prepare", Core),
@@ -511,7 +541,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("git_fork_clone", Core),
     ("provider_cli_available", Core),
     // commands/git_hosting.rs
+    ("get_git_hosts", Core),
     ("get_project_git_hosting", Core),
+    ("set_git_hosts", Core),
     ("set_project_git_hosting", Core),
     // commands/git_peer.rs
     ("git_peer_backups", Core),
@@ -565,6 +597,19 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("detect_project_ides", Client),
     ("open_project_in_ide", Client),
     ("set_ide_launcher", Client),
+    // commands/checkpoints.rs
+    ("checkpoint_clear", Core),
+    ("checkpoint_diff", Core),
+    ("checkpoint_list", Core),
+    ("checkpoint_now", Core),
+    ("checkpoint_restore", Core),
+    ("checkpoint_settings_get", Core),
+    ("checkpoint_settings_set", Core),
+    // commands/tab_archive.rs
+    ("tab_archive_add", Core),
+    ("tab_archive_delete", Core),
+    ("tab_archive_list", Core),
+    ("tab_archive_take", Core),
     // commands/local_loss.rs
     ("local_loss_ack", Core),
     ("local_loss_list", Core),
@@ -670,6 +715,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("mobile_host_status", Admin),
     ("mobile_opaque_id", Core),
     ("mobile_paired_devices", Core),
+    ("mobile_tailscale_serve_command", Admin),
     ("mobile_tailscale_serve_status", Admin),
     ("mobile_verify_tailscale_serve", Admin),
     ("phone_upload_undo", Core),
@@ -710,6 +756,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("ollama_install_strategy", Core),
     ("ollama_is_installed", Core),
     ("ollama_models_dir_plan", Core),
+    ("ollama_public_key", Admin),
     ("ollama_registry_details", Core),
     ("ollama_server_kind", Core),
     ("ollama_status", Core),
@@ -719,6 +766,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("prepare_local_launch", Core),
     ("prepare_text_completion", Core),
     ("pull_ollama_model", Admin),
+    ("restart_ollama_server", Admin),
+    ("search_huggingface_models", Core),
     ("search_ollama_registry", Core),
     ("stop_ollama_model", Admin),
     ("vibe_install_strategy", Core),
@@ -747,6 +796,10 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("pdf_markup_undo", Core),
     ("pdf_markup_undo_preview", Core),
     ("pdf_markup_undo_settle", Core),
+    // commands/port_forward.rs
+    ("port_forward_close", Off(OffReason::DaemonLoopback)),
+    ("port_forward_list", Off(OffReason::DaemonLoopback)),
+    ("port_forward_open", Off(OffReason::DaemonLoopback)),
     // commands/power.rs
     ("get_power_state", Client),
     // commands/presenter.rs
@@ -766,6 +819,20 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("print_test_page", Client),
     // commands/print_native.rs
     ("print_pdf_native", Client),
+    // commands/print_mcp.rs — agent print requests are approved in the
+    // window's own preview and printed on this machine.
+    ("print_mcp_decide", Client),
+    ("print_mcp_pdf", Client),
+    ("print_mcp_requests", Client),
+    // commands/tabs_mcp.rs — tab messaging is served by the window alone
+    // (`Runtime::serves_tabs`); its state, the Deliver button and the idle
+    // wake live where the window runs. Nothing crosses the phone.
+    ("set_project_tab_messages_wake", Client),
+    ("tabs_mcp_clear", Client),
+    ("tabs_mcp_deliver", Client),
+    ("tabs_mcp_human_input", Client),
+    ("tabs_mcp_traffic", Client),
+    ("tabs_mcp_wake_claim", Client),
     // commands/project_runtime.rs
     ("load_side_panel_folder", Core),
     ("save_side_panel_folder", Core),
@@ -795,7 +862,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("patch_compute_host", Core),
     ("plan_project_dir_rename", Core),
     ("preview_project_scaffold", Core),
+    ("create_project_doc", Core),
+    ("project_agent_memory", Core),
+    ("project_agent_memory_read", Core),
     ("project_agents_empty", Core),
+    ("project_docs_status", Core),
     ("project_folder_exists", Core),
     ("project_generated_dir", Core),
     ("project_migration_apply", Core),
@@ -829,6 +900,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("set_project_remote_control", Core),
     ("set_project_remote_label", Core),
     ("set_project_remote_user", Core),
+    ("set_project_remote_agent_dir", Core),
     ("set_project_run_host", Core),
     ("set_project_sandbox", Core),
     ("set_project_sandbox_spec", Core),
@@ -838,7 +910,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("workspace_sync", Core),
     // commands/project_transfer.rs
     ("export_project", Core),
+    ("export_project_set", Core),
     ("import_project_export", Core),
+    ("inspect_project_bundle", Core),
     ("inspect_project_export", Core),
     ("preview_host_export", Core),
     ("preview_project_export", Core),
@@ -889,6 +963,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("read_spreadsheet", Core),
     // commands/skills.rs
     ("skills_add_source", Core),
+    ("skills_copy", Core),
     ("skills_get_detail", Core),
     ("skills_install", Core),
     ("skills_list_catalog", Core),
@@ -952,6 +1027,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_auto_preview", Core),
     ("sync_big_folders", Core),
     ("sync_diff", Core),
+    ("sync_handoff_export", Core),
+    ("sync_handoff_load_resolved", Core),
+    ("sync_handoff_reveal", Client),
     ("sync_file_meta", Core),
     ("sync_mark_selected", Core),
     ("sync_pull", Core),
@@ -959,19 +1037,22 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_resolve_if_identical", Core),
     ("sync_scan_host_new", Core),
     ("sync_set_auto", Core),
+    ("sync_take_newer_get", Core),
+    ("sync_set_take_newer", Core),
     ("sync_set_excluded", Core),
     ("sync_status", Core),
     ("sync_transfer_preview", Core),
-    ("sync_whole_project", Core),
     // commands/terminal.rs
     ("agent_fence_marks", Core),
     ("agent_fence_status", Core),
     ("agent_tab_features", Core),
     ("copilot_fence_auth_status", Core),
     ("copilot_fence_sign_out", Core),
+    ("local_tmux_available", Core),
     ("local_tmux_kill", Core),
     ("local_tmux_kill_app_sessions", Core),
     ("local_tmux_pane_dead", Core),
+    ("local_tmux_app_sessions", Core),
     ("local_tmux_rename", Core),
     ("local_tmux_screen", Core),
     ("project_cpu_percent", Core),
@@ -992,6 +1073,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("register_host_bound_tab", Core),
     // commands/tex.rs
     ("compile_tex", Core),
+    ("compile_tex_host", Core),
     ("list_fonts", Core),
     ("resolve_tex_root", Core),
     ("synctex_edit", Core),
@@ -1001,6 +1083,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("tex_capability", Core),
     ("tex_auto_engine", Core),
     ("tex_preview_snippet", Core),
+    // commands/tfevents.rs
+    ("tfevents_discover", Core),
+    ("tfevents_read", Core),
     // commands/timer.rs
     ("get_project_activity", Core),
     ("get_time_activity_all", Core),
@@ -1029,6 +1114,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("voice_listen_start", Client),
     ("voice_listen_stop", Client),
     ("voice_model_install_script", Client),
+    ("voice_natural_install_script", Client),
     ("voice_speak", Client),
     ("voice_speak_stop", Client),
     ("voice_status", Client),
@@ -1141,6 +1227,15 @@ mod tests {
             actual, expected,
             "src/lib/transport/commandClasses.ts is stale; regenerate with\n  UPDATE_COMMAND_CLASSES=1 cargo test --manifest-path src-tauri/Cargo.toml -q --lib -- the_generated_command_classes_ts_is_current"
         );
+    }
+
+    #[test]
+    fn the_cockpit_commands_are_client_class() {
+        // The window's own clicks on an agent's notes (plan decisions 12 and 20):
+        // a browser shim may forward them, nothing here is core or admin.
+        assert_eq!(class_of("cockpit_result_target"), Some(Client));
+        assert_eq!(class_of("cockpit_attention_dismiss"), Some(Client));
+        assert!(names_in(Client).any(|name| name == "cockpit_attention_dismiss"));
     }
 
     #[test]

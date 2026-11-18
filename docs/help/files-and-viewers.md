@@ -1,7 +1,7 @@
 ---
 id: files-and-viewers
 title: Files, viewers and editing
-keywords: [file, viewer, editor, open, code, markdown, yaml, json, bibtex, csv, table, image, gif, notebook, ipynb, spreadsheet, xlsx, sqlite, html, svg, audio, video, autocomplete, spell check, dictionary, autosave, python, run, debug, text size, copilot, remarks]
+keywords: [file, viewer, editor, open, code, markdown, yaml, json, bibtex, csv, table, image, notebook, spreadsheet, sqlite, html, svg, audio, video, autocomplete, spell check, autosave, python, run, debug, copilot, remarks, share, teams, drag out, clipboard, copy file]
 related: [pdf-and-markup, latex-and-presenter, tabs-and-panels, local-models, git]
 ---
 
@@ -17,6 +17,41 @@ current project. Types it has no viewer for open in your system's default app.
   copy path, reveal, rename, delete and properties.
 - A hit in the file panel's **Search** view jumps straight to that line in the
   viewer.
+
+## Project docs
+
+The project root's standard files (`AGENTS.md`, `README.md`, `.gitignore`, …)
+sit in a **Project docs** group; the header shows how many of the default docs
+exist and how many are still untouched templates. Turn the grouping off with
+**Separate project docs section** in the project's settings.
+
+- A doc still holding the text Tabtivity wrote shows a **template** pill and is
+  dimmed; an edited one looks like any file.
+- A doc that is missing but can be made shows as a ghost row such as
+  `+ TODO.md`. Click it to create that one file from its template and open it
+  (on the phone: its menu → **Create**). Nothing is ever overwritten.
+- An old `CLAUDE.md` or `GEMINI.md` nests under `AGENTS.md` with a **pointer**
+  pill; new projects do not get them.
+- **Agent memory (n)** lists what Claude Code and Codex remember about the
+  project. It opens read-only in a preview; the CLIs maintain those files.
+- The amber **no scaffold** tag on a project means a default doc is missing;
+  click it to see which and to **Repair**.
+
+## Share a file with another app
+
+To send a project file to Teams, mail, a browser upload or a file manager:
+
+- **Drag it out of the window.** Drag the file from the file panel and drop it
+  in the other app. Hold **⇧ Shift** while leaving the window to keep it in
+  Tabtivity instead (a new window, or dock it into a popout). The drag's label
+  shows which one a drop will do. Host files of a remote project can't leave
+  this way; use **Download to…** first.
+- **Copy and paste.** The file panel's context menu **Copy** also puts the
+  file on the system clipboard: paste it into the other app's message box or
+  upload field. Pasting into a web page depends on the browser; dragging
+  always works.
+- **On the phone**, every file you open (sent to the phone, project files,
+  the files library) has **Share…**, which offers the phone's other apps.
 - Which external app opens a type you have no viewer for: **Settings →
   Workspace & apps → File Type Apps** (per type), and per project in the
   project's settings. Otherwise your system's default app is used.

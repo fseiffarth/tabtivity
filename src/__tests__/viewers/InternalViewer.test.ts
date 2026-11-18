@@ -203,3 +203,26 @@ describe("disabledViewers (#48)", () => {
     expect(internalViewerFor(file("change.diff", ".diff"), disabled)).toBeNull();
   });
 });
+
+describe("TensorBoard event files", () => {
+  it("are matched by name prefix, whatever the host-name 'extension' is", () => {
+    const name = "events.out.tfevents.1700000000.some-host.4242.0";
+    expect(internalViewerFor(file(name, ".0"))).toBe("tensorboard");
+    expect(internalViewerFor(file("events.out.tfevents.1.lab", ".lab"))).toBe("tensorboard");
+    expect(internalViewerFor(file("events.out.tfevents.1.h", null))).toBe("tensorboard");
+  });
+
+  it("are not claimed by lookalikes, and folders are never a file viewer", () => {
+    expect(internalViewerFor(file("events.txt", ".txt"))).toBe("text");
+    expect(internalViewerFor(file("my.events.out.tfevents.1.zzz", ".zzz"))).toBeNull();
+    const dir = { ...file("events.out.tfevents.1.h", null), is_dir: true };
+    expect(internalViewerFor(dir)).toBeNull();
+  });
+
+  it("honour the per-type opt-out and then fall through to the external app (#48)", () => {
+    const entry = file("events.out.tfevents.1.h", ".h");
+    const disabled = disabledViewers({ tensorboard: { enabled: false } });
+    expect(disabled.has("tensorboard")).toBe(true);
+    expect(internalViewerFor(entry, disabled)).toBeNull();
+  });
+});

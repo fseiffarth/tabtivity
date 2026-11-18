@@ -10,8 +10,12 @@
  * strip order — so pressing the key again goes on from the tab it landed on.
  */
 import type { AttentionKind } from "../../stores/activity";
-import { projectStations } from "../../stores/keyboardSteering";
-import { ROOT_SCOPE, isPtyTabKind, type TabEntry } from "../../stores/tabs";
+import { wrapStep } from "../wrapStep";
+import { projectStations, type SteeringJumpBack } from "../../stores/keyboardSteering";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { ROOT_SCOPE, allGroups, isPtyTabKind, useTabsStore, type TabEntry } from "../../stores/tabs";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { popoutActiveTab, usePopoutViewStore } from "../../stores/popoutView";
 
 export type TabStatusKind = "decision" | "working" | "done";
 
@@ -62,5 +66,61 @@ export function nextStatusTab(
     ? list.findIndex((t) => t.scope === current.scope && t.key === current.key)
     : -1;
   if (at < 0) return list[delta > 0 ? 0 : list.length - 1];
-  return list[(at + delta + list.length) % list.length];
+  return list[wrapStep(at, delta, list.length)];
+}
+
+/** The tab a status jump walks on from: the one showing. While the root
+ *  console's Root view is up that is its focused subwindow's tab (a jump to a
+ *  root tab does not change the workspace's active tab, so going by that one
+ *  would land on the same root tab again and again); else the workspace's. */
+export function shownStatusTab(): StatusTab | null {
+  // A popout: the active tab of its focused subwindow (its tabs store is empty).
+  if (isDetachedWindow()) {
+    const view = usePopoutViewStore.getState();
+    const tab = popoutActiveTab(view);
+    return tab && view.scope ? { scope: view.scope, key: tab.key } : null;
+  }
+  const tabs = useTabsStore.getState();
+  if (rootViewShown(useRootOverlayStore.getState())) {
+    const groups = allGroups(tabs.layoutByScope[ROOT_SCOPE] ?? null);
+    const focus = tabs.focusedGroupByScope[ROOT_SCOPE];
+    const group = groups.find((g) => g.id === focus) ?? groups[0];
+    if (group?.activeKey) return { scope: ROOT_SCOPE, key: group.activeKey };
+  }
+  return tabs.activeKey ? { scope: tabs.scope, key: tabs.activeKey } : null;
+}
+
+function sameTab(a: StatusTab, b: StatusTab): boolean {
+  return a.scope === b.scope && a.key === b.key;
+}
+
+/**
+ * The Back key's record after a status jump from `from` to `to`. A jump made
+ * from the tab the last one landed on carries that one's origin on, so after
+ * Q Q Q, Back returns to the tab the first Q left; a run that comes round to
+ * that tab again has nothing left to go back to.
+ */
+export function afterStatusJump(
+  prev: SteeringJumpBack | null,
+  from: StatusTab | null,
+  to: StatusTab,
+): SteeringJumpBack | null {
+  if (prev && from && sameTab(from, prev.landed)) {
+    return sameTab(prev.origin, to) ? null : { origin: prev.origin, landed: to };
+  }
+  if (!from || sameTab(from, to)) return null;
+  return { origin: from, landed: to };
+}
+
+/** The tab Back returns to: the record's origin while that tab is still open
+ *  and not the one showing; null otherwise. */
+export function jumpBackTarget(
+  record: SteeringJumpBack | null,
+  shown: StatusTab | null,
+  tabsByScope: Record<string, TabEntry[]>,
+): StatusTab | null {
+  if (!record) return null;
+  const { origin } = record;
+  if (shown && sameTab(shown, origin)) return null;
+  return (tabsByScope[origin.scope] ?? []).some((tab) => tab.key === origin.key) ? origin : null;
 }

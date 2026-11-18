@@ -544,6 +544,14 @@ fn qemu_install_hint() -> &'static str {
 /// Only the *packages* appear here. The Linux line follows the same apt
 /// convention as the rest of Tabtivity's install buttons; a non-apt distro's user
 /// still has the doctor's sentences above the button.
+/// A `brew …` line that first installs Homebrew where it is missing (2442t):
+/// the twin of `withHomebrew` in `src/lib/installCommand.ts`. Pure.
+fn with_homebrew(command: &str) -> String {
+    format!(
+        "{{ command -v brew >/dev/null 2>&1 || {{ /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\" && eval \"$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)\"; }}; }} && {command}"
+    )
+}
+
 fn install_command_for(host: HostOs, arch: GuestArch, p: &VmDoctorProbes) -> Option<String> {
     if !p.supported {
         return None;
@@ -583,7 +591,7 @@ fn install_command_for(host: HostOs, arch: GuestArch, p: &VmDoctorProbes) -> Opt
             if needs_iso {
                 pkgs.push("xorriso");
             }
-            Some(format!("brew install {}", pkgs.join(" ")))
+            Some(with_homebrew(&format!("brew install {}", pkgs.join(" "))))
         }
         // winget's QEMU ships qemu-img and the firmware images too; no seed tool
         // is packaged there (the built-in ISO writer covers it).
@@ -2036,8 +2044,12 @@ mod tests {
         );
         assert_eq!(
             install_command_for(HostOs::Macos, GuestArch::Aarch64, &probes).as_deref(),
-            Some("brew install qemu xorriso")
+            Some(with_homebrew("brew install qemu xorriso")).as_deref()
         );
+        // 2442t: a Mac without Homebrew gets its installer first.
+        let mac = install_command_for(HostOs::Macos, GuestArch::Aarch64, &probes).unwrap();
+        assert!(mac.starts_with("{ command -v brew >/dev/null 2>&1 || { /bin/bash -c "), "{mac}");
+        assert!(mac.ends_with("; }; } && brew install qemu xorriso"), "{mac}");
         assert!(install_command_for(HostOs::Windows, GuestArch::X86_64, &probes)
             .is_some_and(|c| c.contains("winget install")));
     }

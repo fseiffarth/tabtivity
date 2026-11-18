@@ -30,6 +30,8 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(()
 
 import { useMailStore } from "../../stores/mail";
 import type { MailHeader } from "../../types/mail";
+import { isViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { useSettingsStore } from "../../stores/settings";
 
 function header(over: Partial<MailHeader> & { id: string }): MailHeader {
   return {
@@ -282,8 +284,9 @@ describe("the header dropdown's entries", () => {
   });
 
   beforeEach(() => {
+    useRootOverlayStore.setState({ open: false, view: "root" });
+    useSettingsStore.setState({ settings: { mail_client: true } as never });
     useMailStore.setState({
-      overlayOpen: false,
       accountsLoaded: true,
       accounts: [],
       foldersByAccount: {},
@@ -294,7 +297,7 @@ describe("the header dropdown's entries", () => {
     answers["mail_priority_page"] = page([header({ id: "m1" })]);
     await useMailStore.getState().openPriorityView("urgent");
     const s = useMailStore.getState();
-    expect(s.overlayOpen).toBe(true);
+    expect(isViewShown("mail")).toBe(true);
     expect(s.selectedPriority).toBe("urgent");
     expect(s.selectedFolderId).toBeNull();
   });
@@ -305,7 +308,7 @@ describe("the header dropdown's entries", () => {
 
     await useMailStore.getState().openAccountView("a2");
     const s = useMailStore.getState();
-    expect(s.overlayOpen).toBe(true);
+    expect(isViewShown("mail")).toBe(true);
     expect(s.selectedAccountId).toBe("a2");
     expect(s.selectedFolderId).toBe("a2|INBOX");
   });
@@ -330,7 +333,7 @@ describe("the header dropdown's entries", () => {
     useMailStore.setState({ selectedAccountId: "a1", selectedFolderId: "a1|Archive" });
     await useMailStore.getState().openAccountView("a1");
     expect(useMailStore.getState().selectedFolderId).toBe("a1|Archive");
-    expect(useMailStore.getState().overlayOpen).toBe(true);
+    expect(isViewShown("mail")).toBe(true);
     expect(cmds()).not.toContain("mail_headers");
   });
 

@@ -68,6 +68,13 @@ const HOLD_SLOP = 12;
  * finger (or a right-click, or the system's own long-press `contextmenu`),
  * and the click that ends that press is swallowed rather than also tapping. */
 export function useTapHold(onTap: () => void, onHold: () => void) {
+  return useTapHolds()(onTap, onHold);
+}
+
+/** [`useTapHold`] for many buttons at once (a list's rows): one press is
+ * under way at a time, so one timer serves them all; call the returned
+ * function per button, in render, with that button's tap and hold. */
+export function useTapHolds(): (onTap: () => void, onHold: () => void) => TapHoldHandlers {
   const timer = useRef(0);
   const from = useRef<{ x: number; y: number } | null>(null);
   const held = useRef(false);
@@ -77,18 +84,17 @@ export function useTapHold(onTap: () => void, onHold: () => void) {
     from.current = null;
   }, []);
   useEffect(() => cancel, [cancel]);
-  const hold = () => {
-    cancel();
-    held.current = true;
-    onHold();
-  };
-  return {
+  return (onTap, onHold) => ({
     onPointerDown: (event: React.PointerEvent) => {
       held.current = false;
       if (event.button !== 0) return;
       from.current = { x: event.clientX, y: event.clientY };
       window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(hold, HOLD_MS);
+      timer.current = window.setTimeout(() => {
+        cancel();
+        held.current = true;
+        onHold();
+      }, HOLD_MS);
     },
     onPointerMove: (event: React.PointerEvent) => {
       const start = from.current;
@@ -110,5 +116,15 @@ export function useTapHold(onTap: () => void, onHold: () => void) {
       if (held.current) { held.current = false; return; }
       onTap();
     },
-  };
+  });
+}
+
+/** What [`useTapHolds`] hands one button. */
+export interface TapHoldHandlers {
+  onPointerDown: (event: React.PointerEvent) => void;
+  onPointerMove: (event: React.PointerEvent) => void;
+  onPointerUp: () => void;
+  onPointerCancel: () => void;
+  onContextMenu: (event: React.MouseEvent) => void;
+  onClick: () => void;
 }

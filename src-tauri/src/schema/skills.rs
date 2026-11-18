@@ -61,6 +61,10 @@ pub struct SkillCatalogEntry {
 pub struct InstalledSkill {
     pub name: String,
     pub description: String,
+    /// The folder under `.claude/skills/` — what uninstall and overwrite
+    /// address. Not `name`: a hand-authored `foo/` may say `name: bar`, and
+    /// removing by name would delete a different skill's `bar/`.
+    pub folder: String,
 }
 
 /// The preview panel's full read of one catalog entry: `SKILL.md`'s body

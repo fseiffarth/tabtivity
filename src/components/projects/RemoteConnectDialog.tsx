@@ -108,6 +108,7 @@ function RemoteConnectDialogInner({
     autoConnectBlock,
     setAutoConnect,
     setWorkerLabel,
+    setAgentDir,
     connectVpnHeadless,
     connectSshHeadless,
     forgetPasswords,
@@ -161,6 +162,20 @@ function RemoteConnectDialogInner({
     const next = machineDraft.trim();
     if (next === currentMachineLabel) return;
     setWorkerLabel(next);
+  };
+
+  // The agent folder (`agent_dir`) of this machine - the worker's own, or the
+  // primary's `remote.agent_dir`. Committed on blur / Enter; a path the backend
+  // refuses puts the stored value back (the reason shows as the connection error).
+  const currentAgentDir = (host ? host.agent_dir : project.remote?.agent_dir) ?? "";
+  const [agentDirDraft, setAgentDirDraft] = useState(currentAgentDir);
+  useEffect(() => setAgentDirDraft(currentAgentDir), [currentAgentDir]);
+  const commitAgentDir = () => {
+    const next = agentDirDraft.trim();
+    if (next === currentAgentDir) return;
+    void setAgentDir(next).then((ok) => {
+      if (!ok) setAgentDirDraft(currentAgentDir);
+    });
   };
 
   const [sshPassword, setSshPassword] = useState("");
@@ -402,6 +417,28 @@ function RemoteConnectDialogInner({
             </span>
           </label>
         )}
+
+        {/* Where agent CLIs of this machine install and keep their sessions when its
+            home folder has little quota (primary and workers alike). */}
+        <label className="remote-connect-field remote-worker-name">
+          <span className="remote-machine-add-label">
+            {t("remoteConnect.agentDirLabel")}
+            <UntestedTag id="remoteConnectDialog.agentDir" />
+          </span>
+          <input
+            type="text"
+            value={agentDirDraft}
+            placeholder={t("remoteConnect.agentDirPlaceholder")}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(e) => setAgentDirDraft(e.target.value)}
+            onBlur={commitAgentDir}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />
+          <span className="ssh-optional-hint">{t("remoteConnect.agentDirHint")}</span>
+        </label>
 
         {/* ── OpenVPN (always offered; opt-in, default off) ─────────────────────
             Shown for every remote project, not only ones that stored a config at

@@ -11,7 +11,8 @@
 //! rounds of filtering (drop empty frames, drop braille cells) each fixed one
 //! agent's habit and broke another's reading. The agents themselves know
 //! exactly when a turn starts (`UserPromptSubmit`), pauses on the user
-//! (`Notification` with `permission_prompt`), resumes (`PostToolUse`) and ends
+//! (`PermissionRequest`, then `Notification` with `permission_prompt`), resumes
+//! (`PostToolUse`) and ends
 //! (`Stop`), and both Claude Code and Codex run Tabtivity's hook script on those
 //! events already (see `services::agent_session`). The script writes one small
 //! record per tab, `<live_sessions>/<TABTIVITY_TAB_UID>.turn`, holding the state
@@ -48,11 +49,17 @@ pub const TURN_SUFFIX: &str = ".turn";
 /// background (`<uid>.bg`): their task ids, one a line, the last few kept. The
 /// hook writes it on a `PostToolUse` whose result names a `backgroundTaskId`.
 const BG_SUFFIX: &str = ".bg";
+/// The open async questions of a Codex tab (`request_user_input_async`), one
+/// call id per line, written and read by the hook alone: while one is open the
+/// hook records `decision` for `working`. Removed with the turn record.
+pub const ASK_SUFFIX: &str = ".ask";
 
 /// Suffix of the per-tab record of where the user last typed into the tab
 /// (`<uid>.from`): `phone` or `desktop`, written by [`note_input_from`] and
 /// read by `tabtivity-send`, which sends a file to that screen.
 pub const FROM_SUFFIX: &str = ".from";
+/// The marker a sibling's message leaves (`note_mail`), spent by the hook.
+pub const MAIL_SUFFIX: &str = ".mail";
 
 /// The most task ids [`note_background_tasks`] takes from a record.
 const BG_TASKS_MAX: usize = 32;
@@ -128,6 +135,11 @@ pub struct LeftTurn {
     /// the whole conversation, prompt echoes and numbered lists included —
     /// until the agent's hooks speak again.
     pub resting: bool,
+    /// A turn in flight in a session that still runs — the window reattached
+    /// to a tmux session that outlived it (the headless owner kept it, or the
+    /// window crashed): the record is the agent's current turn, not a
+    /// leftover, so it is kept and the tab starts out in that state.
+    pub live: Option<TurnState>,
 }
 
 /// Remember that the tab whose hooks key by `uid` is the PTY `pty_id`, and
@@ -135,14 +147,17 @@ pub struct LeftTurn {
 /// tab keeps its uid across relaunches, and a `working` written before a crash
 /// or quit would otherwise be the first thing the watcher reports for it.
 ///
-/// Returns what that record said ([`LeftTurn`]).
-pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
-    if uid.is_empty() || uid.chars().any(|c| !(c.is_ascii_alphanumeric() || c == '-')) {
+/// Returns what that record said ([`LeftTurn`]). `session_runs`: the tab's
+/// process still runs (its tmux session is only reattached), so a turn in
+/// flight is its live turn — kept, not read as cut off.
+pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>, session_runs: bool) -> LeftTurn {
+    if !valid_uid(uid) {
         return LeftTurn::default();
     }
     // One PTY, one uid: a respawn under a new uid must not leave the old key
     // pointing at this PTY, nor its turn state and job flag behind it.
     on_tab_gone(pty_id);
+    forget_codex(uid);
     bindings().lock_ok().insert(uid.to_string(), pty_id.to_string());
     match project_id {
         Some(pid) => bound_projects().lock_ok().insert(uid.to_string(), pid.to_string()),
@@ -153,21 +168,57 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
     settled().lock_ok().remove(uid);
     turn_ends().lock_ok().remove(uid);
     bg_tasks().lock_ok().remove(uid);
-    let paths = record_paths(uid, project_id);
-    let cut_off = records_hold_turn_in_flight(&paths);
-    let resting = !cut_off && records_hold_finished_turn(&paths);
-    clear_record(uid, project_id);
-    LeftTurn { cut_off, resting }
+    forget_claude(uid);
+    take_left_turn(uid, &record_paths(uid, project_id), session_runs)
 }
 
-/// Whether any of a tab's turn records says `working` or `decision` — a turn
-/// begun and never ended.
-fn records_hold_turn_in_flight(paths: &[PathBuf]) -> bool {
-    paths.iter().any(|p| {
+/// [`bind_tab`]'s read of the tab's turn records at `paths`: a live turn is
+/// seeded and kept, anything else is reported and removed.
+fn take_left_turn(uid: &str, paths: &[PathBuf], session_runs: bool) -> LeftTurn {
+    if session_runs {
+        if let Some((state, path)) = record_in_flight(paths) {
+            // The watcher reports only changes, and this record will not
+            // change until the agent's next hook: seed what a fresh write
+            // would have, so the job poll carries this tab from now on.
+            note_state(uid, state);
+            if let Some(dir) = path.parent() {
+                note_background_tasks(uid, dir);
+            }
+            return LeftTurn { live: Some(state), ..LeftTurn::default() };
+        }
+    }
+    let cut_off = records_hold_turn_in_flight(paths);
+    let resting = !cut_off && records_hold_finished_turn(paths);
+    clear_paths(paths);
+    LeftTurn { cut_off, resting, live: None }
+}
+
+/// A uid a record may be named by: anything else is never a path component.
+fn valid_uid(uid: &str) -> bool {
+    !uid.is_empty() && uid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Whether the tab's turn record says a turn is in flight, read without
+/// touching it: only such a record makes it worth asking, before
+/// [`bind_tab`], whether the tab's session still runs.
+pub fn turn_in_flight(uid: &str, project_id: Option<&str>) -> bool {
+    valid_uid(uid) && records_hold_turn_in_flight(&record_paths(uid, project_id))
+}
+
+/// The first of a tab's turn records that says `working` or `decision` — a
+/// turn begun and never ended — with its state.
+fn record_in_flight(paths: &[PathBuf]) -> Option<(TurnState, &PathBuf)> {
+    paths.iter().find_map(|p| {
         home_io::read_record(p)
             .and_then(|text| parse_turn_record(&text))
-            .is_some_and(|state| matches!(state, TurnState::Working | TurnState::Decision))
+            .filter(|state| matches!(state, TurnState::Working | TurnState::Decision))
+            .map(|state| (state, p))
     })
+}
+
+/// Whether any of a tab's turn records says `working` or `decision`.
+fn records_hold_turn_in_flight(paths: &[PathBuf]) -> bool {
+    record_in_flight(paths).is_some()
 }
 
 /// Whether any of a tab's turn records says `done` — a turn the agent ended.
@@ -194,12 +245,15 @@ pub fn on_tab_gone(pty_id: &str) {
     let mut bg = bg_tasks().lock_ok();
     let mut projects = bound_projects().lock_ok();
     for uid in gone {
+        crate::services::checkpoints::unbind(&uid);
+        forget_codex(&uid);
         projects.remove(&uid);
         states.remove(&uid);
         jobs.remove(&uid);
         settled.remove(&uid);
         ends.remove(&uid);
         bg.remove(&uid);
+        forget_claude(&uid);
     }
 }
 
@@ -261,6 +315,58 @@ fn note_input_from_in(live_root: &Path, pty_id: &str, from: InputFrom) -> std::i
     Ok(())
 }
 
+/// Leave PTY `pty_id`'s agent the empty `<uid>.mail` marker beside its turn
+/// record (`services::tabs_mcp`: a sibling tab sent it a message): the agent
+/// hook prints `tabs_mcp::NOTICE` beside the next prompt and removes it, as it
+/// does the naming reminder. Written where [`note_input_from`] writes, through
+/// a directory handle (the slice is agent-writable), and empty: what a forged
+/// or deleted marker costs is a spurious or missed notice, nothing else.
+pub fn note_mail(pty_id: &str) -> std::io::Result<()> {
+    note_mail_in(&live_sessions_dir(), pty_id)
+}
+
+fn note_mail_in(live_root: &Path, pty_id: &str) -> std::io::Result<()> {
+    for rel in mail_marker_rels(pty_id) {
+        home_io::HomeFile::open(live_root, &rel)
+            .ok_or_else(|| std::io::Error::other(format!("{rel}: not a plain folder")))?
+            .write(b"")?;
+    }
+    Ok(())
+}
+
+/// Remove PTY `pty_id`'s `<uid>.mail` markers, in the root and the project
+/// slice alike (`services::tabs_mcp`: the tab read its inbox, so the notice is
+/// moot). The hook removes only the copy it sees — a fenced agent sees the
+/// slice at the root's path — so without this the other copy would stay. A
+/// link at the name is removed, never followed; a missing marker is fine.
+pub fn clear_mail(pty_id: &str) {
+    clear_mail_in(&live_sessions_dir(), pty_id);
+}
+
+fn clear_mail_in(live_root: &Path, pty_id: &str) {
+    for rel in mail_marker_rels(pty_id) {
+        if let Some(file) = home_io::HomeFile::open_existing(live_root, &rel) {
+            let _ = file.remove();
+        }
+    }
+}
+
+/// Where PTY `pty_id`'s mail markers go, relative to the live-sessions root:
+/// `<uid>.mail` for each uid bound to it, and again in its project's slice.
+fn mail_marker_rels(pty_id: &str) -> Vec<String> {
+    let uids: Vec<String> =
+        bindings().lock_ok().iter().filter(|(_, v)| v.as_str() == pty_id).map(|(k, _)| k.clone()).collect();
+    let mut rels = Vec::new();
+    for uid in uids {
+        let name = format!("{uid}{MAIL_SUFFIX}");
+        if let Some(pid) = bound_projects().lock_ok().get(&uid) {
+            rels.push(format!("{}/{name}", crate::storage::project_key(pid)));
+        }
+        rels.push(name);
+    }
+    rels
+}
+
 fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
     let name = format!("{uid}{TURN_SUFFIX}");
     let mut paths = vec![live_sessions_dir().join(&name)];
@@ -274,8 +380,14 @@ fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
 /// a project, the project's own slice (where a fenced or contained agent's
 /// hook writes).
 pub fn clear_record(uid: &str, project_id: Option<&str>) {
-    for p in record_paths(uid, project_id) {
+    clear_paths(&record_paths(uid, project_id));
+}
+
+/// Remove the turn records at `paths` and the background-task record beside each.
+fn clear_paths(paths: &[PathBuf]) {
+    for p in paths {
         let _ = std::fs::remove_file(p.with_extension(&BG_SUFFIX[1..]));
+        let _ = std::fs::remove_file(p.with_extension(&ASK_SUFFIX[1..]));
         let _ = std::fs::remove_file(p);
     }
 }
@@ -470,15 +582,33 @@ fn boot_ticks_now() -> Option<u64> {
     Some((secs * crate::sysstat::clk_tck() as f64) as u64)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: microseconds since the epoch, the clock `sysstat::process_start`
+/// (`pbi_start_tvsec`/`usec`) reads a shell's start on (2442z).
+#[cfg(target_os = "macos")]
+fn boot_ticks_now() -> Option<u64> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(now.as_micros()).ok()
+}
+
+/// Windows: `FILETIME` now (100-ns units since 1601), the clock
+/// `sysstat::process_start` (`GetProcessTimes`) reads a shell's start on.
+#[cfg(target_os = "windows")]
+fn boot_ticks_now() -> Option<u64> {
+    const UNIX_EPOCH_AS_FILETIME: u64 = 116_444_736_000_000_000;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(now.as_nanos() / 100).ok().map(|t| t + UNIX_EPOCH_AS_FILETIME)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn boot_ticks_now() -> Option<u64> {
     None
 }
 
-/// Whether a shell that started at `start` (ticks since boot, `0` = unknown)
-/// was already running when the turn ended at `ended`. Unknown on either side
-/// reads as yes: the plain `done` reading, as before the start was compared.
-#[cfg(any(target_os = "linux", test))]
+/// Whether a shell that started at `start` (on [`boot_ticks_now`]'s clock,
+/// `0` = unknown) was already running when the turn ended at `ended`. Unknown
+/// on either side reads as yes: the plain `done` reading, as before the start
+/// was compared.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 fn outlived_turn(start: u64, ended: Option<u64>) -> bool {
     start == 0 || ended.is_none_or(|end| start <= end)
 }
@@ -489,17 +619,29 @@ fn last_scan() -> &'static Mutex<Option<Instant>> {
     L.get_or_init(|| Mutex::new(None))
 }
 
-/// Record what the hooks just said about `uid`. `Idle` is the session's end:
-/// its state and job flag go with it.
-fn note_state(uid: &str, state: TurnState) {
+/// The state `uid`'s hooks last reported, if the tab has spoken and not ended.
+pub fn state_of(uid: &str) -> Option<TurnState> {
+    states().lock_ok().get(uid).copied()
+}
+
+/// When the turn record at `path` was written, in milliseconds since the
+/// epoch (never read through a link: the agent can write the record's folder).
+fn record_written_ms(path: &Path) -> Option<u64> {
+    let modified = std::fs::symlink_metadata(path).ok()?.modified().ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
+}
+
+/// Record what the hooks just said about `uid`; the state it had before.
+/// `Idle` is the session's end: its state and job flag go with it.
+fn note_state(uid: &str, state: TurnState) -> Option<TurnState> {
     // Whatever the agent just did, the next timer tick must look again.
     settled().lock_ok().remove(uid);
     if state == TurnState::Idle {
-        states().lock_ok().remove(uid);
+        let prev = states().lock_ok().remove(uid);
         jobs().lock_ok().remove(uid);
         turn_ends().lock_ok().remove(uid);
         bg_tasks().lock_ok().remove(uid);
-        return;
+        return prev;
     }
     let mut states = states().lock_ok();
     let prev = states.insert(uid.to_string(), state);
@@ -514,6 +656,7 @@ fn note_state(uid: &str, state: TurnState) {
             None => ends.remove(uid),
         };
     }
+    prev
 }
 
 /// Whether a shell of `uid`'s agent was running at the last scan.
@@ -684,7 +827,7 @@ fn is_task_output(path: &Path, tasks: &HashSet<String>) -> bool {
 }
 
 /// The tab uid a NUL-separated environment block belongs to, if it sets one.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn environ_uid(environ: &[u8]) -> Option<String> {
     crate::services::proc_table::environ_tab_uid(environ)
 }
@@ -704,7 +847,7 @@ fn environ_uid(environ: &[u8]) -> Option<String> {
 /// [`refresh_jobs`]), each shell's environment read once in its life, and
 /// each match checked alive before it counts — a shell that ended since the
 /// walk is no job. macOS walks its own table through `sysstat` (below);
-/// Windows reports no job. A contained agent's shells belong to the
+/// Windows reads each shell's PEB (below). A contained agent's shells belong to the
 /// container's user and a remote one's live on its host, so those report none
 /// either.
 #[cfg(target_os = "linux")]
@@ -754,6 +897,8 @@ trait ProcProbe {
     fn comm_ppid(&self, pid: u32) -> Option<(String, u32)>;
     fn environ(&self, pid: u32) -> Option<Vec<u8>>;
     fn cmdline(&self, pid: u32) -> Option<String>;
+    /// When `pid` started, on [`boot_ticks_now`]'s clock; `0` = unknown.
+    fn start(&self, pid: u32) -> u64;
 }
 
 /// The walk behind [`tool_shell_uids`], over whatever process table `probe`
@@ -763,6 +908,7 @@ trait ProcProbe {
 #[cfg(any(target_os = "macos", test))]
 fn background_job_uids(
     want: &HashMap<&str, TurnState>,
+    ends: &HashMap<String, u64>,
     pids: impl IntoIterator<Item = u32>,
     probe: &impl ProcProbe,
 ) -> std::collections::HashSet<String> {
@@ -783,9 +929,10 @@ fn background_job_uids(
         }
         let cmdline = probe.cmdline(pid).unwrap_or_default();
         let parent_comm = probe.comm_ppid(ppid).map(|(c, _)| c).unwrap_or_default();
-        // No start time is read here: a shell still running after the Stop
-        // counts, as it did before Linux compared the two.
-        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, true, false) {
+        // As on Linux (2442z): a shell started after the Stop is a tool call
+        // something woken later waits on, not the turn's background job.
+        let outlived = outlived_turn(probe.start(pid), ends.get(&uid).copied());
+        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, outlived, false) {
             out.insert(uid);
         }
     }
@@ -803,7 +950,7 @@ fn background_job_uids(
 #[cfg(target_os = "macos")]
 fn tool_shell_uids(
     want: &HashMap<&str, TurnState>,
-    _ends: &HashMap<String, u64>,
+    ends: &HashMap<String, u64>,
     _bg: &HashMap<String, HashSet<String>>,
     _max_age: Duration,
 ) -> std::collections::HashSet<String> {
@@ -819,19 +966,123 @@ fn tool_shell_uids(
         fn cmdline(&self, pid: u32) -> Option<String> {
             crate::sysstat::cmdline(pid)
         }
+        fn start(&self, pid: u32) -> u64 {
+            crate::sysstat::process_start(pid).unwrap_or(0)
+        }
     }
     if want.is_empty() {
         return std::collections::HashSet::new();
     }
     let probe = Proc(crate::sysstat::parent_map());
     let pids: Vec<u32> = probe.0.keys().copied().collect();
-    background_job_uids(want, pids, &probe)
+    background_job_uids(want, ends, pids, &probe)
 }
 
-/// Windows: no tab ever reports a job — there is no reader of another
-/// process's environment block here (it would take `NtQueryInformationProcess`
-/// and a PEB walk), so no tool shell can be tied to its tab.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// The shells a tool call runs in on Windows, by image name without `.exe`:
+/// Git Bash for Claude's Bash tool (its `bin\bash.exe` and the `usr\bin` one
+/// it starts), the `cmd` → `powershell` pair of its PowerShell tool, and
+/// whichever of them Codex uses.
+#[cfg(any(target_os = "windows", test))]
+const WIN_SHELL_EXES: &[&str] = &["bash", "sh", "cmd", "powershell", "pwsh"];
+
+/// An image name as [`WIN_SHELL_EXES`] spells it: lowercase, no `.exe`.
+#[cfg(any(target_os = "windows", test))]
+fn win_exe_stem(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    lower.strip_suffix(".exe").map(str::to_string).unwrap_or(lower)
+}
+
+/// Whether a Windows process is a shell its agent started for a tool call:
+/// Claude's Bash tool (sources the CLI's shell snapshot, as on POSIX), its
+/// PowerShell tool (handed its script through `CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT`,
+/// measured on Claude 2.1.326), or a shell whose parent is Codex. Tabtivity's own
+/// session hook, which Codex starts as a PowerShell too, is none of them.
+#[cfg(any(target_os = "windows", test))]
+fn is_win_tool_shell(exe: &str, cmdline: &str, parent_exe: &str) -> bool {
+    WIN_SHELL_EXES.contains(&exe)
+        && !cmdline.contains(crate::brand::SESSION_HOOK_PS1)
+        && (cmdline.contains("/shell-snapshots/snapshot-")
+            || cmdline.contains("CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT")
+            || parent_exe.starts_with("codex"))
+}
+
+/// Whether a Windows command line writes to the output file of one of `tasks`
+/// (`…\tasks\<id>.output`): Claude's PowerShell tool redirects there in the
+/// command line itself, so a call the hook recorded as backgrounded is known
+/// mid-turn. Its Bash tool does not (its output goes through a pipe), and
+/// writes the stdin seam POSIX reads (`CLAUDE_BACKGROUND_SEAM`) on every call,
+/// foreground too — so a backgrounded Bash call is known once it outlives the
+/// turn.
+#[cfg(any(target_os = "windows", test))]
+fn win_cmdline_writes_task(cmdline: &str, tasks: &HashSet<String>) -> bool {
+    tasks.iter().any(|id| {
+        cmdline.contains(&format!("tasks\\{id}.output")) || cmdline.contains(&format!("tasks/{id}.output"))
+    })
+}
+
+/// The walk behind Windows' [`tool_shell_uids`], over a process table `procs`
+/// (`(pid, ppid, image name)`) and the readers of a process's command line +
+/// environment (`params`) and start (`start`, `0` = unknown). Shells only:
+/// only they have their PEB read.
+#[cfg(any(target_os = "windows", test))]
+fn win_background_job_uids(
+    want: &HashMap<&str, TurnState>,
+    ends: &HashMap<String, u64>,
+    bg: &HashMap<String, HashSet<String>>,
+    procs: &[(u32, u32, String)],
+    params: impl Fn(u32) -> Option<(String, Vec<u8>)>,
+    start: impl Fn(u32) -> u64,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    if want.is_empty() {
+        return out;
+    }
+    let exe_of: HashMap<u32, String> = procs.iter().map(|(pid, _, name)| (*pid, win_exe_stem(name))).collect();
+    for (pid, ppid, _) in procs {
+        let Some(exe) = exe_of.get(pid) else { continue };
+        if !WIN_SHELL_EXES.contains(&exe.as_str()) {
+            continue;
+        }
+        let Some((cmdline, environ)) = params(*pid) else { continue };
+        let Some(uid) = environ_uid(&environ) else { continue };
+        let Some(state) = want.get(uid.as_str()) else { continue };
+        if out.contains(&uid) {
+            continue;
+        }
+        let parent_exe = exe_of.get(ppid).map(String::as_str).unwrap_or_default();
+        if !is_win_tool_shell(exe, &cmdline, parent_exe) {
+            continue;
+        }
+        let task = bg.get(&uid).is_some_and(|tasks| win_cmdline_writes_task(&cmdline, tasks));
+        let outlived = outlived_turn(start(*pid), ends.get(&uid).copied());
+        if (*state == TurnState::Done && outlived) || task {
+            out.insert(uid);
+        }
+    }
+    out
+}
+
+/// Windows: one ToolHelp walk, then each shell's command line and environment
+/// from its PEB (`sysstat::process_params`) — the tab id is in the
+/// environment, as on POSIX. Only the user's own processes answer, which is
+/// every tab's; a contained or remote agent's shells are not on this table.
+#[cfg(target_os = "windows")]
+fn tool_shell_uids(
+    want: &HashMap<&str, TurnState>,
+    ends: &HashMap<String, u64>,
+    bg: &HashMap<String, HashSet<String>>,
+    _max_age: Duration,
+) -> HashSet<String> {
+    if want.is_empty() {
+        return HashSet::new();
+    }
+    let procs = crate::sysstat::process_list();
+    win_background_job_uids(want, ends, bg, &procs, crate::sysstat::process_params, |pid| {
+        crate::sysstat::process_start(pid).unwrap_or(0)
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn tool_shell_uids(
     _want: &HashMap<&str, TurnState>,
     _ends: &HashMap<String, u64>,
@@ -845,6 +1096,210 @@ fn tool_shell_uids(
 /// `agent-turn` event. Runs for the app's lifetime on its own thread; a watcher
 /// that cannot be created only costs the hook path (the activity store falls
 /// back to its byte heuristic), so failures are logged and swallowed.
+/// How much of a Codex rollout's end [`settle_codex_turn`] reads. The line it
+/// looks for — a turn that ended on an error — carries no reply, so it is
+/// small; a turn ended normally is the `Stop` hook's to report anyway.
+const CODEX_ROLLOUT_TAIL: u64 = 64 * 1024;
+/// How far a turn record's write may trail the rollout's end of the turn and
+/// still belong to it: the hook's write and Codex's own line race by a few ms.
+const CODEX_END_SLACK_MS: i64 = 2_000;
+/// How often a session id whose rollout was not found is looked up again.
+const CODEX_ROLLOUT_RETRY: Duration = Duration::from_secs(30);
+
+/// The epoch milliseconds the last turn in a Codex rollout's `tail` ended, when
+/// its last turn event is that end (`task_complete`). Codex 0.169.0 ends a turn
+/// without firing its `Stop` hook when the turn fails on the API — a usage
+/// limit (`codex_error_info: "usage_limit_exceeded"`) ends it at once — and
+/// records the end only there (probed offline with
+/// `scripts/verify-cli/codex/turn_hooks.py … usage`). A `task_started` after
+/// it is a new turn; an aborted turn (`turn_aborted`, an interrupt) is not
+/// taken as finished. A line cut by the tail's start does not parse and is
+/// skipped.
+pub fn codex_rollout_turn_end(tail: &str) -> Option<i64> {
+    use serde_json::Value;
+    for line in tail.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        match v.pointer("/payload/type").and_then(Value::as_str) {
+            Some("task_complete") => {
+                let stamp = v
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|t| t.timestamp_millis());
+                let completed = v.pointer("/payload/completed_at").and_then(Value::as_i64).map(|s| s.saturating_mul(1000));
+                return stamp.or(completed);
+            }
+            Some("task_started") | Some("turn_aborted") => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What [`settle_codex_turn`] remembers per uid: the rollout found for its
+/// session id (or when it last looked and found none), and the rollout's
+/// length when it was last read, so an unchanged file is not read again.
+struct CodexRollout {
+    sid: String,
+    path: Option<PathBuf>,
+    looked: Instant,
+    read_len: Option<u64>,
+}
+
+fn codex_rollouts() -> &'static Mutex<HashMap<String, CodexRollout>> {
+    static R: OnceLock<Mutex<HashMap<String, CodexRollout>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// uids of the bound tabs that run Codex ([`watch_codex_rollout`]).
+fn codex_uids() -> &'static Mutex<HashSet<String>> {
+    static U: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    U.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Mark the bound tab `uid` as a local Codex: while its turn record says a
+/// turn is in flight, the watcher's poll asks its rollout whether the turn
+/// ended without a `Stop` ([`settle_codex_turn`]).
+pub fn watch_codex_rollout(uid: &str) {
+    if valid_uid(uid) {
+        codex_uids().lock_ok().insert(uid.to_string());
+    }
+}
+
+fn forget_codex(uid: &str) {
+    codex_uids().lock_ok().remove(uid);
+    codex_rollouts().lock_ok().remove(uid);
+}
+
+/// Write `done` over a Codex tab's in-flight turn record when its rollout says
+/// the turn already ended — the end Codex reports with no `Stop` hook (see
+/// [`codex_rollout_turn_end`]). Without it the record kept `working` until the
+/// next turn, so a prompt scheduled for after a usage-limit stop never found
+/// the tab idle and was recorded as missed. The record is written the way the
+/// hook writes it (`done <epoch secs>`), in whichever of the root's and the
+/// project slice's copies is in flight, and the async-question record beside
+/// it goes, as on a `Stop`: the window's watcher and the Mobile sidecar's
+/// scheduler both read the record, so both see the end. The slice is
+/// agent-writable, so every write goes through a directory handle. Returns
+/// whether it wrote.
+pub fn settle_codex_turn(live_root: &Path, uid: &str, project_id: Option<&str>, sessions_root: &Path) -> bool {
+    if !valid_uid(uid) {
+        return false;
+    }
+    let mut dirs = vec![String::new()];
+    if let Some(pid) = project_id {
+        dirs.push(format!("{}/", crate::storage::project_key(pid)));
+    }
+    let in_flight: Vec<(String, i64)> = dirs
+        .into_iter()
+        .filter_map(|dir| {
+            let path = live_root.join(format!("{dir}{uid}{TURN_SUFFIX}"));
+            let state = home_io::read_record(&path).and_then(|text| parse_turn_record(&text))?;
+            matches!(state, TurnState::Working | TurnState::Decision)
+                .then(|| record_written_ms(&path).map(|ms| (dir, ms as i64)))
+                .flatten()
+        })
+        .collect();
+    let Some(written) = in_flight.iter().map(|(_, ms)| *ms).max() else {
+        return false;
+    };
+    // The session id sits beside the record it was written with.
+    let Some(sid) = in_flight.iter().find_map(|(dir, _)| {
+        crate::services::agent_session::read_live_session_in(&live_root.join(dir.trim_end_matches('/')), uid)
+    }) else {
+        return false;
+    };
+    let path = {
+        let mut cache = codex_rollouts().lock_ok();
+        let stale = cache.get(uid).is_none_or(|c| c.sid != sid || (c.path.is_none() && c.looked.elapsed() >= CODEX_ROLLOUT_RETRY));
+        if stale {
+            let path = crate::services::agent_session::codex_session_log(sessions_root, &sid);
+            cache.insert(uid.to_string(), CodexRollout { sid: sid.clone(), path, looked: Instant::now(), read_len: None });
+        }
+        match cache.get(uid).and_then(|c| c.path.clone()) {
+            Some(path) => path,
+            None => return false,
+        }
+    };
+    let Some(mut file) = home_io::open_regular(&path) else {
+        return false;
+    };
+    let Some(len) = file.metadata().ok().map(|m| m.len()) else {
+        return false;
+    };
+    if codex_rollouts().lock_ok().get(uid).and_then(|c| c.read_len) == Some(len) {
+        return false;
+    }
+    let tail = {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut bytes = Vec::new();
+        if file.seek(SeekFrom::Start(len.saturating_sub(CODEX_ROLLOUT_TAIL))).is_err()
+            || file.take(CODEX_ROLLOUT_TAIL).read_to_end(&mut bytes).is_err()
+        {
+            return false;
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    let ended = codex_rollout_turn_end(&tail).is_some_and(|end| end + CODEX_END_SLACK_MS >= written);
+    // An unchanged rollout says the same next time — unless the write below
+    // fails, which the next poll tries again.
+    let remember = |c: &mut HashMap<String, CodexRollout>| {
+        if let Some(c) = c.get_mut(uid) {
+            c.read_len = Some(len);
+        }
+    };
+    if !ended {
+        remember(&mut codex_rollouts().lock_ok());
+        return false;
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut wrote = false;
+    for (dir, _) in &in_flight {
+        if let Some(ask) = home_io::HomeFile::open_existing(live_root, &format!("{dir}{uid}{ASK_SUFFIX}")) {
+            let _ = ask.remove();
+        }
+        if let Some(record) = home_io::HomeFile::open(live_root, &format!("{dir}{uid}{TURN_SUFFIX}")) {
+            wrote |= record.write(format!("done {secs}").as_bytes()).is_ok();
+        }
+    }
+    if wrote {
+        remember(&mut codex_rollouts().lock_ok());
+    }
+    wrote
+}
+
+/// [`settle_codex_turn`] for every bound Codex tab this run whose hooks last
+/// said a turn is in flight: the watcher's poll, on its own thread.
+fn settle_codex_turns() {
+    let codex: Vec<String> = codex_uids().lock_ok().iter().cloned().collect();
+    if codex.is_empty() {
+        return;
+    }
+    let tabs: Vec<(String, Option<String>)> = {
+        let states = states().lock_ok();
+        let projects = bound_projects().lock_ok();
+        codex
+            .into_iter()
+            .filter(|uid| matches!(states.get(uid), Some(TurnState::Working | TurnState::Decision)))
+            .map(|uid| {
+                let project = projects.get(&uid).cloned();
+                (uid, project)
+            })
+            .collect()
+    };
+    let root = live_sessions_dir();
+    for (uid, project) in tabs {
+        let sessions = crate::services::agent_session::codex_sessions_root(project.as_deref());
+        settle_codex_turn(&root, &uid, project.as_deref(), &sessions);
+    }
+}
+
 pub fn start(ctx: CoreCtx) {
     std::thread::spawn(move || {
         use notify::{RecursiveMode, Watcher};
@@ -886,7 +1341,14 @@ pub fn start(ctx: CoreCtx) {
         // when the sender side is dropped, i.e. never before the app exits. The
         // timeout is the tool-shell poll, which costs nothing while no tab is
         // bound.
+        let mut last_settle = Instant::now();
         loop {
+            // Whichever arm woke the loop: any tab's record writes restart
+            // `recv_timeout`'s clock, so a busy neighbour must not keep a
+            // declined question's `decision` from being retired.
+            if settle_due(&mut last_settle, Instant::now()) {
+                settle_claude_turns();
+            }
             match rx.recv_timeout(JOB_POLL) {
                 Ok(path) => {
                     // A source record says how the session rolled (a `/clear`,
@@ -896,7 +1358,10 @@ pub fn start(ctx: CoreCtx) {
                         continue;
                     }
                     if let (Some((id, state)), Some(uid)) = (resolve_event(&path), uid_of(&path)) {
-                        note_state(&uid, state);
+                        let prev = note_state(&uid, state);
+                        // A turn's edges are checkpointed (`services::checkpoints`),
+                        // queued on its folder's worker: no lock is held here.
+                        crate::services::checkpoints::on_turn(&uid, prev, state, record_written_ms(&path));
                         if let Some(dir) = path.parent() {
                             note_background_tasks(&uid, dir);
                         }
@@ -914,6 +1379,8 @@ pub fn start(ctx: CoreCtx) {
                     if !job_poll_due() {
                         continue;
                     }
+                    // A record this writes comes back through the watcher.
+                    settle_codex_turns();
                     for (pty, st, job) in refresh_jobs(None) {
                         emit(pty, st, job, true);
                     }
@@ -925,9 +1392,359 @@ pub fn start(ctx: CoreCtx) {
     });
 }
 
+// ── A Claude question or approval declined with Esc ───────────────────────────
+//
+// Claude fires no hook when the user declines an `AskUserQuestion` or a tool
+// approval (probed on 2.1.326/2.1.327, `tui_ask_esc` / `tui_bash`): the turn
+// record keeps saying `decision` until the next prompt. What it does write, at
+// once, is the user record `[Request interrupted by user for tool use]` into
+// the session's transcript. While a local Claude tab's record reads `decision`,
+// the watcher's poll reads the transcript's tail for that notice.
+
+/// How much of a Claude transcript's end [`settle_claude_turn`] reads. The
+/// notice is small and the last thing written but a few bookkeeping lines;
+/// the big lines (a prompt snapshot) come before it.
+const CLAUDE_TAIL: u64 = 64 * 1024;
+/// How often a session id whose transcript was not found is looked up again.
+const CLAUDE_LOG_RETRY: Duration = Duration::from_secs(30);
+/// The user record Claude writes when a tool approval or question is declined.
+/// A plain Esc mid-turn writes `[Request interrupted by user]` instead, which
+/// does not end a `decision`; neither does feedback on a rejection.
+const CLAUDE_TOOL_NOTICE: &str = "[Request interrupted by user for tool use]";
+
+/// When the user declined the call Claude was waiting on, per the transcript's
+/// `tail`: the epoch milliseconds of the newest `[Request interrupted by user
+/// for tool use]` notice, provided no tool call follows it (a call after it is
+/// the turn going on). A subagent's (`isSidechain`) and a meta record are
+/// stepped over, and so is a line cut by the tail's start.
+fn claude_tool_declined_at(tail: &str) -> Option<i64> {
+    use serde_json::Value;
+    for line in tail.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v.get("isSidechain").and_then(Value::as_bool) == Some(true)
+            || v.get("isMeta").and_then(Value::as_bool) == Some(true)
+        {
+            continue;
+        }
+        match v.get("type").and_then(Value::as_str) {
+            Some("assistant") => {
+                let calls = v
+                    .pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|blocks| blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_use")));
+                if calls {
+                    return None;
+                }
+            }
+            Some("user") => {
+                let text = match v.pointer("/message/content") {
+                    Some(Value::String(text)) => Some(text.as_str()),
+                    Some(Value::Array(blocks)) => match blocks.as_slice() {
+                        [block] if block.get("type").and_then(Value::as_str) == Some("text") => {
+                            block.get("text").and_then(Value::as_str)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if text.is_some_and(|t| t.trim() == CLAUDE_TOOL_NOTICE) {
+                    return v
+                        .get("timestamp")
+                        .and_then(Value::as_str)
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|t| t.timestamp_millis());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What [`settle_claude_turn`] remembers per uid: the transcript found for its
+/// session id (or when it last looked and found none), and the file's length
+/// when it was last read, so an unchanged file is not read again.
+struct ClaudeLog {
+    sid: String,
+    path: Option<PathBuf>,
+    looked: Instant,
+    read_len: Option<u64>,
+}
+
+fn claude_logs() -> &'static Mutex<HashMap<String, ClaudeLog>> {
+    static L: OnceLock<Mutex<HashMap<String, ClaudeLog>>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// uids of the bound tabs that run a local Claude ([`watch_claude_transcript`]).
+fn claude_uids() -> &'static Mutex<HashSet<String>> {
+    static U: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    U.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Mark the bound tab `uid` as a local Claude: while its turn record says
+/// `decision`, the watcher's poll asks its transcript whether the question or
+/// approval was declined ([`settle_claude_turn`]).
+pub fn watch_claude_transcript(uid: &str) {
+    if valid_uid(uid) {
+        claude_uids().lock_ok().insert(uid.to_string());
+    }
+}
+
+fn forget_claude(uid: &str) {
+    claude_uids().lock_ok().remove(uid);
+    claude_logs().lock_ok().remove(uid);
+}
+
+/// Write `done` over a Claude tab's `decision` record when its transcript says
+/// the call it waited on was declined after the record was written — the end
+/// Claude reports with no hook. `done`, not `working`: the turn is over (the
+/// frontend keeps its own "interrupted" mark from the Esc). Only `decision`
+/// is settled; an answer is `PostToolUse`'s to report, and a rejection with
+/// feedback or "Chat about this" writes no such notice, so it stays as it is.
+/// The record is written the way the hook writes it (`done <epoch secs>`), in
+/// whichever of the root's and the project slice's copies reads `decision`,
+/// through a directory handle (the slice is agent-writable). The transcript is
+/// agent-written too: it is opened without following links and only its tail
+/// is read. `projects_root` is the scope's `<home>/.claude/projects`. Returns
+/// whether it wrote.
+pub fn settle_claude_turn(live_root: &Path, uid: &str, project_id: Option<&str>, projects_root: &Path) -> bool {
+    if !valid_uid(uid) {
+        return false;
+    }
+    let mut dirs = vec![String::new()];
+    if let Some(pid) = project_id {
+        dirs.push(format!("{}/", crate::storage::project_key(pid)));
+    }
+    let asking: Vec<(String, i64)> = dirs
+        .into_iter()
+        .filter_map(|dir| {
+            let path = live_root.join(format!("{dir}{uid}{TURN_SUFFIX}"));
+            let state = home_io::read_record(&path).and_then(|text| parse_turn_record(&text))?;
+            (state == TurnState::Decision).then(|| record_written_ms(&path).map(|ms| (dir, ms as i64))).flatten()
+        })
+        .collect();
+    let Some(written) = asking.iter().map(|(_, ms)| *ms).max() else {
+        return false;
+    };
+    // The session id sits beside the record it was written with.
+    let Some(sid) = asking.iter().find_map(|(dir, _)| {
+        crate::services::agent_session::read_live_session_in(&live_root.join(dir.trim_end_matches('/')), uid)
+    }) else {
+        return false;
+    };
+    let path = {
+        let mut cache = claude_logs().lock_ok();
+        let stale = cache.get(uid).is_none_or(|c| c.sid != sid || (c.path.is_none() && c.looked.elapsed() >= CLAUDE_LOG_RETRY));
+        if stale {
+            let path = crate::services::agent_session::claude_session_log(projects_root, &sid);
+            cache.insert(uid.to_string(), ClaudeLog { sid: sid.clone(), path, looked: Instant::now(), read_len: None });
+        }
+        match cache.get(uid).and_then(|c| c.path.clone()) {
+            Some(path) => path,
+            None => return false,
+        }
+    };
+    let Some(mut file) = home_io::open_regular(&path) else {
+        return false;
+    };
+    let Some(len) = file.metadata().ok().map(|m| m.len()) else {
+        return false;
+    };
+    if claude_logs().lock_ok().get(uid).and_then(|c| c.read_len) == Some(len) {
+        return false;
+    }
+    let tail = {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut bytes = Vec::new();
+        if file.seek(SeekFrom::Start(len.saturating_sub(CLAUDE_TAIL))).is_err()
+            || file.take(CLAUDE_TAIL).read_to_end(&mut bytes).is_err()
+        {
+            return false;
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    // An unchanged transcript says the same next time — unless the write below
+    // fails, which the next poll tries again.
+    let remember = || {
+        if let Some(c) = claude_logs().lock_ok().get_mut(uid) {
+            c.read_len = Some(len);
+        }
+    };
+    // Strictly newer: a notice from an earlier question of the same turn
+    // belongs to that one, not to the question this record is about.
+    if !claude_tool_declined_at(&tail).is_some_and(|at| at > written) {
+        remember();
+        return false;
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut wrote = false;
+    for (dir, ms) in &asking {
+        let rel = format!("{dir}{uid}{TURN_SUFFIX}");
+        let path = live_root.join(&rel);
+        // The next prompt's hook may have written `working` since the read
+        // above: only a record still untouched is overwritten.
+        let untouched = record_written_ms(&path).is_some_and(|now| now as i64 == *ms)
+            && home_io::read_record(&path).and_then(|text| parse_turn_record(&text)) == Some(TurnState::Decision);
+        if !untouched {
+            continue;
+        }
+        if let Some(record) = home_io::HomeFile::open(live_root, &rel) {
+            wrote |= record.write(format!("done {secs}").as_bytes()).is_ok();
+        }
+    }
+    if wrote {
+        remember();
+    }
+    wrote
+}
+
+/// Whether the Claude settle is due: at most once per [`JOB_POLL`], on the
+/// watcher's own clock rather than the channel's timeout (which every record
+/// write of any tab restarts). Marks `now` as the last run when it is.
+fn settle_due(last: &mut Instant, now: Instant) -> bool {
+    if now.saturating_duration_since(*last) < JOB_POLL {
+        return false;
+    }
+    *last = now;
+    true
+}
+
+/// [`settle_claude_turn`] for every bound Claude tab whose hooks last said it
+/// waits on the user: the watcher's poll, on its own thread.
+fn settle_claude_turns() {
+    let claude: Vec<String> = claude_uids().lock_ok().iter().cloned().collect();
+    if claude.is_empty() {
+        return;
+    }
+    let tabs: Vec<(String, Option<String>)> = {
+        let states = states().lock_ok();
+        let projects = bound_projects().lock_ok();
+        claude
+            .into_iter()
+            .filter(|uid| states.get(uid) == Some(&TurnState::Decision))
+            .map(|uid| {
+                let project = projects.get(&uid).cloned();
+                (uid, project)
+            })
+            .collect()
+    };
+    let root = live_sessions_dir();
+    for (uid, project) in tabs {
+        let Some(projects) = crate::services::agent_session::claude_projects_roots(project.as_deref()).into_iter().next() else {
+            continue;
+        };
+        settle_claude_turn(&root, &uid, project.as_deref(), &projects);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A rollout line as Codex 0.169.0 writes it (the probe's usage-limit
+    /// run, `turn_hooks.py … usage`), stamped `at`.
+    fn rollout_line(at: chrono::DateTime<chrono::Utc>, payload: serde_json::Value) -> String {
+        serde_json::json!({
+            "timestamp": at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "type": "event_msg",
+            "payload": payload,
+        })
+        .to_string()
+    }
+
+    fn usage_limit_turn(start: chrono::DateTime<chrono::Utc>, end: chrono::DateTime<chrono::Utc>) -> String {
+        let turn = "01a1ed94-7e9b-76a1-8c4c-3852a33c7d20";
+        [
+            r#"{"timestamp":"2026-11-18T07:34:49.000Z","type":"session_meta","payload":{"id":"x"}}"#.to_string(),
+            rollout_line(start, serde_json::json!({"type": "task_started", "turn_id": turn})),
+            r#"{"timestamp":"2026-11-18T07:34:54.410Z","ordinal":7,"type":"response_item","payload":{"type":"message","role":"user","content":[]}}"#.to_string(),
+            rollout_line(end, serde_json::json!({"type": "token_count", "info": null})),
+            rollout_line(end, serde_json::json!({
+                "type": "task_complete", "turn_id": turn, "last_agent_message": null,
+                "error": {"message": "You\u{2019}ve hit your usage limit. Try again later.", "codex_error_info": "usage_limit_exceeded"},
+                "completed_at": end.timestamp(),
+            })),
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    #[test]
+    fn a_codex_rollout_says_when_its_last_turn_ended() {
+        let t0 = chrono::DateTime::parse_from_rfc3339("2026-11-18T07:34:54.366Z").unwrap().to_utc();
+        let t1 = chrono::DateTime::parse_from_rfc3339("2026-11-18T07:34:54.425Z").unwrap().to_utc();
+        let ended = usage_limit_turn(t0, t1);
+        assert_eq!(codex_rollout_turn_end(&ended), Some(t1.timestamp_millis()));
+        // A line cut by the tail's start is skipped, not fatal.
+        assert_eq!(codex_rollout_turn_end(&ended[40..]), Some(t1.timestamp_millis()));
+        // A new turn after it, an interrupt, and a turn still running are not ends.
+        let next = format!("{ended}{}\n", rollout_line(t1, serde_json::json!({"type": "task_started"})));
+        assert_eq!(codex_rollout_turn_end(&next), None);
+        let aborted = format!("{}\n", rollout_line(t1, serde_json::json!({"type": "turn_aborted", "reason": "interrupted"})));
+        assert_eq!(codex_rollout_turn_end(&aborted), None);
+        let running = ended.lines().take(3).collect::<Vec<_>>().join("\n");
+        assert_eq!(codex_rollout_turn_end(&running), None);
+        assert_eq!(codex_rollout_turn_end(""), None);
+    }
+
+    #[test]
+    fn a_codex_turn_that_ended_with_no_stop_is_recorded_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("live_sessions");
+        let sessions = dir.path().join("sessions");
+        let uid = "0c0de000-1111-4222-8333-444455556666";
+        let sid = "01a1ed94-6d65-7bd3-9aca-ed654c1a9e61";
+        let project = "proj/codex";
+        let slice = root.join(crate::storage::project_key(project));
+        let days = sessions.join("2026").join("11").join("18");
+        std::fs::create_dir_all(&slice).unwrap();
+        std::fs::create_dir_all(&days).unwrap();
+        // A fenced tab's hook writes into the project's slice.
+        std::fs::write(slice.join(uid), sid).unwrap();
+        std::fs::write(slice.join(format!("{uid}{TURN_SUFFIX}")), "working 1").unwrap();
+        std::fs::write(slice.join(format!("{uid}{ASK_SUFFIX}")), "call_1\n").unwrap();
+        let rollout = days.join(format!("rollout-2026-11-18T08-34-49-{sid}.jsonl"));
+        let now = chrono::Utc::now();
+        // Still running: nothing written.
+        let running = usage_limit_turn(now, now);
+        let running: String = running.lines().take(3).map(|l| format!("{l}\n")).collect();
+        std::fs::write(&rollout, &running).unwrap();
+        assert!(!settle_codex_turn(&root, uid, Some(project), &sessions));
+        assert!(std::fs::read_to_string(slice.join(format!("{uid}{TURN_SUFFIX}"))).unwrap().starts_with("working"));
+        // The usage-limit stop lands: the record says done, the question goes.
+        std::fs::write(&rollout, usage_limit_turn(now, now + chrono::Duration::milliseconds(60))).unwrap();
+        assert!(settle_codex_turn(&root, uid, Some(project), &sessions));
+        let record = std::fs::read_to_string(slice.join(format!("{uid}{TURN_SUFFIX}"))).unwrap();
+        assert_eq!(parse_turn_record(&record), Some(TurnState::Done), "{record}");
+        assert!(!slice.join(format!("{uid}{ASK_SUFFIX}")).exists());
+        // Done already: nothing more to do.
+        assert!(!settle_codex_turn(&root, uid, Some(project), &sessions));
+        // A turn record written well after the rollout's end is a new turn
+        // whose start the rollout has not caught up with: left alone.
+        let old = now - chrono::Duration::minutes(5);
+        std::fs::write(&rollout, usage_limit_turn(old, old)).unwrap();
+        std::fs::write(slice.join(format!("{uid}{TURN_SUFFIX}")), "working 2").unwrap();
+        assert!(!settle_codex_turn(&root, uid, Some(project), &sessions));
+        // A link planted at the record is replaced, never written through.
+        #[cfg(unix)]
+        {
+            std::fs::write(&rollout, usage_limit_turn(now, now + chrono::Duration::seconds(30))).unwrap();
+            let target = dir.path().join("users-file");
+            std::fs::write(&target, "working 3").unwrap();
+            let name = slice.join(format!("{uid}{TURN_SUFFIX}"));
+            std::fs::remove_file(&name).unwrap();
+            std::os::unix::fs::symlink(&target, &name).unwrap();
+            // A link reads as no record, so there is nothing in flight to end.
+            assert!(!settle_codex_turn(&root, uid, Some(project), &sessions));
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "working 3");
+        }
+        forget_codex(uid);
+        assert!(!settle_codex_turn(&root, "../escape", Some(project), &sessions));
+    }
 
     #[test]
     fn parses_the_state_word_and_refuses_the_rest() {
@@ -1013,6 +1830,48 @@ mod tests {
         assert_eq!(InputFrom::parse("tablet"), None);
     }
 
+    /// A sibling's message leaves the empty `<uid>.mail` marker where
+    /// `<uid>.from` goes: the root and the project slice, never through a link.
+    #[test]
+    fn mail_marker_lands_empty_in_the_root_and_the_slice_and_never_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("live_sessions");
+        let uid = "mail-test-uid-1";
+        let pty = "proj-mail:agent-mail-1";
+        bindings().lock().unwrap().insert(uid.to_string(), pty.to_string());
+        bound_projects().lock().unwrap().insert(uid.to_string(), "proj/mail".to_string());
+        let name = format!("{uid}{MAIL_SUFFIX}");
+        let slice = root.join(crate::storage::project_key("proj/mail"));
+        note_mail_in(&root, pty).unwrap();
+        assert_eq!(std::fs::read(root.join(&name)).unwrap(), b"");
+        assert_eq!(std::fs::read(slice.join(&name)).unwrap(), b"");
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("users-file");
+            std::fs::write(&target, "keep").unwrap();
+            std::fs::remove_file(slice.join(&name)).unwrap();
+            std::os::unix::fs::symlink(&target, slice.join(&name)).unwrap();
+            note_mail_in(&root, pty).unwrap();
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+            assert!(!std::fs::symlink_metadata(slice.join(&name)).unwrap().file_type().is_symlink());
+        }
+        // Reading the inbox clears both copies; the hook only reaches one.
+        clear_mail_in(&root, pty);
+        assert!(!root.join(&name).exists() && !slice.join(&name).exists(), "both markers go");
+        clear_mail_in(&root, pty);
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("users-file");
+            std::os::unix::fs::symlink(&target, slice.join(&name)).unwrap();
+            clear_mail_in(&root, pty);
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep", "the link goes, not its target");
+            assert!(std::fs::symlink_metadata(slice.join(&name)).is_err());
+        }
+        on_tab_gone(pty);
+        note_mail_in(&root, pty).unwrap();
+        assert!(!root.join(&name).exists(), "an unbound PTY gets nothing");
+    }
+
     #[test]
     fn a_leftover_record_mid_turn_reads_as_cut_off() {
         let dir = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-turn-{}-{}"), std::process::id(), line!()));
@@ -1066,14 +1925,43 @@ mod tests {
         on_tab_gone(pty);
     }
 
+    /// A window reattaching to a tmux session that outlived it (the headless
+    /// owner kept the agent running) finds the agent's CURRENT turn in the
+    /// record: it is kept and reported live, never read as a cut-off turn. A
+    /// session that died leaves the same record as a leftover.
+    #[test]
+    fn a_turn_in_flight_in_a_running_session_is_live_not_cut_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let uid = "turn-test-uid-live";
+        let rec = tmp.path().join(format!("{uid}{TURN_SUFFIX}"));
+        let paths = [rec.clone()];
+        for (word, state) in [("working 1", TurnState::Working), ("decision 2", TurnState::Decision)] {
+            std::fs::write(&rec, word).unwrap();
+            let left = take_left_turn(uid, &paths, true);
+            assert_eq!(left, LeftTurn { cut_off: false, resting: false, live: Some(state) }, "{word:?}");
+            assert!(rec.exists(), "a live record is kept: {word:?}");
+            assert_eq!(states().lock_ok().get(uid).copied(), Some(state));
+            let left = take_left_turn(uid, &paths, false);
+            assert_eq!(left, LeftTurn { cut_off: true, resting: false, live: None }, "{word:?}");
+            assert!(!rec.exists(), "a leftover is cleared: {word:?}");
+        }
+        // A finished turn reads the same either way: the agent rests.
+        std::fs::write(&rec, "done 3").unwrap();
+        assert_eq!(take_left_turn(uid, &paths, true), LeftTurn { cut_off: false, resting: true, live: None });
+        assert!(!rec.exists());
+        states().lock_ok().remove(uid);
+        turn_ends().lock_ok().remove(uid);
+        settled().lock_ok().remove(uid);
+    }
+
     #[test]
     fn rebinding_a_pty_forgets_its_previous_uid_and_refuses_a_bad_one() {
         let pty = "proj-b:agent-turn-2";
-        bind_tab("old-uid-2", pty, None);
-        bind_tab("new-uid-2", pty, None);
+        bind_tab("old-uid-2", pty, None, false);
+        bind_tab("new-uid-2", pty, None, false);
         assert_eq!(pty_for("old-uid-2"), None);
         assert_eq!(pty_for("new-uid-2").as_deref(), Some(pty));
-        assert_eq!(bind_tab("../escape", pty, None), LeftTurn::default());
+        assert_eq!(bind_tab("../escape", pty, None, false), LeftTurn::default());
         assert_eq!(pty_for("../escape"), None);
         assert_eq!(pty_for("new-uid-2").as_deref(), Some(pty));
         on_tab_gone(pty);
@@ -1160,8 +2048,8 @@ mod tests {
         }
         let snapshot = snap.join("snapshot-bash-test.sh");
         std::fs::write(&snapshot, "").unwrap();
-        bind_tab(&bg_uid, bg_pty, None);
-        bind_tab(&fg_uid, fg_pty, None);
+        bind_tab(&bg_uid, bg_pty, None, false);
+        bind_tab(&fg_uid, fg_pty, None, false);
         note_state(&bg_uid, TurnState::Working);
         note_state(&fg_uid, TurnState::Working);
         // The hook recorded the background call's task for one tab only.
@@ -1229,7 +2117,7 @@ mod tests {
     /// A process table for [`background_job_uids`]: pid → (comm, ppid, the
     /// raw `KERN_PROCARGS2` buffer, as macOS hands it over). The command line
     /// is the buffer's argv, as `sysstat::cmdline` reads it.
-    struct FakeTable(HashMap<u32, (&'static str, u32, Vec<u8>, String)>);
+    struct FakeTable(HashMap<u32, (&'static str, u32, Vec<u8>, String)>, HashMap<u32, u64>);
     impl ProcProbe for FakeTable {
         fn comm_ppid(&self, pid: u32) -> Option<(String, u32)> {
             self.0.get(&pid).map(|(c, p, _, _)| (c.to_string(), *p))
@@ -1239,6 +2127,9 @@ mod tests {
         }
         fn cmdline(&self, pid: u32) -> Option<String> {
             Some(self.0.get(&pid)?.3.clone())
+        }
+        fn start(&self, pid: u32) -> u64 {
+            self.1.get(&pid).copied().unwrap_or(0)
         }
     }
 
@@ -1273,16 +2164,23 @@ mod tests {
         table.insert(31, entry("zsh", 30, &["/bin/zsh", spoof.as_str(), bg], &[]));
         let want: HashMap<&str, TurnState> =
             [("t-bg", TurnState::Working), ("t-fg", TurnState::Working), ("t-argv", TurnState::Working)].into();
-        let probe = FakeTable(table);
+        let probe = FakeTable(table, [(21, 500)].into());
         let mut pids: Vec<u32> = probe.0.keys().copied().collect();
         pids.sort();
-        let found = background_job_uids(&want, pids.clone(), &probe);
+        let none = HashMap::new();
+        let found = background_job_uids(&want, &none, pids.clone(), &probe);
         assert_eq!(found, ["t-bg".to_string()].into());
         // Once the foreground tab's turn is over, its shell outlived it.
         let done: HashMap<&str, TurnState> = [("t-fg", TurnState::Done)].into();
-        assert_eq!(background_job_uids(&done, pids.clone(), &probe), ["t-fg".to_string()].into());
+        assert_eq!(background_job_uids(&done, &none, pids.clone(), &probe), ["t-fg".to_string()].into());
+        // 2442z: the turn ended (at 400) before the shell started (500) — a
+        // tool call something woken later waits on, not the turn's job.
+        let ended: HashMap<String, u64> = [("t-fg".to_string(), 400)].into();
+        assert!(background_job_uids(&done, &ended, pids.clone(), &probe).is_empty());
+        let ended_after: HashMap<String, u64> = [("t-fg".to_string(), 600)].into();
+        assert_eq!(background_job_uids(&done, &ended_after, pids.clone(), &probe), ["t-fg".to_string()].into());
         // Nobody asked: nothing is read.
-        assert!(background_job_uids(&HashMap::new(), pids, &probe).is_empty());
+        assert!(background_job_uids(&HashMap::new(), &none, pids, &probe).is_empty());
     }
 
     /// Force the next `refresh_jobs` to walk `/proc` rather than reuse the last
@@ -1303,7 +2201,7 @@ mod tests {
         let _guard = scan_lock().lock().unwrap_or_else(|e| e.into_inner());
         let uid = format!("job-none-{}", std::process::id());
         let pty = "proj-j:agent-none";
-        bind_tab(&uid, pty, None);
+        bind_tab(&uid, pty, None, false);
         note_state(&uid, TurnState::Working);
         rescan();
         // Nothing carries this uid: the flag starts false and stays false, so
@@ -1328,8 +2226,8 @@ mod tests {
         std::fs::create_dir_all(&snap).unwrap();
         let snapshot = snap.join("snapshot-bash-test.sh");
         std::fs::write(&snapshot, "").unwrap();
-        bind_tab(&bg_uid, bg_pty, None);
-        bind_tab(&fg_uid, fg_pty, None);
+        bind_tab(&bg_uid, bg_pty, None, false);
+        bind_tab(&fg_uid, fg_pty, None, false);
         // Both agents are mid-turn: one backgrounded a command, the other is
         // waiting on the tool call in front of it.
         note_state(&bg_uid, TurnState::Working);
@@ -1407,8 +2305,8 @@ mod tests {
         std::fs::create_dir_all(&snap).unwrap();
         let snapshot = snap.join("snapshot-bash-test.sh");
         std::fs::write(&snapshot, "").unwrap();
-        bind_tab(&fg_uid, fg_pty, None);
-        bind_tab(&bg_uid, bg_pty, None);
+        bind_tab(&fg_uid, fg_pty, None, false);
+        bind_tab(&bg_uid, bg_pty, None, false);
         note_state(&fg_uid, TurnState::Working);
         note_state(&bg_uid, TurnState::Working);
         note_state(&fg_uid, TurnState::Done);
@@ -1469,7 +2367,7 @@ mod tests {
         std::fs::create_dir_all(&snap).unwrap();
         let snapshot = snap.join("snapshot-bash-test.sh");
         std::fs::write(&snapshot, "").unwrap();
-        bind_tab(&uid, pty, None);
+        bind_tab(&uid, pty, None, false);
         note_state(&uid, TurnState::Working);
         // Some reader (sysstat, the fence marker, ui_priority) walks the table…
         let walked = Instant::now();
@@ -1535,7 +2433,7 @@ mod tests {
         let uid = format!("job-settle-{}", std::process::id());
         let pty = "proj-j:agent-settle";
         let is_settled = |uid: &str| settled().lock().unwrap().contains(uid);
-        bind_tab(&uid, pty, None);
+        bind_tab(&uid, pty, None, false);
         // Mid-turn the tab is never settled: a job can start at any moment.
         note_state(&uid, TurnState::Working);
         rescan();
@@ -1563,12 +2461,313 @@ mod tests {
     fn a_session_end_forgets_the_tabs_state_and_flag() {
         let uid = format!("job-idle-{}", std::process::id());
         let pty = "proj-j:agent-idle";
-        bind_tab(&uid, pty, None);
+        bind_tab(&uid, pty, None, false);
         note_state(&uid, TurnState::Working);
         jobs().lock().unwrap().insert(uid.clone(), true);
         note_state(&uid, TurnState::Idle);
         assert!(!states().lock().unwrap().contains_key(&uid));
         assert!(!job_flag(&uid));
         on_tab_gone(pty);
+    }
+
+    /// Windows (measured on Claude 2.1.326): the Bash tool is Git Bash with the
+    /// snapshot `source` and the stdin seam on EVERY call; the PowerShell tool
+    /// is `cmd` (the `chcp` wrapper, which redirects into the task's output
+    /// file) over `powershell`, both handed the launcher script.
+    #[test]
+    fn windows_tool_shells_are_tied_to_their_tab_and_backgrounded_ones_found() {
+        let var = crate::app_env!("TAB_UID");
+        let env = |uid: &str| format!("PATH=C:\\x\0{var}={uid}\0").into_bytes();
+        let bash = "\"C:\\Program Files\\Git\\bin\\bash.exe\" -c \"source /c/Users/u/AppData/Roaming/x/agent-homes/k/.claude/shell-snapshots/snapshot-bash-1-x.sh 2>/dev/null || true && eval 'cargo test' < /dev/null && pwd -P >| /c/Users/u/AppData/Local/Temp/claude-3c2a-cwd\"";
+        let ps_cmd = "C:\\WINDOWS\\System32\\cmd.exe /d /s /c \"\"C:\\WINDOWS\\System32\\chcp.com\" 65001 >nul & \"powershell.exe\" -NoProfile -Command \"$s = $env:CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT; Invoke-Expression -Command $s\" > \"C:\\Users\\u\\AppData\\Local\\Temp\\claude\\p\\s\\tasks\\b798ytynj.output\" 2>&1\"";
+        let hook = format!("powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\x\\hooks\\{}\"", crate::brand::SESSION_HOOK_PS1);
+        // pid → (cmdline, uid, start)
+        let table: Vec<(u32, u32, String)> = vec![
+            (10, 1, "claude.exe".into()),
+            (11, 10, "bash.exe".into()),
+            (20, 1, "codex.exe".into()),
+            (21, 20, "powershell.exe".into()),
+            (22, 20, "powershell.exe".into()),
+            (30, 1, "claude.exe".into()),
+            (31, 30, "cmd.exe".into()),
+            (40, 1, "Code.exe".into()),
+            (41, 40, "bash.exe".into()),
+        ];
+        let params = |pid: u32| -> Option<(String, Vec<u8>)> {
+            match pid {
+                11 => Some((bash.to_string(), env("u-claude"))),
+                21 => Some(("powershell.exe -Command cargo build".into(), env("u-codex"))),
+                22 => Some((hook.clone(), env("u-codex"))),
+                31 => Some((ps_cmd.to_string(), env("u-ps"))),
+                // A shell of the user's own, not under any tab.
+                41 => Some(("bash.exe --login -i".into(), b"PATH=C:\\x\0".to_vec())),
+                _ => None,
+            }
+        };
+        let start = |pid: u32| if pid == 22 { 500 } else { 100 };
+        let ends: HashMap<String, u64> =
+            ["u-claude", "u-codex", "u-ps"].iter().map(|u| (u.to_string(), 200)).collect();
+        let none: HashMap<String, HashSet<String>> = HashMap::new();
+        let scan = |want: &[(&'static str, TurnState)], bg: &HashMap<String, HashSet<String>>| {
+            let want: HashMap<&str, TurnState> = want.iter().copied().collect();
+            let mut got: Vec<String> = win_background_job_uids(&want, &ends, bg, &table, params, start).into_iter().collect();
+            got.sort();
+            got
+        };
+        // Mid-turn, a foreground call is the turn, seam or no seam.
+        assert!(scan(&[("u-claude", TurnState::Working), ("u-ps", TurnState::Working)], &none).is_empty());
+        // Once the turn is over, a shell that outlived it is a job: Claude's and
+        // Codex's — not the hook Codex runs, started after the Stop and excluded
+        // by name besides.
+        assert_eq!(
+            scan(&[("u-claude", TurnState::Done), ("u-codex", TurnState::Done)], &none),
+            ["u-claude", "u-codex"]
+        );
+        assert!(scan(&[("u-claude", TurnState::Decision)], &none).is_empty());
+        // A PowerShell call the hook recorded as backgrounded is one mid-turn.
+        let bg: HashMap<String, HashSet<String>> =
+            [("u-ps".to_string(), ["b798ytynj".to_string()].into())].into();
+        assert_eq!(scan(&[("u-ps", TurnState::Working)], &bg), ["u-ps"]);
+        let other: HashMap<String, HashSet<String>> = [("u-ps".to_string(), ["zzz".to_string()].into())].into();
+        assert!(scan(&[("u-ps", TurnState::Working)], &other).is_empty());
+        // Only the tabs asked about.
+        assert!(scan(&[("u-gone", TurnState::Done)], &none).is_empty());
+    }
+
+    #[test]
+    fn windows_tool_shell_test_matches_the_measured_spellings() {
+        assert_eq!(win_exe_stem("PowerShell.EXE"), "powershell");
+        assert_eq!(win_exe_stem("bash"), "bash");
+        let snap = "bash.exe -c \"source /c/u/.claude/shell-snapshots/snapshot-bash-1-x.sh && eval 'x'\"";
+        assert!(is_win_tool_shell("bash", snap, "claude"));
+        assert!(is_win_tool_shell("cmd", "cmd.exe /c powershell -Command $env:CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT", "claude"));
+        assert!(is_win_tool_shell("pwsh", "pwsh -Command ls", "codex"));
+        // The agent itself, an MCP server, the hook: none.
+        assert!(!is_win_tool_shell("claude", snap, crate::app_slug!()));
+        assert!(!is_win_tool_shell("node", "node mcp.js", "claude"));
+        assert!(!is_win_tool_shell("cmd", "cmd.exe /c npx some-mcp", "claude"));
+        let hook = format!("powershell -File C:\\h\\{}", crate::brand::SESSION_HOOK_PS1);
+        assert!(!is_win_tool_shell("powershell", &hook, "codex"));
+        let tasks: HashSet<String> = ["abc1".to_string()].into();
+        assert!(win_cmdline_writes_task("x > \"C:\\t\\tasks\\abc1.output\" 2>&1", &tasks));
+        assert!(win_cmdline_writes_task("x > /c/t/tasks/abc1.output", &tasks));
+        assert!(!win_cmdline_writes_task("x > \"C:\\t\\tasks\\abc12.output\"", &tasks));
+    }
+
+    // ── A Claude question declined with Esc ──────────────────────────────
+
+    fn claude_line(at: chrono::DateTime<chrono::Utc>, mut value: serde_json::Value) -> String {
+        value["timestamp"] = at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true).into();
+        value.to_string()
+    }
+
+    /// The probe's records (`tui_ask_esc`, Claude 2.1.327), paths and ids
+    /// scrubbed: the prompt, the `AskUserQuestion` call.
+    fn claude_asked(at: chrono::DateTime<chrono::Utc>) -> String {
+        let ask = serde_json::json!({"questions": [{"header": "Colours", "question": "Which colours?", "multiSelect": true,
+            "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cool"}]}]});
+        [
+            claude_line(at, serde_json::json!({"type": "user", "isSidechain": false, "message": {"role": "user", "content": "ask me"}})),
+            claude_line(at, serde_json::json!({"type": "assistant", "isSidechain": false, "message": {"role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "AskUserQuestion", "input": ask}]}})),
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    /// What Esc on the dialog adds: the rejected result, then the notice.
+    fn claude_declined(at: chrono::DateTime<chrono::Utc>, notice: &str, sidechain: bool) -> String {
+        [
+            claude_line(at, serde_json::json!({"type": "user", "isSidechain": false, "message": {"role": "user",
+                "content": [{"type": "tool_result", "content": "The user doesn't want to proceed with this tool use.",
+                    "is_error": true, "tool_use_id": "toolu_1"}]}, "toolUseResult": "User rejected tool use"})),
+            claude_line(at, serde_json::json!({"type": "user", "isSidechain": sidechain, "message": {"role": "user",
+                "content": [{"type": "text", "text": notice}]}})),
+            serde_json::json!({"type": "last-prompt", "lastPrompt": "ask me"}).to_string(),
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    const TOOL_NOTICE: &str = "[Request interrupted by user for tool use]";
+
+    #[test]
+    fn a_claude_transcript_says_when_a_call_was_declined() {
+        let t0 = chrono::DateTime::parse_from_rfc3339("2026-11-18T09:19:37.511Z").unwrap().to_utc();
+        let t1 = chrono::DateTime::parse_from_rfc3339("2026-11-18T09:19:39.185Z").unwrap().to_utc();
+        let declined = format!("{}{}", claude_asked(t0), claude_declined(t1, TOOL_NOTICE, false));
+        assert_eq!(claude_tool_declined_at(&declined), Some(t1.timestamp_millis()));
+        // A line cut by the tail's start is skipped, not fatal.
+        assert_eq!(claude_tool_declined_at(&declined[40..]), Some(t1.timestamp_millis()));
+        // Still waiting, a plain interrupt, a subagent's notice and a call
+        // after the notice (the turn went on) are not declines.
+        assert_eq!(claude_tool_declined_at(&claude_asked(t0)), None);
+        assert_eq!(claude_tool_declined_at(&claude_declined(t1, "[Request interrupted by user]", false)), None);
+        assert_eq!(claude_tool_declined_at(&claude_declined(t1, TOOL_NOTICE, true)), None);
+        let again = format!("{declined}{}", claude_asked(t1 + chrono::Duration::seconds(1)));
+        assert_eq!(claude_tool_declined_at(&again), None);
+        assert_eq!(claude_tool_declined_at(""), None);
+    }
+
+    /// A tab with a turn record in the project's slice (a fenced tab's hooks
+    /// write there), its session id beside it, and a transcripts folder.
+    struct ClaudeTab {
+        dir: tempfile::TempDir,
+        uid: &'static str,
+        project: &'static str,
+        sid: &'static str,
+    }
+
+    impl ClaudeTab {
+        fn new(uid: &'static str) -> Self {
+            let tab = ClaudeTab {
+                dir: tempfile::tempdir().unwrap(),
+                uid,
+                project: "proj/claude",
+                sid: "0b0e1d2c-3a4b-4c5d-8e6f-708192a3b4c5",
+            };
+            std::fs::create_dir_all(tab.slice()).unwrap();
+            std::fs::create_dir_all(tab.projects().join("-scrubbed-work")).unwrap();
+            std::fs::write(tab.slice().join(uid), tab.sid).unwrap();
+            tab
+        }
+        fn root(&self) -> PathBuf {
+            self.dir.path().join("live_sessions")
+        }
+        fn slice(&self) -> PathBuf {
+            self.root().join(crate::storage::project_key(self.project))
+        }
+        fn projects(&self) -> PathBuf {
+            self.dir.path().join("projects")
+        }
+        fn log(&self, sid: &str) -> PathBuf {
+            self.projects().join("-scrubbed-work").join(format!("{sid}.jsonl"))
+        }
+        fn record(&self, text: &str) {
+            std::fs::write(self.slice().join(format!("{}{TURN_SUFFIX}", self.uid)), text).unwrap();
+        }
+        fn read_record(&self) -> String {
+            std::fs::read_to_string(self.slice().join(format!("{}{TURN_SUFFIX}", self.uid))).unwrap()
+        }
+        fn settle(&self) -> bool {
+            settle_claude_turn(&self.root(), self.uid, Some(self.project), &self.projects())
+        }
+    }
+
+    #[test]
+    fn a_declined_claude_question_is_recorded_done() {
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556601");
+        let now = chrono::Utc::now();
+        tab.record("decision");
+        // Waiting on the question: nothing written.
+        std::fs::write(tab.log(tab.sid), claude_asked(now)).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // Esc: the rejected result and the notice land after the record.
+        let esc = now + chrono::Duration::seconds(2);
+        std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(now), claude_declined(esc, TOOL_NOTICE, false))).unwrap();
+        assert!(tab.settle());
+        assert_eq!(parse_turn_record(&tab.read_record()), Some(TurnState::Done), "{}", tab.read_record());
+        // Done already: nothing more to do.
+        assert!(!tab.settle());
+        // A link planted at the record is never written through.
+        #[cfg(unix)]
+        {
+            let target = tab.dir.path().join("users-file");
+            std::fs::write(&target, "decision").unwrap();
+            let name = tab.slice().join(format!("{}{TURN_SUFFIX}", tab.uid));
+            std::fs::remove_file(&name).unwrap();
+            std::os::unix::fs::symlink(&target, &name).unwrap();
+            std::fs::write(tab.log(tab.sid), format!("{}{}\n", claude_asked(now), claude_declined(esc, TOOL_NOTICE, false))).unwrap();
+            assert!(!tab.settle());
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "decision");
+        }
+        forget_claude(tab.uid);
+        assert!(!settle_claude_turn(&tab.root(), "../escape", Some(tab.project), &tab.projects()));
+    }
+
+    #[test]
+    fn a_claude_record_is_left_alone_unless_a_newer_notice_ends_its_decision() {
+        let now = chrono::Utc::now();
+        let esc = now + chrono::Duration::seconds(2);
+        let declined = format!("{}{}", claude_asked(now), claude_declined(esc, TOOL_NOTICE, false));
+        // Answered: the result is not an error and no notice follows.
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556602");
+        tab.record("decision");
+        let answered = claude_line(esc, serde_json::json!({"type": "user", "isSidechain": false, "message": {"role": "user",
+            "content": [{"type": "tool_result", "content": "answered", "tool_use_id": "toolu_1"}]}}));
+        std::fs::write(tab.log(tab.sid), format!("{}{answered}\n", claude_asked(now))).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // A stale notice, from before the record was written (an earlier
+        // question of the turn), belongs to that question.
+        let old = now - chrono::Duration::minutes(5);
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556603");
+        tab.record("decision");
+        std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(old), claude_declined(old, TOOL_NOTICE, false))).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // Never `working`: a turn in flight is the next hook's to end.
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556604");
+        tab.record("working 1");
+        std::fs::write(tab.log(tab.sid), &declined).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "working 1");
+        // Another session's transcript, and a subagent's notice in this one.
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556605");
+        tab.record("decision");
+        std::fs::write(tab.log("9f9f9f9f-0000-4000-8000-000000000000"), &declined).unwrap();
+        assert!(!tab.settle());
+        std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(now), claude_declined(esc, TOOL_NOTICE, true))).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // Declined another way (the notice differs): stays a decision.
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556606");
+        tab.record("decision");
+        std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(now), claude_declined(esc, "[Request interrupted by user]", false))).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+    }
+
+    #[test]
+    fn the_claude_settle_runs_on_its_own_clock_not_the_channels_timeout() {
+        // A neighbour's records arrive every 500 ms and the channel never
+        // times out: the settle must still come round every `JOB_POLL`.
+        let start = Instant::now();
+        let mut last = start;
+        let mut runs = 0;
+        for tick in 1..=20u32 {
+            if settle_due(&mut last, start + Duration::from_millis(500) * tick) {
+                runs += 1;
+            }
+        }
+        // 10 s of events: due at 2 s, 4 s, ... 10 s.
+        assert_eq!(runs, 5);
+        // Not before the interval has passed.
+        let mut last = start;
+        assert!(!settle_due(&mut last, start + JOB_POLL - Duration::from_millis(1)));
+        assert!(settle_due(&mut last, start + JOB_POLL));
+        assert_eq!(last, start + JOB_POLL);
+    }
+
+    #[test]
+    fn an_unchanged_claude_transcript_is_not_read_again() {
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556607");
+        let now = chrono::Utc::now();
+        tab.record("decision");
+        let declined = format!("{}{}", claude_asked(now), claude_declined(now + chrono::Duration::seconds(2), TOOL_NOTICE, false));
+        // The same bytes with every `user` spelled `usex`: no notice to find.
+        let blind = declined.replace("\"type\":\"user\"", "\"type\":\"usex\"");
+        assert_eq!(blind.len(), declined.len());
+        std::fs::write(tab.log(tab.sid), &blind).unwrap();
+        assert!(!tab.settle());
+        // Swapped in at the same length: the remembered length says nothing new.
+        std::fs::write(tab.log(tab.sid), &declined).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // Any growth reads it again.
+        std::fs::write(tab.log(tab.sid), format!("{declined}\n")).unwrap();
+        assert!(tab.settle());
+        forget_claude(tab.uid);
     }
 }

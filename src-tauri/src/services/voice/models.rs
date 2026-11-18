@@ -160,46 +160,64 @@ pub fn install_script(id: &str, dir: &Path, windows: bool) -> Option<String> {
         s += &format!("New-Item -ItemType Directory -Force -Path {} | Out-Null\n", quote::powershell(&dir));
         s += &format!("Set-Location -LiteralPath {}\n", quote::powershell(&dir));
         for e in fetches {
-            let name = quote::powershell(e.file);
-            let part = quote::powershell(&format!("{}.part", e.file));
-            s += &format!(
-                "if (Test-Path -LiteralPath {name}) {{ Write-Output ('── ' + {name} + ' is already here ──') }} else {{\n\
-                 \x20 Write-Output ('── Fetching ' + {name} + ' ({mb} MB) ──')\n\
-                 \x20 Invoke-WebRequest -Uri {url} -OutFile {part}\n\
-                 \x20 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath {part}).Hash.ToLower()\n\
-                 \x20 if ($actual -ne {hash}) {{ Remove-Item -LiteralPath {part}; throw \"checksum mismatch: $actual\" }}\n\
-                 \x20 Move-Item -Force -LiteralPath {part} -Destination {name}\n\
-                 }}\n",
-                mb = e.size.div_ceil(1_000_000),
-                url = quote::powershell(&e.url()),
-                hash = quote::powershell(e.sha256),
-            );
+            s += &fetch_powershell(e.file, &e.url(), e.sha256, e.size);
         }
         s += "Write-Output '── Speech model ready. ──'\n";
         s
     } else {
-        // macOS has no `sha256sum`; `shasum -a 256` reads the same `-c` format.
-        let sha = if cfg!(target_os = "macos") { "shasum -a 256" } else { "sha256sum" };
         let mut s = String::from("#!/usr/bin/env bash\nset -euo pipefail\n");
         s += &format!("mkdir -p {}\ncd {}\n", quote::posix(&dir), quote::posix(&dir));
         for e in fetches {
-            let name = quote::posix(e.file);
-            let part = quote::posix(&format!("{}.part", e.file));
-            s += &format!(
-                "if [ -f {name} ]; then echo '── '{name}' is already here ──'; else\n\
-                 \x20 echo '── Fetching '{name}' ({mb} MB) ──'\n\
-                 \x20 curl -fL --progress-bar -o {part} {url}\n\
-                 \x20 echo {check} | {sha} -c - || {{ rm -f {part}; exit 1; }}\n\
-                 \x20 mv {part} {name}\n\
-                 fi\n",
-                mb = e.size.div_ceil(1_000_000),
-                url = quote::posix(&e.url()),
-                check = quote::posix(&format!("{}  {}.part", e.sha256, e.file)),
-            );
+            s += &fetch_posix(e.file, &e.url(), e.sha256, e.size);
         }
         s += "echo '── Speech model ready. ──'\n";
         s
     })
+}
+
+/// The `sha256sum -c` of an install script: macOS has no `sha256sum`;
+/// `shasum -a 256` reads the same `-c` format.
+pub(super) fn sha256_check() -> &'static str {
+    if cfg!(target_os = "macos") { "shasum -a 256" } else { "sha256sum" }
+}
+
+/// One file of a PowerShell install script, run in the folder it goes to:
+/// skipped when `file` is there, else fetched from `url` to `<file>.part`,
+/// checked against `sha256` and only then moved to `file`. `size` (bytes) is
+/// what the progress line says.
+pub(super) fn fetch_powershell(file: &str, url: &str, sha256: &str, size: u64) -> String {
+    let name = quote::powershell(file);
+    let part = quote::powershell(&format!("{file}.part"));
+    format!(
+        "if (Test-Path -LiteralPath {name}) {{ Write-Output ('── ' + {name} + ' is already here ──') }} else {{\n\
+         \x20 Write-Output ('── Fetching ' + {name} + ' ({mb} MB) ──')\n\
+         \x20 Invoke-WebRequest -Uri {url} -OutFile {part}\n\
+         \x20 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath {part}).Hash.ToLower()\n\
+         \x20 if ($actual -ne {hash}) {{ Remove-Item -LiteralPath {part}; throw \"checksum mismatch: $actual\" }}\n\
+         \x20 Move-Item -Force -LiteralPath {part} -Destination {name}\n\
+         }}\n",
+        mb = size.div_ceil(1_000_000),
+        url = quote::powershell(url),
+        hash = quote::powershell(sha256),
+    )
+}
+
+/// [`fetch_powershell`] for a bash install script.
+pub(super) fn fetch_posix(file: &str, url: &str, sha256: &str, size: u64) -> String {
+    let name = quote::posix(file);
+    let part = quote::posix(&format!("{file}.part"));
+    format!(
+        "if [ -f {name} ]; then echo '── '{name}' is already here ──'; else\n\
+         \x20 echo '── Fetching '{name}' ({mb} MB) ──'\n\
+         \x20 curl -fL --progress-bar -o {part} {url}\n\
+         \x20 echo {check} | {sha} -c - || {{ rm -f {part}; exit 1; }}\n\
+         \x20 mv {part} {name}\n\
+         fi\n",
+        mb = size.div_ceil(1_000_000),
+        url = quote::posix(url),
+        check = quote::posix(&format!("{sha256}  {file}.part")),
+        sha = sha256_check(),
+    )
 }
 
 /// Write the install script for `id` and return the command the install tab

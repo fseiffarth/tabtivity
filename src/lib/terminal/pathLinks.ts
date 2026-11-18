@@ -15,6 +15,7 @@ import { openFileEntry } from "../files/openFileEntry";
 import { openProjectFilesTab } from "../tabs/openProjectFilesTab";
 import { useTabsStore } from "../../stores/tabs";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
+import { linkBackKey, useLinkBackStore } from "../../stores/linkBack";
 import { relativePathWithin } from "../paths";
 import { internalViewerFor, type FileEntry, type InternalViewer } from "../viewers/fileUtils";
 import type { TranslationKey } from "../i18n";
@@ -101,7 +102,10 @@ export function isLinkable(entry: FileEntry, projectDir: string, disabled?: Read
 
 /** Open a path link: the file's viewer tab in the tab's own scope (reusing one
  *  already open), scrolled to the line it named; a folder in a Files tab.
- *  `newSubwindow` (Ctrl+click) puts the file's tab in a new subwindow. */
+ *  `newSubwindow` (Ctrl+click) puts the file's tab in a new subwindow.
+ *  `fromTab`, the agent tab the link was in, gives the file tab a Back button
+ *  to it (`stores/linkBack`) — one that closes the file tab when the link
+ *  opened it. */
 export function openPathLink(
   entry: FileEntry,
   at: { line?: number; column?: number },
@@ -113,6 +117,7 @@ export function openPathLink(
     disabled?: ReadonlySet<InternalViewer>;
     t: (key: TranslationKey) => string;
     newSubwindow?: boolean;
+    fromTab?: string;
   },
 ): void {
   if (!isLinkable(entry, ctx.projectDir, ctx.disabled)) return;
@@ -120,6 +125,14 @@ export function openPathLink(
     openProjectFilesTab(ctx.t, ctx.projectDir, relativePathWithin(ctx.projectDir, entry.path) ?? "", ctx.scope);
     return;
   }
+  const tabsOf = () => {
+    const s = useTabsStore.getState();
+    return ctx.scope === s.scope ? s.tabs : (s.tabsByScope[ctx.scope] ?? []);
+  };
+  const viewer = internalViewerFor(entry, ctx.disabled);
+  const fileTab = () =>
+    tabsOf().find((t) => t.kind === "embed" && t.viewer === viewer && t.embedPath === entry.path);
+  const prior = fileTab();
   openFileEntry({
     entry,
     projectDir: ctx.projectDir || ctx.cwd,
@@ -132,5 +145,12 @@ export function openPathLink(
     scope: ctx.scope === useTabsStore.getState().scope ? undefined : ctx.scope,
     newSubwindow: ctx.newSubwindow,
   });
+  const opened = ctx.fromTab ? fileTab() : undefined;
+  if (opened && ctx.fromTab && opened.key !== ctx.fromTab) {
+    const links = useLinkBackStore.getState();
+    // A tab an earlier link opened stays one Back closes.
+    const earlier = links.byTab[linkBackKey(ctx.scope, opened.key)];
+    links.set(ctx.scope, opened.key, { from: ctx.fromTab, close: earlier?.close ?? !prior });
+  }
   if (at.line) useEditorJumpStore.getState().requestJump(entry.path, at.line, at.column ?? 0);
 }

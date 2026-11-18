@@ -54,6 +54,14 @@ import type { AgentSignal } from "../../../mobile-web/src/markup/submitState";
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { NAMES, storageKey } from "../../lib/brand";
 
+/** The round, the ticks and the agent's card wait behind the head's Agent
+ * badge while marking: open its sheet (it stays open while marking). */
+const openAgent = () => {
+  const badge = screen.queryByRole("button", { name: /^Agent/ });
+  if (badge && badge.getAttribute("aria-pressed") !== "true") fireEvent.click(badge);
+};
+
+
 const PICTURE = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
 const PDF = { name: "20261001-120000-paper.pdf", original: "paper.pdf", kind: "application/pdf", size: 9_000, modified: 1_790_000_000 };
 const NEWER = { ...PDF, name: "20261002-090000-paper.pdf", size: 9_500, modified: 1_790_090_000, from_tab: true };
@@ -118,6 +126,7 @@ describe("MarkupView · rounds", () => {
     const onSend = vi.fn((): MarkupSend => "sent");
     const onClose = vi.fn();
     const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} onClose={onClose} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
@@ -127,7 +136,8 @@ describe("MarkupView · rounds", () => {
     expect(store.clearLayer).not.toHaveBeenCalled();
 
     // Marking goes on: a highlighter box is the next round.
-    fireEvent.click(screen.getByRole("button", { name: "Highlighter" }));
+    // The box is the Proof slot's first mark.
+    fireEvent.click(screen.getByRole("button", { name: "Proofreading marks" }));
     const canvas = container.querySelector(".markup-page-layer")!;
     fireEvent.pointerDown(canvas, { pointerId: 2, pointerType: "mouse", clientX: 100, clientY: 100 });
     fireEvent.pointerMove(canvas, { pointerId: 2, pointerType: "mouse", clientX: 160, clientY: 140 });
@@ -159,6 +169,7 @@ describe("MarkupView · rounds", () => {
     const calls = desktop();
     const onSend = vi.fn((): MarkupSend => "sent");
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} onClose={() => {}} />);
+    openAgent();
     showPicture();
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     const toggle = screen.getByRole("switch", { name: /Each Submit to a new subagent/ });
@@ -179,6 +190,7 @@ describe("MarkupView · rounds", () => {
     const onSend = vi.fn((): MarkupSend => "queued");
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} agent={agent} onClose={() => {}} />;
     const { rerender } = render(view("working"));
+    openAgent();
     showPicture();
     // Over marks never sent, no pill: there is no round to follow.
     expect(screen.queryByText("Agent is working…")).toBeNull();
@@ -188,9 +200,11 @@ describe("MarkupView · rounds", () => {
     // The first look already sees the agent at work.
     expect(await screen.findByText("Agent is working…")).toBeTruthy();
     rerender(view("question"));
+    openAgent();
     expect(screen.getByText("The agent is asking something — answer in the chat")).toBeTruthy();
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS - 100); });
     expect(screen.queryByText("Agent finished")).toBeNull();
     await act(async () => { vi.advanceTimersByTime(200); });
@@ -198,9 +212,11 @@ describe("MarkupView · rounds", () => {
     // A picture has no Reload: its marks are the reply's own.
     expect(screen.queryByRole("button", { name: "Reload PDF" })).toBeNull();
     rerender(view("working"));
+    openAgent();
     expect(screen.getByText("Agent is working…")).toBeTruthy();
     // With the tab's model known, the pill names it.
     rerender(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} agent="working" model="Opus" onClose={() => {}} />);
+    openAgent();
     expect(screen.getByText("Opus is working…")).toBeTruthy();
   });
 
@@ -210,6 +226,7 @@ describe("MarkupView · rounds", () => {
     const onSend = vi.fn((): MarkupSend => "sent");
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} agent={agent} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
@@ -217,15 +234,19 @@ describe("MarkupView · rounds", () => {
     // Not before the agent is done with the marks.
     expect(screen.queryByRole("button", { name: /Make these changes/ })).toBeNull();
     rerender(view("working"));
+    openAgent();
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
-    fireEvent.click(screen.getByRole("button", { name: /Make these changes/ }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Make these changes/ })); });
     expect(onSend).toHaveBeenLastCalledWith("Go ahead with all of them.");
     expect(screen.getByText("Sent — waiting for the agent")).toBeTruthy();
     // The follow-up's own turn: no second offer once it is done.
     rerender(view("working"));
+    openAgent();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
     expect(screen.getByText("Agent finished")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Make these changes/ })).toBeNull();
@@ -246,6 +267,7 @@ describe("MarkupView · rounds", () => {
     const calls = desktop();
     store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
     const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     const frame = (container.querySelector("iframe.markup-frame") as HTMLIFrameElement).contentWindow!;
     const say = (data: unknown) => window.dispatchEvent(new MessageEvent("message", { data, origin: "null", source: frame }));
     const asked: string[] = [];
@@ -271,18 +293,57 @@ describe("MarkupView · rounds", () => {
     }]);
   });
 
+  it("shows the earliest page's failure when an upload fails on page 2 of 3, with page 3 already asked of the frame", async () => {
+    const calls = desktop();
+    const inbox = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes("name=paper-p2-")) {
+        calls.push({ url: String(input), method: "POST", body: init?.body });
+        return jsonResponse(507, { error: "inbox_full" });
+      }
+      return inbox(input, init);
+    }));
+    let layer: Layer = EMPTY_LAYER;
+    for (const n of [1, 2, 3]) layer = addMark(layer, n, [800, 600], { kind: "ink", color: "red", width: 2, points: [[10, 10, 0.5], [40, 30, 0.5]] });
+    store.loadLayer.mockResolvedValue({ layer, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
+    const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
+    const frame = (container.querySelector("iframe.markup-frame") as HTMLIFrameElement).contentWindow!;
+    const say = (data: unknown) => window.dispatchEvent(new MessageEvent("message", { data, origin: "null", source: frame }));
+    const asked: string[] = [];
+    vi.spyOn(frame, "postMessage").mockImplementation((message: unknown) => {
+      const ask = message as { type: string; id: number; n?: number; page?: number };
+      asked.push(ask.type === "open" ? "open" : `${ask.type}${ask.n ?? ask.page}`);
+      if (ask.type === "snapshot") queueMicrotask(() => say({ type: "snapshot", id: ask.id, n: ask.n }));
+      if (ask.type === "text") queueMicrotask(() => say({ type: "text", id: ask.id, page: ask.page, runs: [] }));
+    });
+    await waitFor(() => expect(calls.some((call) => call.url.endsWith(".pdf"))).toBe(true));
+    act(() => { say({ type: "ready" }); say({ type: "meta", pages: [{ w: 800, h: 600 }, { w: 800, h: 600 }, { w: 800, h: 600 }] }); });
+    await waitFor(() => expect(asked).toContain("open"));
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    expect(await screen.findByText(/page 2 could not be uploaded \(the project's inbox is full\)/)).toBeTruthy();
+    // Page 3 was asked of the frame while page 2 uploaded; nothing was sent on.
+    expect(asked.filter((ask) => /^(snapshot|text)/.test(ask))).toEqual(["snapshot1", "text1", "snapshot2", "text2", "snapshot3", "text3"]);
+    expect(calls.some((call) => call.url.endsWith("/markup"))).toBe(false);
+    expect(calls.some((call) => call.url.includes("name=paper-p3-"))).toBe(false);
+  });
+
   it("loads the changed PDF under the marks once the agent finished, by default", async () => {
     desktop();
     store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
     const refresh = vi.fn(async () => NEWER);
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} agent={agent} refresh={refresh} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
     expect(await screen.findByText("Sent — waiting for the agent")).toBeTruthy();
     rerender(view("working"));
+    openAgent();
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
     // The look, then the reload it led to — no tap.
     expect(refresh).toHaveBeenCalledTimes(2);
@@ -297,13 +358,16 @@ describe("MarkupView · rounds", () => {
     const refresh = vi.fn(async () => NEWER);
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} agent={agent} refresh={refresh} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
     expect(await screen.findByText("Sent — waiting for the agent")).toBeTruthy();
     expect(refresh).not.toHaveBeenCalled();
     rerender(view("working"));
+    openAgent();
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Agent finished — PDF changed")).toBeTruthy();
@@ -317,12 +381,15 @@ describe("MarkupView · rounds", () => {
     const refresh = vi.fn(async (file: OutboxFile) => file);
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} agent={agent} refresh={refresh} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
     expect(await screen.findByText("Sent — waiting for the agent")).toBeTruthy();
     rerender(view("working"));
+    openAgent();
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Agent finished — PDF unchanged")).toBeTruthy();
@@ -334,6 +401,7 @@ describe("MarkupView · rounds", () => {
   it("says Queued while the agent works on its current step", async () => {
     desktop();
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "queued"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
@@ -345,6 +413,7 @@ describe("MarkupView · rounds", () => {
     const toChat = vi.fn();
     const onClose = vi.fn();
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "queued"} toChat={toChat} onClose={onClose} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     expect(screen.queryByRole("button", { name: /^Chat/ })).toBeNull();
@@ -360,11 +429,13 @@ describe("MarkupView · rounds", () => {
     const view = (agent: AgentSignal, dialog?: string) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE}
       onSend={() => "queued"} agent={agent} dialog={dialog} toChat={toChat} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
     expect(await screen.findByRole("button", { name: /^Chat/ })).toBeTruthy();
     rerender(view("question", "Do you want to make this edit to main.tex?"));
+    openAgent();
     expect(screen.getByText("“Do you want to make this edit to main.tex?”")).toBeTruthy();
     const answer = screen.getByRole("button", { name: /^Answer in chat/ });
     expect(answer.className).toContain("markup-submit");
@@ -372,6 +443,7 @@ describe("MarkupView · rounds", () => {
     expect(toChat).toHaveBeenCalledWith(expect.objectContaining({ file: PICTURE, scope: { tab: "t1" } }));
     // Answered: back to the plain Chat button, no line.
     rerender(view("working"));
+    openAgent();
     expect(screen.queryByText("“Do you want to make this edit to main.tex?”")).toBeNull();
     expect(screen.getByRole("button", { name: /^Chat/ }).className).toContain("outbox-action");
   });
@@ -382,6 +454,7 @@ describe("MarkupView · rounds", () => {
     store.loadLayer.mockResolvedValue({ layer: addMark(sent, 1, [800, 600], { kind: "box", color: "yellow", rect: [1, 1, 20, 20] }), fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
     const refresh = vi.fn(async () => NEWER);
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} refresh={refresh} onClose={() => {}} />);
+    openAgent();
     await waitFor(() => expect(store.loadLayer).toHaveBeenCalledTimes(1));
     const frame = screen.getByTitle("pdf");
     await waitFor(() => expect(calls.some((call) => call.url.includes(`/outbox/${PDF.name}?`))).toBe(true));
@@ -417,6 +490,7 @@ describe("MarkupView · rounds", () => {
     desktop();
     store.loadLayer.mockResolvedValue({ layer: markSent(LAYER), fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} refresh={async (file) => file} onClose={() => {}} />);
+    openAgent();
     await waitFor(() => expect(store.loadLayer).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     fireEvent.click(screen.getByRole("button", { name: /Reload PDF/ }));
@@ -463,6 +537,7 @@ describe("MarkupView · apply rounds and Undo", () => {
     store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={onSend} agent={agent} refresh={refresh} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
     expect(await screen.findByText("Sent — waiting for the agent")).toBeTruthy();
@@ -470,9 +545,11 @@ describe("MarkupView · apply rounds and Undo", () => {
     // Not before the agent is done with the marks.
     expect(undoButton()).toBeNull();
     rerender(view("working"));
+    openAgent();
     expect(undoButton()).toBeNull();
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
     vi.useRealTimers();
     expect(screen.getByText(/^Agent finished/)).toBeTruthy();
@@ -518,12 +595,15 @@ describe("MarkupView · apply rounds and Undo", () => {
     const onSend = vi.fn((): MarkupSend => "sent");
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={onSend} agent={agent} refresh={refresh} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
     expect(await screen.findByText("Sent — waiting for the agent")).toBeTruthy();
     rerender(view("working"));
+    openAgent();
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
     vi.useRealTimers();
     // Auto-reload drew the agent's copy.
@@ -542,8 +622,10 @@ describe("MarkupView · apply rounds and Undo", () => {
     store.moveLayer.mockClear();
     const looks = refresh.mock.calls.length;
     rerender(view("working"));
+    openAgent();
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
     vi.useRealTimers();
     await waitFor(() => expect(refresh.mock.calls.length).toBe(looks + 1));
@@ -592,6 +674,24 @@ describe("MarkupView · apply rounds and Undo", () => {
     expect(await screen.findByText("The undo did not go through (error undo_failed). Check the files before you try again.")).toBeTruthy();
   });
 
+  it("saves the record when only the undo steps change: an Undo forgets the round in the steps behind the present", async () => {
+    const calls = undoDesktop();
+    await finishedRound(calls, () => "sent");
+    const saved = () => store.saveLayer.mock.calls as unknown as [string, Layer, { size: number; modified: number }, undefined, Layer[]][];
+    const logged = (past: Layer[]) => past.some((step) => (step.sent?.log?.length ?? 0) > 0);
+    // Clearing the sent marks leaves the logged round only in the steps behind.
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear sent marks" }));
+    await waitFor(() => expect(logged(saved()[saved().length - 1][4])).toBe(true));
+    expect(saved()[saved().length - 1][1].sent).toBeUndefined();
+    const before = saved().length;
+    fireEvent.click(undoButton()!);
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Undo the agent's changes from these marks?" })).getByRole("button", { name: "Undo" }));
+    expect(await screen.findByText("Undone — the files are back as they were before the round.")).toBeTruthy();
+    await waitFor(() => expect(saved().length).toBeGreaterThan(before));
+    expect(logged(saved()[saved().length - 1][4])).toBe(false);
+  });
+
   it("runs a list round with Make these changes and says why there is no undo", async () => {
     const calls = undoDesktop({ submit: { prompt: "Round 1", marked: null, mode: "list", undo: null, noUndo: "not_git" } });
     await finishedRound(calls, () => "sent");
@@ -605,6 +705,7 @@ describe("MarkupView · apply rounds and Undo", () => {
     writeFlag("markupDirect", false);
     const calls = undoDesktop({ submit: { prompt: "Round 1", marked: null, mode: "list", undo: null, noUndo: null } });
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
@@ -656,6 +757,7 @@ describe("Terminal · sendMarkup", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "plot.png" })).getByRole("button", { name: "Mark up plot.png" }));
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
+    openAgent();
     fireEvent.click(submitButton());
 
     await waitFor(() => expect(calls.some((call) => call.url.endsWith("/tabs/tab-7/held"))).toBe(true));
@@ -674,6 +776,7 @@ describe("Terminal · sendMarkup", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "plot.png" })).getByRole("button", { name: "Mark up plot.png" }));
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
+    openAgent();
     fireEvent.click(submitButton());
 
     await waitFor(() => expect(FakeWebSocket.typed.join("")).toContain("Round 1"), { timeout: 2_000 });
@@ -689,6 +792,7 @@ describe("Terminal · sendMarkup", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "plot.png" })).getByRole("button", { name: "Mark up plot.png" }));
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
+    openAgent();
     fireEvent.click(submitButton());
     await waitFor(() => expect(document.querySelector(".markup-chat")).toBeTruthy());
     fireEvent.click(document.querySelector(".markup-chat")!);
@@ -708,6 +812,7 @@ describe("Terminal · sendMarkup", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "plot.png" })).getByRole("button", { name: "Mark up plot.png" }));
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
+    openAgent();
     fireEvent.click(submitButton());
     await waitFor(() => expect(document.querySelector(".markup-chat")).toBeTruthy());
     fireEvent.click(document.querySelector(".markup-chat")!);
@@ -758,5 +863,59 @@ describe("Terminal · sendMarkup", () => {
     fireEvent.click(screen.getByRole("button", { name: /Reload PDF/ }));
     await waitFor(() => expect(store.moveLayer).toHaveBeenCalledWith("tab:tab-7:outbox:paper.pdf", `tab:tab-7:outbox:${newer.name}`, { size: newer.size, modified: newer.modified }));
     expect(screen.getByRole("dialog", { name: "Mark up paper.pdf" })).toBeTruthy();
+  });
+});
+
+describe("MarkupView · when the layer is saved", () => {
+  const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+  const saves = () => store.saveLayer.mock.calls as unknown as [string, Layer, { size: number; modified: number }, undefined, Layer[]][];
+
+  it("writes the empty layer once for a file with no record (a delete), and nothing more", async () => {
+    desktop();
+    store.loadLayer.mockResolvedValue(null);
+    store.saveLayer.mockClear();
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    await waitFor(() => expect(store.saveLayer).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(store.saveLayer).toHaveBeenCalledTimes(1);
+    expect(saves()[0][0]).toBe(`p1:outbox:${PICTURE.name}`);
+    expect(saves()[0][1]).toEqual(EMPTY_LAYER);
+    expect(saves()[0][2]).toEqual({ size: PICTURE.size, modified: PICTURE.modified });
+    expect(saves()[0][4]).toEqual([]);
+  });
+
+  it("writes nothing for a record it just read", async () => {
+    desktop();
+    store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PICTURE.size, modified: PICTURE.modified }, saved: 1 });
+    store.saveLayer.mockClear();
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalled());
+    await flush();
+    expect(store.saveLayer).not.toHaveBeenCalled();
+  });
+
+  it("a Reload that gives the same name a new fingerprint saves the marks stamped with it, and reads nothing back", async () => {
+    desktop();
+    const sent = markSent(LAYER);
+    store.loadLayer.mockResolvedValue({ layer: sent, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
+    store.saveLayer.mockClear();
+    store.moveLayer.mockClear();
+    const refresh = vi.fn(async () => ({ ...PDF, size: 9_600, modified: 1_790_050_000 }));
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} refresh={refresh} onClose={() => {}} />);
+    openAgent();
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(store.saveLayer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: /Reload PDF/ }));
+    await waitFor(() => expect(store.saveLayer).toHaveBeenCalled());
+    const last = saves()[saves().length - 1];
+    expect(last[0]).toBe(`p1:outbox:${PDF.name}`);
+    expect(last[2]).toEqual({ size: 9_600, modified: 1_790_050_000 });
+    expect(last[1]).toBe(sent);
+    expect(store.moveLayer).not.toHaveBeenCalled();
+    expect(store.loadLayer).toHaveBeenCalledTimes(1);
   });
 });

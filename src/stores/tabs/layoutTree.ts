@@ -93,6 +93,24 @@ export function orderedTabKeys(node: LayoutNode | null): string[] {
   return allGroups(node).flatMap((g) => g.tabKeys);
 }
 
+/** The tab `delta` steps from the focused subwindow's active tab, walking every
+ *  tab of the layout in `orderedTabKeys` order (so past a subwindow's last tab
+ *  comes the next subwindow's first), wrapping at the ends. Null when there is
+ *  no other tab to go to. */
+export function stepOrderedTab(
+  node: LayoutNode | null,
+  focusedGroupId: string | null,
+  delta: 1 | -1,
+): { groupId: string; key: string } | null {
+  const slots = allGroups(node).flatMap((g) => g.tabKeys.map((key) => ({ groupId: g.id, key })));
+  if (slots.length < 2) return null;
+  const focused = (focusedGroupId && findGroup(node, focusedGroupId)) || allGroups(node)[0];
+  const curKey = focused?.activeKey ?? focused?.tabKeys[0];
+  const found = slots.findIndex((s) => s.groupId === focused?.id && s.key === curKey);
+  const cur = found >= 0 ? found : 0;
+  return slots[(cur + delta + slots.length) % slots.length];
+}
+
 /** Remove a tab key from whichever group holds it within a subtree, collapsing
  *  an emptied group / lone-child split. Returns the new (possibly null) subtree;
  *  returns the input unchanged if the key isn't present. Used by the detached

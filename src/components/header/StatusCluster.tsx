@@ -1,14 +1,10 @@
-import { Fragment, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ConnLamp } from "../common/ConnLamp";
 import { ConnTypeIcon, connLabel } from "./ConnTypeIcon";
 import { BatteryIndicator } from "./BatteryIndicator";
-import { MobileIndicator } from "./MobileIndicator";
-import { AlertsToggle } from "./AlertsToggle";
-import { VpnIndicator } from "./VpnIndicator";
 import { VoiceIndicator } from "./VoiceIndicator";
 import { AppResourceDisplay } from "./AppResourceDisplay";
-import { DevBuildIndicator } from "./DevBuildIndicator";
 import { useQuiesce, saverInterval, usePowerStore } from "../../stores/power";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderSlotsStore } from "../../stores/headerSlots";
@@ -30,16 +26,6 @@ import {
 import { useT } from "../../lib/i18n";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
-
-// Code-split (perf plan §6): the Machines menu renders nothing while switched
-// off (Settings' "Remote features"; on by default), so its module graph loads
-// only once `machines_enabled` is on. Once mounted it stays mounted: switching
-// the feature off is its own `!enabled` branch (no menu, header report
-// cleared), and a "sign in in a terminal" add/edit still waiting keeps its
-// poll and form instead of being dropped by an unmount.
-const MachinesIndicator = lazy(() =>
-  import("./MachinesIndicator").then((m) => ({ default: m.MachinesIndicator })),
-);
 
 /**
  * The header's machine-state readouts — connection, battery, Mobile, OpenVPN,
@@ -96,11 +82,6 @@ export function StatusCluster({ narrow = false }: { narrow?: boolean } = {}) {
   const onBattery = usePowerStore((s) => s.onBattery);
   const expanded = useSettingsStore((s) => s.settings?.header_status_expanded ?? false);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
-  // On by default; the lazy Machines menu is mounted from its first switch-on
-  // and then kept (above).
-  const machinesEnabled = useSettingsStore((s) => s.settings?.machines_enabled ?? true);
-  const [machinesMounted, setMachinesMounted] = useState(machinesEnabled);
-  if (machinesEnabled && !machinesMounted) setMachinesMounted(true);
   const reports = useHeaderStatusStore((s) => s.reports);
   const pins = useSettingsStore((s) => s.settings?.header_pins);
   const pinDefaults = useHeaderPinDefaults();
@@ -189,22 +170,13 @@ export function StatusCluster({ narrow = false }: { narrow?: boolean } = {}) {
   // whatever the user's choice; widening restores that choice untouched.
   const collapsed = (!expanded || narrow) && !foldPeek && hasToggle;
 
-  // Alerts leads the row by default: it is the one member that is a *control*
-  // rather than a readout, so it takes the row's head — the slot nearest the
-  // global-app buttons it used to live among — rather than being buried between
-  // the VPN lamp and the CPU meters. The user can drag any member elsewhere.
+  // The members that need this cluster's own state; the rest (alerts, Mobile,
+  // VPN, Machines, dev build) come from `APP_ICONS`, the same nodes `HeaderBar`
+  // draws when the user dragged one into the apps run.
   const members: Partial<Record<HeaderItemId, ReactNode>> = {
-    alerts: <AlertsToggle />,
     conn: showConn && <ConnTypeIcon type={connKind ?? "wlan"} online={online} ssid={ssid} />,
     battery: batterySupported && (
       <BatteryIndicator percentage={batteryPercentage} plugged={!onBattery} />
-    ),
-    mobile: <MobileIndicator />,
-    vpn: <VpnIndicator />,
-    machines: machinesMounted && (
-      <Suspense fallback={null}>
-        <MachinesIndicator />
-      </Suspense>
     ),
     resources: (
       <AppResourceDisplay
@@ -212,9 +184,6 @@ export function StatusCluster({ narrow = false }: { narrow?: boolean } = {}) {
         peek={resourcePeek}
       />
     ),
-    // Dev checkouts only: a release build's backend answers no status and the
-    // chip renders nothing (see DevBuildIndicator).
-    devBuild: <DevBuildIndicator />,
   };
 
   const readouts = orderedHeaderIds("status", order);

@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 import { useSettingsStore } from "../../stores/settings";
 import { useOllamaAutoloadStore } from "../../stores/agents/ollamaAutoload";
 import { useOllamaUpgradeStore } from "../../stores/agents/ollamaUpgrade";
+import { placementLabel } from "../../lib/agents/ollamaPlacement";
 import type { LocalModelInfo } from "../../stores/agents/ollamaActivity";
+import { shortOnContext } from "../../lib/agents/ollamaContext";
 import type { OllamaModelUpdate } from "../../lib/agents/localDrivers";
 import { runInstallInTab, type InstallShellKind } from "../../lib/installCommand";
 import {
@@ -16,6 +18,7 @@ import {
   gpuTotals,
 } from "../../lib/gpu";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { RECOMMENDED_AUTOCOMPLETE_MODEL, autocompleteModelAdvice } from "../../lib/viewers/completion/autocomplete";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { DEFAULT_COMPACT_AGENT_IDS } from "../../lib/tabs/newTabItems";
@@ -25,7 +28,7 @@ import { CloseIcon, DotIcon } from "../common/icons/Icon";
 /**
  * The Models & agents sections, rendered by both surfaces: the header's hover
  * dropdown (`layout/LocalModelMenu`) and the overlay's tabs
- * (`models/ModelsOverlay`). Moved out of the dropdown verbatim — same markup,
+ * (`models/ModelsView`). Moved out of the dropdown verbatim — same markup,
  * same classes — so the dropdown stays pixel-identical and the overlay's rows
  * are the dropdown's rows, never a second design of them. The data and the
  * verbs come from `useModelsHub`; these only draw.
@@ -222,7 +225,50 @@ function CapabilityChips({
       {hasCapability(m, "thinking") && (
         <ModelChip label={t("localModel.thinkingChip")} title={t("localModel.thinkingTitle", { name: m.name })} />
       )}
+      {/* Fill-in-the-middle: the fast autocomplete path (the editor sends the
+          text after the caret as Ollama's `suffix`). */}
+      {hasCapability(m, "insert") && (
+        <>
+          <ModelChip label={t("localModel.insertChip")} title={t("localModel.insertTitle", { name: m.name })} />
+          <UntestedTag id="localModel.insertChip" />
+        </>
+      )}
     </>
+  );
+}
+
+/**
+ * What the autocomplete role is missing, as one banner beside the others: its
+ * model cannot fill in the middle, or no model can and none is chosen. Offers
+ * the recommended small FIM model in one click — a download into the
+ * autocomplete role, or just the role when it is already installed. Nothing is
+ * pulled without that click.
+ */
+function AutocompleteModelNotice({ hub, t }: { hub: ModelsHub; t: TFn }) {
+  const advice = autocompleteModelAdvice(hub.models, hub.roles.autocomplete);
+  if (!advice) return null;
+  const model = RECOMMENDED_AUTOCOMPLETE_MODEL;
+  const installed = hub.models.some((m) => m.name === model);
+  const downloading = hub.downloads[model] !== undefined;
+  return (
+    <div className="local-model-igpu-notice">
+      <div className="local-model-igpu-text">
+        {advice.kind === "noInsert"
+          ? t("localModel.autocompleteNoInsert", { model: advice.model })
+          : t("localModel.autocompleteNoFim")}{" "}
+        <UntestedTag id="localModel.autocompleteAdvice" />
+      </div>
+      <button
+        type="button"
+        className="settings-btn sm"
+        disabled={downloading}
+        onClick={() => (installed ? hub.assignRole("autocomplete", model) : hub.pullIntoRole(model, "autocomplete"))}
+      >
+        {downloading
+          ? t("localModel.autocompleteDownloading", { model })
+          : t(installed ? "localModel.autocompleteUse" : "localModel.autocompleteGet", { model })}
+      </button>
+    </div>
   );
 }
 
@@ -500,7 +546,7 @@ function ModelFacts({ m, t, resident }: { m: LocalModelInfo; t: TFn; resident: b
       )}
       {resident && (
         <span className={`lm-fact lm-place ${m.size_vram > 0 ? "gpu" : "cpu"}`}>
-          {m.size_vram > 0 ? `GPU ${formatBytes(m.size_vram)}` : "CPU"}
+          {placementLabel(m, formatBytes)}
         </span>
       )}
       {hasCapability(m, "vision") && (
@@ -533,7 +579,7 @@ function LoadOnStart({ name, hub, t }: { name: string; hub: ModelsHub; t: TFn })
 
 /** A resident model: its status, the tasks it is pinned to, where it is offered,
  *  and the two verbs that are about it right now (Unload; Update if there is one). */
-function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: ModelsHub; t: TFn }) {
+export function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: ModelsHub; t: TFn }) {
   const {
     activeModel,
     roles,
@@ -794,6 +840,8 @@ export function LocalModelsSection({
     autoload,
     roles,
     rootOffModels,
+    restartingOllama,
+    restartOllama,
     checkUpdates,
     upgradeOllama,
     pausePull,
@@ -822,21 +870,40 @@ export function LocalModelsSection({
   const restoreNow = useOllamaUpgradeStore((s) => s.reloadNow);
   const restoreCancel = useOllamaUpgradeStore((s) => s.cancel);
   const restoreDismiss = useOllamaUpgradeStore((s) => s.dismiss);
+  const restoreTo = useOllamaUpgradeStore((s) => s.to);
+  const restartError = useOllamaUpgradeStore((s) => s.restartError);
+  const restartNow = useOllamaUpgradeStore((s) => s.restartNow);
   const showRestoreNote = !restoreDismissed && restorePhase !== "idle";
+  // Nothing was resident: the note is only about the server restart.
+  const restartOnly = restoreModels.length === 0;
+  const restartReason =
+    restartError === "ollama_remote"
+      ? t("localModel.restartRemote")
+      : restartError === "ollama_still_running"
+        ? t("localModel.upgradeRestartStillRunning")
+        : restartError || t("localModel.restartFailed");
   const restoreSentence = !showRestoreNote
     ? ""
     : restorePhase === "waiting"
-      ? t("localModel.upgradeRestoreWaiting", { names: restoreModels.join(", ") })
-      : restorePhase === "reloading"
-        ? t("localModel.upgradeRestoreLoading", { names: restoreModels.join(", ") })
-        : restorePhase === "done"
-          ? t("localModel.upgradeRestoreDone", { names: restoreLoaded.join(", ") })
-          : restorePhase === "timeout"
-            ? t("localModel.upgradeRestoreTimeout", { names: restoreModels.join(", ") })
-            : t("localModel.upgradeRestoreFailed", {
-                names: Object.keys(restoreFailed).join(", "),
-                error: Object.values(restoreFailed)[0] ?? "",
-              });
+      ? restartOnly
+        ? t("localModel.upgradeRestartWaiting")
+        : t("localModel.upgradeRestoreWaiting", { names: restoreModels.join(", ") })
+      : restorePhase === "restarting"
+        ? t("localModel.upgradeRestarting", { version: restoreTo })
+        : restorePhase === "restart_failed"
+          ? t("localModel.upgradeRestartFailed", { version: restoreTo, error: restartReason })
+          : restorePhase === "reloading"
+            ? t("localModel.upgradeRestoreLoading", { names: restoreModels.join(", ") })
+            : restorePhase === "done"
+              ? restartOnly
+                ? t("localModel.upgradeRestarted", { version: restoreTo })
+                : t("localModel.upgradeRestoreDone", { names: restoreLoaded.join(", ") })
+              : restorePhase === "timeout"
+                ? t("localModel.upgradeRestoreTimeout", { names: restoreModels.join(", ") })
+                : t("localModel.upgradeRestoreFailed", {
+                    names: Object.keys(restoreFailed).join(", "),
+                    error: Object.values(restoreFailed)[0] ?? "",
+                  });
 
   const autoNotice = useAutoloadNotice();
   const showAutoNote = autoNotice.show;
@@ -859,7 +926,11 @@ export function LocalModelsSection({
       {showRestoreNote && (
         <div
           className={`local-model-autostart-note${
-            restorePhase === "timeout" ? " saver" : restorePhase === "error" ? " failed" : ""
+            restorePhase === "timeout"
+              ? " saver"
+              : restorePhase === "error" || restorePhase === "restart_failed"
+                ? " failed"
+                : ""
           }`}
         >
           <button
@@ -874,6 +945,9 @@ export function LocalModelsSection({
           <div className="local-model-autostart-text">
             <span className="local-model-autostart-sentence">{restoreSentence}</span>
             <UntestedTag id="localModelMenu.2" />
+            {restorePhase !== "reloading" && restorePhase !== "error" && restorePhase !== "timeout" && (
+              <UntestedTag id="localModel.upgradeRestarting" />
+            )}
           </div>
           {/* Waiting is the one phase with something to *stop*; the two
               that ended without the models being back are the ones with
@@ -884,10 +958,22 @@ export function LocalModelsSection({
               <button
                 type="button"
                 className={noteBtn}
-                title={t("localModel.upgradeRestoreCancelTitle")}
+                title={t(restartOnly ? "localModel.upgradeRestartCancelTitle" : "localModel.upgradeRestoreCancelTitle")}
                 onClick={restoreCancel}
               >
-                {t("localModel.upgradeRestoreCancel")}
+                {t(restartOnly ? "localModel.upgradeRestartCancel" : "localModel.upgradeRestoreCancel")}
+              </button>
+            </div>
+          )}
+          {restorePhase === "restart_failed" && (
+            <div className="local-model-autostart-actions">
+              <button
+                type="button"
+                className={noteBtn}
+                title={t("localModel.restartOllamaTitle")}
+                onClick={() => void restartNow()}
+              >
+                {t("localModel.restartOllama")}
               </button>
             </div>
           )}
@@ -1048,6 +1134,7 @@ export function LocalModelsSection({
         : t("localModel.running");
     const downloadCount = Object.keys(downloads).length + paused.length;
     const showIgpu = installed && models.length > 0 && gpuStatus?.igpu_dropped;
+    const contextShort = shortOnContext(models);
     return (
       <div className="lm-page">
         <div className="lm-status">
@@ -1080,6 +1167,18 @@ export function LocalModelsSection({
           </div>
           {installed && (
             <div className="lm-status-actions">
+              {status !== "stopped" && (
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  disabled={restartingOllama}
+                  title={t("localModel.restartOllamaTitle")}
+                  onClick={restartOllama}
+                >
+                  {restartingOllama ? t("localModel.restartingOllama") : t("localModel.restartOllama")}{" "}
+                  <UntestedTag id="localModel.restartOllama" />
+                </button>
+              )}
               {/* The check is the page's one outbound request, so it stays a
                   button: a manifest-digest HEAD per installed model, only when
                   clicked. A found update shows on its card; what has no other
@@ -1114,6 +1213,21 @@ export function LocalModelsSection({
         <div className="lm-banners">
           {notices}
           {showIgpu && igpuNote}
+          {installed && <AutocompleteModelNotice hub={hub} t={t} />}
+          {contextShort.length > 0 && (
+            <div className="local-model-igpu-notice">
+              <div className="local-model-igpu-text">
+                {t("localModel.contextShort", {
+                  names: contextShort.map((m) => m.name).join(", "),
+                  size: contextShort[0].context_length ?? 0,
+                })}{" "}
+                <UntestedTag id="localModel.contextShort" />
+              </div>
+              <button type="button" className={igpuBtn} disabled={restartingOllama} onClick={restartOllama}>
+                {restartingOllama ? t("localModel.restartingOllama") : t("localModel.restartOllama")}
+              </button>
+            </div>
+          )}
         </div>
         {machine}
         {installed && downloadCount > 0 && (
@@ -1182,9 +1296,6 @@ export function LocalModelsSection({
           it is what makes Running / On disk (`is-sub`) read as its parts. */}
       <div className="tab-new-menu-group-label">{t("localModel.localModelsGroup")}</div>
       <button className="tab-new-menu-item" onClick={onManageModels}>
-        <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-          <DotIcon />
-        </span>
         {installed ? t("localModel.manageLocalModels") : t("localModel.installOllamaEllipsis")}
         {/* The dropdown's door now opens the overlay's Ollama tab, not Settings;
             inside the overlay it is a tab switch and carries no pill. */}
@@ -1206,9 +1317,6 @@ export function LocalModelsSection({
             title={t("localModel.checkUpdatesTitle")}
             onClick={checkUpdates}
           >
-            <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-              <DotIcon />
-            </span>
             {checkingUpdates ? t("localModel.checkingUpdates") : t("localModel.checkUpdates")}
             {/* The click must always report back — but only where nothing
                 else does. A *found* update now shows itself: the green
@@ -1335,7 +1443,7 @@ export function LocalModelsSection({
                     <CaveatChip m={m} t={t} />
                     <CapabilityChips m={m} t={t} />
                     <span className={m.size_vram > 0 ? "gpu" : "cpu"}>
-                      {m.size_vram > 0 ? `GPU ${formatBytes(m.size_vram)}` : "CPU"}
+                      {placementLabel(m, formatBytes)}
                     </span>
                   </span>
                 </button>
@@ -1644,7 +1752,9 @@ export function LocalModelsSection({
  * it is what the machine has left for whichever of them you pick. The overlay
  * shows it below the overview tiles and above its Local models tab.
  */
-export function MachineMeters({ hub, layout = "menu" }: { hub: Pick<ModelsHub, "gpus" | "machine">; layout?: "menu" | "overlay" }) {
+/** `strip`: the bare meters, for a caller that frames them itself (the Machines
+ *  view lays them side by side under its own label). */
+export function MachineMeters({ hub, layout = "menu" }: { hub: Pick<ModelsHub, "gpus" | "machine">; layout?: "menu" | "overlay" | "strip" }) {
   const t = useT();
   const { gpus, machine } = hub;
   const { used: gpuUsed, total: gpuTotal } = gpuTotals(gpus);
@@ -1747,6 +1857,7 @@ export function MachineMeters({ hub, layout = "menu" }: { hub: Pick<ModelsHub, "
   );
   const showStats = showMachine || gpus.length > 0;
 
+  if (layout === "strip") return showStats ? stats : null;
   if (layout === "overlay") {
     return showStats ? (
       <section className="lm-section">

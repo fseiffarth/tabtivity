@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { shellQuote } from "./pythonRun";
 import type { TranslationKey } from "../i18n";
-import type { DroppedFile } from "../files/droppedFiles";
+import { parseDroppedFiles, type DroppedFile } from "../files/droppedFiles";
 import { IS_HOST_WINDOWS } from "../platform";
 import { isServerClient } from "../transport/linkState";
 import { blobBase64 } from "../viewers/pdfMarkup";
@@ -36,6 +36,7 @@ const DROP_ERRORS: Record<string, TranslationKey> = {
   inbox_full: "terminal.drop.inboxFull",
   not_a_file: "terminal.drop.notAFile",
   not_found: "terminal.drop.notFound",
+  local_models_only: "terminal.drop.localModelsOnly",
 };
 
 export function dropErrorKey(code: string): TranslationKey {
@@ -136,6 +137,42 @@ export async function pasteClipboardImage(
     if (code === "no_clipboard_image") return { text: "", error: null };
     return { text: "", error: PASTE_ERRORS[code] ?? "terminal.paste.imageFailed" };
   }
+}
+
+/** A paste into a box that types for agent tab `ptyId` — the Reader's
+ *  composer, its answer field under a question's "Type something." row, the
+ *  steering prompt. Files copied in the file manager go to the tab folder's
+ *  inbox (`deliverDrop`); with no text on the clipboard, its image goes there
+ *  as a PNG (`pasteClipboardImage`). Either way `done` gets the `@<reference>`
+ *  text to put at the caret (empty when nothing made it), the translation key
+ *  of why something did not, and whether it was a pasted image. A text paste
+ *  is left alone: returns false and the box takes it as it always did. */
+export function pasteIntoAgentBox(
+  event: { clipboardData: DataTransfer; preventDefault: () => void },
+  ptyId: string,
+  done: (pasted: { text: string; error: TranslationKey | null; image: boolean }) => void,
+): boolean {
+  const files = parseDroppedFiles(event.clipboardData);
+  if (files.length > 0) {
+    event.preventDefault();
+    void deliverDrop(ptyId, files, true).then((pasted) => done({ ...pasted, image: false }));
+    return true;
+  }
+  if (event.clipboardData.getData("text/plain")) return false;
+  event.preventDefault();
+  // The browser client files the picture the paste itself carried; the
+  // window reads the OS clipboard instead and ignores it.
+  const picture = Array.from(event.clipboardData.files ?? []).find((file) => file.type.startsWith("image/")) ?? null;
+  void pasteClipboardImage(ptyId, true, picture).then((pasted) => done({ ...pasted, image: true }));
+  return true;
+}
+
+/** `current` with `text` put in at offset `at`, a space before it unless it
+ *  starts the text or follows whitespace: how a box for an agent tab takes an
+ *  `@` reference, a pasted file or a dictated piece. */
+export function spliceSpaced(current: string, at: number, text: string): string {
+  const before = current.slice(0, at);
+  return `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
 }
 
 type ReaderInsert = (text: string) => void;

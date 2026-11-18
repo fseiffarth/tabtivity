@@ -23,15 +23,15 @@ import { storageKey } from "../../lib/brand";
 import { formatTokens } from "../../lib/tokenStats";
 import { formatCacheWriteUsd, formatIdleTime, useAgentResumeCostStore } from "../../stores/agents/agentResumeCost";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
-import { groupOpenCodeModels, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
+import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
-import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../../../mobile-web/src/terminal/agentModes";
+import { currentMode, modeChoices, modeFixed, modeOffered, shiftTabKey } from "../../../mobile-web/src/terminal/agentModes";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
-import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
+import { limitMeters, parseUsageReport, resolveResetAt, type LimitMeters } from "../../../shared/usageReport";
 import { STATUS_AGENTS, TerminalReaderStatus, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS, TerminalReaderContext } from "./TerminalReaderContext";
 import { usePoll, type PollRun } from "../../lib/usePoll";
@@ -143,7 +143,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       const next = limitMeters(parseUsageReport(report.raw));
       if (!next.session && !next.week) return;
       setLimits(next);
-      setReadAt(Date.now());
+      setReadAt(report.readAt ?? Date.now());
     });
   }, [tab.cmd]);
   // While the Reader shows, with the window in front (`usePoll`).
@@ -163,7 +163,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const modelPicking = picking && !permissionPicking;
   const codex = isCodexCommand(tab.cmd);
   const modelPickable = modelPickOffered(tab);
-  const groupModels = modelPicking && isOpenCodeTab(agentLabel) && shownStep?.title === "Select model";
+  const groupModels = modelPicking && isOpenCodeModelList(agentLabel, shownStep?.title);
   const modelGroups = shownStep
     ? groupModels ? groupOpenCodeModels(shownStep.options) : [{ key: "all", options: shownStep.options }]
     : [];
@@ -202,6 +202,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setModeOpen(false);
   };
   const openModes = () => {
+    if (!modeOffered(agentLabel)) return;
     closeWorktrees();
     if (codex) {
       if (permissionPicking) close();
@@ -364,6 +365,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const readTime = fromPanel ? new Date(readAt) : clock;
   const limitFact = (meter: LimitMeters["session"], key: "mobile.facts.session" | "mobile.facts.week") => {
     if (!meter) return null;
+    const resetAt = meter.resets ? resolveResetAt(meter.resets, readTime) : null;
+    if (resetAt && resetAt.getTime() <= clock.getTime()) return null;
     const left = meter.resets ? resetCountdown(meter.resets, clock, readTime) : "";
     const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
     const percentText = t(key, { percent: Math.round(remaining) });
@@ -374,18 +377,24 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         onClick={toggleLimitBars}
         aria-pressed={limitBars}
         aria-label={limitBars ? percentText : undefined}
-        title={[meter.resets ? resetText(meter.resets, clock, readTime) : "", t("mobile.facts.limitToggle")].filter(Boolean).join("\n")}
+        title={[meter.resets ? resetText(meter.resets, clock, readTime) : "", t("mobile.facts.limitToggle"), readAt < now - 180_000 ? t("agents.usage.readAge", { minutes: Math.floor((now - readAt) / 60_000) }) : ""].filter(Boolean).join("\n")}
       >
         {limitBars ? <>
           {t(key === "mobile.facts.session" ? "mobile.facts.sessionLabel" : "mobile.facts.weekLabel")}
           <span className="terminal-reader-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span>
         </> : percentText}
         {left && <> · {t("mobile.facts.resetIn", { time: left })}</>}
+        {fromPanel && readAt < now - 180_000 && <small> · {t("agents.usage.readAge", { minutes: Math.floor((now - readAt) / 60_000) })}</small>}
+        {fromPanel && codex && <UntestedTag id="agents.codex.accountLimits" />}
       </button>
     );
   };
-  const modelLabel = status?.model ?? modelTag;
-  const effortLabel = status?.effort ?? effort;
+  // The tab's tag carries an effort as `Gemini 3.8 Flash · high`
+  // (`statusModelTag`); the chip names the model and the effort is its own
+  // fact beside it, as it is when the live status is read.
+  const taggedEffort = status?.model ? null : /^(.+) · (low|medium|high|xhigh|max)$/u.exec(modelTag ?? "");
+  const modelLabel = status?.model ?? taggedEffort?.[1] ?? modelTag;
+  const effortLabel = status?.effort ?? effort ?? taggedEffort?.[2];
   const modeLabel = modes.find((choice) => choice.value === activeMode)?.label ?? status?.mode;
   const shownPath = status?.path ?? path;
   const worktree = worktreeOfPath(shownPath);
@@ -569,6 +578,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <button
             type="button"
             className="terminal-reader-fact-model"
+            data-reader-fact="model"
             onClick={() => modelPicking ? close() : openPicker()}
             disabled={!modelPicking && (!!live.working || !!live.question || picking)}
             aria-haspopup="dialog"
@@ -586,6 +596,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <button
             type="button"
             className="terminal-reader-fact-model"
+            data-reader-fact="effort"
             onClick={claude ? openEffort : modelPicking ? close : openEffort}
             disabled={claude ? !effortOpen && (!!live.question || picking) : !modelPicking && (!!live.working || !!live.question || picking)}
             aria-haspopup="dialog"
@@ -596,7 +607,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             <UntestedTag id="terminal.reader.effortPick" />
           </button>
         )}
-        {tab.kind === "agent" && (
+        {tab.kind === "agent" && modeOffered(agentLabel) && (
           <button
             type="button"
             className={status?.mode === "plan" ? "terminal-reader-fact-model plan" : "terminal-reader-fact-model"}
@@ -612,6 +623,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         )}
         {tab.cmd === "opencode" && <UntestedTag id="agents.opencode.v2" />}
         {tab.cmd === "copilot" && <UntestedTag id="agents.copilot.reader" />}
+        {tab.cmd === "muse" && <UntestedTag id="agents.muse.reader" />}
         <UntestedTag id="terminal.reader.facts" />
         <UntestedTag id="terminal.reader.factsMore" />
         {shownPath && <span className="terminal-reader-fact terminal-reader-fact-path" title={shownPath}>{shortPath(shownPath)}</span>}

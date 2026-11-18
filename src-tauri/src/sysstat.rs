@@ -57,6 +57,12 @@ pub struct ProcSample {
     /// uid falls back to `#<uid>` rather than an empty string.
     #[serde(default)]
     pub user: String,
+    /// Its usage could not be read: Windows refuses `OpenProcess` for a
+    /// protected or elevated process. `rss_kib` and `cpu_jiffies` are then 0
+    /// placeholders the pane must not show as a reading (2442m). Left out of
+    /// the JSON when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
 }
 
 /// One interactive login session on the sampled host, from `who`. Mirrors the
@@ -524,6 +530,21 @@ pub fn cmdline(pid: u32) -> Option<String> {
 /// [`descendant_pids`]'s full enumeration per root.
 pub fn parent_map() -> HashMap<u32, u32> {
     platform::parent_map()
+}
+
+/// Every live process as `(pid, parent pid, image name)`, one ToolHelp walk.
+/// The name is the bare file name (`bash.exe`).
+#[cfg(target_os = "windows")]
+pub fn process_list() -> Vec<(u32, u32, String)> {
+    platform::process_list()
+}
+
+/// A process's full command line and its environment block (`NAME=value`
+/// pairs, NUL-separated, UTF-8), read from its PEB. Only the agent job scan
+/// asks, and only for shells; `None` for a process this user cannot read.
+#[cfg(target_os = "windows")]
+pub fn process_params(pid: u32) -> Option<(String, Vec<u8>)> {
+    platform::process_params(pid)
 }
 
 /// A whole-system sample (all processes + per-core CPU + memory/load) for the
@@ -1329,6 +1350,7 @@ pub fn parse_remote_snapshot(raw: &str) -> SystemSnapshot {
             cpu_jiffies,
             threads,
             user: String::new(),
+            unreadable: false,
         });
         proc_uid.push(acc.uid);
     }
@@ -1442,6 +1464,15 @@ fn decode_ansi_nul(raw: &[i8]) -> String {
         .map(|&c| c as u8)
         .collect();
     String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Decode little-endian UTF-16 bytes (a PEB's command line or environment
+/// block), lossily; a trailing odd byte is dropped. NULs survive as `\0`, so an
+/// environment block comes out NUL-separated like `/proc/<pid>/environ`.
+#[cfg(any(target_os = "windows", test))]
+fn decode_utf16_le(raw: &[u8]) -> String {
+    let units: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect();
+    String::from_utf16_lossy(&units)
 }
 
 // ── Pure macOS decoders (compiled under test on any OS) ─────────────────────
@@ -1790,6 +1821,7 @@ mod platform {
                     cpu_jiffies,
                     threads,
                     user,
+                    unreadable: false,
                 });
             }
         }
@@ -1862,15 +1894,112 @@ mod platform {
         map
     }
 
+    /// `(pid, ppid, image name)` for every live process, one ToolHelp snapshot.
+    pub fn process_list() -> Vec<(u32, u32, String)> {
+        let mut out = Vec::new();
+        // SAFETY: as in `parent_map`.
+        unsafe {
+            let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                return out;
+            };
+            let mut entry = PROCESSENTRY32 {
+                dwSize: std::mem::size_of::<PROCESSENTRY32>() as u32,
+                ..Default::default()
+            };
+            if Process32First(snapshot, &mut entry).is_ok() {
+                loop {
+                    let name = super::decode_ansi_nul(&entry.szExeFile);
+                    out.push((entry.th32ProcessID, entry.th32ParentProcessID, name));
+                    if Process32Next(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snapshot);
+        }
+        out
+    }
+
     /// Open a process for query, run `f` with the handle, and always close it.
     fn with_process<T>(pid: u32, f: impl FnOnce(HANDLE) -> Option<T>) -> Option<T> {
+        with_process_access(pid, PROCESS_QUERY_LIMITED_INFORMATION, f)
+    }
+
+    fn with_process_access<T>(
+        pid: u32,
+        access: windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS,
+        f: impl FnOnce(HANDLE) -> Option<T>,
+    ) -> Option<T> {
         // SAFETY: the handle is closed before returning regardless of `f`'s result.
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+        let handle = unsafe { OpenProcess(access, false, pid) }.ok()?;
         let out = f(handle);
         unsafe {
             let _ = CloseHandle(handle);
         }
         out
+    }
+
+    /// `len` bytes of `handle`'s memory at `addr`, all of them or nothing.
+    fn read_remote(handle: HANDLE, addr: usize, len: usize) -> Option<Vec<u8>> {
+        use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+        if addr == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; len];
+        let mut got = 0usize;
+        // SAFETY: `buf` holds `len` bytes; the call writes at most that many and
+        // reports how many in `got`.
+        unsafe { ReadProcessMemory(handle, addr as *const _, buf.as_mut_ptr().cast(), len, Some(&mut got)) }
+            .ok()?;
+        (got == len).then_some(buf)
+    }
+
+    fn read_remote_usize(handle: HANDLE, addr: usize) -> Option<usize> {
+        let raw = read_remote(handle, addr, 8)?;
+        usize::try_from(u64::from_le_bytes(raw.try_into().ok()?)).ok()
+    }
+
+    /// The command line and environment block of `pid`, from its PEB's
+    /// `RTL_USER_PROCESS_PARAMETERS` (64-bit layout: the PEB's parameters
+    /// pointer at 0x20; `CommandLine` at 0x70, `Environment` at 0x80,
+    /// `EnvironmentSize` at 0x3F0). A WOW64 process has the same 64-bit PEB
+    /// beside its 32-bit one. Opens the process for query and memory read only;
+    /// both blocks are capped, and anything that does not read cleanly is `None`.
+    #[cfg(target_pointer_width = "64")]
+    pub fn process_params(pid: u32) -> Option<(String, Vec<u8>)> {
+        use windows::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
+        use windows::Win32::System::Threading::{PROCESS_BASIC_INFORMATION, PROCESS_VM_READ};
+        const CMDLINE_MAX: usize = 64 * 1024;
+        const ENV_MAX: usize = 512 * 1024;
+        with_process_access(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, |handle| {
+            let mut info = PROCESS_BASIC_INFORMATION::default();
+            let mut len = 0u32;
+            // SAFETY: `info` is a PROCESS_BASIC_INFORMATION and the size passed is its own.
+            unsafe {
+                NtQueryInformationProcess(
+                    handle,
+                    ProcessBasicInformation,
+                    (&mut info as *mut PROCESS_BASIC_INFORMATION).cast(),
+                    std::mem::size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+                    &mut len,
+                )
+            }
+            .ok()
+            .ok()?;
+            let params = read_remote_usize(handle, info.PebBaseAddress as usize + 0x20)?;
+            let cmd_len = usize::from(u16::from_le_bytes(read_remote(handle, params + 0x70, 2)?.try_into().ok()?));
+            let cmd_buf = read_remote_usize(handle, params + 0x78)?;
+            let cmdline = super::decode_utf16_le(&read_remote(handle, cmd_buf, cmd_len.min(CMDLINE_MAX) & !1)?);
+            let env_buf = read_remote_usize(handle, params + 0x80)?;
+            let env_len = read_remote_usize(handle, params + 0x3F0)?.min(ENV_MAX) & !1;
+            let environ = super::decode_utf16_le(&read_remote(handle, env_buf, env_len)?).into_bytes();
+            Some((cmdline, environ))
+        })
+    }
+
+    #[cfg(not(target_pointer_width = "64"))]
+    pub fn process_params(_pid: u32) -> Option<(String, Vec<u8>)> {
+        None
     }
 
     /// kernel + user CPU time in 100-ns units, via `GetProcessTimes`.
@@ -2148,8 +2277,8 @@ mod platform {
 
         // One ToolHelp walk for identity fields (pid/ppid/name/threads), then
         // per-pid CPU/RSS queries. A pid we cannot open (system/elevated)
-        // keeps its identity row with zeroed usage, matching the Linux
-        // behavior of unreadable /proc entries as closely as possible.
+        // keeps its identity row, marked `unreadable`: the pane shows no
+        // usage for it rather than a zero one (2442m).
         let mut processes = Vec::new();
         // SAFETY: snapshot is closed before returning; the entry is fully
         // initialized (dwSize set) before Process32First reads it.
@@ -2163,18 +2292,21 @@ mod platform {
                     loop {
                         let pid = entry.th32ProcessID;
                         let comm = super::decode_ansi_nul(&entry.szExeFile);
+                        let (rss, ticks) = (rss_kib(pid), proc_ticks(pid));
                         processes.push(ProcSample {
                             pid,
                             ppid: entry.th32ParentProcessID,
                             cmdline: format!("[{comm}]"),
                             comm,
                             state: String::new(),
-                            rss_kib: rss_kib(pid).unwrap_or(0),
-                            cpu_jiffies: proc_ticks(pid).unwrap_or(0),
+                            rss_kib: rss.unwrap_or(0),
+                            cpu_jiffies: ticks.unwrap_or(0),
                             threads: entry.cntThreads,
                             // No cheap per-process owner lookup here; the pane hides
                             // the per-user section when no process reports one.
                             user: String::new(),
+                            // A pid this user cannot open: no reading, not a zero one.
+                            unreadable: rss.is_none() || ticks.is_none(),
                         });
                         if Process32Next(snapshot, &mut entry).is_err() {
                             break;
@@ -2662,6 +2794,7 @@ mod platform {
                 // are visible anyway); the pane hides the per-user section when no
                 // process reports one.
                 user: String::new(),
+                unreadable: false,
             });
         }
 
@@ -3181,6 +3314,36 @@ SwapFree:        2000000 kB
         assert_eq!(decode_ansi_nul(&[]), "");
     }
 
+    #[test]
+    fn decode_utf16_le_keeps_nuls_and_drops_a_trailing_odd_byte() {
+        let block: Vec<u8> = "A=1\0B=ü\0\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(decode_utf16_le(&block), "A=1\0B=ü\0\0");
+        let mut odd = block.clone();
+        odd.push(0x41);
+        assert_eq!(decode_utf16_le(&odd), "A=1\0B=ü\0\0");
+        assert_eq!(decode_utf16_le(&[0x00, 0xD8]), "\u{fffd}"); // lone surrogate
+        assert_eq!(decode_utf16_le(&[]), "");
+    }
+
+    /// The PEB read against a live child: its own command line and an
+    /// environment variable it was given.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn process_params_reads_a_live_childs_command_line_and_environment() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/d", "/c", "ping -n 30 127.0.0.1 >nul"])
+            .env("PEB_READ_PROBE", "a-1")
+            .spawn()
+            .unwrap();
+        let read = process_params(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        let (cmdline, environ) = read.expect("own child is readable");
+        assert!(cmdline.contains("ping -n 30 127.0.0.1"), "{cmdline}");
+        assert!(environ.split(|b| *b == 0).any(|kv| kv == b"PEB_READ_PROBE=a-1"));
+        assert!(process_list().iter().any(|(pid, _, name)| *pid == std::process::id() && !name.is_empty()));
+    }
+
     // ── macOS decoders (pure; run on any OS) ────────────────────────────────
 
     #[test]
@@ -3617,5 +3780,20 @@ mod thread_count_tests {
     fn absent_or_unparseable_is_none() {
         assert_eq!(parse_threads("Name:\tx\nVmRSS:\t1 kB\n"), None);
         assert_eq!(parse_threads("Threads:\tmany\n"), None);
+    }
+}
+
+/// 2442m: a process whose usage could not be read says so to the pane
+/// instead of passing its zero placeholders off as a reading.
+#[cfg(test)]
+mod unreadable_tests {
+    use super::ProcSample;
+
+    #[test]
+    fn an_unreadable_process_is_marked_and_a_readable_one_is_unchanged() {
+        let readable = serde_json::to_value(ProcSample { pid: 4, ..Default::default() }).unwrap();
+        assert!(readable.get("unreadable").is_none(), "the JSON of a readable row is as before");
+        let blocked = serde_json::to_value(ProcSample { pid: 4, unreadable: true, ..Default::default() }).unwrap();
+        assert_eq!(blocked["unreadable"], serde_json::json!(true));
     }
 }

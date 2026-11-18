@@ -9,7 +9,7 @@ import { inboxLeaves, withoutInboxReferences } from "../../terminal/inboxRefs";
 
 /** A line the dictation strip shows: a key, not a sentence, so switching the
  * language retranslates what is already on screen. */
-export type VoiceNote = { key: TranslationKey; language?: string };
+export type VoiceNote = { key: TranslationKey; language?: string; params?: Record<string, string> };
 
 /** Turns fetched at first, and added per "Show earlier turns" tap. */
 export const TRANSCRIPT_STEP = 120;

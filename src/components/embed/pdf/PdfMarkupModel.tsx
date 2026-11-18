@@ -13,8 +13,7 @@ import { modelPickOffered, useSessionPicker } from "../../../hooks/useSessionPic
 import { agentTabLabel } from "../../../stores/agents/agentModels";
 import type { TabEntry } from "../../../stores/tabs";
 import { UntestedTag } from "../../common/UntestedTag";
-import { isOpenCodeTab } from "../../../../mobile-web/src/terminal/openCodeMini";
-import { groupOpenCodeModels, openCodeModelGroupTitle } from "../../../../mobile-web/src/terminal/openCodeModelGroups";
+import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../../../../mobile-web/src/terminal/openCodeModelGroups";
 import { CloseIcon } from "../../common/icons/Icon";
 
 export function PdfMarkupModel({ tab, ptyId, label, model, agent, disabled }: {
@@ -84,7 +83,7 @@ export function PdfMarkupModel({ tab, ptyId, label, model, agent, disabled }: {
           </div>
           {shownStep ? (
             <div className="terminal-reader-options">
-              {(isOpenCodeTab(agentTabLabel(tab)) && shownStep.title === "Select model"
+              {(isOpenCodeModelList(agentTabLabel(tab), shownStep.title)
                 ? groupOpenCodeModels(shownStep.options)
                 : [{ key: "all", options: shownStep.options }]).map((group) => <div className="terminal-reader-option-group" key={group.key}>
                 {group.key !== "all" && <div className="terminal-reader-option-group-title">{openCodeModelGroupTitle(group, t)}</div>}

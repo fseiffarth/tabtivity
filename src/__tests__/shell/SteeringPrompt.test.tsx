@@ -20,6 +20,7 @@ vi.mock("../../lib/terminal/terminalInput", () => ({
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { SteeringPromptOverlay } from "../../components/layout/SteeringPromptOverlay";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
+import { invoke } from "@tauri-apps/api/core";
 import {
   _clearScheduledAgentInputsForTest,
   registerScheduledAgentInput,
@@ -81,7 +82,7 @@ describe("steering prompt box", () => {
       steering().enter();
       steering().setLevel("panes");
     });
-    press("i");
+    press(" ");
     expect(steering().active).toBe(false);
     const input = box()!;
     expect(document.activeElement).toBe(input);
@@ -111,7 +112,7 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     fireEvent.change(box()!, { target: { value: "hello" } });
     await act(async () => {
       fireEvent.keyDown(box()!, { key: "Enter" });
@@ -137,7 +138,7 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     fireEvent.change(box()!, { target: { value: "and then this" } });
     fireEvent.keyDown(box()!, { key: "Enter" });
     await vi.waitFor(() => expect(box()).toBeNull());
@@ -159,17 +160,17 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     fireEvent.change(box()!, { target: { value: "half a thought" } });
     act(() => {
       box()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(box()).toBeNull();
-    press("i");
+    press(" ");
     expect(box()?.value).toBe("half a thought");
     fireEvent.keyDown(box()!, { key: "Enter" });
     await vi.waitFor(() => expect(box()).toBeNull());
-    press("i");
+    press(" ");
     expect(box()?.value).toBe("");
   });
 
@@ -182,7 +183,7 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     fireEvent.change(box()!, { target: { value: "never mind" } });
     act(() => {
       box()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -201,9 +202,61 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     expect(box()).toBeNull();
     expect(steering().active).toBe(true);
+  });
+
+  describe("paste", () => {
+    const invokeMock = vi.mocked(invoke);
+    const openBox = (draft: string) => {
+      activeTab({ kind: "agent", scheduleTargetId: "target" });
+      render(
+        <>
+          <Harness />
+          <SteeringPromptOverlay />
+        </>,
+      );
+      act(() => steering().enter());
+      press(" ");
+      fireEvent.change(box()!, { target: { value: draft } });
+      box()!.setSelectionRange(draft.length, draft.length);
+    };
+    const clipboard = (data: Record<string, string>) => ({
+      getData: (type: string) => data[type] ?? "",
+      files: [],
+      types: Object.keys(data),
+    });
+    afterEach(() => invokeMock.mockReset());
+
+    it("copied files go to the tab's inbox and in as @ references at the caret", async () => {
+      invokeMock.mockImplementation(async (cmd) =>
+        cmd === "pty_drop_files" ? { items: ["inbox/a.pdf", "inbox/b.png"], error: null } : undefined,
+      );
+      openBox("look at");
+      const pasted = fireEvent.paste(box()!, { clipboardData: clipboard({ "text/uri-list": "file:///home/u/a.pdf\r\nfile:///home/u/b.png" }) });
+      expect(pasted).toBe(false);
+      await vi.waitFor(() => expect(box()?.value).toBe("look at @inbox/a.pdf @inbox/b.png "));
+      expect(invokeMock).toHaveBeenCalledWith("pty_drop_files", expect.objectContaining({
+        id: "p:t1",
+        paths: ["/home/u/a.pdf", "/home/u/b.png"],
+        agent: true,
+      }));
+    });
+
+    it("an image with no text on the clipboard goes in as its inbox reference", async () => {
+      invokeMock.mockImplementation(async (cmd) => (cmd === "pty_paste_clipboard_image" ? "inbox/shot.png" : undefined));
+      openBox("");
+      fireEvent.paste(box()!, { clipboardData: clipboard({}) });
+      await vi.waitFor(() => expect(box()?.value).toBe("@inbox/shot.png "));
+    });
+
+    it("text pastes as it always did", () => {
+      openBox("");
+      const pasted = fireEvent.paste(box()!, { clipboardData: clipboard({ "text/plain": "hello" }) });
+      expect(pasted).toBe(true);
+      expect(invokeMock).not.toHaveBeenCalledWith("pty_paste_clipboard_image", expect.anything());
+    });
   });
 
   describe("chips", () => {
@@ -222,17 +275,17 @@ describe("steering prompt box", () => {
         </>,
       );
       act(() => steering().enter());
-      press("i");
+      press(" ");
       return box()!;
     }
     const alt = (input: HTMLTextAreaElement, key: string) =>
       fireEvent.keyDown(input, { key, code: `Key${key.toUpperCase()}`, altKey: true });
     const written = () => writeMock.mock.calls.map(([, bytes]) => decode(bytes));
 
-    it("Alt+L / Alt+G lead the text with /plan or /goal and take it off again", () => {
+    it("Alt+P / Alt+G lead the text with /plan or /goal and take it off again", () => {
       const input = openBox();
       fireEvent.change(input, { target: { value: "tidy the tests" } });
-      alt(input, "l");
+      alt(input, "p");
       expect(box()!.value).toBe("/plan tidy the tests");
       alt(input, "g");
       expect(box()!.value).toBe("/goal tidy the tests");
@@ -241,22 +294,51 @@ describe("steering prompt box", () => {
       expect(writeMock).not.toHaveBeenCalled();
     });
 
-    it("Alt+K clears only on the second press", async () => {
+    it("AltGr+E (€ on a German layout) opens the effort list like Alt+E, and types no €", () => {
       const input = openBox();
-      alt(input, "k");
+      // Linux: AltGr is neither Alt nor Ctrl. Windows: Ctrl+Alt as well.
+      const linux = fireEvent.keyDown(input, { key: "€", code: "KeyE", modifierAltGraph: true });
+      expect(linux).toBe(false); // default prevented: no € in the box
+      expect(document.querySelector(".steering-prompt-list")).not.toBeNull();
+      fireEvent.keyDown(input, { key: "€", code: "KeyE", ctrlKey: true, altKey: true, modifierAltGraph: true });
+      expect(document.querySelector(".steering-prompt-list")).toBeNull();
+    });
+
+    it("Ctrl+Alt+E without AltGr is not a chip", () => {
+      const input = openBox();
+      fireEvent.keyDown(input, { key: "e", code: "KeyE", ctrlKey: true, altKey: true });
+      expect(document.querySelector(".steering-prompt-list")).toBeNull();
+    });
+
+    it("Alt+C clears only on the second press", async () => {
+      const input = openBox();
+      alt(input, "c");
       expect(writeMock).not.toHaveBeenCalled();
       expect(document.querySelector(".steering-prompt-chip.on")).not.toBeNull();
-      alt(input, "k");
+      alt(input, "c");
       await vi.waitFor(() => expect(written()).toContain("/clear"));
       expect(box()).not.toBeNull();
     });
 
-    it("another key between the two Alt+K presses disarms Clear", () => {
+    it("another key between the two Alt+C presses disarms Clear", () => {
       const input = openBox();
-      alt(input, "k");
+      alt(input, "c");
       fireEvent.keyDown(input, { key: "a" });
-      alt(input, "k");
+      alt(input, "c");
       expect(writeMock).not.toHaveBeenCalled();
+    });
+
+    it("Alt+T lists the three commit prompts: a digit sends one as a prompt of its own and closes the box, the draft kept", async () => {
+      const input = openBox();
+      fireEvent.change(input, { target: { value: "half a thought" } });
+      alt(input, "t");
+      expect(document.querySelectorAll(".steering-prompt-list .terminal-reader-option").length).toBe(3);
+      fireEvent.keyDown(input, { key: "2" });
+      await vi.waitFor(() => expect(written().join("")).toContain("Commit the current state"));
+      await vi.waitFor(() => expect(box()).toBeNull());
+      // The draft waits for the tab's next open.
+      press(" ");
+      expect(box()?.value).toBe("half a thought");
     });
 
     it("Alt+E lists Claude's efforts: ↓ and Enter send one, Escape closes the list first", async () => {
@@ -312,13 +394,14 @@ describe("steering prompt box", () => {
       }));
       try {
         const { chipKeyLabel } = await import("../../components/layout/SteeringPromptOverlay");
-        const chips = ["model", "effort", "clear", "plan", "goal"] as const;
+        const chips = ["model", "effort", "clear", "plan", "goal", "commit"] as const;
         expect(chips.map((c) => chipKeyLabel(c))).toEqual([
           "⌥M",
           "⌥E",
-          "⌥K",
-          "⌥L",
+          "⌥C",
+          "⌥P",
           "⌥G",
+          "⌥T",
         ]);
       } finally {
         vi.doUnmock("../../lib/platform");

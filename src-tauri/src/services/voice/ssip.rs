@@ -299,7 +299,8 @@ pub fn speak_limit(chunk: &str, rate: f32) -> Duration {
 #[cfg(unix)]
 pub mod transport {
     use std::os::unix::net::UnixStream;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     use super::{Broken, Client};
@@ -326,24 +327,143 @@ pub mod transport {
         )
     }
 
+    /// The only speech-dispatcher this app starts: the root-owned system copy
+    /// (`paths::system_executable`, the way git is found), never one found on
+    /// `PATH` or in a per-user directory — a planted `~/.local/bin/speech-dispatcher`
+    /// would otherwise run the next time read-aloud finds no socket (gap 101).
+    fn server_binary() -> Option<PathBuf> {
+        crate::paths::system_executable("speech-dispatcher")
+    }
+
     /// Whether read-aloud can work here at all: a socket to reach, or a
-    /// server to start.
+    /// root-owned server to start.
     pub fn available() -> bool {
-        default_socket().is_some_and(|p| p.exists())
-            || std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .any(|dir| dir.join("speech-dispatcher").is_file())
+        default_socket().is_some_and(|p| p.exists()) || server_binary().is_some()
+    }
+
+    /// Where the server this run starts writes its pid, so the quit can stop
+    /// it: `speech-dispatcher --spawn` forks and the child we hold exits at
+    /// once, so there is no process to register with the teardown.
+    pub fn pid_file() -> PathBuf {
+        crate::storage::state_dir().join("voice").join("speechd.pid")
+    }
+
+    /// The server's argv, from the resolver's answer: `None` without a
+    /// root-owned copy. No shell; the pid file is its own option (`-P`).
+    pub(super) fn server_command(
+        resolve: impl Fn(&str) -> Option<PathBuf>,
+        pid_file: &Path,
+    ) -> Option<std::process::Command> {
+        let mut command = std::process::Command::new(resolve("speech-dispatcher")?);
+        command
+            .arg("--spawn")
+            .arg("--pid-file")
+            .arg(pid_file)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        Some(command)
+    }
+
+    /// The server this run started: its pid and the kernel start time that
+    /// pins that one process across pid reuse.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Started {
+        pub pid: u32,
+        pub start: u64,
+    }
+
+    static STARTED: Mutex<Option<Started>> = Mutex::new(None);
+
+    /// What the quit finds out about the recorded pid.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Probe {
+        /// `proc_table::start_time(pid)`: `None` for no such process.
+        pub start: Option<u64>,
+        /// The uid owning `/proc/<pid>`.
+        pub owner: Option<u32>,
+        /// `/proc/<pid>/comm` (the kernel keeps 15 characters).
+        pub comm: Option<String>,
+    }
+
+    pub fn probe(pid: u32) -> Probe {
+        use std::os::unix::fs::MetadataExt;
+        Probe {
+            start: crate::services::proc_table::start_time(pid),
+            owner: std::fs::metadata(format!("/proc/{pid}")).ok().map(|m| m.uid()),
+            comm: std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|c| c.trim().to_string()),
+        }
+    }
+
+    /// The pid a server wrote into its pid file.
+    pub fn parse_pid(text: &str) -> Option<u32> {
+        text.trim().parse::<u32>().ok().filter(|pid| *pid > 1)
+    }
+
+    /// Whether `probe` still describes the process `started` recorded: the
+    /// same start time, the same owner as ours, and still speech-dispatcher
+    /// (never a recycled pid of something else).
+    pub fn is_ours(started: &Started, probe: &Probe, me: u32) -> bool {
+        probe.start == Some(started.start)
+            && probe.owner == Some(me)
+            && probe.comm.as_deref().is_some_and(|c| c.starts_with("speech-dispatch"))
+    }
+
+    /// Remember the server whose pid file `text` is, once, if it is ours.
+    fn record(text: &str, me: u32, probe: &impl Fn(u32) -> Probe) {
+        let Some(pid) = parse_pid(text) else { return };
+        let found = probe(pid);
+        let Some(start) = found.start else { return };
+        let started = Started { pid, start };
+        if is_ours(&started, &found, me) {
+            *STARTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(started);
+        }
+    }
+
+    /// The `RunEvent::Exit` teardown: stop the server this run started, and
+    /// only that one, through its pid file. SIGTERM after re-checking that the
+    /// pid is still the process recorded; a server the user's session started
+    /// (socket activation) is never in `STARTED`.
+    #[cfg(target_os = "linux")]
+    pub fn stop_started_server() {
+        let me = unsafe { libc::geteuid() };
+        stop_started_with(&STARTED, me, &probe, &|pid| {
+            if let Ok(raw) = libc::pid_t::try_from(pid) {
+                // SAFETY: `kill` takes no pointers; `raw` is a checked pid.
+                unsafe { libc::kill(raw, libc::SIGTERM) };
+            }
+        });
+        let _ = std::fs::remove_file(pid_file());
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub(super) fn stop_started_with(
+        slot: &Mutex<Option<Started>>,
+        me: u32,
+        probe: &impl Fn(u32) -> Probe,
+        kill: &impl Fn(u32),
+    ) -> bool {
+        let Some(started) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else { return false };
+        if !is_ours(&started, &probe(started.pid), me) {
+            return false;
+        }
+        kill(started.pid);
+        true
     }
 
     /// Connect, starting the server first when nothing listens — as
     /// libspeechd does. Ubuntu socket-activates it, so this is the fallback
-    /// for a session without systemd. A server started here exits on its own
-    /// idle timeout; the quit does not stop it.
+    /// for a session without systemd. A server started here is stopped at
+    /// the quit (`stop_started_server`); without a root-owned copy nothing is
+    /// started and the connection fails (`no-speech-server`).
     pub fn connect(client_name: &str) -> Result<Client<UnixStream>, Broken> {
         let path = default_socket().ok_or(Broken)?;
         let stream = match UnixStream::connect(&path) {
             Ok(stream) => stream,
             Err(_) => {
-                spawn_server();
+                if !spawn_server() {
+                    return Err(Broken);
+                }
                 let deadline = Instant::now() + Duration::from_secs(3);
                 loop {
                     match UnixStream::connect(&path) {
@@ -358,25 +478,44 @@ pub mod transport {
         Client::open(reader, stream, client_name)
     }
 
-    fn spawn_server() {
+    /// Starts the server; false when there is no root-owned copy to start.
+    fn spawn_server() -> bool {
+        let pid_file = pid_file();
+        if let Some(dir) = pid_file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        // A pid left by an earlier run is not the server about to start.
+        let _ = std::fs::remove_file(&pid_file);
         // argv, no shell; it forks and returns once its socket is up.
-        let child = std::process::Command::new("speech-dispatcher")
-            .arg("--spawn")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        if let Ok(mut child) = child {
-            let deadline = Instant::now() + Duration::from_secs(3);
-            while Instant::now() < deadline {
-                if !matches!(child.try_wait(), Ok(None)) {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(50));
+        let Some(mut command) = server_command(|_| server_binary(), &pid_file) else { return false };
+        let Ok(mut child) = command.spawn() else { return false };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut exited = false;
+        while Instant::now() < deadline {
+            if !matches!(child.try_wait(), Ok(None)) {
+                exited = true;
+                break;
             }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if !exited {
             let _ = child.kill();
             let _ = child.wait();
         }
+        // The forked server wrote its own pid; this run owns the stop.
+        let me = unsafe { libc::geteuid() };
+        let end = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&pid_file) {
+                record(&text, me, &probe);
+                break;
+            }
+            if Instant::now() >= end {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        true
     }
 }
 
@@ -460,6 +599,62 @@ mod tests {
         assert_eq!(socket_path(Some("inet_socket:example.org:6560"), Some(runtime)), None);
         assert_eq!(socket_path(Some("unix_socket:relative.sock"), Some(runtime)), None);
         assert_eq!(socket_path(None, None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_server_is_started_only_from_a_root_owned_copy_and_with_a_pid_file() {
+        use std::path::{Path, PathBuf};
+        use transport::server_command;
+        let pid_file = Path::new("state").join("voice").join("speechd.pid");
+        // No root-owned copy (the resolver's answer is None): nothing starts.
+        assert!(server_command(|_| None, &pid_file).is_none());
+        let bin = PathBuf::from("root-owned").join("speech-dispatcher");
+        let command = server_command(|name| (name == "speech-dispatcher").then(|| bin.clone()), &pid_file).unwrap();
+        assert_eq!(command.get_program(), bin.as_os_str(), "the resolved path, never a bare name looked up on PATH");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["--spawn", "--pid-file", pid_file.to_str().unwrap()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_source_never_finds_the_server_on_path() {
+        let source = include_str!("ssip.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap();
+        assert!(!code.contains("Command::new(\"speech-dispatcher\")"));
+        assert!(!code.contains("split_paths"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_quit_stops_only_the_server_this_run_started() {
+        use std::sync::Mutex;
+        use transport::{is_ours, parse_pid, stop_started_with, Probe, Started};
+        assert_eq!(parse_pid("4242\n"), Some(4242));
+        assert_eq!(parse_pid("1"), None);
+        assert_eq!(parse_pid("junk"), None);
+        let started = Started { pid: 4242, start: 777 };
+        let server = |start, owner, comm: &str| Probe { start, owner, comm: Some(comm.to_string()) };
+        assert!(is_ours(&started, &server(Some(777), Some(1000), "speech-dispatch"), 1000));
+        // Pid reuse: another start time, another owner, another program.
+        assert!(!is_ours(&started, &server(Some(778), Some(1000), "speech-dispatch"), 1000));
+        assert!(!is_ours(&started, &server(Some(777), Some(0), "speech-dispatch"), 1000));
+        assert!(!is_ours(&started, &server(Some(777), Some(1000), "bash"), 1000));
+        assert!(!is_ours(&started, &Probe { start: None, owner: None, comm: None }, 1000));
+
+        let killed = Mutex::new(Vec::new());
+        let kill = |pid| killed.lock().unwrap().push(pid);
+        // Nothing recorded (the user's own server, socket activation): nothing is signalled.
+        let none = Mutex::new(None);
+        assert!(!stop_started_with(&none, 1000, &|_| server(Some(777), Some(1000), "speech-dispatch"), &kill));
+        // Recorded and still the same process: SIGTERM, once.
+        let slot = Mutex::new(Some(started));
+        assert!(stop_started_with(&slot, 1000, &|_| server(Some(777), Some(1000), "speech-dispatch"), &kill));
+        assert!(!stop_started_with(&slot, 1000, &|_| server(Some(777), Some(1000), "speech-dispatch"), &kill));
+        // Recorded but the pid now belongs to something else: left alone.
+        let reused = Mutex::new(Some(started));
+        assert!(!stop_started_with(&reused, 1000, &|_| server(Some(9999), Some(1000), "bash"), &kill));
+        assert_eq!(*killed.lock().unwrap(), [4242]);
     }
 
     /// A speech-dispatcher stand-in on a socket pair: answers each command

@@ -108,8 +108,8 @@ export interface CursorPalette {
  *  computed styles to read (tests) or a token is not a plain color. */
 export const CURSOR_PALETTE_FALLBACK: CursorPalette = {
   accent: "#36c5f0",
-  ink: "#f4f8ff",
-  surface: "#101624",
+  ink: "#eef3fb",
+  surface: "#0b121e",
 };
 
 const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;

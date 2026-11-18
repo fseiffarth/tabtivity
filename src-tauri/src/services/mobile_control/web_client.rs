@@ -641,7 +641,7 @@ impl WebClientState {
             let role = self.lock_sessions().touch(&token)?;
             return Some((SessionRef::Web(token), role));
         };
-        let token = super::host::device_session_cookie(headers)?;
+        let token = super::host::device_session_cookie(headers, &link.public_host)?;
         link.auth.lock_ok().touch(token)?;
         Some((SessionRef::Device(token.to_string()), server::gateway_role_in(headers)))
     }

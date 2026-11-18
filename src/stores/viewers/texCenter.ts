@@ -1,5 +1,4 @@
-import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { broadcast, listenOtherWindows } from "../../lib/window/crossWindow";
 
 /**
  * Cross-window "center this TeX workspace on that source file" channel for
@@ -31,27 +30,16 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
  */
 export const TEX_CENTER_EVENT = "tex-workspace-center";
 
-/** Envelope for a cross-window center switch (plus the originating window's
- *  label, so a window ignores the echo of its own broadcast). */
-export interface TexCenterEnvelope {
+/** A cross-window center switch as broadcast. */
+interface TexCenterPayload {
   /** The workspace's main document (the tab's identity/dedupe key). */
   root: string;
   /** The source file the center should switch to. */
   source: string;
-  from: string;
   /** When set, the request is "recompile the document `source` belongs to"
    *  rather than a center switch — the PDF tab's recompile notice, which has
    *  no compile of its own (see `registerTexCompile`). */
   compile?: boolean;
-}
-
-/** The current window's Tauri label, or "" outside a Tauri context (tests). */
-function currentLabel(): string {
-  try {
-    return getCurrentWindow().label;
-  } catch {
-    return "";
-  }
 }
 
 // The workspaces mounted in THIS window, keyed by main document path. At most
@@ -84,15 +72,7 @@ export function centerTexWorkspace(root: string, source: string): boolean {
  *  tab is detached, i.e. rendered in a popout this heap cannot reach. Best
  *  effort: a non-Tauri env (tests) simply skips the broadcast. */
 export function requestTexCenter(root: string, source: string): void {
-  try {
-    emit(TEX_CENTER_EVENT, {
-      root,
-      source,
-      from: currentLabel(),
-    } satisfies TexCenterEnvelope).catch(() => {});
-  } catch {
-    /* no Tauri event bus available (synchronous failure) */
-  }
+  broadcast(TEX_CENTER_EVENT, { root, source } satisfies TexCenterPayload);
 }
 
 // The compile entry points mounted in THIS window, keyed by the editor's own
@@ -134,16 +114,7 @@ export function compileTexWorkspace(path: string): boolean {
  *  exists but renders in a popout this heap cannot reach. Best effort, like
  *  {@link requestTexCenter}. */
 export function requestTexCompile(root: string, source: string): void {
-  try {
-    emit(TEX_CENTER_EVENT, {
-      root,
-      source,
-      from: currentLabel(),
-      compile: true,
-    } satisfies TexCenterEnvelope).catch(() => {});
-  } catch {
-    /* no Tauri event bus available (synchronous failure) */
-  }
+  broadcast(TEX_CENTER_EVENT, { root, source, compile: true } satisfies TexCenterPayload);
 }
 
 /**
@@ -153,20 +124,10 @@ export function requestTexCompile(root: string, source: string): void {
  * registry, so whichever window renders the workspace switches its center.
  * Returns an unlisten. No-ops outside a Tauri context.
  */
-export async function listenTexCenter(): Promise<() => void> {
-  const self = currentLabel();
-  try {
-    return await listen<TexCenterEnvelope>(TEX_CENTER_EVENT, (ev) => {
-      const { root, source, from, compile } = ev.payload;
-      if (from === self) return; // we already tried our own registry locally
-      if (compile) {
-        // The clicked source's editor if it is mounted here, else the main's.
-        if (!compileTexWorkspace(source)) compileTexWorkspace(root);
-        return;
-      }
-      centerTexWorkspace(root, source);
-    });
-  } catch {
-    return () => {};
-  }
+export function listenTexCenter(): Promise<() => void> {
+  return listenOtherWindows<TexCenterPayload>(TEX_CENTER_EVENT, ({ root, source, compile }) => {
+    // A recompile: the clicked source's editor if it is mounted here, else the main's.
+    if (!compile) centerTexWorkspace(root, source);
+    else if (!compileTexWorkspace(source)) compileTexWorkspace(root);
+  });
 }

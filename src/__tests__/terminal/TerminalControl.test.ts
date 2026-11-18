@@ -35,6 +35,10 @@ describe("terminal control helpers", () => {
     expect(initialInputForPty("/hooks", "agent")).toBe("/hooks");
   });
 
+  it("types no Ctrl+U at a Windows console, which would keep it as a literal ^U", () => {
+    expect(initialInputForPty("$w = 1", "shell", true)).toBe("$w = 1");
+  });
+
   it("claims a given initial input only once per PTY id", () => {
     expect(claimInitialInput("p:shell-1", "bash 'install.sh'")).toBe(true);
     expect(claimInitialInput("p:shell-1", "bash 'install.sh'")).toBe(false);

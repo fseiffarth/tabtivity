@@ -1,11 +1,18 @@
-/// The detail payload's `terminals` field has exactly two values, and the
-/// host's own answer is the one `live_tmux` short-circuits on: a Windows
-/// build says `unsupported` and lists no session, every other says `tmux`.
+/// The detail payload's `terminals` field comes from the session mux, and
+/// the host's own answer is the one `live_tmux` short-circuits on: a Windows
+/// build (no session host yet) says `unsupported` and lists no session, every
+/// other says `tmux`; `native` waits for the session host.
 #[test]
 fn terminals_support_names_tmux_or_unsupported() {
-    assert_eq!(super::terminals_support_on(false), super::TERMINALS_TMUX);
-    assert_eq!(super::terminals_support_on(true), super::TERMINALS_UNSUPPORTED);
-    assert_eq!(super::terminals_support(), super::terminals_support_on(cfg!(target_os = "windows")));
+    use crate::services::session_mux::MuxKind;
+    // tmux answers `tmux` without asking whether it is installed (`tmux -V`
+    // has no deadline): a Unix build without tmux still says `tmux`.
+    assert_eq!(super::terminals_support_on(MuxKind::Tmux, || panic!("tmux is never probed")), super::TERMINALS_TMUX);
+    assert_eq!(super::terminals_support_on(MuxKind::WinHost, || false), super::TERMINALS_UNSUPPORTED);
+    assert_eq!(super::terminals_support_on(MuxKind::WinHost, || true), super::TERMINALS_NATIVE);
+    // Windows has no session host yet: today's answer is unchanged.
+    let expected = if cfg!(target_os = "windows") { super::TERMINALS_UNSUPPORTED } else { super::TERMINALS_TMUX };
+    assert_eq!(super::terminals_support(), expected);
     for value in [super::TERMINALS_TMUX, super::TERMINALS_UNSUPPORTED] {
         let row = serde_json::json!({ "shells": false, "terminals": value });
         assert_eq!(row["terminals"].as_str(), Some(value));
@@ -101,7 +108,7 @@ fn agent_counts_keep_working_question_and_done_and_skip_the_rest() {
 
 #[test]
 fn tmux_ls_runs_through_app_path() {
-    let command = tmux_ls_command("#{session_name}");
+    let command = crate::services::session_mux::tmux::TmuxMux::default().list_command();
     let path = command
         .get_envs()
         .find(|(key, _)| *key == "PATH")
@@ -515,6 +522,50 @@ fn the_assistant_scope_has_a_per_phone_list_absent_is_every_phone_empty_is_none(
     assert_eq!(assistant_devices(dir.path()), Some(Vec::new()));
 }
 
+/// Root's per-phone list is opt-in, unlike every other scope's: with the
+/// switch on and no list, no phone has root — a phone paired later is off it
+/// until the user ticks it. A list names the phones; an empty or malformed
+/// one, or unreadable settings, none. The catalog, the per-phone view and
+/// `ScopeAccess` (what a phone's prompt or schedule faces) agree.
+#[test]
+fn the_root_scope_is_off_for_every_phone_until_the_list_names_it() {
+    let host = crate::brand::MOBILE_HOST_KEY;
+    let reaching = |devices: Option<serde_json::Value>, phone: &str| {
+        let mut block = serde_json::json!({ "enabled": true, "root_access": true });
+        if let Some(devices) = devices {
+            block["root_devices"] = devices;
+        }
+        let dir = assistant_state(Some(serde_json::json!({ "assistant": false, host: block })), vec![]);
+        fs::create_dir_all(dir.path().join("root")).expect("root dir");
+        let env = RootEnv { dir: dir.path().join("root"), fenced: || true };
+        let catalog = Catalog::load_with(dir.path(), &[7; 32], &env, &HashMap::new(), &HostLive::default(), true).expect("catalog");
+        let listed = catalog.projects.iter().any(|p| p.raw_id == "root");
+        let seen = catalog.for_device(phone).projects.iter().any(|p| p.raw_id == "root");
+        let access = ScopeAccess::load_with(dir.path(), &env).expect("access").reaches("root", phone);
+        (listed, seen, access)
+    };
+    // Absent: the scope is there, no phone reaches it.
+    assert_eq!(reaching(None, "d1"), (true, false, Ok(false)));
+    // A list: those phones only.
+    let list = Some(serde_json::json!(["d1", "d2"]));
+    assert_eq!(reaching(list.clone(), "d1"), (true, true, Ok(true)));
+    assert_eq!(reaching(list, "d3"), (true, false, Ok(false)));
+    // Empty, or anything that is not a list of strings: no phone.
+    for none in [serde_json::json!([]), serde_json::json!("d1"), serde_json::json!(["d1", 2]), serde_json::Value::Null] {
+        assert_eq!(reaching(Some(none.clone()), "d1"), (true, false, Ok(false)), "{none}");
+    }
+    // The list narrows the switch; it never opens a closed one.
+    let dir = assistant_state(
+        Some(serde_json::json!({ "assistant": false, host: { "enabled": true, "root_access": false, "root_devices": ["d1"] } })),
+        vec![],
+    );
+    assert!(load_assistant(dir.path()).is_empty());
+    // Unreadable settings are no phone either.
+    let dir = tempfile::tempdir().expect("state dir");
+    fs::write(dir.path().join("settings.json"), b"{").expect("corrupt");
+    assert!(root_devices(dir.path()).is_empty());
+}
+
 /// The chat assistant reaches the phone by its switch and gate alone
 /// (`assistant_open`), as a scope of its own kind rooted in the work
 /// folder: listed before its folder exists (so the phone can start the
@@ -822,6 +873,8 @@ fn agent_label_names_the_cli_not_the_tab() {
         args: None,
         launched_at: None,
         assistant: None,
+        auto_label: None,
+        task_name: None,
     };
     assert_eq!(agent_label_of(&tab("release review", "claude")), "Claude");
     assert_eq!(agent_label_of(&tab("Codex", "codex")), "Codex");
@@ -1123,6 +1176,10 @@ fn a_mobile_enabled_box_is_a_scope_with_the_folder_and_member_roots() {
     let labels: Vec<&str> = b.tabs.iter().map(|t| t.public.label.as_str()).collect();
     assert_eq!(labels, vec!["Box shell", "Lib shell", "Remote shell"]);
     assert!(!b.public.id.contains("b1"), "the opaque id must not carry the box id");
+    // Every member, as the id its own row would carry; the list narrows them
+    // per phone (`host::projects`).
+    let ids: Vec<String> = ["p-lib", "p-remote", "p-vm", "p-gone"].iter().map(|id| key_id(&[7; 32], "project", &[id])).collect();
+    assert_eq!(b.public.members.as_deref(), Some(ids.as_slice()));
 }
 
 /// One project record per host type, each with Mobile on.
@@ -1637,10 +1694,10 @@ fn host_tabs_need_persisted_sessions_a_non_vm_project_and_tmux_terminals() {
     assert_eq!(load_hosts(dir.path(), &HostLive::default(), true).tabs.len(), 2);
     let (dir, _) = host_tab_state(None, true);
     assert!(load_hosts(dir.path(), &HostLive::default(), true).tabs.is_empty(), "a VM project lists no host tab");
-    assert!(!host_tabs_on(terminals_support_on(true)), "Windows");
-    assert!(host_tabs_on(terminals_support_on(false)));
+    assert!(!host_tabs_on(true), "Windows");
+    assert!(host_tabs_on(false));
     let (dir, _) = host_tab_state(None, false);
-    assert!(load_hosts(dir.path(), &HostLive::default(), host_tabs_on(terminals_support_on(true))).tabs.is_empty());
+    assert!(load_hosts(dir.path(), &HostLive::default(), host_tabs_on(true)).tabs.is_empty());
 }
 
 /// [`host_tab_state`] for a remote-only project (`remote.remote_only`):
@@ -1719,6 +1776,43 @@ fn a_remote_only_project_runs_everything_on_its_host() {
         hosts.sort();
         assert_eq!(hosts, ["primary.example", "w1.example"]);
     }
+}
+
+/// The phone's project row says whether the project is Local models only and whether
+/// its network is cut, as two plain flags read with the backend's own rule
+/// (`agent_privacy::privacy_of_value`): an unset project reads false and carries
+/// neither key, a malformed record reads as locked, and the setting itself, the id
+/// and the folder never cross.
+#[test]
+fn a_project_row_carries_the_local_models_only_flags_and_nothing_else() {
+    let wire_of = |privacy: Option<serde_json::Value>| {
+        let (dir, _) = host_tab_state(None, false);
+        let path = dir.path().join("projects.json");
+        let mut records: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        if let Some(value) = privacy {
+            records[0]["agent_privacy"] = value;
+        }
+        fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+        let project = load_hosts(dir.path(), &HostLive::default(), true);
+        let flags = (project.public.local_models_only, project.public.cut_network);
+        (flags, serde_json::to_string(&project.public).unwrap())
+    };
+    let (flags, wire) = wire_of(None);
+    assert_eq!(flags, (false, false));
+    assert!(!wire.contains("local_models_only") && !wire.contains("cut_network"), "an unlocked project says nothing: {wire}");
+    assert_eq!(wire_of(Some(serde_json::Value::Null)).0, (false, false));
+    assert_eq!(wire_of(Some(serde_json::json!({}))).0, (false, false));
+    assert_eq!(wire_of(Some(serde_json::json!({ "local_models_only": false, "cut_network": false }))).0, (false, false));
+    let (flags, wire) = wire_of(Some(serde_json::json!({ "local_models_only": true, "cut_network": false })));
+    assert_eq!(flags, (true, false));
+    assert!(wire.contains(r#""local_models_only":true"#) && !wire.contains("cut_network"), "{wire}");
+    let (flags, wire) = wire_of(Some(serde_json::json!({ "local_models_only": true, "cut_network": true, "future": 1 })));
+    assert_eq!(flags, (true, true));
+    assert!(wire.contains(r#""cut_network":true"#) && !wire.contains("future") && !wire.contains("agent_privacy"), "{wire}");
+    // Cut network means something only beneath Local models only.
+    assert_eq!(wire_of(Some(serde_json::json!({ "cut_network": true }))).0, (false, false));
+    // A record of another shape reads as locked, as the gate reads it.
+    assert_eq!(wire_of(Some(serde_json::json!("yes"))).0, (true, false));
 }
 
 /// With no machine a phone-made agent may start on (host sessions not
@@ -1880,6 +1974,9 @@ fn a_scope_with_a_device_list_reaches_only_those_phones() {
 
 #[test]
 fn no_tmux_server_is_an_answer_and_any_other_failure_is_not() {
+    let live_from_ls = |success: bool, stdout: &[u8], stderr: &[u8]| {
+        crate::services::session_mux::tmux::list_answer(success, stdout, stderr).map(live_of)
+    };
     // tmux's ways of saying "no server", i.e. zero sessions.
     for stderr in [
         "no server running on /tmp/tmux-1000/default",
@@ -1903,7 +2000,10 @@ fn no_tmux_server_is_an_answer_and_any_other_failure_is_not() {
     // An answer: its rows, and a malformed one costs only itself.
     let live = live_from_ls(
         true,
-        concat!(crate::app_slug!(), "-p--shell-1\t1700000000\t/home/u/p\nbroken row\nwork\t5\t/tmp\n").as_bytes(),
+        concat!(crate::app_slug!(), "-p--shell-1	1	1600000000	0	1700000000	bash	/home/u/p
+broken row
+work	1	5	1	5	vim	/tmp
+").as_bytes(),
         b"",
     )
     .expect("listing");
@@ -1911,11 +2011,18 @@ fn no_tmux_server_is_an_answer_and_any_other_failure_is_not() {
     assert_eq!(live[concat!(crate::app_slug!(), "-p--shell-1")].activity, 1_700_000_000);
     assert_eq!(live["work"].cwd, PathBuf::from("/tmp"));
     assert!(live_from_ls(true, b"", b"").expect("empty listing").is_empty());
+    // Decided, not an accident: the listing goes through `ssh_exec::parse_tmux_ls`
+    // (the remote path's parser), which trims the cwd — a folder whose name ends
+    // in a space reads without it, and so matches no tab's folder.
+    let live = live_from_ls(true, "spaced\t1\t5\t0\t5\tbash\t/home/u/p \n".as_bytes(), b"").expect("listing");
+    assert_eq!(live["spaced"].cwd, PathBuf::from("/home/u/p"));
 }
 
 #[cfg(unix)]
 #[test]
 fn a_command_that_hangs_is_killed_at_its_deadline() {
+    use crate::paths::output_within;
+    use std::process::Command;
     let mut hung = Command::new("sleep");
     hung.arg("30");
     let started = Instant::now();
@@ -2103,4 +2210,65 @@ fn repeat_loads_inside_the_ttl_do_not_touch_the_disk() {
     fs::remove_file(dir.path().join("projects.json")).expect("remove");
     assert!(cache.load(dir.path(), &[7; 32]).is_ok());
     assert!(cache.load_fresh(dir.path(), &[7; 32]).is_ok());
+}
+
+/// The phone names an agent tab by its first prompt while the tab still holds
+/// the label Tabtivity gave it; a tab the user renamed shows that name.
+#[test]
+fn public_label_is_the_task_name_until_renamed() {
+    let tab = |value: serde_json::Value| -> SavedTab { serde_json::from_value(value).expect("saved tab") };
+    let named = tab(serde_json::json!({
+        "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent",
+        "autoLabel": "Claude", "autoNamed": true, "taskName": "Fix the settings scrollbar",
+    }));
+    assert_eq!(public_label_of(&named), "Fix the settings scrollbar");
+    let renamed = tab(serde_json::json!({
+        "label": "Mine", "cmd": "claude", "cwd": "", "kind": "agent",
+        "autoLabel": "Claude", "taskName": "Fix the settings scrollbar",
+    }));
+    assert_eq!(public_label_of(&renamed), "Mine");
+    let unnamed = tab(serde_json::json!({ "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent", "autoLabel": "Claude" }));
+    assert_eq!(public_label_of(&unnamed), "Claude");
+    let odd = tab(serde_json::json!({ "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent", "autoLabel": "Claude", "taskName": 5 }));
+    assert_eq!(public_label_of(&odd), "Claude");
+}
+
+/// A catalog load asks tmux always, and the session host whenever it may
+/// hold sessions — its setting off included, so a live session stays listed
+/// (and an open terminal's re-check keeps it) until it ends.
+#[test]
+fn live_sessions_are_listed_whenever_the_backend_may_hold_them() {
+    use crate::services::session_mux::MuxKind;
+    assert!(super::lists_sessions_on(MuxKind::Tmux, || panic!("tmux is never probed")));
+    assert!(super::lists_sessions_on(MuxKind::WinHost, || true));
+    assert!(!super::lists_sessions_on(MuxKind::WinHost, || false));
+}
+
+/// Dissolving a box ends the sessions its saved tabs minted: each tab's own,
+/// never one it only attached to, never a name the app would not have given a
+/// tab of that scope and kind, and none at all for a scope with no saved tabs.
+#[test]
+fn a_scopes_saved_tabs_name_the_sessions_to_end_with_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = dir.path();
+    let sessions = state.join("sessions").join("box_b1");
+    fs::create_dir_all(&sessions).expect("sessions");
+    let own = format!("{}box_b1--agent-123456789", crate::brand::TMUX_PREFIX);
+    let shell = format!("{}box_b1--shell-123456789", crate::brand::TMUX_PREFIX);
+    let tab = |kind: &str, session: &str, attach: Option<&str>| {
+        serde_json::json!({
+            "label": kind, "cmd": "", "cwd": "/b", "kind": kind,
+            "tmuxSession": session, "tmuxAttach": attach,
+        })
+    };
+    let tabs = serde_json::json!([
+        tab("agent", &own, None),
+        tab("shell", &shell, Some("someone-elses")),
+        tab("shell", "not-ours--shell-123456789", None),
+        tab("agent", &format!("{}box_b2--agent-123456789", crate::brand::TMUX_PREFIX), None),
+        { "label": "files", "cmd": "", "cwd": "/b", "kind": "files" },
+    ]);
+    fs::write(sessions.join("terminals.json"), serde_json::json!({ "tabLayout": tabs }).to_string()).expect("session");
+    assert_eq!(saved_scope_sessions(state, "box:b1"), vec![own]);
+    assert!(saved_scope_sessions(state, "box:none").is_empty());
 }

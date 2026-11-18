@@ -7,19 +7,23 @@ import { useBoxesStore } from "../../stores/boxes";
 import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
-import { runInstallInTab } from "../../lib/installCommand";
+import { runInstallInTab, TMUX_INSTALL_CMD } from "../../lib/installCommand";
+import { useTmuxAvailable } from "../../lib/tmuxAvailable";
+import { ensureMobileSessions } from "./mobileSessionGate";
+import { tailscaleServeCommand } from "../../lib/tailscaleServeCommand";
 import { useT, translateNow } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ConnectToServer } from "../server/ConnectToServer";
-import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "./MobileAccessPicker";
+import { MobileAccessPicker, HOST_REACH_KEY, PhoneReachButton, phoneReachHost } from "./MobileAccessPicker";
 import { projectHostKind } from "../../lib/projectTabHost";
 import type { ProjectEntry } from "../../types";
-import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
+import { usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
+import { LinkedDesktops } from "./LinkedDesktops";
 
 interface RuntimeStatus {
   configured: boolean;
@@ -131,6 +135,8 @@ function Hint({ help, children }: { help: string; children: ReactNode }) {
 export function MobileSettings() {
   const t = useT();
   const assistantOn = useExperimental("assistant");
+  const sessionHostOn = useExperimental("windows_session_host");
+  const tmuxAvailable = useTmuxAvailable();
   const { confirmAction, dialogs } = useDialogs();
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.updateSettings);
@@ -169,7 +175,7 @@ export function MobileSettings() {
   // (a revoke or Forget all changes what a list still reaches).
   const { phones: pairedPhones } = usePairedPhones(devices);
   const [phonePicker, setPhonePicker] = useState<
-    { kind: "project" | "box" | "assistant"; id: string; x: number; y: number } | null
+    { kind: "project" | "box" | "assistant" | "root"; id: string; x: number; y: number } | null
   >(null);
   const addDevice = useAddDevice();
   const [error, setError] = useState<string | null>(null);
@@ -286,7 +292,7 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "project_sync" | "project_remarks" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "project_sync" | "project_remarks" | "stay_after_quit" | "shell_tabs" | "desktop_images" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
@@ -351,24 +357,13 @@ export function MobileSettings() {
       }
       await updateSettings({
         [MOBILE_HOST_KEY]: {
+          // The block is written whole (a settings patch is shallow): the
+          // stored one rides along, so no gate or list is dropped.
+          ...stored,
           enabled,
           display_name: displayName.trim() || "Workstation",
           port: parsedPort || 8742,
           serve_origin: origin.trim() || undefined,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          browser_client: stored?.browser_client,
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -384,10 +379,10 @@ export function MobileSettings() {
   // Same one-click shape as every other install-via-command flow: the command
   // runs in a root terminal tab, watched in the root console floating over
   // Settings — never a scope switch away from the panel.
-  /** The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside
-   *  a row whose access is on: opens the per-phone picker for it. */
+  /** The "All phones ▾" button beside a row whose access is on: opens the
+   *  per-phone picker for it. */
   const phoneScopeButton = (
-    kind: "project" | "box" | "assistant",
+    kind: "project" | "box" | "assistant" | "root",
     id: string,
     name: string,
     enabled: boolean,
@@ -395,20 +390,13 @@ export function MobileSettings() {
   ) => {
     // `null`, not `undefined`: the row keeps its shape while off (ToggleRow).
     if (!enabled) return null;
-    const reach = phoneReach(true, list, pairedPhones);
     return (
-      <button
-        type="button"
-        className={`settings-btn sm${reach.kind === "none" ? " warning" : ""}`}
-        aria-haspopup="menu"
-        title={t("mobile.phones.buttonTitle", { name })}
-        onClick={(event) => {
-          const r = event.currentTarget.getBoundingClientRect();
-          setPhonePicker({ kind, id, x: r.left, y: r.bottom + 2 });
-        }}
-      >
-        {phoneReachLabel(reach, t)} ▾
-      </button>
+      <PhoneReachButton
+        name={name}
+        list={list}
+        phones={pairedPhones}
+        onOpen={(r) => setPhonePicker({ kind, id, x: r.left, y: r.bottom + 2 })}
+      />
     );
   };
 
@@ -425,8 +413,21 @@ export function MobileSettings() {
     });
   };
 
+  /** Root's reach, from its picker: the phones that may open the root console
+   * (none is the default — a phone paired later starts off it). An empty list
+   * is stored as no list. One whole-block write, like `setMailGate`. */
+  const setRootReach = async (list: string[] | null) => {
+    await updateSettings({
+      [MOBILE_HOST_KEY]: {
+        ...(stored ?? { enabled: false }),
+        root_devices: list && list.length > 0 ? list : undefined,
+      },
+    });
+  };
+
   const setUpInTerminal = async () => {
-    const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
+    // The CLI this machine resolves, not a bare `tailscale` (2442s).
+    const command = await tailscaleServeCommand(guidePort);
     const ok = await confirmAction({
       title: translateNow("mobile.guideSummary"),
       // The prose's blank lines set the command apart; a <p> collapses `\n`.
@@ -457,24 +458,10 @@ export function MobileSettings() {
       setServeVerification({ verified: true });
       await updateSettings({
         [MOBILE_HOST_KEY]: {
-          enabled: stored?.enabled ?? false,
+          ...(stored ?? { enabled: false }),
           display_name: detected.display_name,
           port: detected.port,
           serve_origin: detected.origin,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          browser_client: stored?.browser_client,
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
         },
       });
     } catch (reason) {
@@ -483,6 +470,21 @@ export function MobileSettings() {
     } finally {
       setDetectingServe(false);
     }
+  };
+
+  /** Windows: the phone reaches agent tabs only through the session host, which
+   *  needs Persistent local sessions too, so one confirmed click sets both
+   *  (the same two switches Settings → Experimental and → Terminal hold).
+   *  Turning it back off stays with those switches, which end the host's
+   *  sessions first. */
+  const turnOnSessionHost = async () => {
+    const ok = await confirmAction({
+      title: translateNow("mobile.windowsTerminalsTurnOnTitle"),
+      body: translateNow("mobile.windowsTerminalsTurnOnBody"),
+      confirmLabel: translateNow("mobile.windowsTerminalsTurnOn"),
+    });
+    if (!ok) return;
+    await updateSettings({ windows_session_host: true, persist_local_sessions: true });
   };
 
   const lockDownNow = async () => {
@@ -500,25 +502,13 @@ export function MobileSettings() {
       if (response.status === "error") throw new Error(response.message);
       await updateSettings({
         [MOBILE_HOST_KEY]: {
+          ...stored,
           enabled: false,
           display_name: displayName.trim() || "Workstation",
           port: Number(port) || 8742,
           serve_origin: origin.trim() || undefined,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          // `browser_client` is left out on purpose: lockdown closes browser
-          // access too.
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
+          // Cleared on purpose: lockdown closes browser access too.
+          browser_client: undefined,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
@@ -601,9 +591,36 @@ export function MobileSettings() {
         </div>
       </div>
       {addDevice.pairing && <AddDevicePanel pairing={addDevice.pairing} />}
-      {IS_HOST_WINDOWS && (
+      {/* Windows without the session host, or with persistent sessions off
+          (the phone then still gets `unsupported`): one click turns both on,
+          after a confirm (the host is experimental and moves new agent tabs
+          into another process). With both on the phone reaches agent tabs, so
+          there is nothing to say. */}
+      {IS_HOST_WINDOWS && !(sessionHostOn && settings?.persist_local_sessions !== false) && (
         <p className="settings-help">
-          {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />
+          {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />{" "}
+          <button
+            type="button"
+            className="settings-btn sm"
+            onClick={() => void turnOnSessionHost()}
+          >
+            {t("mobile.windowsTerminalsTurnOn")}
+          </button>
+        </p>
+      )}
+      {/* Linux/macOS without tmux: the phone lists agent tabs but cannot open
+          them (the sidecar attaches through tmux), so say so and offer the
+          one-click install. Re-probed on window focus. */}
+      {!IS_HOST_WINDOWS && tmuxAvailable === false && (
+        <p className="settings-help">
+          {t("mobile.noTmuxNote")} <UntestedTag id="mobile.noTmuxInstall" />{" "}
+          <button
+            type="button"
+            className="settings-btn sm"
+            onClick={() => runInstallInTab(t("settings.installTmux"), TMUX_INSTALL_CMD, "default")}
+          >
+            {t("settings.installTmux")}
+          </button>
         </p>
       )}
       <details
@@ -723,6 +740,7 @@ export function MobileSettings() {
         checked={stored?.root_access ?? false}
         disabled={busy}
         onChange={(event) => void setMailGate("root_access", event.target.checked)}
+        aside={phoneScopeButton("root", "root", t("mobile.rootAccess"), stored?.root_access === true, stored?.root_devices ?? [])}
       />
       {stored?.root_access && rootGateClosed && (
         <div className="project-dialog-error">{t("mobile.rootAccessClosed")}</div>
@@ -757,6 +775,12 @@ export function MobileSettings() {
         checked={stored?.shell_tabs !== true}
         disabled={busy}
         onChange={(event) => void setMailGate("shell_tabs", !event.target.checked)}
+      />
+      <ToggleRow
+        label={<><Hint help={t("mobile.desktopImagesGateHelp")}>{t("mobile.desktopImagesGate")}</Hint> <UntestedTag id="mobile.desktopImagesGate" /></>}
+        checked={stored?.desktop_images ?? false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("desktop_images", event.target.checked)}
       />
       <ToggleRow
         label={<><Hint help={t("mobile.localModelsGateHelp")}>{t("mobile.localModelsGate")}</Hint> <UntestedTag id="mobile.localModelsGate" /></>}
@@ -795,7 +819,11 @@ export function MobileSettings() {
               setError(null);
               touchRow(`project:${project.id}`);
               // One click on = every phone; narrowing is the ▾ button's job.
-              void setProjectMobileAccess(project.id, event.target.checked, null).catch((reason) => setError(String(reason)));
+              const on = event.target.checked;
+              void (async () => {
+                if (on && !(await ensureMobileSessions(confirmAction))) return;
+                await setProjectMobileAccess(project.id, on, null);
+              })().catch((reason) => setError(String(reason)));
             }}
             aside={phoneScopeButton("project", project.id, project.name, project[MOBILE_ACCESS_KEY] ?? false, project[MOBILE_DEVICES_KEY])}
           />
@@ -816,7 +844,11 @@ export function MobileSettings() {
               onChange={(event) => {
                 setError(null);
                 touchRow(`box:${box.id}`);
-                void setBoxMobileAccess(box.id, event.target.checked, null).catch((reason) => setError(String(reason)));
+                const on = event.target.checked;
+                void (async () => {
+                  if (on && !(await ensureMobileSessions(confirmAction))) return;
+                  await setBoxMobileAccess(box.id, on, null);
+                })().catch((reason) => setError(String(reason)));
               }}
               aside={phoneScopeButton("box", box.id, box.name, box[MOBILE_ACCESS_KEY] ?? false, box[MOBILE_DEVICES_KEY])}
             />
@@ -837,7 +869,18 @@ export function MobileSettings() {
           onClose={() => setPhonePicker(null)}
         />
       )}
-      {phonePicker && phonePicker.kind !== "assistant" && (() => {
+      {phonePicker && phonePicker.kind === "root" && (
+        <MobileAccessPicker
+          x={phonePicker.x}
+          y={phonePicker.y}
+          kind="root"
+          enabled={stored?.root_access === true}
+          devices={stored?.root_devices ?? []}
+          onApply={(_enabled, list) => setRootReach(list)}
+          onClose={() => setPhonePicker(null)}
+        />
+      )}
+      {phonePicker && (phonePicker.kind === "project" || phonePicker.kind === "box") && (() => {
         const target = phonePicker.kind === "project"
           ? projects.find((p) => p.id === phonePicker.id)
           : boxes.find((b) => b.id === phonePicker.id);
@@ -850,9 +893,12 @@ export function MobileSettings() {
             host={phonePicker.kind === "project" ? phoneReachHost(target as ProjectEntry) : undefined}
             enabled={target[MOBILE_ACCESS_KEY] ?? false}
             devices={target[MOBILE_DEVICES_KEY]}
-            onApply={(enabled, list) => phonePicker.kind === "project"
-              ? setProjectMobileAccess(phonePicker.id, enabled, list)
-              : setBoxMobileAccess(phonePicker.id, enabled, list)}
+            onApply={async (enabled, list) => {
+              if (enabled && !(target[MOBILE_ACCESS_KEY] ?? false) && !(await ensureMobileSessions(confirmAction))) return;
+              await (phonePicker.kind === "project"
+                ? setProjectMobileAccess(phonePicker.id, enabled, list)
+                : setBoxMobileAccess(phonePicker.id, enabled, list));
+            }}
             onClose={() => setPhonePicker(null)}
           />
         );
@@ -987,6 +1033,7 @@ export function MobileSettings() {
           </button>
         </div>
       )}
+      <LinkedDesktops busy={busy} />
       <ConnectToServer />
       {dialogs}
     </SettingsCard>

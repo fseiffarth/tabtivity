@@ -1,5 +1,6 @@
 import { findPathCandidates } from "../../../src/lib/terminal/pathCandidates";
 import { renderMarkdown } from "../../../src/lib/viewers/markdown";
+import { parseAppLink } from "../../../src/lib/navigation/appLinks";
 
 /**
  * An agent's answer in the Focus chat as formatted text: the desktop
@@ -8,6 +9,7 @@ import { renderMarkdown } from "../../../src/lib/viewers/markdown";
  * kept — headings, lists, emphasis, code, tables, quotes. Nothing in an
  * answer opens or loads anything by itself: a link is its label, carrying its
  * target as `data-href` only when that is a plain web address (`chatLinkUrl`)
+ * or as `data-app-link` for a validated internal navigation destination
  * for the chat to offer behind a confirmation (`LinkSheet`); an image is its
  * alt text, a task box is a glyph, and headings carry no ids to collide
  * across bubbles.
@@ -21,23 +23,25 @@ import { renderMarkdown } from "../../../src/lib/viewers/markdown";
  * may have read anything, and this lands in `innerHTML`. Only the tags the
  * renderer emits survive, only its own classes, a `style` only as a table
  * cell's alignment, a `data-href` only on a link and only as a web address
- * `chatLinkUrl` accepts, and a `data-path` only on a link and only as one file
+ * `chatLinkUrl` accepts, `data-app-link` only for `parseAppLink` destinations,
+ * and a `data-path` only on a link and only as one file
  * path (`filePathOf`) — so a renderer change that let the answer's text
  * reach the markup could still not open, load, run or restyle anything.
  */
 export function answerHtml(text: string): string {
-  return inert(renderMarkdown(withoutLoneBreaks(text)));
+  return inert(renderMarkdown(withoutLoneTags(text)));
 }
 
-/** A line that is nothing but a `<br>` tag: an agent's stray filler. Escaped, it
- * would read as the literal tag. */
-const LONE_BREAK = /^\s*<br\s*\/?>\s*$/i;
+/** A line that is nothing but a tag with no text of its own: an agent's stray
+ * `<br>` filler, or the `<proposed_plan>`/`</proposed_plan>` wrapper Codex puts
+ * around a Plan-mode plan. Escaped, either would read as the literal tag. */
+const LONE_TAG = /^\s*(?:<br\s*\/?>|<\/?proposed_plan>)\s*$/i;
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
 
-/** `text` without its lone-`<br>` lines (`LONE_BREAK`), except inside a fenced
+/** `text` without its lone-tag lines (`LONE_TAG`), except inside a fenced
  * code block, where the line is the code's own. */
-function withoutLoneBreaks(text: string): string {
-  if (!/<br/i.test(text)) return text;
+function withoutLoneTags(text: string): string {
+  if (!/<(?:br|\/?proposed_plan)/i.test(text)) return text;
   let fence: string | null = null;
   return text.split("\n").filter((line) => {
     const open = FENCE.exec(line)?.[1];
@@ -45,7 +49,7 @@ function withoutLoneBreaks(text: string): string {
       fence = fence === null ? open : null;
       return true;
     }
-    return fence !== null || !LONE_BREAK.test(line);
+    return fence !== null || !LONE_TAG.test(line);
   }).join("\n");
 }
 
@@ -137,6 +141,20 @@ function filePathOf(target: string | null): string | null {
   return found.length === 1 ? found[0].path : null;
 }
 
+/** The attribute a link to an Antigravity chat's own document carries its
+ * target in. Only a name to look up: the desktop resolves it inside that
+ * chat's folder and answers nothing for any other file. */
+export const ARTIFACT_ATTR = "data-artifact";
+const ARTIFACT_TARGET_MAX = 1024;
+
+/** A `file://` link into an Antigravity `brain/<conversation>/` folder — the
+ * form it links the plans and notes it writes (`agent_artifacts`) — or null. */
+export function artifactTargetOf(target: string | null | undefined): string | null {
+  const raw = target?.trim() ?? "";
+  if (!raw.startsWith("file:///") || raw.length > ARTIFACT_TARGET_MAX || !/\/brain\/[^/]+\/[^/]/u.test(raw)) return null;
+  return raw;
+}
+
 /** `inLink`: `from` sits inside a link. The renderer formats a link's label
  * as text of its own, so a label that reads as an address comes out as a link
  * inside the link; only the outer one is where the answer points, and the
@@ -162,6 +180,13 @@ function copyChildren(from: Node, to: Node, inLink = false): void {
     if (style && CELL_ALIGN.test(style)) copy.setAttribute("style", style);
     if (element.getAttribute("aria-hidden") === "true") copy.setAttribute("aria-hidden", "true");
     const link = tag === "span" && classes.includes("md-link");
+    const appHref = link && !inLink ? element.getAttribute("data-app-link") : null;
+    if (appHref && parseAppLink(appHref)) {
+      copy.setAttribute("data-app-link", appHref);
+      copy.setAttribute("role", "link");
+      copy.setAttribute("tabindex", "0");
+      copy.setAttribute("title", appHref);
+    }
     const href = link && !inLink ? chatLinkUrl(element.getAttribute("data-href")) : null;
     if (href) {
       copy.setAttribute("data-href", href);
@@ -170,6 +195,12 @@ function copyChildren(from: Node, to: Node, inLink = false): void {
     }
     const path = link && !inLink && !href ? filePathOf(element.getAttribute("data-href")) : null;
     if (path) copy.setAttribute("data-path", path);
+    const artifact = link && !inLink && !href && !path ? artifactTargetOf(element.getAttribute("data-href")) : null;
+    if (artifact) {
+      copy.setAttribute(ARTIFACT_ATTR, artifact);
+      copy.setAttribute("role", "link");
+      copy.setAttribute("tabindex", "0");
+    }
     copyChildren(element, copy, inLink || link);
     to.appendChild(copy);
   });

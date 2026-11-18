@@ -93,6 +93,8 @@ fn opts_with_args(args: &[&str]) -> PtyOptions {
         schedule_target_id: None,
         host_session: false,
         api_key: None,
+        mux_wrapped: false,
+        mcp_mark: None,
     }
 }
 
@@ -141,7 +143,63 @@ fn vibe_hook_registration_preserves_existing_hooks_and_is_idempotent() {
     assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
     assert!(once.contains("name = \"mine\""));
     assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
+    for kind in VIBE_HOOK_TYPES {
+        assert_eq!(once.matches(&format!("name = \"{}\"", vibe_hook_name(kind))).count(), 1, "{kind}");
+        assert_eq!(once.matches(&format!("type = \"{kind}\"")).count(), 1 + usize::from(kind == "post_agent"), "{kind}");
+    }
+    // A file from before the turn hooks holds the post_agent one alone: it
+    // gains the others once, and that one stays where it was.
+    let old = format!(
+        "[[hooks]]\nname = \"mine\"\ntype = \"post_agent\"\ncommand = \"true\"\n\n[[hooks]]\nname = \"{}\"\n\
+         type = \"post_agent\"\ncommand = {}\ntimeout = 10.0\n",
+        crate::brand::VIBE_SESSION_HOOK,
+        serde_json::to_string(&vibe_shell_command(&hook_command())).unwrap()
+    );
+    std::fs::write(&hooks, &old).unwrap();
+    register_vibe_hook_in(&home).unwrap();
+    let grown = std::fs::read_to_string(&hooks).unwrap();
+    assert!(grown.starts_with(&old), "{grown}");
+    for kind in VIBE_HOOK_TYPES {
+        assert_eq!(grown.matches(&format!("name = \"{}\"", vibe_hook_name(kind))).count(), 1, "{kind}");
+    }
+    register_vibe_hook_in(&home).unwrap();
+    assert_eq!(std::fs::read_to_string(&hooks).unwrap(), grown);
     std::fs::remove_dir_all(home).unwrap();
+}
+
+/// Vibe 3.1.2 hands a hook's `command` to `/bin/sh` as written, so the
+/// script's path under macOS's `Application Support` ran as `…/Application`
+/// (`scripts/verify-cli/vibe/resume.py`): such a path is quoted, and an entry
+/// a build wrote unquoted is repaired where it stands.
+#[cfg(unix)]
+#[test]
+fn vibe_hooks_quote_a_path_the_shell_would_split_and_repair_an_old_entry() {
+    let spaced = "/Users/u/Library/Application Support/x/hooks/hook.sh";
+    assert_eq!(vibe_shell_command(spaced), format!("'{spaced}'"));
+    assert_eq!(vibe_shell_command("/home/u/.local/share/x/hooks/hook.sh"), "/home/u/.local/share/x/hooks/hook.sh");
+    let entries = vibe_hook_entries_running(&["post_agent"], spaced).unwrap();
+    assert!(entries.contains(&format!("command = {}", serde_json::to_string(&format!("'{spaced}'")).unwrap())));
+
+    let stale = format!(
+        "[[hooks]]\nname = \"mine\"\ntype = \"post_agent\"\ncommand = \"/my hook\"\n\n{}",
+        // What a build before the quoting wrote: every hook, unquoted.
+        VIBE_HOOK_TYPES
+            .iter()
+            .map(|kind| format!(
+                "[[hooks]]\nname = \"{}\"\ntype = \"{kind}\"\ncommand = {}\ntimeout = 10.0\n",
+                vibe_hook_name(kind),
+                serde_json::to_string(spaced).unwrap()
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let repaired = merge_vibe_hooks(&stale, spaced).unwrap();
+    let quoted = format!("command = {}", serde_json::to_string(&format!("'{spaced}'")).unwrap());
+    assert_eq!(repaired.matches(&quoted).count(), VIBE_HOOK_TYPES.len(), "{repaired}");
+    // The user's own hook is theirs: its command stays as written.
+    assert!(repaired.starts_with("[[hooks]]\nname = \"mine\"\ntype = \"post_agent\"\ncommand = \"/my hook\"\n"));
+    assert_eq!(repaired.lines().count(), stale.lines().count(), "rewritten in place, nothing added");
+    assert_eq!(merge_vibe_hooks(&repaired, spaced).unwrap(), repaired);
 }
 
 /// The assistant's local-Claude chats keep their transcripts in the
@@ -168,6 +226,10 @@ fn a_local_model_home_keeps_only_apps_hook() {
     let once = std::fs::read_to_string(&hooks).unwrap();
     assert!(!once.contains("planted"));
     assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
+    // The local-model home gets the same hooks as any other.
+    for kind in VIBE_HOOK_TYPES {
+        assert_eq!(once.matches(&format!("type = \"{kind}\"")).count(), 1, "{kind}");
+    }
     write_vibe_hooks(&file, true).unwrap();
     assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
     std::fs::remove_dir_all(home).unwrap();
@@ -232,6 +294,78 @@ fn vibe_hook_records_only_top_level_post_agent() {
         &payload(nested, &format!("\"{own}\""), "post_agent")).0, None);
     assert_eq!(run_hook(&script, &live, uid, Some("vibe"), false,
         &payload(own, "null", "post_agent")).0.as_deref(), Some(own));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+/// Vibe 3.1.2's hooks as its TUI fires them (`scripts/verify-cli/vibe/turn_hooks.py`):
+/// the prompt records the session and the turn, the approval notice is the
+/// dialog opening, a finished tool ends it, the turn's end is done, and a
+/// `/clear` ends a session without ending the CLI. A subagent (a parent set),
+/// a `vibe -p` run from the tab's bash tool (`VIBE_SESSION` set) and another
+/// session's events move nothing.
+#[cfg(unix)]
+#[test]
+fn vibe_hook_records_the_session_at_the_prompt_and_the_turn_state() {
+    let home = unique_tmp(concat!(crate::app_slug!(), "-vibe-hook-turn"));
+    let live = home.join("live");
+    std::fs::create_dir_all(&live).unwrap();
+    let script = home.join("hook.sh");
+    std::fs::write(&script, posix_hook_script_body(&live.to_string_lossy())).unwrap();
+    let uid = "11111111-2222-4333-8444-555555555555";
+    let own = "c177eecf-d07d-08bc-a5ff-cba000560c35";
+    let cleared = "f93036ac-961b-1c1c-20bc-9ec675d65f26";
+    let other = "3b596e2a-0fbb-99b3-1007-fb70272bd679";
+    let turn = || {
+        std::fs::read_to_string(live.join(format!("{uid}.turn")))
+            .ok()
+            .map(|t| t.split_whitespace().next().unwrap_or("").to_string())
+    };
+    // The shapes 3.1.2 sends (paths cut).
+    let ev = |id: &str, parent: &str, event: &str, extra: &str| format!(
+        "{{\"session_id\": \"{id}\", \"transcript_path\": \"/v/logs/session/unified/{id}\", \"cwd\": \"/w\", \
+         \"parent_session_id\": {parent}, \"hook_event_name\": \"{event}\"{extra}}}"
+    );
+    let run = |env: &[(&str, &str)], payload: String| run_hook_with(&script, &live, uid, Some("vibe"), false, env, &payload).0;
+    let prompt = r#", "agent_name": "accept-edits", "turn_id": "turn-1", "prompt": "say hi""#;
+    let approval = r#", "notification_type": "approval_requested", "message": "Vibe needs your approval to run file_system.bash", "tool_name": "file_system.bash""#;
+    let tool = r#", "tool_name": "file_system.bash", "tool_status": "failure", "tool_error": "Tool execution denied by approval callback""#;
+
+    // Nothing records before a prompt: no session_start is registered.
+    assert_eq!(run(&[], ev(own, "null", "pre_agent", prompt)).as_deref(), Some(own));
+    assert_eq!(turn().as_deref(), Some("working"));
+    run(&[], ev(own, "null", "notification", approval));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run(&[], ev(own, "null", "post_tool", tool));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // A finished turn's notice is no wait.
+    run(&[], ev(own, "null", "notification", r#", "notification_type": "turn_completed""#));
+    assert_eq!(turn().as_deref(), Some("working"));
+    assert_eq!(run(&[], ev(own, "null", "post_agent", "")).as_deref(), Some(own));
+    assert_eq!(turn().as_deref(), Some("done"));
+
+    // Not the tab's own Vibe: a subagent, a nested `vibe -p` (both records
+    // and turn untouched for every event), another session's tool or end.
+    for event in ["pre_agent", "post_agent", "post_tool", "notification", "session_end"] {
+        let extra = if event == "notification" { approval } else { r#", "reason": "exit""# };
+        assert_eq!(run(&[], ev(other, &format!("\"{own}\""), event, extra)).as_deref(), Some(own), "{event}");
+        assert_eq!(run(&[("VIBE_SESSION", "1")], ev(other, "null", event, extra)).as_deref(), Some(own), "{event}");
+        assert_eq!(turn().as_deref(), Some("done"), "{event}");
+    }
+    for event in ["post_tool", "notification", "session_end"] {
+        let extra = if event == "notification" { approval } else { r#", "reason": "exit""# };
+        run(&[], ev(other, "null", event, extra));
+        assert_eq!(turn().as_deref(), Some("done"), "{event}");
+    }
+
+    // A /clear ends the session but not the CLI; the next prompt moves the
+    // record to the new session.
+    run(&[], ev(own, "null", "session_end", r#", "reason": "clear""#));
+    assert_eq!(turn().as_deref(), Some("done"));
+    assert_eq!(run(&[], ev(cleared, "null", "pre_agent", prompt)).as_deref(), Some(cleared));
+    assert_eq!(turn().as_deref(), Some("working"));
+    run(&[], ev(cleared, "null", "post_agent", ""));
+    run(&[], ev(cleared, "null", "session_end", r#", "reason": "exit""#));
+    assert_eq!(turn().as_deref(), Some("idle"));
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -725,6 +859,78 @@ fn hook_body_is_no_op_without_env_and_bakes_dir() {
     assert!(twin.contains(concat!("/c/Users/x/AppData/Roaming/", crate::app_slug!(), "/live_sessions")));
 }
 
+/// 2442h: the PowerShell hook takes a clear/resume start only from a Claude
+/// with no other Claude above it up to the app, like the POSIX twin; any
+/// other unknown start is still refused.
+#[test]
+fn the_powershell_hook_refuses_a_nested_claudes_resume() {
+    let body = powershell_hook_script_body(r"C:\live", "App's.exe");
+    let walk = body.find("elseif (($src -eq 'clear') -or ($src -eq 'resume'))").expect("the clear/resume arm");
+    let rest = &body[walk..];
+    assert!(rest.contains("Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine"));
+    assert!(rest.contains("$q = $procs[[int]$PID]"), "the walk starts at the hook");
+    assert!(rest.contains("($q.Name -ieq 'App''s.exe')"), "and stops at the app, quoted");
+    assert!(rest.contains("($q.Name -ieq 'claude.exe')"));
+    assert!(rest.contains(r"'@anthropic-ai[\\/]claude-code[\\/]'"), "an npm Claude runs as node");
+    assert!(rest.contains("if ($n -ge 2) { exit 0 }"));
+    assert!(rest.contains("($hops -lt 64)"), "bounded against a pid-reuse cycle");
+    let arm_end = rest.find("} else { exit 0 }").expect("other starts are refused");
+    assert!(rest[..arm_end].contains("$n -ge 2"));
+    // Balanced braces: the script still parses as one block structure.
+    let opens = body.matches('{').count();
+    let closes = body.matches('}').count();
+    assert_eq!(opens, closes);
+}
+
+/// The PowerShell twin records a backgrounded call's task id like the POSIX
+/// one, so the Windows job scan can know it mid-turn; run for real on Windows.
+#[test]
+fn the_powershell_hook_records_background_task_ids() {
+    let body = powershell_hook_script_body(r"C:\live", "app.exe");
+    let at = body.find("if ($event -eq 'PostToolUse') {").expect("the .bg block");
+    let turn_write = body.rfind("[IO.File]::WriteAllText(($rec + '.turn')").unwrap();
+    assert!(at < turn_write, "written before the turn record the scan wakes on");
+    assert!(body[at..].contains(r#"'"backgroundTaskId"\s*:\s*"([A-Za-z0-9]+)"'"#));
+    assert!(body[at..].contains("-Tail 15"));
+}
+
+#[cfg(windows)]
+#[test]
+fn the_powershell_hook_writes_the_bg_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    let script = dir.path().join("hook.ps1");
+    std::fs::write(&script, powershell_hook_script_body(&live.to_string_lossy(), "app.exe")).unwrap();
+    let uid = "77777777-7777-4777-8777-777777777777";
+    let run = |extra: &str| {
+        use std::io::Write;
+        let mut child = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .env(crate::app_env!("TAB_UID"), uid)
+            .env(crate::app_env!("TAB_AGENT"), "claude")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let payload = format!(r#"{{"session_id":"{uid}","hook_event_name":"PostToolUse"{extra}}}"#);
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+    };
+    let bg = || std::fs::read_to_string(live.join(format!("{uid}.bg"))).ok();
+    run(r#","tool_name":"PowerShell","tool_response":{"stdout":"{\"backgroundTaskId\":\"zzz9\"}"}"#);
+    assert_eq!(bg(), None, "a quoted field in the output is not the result's");
+    for i in 0..18 {
+        run(&format!(r#","tool_name":"PowerShell","tool_response":{{"stdout":"","backgroundTaskId":"t{i}"}}"#));
+    }
+    let kept: Vec<String> = bg().unwrap().lines().map(str::to_string).collect();
+    assert_eq!(kept, (2..18).map(|i| format!("t{i}")).collect::<Vec<_>>(), "the last sixteen");
+    assert_eq!(
+        std::fs::read_to_string(live.join(format!("{uid}.turn"))).unwrap().split(' ').next(),
+        Some("working")
+    );
+}
+
 /// `/fork` starts a thread with no `SessionStart` the matcher lets through, so
 /// the fork's rollout is what moves the record (Codex 0.166.0, payloads and
 /// rollout header as captured). The move comes on the fork's first event, or a
@@ -792,10 +998,25 @@ fn run_hook(
     claudecode: bool,
     payload: &str,
 ) -> (Option<String>, Option<String>) {
+    run_hook_with(script, live_dir, uid, agent, claudecode, &[], payload)
+}
+
+/// [`run_hook`] with more variables in the hook's environment.
+#[cfg(unix)]
+fn run_hook_with(
+    script: &std::path::Path,
+    live_dir: &std::path::Path,
+    uid: &str,
+    agent: Option<&str>,
+    claudecode: bool,
+    extra_env: &[(&str, &str)],
+    payload: &str,
+) -> (Option<String>, Option<String>) {
     use std::io::Write as _;
     let mut cmd = std::process::Command::new("sh");
     cmd.arg(script)
         .env_clear()
+        .envs(extra_env.iter().copied())
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env(crate::app_env!("TAB_UID"), uid)
         .stdin(std::process::Stdio::piped())
@@ -840,6 +1061,63 @@ fn phone_hint_only_reaches_a_scoped_claude_or_codex_session_start() {
         let out = child.wait_with_output().unwrap();
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout).contains(concat!(crate::app_slug!(), "-send <file>")), expected, "{agent} {scoped} {sid} {event}");
+    }
+}
+
+/// The first prompt of a new conversation (fresh start or `/clear`, never a
+/// resume) in a Claude tab holding the cockpit lane carries the reminder to
+/// name the tab, once; a session command typed first does not spend it.
+#[cfg(unix)]
+#[test]
+fn name_hint_rides_the_first_prompt_of_a_new_claude_conversation() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    let script = dir.path().join("hook.sh");
+    std::fs::write(&script, posix_hook_script_body(&live.to_string_lossy())).unwrap();
+    let uid = "11111111-1111-4111-8111-111111111111";
+    let cleared = "33333333-3333-4333-8333-333333333333";
+    let hint = crate::services::cockpit_mcp::NAME_HINT;
+    let run = |agent: &str, cockpit: bool, payload: String| -> bool {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(&script).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env(crate::app_env!("TAB_UID"), uid).env(crate::app_env!("TAB_AGENT"), agent)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+        if cockpit { cmd.env(crate::services::root_mcp::COCKPIT_URL_ENV, "http://127.0.0.1:1/mcp/cockpit"); }
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).contains(hint)
+    };
+    let start = |sid: &str, src: &str| format!(r#"{{"session_id":"{sid}","hook_event_name":"SessionStart","source":"{src}","transcript_path":"/t/{sid}.jsonl"}}"#);
+    let prompt = |sid: &str, text: &str| format!(r#"{{"session_id":"{sid}","hook_event_name":"UserPromptSubmit","prompt":"{text}"}}"#);
+
+    assert!(!run("claude", true, start(uid, "startup")), "the start itself stays quiet");
+    assert!(!run("claude", true, prompt(uid, "/clear")), "a session command does not spend it");
+    assert!(run("claude", true, prompt(uid, "fix the tab names")));
+    assert!(!run("claude", true, prompt(uid, "and the phone too")), "once per conversation");
+    // A /clear opens the next conversation.
+    assert!(!run("claude", true, start(cleared, "clear")));
+    assert!(run("claude", true, prompt(cleared, "now something else")));
+    // A resume continues a named conversation; a compact is mid-conversation.
+    assert!(!run("claude", true, start(cleared, "resume")));
+    assert!(!run("claude", true, prompt(cleared, "go on")));
+    assert!(!run("claude", true, start(cleared, "compact")));
+    assert!(!run("claude", true, prompt(cleared, "go on")));
+    // No cockpit lane (switched off, remote, Tabby) or not Claude: never.
+    assert!(!run("claude", false, start(cleared, "clear")));
+    assert!(!run("claude", false, prompt(cleared, "task")));
+    assert!(!run("codex", true, start(cleared, "startup")));
+    assert!(!run("codex", true, prompt(cleared, "task")));
+}
+
+#[test]
+fn name_hint_fits_the_hooks_single_quoted_literals() {
+    let hint = crate::services::cockpit_mcp::NAME_HINT;
+    assert!(!hint.contains('\'') && !hint.contains('\n'));
+    for tool in [crate::services::cockpit_mcp::TOOL_INFO, crate::services::cockpit_mcp::TOOL_RENAME] {
+        assert!(hint.contains(&format!("mcp__{}__{tool}", crate::services::cockpit_mcp::SERVER_NAME)), "{tool}");
     }
 }
 
@@ -1297,6 +1575,23 @@ fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
     assert_eq!(turn().as_deref(), Some("decision"));
     run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", r#","tool_name":"Bash""#));
     assert_eq!(turn().as_deref(), Some("working"));
+    // The dialog opening (a question, an approval) is the decision at once:
+    // Claude 2.1.322's notice for it comes 6 s later, or never.
+    let ask = r#","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","options":[{"label":"Red"}]}]},"permission_suggestions":[]"#;
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PermissionRequest", ask));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", r#","tool_name":"AskUserQuestion""#));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // Claude's other dialog notices that wait on the user.
+    for ntype in ["elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"] {
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", ""));
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "Notification", &format!(r#","notification_type":"{ntype}""#)));
+        assert_eq!(turn().as_deref(), Some("decision"), "{ntype}");
+    }
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", ""));
+    // A nested `claude -p` asking for permission is not this tab's dialog.
+    run_hook(&script, &live, uid, claude, true, &ev(nested, "PermissionRequest", ask));
+    assert_eq!(turn().as_deref(), Some("working"));
     // A Bash call put in the background leaves its task id for the job scan
     // (the result's shape as Claude 2.1.300 records it); a foreground call,
     // even one whose OUTPUT quotes such a field, leaves none.
@@ -1327,6 +1622,53 @@ fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
     run_hook(&script, &live, uid, claude, true, &ev(uid, "Notification", r#","notification_type":"idle_prompt""#));
     assert_eq!(turn().as_deref(), Some("done"));
 
+    // Claude 2.1.325 (`scripts/verify-cli/claude/turn_hooks.py`, the shapes
+    // it sent): a tool that fails reports PostToolUseFailure, not
+    // PostToolUse — an approval it ran after still ends there.
+    let fail = |interrupt: bool| {
+        format!(r#","tool_name":"Bash","tool_input":{{"command":"exit 3"}},"error":"Exit code 3","is_interrupt":{interrupt},"duration_ms":527"#)
+    };
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "UserPromptSubmit", ""));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PermissionRequest", r#","tool_name":"Bash""#));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUseFailure", &fail(false)));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // One the user cut off is not work going on: what the interrupt left stands.
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PermissionRequest", r#","tool_name":"Bash""#));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUseFailure", &fail(true)));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    // An MCP server's question opens with Elicitation and is answered with
+    // ElicitationResult (the notice comes 6 s after the dialog, as for
+    // permissions).
+    let elicit = r#","mcp_server_name":"elic","message":"pick a colour","mode":"form","requested_schema":{"type":"object","properties":{"colour":{"type":"string"}}}"#;
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "Elicitation", elicit));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "ElicitationResult", r#","mcp_server_name":"elic","mode":"form","action":"cancel""#));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // A turn the API refused ends with StopFailure and no Stop.
+    let refused = r#","prompt_id":"p1","effort":{"level":"high"},"error":"rate_limit","last_assistant_message":"API Error: 429""#;
+    let (rec, _) = run_hook(&script, &live, uid, claude, true, &ev(uid, "StopFailure", refused));
+    assert_eq!(turn().as_deref(), Some("done"));
+    assert_eq!(rec.as_deref(), Some(uid));
+    // A nested `claude -p` (its own transcript, as Claude names it) firing
+    // any of them moves nothing.
+    let nested_ev = |event: &str, extra: &str| {
+        format!(r#"{{"session_id":"{nested}","transcript_path":"/p/-w/{nested}.jsonl","hook_event_name":"{event}"{extra}}}"#)
+    };
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "UserPromptSubmit", ""));
+    for (event, extra) in [
+        ("PostToolUseFailure", fail(false)),
+        ("Elicitation", elicit.to_string()),
+        ("ElicitationResult", r#","action":"accept""#.to_string()),
+        ("StopFailure", refused.to_string()),
+    ] {
+        let (rec, _) = run_hook(&script, &live, uid, claude, true, &nested_ev(event, &extra));
+        assert_eq!(turn().as_deref(), Some("working"), "{event}");
+        assert_eq!(rec.as_deref(), Some(uid), "{event}");
+    }
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "Stop", ""));
+    assert_eq!(turn().as_deref(), Some("done"));
+
     // A nested `claude -p` under the tab fires the same events for its own
     // session: none of them may move this tab's state.
     run_hook(&script, &live, uid, claude, true, &ev(nested, "UserPromptSubmit", ""));
@@ -1352,6 +1694,68 @@ fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
             .map(|t| t.split_whitespace().next().unwrap_or("").to_string())
     };
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "SessionStart", r#","source":"startup""#));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", ""));
+    assert_eq!(cturn().as_deref(), Some("working"));
+    // Codex 0.169.0's approval dialog opening (the shape it sent): decision,
+    // until the approved tool reports. A nested `codex exec`'s is somebody
+    // else's.
+    let approval = r#","turn_id":"t1","model":"stub","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"touch a.txt","description":"probe"}"#;
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(nested, "PermissionRequest", approval));
+    assert_eq!(cturn().as_deref(), Some("working"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PermissionRequest", approval));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", r#","tool_name":"Bash""#));
+    assert_eq!(cturn().as_deref(), Some("working"));
+    // With auto-review the request goes to Codex's reviewer agent, never to a
+    // dialog (0.169.0 fired it before every guardian review in the fence):
+    // the turn stays working. Only the top-level key counts.
+    let codex_home = tmp.join("codex-home");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let home_env = [("CODEX_HOME", codex_home.to_str().unwrap())];
+    for (config, asks) in [
+        ("approvals_reviewer = \"auto_review\"\nmodel = \"m\"\n", false),
+        ("model = \"m\"\napprovals_reviewer = 'auto_review' # mine\n[tui]\nx = 1\n", false),
+        ("model = \"m\"\n[profiles.p]\napprovals_reviewer = \"auto_review\"\n", true),
+        ("approvals_reviewer = \"user\"\n", true),
+    ] {
+        std::fs::write(codex_home.join("config.toml"), config).unwrap();
+        run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", ""));
+        run_hook_with(&script, &live, codex_uid, Some("codex"), false, &home_env, &ev(codex_id, "PermissionRequest", approval));
+        assert_eq!(cturn().as_deref(), Some(if asks { "decision" } else { "working" }), "{config}");
+    }
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", r#","tool_name":"Bash""#));
+    // An async question (`request_user_input_async`, the shapes 0.169.0 sent):
+    // the turn works on, but reads as a question until the reply names the
+    // call. Two open at once: the first reply leaves the second asking.
+    let ask = |call: &str| {
+        format!(r#","tool_name":"request_user_input_async","tool_input":{{"questions":[{{"title":"Which?","options":["A","B"]}}]}},"tool_response":"{{\"accepted\":true}}","tool_use_id":"{call}""#)
+    };
+    let reply = |call: &str| {
+        format!(
+            r#","prompt":"<send_user_message_question_reply>\n[{{\"answer\":\"A\",\"question\":\"Which?\",\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"{call}\\\",0]\"}}]\n</send_user_message_question_reply>""#
+        )
+    };
+    let asks = || std::fs::read_to_string(live.join(format!("{codex_uid}.ask"))).ok();
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", &ask("call_q1")));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", r#","tool_name":"exec""#));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", &ask("call_q2")));
+    // A nested `codex exec`'s question is somebody else's.
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(nested, "PostToolUse", &ask("call_n")));
+    assert_eq!(asks().as_deref(), Some("call_q1\ncall_q2\n"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", &reply("call_q1")));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    assert_eq!(asks().as_deref(), Some("call_q2\n"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", &reply("call_q2")));
+    assert_eq!(cturn().as_deref(), Some("working"));
+    assert_eq!(asks(), None);
+    // The turn's end drops a question still waiting (Codex does too).
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", &ask("call_q3")));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "Stop", ""));
+    assert_eq!(cturn().as_deref(), Some("done"));
+    assert_eq!(asks(), None);
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", ""));
     assert_eq!(cturn().as_deref(), Some("working"));
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(nested, "Stop", ""));
@@ -1435,7 +1839,17 @@ fn register_hook_is_idempotent_and_preserves_other_keys() {
     };
     assert!(!ours(&stop[0]) && ours(&stop[1]));
     // The turn-state events are registered too, one group each.
-    for ev in ["UserPromptSubmit", "PostToolUse", "Notification", "SessionEnd"] {
+    for ev in [
+        "UserPromptSubmit",
+        "PostToolUse",
+        "PermissionRequest",
+        "Notification",
+        "SessionEnd",
+        "StopFailure",
+        "PostToolUseFailure",
+        "Elicitation",
+        "ElicitationResult",
+    ] {
         let groups = v["hooks"][ev].as_array().unwrap();
         assert_eq!(groups.len(), 1, "{ev}");
         assert!(ours(&groups[0]), "{ev}");
@@ -1450,6 +1864,23 @@ fn register_hook_is_idempotent_and_preserves_other_keys() {
     )
     .unwrap();
     register_hook_in_settings(&HomeFile::open(&tmp, "settings.json").unwrap()).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    for ev in HOOK_EVENTS {
+        assert_eq!(v["hooks"][ev].as_array().unwrap().len(), 1, "{ev}");
+    }
+
+    // An install holding the seven events of before the failure and
+    // elicitation hooks gains exactly the four new ones, once.
+    let cmd = serde_json::to_string(&hook_command()).unwrap();
+    let seven: Vec<String> = HOOK_EVENTS[..7]
+        .iter()
+        .map(|ev| format!(r#""{ev}":[{{"hooks":[{{"type":"command","command":{cmd}}}]}}]"#))
+        .collect();
+    std::fs::write(&settings, format!(r#"{{"hooks":{{{}}}}}"#, seven.join(","))).unwrap();
+    for _ in 0..2 {
+        register_hook_in_settings(&HomeFile::open(&tmp, "settings.json").unwrap()).unwrap();
+    }
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
     for ev in HOOK_EVENTS {
@@ -1507,6 +1938,24 @@ fn register_codex_hook_appends_once_and_preserves_toml() {
     assert_eq!(out.matches("[[hooks.SessionStart]]").count(), 1);
     assert_eq!(out.matches("[[hooks.Stop]]").count(), 1);
     assert_eq!(out.matches("[[hooks.UserPromptSubmit]]").count(), 1);
+    // An install that registered the five events of before PermissionRequest
+    // gains it once, and only it.
+    let mut five = String::from("model = \"o3\"\n");
+    for ev in &CODEX_HOOK_EVENTS[..5] {
+        five.push_str(&format!(
+            "\n[[hooks.{ev}]]\n\n[[hooks.{ev}.hooks]]\ntype = \"command\"\ncommand = '{}'\ntimeout = {}\n",
+            hook_command(),
+            if *ev == "SessionEnd" { 3 } else { 10 }
+        ));
+    }
+    std::fs::write(&config, &five).unwrap();
+    for _ in 0..2 {
+        register_codex_hook_in(&HomeFile::open(&tmp, "config.toml").unwrap()).unwrap();
+    }
+    let out = std::fs::read_to_string(&config).unwrap();
+    assert!(out.starts_with(&five), "{out}");
+    assert_eq!(out.matches("[[hooks.PermissionRequest]]").count(), 1);
+    assert_eq!(out.matches("[[hooks.").count(), five.matches("[[hooks.").count() + 2);
     // Somebody else's hook on an event we register does not count as ours.
     assert_eq!(
         codex_registered_events(
@@ -1633,6 +2082,53 @@ fn codex_hook_state_reads_a_bare_trusted_hash_as_enabled() {
     assert_eq!(codex_hook_state_in(&off, CFG, CMD), CodexHookState::Disabled);
 }
 
+/// Our approval hook block as `register_codex_hook_in` writes it.
+fn our_approval_hook() -> String {
+    format!(
+        "[[hooks.PermissionRequest]]\n\n\
+             [[hooks.PermissionRequest.hooks]]\n\
+             type = \"command\"\n\
+             command = '{CMD}'\n\
+             timeout = 10\n"
+    )
+}
+
+#[test]
+fn the_reported_codex_state_counts_an_untrusted_approval_hook() {
+    // A home that trusted the session hooks, then skipped Codex's "Hooks need
+    // review" for the approval hook added later: that hook never runs, and
+    // reporting Enabled offered no way to fix it.
+    let trusted_start = format!("[hooks.state.\"{CFG}:session_start:0:0\"]\ntrusted_hash = \"sha256:93f0\"\n");
+    let src = format!("{}\n{}\n{trusted_start}", our_hook(), our_approval_hook());
+    assert_eq!(codex_reported_state_in(&src, CFG, CMD), CodexHookState::Untrusted);
+    // The resume path is live all the same: the binder's gate reads this one.
+    assert_eq!(codex_hook_state_in(&src, CFG, CMD), CodexHookState::Enabled);
+
+    let both = format!("{src}\n[hooks.state.\"{CFG}:permission_request:0:0\"]\ntrusted_hash = \"sha256:77aa\"\n");
+    assert_eq!(codex_reported_state_in(&both, CFG, CMD), CodexHookState::Enabled);
+
+    let off = format!("{both}enabled = false\n");
+    assert_eq!(codex_reported_state_in(&off, CFG, CMD), CodexHookState::Disabled);
+}
+
+#[test]
+fn the_reported_codex_state_follows_the_session_hook_first() {
+    // No approval hook in the file yet (no tab has spawned in this home since
+    // the update): the session hook's own state is the answer.
+    let trusted = format!("{}\n[hooks.state.\"{CFG}:session_start:0:0\"]\nenabled = true\n", our_hook());
+    assert_eq!(codex_reported_state_in(&trusted, CFG, CMD), CodexHookState::Enabled);
+    // An untrusted session hook is reported as such whatever the approval hook's verdict.
+    let src = format!(
+        "{}\n{}\n[hooks.state.\"{CFG}:permission_request:0:0\"]\ntrusted_hash = \"sha256:77aa\"\n",
+        our_hook(),
+        our_approval_hook()
+    );
+    assert_eq!(codex_reported_state_in(&src, CFG, CMD), CodexHookState::Untrusted);
+    // A verdict for the session hook's position is not read as the approval hook's.
+    let other = format!("{}\n{}\n[hooks.state.\"{CFG}:session_start:0:0\"]\nenabled = true\n", our_hook(), our_approval_hook());
+    assert_eq!(codex_reported_state_in(&other, CFG, CMD), CodexHookState::Untrusted);
+}
+
 #[test]
 fn codex_hook_state_indexes_our_hook_past_the_users_own() {
     // A user hook group precedes ours, so our verdict key is `:0:0` → no,
@@ -1676,7 +2172,12 @@ const LIVE_HASHES: [(&str, &str); 5] = [
     ("session_end", "sha256:0aee76ee8e8150b8b99cbacae20528f5663be4655b1590fc1749d43d6291b54b"),
 ];
 
-/// Our five hook blocks for `cmd`, exactly as registration writes them.
+/// What Codex 0.169.0 wrote for our `PermissionRequest` block (no matcher,
+/// `timeout = 10`) with that command, through "Trust all and continue"
+/// (offline, 2026-11-16).
+const LIVE_PERMISSION_REQUEST_HASH: &str = "sha256:2a8df71061d856638e087ce2c2259f9200fa7c7f9b6f9e7fd6c85c2cbc8e49c1";
+
+/// Our hook blocks for `cmd`, exactly as registration writes them.
 fn registered_codex_config(cmd: &str, before: &str) -> String {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join(".codex")).unwrap();
@@ -1691,7 +2192,7 @@ fn codex_hooks_are_trusted_with_the_hash_codex_writes() {
     let cfg = "/c/.codex/config.toml";
     let src = registered_codex_config(cmd, "model = \"o3\"\n");
     let out = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).expect("something to trust");
-    for (label, hash) in LIVE_HASHES {
+    for (label, hash) in LIVE_HASHES.into_iter().chain([("permission_request", LIVE_PERMISSION_REQUEST_HASH)]) {
         let table = format!("[hooks.state.\"{cfg}:{label}:0:0\"]\ntrusted_hash = \"{hash}\"\n");
         assert!(out.contains(&table), "{label} missing in\n{out}");
     }
@@ -2159,6 +2660,31 @@ fn markup_the_user_pasted_stays_their_prompt() {
     );
 }
 
+/// A Tabby chat's inbox picture goes in as a paste beside its reference, and
+/// Claude records an `[Image #N]` chip wherever the cursor stood (2.1.322,
+/// `assistant_attach::picture_pastes_in`): the prompt reads as it was sent.
+#[test]
+fn an_inbox_picture_chip_is_dropped_beside_its_reference() {
+    let inbox = crate::brand::INBOX_DIR;
+    let record = serde_json::json!({
+        "type": "user",
+        "imagePasteIds": [1],
+        "message": {"role": "user", "content": [
+            {"type": "text", "text": format!("@{inbox}/p.jpg Where can I buy this?[Image #1]")},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AA=="}},
+        ]},
+    });
+    assert_eq!(claude_prompt_in_record(&record), Some(format!("@{inbox}/p.jpg Where can I buy this?")));
+    assert_eq!(claude_prompt_text(&format!("@{inbox}/p.jpg [Image #2] hi")), Some(format!("@{inbox}/p.jpg hi")));
+    assert_eq!(claude_prompt_text(&format!("@{inbox}/p.jpg [Image #12]")), Some(format!("@{inbox}/p.jpg")));
+    // With no inbox reference, a chip the user pasted stays; a look-alike too.
+    assert_eq!(claude_prompt_text("look [Image #1]").as_deref(), Some("look [Image #1]"));
+    assert_eq!(
+        claude_prompt_text(&format!("@{inbox}/p.jpg [Image #x]")),
+        Some(format!("@{inbox}/p.jpg [Image #x]"))
+    );
+}
+
 #[test]
 fn a_compact_summary_is_never_a_prompt() {
     let summary: serde_json::Value = serde_json::from_str(concat!(
@@ -2397,4 +2923,98 @@ fn planted_fifos_links_and_oversized_records_read_as_nothing() {
     std::fs::create_dir_all(agent_home.join(".codex")).unwrap();
     mkfifo(&agent_home.join(".codex/config.toml"));
     within_deadline(move || codex_hook_state_of_home(&agent_home));
+}
+
+/// Gap 93: a warm-up's Codex run in the probe home leaves a `sessions/` folder
+/// and no hook (the probe home registers none by design); that must not read
+/// as "Tabtivity's hook is not registered" for the Codex tabs.
+#[test]
+fn the_probe_home_never_counts_in_the_codex_hook_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let probe = crate::services::agent_home::probe_home_in(tmp.path());
+    std::fs::create_dir_all(probe.join(".codex/sessions")).unwrap();
+    std::fs::write(probe.join(".codex/config.toml"), "").unwrap();
+    assert_eq!(codex_hook_state_across(std::slice::from_ref(&probe)), CodexHookState::NoCodex);
+    // The same folder under a scope's name does count (the control).
+    let scope = crate::services::agent_home::scope_home_in(tmp.path(), "p1");
+    std::fs::create_dir_all(scope.join(".codex/sessions")).unwrap();
+    std::fs::write(scope.join(".codex/config.toml"), "").unwrap();
+    assert_eq!(codex_hook_state_across(&[scope]), CodexHookState::NotRegistered);
+}
+
+/// A sibling tab's message (`tabs_mcp`) leaves an empty `.mail` marker; the
+/// next real prompt of a Claude tab holding the tabs lane carries the fixed
+/// notice and spends it. A session command does not; no lane, no notice.
+#[cfg(unix)]
+#[test]
+fn mail_notice_rides_the_next_prompt_once_and_spends_the_marker() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    std::fs::create_dir_all(&live).unwrap();
+    let script = dir.path().join("hook.sh");
+    std::fs::write(&script, posix_hook_script_body(&live.to_string_lossy())).unwrap();
+    let uid = "22222222-2222-4222-8222-222222222222";
+    let marker = live.join(format!("{uid}{}", crate::services::agent_turn::MAIL_SUFFIX));
+    let notice = crate::services::tabs_mcp::NOTICE;
+    let run = |agent: &str, lane: bool, payload: String| -> bool {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(&script).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env(crate::app_env!("TAB_UID"), uid).env(crate::app_env!("TAB_AGENT"), agent)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+        if lane { cmd.env(crate::services::root_mcp::TABS_URL_ENV, "http://127.0.0.1:1/mcp/tabs"); }
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).contains(notice)
+    };
+    let prompt = |text: &str| format!(r#"{{"session_id":"{uid}","hook_event_name":"UserPromptSubmit","prompt":"{text}"}}"#);
+    let stop = format!(r#"{{"session_id":"{uid}","hook_event_name":"Stop"}}"#);
+
+    assert!(!run("claude", true, prompt("no mail yet")));
+    std::fs::write(&marker, b"").unwrap();
+    assert!(!run("claude", true, stop.clone()), "only a prompt carries it");
+    assert!(!run("claude", true, prompt("/clear")), "a session command does not spend it");
+    assert!(!run("claude", false, prompt("no lane")), "no lane, no notice");
+    assert!(!run("codex", true, prompt("not claude")));
+    assert!(marker.exists());
+    assert!(run("claude", true, prompt("next task")));
+    assert!(!marker.exists(), "spent");
+    assert!(!run("claude", true, prompt("and again")), "once per marker");
+}
+
+#[test]
+fn both_hook_twins_carry_the_mail_block() {
+    let src = include_str!("../agent_session.rs");
+    let posix = src.split("fn posix_hook_script_body_with").nth(1).expect("posix body");
+    let posix = posix.split("\n}\n").next().unwrap();
+    // The PowerShell twin, held to the POSIX one here.
+    let ps = src.split("fn powershell_hook_script_body").nth(1).expect("powershell body");
+    let ps = ps.split("\n}\n").next().unwrap();
+    for body in [posix, ps] {
+        assert!(body.contains("tabs_mcp::NOTICE") && body.contains("agent_turn::MAIL_SUFFIX"), "{body}");
+        assert!(body.contains("_TABS_MCP_URL") && body.contains("{mail_suffix}") && body.contains("'{notice}'"));
+    }
+    let notice = crate::services::tabs_mcp::NOTICE;
+    assert!(!notice.contains('\'') && !notice.contains('\n'));
+}
+
+/// Writes the app's hook script and Vibe's `hooks.toml` for an offline probe
+/// (`scripts/verify-cli/vibe/resume.py`): `VIBE_PROBE_SCRIPT=<path the script
+/// goes to> VIBE_PROBE_LIVE=<record folder> VIBE_PROBE_HOME=<scratch VIBE_HOME>`.
+/// Never point these at the app's own folders.
+#[cfg(unix)]
+#[test]
+#[ignore = "writes the hook for scripts/verify-cli/vibe/resume.py"]
+fn writes_the_vibe_hook_for_a_probe() {
+    use std::os::unix::fs::PermissionsExt;
+    let script = std::path::PathBuf::from(std::env::var("VIBE_PROBE_SCRIPT").expect("VIBE_PROBE_SCRIPT"));
+    let live = std::env::var("VIBE_PROBE_LIVE").expect("VIBE_PROBE_LIVE");
+    let home = std::path::PathBuf::from(std::env::var("VIBE_PROBE_HOME").expect("VIBE_PROBE_HOME"));
+    std::fs::write(&script, posix_hook_script_body(&live)).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let block = vibe_hook_entries_running(&VIBE_HOOK_TYPES, &script.to_string_lossy()).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("hooks.toml"), block).unwrap();
 }

@@ -53,6 +53,7 @@ import {
   MAX_PRESETS,
   palmRejects,
   parsePenPrefs,
+  removePreset,
   resetPresets,
   savePreset,
   strokePressure,
@@ -307,7 +308,8 @@ describe("pen prefs, round 2", () => {
     });
     const odd = parsePenPrefs({ tool: "select", stamp: "swap", textMark: "strike", snap: false, pressure: "firm", palm: "nope", presets: [{ tool: "eraser", color: "red" }, { tool: "stamp", color: "blue", style: "x", size: 7 }, 3] });
     expect(odd).toMatchObject({ tool: "select", stamp: "swap", textMark: "strike", snap: false, pressure: "firm", palm: "normal" });
-    expect(odd.presets).toEqual([{ tool: "stamp", color: "blue", style: "pen", size: 1 }]);
+    // An old record's size 7 is no old size: the default.
+    expect(odd.presets).toEqual([{ tool: "stamp", color: "blue", style: "pen", size: 3 }]);
     expect(parsePenPrefs({ presets: Array.from({ length: 6 }, (_, i) => ({ tool: "ink", color: "red", style: "pen", size: i % 3 })) }).presets).toHaveLength(MAX_PRESETS);
   });
 
@@ -315,6 +317,7 @@ describe("pen prefs, round 2", () => {
     expect(colorsFor("textmark", "pen", "highlight")).toContain("yellow");
     expect(colorsFor("textmark", "pen", "strike")).not.toContain("yellow");
     expect(colorsFor("stamp", "marker")).not.toContain("yellow");
+    expect(colorsFor("textmark", "pen", "highlight")).toContain("pink");
     expect(colorOf({ ...DEFAULT_PEN_PREFS, tool: "textmark", textMark: "underline" })).toBe("red");
     expect(colorOf({ ...DEFAULT_PEN_PREFS, tool: "textmark" })).toBe("yellow");
     const select = { ...DEFAULT_PEN_PREFS, tool: "select" as const };
@@ -323,18 +326,20 @@ describe("pen prefs, round 2", () => {
   });
 
   it("applies, saves and resets presets", () => {
-    const marker = applyPreset(DEFAULT_PEN_PREFS, DEFAULT_PRESETS[1]);
-    expect(marker).toMatchObject({ tool: "ink", style: "marker", size: 1 });
+    const marker = applyPreset(DEFAULT_PEN_PREFS, DEFAULT_PRESETS[3]);
+    expect(marker).toMatchObject({ tool: "highlight", size: 3 });
     expect(colorOf(marker)).toBe("yellow");
     const boxed = applyPreset({ ...DEFAULT_PEN_PREFS, style: "arrow" }, { tool: "box", color: "blue", style: "pen", size: 2 });
-    expect(boxed).toMatchObject({ tool: "box", style: "arrow", size: 2, colors: { box: "blue" } });
-    const saved = savePreset({ ...DEFAULT_PEN_PREFS, tool: "stamp", colors: { ...DEFAULT_PEN_PREFS.colors, stamp: "blue" } });
+    expect(boxed).toMatchObject({ tool: "box", style: "arrow", size: 2, colors: { box: "blue" }, proof: "box" });
+    const stamp = { ...DEFAULT_PEN_PREFS, tool: "stamp" as const, colors: { ...DEFAULT_PEN_PREFS.colors, stamp: "blue" as const } };
+    const saved = savePreset(savePreset({ ...stamp, presets: [...DEFAULT_PRESETS, { tool: "ink", color: "green", style: "pen", size: 5 }] }));
     expect(saved.presets).toHaveLength(MAX_PRESETS);
-    expect(saved.presets[MAX_PRESETS - 1]).toEqual({ tool: "stamp", color: "blue", style: "pen", size: 1 });
+    expect(saved.presets[MAX_PRESETS - 1]).toEqual({ tool: "stamp", color: "blue", style: "pen", size: 3 });
     expect(saved.presets[0]).toEqual(DEFAULT_PRESETS[1]);
     // An equal pen moves to the end instead of standing twice.
     const again = savePreset({ ...DEFAULT_PEN_PREFS, presets: DEFAULT_PRESETS });
     expect(again.presets).toEqual([DEFAULT_PRESETS[1], DEFAULT_PRESETS[2], DEFAULT_PRESETS[3], DEFAULT_PRESETS[0]]);
+    expect(removePreset(again, 0).presets).toEqual([DEFAULT_PRESETS[2], DEFAULT_PRESETS[3], DEFAULT_PRESETS[0]]);
     const eraser = { ...DEFAULT_PEN_PREFS, tool: "eraser" as const };
     expect(savePreset(eraser)).toBe(eraser);
     expect(resetPresets(saved).presets).toEqual(DEFAULT_PRESETS);

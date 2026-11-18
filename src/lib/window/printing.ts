@@ -29,6 +29,7 @@ import type { TranslationKey } from "../i18n";
 // attachment's, and the mail module is where that definition already lives.
 import { formatSize } from "../mail";
 import { NAMES } from "../brand";
+import { PLATFORM } from "../platform";
 
 export { formatSize };
 
@@ -59,12 +60,31 @@ export async function printSnapshot(): Promise<PrintSnapshot> {
  *  through its own preview instead. */
 export type NativePdfPrint = "sent" | "cancelled" | "opened" | "unsupported";
 
+/** Which print-preview settings the system print dialog can be opened preset
+ *  to on `platform` (2442aa). Linux's GTK dialog takes all three. Windows
+ *  (WebView2's `ShowPrintUI`, Edge's own preview) and macOS (PDFKit with the
+ *  shared `NSPrintInfo`) take none of them: paper and two-sided are the user's
+ *  to pick in that dialog, and grayscale is baked into the PDF instead
+ *  (`layoutPrintPdf`'s `bakeGrayscale`). The preview must not claim a preset
+ *  it cannot make. */
+export function nativePresets(platform: "windows" | "macos" | "linux" = PLATFORM): {
+  paper: boolean;
+  grayscale: boolean;
+  duplex: boolean;
+} {
+  const linux = platform === "linux";
+  return { paper: linux, grayscale: linux, duplex: linux };
+}
+
 /** What the system print dialog opens preset to (Linux; ignored elsewhere): the
- *  paper the document was laid out on, and colour off for a grayscale job — the
- *  one print-preview option a vector PDF cannot carry in itself. */
+ *  paper the document was laid out on, colour off for a grayscale job, and
+ *  two-sided printing — the print-preview options a vector PDF cannot carry in
+ *  itself. `duplex` is optional so a caller that predates it keeps working; it
+ *  is `none` (single-sided) then. */
 export interface NativePrintSetup {
   paper: string;
   grayscale: boolean;
+  duplex?: "none" | "long" | "short";
 }
 
 /**

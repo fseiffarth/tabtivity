@@ -33,10 +33,37 @@ function store(defaults: Settings["agent_launch_defaults"] = {}) {
 }
 
 describe("per-CLI startup defaults", () => {
+  it("offers configured model choices for other CLIs", () => {
+    store();
+    useSettingsStore.setState((s) => ({ settings: { ...s.settings, agent_models: { gemini: ["configured-model"] } } as Settings }));
+    render(<AgentDefaults agent={{ ...agent, id: "gemini", bin: "gemini" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Default model" }));
+    fireEvent.click(screen.getByRole("option", { name: "configured-model" }));
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Custom model ID or alias" }).value).toBe("configured-model");
+  });
+
+  it("offers discovered launch IDs and saves a dropdown selection", async () => {
+    const update = store();
+    render(<AgentDefaults agent={{ ...agent, default_models: ["gpt-example", "gpt-other"] }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Default model" }));
+    fireEvent.click(screen.getByRole("option", { name: "gpt-other" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ agent_launch_defaults: { codex: { model: "gpt-other", effort: "" } } }));
+  });
+
+  it("keeps custom models selectable when a catalog changes and offers the CLI default", () => {
+    store({ codex: { model: "private-model", effort: "" } });
+    render(<AgentDefaults agent={{ ...agent, default_models: ["gpt-example"] }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Default model" }));
+    expect(screen.getByRole("option", { name: "private-model" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: "Use CLI default" }));
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Custom model ID or alias" }).value).toBe("");
+  });
+
   it("saves model and effort together, retaining another CLI's defaults", async () => {
     const update = store({ claude: { model: "opus", effort: "high" } });
     render(<AgentDefaults agent={agent} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "Default model" }), { target: { value: "  my-model  " } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Custom model ID or alias" }), { target: { value: "  my-model  " } });
     fireEvent.click(screen.getByRole("button", { name: "Default effort" }));
     fireEvent.click(screen.getByRole("option", { name: "ultra" }));
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
@@ -53,7 +80,7 @@ describe("per-CLI startup defaults", () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith({ agent_launch_defaults: { claude: { model: "sonnet" } } }));
     view.unmount();
     render(<AgentDefaults agent={agent} />);
-    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Default model" }).value).toBe("");
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Custom model ID or alias" }).value).toBe("");
   });
 
   it("reports a failed save and keeps the draft for retry", async () => {
@@ -103,14 +130,14 @@ describe("defaults saved from the phone", () => {
       ? { agent_launch_defaults: { codex: { model: "from-phone", effort: "low" }, claude: { model: "opus", effort: "" } } }
       : undefined) as never);
     render(<AgentDefaults agent={{ ...agent, id: "gemini", bin: "gemini", label: "Gemini" }} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "Default model" }), { target: { value: "pro" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Custom model ID or alias" }), { target: { value: "pro" } });
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith({ agent_launch_defaults: {
       codex: { model: "from-phone", effort: "low" }, claude: { model: "opus", effort: "" }, gemini: { model: "pro", effort: "" },
     } }));
     cleanup();
     render(<AgentDefaults agent={agent} />);
-    await waitFor(() => expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Default model" }).value).toBe("from-phone"));
+    await waitFor(() => expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Custom model ID or alias" }).value).toBe("from-phone"));
   });
 });
 
@@ -125,7 +152,7 @@ describe("launch defaults under the Chat view's model list", () => {
     const toggle = await screen.findByRole("button", { name: /Default for new tabs: old · high/ });
     fireEvent.click(toggle);
     expect(screen.queryByText(/Applies to new sessions in every project/)).toBeNull();
-    fireEvent.change(screen.getByRole("textbox", { name: "Default model" }), { target: { value: "new" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Custom model ID or alias" }), { target: { value: "new" } });
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith({ agent_launch_defaults: { codex: { model: "new", effort: "high" } } }));
     expect(await screen.findByRole("button", { name: /Default for new tabs: new · high/ })).toBeTruthy();

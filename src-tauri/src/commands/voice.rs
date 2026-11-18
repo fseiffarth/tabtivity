@@ -60,10 +60,21 @@ pub async fn voice_listen_stop(ctx: Ctx, session: u64) -> Result<(), String> {
 }
 
 /// Read `chunks` aloud as read `id`; `voice:speaking` follows it. `rate` is
-/// a multiplier, 0.5–2.0; `replace` stops what is being said first.
+/// a multiplier, 0.5–2.0; `replace` stops what is being said first;
+/// `natural` (unset: yes) lets an installed natural voice say it.
+#[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn voice_speak(ctx: Ctx, id: String, chunks: Vec<String>, lang: String, rate: f32, replace: bool) -> Result<(), String> {
-    app_core::rt::try_blocking("voice", move || voice::speak(&ctx.0, &id, &chunks, &lang, rate, replace).map_err(String::from)).await
+pub async fn voice_speak(ctx: Ctx, id: String, chunks: Vec<String>, lang: String, rate: f32, replace: bool, natural: Option<bool>) -> Result<(), String> {
+    let natural = natural.unwrap_or(true);
+    app_core::rt::try_blocking("voice", move || voice::speak(&ctx.0, &id, &chunks, &lang, rate, natural, replace).map_err(String::from)).await
+}
+
+/// The command line that installs the natural (Piper) voice for language
+/// `lang` (and Piper itself, when missing) in an install tab. Only a
+/// catalog language is accepted.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn voice_natural_install_script(lang: String) -> Result<String, String> {
+    app_core::rt::try_blocking("voice", move || voice::piper::install_command(&lang)).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]

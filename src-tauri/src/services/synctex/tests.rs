@@ -607,9 +607,8 @@ fn a_network_input_is_neither_resolved_nor_reported() {
             "Input:1:{net}\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n{{1\n[1,33:0,0:23146168,12000000,0\n\
                  (1,33:1857863,3637000:26011770,544000,150000\nx1,33:2457000,3637000\n)\n]\n}}1\n"
         );
-        let pre = parse_preamble(&text);
-        let boxes = page_hboxes(&text, 1, &pre);
-        let map = Map { text, pre };
+        let map = Map::new(text);
+        let boxes = page_hboxes(&map.text, 1, &map.pre);
         assert_eq!(resolve_point(&map, &spelling, &boxes, bp(3000000.0), bp(3637000.0)), None);
     }
 }
@@ -1331,4 +1330,134 @@ fn a_fifo_under_the_maps_name_is_not_opened() {
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0, "mkfifo {}", fifo.display());
     // Opening it would block until a writer came; it is skipped instead.
     assert!(read_map(&fifo, MAX_MAP_BYTES).is_none());
+}
+
+/// Three pages, a line of `main.tex` on each (3, 4, 5), and page 2 opened a
+/// second time at the end: reverse search must meet the first one, as the
+/// whole-file walk always did.
+const THREE_PAGE: &str = "\
+Input:1:/proj/main.tex
+Unit:1
+X Offset:0
+Y Offset:0
+Content:
+{1
+(1,3:8799518,8865054:22609920,455111,0
+x1,3:11218261,8865054
+)
+}1
+{2
+(1,4:8799518,8865054:22609920,455111,0
+x1,4:11218261,8865054
+)
+}2
+{3
+(1,5:8799518,8865054:22609920,455111,0
+x1,5:11218261,8865054
+)
+}3
+{2
+(1,9:8799518,8865054:22609920,455111,0
+x1,9:11218261,8865054
+)
+}2
+";
+
+/// `parse_preamble` with the page offsets forgotten: the walk from the top.
+fn without_page_offsets(text: &str) -> Preamble {
+    let mut pre = parse_preamble(text);
+    pre.pages.clear();
+    pre
+}
+
+fn wanted(pages: &[u32]) -> BTreeSet<u32> {
+    pages.iter().copied().collect()
+}
+
+#[test]
+fn each_page_opens_at_its_first_line() {
+    let pre = parse_preamble(THREE_PAGE);
+    assert_eq!(pre.pages.len(), 3);
+    for (page, at) in &pre.pages {
+        assert!(THREE_PAGE[*at..].starts_with(&format!("{{{page}\n")), "page {page} at {at}");
+    }
+    let second = *pre.pages.get(&2).expect("page 2");
+    assert!(second < THREE_PAGE.rfind("{2").expect("the repeat"), "the first {{2 is kept");
+}
+
+#[test]
+fn reverse_search_starting_at_its_page_answers_as_the_whole_walk_does() {
+    let with = parse_preamble(THREE_PAGE);
+    let without = without_page_offsets(THREE_PAGE);
+    for pages in [&[1][..], &[2], &[3], &[2, 3], &[1, 3], &[1, 2, 3]] {
+        let only = wanted(pages);
+        assert_eq!(
+            format!("{:?}", walk_hboxes(THREE_PAGE, &with, Some(&only))),
+            format!("{:?}", walk_hboxes(THREE_PAGE, &without, Some(&only))),
+            "pages {pages:?}"
+        );
+    }
+    let late = page_hboxes(THREE_PAGE, 3, &with);
+    assert_eq!(late.len(), 1);
+    assert_eq!(late[0].rec.line, 5);
+    // The page that opens twice answers from its first opening only.
+    let twice = page_hboxes(THREE_PAGE, 2, &with);
+    assert_eq!(format!("{twice:?}"), format!("{:?}", page_hboxes(THREE_PAGE, 2, &without)));
+    assert_eq!(twice.iter().map(|b| b.rec.line).collect::<Vec<_>>(), [4]);
+}
+
+#[test]
+fn the_walk_over_every_page_is_unchanged_by_the_offsets() {
+    let with = parse_preamble(THREE_PAGE);
+    let without = without_page_offsets(THREE_PAGE);
+    assert_eq!(
+        format!("{:?}", walk_hboxes(THREE_PAGE, &with, None)),
+        format!("{:?}", walk_hboxes(THREE_PAGE, &without, None)),
+    );
+}
+
+#[test]
+fn the_walk_starts_at_the_wanted_page_and_no_earlier() {
+    let pre = parse_preamble(THREE_PAGE);
+    assert_eq!(walk_start(THREE_PAGE, &pre, &wanted(&[3])), pre.pages.get(&3).copied());
+    assert_eq!(walk_start(THREE_PAGE, &pre, &wanted(&[3, 2])), pre.pages.get(&2).copied());
+    assert_eq!(walk_start(THREE_PAGE, &pre, &wanted(&[1])), Some(pre.pages[&1]));
+    // A page the map never opened has no offset: the whole walk.
+    assert_eq!(walk_start(THREE_PAGE, &pre, &wanted(&[3, 40])), None);
+}
+
+#[test]
+fn offsets_from_another_text_fall_back_to_the_whole_walk() {
+    // Page 3 sits far later in the long text than anywhere in the short one,
+    // and the short one holds a multi-byte character where the offset lands.
+    let long = THREE_PAGE.to_string();
+    let short = "Input:1:/proj/ü.tex\n{1\n(1,7:8799518,8865054:22609920,455111,0\n)\n}1\n";
+    let from_long = parse_preamble(&long);
+    for text in [short, "", "{", "{3"] {
+        assert_eq!(walk_start(text, &from_long, &wanted(&[3])), None, "text {text:?}");
+        let got = walk_hboxes(text, &from_long, Some(&wanted(&[3])));
+        let expect = walk_hboxes(text, &without_page_offsets(text), Some(&wanted(&[3])));
+        assert_eq!(format!("{got:?}"), format!("{expect:?}"));
+    }
+    // An offset in the middle of a line, or of another page, is not believed.
+    let mut skewed = parse_preamble(THREE_PAGE);
+    let one = skewed.pages[&1];
+    skewed.pages.insert(3, one + 1);
+    assert_eq!(walk_start(THREE_PAGE, &skewed, &wanted(&[3])), None);
+    skewed.pages.insert(3, one);
+    assert_eq!(walk_start(THREE_PAGE, &skewed, &wanted(&[3])), None, "that line opens page 1");
+    assert_eq!(
+        format!("{:?}", page_hboxes(THREE_PAGE, 3, &skewed)),
+        format!("{:?}", page_hboxes(THREE_PAGE, 3, &without_page_offsets(THREE_PAGE))),
+    );
+}
+
+#[test]
+fn page_offsets_hold_for_windows_line_endings() {
+    let crlf = THREE_PAGE.replace('\n', "\r\n");
+    let pre = parse_preamble(&crlf);
+    assert_eq!(pre.pages.len(), 3);
+    let boxes = page_hboxes(&crlf, 3, &pre);
+    assert_eq!(boxes.iter().map(|b| b.rec.line).collect::<Vec<_>>(), [5]);
+    assert_eq!(walk_start(&crlf, &pre, &wanted(&[3])), pre.pages.get(&3).copied());
 }

@@ -49,10 +49,22 @@ async function openMessage(writes: { actions?: boolean; reply?: boolean }) {
 describe("phone mail writes", () => {
   it("shows no write controls when the desktop reports neither capability", async () => {
     await openMessage({});
-    expect(screen.queryByText("Mark read")).toBeNull();
-    expect(screen.queryByText("★ Star")).toBeNull();
+    expect(screen.queryByLabelText("Mark read")).toBeNull();
+    expect(screen.queryByLabelText("Star")).toBeNull();
     expect(screen.queryByLabelText("Reply text")).toBeNull();
+    // The rules banner is the head's ⓘ now.
+    expect(screen.queryByText(/Read-only mail/)).toBeNull();
+    fireEvent.click(screen.getByLabelText("How mail works here"));
+    expect(screen.getByRole("dialog", { name: "Mail on this phone" })).toBeTruthy();
     expect(screen.getByText(/Read-only mail/)).toBeTruthy();
+  });
+
+  it("says in the ⓘ sheet which writes the desktop allows", async () => {
+    await openMessage({ actions: true, reply: true });
+    fireEvent.click(screen.getByLabelText("How mail works here"));
+    expect(screen.getByText(/Read state and star can be changed here/)).toBeTruthy();
+    expect(screen.getByText(/Plain-text replies go to the original sender only/)).toBeTruthy();
+    expect(screen.queryByText(/Read-only mail/)).toBeNull();
   });
 
   it("marks read through the mark route and takes the header back from the desktop's answer", async () => {
@@ -62,21 +74,55 @@ describe("phone mail writes", () => {
       calls.push({ path, body: init?.body ? JSON.parse(String(init.body)) : undefined });
       return { mail: folderView(true, true) };
     });
-    fireEvent.click(screen.getByText("Mark read"));
-    await screen.findByText("Mark unread");
+    fireEvent.click(screen.getByLabelText("Mark read"));
+    await screen.findByLabelText("Mark unread");
     expect(calls).toEqual([{
       path: "/api/v1/mail/folders/folder-1/messages/msg-1/mark",
       body: { action: "seen", offset: 0 },
     }]);
     // The star came back set in the same answer: the phone believes the page,
     // not its own click.
-    expect(screen.getByText("☆ Unstar")).toBeTruthy();
+    expect(screen.getByLabelText("Star").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("shows a message the desktop marked read on opening as read in the list", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/api/v1/mail") {
+        return { mail: { view: "overview", accounts: [{ id: "acc", label: "Work", address: "me@example.test", folders: [folderView(false).folder] }], actions: true } };
+      }
+      if (path.endsWith("/messages/msg-1?offset=0")) return { mail: messageView(true) };
+      if (path.startsWith("/api/v1/mail/folders/folder-1?")) return { mail: folderView(false) };
+      throw new Error(`unexpected ${path}`);
+    });
+    render(createElement(Mail));
+    fireEvent.click(await screen.findByText("Inbox"));
+    const row = (await screen.findByText("Meeting")).closest("button")!;
+    expect(row.classList.contains("unread")).toBe(true);
+    fireEvent.click(row);
+    await screen.findByLabelText("Mark unread");
+    fireEvent.click(screen.getByRole("button", { name: /Inbox/ }));
+    await waitFor(() => expect(screen.getByText("Meeting").closest("button")!.classList.contains("unread")).toBe(false));
+  });
+
+  it("refreshes an open message from its folder page, so a mark-unread is not undone", async () => {
+    await openMessage({ actions: true });
+    const paths: string[] = [];
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      paths.push(path);
+      return { mail: folderView(false) };
+    });
+    fireEvent.click(screen.getByLabelText("Refresh"));
+    await waitFor(() => expect(paths).toEqual(["/api/v1/mail/folders/folder-1?offset=0"]));
+    // Still on the message, still unread.
+    expect(await screen.findByLabelText("Mark read")).toBeTruthy();
+    expect(screen.getByText("Are we on?", { selector: "pre" })).toBeTruthy();
   });
 
   it("explains a desktop-side refusal instead of echoing the code", async () => {
     await openMessage({ actions: true });
     vi.mocked(api).mockRejectedValue(new ApiError(403, "mail_actions_disabled"));
-    fireEvent.click(screen.getByText("★ Star"));
+    expect(screen.getByLabelText("Star").getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(screen.getByLabelText("Star"));
     await screen.findByText(new RegExp(String.raw`Switched off in ${BRAND.display}`));
   });
 
@@ -87,7 +133,7 @@ describe("phone mail writes", () => {
       calls.push({ path, body: init?.body ? JSON.parse(String(init.body)) : undefined });
       return { mail: folderView(true, false, true) };
     });
-    const send = screen.getByText("Send reply…") as HTMLButtonElement;
+    const send = screen.getByRole("button", { name: "Send reply…" }) as HTMLButtonElement;
     expect(send.disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("Reply text"), { target: { value: "Yes, 10 am." } });
     expect(send.disabled).toBe(false);
@@ -107,7 +153,7 @@ describe("phone mail writes", () => {
   it("refuses to offer a reply longer than the sidecar accepts", async () => {
     await openMessage({ reply: true });
     fireEvent.change(screen.getByLabelText("Reply text"), { target: { value: "x".repeat(16 * 1024 + 1) } });
-    expect((screen.getByText("Send reply…") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Send reply…" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/longer than the phone may send/)).toBeTruthy();
   });
 });

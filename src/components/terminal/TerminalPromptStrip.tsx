@@ -11,6 +11,7 @@ import { useMarkupLinksStore } from "../../stores/viewers/markupLinks";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { TerminalReaderChats } from "./TerminalReaderChats";
+import { ReaderScheduleButton } from "./ReaderScheduleButton";
 import { chatsOffered } from "../../lib/agents/agentChats";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
@@ -75,7 +76,7 @@ export function TerminalPromptStrip({
    * lists (`TerminalReaderChats`). */
   /** `onHost`: the tab runs on a remote project's host, whose copy of the
    * conversation the chat reads. */
-  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void; empty?: boolean }; cwd?: string; onHost?: boolean };
+  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void; empty?: boolean }; files?: { open: boolean; onToggle: () => void; empty?: boolean }; cwd?: string; onHost?: boolean };
 }) {
   const t = useT();
   const use24h = useUse24h();
@@ -278,6 +279,9 @@ export function TerminalPromptStrip({
         {reader && chatsOffered(scope, tab) && (
           <TerminalReaderChats ptyId={ptyId} scope={scope} tab={tab} cwd={reader.cwd} onReturnFocus={onReturnFocus} />
         )}
+        {topBar && reader && tab && (tab.kind === "agent" || tab.kind === "local_agent") && (
+          <ReaderScheduleButton scope={scope} tab={tab} />
+        )}
         {topBar && <>
           <span className="reader-topbar-navigation" ref={navigationSlot} />
           <span className="reader-topbar-actions" ref={actionSlot} />
@@ -293,9 +297,9 @@ export function TerminalPromptStrip({
             tabs[next]?.focus();
             tabs[next]?.click();
           }}>
-            <button type="button" role="tab" aria-selected={reader.open && !reader.changes?.open}
-              tabIndex={reader.open && !reader.changes?.open ? 0 : -1}
-              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (!reader.open) reader.onToggle(); }}>
+            <button type="button" role="tab" aria-selected={reader.open && !reader.changes?.open && !reader.files?.open}
+              tabIndex={reader.open && !reader.changes?.open && !reader.files?.open ? 0 : -1}
+              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (reader.files?.open) reader.files.onToggle(); if (!reader.open) reader.onToggle(); }}>
               {t("terminal.reader.showReader")}
             </button>
             {reader.changes && <button type="button" role="tab" aria-selected={reader.changes.open}
@@ -305,9 +309,17 @@ export function TerminalPromptStrip({
               onClick={() => { if (!reader.changes?.open) reader.changes?.onToggle(); }}>
               {t("terminal.reader.changes")}
             </button>}
-            <button type="button" role="tab" aria-selected={!reader.open && !reader.changes?.open}
-              tabIndex={!reader.open && !reader.changes?.open ? 0 : -1}
-              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (reader.open) reader.onToggle(); }}>
+            {reader.files && <button type="button" role="tab" aria-selected={reader.files.open}
+              tabIndex={reader.files.open ? 0 : -1}
+              disabled={!reader.files.open && reader.files.empty}
+              title={!reader.files.open && reader.files.empty ? t("terminal.reader.filesNone") : undefined}
+              onClick={() => { if (!reader.files?.open) reader.files?.onToggle(); }}>
+              {t("terminal.reader.filesTab")}
+              <UntestedTag id="terminal.reader.files" />
+            </button>}
+            <button type="button" role="tab" aria-selected={!reader.open && !reader.changes?.open && !reader.files?.open}
+              tabIndex={!reader.open && !reader.changes?.open && !reader.files?.open ? 0 : -1}
+              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (reader.files?.open) reader.files.onToggle(); if (reader.open) reader.onToggle(); }}>
               {t("terminal.reader.showTerminal")}
             </button>
             <UntestedTag id="terminal.reader.topbar" />

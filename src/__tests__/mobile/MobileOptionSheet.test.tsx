@@ -222,16 +222,16 @@ describe(`${BRAND.display} Mobile composer sheets`, () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("keeps cycling as before for a session no mode family claims", async () => {
-    // Goose switches modes with a slash command, not Shift+Tab, so no family
-    // lists it and the chip only presses the key.
+  it("offers no guessed mode key for a session no mode family claims", async () => {
+    // Goose switches modes with a slash command, not Shift+Tab.
     render(<Terminal tab={{ ...TAB, id: "tab-g", label: "Goose" }} back={() => {}} />);
     await act(async () => {});
     await paint("> \n? for shortcuts");
 
     FakeWebSocket.keys = [];
-    fireEvent.click(screen.getByTitle("Switch mode (Shift+Tab)"));
-    expect(FakeWebSocket.keys).toEqual([`${ESC}[Z`]);
+    expect(screen.queryByTitle("Switch mode (Shift+Tab)")).toBeNull();
+    expect(screen.queryByTitle("Choose the permission mode")).toBeNull();
+    expect(FakeWebSocket.keys).toEqual([]);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

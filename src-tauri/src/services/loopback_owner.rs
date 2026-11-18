@@ -12,7 +12,10 @@
 //!   through [`check`] and [`Policy`];
 //! * the phone's OAuth-callback relay (`mobile_control::sign_in`), through
 //!   [`own_targets`];
-//! * the API proxy's remembered-port start (`api_proxy`), through [`check`].
+//! * the API proxy's remembered-port start (`api_proxy`), through [`check`];
+//! * the MCP listener's check of who presents a revived token
+//!   (`root_mcp_reattach`), through [`peer_descends_from`]: the *client* end
+//!   of an accepted connection, mapped to the processes holding it.
 //!
 //! The parsing is pure and OS-independent; reading `/proc` is Linux only.
 //! **macOS and Windows have no check**: [`check`] accepts there, so those
@@ -30,23 +33,148 @@ pub struct Listener {
     pub inode: u64,
 }
 
-/// The listening sockets of one `/proc/net/tcp{,6}` table (`LISTEN` is `0A`).
-pub fn listeners(table: &str) -> Vec<Listener> {
-    fn ip_of(hex: &str) -> Option<IpAddr> {
-        // The kernel prints each 32-bit word in host (little-endian) order.
-        let words: Vec<u32> = (0..hex.len() / 8).map(|i| u32::from_str_radix(&hex[i * 8..i * 8 + 8], 16).ok()).collect::<Option<_>>()?;
-        match words.as_slice() {
-            [w] => Some(IpAddr::V4(Ipv4Addr::from(w.to_le_bytes()))),
-            [a, b, c, d] => {
-                let mut bytes = [0u8; 16];
-                for (i, w) in [a, b, c, d].iter().enumerate() {
-                    bytes[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
-                }
-                Some(IpAddr::V6(Ipv6Addr::from(bytes)).to_canonical())
+/// An address column of `/proc/net/tcp{,6}` (`0100007F:2CAA`).
+fn ip_of(hex: &str) -> Option<IpAddr> {
+    // The kernel prints each 32-bit word in host (little-endian) order.
+    let words: Vec<u32> = (0..hex.len() / 8).map(|i| u32::from_str_radix(&hex[i * 8..i * 8 + 8], 16).ok()).collect::<Option<_>>()?;
+    match words.as_slice() {
+        [w] => Some(IpAddr::V4(Ipv4Addr::from(w.to_le_bytes()))),
+        [a, b, c, d] => {
+            let mut bytes = [0u8; 16];
+            for (i, w) in [a, b, c, d].iter().enumerate() {
+                bytes[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
             }
-            _ => None,
+            Some(IpAddr::V6(Ipv6Addr::from(bytes)).to_canonical())
+        }
+        _ => None,
+    }
+}
+
+fn addr_of(field: &str) -> Option<SocketAddr> {
+    let (addr, port) = field.split_once(':')?;
+    Some(SocketAddr::new(ip_of(addr)?, u16::from_str_radix(port, 16).ok()?))
+}
+
+/// One socket in `ESTABLISHED` state (`01`) of a `/proc/net/tcp{,6}` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Connection {
+    pub local: SocketAddr,
+    pub remote: SocketAddr,
+    pub uid: u32,
+    pub inode: u64,
+}
+
+/// The established sockets of one `/proc/net/tcp{,6}` table.
+pub fn connections(table: &str) -> Vec<Connection> {
+    table
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() < 10 || fields[3] != "01" {
+                return None;
+            }
+            Some(Connection {
+                local: addr_of(fields[1])?,
+                remote: addr_of(fields[2])?,
+                uid: fields[7].parse().ok()?,
+                inode: fields[9].parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// The socket whose own end is `local` and whose other end is `remote`, in
+/// any of `tables`: for an accepted connection, the client's socket is
+/// `local` = the peer address, `remote` = the listener's address.
+pub fn connection(tables: &[String], local: SocketAddr, remote: SocketAddr) -> Option<Connection> {
+    tables.iter().flat_map(|t| connections(t)).find(|c| c.local == local && c.remote == remote && c.inode != 0)
+}
+
+/// The `PPid:` of a `/proc/<pid>/status`.
+pub fn parent_pid(status: &str) -> Option<u32> {
+    status.lines().find_map(|line| line.strip_prefix("PPid:")).and_then(|v| v.trim().parse().ok())
+}
+
+/// Whether `pid` is `root` or one of its descendants, walking `parent` up
+/// (a bounded walk; a missing or self-referencing parent, or pid 0, ends it
+/// with `false`).
+pub fn descends_from(pid: u32, root: u32, parent: impl Fn(u32) -> Option<u32>) -> bool {
+    let mut current = pid;
+    for _ in 0..256 {
+        if current == root {
+            return true;
+        }
+        match parent(current) {
+            Some(next) if next != 0 && next != current => current = next,
+            _ => return false,
         }
     }
+    false
+}
+
+/// Where the client end of a connection sits against a pane tree
+/// ([`peer_tree`]). Only [`PeerTree::Inside`] is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerTree {
+    /// Held, and every holder found descends from the root.
+    Inside,
+    /// Seen to be someone else's: another account's socket, or a holder of
+    /// this account outside the tree.
+    Outside,
+    /// This account's socket, but no process could be read holding it: a
+    /// non-dumpable process hides its `/proc/<pid>/fd` (and its `/proc/<pid>`
+    /// reads as root's), so who it is cannot be told.
+    Hidden,
+    /// No such connection (it closed meanwhile), or no `/proc` to read.
+    Unknown,
+}
+
+/// [`peer_tree`]'s judgement, with what it reads passed in: the client
+/// `socket` (if found), this account's uid, the pids `holders` of an inode
+/// finds, and whether a pid `descends` from the root.
+pub fn judge_peer(socket: Option<Connection>, uid: u32, holders: impl FnOnce(u64) -> Vec<u32>, descends: impl Fn(u32) -> bool) -> PeerTree {
+    let Some(socket) = socket else { return PeerTree::Unknown };
+    if socket.uid != uid {
+        return PeerTree::Outside;
+    }
+    let held = holders(socket.inode);
+    if held.is_empty() {
+        PeerTree::Hidden
+    } else if held.iter().all(|pid| descends(*pid)) {
+        PeerTree::Inside
+    } else {
+        PeerTree::Outside
+    }
+}
+
+/// Whether the client end `peer` of a connection to `server` belongs to
+/// processes of this account that all descend from `root` (host pid
+/// namespace: a fenced process's bwrap parent sits under the pane that
+/// started it), and when not, why ([`PeerTree`]). Only `Inside` passes: no
+/// such socket, another account's, no holder found (an unreadable
+/// `/proc/<pid>/fd`, a non-dumpable process), or any holder outside the tree
+/// fail closed. Linux only; [`PeerTree::Unknown`] elsewhere.
+pub fn peer_tree(peer: SocketAddr, server: SocketAddr, root: u32) -> PeerTree {
+    #[cfg(target_os = "linux")]
+    {
+        let parent = |pid: u32| std::fs::read_to_string(format!("/proc/{pid}/status")).ok().as_deref().and_then(parent_pid);
+        judge_peer(
+            connection(&read_tables(), peer, server),
+            own_uid(),
+            |inode| proc::walk(inode).into_iter().map(|h| h.pid).collect(),
+            |pid| descends_from(pid, root, parent),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (peer, server, root);
+        PeerTree::Unknown
+    }
+}
+
+/// The listening sockets of one `/proc/net/tcp{,6}` table (`LISTEN` is `0A`).
+pub fn listeners(table: &str) -> Vec<Listener> {
     table
         .lines()
         .skip(1)
@@ -293,7 +421,7 @@ mod proc {
     /// The processes of this uid holding a descriptor on socket `inode`. Only
     /// this uid's processes are looked at: a listener of another uid is judged
     /// by the uid.
-    fn walk(inode: u64) -> Vec<Held> {
+    pub fn walk(inode: u64) -> Vec<Held> {
         let needle = format!("socket:[{inode}]");
         let ours = std::fs::read_link("/proc/self/ns/pid").ok();
         // SAFETY: getuid has no preconditions.
@@ -337,6 +465,15 @@ mod proc {
             HOLDERS.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert(inode, (now, found.clone()));
         }
         found
+    }
+
+    /// Drop the cached holders of `inode`, so the next look walks `/proc`
+    /// again.
+    #[cfg(test)]
+    pub fn forget(inode: u64) {
+        if let Some(map) = HOLDERS.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            map.remove(&inode);
+        }
     }
 
     pub fn placement_of(inode: u64, trusted_pids: &[u32]) -> Placement {
@@ -506,10 +643,145 @@ mod tests {
         // The same listener, but this process's pid namespace is pretended away.
         let theirs: Vec<Listener> = listeners(&read_tables().join("\n")).into_iter().filter(|l| l.port == port).collect();
         assert_eq!(theirs.len(), 1);
-        assert_eq!(proc::placement_of(theirs[0].inode, &[]), Placement::Here);
+        let inode = theirs[0].inode;
+        // Other tests of this binary fork children all the time. Between fork
+        // and exec a child holds a copy of every descriptor, this listener's
+        // too, and may already be in a new pid namespace (a fence probe) or
+        // be switching program, so a single walk can see a second, foreign
+        // holder. That window is brief: look again, uncached, until it closes.
+        fn settled<T: PartialEq + std::fmt::Debug>(inode: u64, want: &T, mut look: impl FnMut() -> T) -> T {
+            let mut seen = look();
+            for _ in 0..100 {
+                if &seen == want { break; }
+                proc::forget(inode);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                seen = look();
+            }
+            seen
+        }
+        assert_eq!(settled(inode, &Placement::Here, || proc::placement_of(inode, &[])), Placement::Here);
         assert_eq!(proc::placement_of(u64::MAX - 1, &[]), Placement::Unknown, "no holder is not a pass");
-        let seen = occupants(port);
-        assert_eq!(seen, vec![Occupant { uid: own_uid(), fenced: false, same_program: true, identified: true }]);
+        let want = vec![Occupant { uid: own_uid(), fenced: false, same_program: true, identified: true }];
+        assert_eq!(settled(inode, &want, || occupants(port)), want);
         assert!(occupants(1).is_empty());
+    }
+
+    // ── the client end of a connection (revived MCP tokens) ───────────────
+
+    #[test]
+    fn parses_established_sockets_and_finds_a_connection_by_both_ends() {
+        let found = connections(V4);
+        assert_eq!(found.len(), 1, "listeners are not connections");
+        let local: SocketAddr = "127.0.0.1:3000".parse().unwrap();
+        let remote: SocketAddr = "127.0.0.1:54321".parse().unwrap();
+        assert_eq!(found[0], Connection { local, remote, uid: 1001, inode: 5003 });
+        let tables = [V6.to_string(), V4.to_string()];
+        assert_eq!(connection(&tables, local, remote).map(|c| c.inode), Some(5003));
+        assert_eq!(connection(&tables, remote, local), None, "the other end is another socket");
+        assert!(connections(V6).is_empty());
+    }
+
+    #[test]
+    fn the_parent_pid_of_a_status_file() {
+        let status = "Name:\tclaude\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t4242\nPid:\t4242\nPPid:\t4200\nTracerPid:\t0\n";
+        assert_eq!(parent_pid(status), Some(4200));
+        assert_eq!(parent_pid("Name:\tx\n"), None);
+    }
+
+    /// The pane's tree: pane 100 → bwrap 110 → bwrap 111 (the fence's init)
+    /// → agent 120 → MCP helper 130. Another project's fence hangs off 1.
+    #[test]
+    fn the_ancestry_walk_reaches_the_pane_through_the_fence() {
+        let parents = std::collections::HashMap::from([(130, 120), (120, 111), (111, 110), (110, 100), (100, 50), (50, 1), (210, 200), (200, 1)]);
+        let parent = |pid: u32| parents.get(&pid).copied();
+        assert!(descends_from(130, 100, parent), "a fenced helper is inside");
+        assert!(descends_from(100, 100, parent), "the pane process itself");
+        assert!(!descends_from(210, 100, parent), "another fence is outside");
+        assert!(!descends_from(50, 100, parent), "an ancestor of the pane is outside");
+        assert!(!descends_from(999, 100, parent), "an unreadable parent: fail closed");
+        assert!(!descends_from(7, 100, |_| Some(7)), "a loop ends");
+    }
+
+    /// A real loopback connection: its client end is found and judged by who
+    /// holds it — this test process is inside its own tree, and outside the
+    /// tree of a child it started.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_real_peer_is_judged_by_its_ancestry() {
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = server.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (_accepted, peer) = server.accept().unwrap();
+        assert_eq!(peer, client.local_addr().unwrap());
+        assert_eq!(peer_tree(peer, addr, std::process::id()), PeerTree::Inside);
+        let mut child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+        let outside = peer_tree(peer, addr, child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(outside, PeerTree::Outside);
+        let unknown: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        assert_eq!(peer_tree(unknown, addr, std::process::id()), PeerTree::Unknown, "no such socket");
+    }
+
+    /// Why a peer is refused: only a socket of this account that nobody can
+    /// be seen holding is `Hidden` (the case a revived token's tab is then
+    /// flagged stale for); someone seen outside the tree is `Outside`.
+    #[test]
+    fn a_refused_peer_says_why() {
+        let socket = Connection { local: "127.0.0.1:5000".parse().unwrap(), remote: "127.0.0.1:4000".parse().unwrap(), uid: 1000, inode: 77 };
+        let inside = |pid: u32| pid < 100;
+        assert_eq!(judge_peer(None, 1000, |_| panic!("no socket, no walk"), inside), PeerTree::Unknown);
+        assert_eq!(judge_peer(Some(Connection { uid: 1001, ..socket }), 1000, |_| panic!("not ours"), inside), PeerTree::Outside);
+        assert_eq!(judge_peer(Some(socket), 1000, |inode| { assert_eq!(inode, 77); vec![10, 20] }, inside), PeerTree::Inside);
+        assert_eq!(judge_peer(Some(socket), 1000, |_| vec![10, 200], inside), PeerTree::Outside, "one holder outside");
+        assert_eq!(judge_peer(Some(socket), 1000, |_| Vec::new(), inside), PeerTree::Hidden);
+    }
+
+    /// A real non-dumpable client (what Codex's process hardening may make
+    /// itself): its socket is this account's, but no `/proc/<pid>/fd` shows
+    /// who holds it, so the peer reads `Hidden`, inside its tree or not.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_non_dumpable_client_is_hidden() {
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = server.local_addr().unwrap();
+        // Built before the fork: the child only makes raw system calls.
+        // SAFETY: zeroed is a valid sockaddr_in.
+        let mut sin: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        sin.sin_family = libc::AF_INET as libc::sa_family_t;
+        sin.sin_port = addr.port().to_be();
+        sin.sin_addr = libc::in_addr { s_addr: u32::from(Ipv4Addr::LOCALHOST).to_be() };
+        // SAFETY: the child calls only async-signal-safe functions, then exits.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork");
+        if pid == 0 {
+            // SAFETY: plain system calls on values owned by the child.
+            unsafe {
+                libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+                let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+                let ok = fd >= 0
+                    && libc::connect(fd, std::ptr::addr_of!(sin).cast(), std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t) == 0;
+                if ok {
+                    libc::sleep(10);
+                }
+                libc::_exit(0);
+            }
+        }
+        server.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let accepted = loop {
+            match server.accept() {
+                Ok(accepted) => break Some(accepted),
+                Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(_) => break None,
+            }
+        };
+        let verdict = accepted.as_ref().map(|(_, peer)| peer_tree(*peer, addr, pid as u32));
+        // SAFETY: the child is ours to end and reap.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+        }
+        assert_eq!(verdict, Some(PeerTree::Hidden), "even from the root of its own tree");
     }
 }

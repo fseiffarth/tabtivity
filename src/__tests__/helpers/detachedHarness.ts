@@ -124,6 +124,8 @@ export interface Heap {
   settings: typeof import("../../stores/settings");
   activity: typeof import("../../stores/activity");
   context: typeof import("../../stores/detachedContext");
+  /** The popout heap's view of its own tabs (`stores/popoutView`). */
+  popoutView: typeof import("../../stores/popoutView");
   projects: typeof import("../../stores/projects");
   boxes: typeof import("../../stores/boxes");
   remoteStatus: typeof import("../../stores/remote/remoteStatus");
@@ -140,7 +142,7 @@ export interface Heap {
  */
 export async function loadHeap(): Promise<Heap> {
   vi.resetModules();
-  const [tabs, tabLayoutTree, tabViewerState, detached, settings, activity, context, projects, boxes, remoteStatus, usage, runHostPref] =
+  const [tabs, tabLayoutTree, tabViewerState, detached, settings, activity, context, popoutView, projects, boxes, remoteStatus, usage, runHostPref] =
     await Promise.all([
       import("../../stores/tabs"),
       import("../../stores/tabs/layoutTree"),
@@ -149,6 +151,7 @@ export async function loadHeap(): Promise<Heap> {
       import("../../stores/settings"),
       import("../../stores/activity"),
       import("../../stores/detachedContext"),
+      import("../../stores/popoutView"),
       import("../../stores/projects"),
       import("../../stores/boxes"),
       import("../../stores/remote/remoteStatus"),
@@ -163,6 +166,7 @@ export async function loadHeap(): Promise<Heap> {
     settings,
     activity,
     context,
+    popoutView,
     projects,
     boxes,
     remoteStatus,

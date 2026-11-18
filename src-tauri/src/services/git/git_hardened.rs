@@ -6,10 +6,10 @@
 //! `commands::git` re-exports every item, so `commands::git::
 //! hardened_git_command_in` keeps resolving.
 
-use crate::brand::UPPER;
 use std::path::{Path, PathBuf};
 
 use crate::services::remote::RemoteTarget;
+use crate::services::git_hosting::GitAuth;
 
 // Every git invocation goes through the single `run_git` helper, which dispatches
 // on whether the project is local or remote:
@@ -128,8 +128,10 @@ pub(crate) const DIFF_DRIVER_CMDS: &[&str] = &["diff", "log", "show", "blame"];
 ///   Reword, Push, Publish, Pull's merge and the merge commit — and each is
 ///   gated by `services::exec_trust` first (`TrustKind::GitHooks`, see
 ///   [`require_hook_trust`]): the hook files and the repo-scope keys that name
-///   programs (`core.hooksPath`, `core.sshCommand`, `credential*.helper`) are
-///   fingerprinted and approved once, and any change asks again.
+///   programs (`core.hooksPath`, `core.sshCommand`, `credential*.helper`,
+///   `remote.*.uploadpack`, `url.*.insteadOf`, …) are fingerprinted and
+///   approved once, and any change asks again. Fetch runs no hook but honours
+///   those keys, so the local fetch passes the same gate.
 ///   `services::git_guard` additionally mounts `.git/config` and `.git/hooks`
 ///   read-only for fenced and contained agents; the one redirect it cannot
 ///   cover — an agent *creating* a `commondir` in a main `.git`, so git reads
@@ -167,7 +169,7 @@ fn git_args<S: AsRef<str>>(args: &[S], hooks: Hooks) -> Vec<String> {
         }
     }
     let mut rest = args.iter().map(|a| a.as_ref()).peekable();
-    // A caller may bring its own `-c <key>=<value>` pairs (`scoped_token_config`),
+    // A caller may bring its own `-c <key>=<value>` pairs (`GitAuth::git_args`),
     // and those are git's *pre-subcommand* options — so they are passed through
     // first and the subcommand is whatever follows them. Without this the leading
     // `-c` was mistaken for the subcommand, which happens to still produce a valid
@@ -559,6 +561,23 @@ fn refusal_shell() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("sh"))
 }
 
+/// A command that runs the git hook `hook` as git itself would: directly
+/// where the OS honours its `#!` line, through Git for Windows' `sh.exe`
+/// (the shell git runs hooks with there) on Windows, where `CreateProcess`
+/// cannot start a script. The caller adds the hook's arguments.
+pub(crate) fn hook_command(hook: &Path) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = crate::paths::command_no_window(refusal_shell());
+        cmd.arg(hook);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        crate::paths::command_no_window(hook)
+    }
+}
+
 /// Where Git for Windows keeps `sh.exe` relative to a `git.exe` it ships —
 /// `<root>\cmd\git.exe`, `<root>\bin\git.exe` or
 /// `<root>\mingw64\bin\git.exe` — in lookup order. Pure.
@@ -658,6 +677,130 @@ pub(crate) fn hookless_git_command_in<S: AsRef<str>, P: AsRef<Path>>(
     args: &[S],
 ) -> std::process::Command {
     hardened_git_command_in(project_dir, args)
+}
+
+/// The store a checkpoint git call runs against (`services::checkpoints`): its
+/// own git dir and index under the state dir, the project folder as the work
+/// tree.
+pub(crate) struct CheckpointRepo<'a> {
+    pub git_dir: &'a Path,
+    pub work_tree: &'a Path,
+    pub index: &'a Path,
+    /// The ignore file the store reads (`core.excludesFile`): the project's
+    /// own `info/exclude`, copied in through the guarded helper, and ours.
+    pub exclude: &'a Path,
+}
+
+/// The device git reads as an empty global config.
+pub(crate) const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+
+/// Git variables a caller's environment could carry into a checkpoint call to
+/// point it at another repo, config, index or attribute source, or to inject
+/// config (`GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` is how a parent git
+/// hands its `-c` pairs to a hook).
+const CHECKPOINT_FOREIGN_ENV: &[&str] = &[
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_LITERAL_PATHSPECS",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_EXTERNAL_DIFF",
+    "GIT_DIFF_OPTS",
+    "GIT_DEFAULT_HASH",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_GRAFT_FILE",
+    "GIT_TEMPLATE_DIR",
+    "GIT_EXEC_PATH",
+    "GIT_PAGER",
+    "GIT_EDITOR",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_ASKPASS",
+    "GIT_PROXY_COMMAND",
+    "GIT_TRACE",
+    "GIT_TRACE2",
+];
+
+/// The empty tree of a SHA-1 repository, as `GIT_ATTR_SOURCE`: no attribute
+/// is read from the work tree (the store is created SHA-1, whatever the
+/// caller's `GIT_DEFAULT_HASH`).
+const CHECKPOINT_EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// `git <args>` against a checkpoint store: the project folder is the work
+/// tree but **none of its repo's config, attributes or hooks** (nor the
+/// user's or the system's) is read, because the folder is attacker-controlled
+/// and a global config may name filter drivers (Git LFS) or an fsmonitor.
+///
+/// - `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` name the store, so the folder's
+///   own `.git` (and its `config`, `commondir`, hooks) is never discovered;
+///   `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` = the null device leave
+///   only the store's own config, which holds nothing executable.
+/// - Hooks and `core.fsmonitor` are pinned off like every other call
+///   ([`HARDENED_CONFIG`], [`NO_HOOKS_CONFIG`]); a `.gitattributes` `filter=`
+///   names a driver no config defines, and `GIT_ATTR_SOURCE` = the empty tree
+///   plus `GIT_ATTR_NOSYSTEM` switch the work tree's attributes off, so the
+///   bytes stored are the bytes on disk (no end-of-line conversion, `ident`).
+/// - Nothing here is the project's `.git`: `GIT_COMMON_DIR` and friends are
+///   dropped from the inherited environment.
+///
+/// The caller bounds the run (`git_bounded`). It builds on [`git_command`], the
+/// one spawn the scan `every_local_git_spawn_goes_through_the_hardened_builder`
+/// allows, so it needs no `BARE_GIT_ALLOWED` row of its own.
+pub(crate) fn checkpoint_git_command<S: AsRef<str>>(repo: &CheckpointRepo<'_>, args: &[S]) -> std::process::Command {
+    // Leading `-c` pairs are git's pre-subcommand options and pass through
+    // `git_args` untouched, ahead of the subcommand.
+    let pins = [
+        "core.symlinks=true",
+        "core.autocrlf=false",
+        "core.safecrlf=false",
+        "core.splitIndex=false",
+        "core.untrackedCache=false",
+        "core.quotePath=false",
+        "gc.auto=0",
+        "commit.gpgSign=false",
+        "tag.gpgSign=false",
+        "maintenance.auto=false",
+    ];
+    let mut all: Vec<String> = Vec::new();
+    for kv in pins {
+        all.extend(["-c".to_string(), kv.to_string()]);
+    }
+    all.extend(["-c".to_string(), format!("core.excludesFile={}", crate::paths::display_path(repo.exclude))]);
+    all.extend(["-c".to_string(), format!("core.attributesFile={NULL_DEVICE}")]);
+    all.extend(args.iter().map(|a| a.as_ref().to_string()));
+    let mut cmd = git_command(&all, Hooks::Off);
+    for name in CHECKPOINT_FOREIGN_ENV {
+        cmd.env_remove(name);
+    }
+    cmd.current_dir(repo.work_tree);
+    cmd.env("GIT_DIR", crate::paths::display_path(repo.git_dir))
+        .env("GIT_WORK_TREE", crate::paths::display_path(repo.work_tree))
+        .env("GIT_INDEX_FILE", crate::paths::display_path(repo.index))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_ATTR_SOURCE", CHECKPOINT_EMPTY_TREE)
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // Its messages are matched (`snapshot::stage_with`): never translated.
+        .env("LC_ALL", "C")
+        .env_remove("LANGUAGE")
+        .env("GIT_AUTHOR_NAME", crate::brand::DISPLAY)
+        .env("GIT_AUTHOR_EMAIL", "checkpoints@localhost")
+        .env("GIT_COMMITTER_NAME", crate::brand::DISPLAY)
+        .env("GIT_COMMITTER_EMAIL", "checkpoints@localhost")
+        // The store's index is ours: a refresh may be written back.
+        .env_remove("GIT_OPTIONAL_LOCKS");
+    cmd
 }
 
 /// The subcommand of a git argument list: the first argument after any
@@ -806,6 +949,9 @@ pub(crate) fn local_non_repo(target: Option<&RemoteTarget>, project_dir: &str) -
 
 /// [`git_available`] on the calling thread, for code already off the window's.
 pub fn git_available_blocking() -> bool {
+    if git_probe_would_prompt() {
+        return false;
+    }
     // Bare on purpose: `--version` touches no repo.
     crate::paths::command_no_window("git")
         .arg("--version")
@@ -814,55 +960,65 @@ pub fn git_available_blocking() -> bool {
         .unwrap_or(false)
 }
 
-/// `-c` pairs for an ephemeral inline credential helper that answers an https
-/// challenge with the effective token — **only for `origins`** (from
-/// `git_hosting::token_origins`). The token is read from the child's env INSIDE
-/// the snippet, so it never lands in argv or on disk. A leading empty
-/// `credential.helper=` clears every helper configured so far (a system GCM, and
-/// any a repo's own config names) so only ours runs.
-///
-/// Scoping by origin is the point: the push URL comes from `.git/config`, which a
-/// fenced agent can rewrite (`pushurl`, `insteadOf`), and an unscoped helper
-/// would hand the token to whatever server that names. Harmless for SSH remotes —
-/// git won't call an http helper. Shared by push, publish and clone.
-pub(crate) fn scoped_token_config(origins: &[String], username: &str) -> Vec<String> {
-    let helper = format!(
-        "!f() {{ test \"$1\" = get && echo username={username} && echo \"password=${UPPER}_GIT_TOKEN\"; }}; f" // privacy-check: ok — an env-var NAME; the token is read at runtime, never written here
-    );
-    let mut args = vec!["-c".to_string(), "credential.helper=".to_string()];
-    for origin in origins {
-        args.push("-c".to_string());
-        args.push(format!("credential.{origin}.helper={helper}"));
+/// macOS (2442t): `/usr/bin/git` is a stub that, without Apple's Command Line
+/// Tools, raises the system "install developer tools" dialog instead of
+/// answering. When that stub is the git found and `xcode-select -p` names no
+/// developer dir, git counts as missing — the app's own "Install git" offer
+/// (`xcode-select --install`) is then the one dialog the user sees.
+fn git_probe_would_prompt() -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
     }
-    args
+    // The git `command_no_window` will run: the root-owned system copy first.
+    let resolved = crate::paths::helper_program(std::ffi::OsStr::new("git"))
+        .or_else(|| crate::paths::resolve_executable("git"));
+    stub_without_tools(resolved.as_deref(), || {
+        crate::paths::command_no_window("/usr/bin/xcode-select")
+            .arg("-p")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
+}
+
+/// Whether `resolved` is the macOS git stub and `developer_dir` says the tools
+/// it would run are not installed. Pure over `developer_dir`.
+fn stub_without_tools(resolved: Option<&Path>, developer_dir: impl FnOnce() -> bool) -> bool {
+    resolved.is_some_and(|p| p == Path::new("/usr/bin/git")) && !developer_dir()
+}
+
+/// The local git's `(major, minor)`, or `None` when there is no git or its
+/// banner doesn't parse. Bare on purpose, as [`git_available_blocking`].
+pub fn local_git_version_blocking() -> Option<(u32, u32)> {
+    if git_probe_would_prompt() {
+        return None;
+    }
+    let out = crate::paths::command_no_window("git").arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_git_version(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// The transport half of an agent-requested push (`services::git_push_mcp`):
 /// one explicit `refspec` to one explicit `url`, hooks off. Unlike
 /// [`push_local`] this never runs the repo's `pre-push` — the fenced,
 /// tokenless preflight has already run it — so no project code runs on the
-/// host while `TABTIVITY_GIT_TOKEN` is in the environment. `--no-verify` says so
+/// host while a token is in the environment. `--no-verify` says so
 /// twice: [`hardened_git_command_in`] already pins `core.hooksPath=`, which
 /// also silences `reference-transaction`. The URL goes on the command line, so
 /// `remote.<r>.pushurl` plays no part (a repo-scope `insteadOf` is refused by
-/// the caller before this runs). `token` is offered only to `origins`. The
-/// caller runs it under its own timeout.
+/// the caller before this runs). Each token in `auth` is offered only to its
+/// own origin. The caller runs it under its own timeout.
 pub(crate) fn push_transport_command(
     dir: &std::path::Path,
     url: &str,
     refspec: &str,
-    token: Option<&str>,
-    origins: &[String],
+    auth: &GitAuth,
 ) -> std::process::Command {
-    let mut args: Vec<String> = Vec::new();
-    if token.is_some() {
-        args.extend(scoped_token_config(origins, "x-access-token"));
-    }
+    let mut args = auth.git_args("x-access-token");
     args.extend(["push", "--no-verify", "--porcelain", "--", url, refspec].map(str::to_string));
     let mut cmd = hardened_git_command_in(dir, &args);
-    if let Some(tok) = token {
-        cmd.env(crate::app_env!("GIT_TOKEN"), tok);
-    }
+    auth.apply_env(&mut cmd);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     // A `refs/replace` graft would otherwise pass push's fast-forward check
     // for a commit that rewrites the remote branch.
@@ -978,6 +1134,65 @@ pub(crate) struct HostGit {
     /// The host runs `timeout -k <s> <s> git …` (GNU coreutils, BusyBox), so a
     /// host git call is bounded on the host as well.
     pub timeout: bool,
+    /// The host was reached and its shell found no `git` (exit 127), as
+    /// opposed to a host that could not be probed at all.
+    pub missing: bool,
+}
+
+/// The error every git call on a host without git ends in
+/// (`ssh_exec::run_git_remote`), instead of an empty answer or a refusal that
+/// blames the connection.
+pub(crate) const HOST_GIT_MISSING: &str = "git is not installed on the remote host (or not on its PATH).";
+
+/// The exit status a POSIX shell reports for a command it cannot find. git
+/// itself never exits with it, so over ssh it means the host has no git.
+pub(crate) const SHELL_NOT_FOUND: i32 = 127;
+
+/// How a read verb's failed git run reads.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReadFailure {
+    /// git ran and said the folder is not a repository: a clean "no repo".
+    NotARepo,
+    /// Anything else (no git, a refused or corrupt repo, an unsafe owner): no
+    /// reading at all, never to be shown as an empty or clean one.
+    Error(String),
+}
+
+/// [`ReadFailure`] for a failed run's exit `code` and `stderr`. git's "not a
+/// git repository" is matched in English: a local git runs under `LC_ALL=C`; a
+/// host git in another language reads as an error, which is still no false
+/// "clean". Pure.
+pub(crate) fn read_failure(code: Option<i32>, stderr: &[u8]) -> ReadFailure {
+    let text = String::from_utf8_lossy(stderr);
+    let text = text.trim();
+    if code == Some(SHELL_NOT_FOUND) {
+        return ReadFailure::Error(HOST_GIT_MISSING.to_string());
+    }
+    if code == Some(128) && text.to_ascii_lowercase().contains("not a git repository") {
+        return ReadFailure::NotARepo;
+    }
+    ReadFailure::Error(if text.is_empty() {
+        match code {
+            Some(c) => format!("git exited with status {c}"),
+            None => "git was stopped by a signal".to_string(),
+        }
+    } else {
+        text.to_string()
+    })
+}
+
+/// [`read_failure`] for a finished run; `None` when it succeeded.
+pub(crate) fn failed_read(out: &std::process::Output) -> Option<ReadFailure> {
+    (!out.status.success()).then(|| read_failure(out.status.code(), &out.stderr))
+}
+
+/// A failed run as an error message, for a caller with no "no repo" answer of
+/// its own.
+pub(crate) fn failure_message(out: &std::process::Output) -> String {
+    match read_failure(out.status.code(), &out.stderr) {
+        ReadFailure::NotARepo => "not a git repository".to_string(),
+        ReadFailure::Error(why) => why,
+    }
 }
 
 /// `(major, minor)` from `git --version`'s output (`git version 2.39.3 (Apple
@@ -1057,18 +1272,24 @@ fn probe_host_git(spec: &crate::schema::project::RemoteSpec) -> HostGit {
     };
     let version = |out: &std::process::Output| parse_git_version(&String::from_utf8_lossy(&out.stdout));
     let Some(out) = run(HOST_GIT_PROBE_BOUNDED) else {
-        return HostGit { version: None, timeout: false };
+        return HostGit { version: None, timeout: false, missing: false };
     };
     if out.status.success() {
         if let Some(v) = version(&out) {
-            return HostGit { version: Some(v), timeout: true };
+            return HostGit { version: Some(v), timeout: true, missing: false };
         }
     }
     // ssh's own failure (255): the host was not reached, so a second try would not be either.
     if out.status.code() == Some(255) {
-        return HostGit { version: None, timeout: false };
+        return HostGit { version: None, timeout: false, missing: false };
     }
-    HostGit { version: run(HOST_GIT_PROBE).as_ref().and_then(version), timeout: false }
+    // The bounded probe's 127 may be a missing `timeout`; only the bare one's says git.
+    let bare = run(HOST_GIT_PROBE);
+    HostGit {
+        version: bare.as_ref().and_then(version),
+        timeout: false,
+        missing: bare.as_ref().is_some_and(|o| o.status.code() == Some(SHELL_NOT_FOUND)),
+    }
 }
 
 /// Turn git's own auth failure into the one sentence that tells the user what to
@@ -1116,7 +1337,8 @@ pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, St
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let token = crate::services::git_hosting::global_git_token();
+    // No project yet: every host default, each for its own host.
+    let auth = crate::services::git_hosting::hosts_auth();
     let https = {
         let lower = url.to_ascii_lowercase();
         lower.starts_with("https://") || lower.starts_with("http://")
@@ -1128,11 +1350,8 @@ pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, St
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     if https {
-        if let Some(tok) = token.as_deref() {
-            let origins = crate::services::git_hosting::token_origins(None, None);
-            cmd.args(scoped_token_config(&origins, "x-access-token"));
-            cmd.env(crate::app_env!("GIT_TOKEN"), tok);
-        }
+        cmd.args(auth.git_args("x-access-token"));
+        auth.apply_env(&mut cmd);
     }
     // `--` so a URL can never be read as an option.
     cmd.args(["clone", "--", &url, &dest]);
@@ -1151,9 +1370,47 @@ pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, St
         if dest_path.exists() {
             let _ = std::fs::remove_dir_all(&dest_path);
         }
-        return Err(clone_error(&raw, token.is_some(), https));
+        return Err(clone_error(&raw, !auth.is_empty(), https));
     }
     Ok(dest)
+}
+
+#[cfg(test)]
+mod stub_probe_tests {
+    use super::*;
+
+    /// 2442t: the macOS git stub without the Command Line Tools is not run
+    /// (it would raise the system dialog); any other git, or the stub with the
+    /// tools installed, is.
+    #[test]
+    fn the_mac_git_stub_counts_as_missing_without_the_tools() {
+        let stub = Path::new("/usr/bin/git");
+        assert!(stub_without_tools(Some(stub), || false));
+        assert!(!stub_without_tools(Some(stub), || true));
+        assert!(!stub_without_tools(Some(Path::new("/opt/homebrew/bin/git")), || false));
+        assert!(!stub_without_tools(None, || false));
+    }
+
+    /// A failed read is "no repo" only on git's own not-a-repo answer; a host
+    /// without git, a refused repo and a silent failure are errors.
+    #[test]
+    fn a_failed_read_is_no_repo_only_on_gits_own_answer() {
+        assert_eq!(
+            read_failure(Some(128), b"fatal: not a git repository (or any of the parent directories): .git\n"),
+            ReadFailure::NotARepo
+        );
+        assert_eq!(
+            read_failure(Some(SHELL_NOT_FOUND), b"sh: 1: git: not found\n"),
+            ReadFailure::Error(HOST_GIT_MISSING.to_string())
+        );
+        let owner = b"fatal: detected dubious ownership in repository at '/srv/x'\n";
+        assert_eq!(
+            read_failure(Some(128), owner),
+            ReadFailure::Error("fatal: detected dubious ownership in repository at '/srv/x'".into())
+        );
+        assert_eq!(read_failure(Some(1), b""), ReadFailure::Error("git exited with status 1".into()));
+        assert_eq!(read_failure(None, b""), ReadFailure::Error("git was stopped by a signal".into()));
+    }
 }
 
 /// Hosted plan §6.5 gate 1: in a shared project's repo, config sanitizing

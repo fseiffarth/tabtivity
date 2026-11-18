@@ -29,6 +29,14 @@ import { OutboxViewer } from "../../../mobile-web/src/components/OutboxViewer";
 import { markupAgent } from "../../../mobile-web/src/markup/newTab";
 import type { AgentRow } from "../../../mobile-web/src/api";
 
+/** The round, the ticks and the agent's card wait behind the head's Agent
+ * badge while marking: open its sheet (it stays open while marking). */
+const openAgent = () => {
+  const badge = screen.queryByRole("button", { name: /^Agent/ });
+  if (badge && badge.getAttribute("aria-pressed") !== "true") fireEvent.click(badge);
+};
+
+
 const PICTURE = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
 const LAYER = addMark(EMPTY_LAYER, 1, [800, 600], { kind: "ink", color: "red", width: 2, points: [[10, 10, 0.5], [40, 30, 0.5]] });
 const AGENTS: AgentRow[] = [
@@ -119,6 +127,7 @@ describe("MarkupView · Submit with no agent tab", () => {
     const show = vi.fn();
     const onClose = vi.fn();
     render(<MarkupView projectId="p1" scope={{ project: "p1" }} file={PICTURE} newTab={{ projectId: "p1", show }} onClose={onClose} />);
+    openAgent();
     showPicture();
     expect(screen.getByText(/Submit opens a new tab of your default agent/)).toBeTruthy();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
@@ -151,6 +160,7 @@ describe("MarkupView · Submit with no agent tab", () => {
   it("follows the opened tab's turn in the round's pill", async () => {
     desktop({ status: "working" });
     render(<MarkupView projectId="p1" scope={{ project: "p1" }} file={PICTURE} newTab={{ projectId: "p1", show: vi.fn() }} onClose={vi.fn()} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());
@@ -161,6 +171,7 @@ describe("MarkupView · Submit with no agent tab", () => {
     const calls = desktop({ heldFails: 1 });
     const show = vi.fn();
     render(<MarkupView projectId="p1" scope={{ project: "p1" }} file={PICTURE} newTab={{ projectId: "p1", show }} onClose={vi.fn()} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(submitButton().disabled).toBe(false));
     fireEvent.click(submitButton());

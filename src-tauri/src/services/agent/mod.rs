@@ -9,6 +9,9 @@ pub mod agent_api_keys;
 // Claude rotates that file by rename.
 pub mod agent_auth;
 pub mod agent_bin;
+// "Continue with another CLI": a tab's conversation, notes and working tree written as
+// one HANDOFF.md in the scope's agent home for the next CLI to read.
+pub mod agent_cli_handoff;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
 pub mod agent_changes;
@@ -30,14 +33,21 @@ pub mod agent_hint;
 // Where each CLI keeps its conversations in an agent home, for export/import.
 pub mod agent_history;
 pub mod agent_home;
+// The first-start question a fresh install is asked before this computer's
+// agent logins and config are copied.
+pub mod agent_import_offer;
 pub mod agent_install;
 pub mod agent_latest;
+pub mod agent_privacy;
 pub mod agent_prompts;
 // The built-in agent-CLI registry (`AGENTS`) and its lookups.
 pub mod agent_registry;
 // An agent tab's conversation taken along to another worktree (the Reader's
 // branch chip).
 pub mod agent_relocate;
+// Whether a respawn would resume an agent tab's own conversation: the stop
+// sweep's check before it ends an idle tab (docs/agent_tab_stop_plan.md).
+pub mod agent_resume_pinned;
 pub mod agent_session;
 pub mod agent_shim;
 pub mod agent_sqlite;
@@ -53,6 +63,9 @@ pub mod agent_turn;
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
 pub mod agent_versions;
+// Claude's long-lived token (`claude setup-token`): kept in the keyring,
+// the fallback login of every Claude tab with no shared login, local and remote.
+pub mod claude_token;
 // One overview of the CLIs in use: plan, account, usage windows
 // (docs/cli_overview_plan.md).
 pub mod cli_overview;
@@ -72,14 +85,23 @@ pub mod copilot_auth;
 // Copilot CLI's own session store: the tab's pinned session, its events, its
 // folder's chats (the Reader's chat, Diffs and Resume menu).
 pub mod copilot_session;
+// Meta Muse Code's session store: the Reader's chat, the Resume menu and a
+// restored tab's `resume --last`.
+pub mod muse_session;
 pub mod opencode_models;
 pub mod opencode_session;
 pub mod opencode_store;
+// Antigravity's PreInvocation hook: which conversation is each tab's own.
+pub mod antigravity_session;
+// The plans an Antigravity chat wrote, read back for the phone and the Chat.
+pub mod agent_artifacts;
 pub mod google_chat;
 // Change notifications for the transcripts the desktop Reader shows.
 pub mod transcript_watch;
 // The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
 pub mod assistant;
+// Whether a chat has had an `@` attachment: the backend's own record, read by the web lane.
+pub mod assistant_attach;
 // Claude's own `/model` list for the assistant's chats, read by a short-lived probe.
 pub mod assistant_model_probe;
 // The rows each CLI's own model picker last drew, per installed build.

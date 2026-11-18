@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Standalone, synthetic-document CLS probe; never starts Tabtivity.
 
-Usage: python3 scripts/copilot-probe.py /absolute/path/to/copilot-language-server
-No credentials are read from other editors. Sign-in is deliberately not part of
-this unauthenticated probe: the 1.547.0 default auth repository is plaintext.
-Protocol payloads and server logs are not printed.
+Usage: python3 scripts/copilot-probe.py [--sign-in] /absolute/path/to/copilot-language-server
+No credentials are read from other editors: HOME, the XDG directories and the
+Copilot home all point into a temporary directory, and only PATH and the locale
+are inherited. `--sign-in` adds an anonymous `signIn` that stops at the
+returned device code (never finished, so no account is involved): it proves the
+server reaches GitHub. Protocol payloads, the code itself and server logs are
+not printed.
 """
 
 import json
@@ -19,7 +22,7 @@ import threading
 import time
 
 
-def probe(executable):
+def probe(executable, sign_in=False):
     with tempfile.TemporaryDirectory(prefix="tabtivity-cls-probe-") as directory:
         root = Path(directory)
         project = root / "synthetic-project"
@@ -28,9 +31,14 @@ def probe(executable):
         # A directory at the database filename forces the inspected server's
         # in-memory fallback. No credential database may be written on disk.
         (config / "github-copilot" / "auth.db").mkdir(parents=True)
+        # Without HOME a server falls back to the account's real home, where
+        # another tool's GitHub sign-in may lie.
+        home = root / "home"
+        home.mkdir()
         env = {key: value for key, value in os.environ.items()
                if key in ("PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL")}
-        env.update(XDG_CONFIG_HOME=str(config), XDG_CACHE_HOME=str(root / "cache"),
+        env.update(HOME=str(home), USERPROFILE=str(home),
+                   XDG_CONFIG_HOME=str(config), XDG_CACHE_HOME=str(root / "cache"),
                    XDG_STATE_HOME=str(root / "state"), COPILOT_HOME=str(root / "copilot"))
         process = subprocess.Popen([executable, "--stdio"], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -126,6 +134,15 @@ def probe(executable):
             notify("$/cancelRequest", {"id": 3})
             response = result(3)
             print("cancelled completion error code:", response.get("error", {}).get("code"))
+            if sign_in:
+                send({"id": 5, "method": "signIn", "params": {}})
+                reply = result(5)
+                answer = reply.get("result") or {}
+                print("signIn error code:", reply.get("error", {}).get("code"))
+                print("signIn status:", answer.get("status"))
+                print("signIn user code length:", len(answer.get("userCode") or ""))
+                print("signIn verificationUri:", answer.get("verificationUri"))
+                print("signIn command:", (answer.get("command") or {}).get("command"))
             notify("textDocument/didClose", {"textDocument": {"uri": uri}})
             notify("textDocument/didFocus", {})
             send({"id": 4, "method": "shutdown", "params": {}})
@@ -144,6 +161,9 @@ def probe(executable):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or not Path(sys.argv[1]).is_absolute():
+    arguments = sys.argv[1:]
+    with_sign_in = "--sign-in" in arguments
+    paths = [argument for argument in arguments if argument != "--sign-in"]
+    if len(paths) != 1 or not Path(paths[0]).is_absolute():
         sys.exit("Provide the absolute path to an installed Copilot language server.")
-    probe(sys.argv[1])
+    probe(paths[0], with_sign_in)

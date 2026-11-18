@@ -20,11 +20,14 @@
  * chip scrolls the page to its pin.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useStableList } from "../../../hooks/useStableList";
 import { CheckboxIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, SquareIcon } from "../../common/icons/Icon";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useT } from "../../../lib/i18n";
 import {
   answersOf,
+  arrivalGuard,
+  MAX_OTHER,
   NO_PICK,
   pagePins,
   splitRecommended,
@@ -40,10 +43,6 @@ import { pageTextItemBoxes } from "./pageText";
 import { scrollIntoPdfBox } from "./scrollBox";
 import type { MarkupQuestions, QuestionFocus } from "./usePdfMarkup";
 
-/** The longest an **Other…** answer may be (`markup_mcp::MAX_OTHER_CHARS`). */
-const MAX_OTHER = 500;
-/** How long a newly shown ask takes no clicks (the phone card's rule). */
-export const ARRIVAL_GUARD_MS = 1_200;
 
 /** Where a pin's key in the card's `pinned` set comes from. */
 export const pinKey = (askId: string, index: number) => `${askId}:${index}`;
@@ -88,8 +87,12 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
   const cardRef = useRef<HTMLDivElement>(null);
   const busy = questions.answering !== null;
   const sending = questions.answering === ask.id;
-  const [arrivedAt] = useState(() => Date.now());
-  const settling = () => Date.now() - arrivedAt < ARRIVAL_GUARD_MS;
+  const [guard] = useState(() => {
+    const opened = arrivalGuard();
+    opened.arrive(Date.now());
+    return opened;
+  });
+  const settling = () => guard.settling(Date.now());
   const answers = answersOf(ask.questions, picks);
 
   // A pin was clicked: turn the card to its question and bring it into view.
@@ -270,18 +273,17 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
  */
 export function useQuestionPins(doc: PDFDocumentProxy | null, asks: readonly MarkupAsk[]): Map<number, QuestionPin[]> {
   const [texts, setTexts] = useState<{ doc: PDFDocumentProxy; pages: Map<number, TextItemBox[]> } | null>(null);
-  const pageList = useMemo(
+  const pageList = useStableList(useMemo(
     () => [...new Set(asks.flatMap((ask) => ask.questions.flatMap((q) => (q.page ? [q.page] : []))))]
       .filter((page) => doc !== null && page <= doc.numPages)
       .sort((a, b) => a - b),
     [asks, doc],
-  );
-  const wanted = pageList.join(",");
+  ));
   useEffect(() => {
-    if (!doc || !wanted) return;
+    if (!doc || !pageList.length) return;
     let live = true;
     const have = texts?.doc === doc ? texts.pages : null;
-    const missing = wanted.split(",").map(Number).filter((page) => !have?.has(page));
+    const missing = pageList.filter((page) => !have?.has(page));
     if (!missing.length) return;
     void Promise.all(missing.map((page) => pageTextItemBoxes(doc, page).then((items): [number, TextItemBox[]] => [page, items], (): [number, TextItemBox[]] => [page, []])))
       .then((read) => {
@@ -296,7 +298,7 @@ export function useQuestionPins(doc: PDFDocumentProxy | null, asks: readonly Mar
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, wanted]);
+  }, [doc, pageList]);
   // Matching the quotes walks every named page's text runs: only again when
   // the asks or the read text change, not on every render of the viewer.
   return useMemo(() => {

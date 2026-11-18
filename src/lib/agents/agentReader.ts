@@ -17,23 +17,27 @@ export type { SessionTranscript };
 
 /** The agents whose transcript the backend reads; any other family answers
  * `unsupported` there. The phone bridge's list (`MobileBridgeHost`). */
-const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot"]);
+const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot", "muse"]);
 
 /** The agents whose session is found by the tab's folder (and launch moment)
  * rather than by a launch id Tabtivity mints: they read with no `sessionId`. */
-const FOLDER_AGENTS = new Set(["opencode", "agy"]);
+const FOLDER_AGENTS = new Set(["opencode", "agy", "muse"]);
 
 /** Whether a Reader of `agent` can list the files its conversation changed:
- * Antigravity's transcript carries no tool results to diff. */
+ * Antigravity's and Muse's transcripts carry no tool results to diff. */
 export function changesOffered(agent: string): boolean {
-  return agent !== "agy";
+  return agent !== "agy" && agent !== "muse";
 }
 
 /** A local-model tab's driver (`list_local_drivers` id): the one it was
- * started with, or the one its saved launch line names. Empty for any other
- * tab, and for a local tab started before the driver was recorded. */
-export function localTabDriver(tab: Pick<TabEntry, "kind" | "localDriver" | "localLaunch">): string {
-  return tab.kind === "local_agent" ? tab.localDriver ?? tab.localLaunch?.driver ?? "" : "";
+ * started with, or the one its saved launch line names — else OpenCode for a
+ * tab whose `cmd` is `opencode`, the one driver that never goes through
+ * `ollama launch` (a resumed tab whose launch line was not kept carries
+ * neither field, and its Chat would read as unsupported). Empty for any
+ * other tab, and for a local tab started before the driver was recorded. */
+export function localTabDriver(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch">): string {
+  if (tab.kind !== "local_agent") return "";
+  return tab.localDriver ?? tab.localLaunch?.driver ?? (tab.cmd === "opencode" ? "opencode" : "");
 }
 
 /** The agent whose transcript `tab` keeps, as `agent_tab_transcript` names

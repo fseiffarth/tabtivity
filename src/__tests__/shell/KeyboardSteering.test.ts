@@ -11,6 +11,9 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) 
 
 import { projectStations, useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useProjectsStore } from "../../stores/projects";
+import { useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
+import { useTabsStore } from "../../stores/tabs";
 import type { ProjectEntry } from "../../types";
 
 function project(id: string, position: number, status = "active"): ProjectEntry {
@@ -20,6 +23,9 @@ function project(id: string, position: number, status = "active"): ProjectEntry 
 beforeEach(() => {
   useKeyboardSteeringStore.setState({ active: false });
   useProjectsStore.setState({ projects: [] });
+  useBoxesStore.setState({ boxes: [] });
+  resetBoxSlice();
+  useTabsStore.setState({ scope: "root" });
 });
 
 describe("mode", () => {
@@ -41,5 +47,45 @@ describe("projectStations", () => {
       projects: [project("c", 2), project("z", 5, "inactive"), project("a", 0, "current"), project("b", 1)],
     });
     expect(projectStations()).toEqual([null, "a", "b", "c"]);
+  });
+
+  describe("inside a box slice", () => {
+    beforeEach(() => {
+      useProjectsStore.setState({
+        projects: [
+          project("a", 0),
+          project("b", 1, "inactive"),
+          project("c", 2),
+          project("d", 3),
+          project("e", 4, "inactive"),
+        ],
+      });
+      useBoxesStore.setState({
+        boxes: [{ id: "bx", name: "bx", member_ids: ["d", "b", "a"], position: 0 }],
+      });
+    });
+
+    it("is the visible pills: the members, inactive ones included, in the box's own order", () => {
+      useBoxSliceStore.setState({ sliceBoxId: "bx" });
+      expect(projectStations()).toEqual([null, "d", "b", "a"]);
+    });
+
+    it("keeps the project in scope even when it is not a member", () => {
+      useBoxSliceStore.setState({ sliceBoxId: "bx" });
+      useTabsStore.setState({ scope: "c" });
+      // A guest after the members, as the strip draws it.
+      expect(projectStations()).toEqual([null, "d", "b", "a", "c"]);
+    });
+
+    it("is the plain active ring again once the slice is left", () => {
+      useBoxSliceStore.setState({ sliceBoxId: "bx" });
+      useBoxSliceStore.setState({ sliceBoxId: null });
+      expect(projectStations()).toEqual([null, "a", "c", "d"]);
+    });
+
+    it("falls back to the plain ring when the sliced box is gone", () => {
+      useBoxSliceStore.setState({ sliceBoxId: "vanished" });
+      expect(projectStations()).toEqual([null, "a", "c", "d"]);
+    });
   });
 });

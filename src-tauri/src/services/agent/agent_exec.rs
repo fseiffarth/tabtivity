@@ -55,7 +55,8 @@ pub struct Mapping {
 /// The variables a carrier may set: the CLIs' credential variables that carry
 /// an API proxy token (`agent_api_keys::ENV_VARS`) — the user's own key's or a
 /// hosted server administrator's, which reach agents only through the proxy
-/// (#2389) — nothing else. The step runs *outside* the
+/// (#2389) — and Claude's long-lived token (`claude_token::TOKEN_ENV`),
+/// nothing else. The step runs *outside* the
 /// fence, in front of bwrap or `sandbox-exec` (and of an unfenced Host
 /// session's CLI), so a carrier able to name any variable would be an
 /// environment-injection lever there: `LD_PRELOAD`, `PATH`, `BASH_ENV` or
@@ -64,7 +65,10 @@ pub struct Mapping {
 /// running_binary`, `/proc/<pid>/exe` once replaced), the same build that
 /// injected the carrier. A name a later build adds is added here with it.
 pub fn targets() -> Vec<&'static str> {
-    crate::services::agent_api_keys::ENV_VARS.to_vec()
+    let mut targets = crate::services::agent_api_keys::ENV_VARS.to_vec();
+    // Claude's long-lived token, the fallback login (`claude_token`).
+    targets.push(crate::services::claude_token::TOKEN_ENV);
+    targets
 }
 
 /// Whether `key` is a carrier, by bytes: a name that is not UTF-8 still

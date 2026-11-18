@@ -332,19 +332,13 @@ fn scaffold_project_integration_creates_full_structure() {
     let tmp = setup();
     scaffold_project(tmp.path(), true).unwrap();
 
-    // Every canonical scaffold file must be present.
-    for f in &[
-        "AGENTS.md",
-        "CLAUDE.md",
-        "GEMINI.md",
-        "TODO.md",
-        "ROADMAP.md",
-        "STATUS.md",
-        "README.md",
-        ".gitignore",
-        ".claude/settings.json",
-    ] {
+    // Every default scaffold file must be present.
+    for f in &["AGENTS.md", "README.md", ".gitignore"] {
         assert!(tmp.path().join(f).exists(), "missing scaffold: {f}");
+    }
+    // The pointer files, the on-demand docs and `.claude/` are not scaffolded.
+    for f in &["CLAUDE.md", "GEMINI.md", "TODO.md", "ROADMAP.md", "STATUS.md", "PROJECT.md", ".claude"] {
+        assert!(!tmp.path().join(f).exists(), "unexpected scaffold: {f}");
     }
 }
 
@@ -358,15 +352,4 @@ fn scaffold_project_gitignore_contains_app() {
         gitignore.contains(concat!(".", app_lib::app_slug!(), "/")),
         ".gitignore must exclude .{SLUG}/: {gitignore}"
     );
-}
-
-#[test]
-fn scaffold_project_claude_settings_is_valid_json() {
-    let tmp = setup();
-    scaffold_project(tmp.path(), true).unwrap();
-
-    let content = fs::read_to_string(tmp.path().join(".claude/settings.json")).unwrap();
-    let parsed: serde_json::Value =
-        serde_json::from_str(&content).expect(".claude/settings.json must be valid JSON");
-    assert!(parsed.is_object());
 }

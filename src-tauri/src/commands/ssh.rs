@@ -52,9 +52,9 @@ pub fn ssh_tooling_status() -> SshTooling {
 }
 
 /// What the fingerprint-confirmation dialog shows for a host Tabtivity has never
-/// connected to. `scan` is the raw known_hosts text behind `keys` and is handed
-/// straight back to [`ssh_trust_host_key`], so what gets stored is exactly what
-/// was shown — a re-scan at accept time would leave a window for a different key.
+/// connected to. Accepting hands the shown fingerprints back to
+/// [`ssh_trust_host_key`], which re-scans and stores only a key carrying one of
+/// them — so what gets stored is exactly what was shown.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostKeyPreview {
     /// Resolved `host:port` (after `~/.ssh/config`), so the dialog names the
@@ -64,8 +64,6 @@ pub struct HostKeyPreview {
     /// to ask and the caller can proceed straight to connecting.
     pub known: bool,
     pub keys: Vec<crate::services::ssh_common::HostKeyFingerprint>,
-    /// Opaque known_hosts lines to pass back to `ssh_trust_host_key`.
-    pub scan: String,
 }
 
 /// Fetch the SSH host keys a host currently offers, so the user can verify the
@@ -81,12 +79,11 @@ pub async fn ssh_host_key_preview(
         use crate::services::ssh_common as sc;
         let (resolved, resolved_port) = sc::resolve_host_port(&host, port);
         let known = sc::host_key_known(&resolved, resolved_port);
-        let (scan, keys) = sc::scan_host_keys(&host, port)?;
+        let (_, keys) = sc::scan_host_keys(&host, port)?;
         Ok(HostKeyPreview {
             target: format!("{resolved}:{resolved_port}"),
             known,
             keys,
-            scan,
         })
     })
     .await
@@ -96,9 +93,21 @@ pub async fn ssh_host_key_preview(
 /// appending them to `~/.ssh/known_hosts`. This is the *only* thing that clears
 /// the first-contact gate, and it exists solely to be reachable from a click — no
 /// launch or background path may call it.
+///
+/// Takes the host, not known_hosts text: the backend scans `host`/`port` again
+/// and writes only a plain line for that host whose key has one of
+/// `fingerprints` (the ones the dialog showed). Async: the scan talks to the
+/// network.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn ssh_trust_host_key(scan: String) -> Result<(), String> {
-    crate::services::ssh_common::trust_host_key(&scan)
+pub async fn ssh_trust_host_key(
+    host: String,
+    port: Option<u16>,
+    fingerprints: Vec<String>,
+) -> Result<(), String> {
+    app_core::rt::try_blocking("host key trust failed", move || {
+        crate::services::ssh_common::trust_host_key(&host, port, &fingerprints)
+    })
+    .await
 }
 
 /// Most-recently-used SSH addresses to keep. Old entries past this fall off.
@@ -302,28 +311,75 @@ fn web_url_to_open(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 
+/// Last line of the raw half of a failed run that exited 255, ssh's status for a
+/// connection or authentication failure. ssh never prints it; [`ssh_unreachable`]
+/// reads it so a failure that said nothing ssh-prefixed (a reset or close
+/// mid-handshake, which `LogLevel=ERROR` leaves silent) still reads as unreachable.
+const SSH_EXIT_255: &str = "\u{1e}ssh-exit-255";
+
+/// How long a credential check ([`ssh_probe`]) may take, start to finish.
+/// `ConnectTimeout` bounds only TCP and the banner: name resolution, a dead
+/// ControlMaster the run rides (its `ServerAlive` takes ~45 s to notice) and a
+/// stalled login are not covered, and the Machines menu waits for every host.
+const PROBE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// [`PROBE_LIMIT`] for [`ssh_connect`]: a person is waiting, and a slow login
+/// node gets more room than a menu-open sweep.
+const CONNECT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Run a built command, returning stdout on success or `(explained, raw stderr)`
 /// on failure (a generic message and no stderr when it printed nothing). `what`
 /// names the binary for error messages. The explained form is deliberately lossy,
 /// so a caller that decides on what ssh said (a wrong key passphrase vs a
 /// server-side failure in [`run_ssh_auth`], a dead network in [`probe_verdict`])
 /// reads the raw half.
-fn capture_raw(mut cmd: Command, what: &str) -> Result<String, (String, String)> {
-    let output = cmd
-        .output()
-        .map_err(|e| (format!("failed to run {what}: {e}"), String::new()))?;
+///
+/// With `limit`, a run that outlives it is killed with its process group and
+/// reported as a 255 exit with nothing printed, which [`ssh_unreachable`] reads
+/// as unreachable: no credential was judged.
+fn capture_raw_within(
+    mut cmd: Command,
+    what: &str,
+    limit: Option<std::time::Duration>,
+) -> Result<String, (String, String)> {
+    let output = match limit {
+        Some(limit) => crate::paths::output_within(cmd, limit).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                (
+                    format!("{what} got no answer within {} s", limit.as_secs()),
+                    SSH_EXIT_255.to_string(),
+                )
+            } else {
+                (format!("failed to run {what}: {e}"), String::new())
+            }
+        })?,
+        None => cmd
+            .output()
+            .map_err(|e| (format!("failed to run {what}: {e}"), String::new()))?,
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // ssh exits 255 for every connection failure; the classifier reads that through
+        // a marker line on the raw half (see `SSH_EXIT_255`). The explained half and the
+        // `stderr` the caller shows never carry it.
+        // The marker's control byte is dropped from what the run printed first, so no
+        // output can spell the marker itself.
+        let clean = stderr.replace('\u{1e}', "");
+        let raw = if output.status.code() == Some(255) {
+            if clean.is_empty() { SSH_EXIT_255.to_string() } else { format!("{clean}\n{SSH_EXIT_255}") }
+        } else {
+            clean
+        };
         if stderr.is_empty() {
-            return Err((format!("{what} command failed"), stderr));
+            return Err((format!("{what} command failed"), raw));
         }
         // Headless has no terminal for the user to read, so translate what OpenSSH
         // said into what they got wrong. Unrecognized stderr passes through
         // verbatim rather than being flattened into a vague guess.
         let explained = crate::services::ssh_common::explain_ssh_error(&stderr)
             .unwrap_or_else(|| stderr.clone());
-        return Err((explained, stderr));
+        return Err((explained, raw));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -379,29 +435,41 @@ pub(crate) fn run_ssh_auth(
     password: Option<&str>,
     remote: &[&str],
 ) -> Result<String, String> {
-    run_ssh_auth_raw(user, host, port, password, remote).map_err(|(explained, _)| explained)
+    run_ssh_auth_raw(user, host, port, password, remote, false, None).map_err(|(explained, _)| explained)
 }
 
 /// [`run_ssh_auth`] keeping ssh's raw stderr alongside the explained message, for
 /// the caller that must classify a failure ([`ssh_probe`]). The explained form is
 /// written for a person and says "No route to the host", so a classifier reading
 /// it matches nothing; the raw half is empty when ssh never ran.
+///
+/// `quiet` adds `-o LogLevel=ERROR` ([`quiet_ssh`]): the probe's stderr is then
+/// ssh's own errors only, never a server's pre-auth banner. `limit` bounds each
+/// ssh run ([`capture_raw_within`]); `None` for a caller whose remote command
+/// does real work.
 fn run_ssh_auth_raw(
     user: &Option<String>,
     host: &str,
     port: Option<u16>,
     password: Option<&str>,
     remote: &[&str],
+    quiet: bool,
+    limit: Option<std::time::Duration>,
 ) -> Result<String, (String, String)> {
     use crate::services::ssh_common::SecretKind;
 
     let never_ran = |e: String| (e, String::new());
     let Some(pw) = password.filter(|p| !p.is_empty()) else {
-        let base = ssh_base_args(user, host, port).map_err(never_ran)?;
+        let base = quiet_ssh(ssh_base_args(user, host, port).map_err(never_ran)?, quiet);
         let mut cmd = crate::paths::command_no_window("ssh");
         cmd.args(&base);
         cmd.args(remote);
-        return capture_raw(cmd, "ssh").map_err(|(err, raw)| {
+        return capture_raw_within(cmd, "ssh", limit).map_err(|(err, raw)| {
+            // A host that never answered judged no key, and the hint costs two
+            // more subprocesses per dead host on every sweep.
+            if ssh_unreachable(&raw) {
+                return (err, raw);
+            }
             // `BatchMode=yes` never asks for an encrypted key's passphrase, so a
             // locked key surfaces as a bare "Permission denied (publickey)" with
             // nothing pointing at the actual cause. Name it.
@@ -429,13 +497,17 @@ fn run_ssh_auth_raw(
             crate::services::ssh_common::ssh_passphrase_base_args(user, host, port)
         }
         .map_err(never_ran)?;
-        match run_one_secret_attempt(kind, pw, &base, remote) {
+        let base = quiet_ssh(base, quiet);
+        match run_one_secret_attempt(kind, pw, &base, remote, limit) {
             Ok(out) => return Ok(out),
             Err((explained, raw, rejected_locally)) => {
-                error = (explained, raw);
                 // Definitively a wrong passphrase: retrying it as a login password
-                // would disclose a local secret to the host.
-                if rejected_locally || i == last {
+                // would disclose a local secret to the host. A host that never
+                // answered judged no secret, so the next kind would only wait
+                // out the same timeout again.
+                let stop = rejected_locally || i == last || ssh_unreachable(&raw);
+                error = (explained, raw);
+                if stop {
                     return Err(error);
                 }
             }
@@ -444,18 +516,34 @@ fn run_ssh_auth_raw(
     Err(error)
 }
 
+/// `base` (an option list ending in the `[user@]host` target) with `-o LogLevel=ERROR`
+/// before the target when `quiet`. OpenSSH prints a server's pre-auth banner, and its
+/// own "Connection closed/reset by …" notes, only at INFO and above, so at ERROR what
+/// is left on stderr is ssh's errors: `ssh: connect to host …`, `Could not resolve
+/// hostname`, `kex_exchange_identification: …`, `Permission denied (…)`. A command-line
+/// option outranks `~/.ssh/config`'s `LogLevel`. Checked against OpenSSH 10.2: a
+/// `Connection closed by`/`reset by` line goes away at ERROR, the others stay.
+fn quiet_ssh(mut base: Vec<String>, quiet: bool) -> Vec<String> {
+    if quiet && !base.is_empty() {
+        let at = base.len() - 1;
+        base.splice(at..at, ["-o".to_string(), "LogLevel=ERROR".to_string()]);
+    }
+    base
+}
+
 /// One authentication attempt for [`run_ssh_auth`]: build `ssh` (or `sshpass`)
 /// with the askpass shim for `kind` attached, run it, and return stdout or
 /// `(explained, raw stderr, rejected locally)`.
 ///
 /// The askpass guard must outlive the ssh run — the shim is invoked *during*
-/// authentication — so it stays in scope until `capture_raw` returns, and its
+/// authentication — so it stays in scope until `capture_raw_within` returns, and its
 /// refusal record is read before it drops (dropping deletes it).
 fn run_one_secret_attempt(
     kind: crate::services::ssh_common::SecretKind,
     secret: &str,
     base: &[String],
     remote: &[&str],
+    limit: Option<std::time::Duration>,
 ) -> Result<String, (String, String, bool)> {
     let build_err = |e: String| (e, String::new(), false);
 
@@ -469,7 +557,7 @@ fn run_one_secret_attempt(
         for (k, v) in askpass.env_vars() {
             cmd.env(k, v);
         }
-        let out = capture_raw(cmd, "ssh");
+        let out = capture_raw_within(cmd, "ssh", limit);
         askpass_refusal_raw(kind, &askpass, out)
     }
     #[cfg(not(unix))]
@@ -489,7 +577,7 @@ fn run_one_secret_attempt(
             for (k, v) in askpass.env_vars() {
                 cmd.env(k, v);
             }
-            let out = capture_raw(cmd, "ssh");
+            let out = capture_raw_within(cmd, "ssh", limit);
             askpass_refusal_raw(kind, &askpass, out)
         } else if kind == SecretKind::KeyPassphrase {
             Err(build_err(
@@ -504,7 +592,7 @@ fn run_one_secret_attempt(
             cmd.arg("ssh");
             cmd.args(base);
             cmd.args(remote);
-            capture_raw(cmd, "sshpass").map_err(|(e, raw)| (e, raw, false))
+            capture_raw_within(cmd, "sshpass", limit).map_err(|(e, raw)| (e, raw, false))
         } else {
             Err(build_err(
                 "password auth needs OpenSSH 8.4+ or sshpass — update OpenSSH, \
@@ -573,7 +661,8 @@ pub async fn ssh_connect(
         let effective = password
             .filter(|p| !p.is_empty())
             .or_else(|| creds::get(&account));
-        run_ssh_auth(&user, &host, port, effective.as_deref(), &["true"])?;
+        run_ssh_auth_raw(&user, &host, port, effective.as_deref(), &["true"], false, Some(CONNECT_LIMIT))
+            .map_err(|(explained, _)| explained)?;
         let outcome = creds::remember_secret(&account, remember, effective.as_deref());
         Ok(SshConnectOutcome {
             saved: outcome.saved,
@@ -692,28 +781,52 @@ pub struct SshProbe {
 /// no credential was judged, so a re-try replays nothing. Any text that got as far
 /// as authentication is a "no", whatever else it says.
 ///
-/// `err` is ssh's **raw** stderr: the markers are OpenSSH's own words, which
-/// `explain_ssh_error` rewrites (see [`probe_verdict`]).
+/// `err` is ssh's **raw** stderr from a run with `-o LogLevel=ERROR` ([`quiet_ssh`]),
+/// and only a line that *starts* with one of ssh's own prefixes counts: the host
+/// being dialled chooses the text of its pre-auth banner and of what it says on
+/// disconnect, and a substring match anywhere let it write itself an "unreachable"
+/// (which raises the project's VPN tunnel once) or a "rejected" verdict. The
+/// markers are OpenSSH's own words, which `explain_ssh_error` rewrites (see
+/// [`probe_verdict`]). A failed run that exited 255 (ssh's status for every connection
+/// or authentication failure; [`SSH_EXIT_255`] carries it) and has no line starting with
+/// a client prefix is unreachable as well, whether it printed nothing or only a server's
+/// text (a reset or close mid-handshake prints nothing at ERROR): a rejection marker on
+/// a non-client line still wins. A run that never got to exit 255 (ssh not run at all,
+/// any other status) has no marker and is not unreachable on silence.
 fn ssh_unreachable(err: &str) -> bool {
-    const MARKERS: [&str; 11] = [
-        "Connection timed out",
-        "Operation timed out",
-        "No route to host",
-        "Network is unreachable",
-        "Network is down",
-        "Host is down",
-        "Connection refused",
-        "Could not resolve hostname",
-        "Connection reset",
-        "kex_exchange_identification",
-        "Connection closed by",
+    const CLIENT_PREFIXES: [&str; 7] = [
+        "ssh: connect to host ",
+        // TCP is up but the host never speaks (a half-open tunnel, a filtering firewall):
+        // ssh prints this at ERROR, so it survives `LogLevel=ERROR` where the INFO notes do not.
+        "Connection timed out during banner exchange",
+        "ssh: Could not resolve hostname",
+        "kex_exchange_identification:",
+        "ssh_exchange_identification:",
+        "Connection closed by ",
+        "Connection reset by ",
     ];
+    // ssh's complaints about this machine's own configuration also exit 255; no network
+    // or tunnel changes them, so they are not "unreachable" however quiet the rest is.
+    const LOCAL_CONFIG: [&str; 3] = ["Bad owner or permissions on ", "Bad configuration option", "Unsupported option"];
     const REJECTED: [&str; 3] = ["permission denied", "authentication", "host key"];
-    let err = err.to_ascii_lowercase();
-    !REJECTED.iter().any(|m| err.contains(m))
-        && MARKERS
-            .iter()
-            .any(|m| err.contains(&m.to_ascii_lowercase()))
+    let client = |line: &str| CLIENT_PREFIXES.iter().any(|prefix| line.starts_with(prefix));
+    let mut lines = err.lines().filter(|line| *line != SSH_EXIT_255);
+    let exit_255 = err.lines().any(|line| line == SSH_EXIT_255);
+    // A client line names the host dialled, which may spell anything ("authentication.example"):
+    // only the other lines can say "no".
+    let rejected = lines.clone().filter(|line| !client(line)).any(|line| {
+        let line = line.to_ascii_lowercase();
+        REJECTED.iter().any(|m| line.contains(m))
+    });
+    if rejected {
+        return false;
+    }
+    // A client line says so. So does a 255 exit with no rejection marker on any line, whether
+    // it printed nothing (a reset or close mid-handshake, sshd's `MaxStartups` drop) or only
+    // a server's text: what a host writes never decides the verdict, and no credential was
+    // judged, so a re-try replays nothing.
+    lines.clone().any(client)
+        || (exit_255 && !lines.any(|line| LOCAL_CONFIG.iter().any(|p| line.starts_with(p))))
 }
 
 /// The probe's answer from one authenticated run: the explained message is what
@@ -764,7 +877,7 @@ pub async fn ssh_probe(
         use crate::services::remote_credentials as creds;
         let _dial = crate::services::ssh_common::declared_dial(background, &user, &host, port);
         let saved = creds::get(&creds::ssh_account(&user, &host, port));
-        probe_verdict(run_ssh_auth_raw(&user, &host, port, saved.as_deref(), &["true"]))
+        probe_verdict(run_ssh_auth_raw(&user, &host, port, saved.as_deref(), &["true"], true, Some(PROBE_LIMIT)))
     })
     .await
     .unwrap_or_else(|e| SshProbe {
@@ -1081,8 +1194,121 @@ mod tests {
         }
     }
 
+    /// The host being dialled writes its own pre-auth banner and disconnect notes, so
+    /// the verdict reads ssh's own lines and nothing a line merely contains (gap 85).
+    #[test]
+    fn a_server_banner_cannot_write_the_verdict() {
+        for err in [
+            "*** Maintenance window: Connection closed by 192.0.2.10 port 22 ***",
+            "Welcome to build.example\n  Connection closed by 192.0.2.10 port 22",
+            "Notice: ssh: connect to host build.example port 22: Connection timed out",
+            "Banner: kex_exchange_identification: Connection closed by remote host",
+            "",
+        ] {
+            assert!(!ssh_unreachable(err), "a banner must not read as unreachable: {err:?}");
+        }
+        // The other direction: a line ssh printed is found among others, and a host *named*
+        // like a rejection is still unreachable.
+        assert!(ssh_unreachable("Welcome to build.example\nssh: connect to host build.example port 22: No route to host"));
+        assert!(ssh_unreachable("ssh: connect to host authentication.example port 22: Connection timed out"));
+        assert!(ssh_unreachable("ssh: Could not resolve hostname host-key.example: Name or service not known\r\n"));
+        // Printed by ssh at ERROR (`ConnectTimeout` covers the banner exchange too): a host
+        // that accepts the connection and then says nothing is not "rejected".
+        assert!(ssh_unreachable("Connection timed out during banner exchange"));
+        assert!(!ssh_unreachable("Welcome\n  Connection timed out during banner exchange"));
+    }
+
+    /// A connection that dies before authentication prints nothing at `LogLevel=ERROR` and
+    /// ssh exits 255: that reads as unreachable (user decision 2026-11-06), through the same
+    /// two steps the probe takes (`capture_raw_within` marks the 255, `probe_verdict` classifies).
+    #[cfg(unix)]
+    fn run_probe(script: &str) -> SshProbe {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", script]);
+        probe_verdict(capture_raw_within(cmd, "ssh", None))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn empty_stderr_with_exit_255_is_unreachable() {
+        let probe = run_probe("exit 255");
+        assert!(!probe.ok && probe.unreachable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn banner_only_stderr_with_exit_255_is_unreachable() {
+        let probe = run_probe("echo 'Welcome to build.example' >&2; exit 255");
+        assert!(!probe.ok && probe.unreachable);
+        assert_eq!(probe.error, "Welcome to build.example", "the shown text carries no marker");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_client_rejection_with_exit_255_stays_rejected() {
+        let probe = run_probe("echo 'alice@build.example: Permission denied (publickey,password).' >&2; exit 255");
+        assert!(!probe.ok && !probe.unreachable, "permission denied");
+        assert!(!run_probe("echo 'Host key verification failed.' >&2; exit 255").unreachable);
+        assert!(!run_probe("echo 'Welcome' >&2; echo 'Too many authentication failures' >&2; exit 255").unreachable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn silence_alone_is_not_unreachable_without_a_255_exit() {
+        // Not a connection failure (another status), and ssh never having run, say nothing.
+        assert!(!run_probe("exit 1").unreachable);
+        assert!(!run_probe("echo 'Welcome' >&2; exit 1").unreachable);
+        // Output cannot spell the exit marker itself.
+        assert!(!run_probe("printf '\\036ssh-exit-255\\n' >&2; exit 1").unreachable);
+        assert!(!probe_verdict(Err(("failed to run ssh".to_string(), String::new()))).unreachable);
+        // This machine's own ssh config being unusable is not the network.
+        assert!(!run_probe("echo 'Bad owner or permissions on /etc/ssh/ssh_config.d/x.conf' >&2; exit 255").unreachable);
+    }
+
+    /// A run that outlives its bound (a dead ControlMaster, a stalled name
+    /// lookup) is cut off and reads as unreachable: no credential was judged,
+    /// and the Machines menu must not wait ~45 s on one host.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_past_its_limit_is_cut_off_as_unreachable() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30");
+        let started = std::time::Instant::now();
+        let probe = probe_verdict(capture_raw_within(cmd, "ssh", Some(std::time::Duration::from_millis(200))));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+        assert!(!probe.ok && probe.unreachable, "{probe:?}");
+        assert!(probe.error.contains("no answer"), "{}", probe.error);
+    }
+
+    #[test]
+    fn the_exit_marker_decides_only_with_no_rejection_on_a_non_client_line() {
+        let marked = |text: &str| format!("{text}\n{SSH_EXIT_255}");
+        assert!(ssh_unreachable(SSH_EXIT_255));
+        assert!(ssh_unreachable(&marked("*** Maintenance: Connection closed by 192.0.2.10 port 22 ***")));
+        assert!(!ssh_unreachable(&marked("Permission denied (publickey).")));
+        assert!(!ssh_unreachable(&marked("Welcome\nToo many authentication failures")));
+        assert!(ssh_unreachable(&marked("ssh: connect to host authentication.example port 22: Connection timed out")));
+        // No marker, no say: the same texts without a 255 exit stay as they were.
+        assert!(!ssh_unreachable(""));
+        assert!(!ssh_unreachable("*** Maintenance: Connection closed by 192.0.2.10 port 22 ***"));
+    }
+
+    /// The probe asks ssh for `LogLevel=ERROR` (which keeps the banner and the INFO notes
+    /// off stderr); other logins do not, and it goes before the target.
+    #[test]
+    fn the_probe_runs_ssh_quiet_before_the_target() {
+        let base = ssh_base_args(&Some("alice".to_string()), "host.example", Some(2222)).unwrap();
+        assert_eq!(quiet_ssh(base.clone(), false), base);
+        let quiet = quiet_ssh(base.clone(), true);
+        assert_eq!(quiet.last(), base.last(), "the target stays last");
+        let at = quiet.iter().position(|a| a == "LogLevel=ERROR").expect("LogLevel=ERROR");
+        assert_eq!(quiet[at - 1], "-o");
+        assert_eq!(quiet.len(), base.len() + 2);
+        assert_eq!(at + 2, quiet.len(), "-o LogLevel=ERROR sits right before the target");
+    }
+
     /// The failures a dropped network really produces, through the same two steps
-    /// `ssh_probe` takes: `capture_raw` explains them, `probe_verdict` classifies.
+    /// `ssh_probe` takes: `capture_raw_within` explains them, `probe_verdict` classifies.
     #[cfg(unix)]
     #[test]
     fn probe_classifies_a_network_failure_from_what_ssh_said() {
@@ -1095,7 +1321,7 @@ mod tests {
         ] {
             let mut cmd = Command::new("sh");
             cmd.args(["-c", "printf '%s\n' \"$1\" >&2; exit 255", "sh", stderr]);
-            let probe = probe_verdict(capture_raw(cmd, "ssh"));
+            let probe = probe_verdict(capture_raw_within(cmd, "ssh", None));
             assert!(!probe.ok, "{stderr}");
             assert!(probe.unreachable, "should be unreachable: {stderr}");
             // The user still reads the explanation, not OpenSSH's line.

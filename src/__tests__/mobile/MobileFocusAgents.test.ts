@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chatTurns, isPromptEcho } from "../../../mobile-web/src/terminal/chatTurns";
-import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
+import { currentMode, modeChoices, modeOffered } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import type { ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
 import { BRAND } from "../../lib/brand";
@@ -109,5 +109,13 @@ describe(`${BRAND.display} Mobile Gemini CLI approval mode`, () => {
     expect(currentMode(modeChoices("accept edits", "Gemini"), "accept edits", true)).toBe("accept edits");
     // A Gemini tab showing a mode its family does not list earns no list.
     expect(modeChoices("full access", "Gemini")).toEqual([]);
+  });
+});
+
+
+describe("mode control capabilities", () => {
+  it("never guesses a mode key for unsupported CLIs", () => {
+    for (const label of ["Claude", "Codex", "Gemini", "Qwen", "OpenCode", "Google Antigravity", "Copilot"]) expect(modeOffered(label)).toBe(true);
+    for (const label of ["Muse", "Aider", "custom"]) expect(modeOffered(label)).toBe(false);
   });
 });

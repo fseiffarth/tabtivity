@@ -8,12 +8,13 @@
 //! GitHub only. The repository is the checked-out branch's upstream URL (else
 //! `origin`) — never an argument — and the lane reads it only once the user
 //! confirmed that repo: it is the confirmed push URL's, or one allowed on an
-//! "Allow CI" card (`git_push_mcp::ci_target`, gap 19). The stored token is offered to the API only when github.com is
-//! one of the project's token origins; without one, a public repo still
+//! "Allow CI" card (`git_push_mcp::ci_target`, gap 19). The API gets the token the project's git calls
+//! would hand to github.com; without one, a public repo still
 //! answers its runs, and anything else says where to add a token. Nothing here
 //! writes: no re-run, no cancel, no dispatch. `tip_ci` is the same read for
 //! the Release gate (`git_release::plan`).
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use crate::services::root_mcp_security::{admit_keyed, RollingWindows, HOUR};
 use app_core::sync::LockExt;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -78,16 +79,15 @@ pub fn resolve(dir: &Path) -> Result<CiRepo, Failure> {
     Ok(CiRepo { owner, repo, branch, url })
 }
 
-/// The token for api.github.com: only when github.com is one of the
-/// project's token origins (`git_hosting::token_origins`).
+/// The token for api.github.com: the one the project's git calls would hand
+/// to github.com (its own override, else the github.com host default).
 fn api_token(project: &str) -> Option<String> {
-    let (token, origins) = crate::services::git_push_mcp::creds(project);
-    token.filter(|_| origins.iter().any(|o| o == "https://github.com"))
+    crate::services::git_push_mcp::creds(project).token_for("https://github.com").map(str::to_string)
 }
 
 /// Per-tab budget, taken at admission.
 pub fn admit_rate(tab: &str) -> bool {
-    static CALLS: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
+    static CALLS: OnceLock<Mutex<RollingWindows>> = OnceLock::new();
     let mut map = CALLS.get_or_init(Default::default).lock_ok();
     admit_in(&mut map, tab, Instant::now())
 }
@@ -95,15 +95,8 @@ pub fn admit_rate(tab: &str) -> bool {
 /// [`CI_RATE`] calls per tab in the rolling hour before `now`; a refused call
 /// takes nothing. Tabs whose window has emptied are dropped, so a closed tab's
 /// entry does not stay in the map for the life of the process.
-fn admit_in(map: &mut HashMap<String, VecDeque<Instant>>, tab: &str, now: Instant) -> bool {
-    map.retain(|_, calls| {
-        calls.retain(|at| now.saturating_duration_since(*at) < Duration::from_secs(3600));
-        !calls.is_empty()
-    });
-    let calls = map.entry(tab.to_string()).or_default();
-    if calls.len() >= CI_RATE { return false; }
-    calls.push_back(now);
-    true
+fn admit_in(map: &mut RollingWindows, tab: &str, now: Instant) -> bool {
+    admit_keyed(map, tab, CI_RATE, HOUR, now)
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
@@ -225,7 +218,7 @@ pub fn log_excerpt(raw: &str, token: Option<&str>) -> String {
         _ => (lines.len().saturating_sub(150), lines.len()),
     };
     let text = lines[start..end].join("\n");
-    tail(&redact(&crate::services::root_mcp_mail::strip_invisible(&text), token), EXCERPT_CAP)
+    tail(&redact(&crate::services::root_mcp_mail::strip_invisible(&text), token.as_slice()), EXCERPT_CAP)
 }
 
 /// Short, single-line, redacted text from GitHub (titles, messages).
@@ -233,7 +226,7 @@ fn short(value: &Value, token: Option<&str>) -> Value {
     match value.as_str() {
         Some(s) => {
             let clean: String = crate::services::root_mcp_mail::strip_invisible(s).split_whitespace().collect::<Vec<_>>().join(" ");
-            let clean = redact(&clean, token);
+            let clean = redact(&clean, token.as_slice());
             Value::String(if clean.chars().count() > TEXT_CAP { format!("{}…", clean.chars().take(TEXT_CAP).collect::<String>()) } else { clean })
         }
         None => Value::Null,

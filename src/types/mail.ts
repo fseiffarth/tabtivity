@@ -211,6 +211,16 @@ export interface PgpKeyInfo {
   verified: boolean;
   accounts: string[];
   algorithm: string;
+  /** Made on this machine, or imported from a file or paste. */
+  origin: "generated" | "imported";
+  /** The key carries a revocation its owner signed. Computed, never stored. */
+  revoked: boolean;
+  /** The key's expiry has passed. Computed, never stored. */
+  expired: boolean;
+  /** What the call that returned this key just did to its trust (import, bind):
+   *  `identities-changed-unverified`, `identities-changed-unbound`,
+   *  `bound-imported-unverified`. Empty on every later read. */
+  notes: string[];
 }
 
 export interface MailPasswordState {

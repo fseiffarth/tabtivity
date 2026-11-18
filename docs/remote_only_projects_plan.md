@@ -215,7 +215,7 @@ recorded below.
 | D3 | Tabtivity's MCP servers (help, markup, push, schedule) for host agents | **User, 2026-10-28:** none in v1, as for every host tab today. Pushes use the host's own git credentials. |
 | D4 | Worker hosts | **Fixed:** shared-filesystem and no-sync workers only. "Sync a copy" is disabled with a reason, because `worker_sync` sources from the mirror. |
 | D5 | Host down | **Fixed:** nothing cached. A Connect placeholder, with no stale tree and no local record of host file names. |
-| D6 | TeX compile, SyncTeX, IDE | **User, 2026-10-28:** Compile opens a visible host build tab (`latexmk` over ssh). The PDF reloads over SFTP on its mtime, and SyncTeX shows its existing "remote" notice. Host SyncTeX is a later step. **Fixed** for the IDE: hidden or refused in v1. |
+| D6 | TeX compile, SyncTeX, IDE | **User, 2026-11-11 (replaces the build tab of 2026-10-28):** no tab — Compile runs `latexmk` on the host in the background (`compile_tex_host`, over the ControlMaster) and reports like a local build. **User, 2026-10-28:** Compile opens a visible host build tab (`latexmk` over ssh). The PDF reloads over SFTP on its mtime, and SyncTeX shows its existing "remote" notice. Host SyncTeX is a later step. **Fixed** for the IDE: hidden or refused in v1. |
 | D7 | Conversions in this plan | **User, 2026-10-28:** Remote ⇄ Remote-only in v1 (E8/F9). Local → Remote-only comes later. |
 | D8 | Mirror folder on Remote → Remote-only | **Fixed:** never deleted. A default-location mirror is moved out of the state dir as `<name> (local copy)`. F9's confirm wording follows E8, not "will be deleted". |
 | D9 | HPC-tagged hosts | **Fixed:** allowed, with a creation-time warning. There is no background sync, and agent load is the user's call per act. |
@@ -282,7 +282,7 @@ backend answers "not available" in a shape that already exists.
 | Search | `commands::search::project_search_blocking` (local walk only); quick open `commands::fs::list_project_paths_blocking` (also used by `ContextFilePicker`) | **route**: new host branch in each (E6a) |
 | Python detection | `commands::python::python_interpreters_blocking` | route (already host probe) |
 | SLURM, monitor, disk usage, network | `commands::{slurm,monitor,disk_usage,network}` | route (already host) |
-| LaTeX build | `commands::tex::compile_tex` (path-based, local) | not called; Compile opens a host build tab (D6) |
+| LaTeX build | `commands::tex::compile_tex` (path-based, local) | not called; Compile runs `compile_tex_host` on the host, no tab (D6) |
 | SyncTeX | `commands::synctex` reads local maps | unavailable (TexView already shows `"remote"`) |
 | IDE open | `commands::ide::project_root` (mirror) | refuse with sentinel (D6) |
 | HPC logs | `hpc_ws::hpc_ws_pull_logs` writes into the mirror | refuse (logs are read over SFTP in place) |

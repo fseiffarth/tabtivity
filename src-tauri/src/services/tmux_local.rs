@@ -165,18 +165,6 @@ pub fn is_app_local_tmux_session(session: &str) -> bool {
     crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, session).is_some()
 }
 
-/// Whether the app's own local session `session` is running: a spawn wrapped
-/// in `new-session -A` then attaches to it rather than starting anything
-/// (the AI switch lets such a reattach through, `launch_prep::prepare`).
-pub fn app_session_alive(session: &str) -> bool {
-    is_app_local_tmux_session(session)
-        && tmux_available()
-        && tmux_command()
-            .args(["has-session", "-t", &format!("={session}")])
-            .output()
-            .is_ok_and(|o| o.status.success())
-}
-
 /// The tab variables worth putting in a session's environment, sorted so the
 /// argv is deterministic (and testable).
 ///
@@ -242,20 +230,42 @@ fn version_supports_session_env(v_output: &str) -> bool {
     (major, minor) >= (3, 2)
 }
 
-/// Whether a usable `tmux` is on `PATH`. Cached after the first probe (the answer
-/// cannot change within a run). Always `false` on Windows, which is what makes
-/// every wrap here a no-op there.
+/// Whether a usable `tmux` is on `PATH`. A found tmux is cached for the run; a
+/// missing one is probed again at most every [`TMUX_REPROBE`], so installing it
+/// (the one-click install a Mac without tmux is offered, 2442r) takes effect
+/// without a restart. Always `false` on Windows, which is what makes every wrap
+/// here a no-op there.
 #[cfg(unix)]
 pub fn tmux_available() -> bool {
-    use std::sync::OnceLock;
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        crate::paths::command_no_window("tmux")
-            .arg("-V")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+    use app_core::sync::LockExt;
+    static PROBE: std::sync::Mutex<Option<(bool, std::time::Instant)>> = std::sync::Mutex::new(None);
+    let mut probe = PROBE.lock_ok();
+    let now = std::time::Instant::now();
+    if let Some(answer) = cached_probe(*probe, now, TMUX_REPROBE) {
+        return answer;
+    }
+    let found = crate::paths::command_no_window("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    *probe = Some((found, now));
+    found
+}
+
+/// How long a "no tmux" answer stands before [`tmux_available`] asks again.
+#[cfg(unix)]
+const TMUX_REPROBE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The cached answer still standing at `now`: a `true` forever, a `false`
+/// until `ttl` has passed. Pure.
+#[cfg(any(unix, test))]
+fn cached_probe(cached: Option<(bool, std::time::Instant)>, now: std::time::Instant, ttl: std::time::Duration) -> Option<bool> {
+    match cached {
+        Some((true, _)) => Some(true),
+        Some((false, at)) if now.duration_since(at) < ttl => Some(false),
+        _ => None,
+    }
 }
 
 #[cfg(not(unix))]
@@ -468,6 +478,14 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     crate::services::root_mcp::WEB_TOKEN_ENV,
     // Append to preserve every existing update-environment slot (8639).
     crate::services::agent_api_keys::OPENAI_CARRIER,
+    // The cockpit lane's token (`Caller::Cockpit`), slot 8640 — appended.
+    crate::services::root_mcp::COCKPIT_TOKEN_ENV,
+    // The print lane's token (`Caller::Printer`), slot 8641 — appended.
+    crate::services::root_mcp::PRINT_TOKEN_ENV,
+    // Claude's long-lived token under its carrier (`claude_token`), slot 8642.
+    crate::services::claude_token::CARRIER,
+    // The tab messages lane's token (`Caller::Tabs`), slot 8643 — appended.
+    crate::services::root_mcp::TABS_TOKEN_ENV,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -694,11 +712,12 @@ pub fn attach_argv(session: &str) -> Vec<String> {
     args
 }
 
-/// `tmux kill-session -t <session>` argv, for the explicit-close / Sessions-view
+/// `tmux kill-session -t =<session>` argv, for the explicit-close / Sessions-view
 /// kill of a local persistent tab. `|| true` is unnecessary here (a missing
-/// session just exits non-zero, which the fire-and-forget caller ignores).
+/// session just exits non-zero, which the fire-and-forget caller ignores). `=`
+/// makes the match exact: an exited `train` must not prefix-match `train-2`.
 pub fn local_tmux_kill_args(session: &str) -> Vec<String> {
-    vec!["kill-session".into(), "-t".into(), session.to_string()]
+    vec!["kill-session".into(), "-t".into(), format!("={session}")]
 }
 
 /// `tmux capture-pane -p -J -t =<session>:` argv: the session's visible screen
@@ -739,12 +758,12 @@ pub fn pane_dead_answer(stdout: &str) -> bool {
     stdout.trim() == "1"
 }
 
-/// `tmux rename-session -t <old> <new>` argv.
+/// `tmux rename-session -t =<old> <new>` argv; `=` matches `old` exactly.
 pub fn local_tmux_rename_args(old: &str, new: &str) -> Vec<String> {
     vec![
         "rename-session".into(),
         "-t".into(),
-        old.to_string(),
+        format!("={old}"),
         new.to_string(),
     ]
 }
@@ -756,6 +775,60 @@ pub fn local_tmux_ls_args() -> Vec<String> {
         "ls".into(),
         "-F".into(),
         "#{session_name}\t#{session_windows}\t#{session_created}\t#{session_attached}\t#{session_activity}\t#{pane_current_command}\t#{pane_current_path}".into(),
+    ]
+}
+
+/// `tmux ls -F …` argv listing every session with the MCP stamp it was created
+/// with (`root_mcp_mark::OPTION`; empty for a session with none) — one call
+/// answers every tab of a restore ([`parse_mcp_marks`]).
+pub fn mcp_marks_ls_args() -> Vec<String> {
+    vec![
+        "ls".into(),
+        "-F".into(),
+        format!("#{{session_name}}\t#{{{}}}", crate::services::root_mcp::root_mcp_mark::OPTION),
+    ]
+}
+
+/// A [`mcp_marks_ls_args`] answer: each session with its raw stamp, `None`
+/// when it has none. A line without the tab (or with no name) is skipped.
+pub fn parse_mcp_marks(stdout: &str) -> Vec<(String, Option<String>)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once('\t')?;
+            let value = value.trim();
+            (!name.is_empty()).then(|| (name.to_string(), (!value.is_empty()).then(|| value.to_string())))
+        })
+        .collect()
+}
+
+/// The argv tail that stamps a freshly created `session` with `mark`
+/// (`PtyOptions::mcp_mark`): one more command of the same tmux invocation.
+///
+/// `-o` sets the option only where it is unset, so it rides a create alone:
+/// `new-session -A` attaches instead when the session appeared after the
+/// listing that judged it absent (the Mobile host created it inside the 3 s
+/// cache, or two spawns of one id raced), and an attach must never overwrite
+/// the stamp of the grant its agent really holds. `-q` keeps that refusal
+/// silent and successful: an error would end tmux's command chain there, show
+/// on the attached client and fail a detached spawn's exit status.
+fn mcp_mark_args(session: &str, mark: &str) -> Vec<String> {
+    [";", "set-option", "-q", "-o", "-t", session, crate::services::root_mcp::root_mcp_mark::OPTION, mark]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+/// `set-option -t =<session>: <option> <mark>`: overwrite a live session's
+/// stamp (a revival renews it with this run's nonce, `root_mcp_reattach`).
+/// The exact target, never a prefix match onto another session.
+pub fn mcp_restamp_args(session: &str, mark: &str) -> Vec<String> {
+    vec![
+        "set-option".to_string(),
+        "-t".to_string(),
+        format!("={session}:"),
+        crate::services::root_mcp::root_mcp_mark::OPTION.to_string(),
+        mark.to_string(),
     ]
 }
 
@@ -781,6 +854,7 @@ pub fn wrap_pty_options_local(opts: &mut PtyOptions) {
     let args = local_tmux_argv(&session, opts, false);
     opts.cmd = "tmux".to_string();
     opts.args = args;
+    opts.mux_wrapped = true;
 }
 
 /// The `tmux` argv that starts (or, with `-A`, re-attaches) `session` running
@@ -820,6 +894,12 @@ pub fn local_tmux_argv(session: &str, opts: &PtyOptions, detached: bool) -> Vec<
             }
         }
     }
+    // A session this launch creates is stamped with the MCP grant it was
+    // given; `prepare` sets the mark only when the session did not exist, so
+    // an attach never rewrites it.
+    if let Some(mark) = opts.mcp_mark.as_deref() {
+        args.extend(mcp_mark_args(session, mark));
+    }
     if detached {
         detach(&mut args, opts.cols, opts.rows);
     }
@@ -845,10 +925,10 @@ fn detach(args: &mut Vec<String>, cols: u16, rows: u16) {
 }
 
 /// Whether `opts` is already the tmux client's launch — what
-/// [`wrap_pty_options_local`] (and so `launch_prep::prepare`) leaves behind:
-/// `cmd` is `tmux` and the argv creates a session.
+/// [`wrap_pty_options_local`] (and so `launch_prep::prepare`) leaves behind,
+/// marked explicitly (`PtyOptions::mux_wrapped`), never guessed from `cmd`.
 fn is_tmux_wrapped(opts: &PtyOptions) -> bool {
-    opts.cmd == "tmux" && opts.args.iter().any(|a| a == "new-session")
+    opts.mux_wrapped
 }
 
 /// The argv [`spawn_detached_with`] hands the tmux client for `session`.
@@ -958,6 +1038,19 @@ pub(crate) fn launcher_text(session: &str) -> Option<String> {
 mod tests {
     use crate::brand::SLUG;
     use super::*;
+
+    /// 2442r: a found tmux stands for the run, a missing one is asked again
+    /// after the TTL, so an install is noticed without a restart.
+    #[test]
+    fn a_missing_tmux_is_probed_again_after_the_ttl() {
+        let t0 = std::time::Instant::now();
+        let ttl = std::time::Duration::from_secs(30);
+        let later = t0 + std::time::Duration::from_secs(31);
+        assert_eq!(cached_probe(None, t0, ttl), None);
+        assert_eq!(cached_probe(Some((true, t0)), later, ttl), Some(true));
+        assert_eq!(cached_probe(Some((false, t0)), t0 + std::time::Duration::from_secs(5), ttl), Some(false));
+        assert_eq!(cached_probe(Some((false, t0)), later, ttl), None);
+    }
 
     fn env_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -1243,8 +1336,14 @@ mod tests {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
             assert_eq!(SECRET_UPDATE_ENV_SLOT + at, if i < 2 { 8636 + i } else { 8639 }, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 10);
-        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8639);
+        assert_eq!(SECRET_ENV.len(), 14);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8643);
+        let print = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::PRINT_TOKEN_ENV).unwrap();
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + print, 8641, "the print token is appended, slot 8641");
+        let claude = SECRET_ENV.iter().position(|k| *k == crate::services::claude_token::CARRIER).unwrap();
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + claude, 8642);
+        let tabs = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::TABS_TOKEN_ENV).unwrap();
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + tabs, 8643, "the tab messages token is appended, slot 8643");
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }
@@ -1436,14 +1535,16 @@ mod tests {
 
     #[test]
     fn kill_and_rename_argv() {
-        assert_eq!(local_tmux_kill_args("s"), vec!["kill-session", "-t", "s"]);
+        // `=` makes the target exact: killing an exited `train` must never
+        // prefix-match a live `train-2` (screen 2026-11-12 H9).
+        assert_eq!(local_tmux_kill_args("train"), vec!["kill-session", "-t", "=train"]);
         assert_eq!(
             local_tmux_screen_args(concat!(crate::app_slug!(), "-s")),
             vec!["-u", "capture-pane", "-p", "-J", "-t", concat!("=", crate::app_slug!(), "-s:")]
         );
         assert_eq!(
             local_tmux_rename_args("old", "new"),
-            vec!["rename-session", "-t", "old", "new"]
+            vec!["rename-session", "-t", "=old", "new"]
         );
     }
 
@@ -1557,6 +1658,8 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
+            mcp_mark: None,
         }
     }
 
@@ -1620,6 +1723,8 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
+            mcp_mark: None,
         };
         wrap_pty_options_local(&mut opts);
         assert_eq!(opts.cmd, "bash");
@@ -1648,6 +1753,8 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
+            mcp_mark: None,
         }
     }
 
@@ -1681,6 +1788,7 @@ mod tests {
         let wrapped = local_tmux_args_with(session, &opts.cmd, &opts.args, &opts.env, true);
         opts.args = wrapped.clone();
         opts.cmd = "tmux".into();
+        opts.mux_wrapped = true;
 
         let args = detached_argv(session, &opts);
         let mut expected = wrapped;
@@ -1794,5 +1902,135 @@ mod tests {
         let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
         assert!(listed.lines().any(|l| l == format!("{session}\t0")), "{listed}");
         assert!(seen.contains(concat!(crate::app_env!("TAB_UID"), "=u-detached")), "{seen}");
+    }
+
+    // ── the MCP stamp (docs/mcp_reattach_plan.md) ───────────────────────────
+
+    const STAMP: &str = "0123456789abcdef0123456789abcdef:-:4242";
+
+    #[test]
+    fn the_stamp_listing_argv_and_parser() {
+        let args = mcp_marks_ls_args();
+        assert_eq!(args[..2], ["ls", "-F"]);
+        assert_eq!(args[2], format!("#{{session_name}}\t#{{{}}}", crate::services::root_mcp::root_mcp_mark::OPTION));
+        assert!(args[2].contains(concat!("@", crate::app_slug!(), "_mcp")));
+        let out = format!("alpha\t{STAMP}\nbeta\t\ngamma\t  \nno-tab-line\n\t{STAMP}\n");
+        assert_eq!(
+            parse_mcp_marks(&out),
+            vec![
+                ("alpha".to_string(), Some(STAMP.to_string())),
+                ("beta".to_string(), None),
+                ("gamma".to_string(), None),
+            ],
+            "a stamped session, two unstamped, and no row without a name or a tab"
+        );
+    }
+
+    /// The stamp rides a launch that creates the session, as the last command
+    /// of the same tmux invocation, and an unmarked launch (an attach) has none.
+    #[test]
+    fn only_a_launch_with_a_mark_stamps_its_session() {
+        let session = concat!(crate::app_slug!(), "-p--agent-mark");
+        let mut opts = detached_fixture(session, "/tmp");
+        assert!(!local_tmux_argv(session, &opts, false).iter().any(|a| a == crate::services::root_mcp::root_mcp_mark::OPTION));
+        opts.mcp_mark = Some(STAMP.to_string());
+        let args = local_tmux_argv(session, &opts, false);
+        let tail = &args[args.len() - 8..];
+        assert_eq!(tail, [";", "set-option", "-q", "-o", "-t", session, crate::services::root_mcp::root_mcp_mark::OPTION, STAMP]);
+        assert!(!STAMP.contains(['\'', ' ']), "one argv item, never quoted");
+        let detached = local_tmux_argv(session, &opts, true);
+        assert_eq!(&detached[detached.len() - 8..], tail, "detached starts the same way");
+        // The mark is the backend's alone: a payload cannot carry one.
+        let json = serde_json::to_value(&opts).unwrap();
+        assert!(json.get("mcp_mark").is_none(), "never written out");
+        let mut payload = serde_json::to_value(detached_fixture(session, "/tmp")).unwrap();
+        payload["mcp_mark"] = serde_json::json!("planted");
+        assert!(serde_json::from_value::<PtyOptions>(payload).unwrap().mcp_mark.is_none(), "never read in");
+    }
+
+    /// A real tmux on a private socket: a session created with a mark lists
+    /// with it, an unstamped session lists with none, and an absent one is not
+    /// listed. (An attach needs a terminal, so it is covered by the argv test:
+    /// a launch without a mark carries no `set-option` for the stamp.)
+    #[cfg(unix)]
+    #[test]
+    fn a_real_tmux_session_keeps_the_stamp_it_was_created_with() {
+        if !tmux_available() {
+            return;
+        }
+        use crate::services::session_mux::{tmux::TmuxMux, SessionMux};
+        let socket = format!(concat!(crate::app_slug!(), "-test-mcpmark-{}"), std::process::id());
+        let (stamped, bare) = (concat!(crate::app_slug!(), "-p--agent-stamped"), concat!(crate::app_slug!(), "-p--agent-bare"));
+        let dir = tempfile::tempdir().unwrap();
+        let mux = TmuxMux::isolated(socket.clone());
+        let start = |session: &str, mark: Option<&str>| {
+            let mut opts = detached_fixture(session, &dir.path().to_string_lossy());
+            opts.cmd = "sleep".into();
+            opts.args = vec!["30".into()];
+            opts.mcp_mark = mark.map(str::to_string);
+            spawn_detached_with(&opts, Some(&socket))
+        };
+        let created = start(stamped, Some(STAMP)).and_then(|()| start(bare, None));
+        let listed = mux.mcp_marks();
+        let _ = std::process::Command::new("tmux").args(["-L", &socket, "-f", "/dev/null", "kill-server"]).output();
+        created.unwrap();
+        let marks = listed.unwrap();
+        assert_eq!(marks.entry(stamped), Some(&Some(STAMP.to_string())));
+        assert_eq!(marks.entry(bare), Some(&None));
+        assert_eq!(marks.entry("nothing-here"), None);
+        assert!(marks.contains(stamped) && marks.contains(bare) && !marks.contains("nothing-here"));
+        // With the server gone the listing is empty, not an error.
+        assert_eq!(mux.mcp_marks().unwrap(), crate::services::session_mux::SessionMarks::default());
+    }
+
+    /// R1's race: the listing judged the session absent, but by the spawn it
+    /// exists (the Mobile host created it inside the 3 s cache, or two spawns
+    /// of one id raced), so `new-session -A` attaches and the stamp tail runs
+    /// against a live, stamped session. It must keep the stamp of the grant
+    /// its agent holds, succeed quietly, and leave the rest of the chain to
+    /// run. (An attach needs a terminal, so the tail runs on its own here.)
+    /// A revival's re-stamp, by contrast, overwrites.
+    #[cfg(unix)]
+    #[test]
+    fn a_stamp_rides_a_create_only_and_never_overwrites_on_an_attach() {
+        if !tmux_available() {
+            return;
+        }
+        use crate::services::session_mux::{tmux::TmuxMux, SessionMux};
+        const OTHER: &str = "fedcba9876543210fedcba9876543210:-:4343";
+        let socket = format!(concat!(crate::app_slug!(), "-test-mcprace-{}"), std::process::id());
+        let session = concat!(crate::app_slug!(), "-p--agent-race");
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = detached_fixture(session, &dir.path().to_string_lossy());
+        opts.cmd = "sleep".into();
+        opts.args = vec!["30".into()];
+        opts.mcp_mark = Some(STAMP.to_string());
+        let tmux = |args: &[String]| {
+            std::process::Command::new("tmux").args(["-L", &socket, "-f", "/dev/null"]).args(args).output()
+        };
+        let created = spawn_detached_with(&opts, Some(&socket));
+        // The second launch's stamp tail, then one more command of the chain.
+        let mut tail: Vec<String> = mcp_mark_args(session, OTHER).into_iter().skip(1).collect();
+        tail.extend([";", "set-option", "-t", session, "@race_probe", "ran"].map(str::to_string));
+        let attached = tmux(&tail);
+        let probe = tmux(&["show-option".into(), "-t".into(), session.into(), "-v".into(), "@race_probe".into()]);
+        let mux = TmuxMux::isolated(socket.clone());
+        let kept = mux.mcp_marks();
+        let restamped = mux.restamp_mcp(session, OTHER).and_then(|()| mux.mcp_marks());
+        let _ = tmux(&["kill-server".into()]);
+        created.unwrap();
+        let attached = attached.unwrap();
+        assert!(attached.status.success(), "quiet: {}", String::from_utf8_lossy(&attached.stderr));
+        assert_eq!(String::from_utf8_lossy(&probe.unwrap().stdout).trim(), "ran", "the chain went on");
+        assert_eq!(kept.unwrap().entry(session), Some(&Some(STAMP.to_string())), "the creating stamp is kept");
+        assert_eq!(restamped.unwrap().entry(session), Some(&Some(OTHER.to_string())), "a re-stamp overwrites");
+    }
+
+    #[test]
+    fn a_restamp_names_the_exact_session() {
+        assert_eq!(
+            mcp_restamp_args("s-1", STAMP),
+            ["set-option", "-t", "=s-1:", crate::services::root_mcp::root_mcp_mark::OPTION, STAMP]
+        );
     }
 }

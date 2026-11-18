@@ -9,7 +9,8 @@
 # unstaged edits) plus untracked files. Sets:
 #   CHANGED     the changed paths, one per line
 #   A_FE        1: the frontend (any file outside the crates, docs/, todo/,
-#               scripts/, .github/, .githooks/ and *.md)
+#               scripts/, .github/, .githooks/ and *.md; docs/help/ counts
+#               for src-tauri, which embeds it)
 #   A_CORE A_GATEWAY A_TAURI A_SERVERD
 #               1: that crate (src-core, src-gateway, src-tauri, src-serverd)
 #   A_ALL       1: Cargo.toml, Cargo.lock or rust-toolchain.toml, i.e. every crate
@@ -43,6 +44,8 @@ changed_areas() {
       src-tauri/*) A_TAURI=1 ;;
       src-serverd/*) A_SERVERD=1 ;;
       Cargo.toml|Cargo.lock|rust-toolchain.toml) A_ALL=1 ;;
+      # The help corpus is compiled into the app (src-tauri/build.rs).
+      docs/help/*) A_TAURI=1 ;;
       docs/*|todo/*|scripts/*|.github/*|.githooks/*|*.md) ;;
       *) A_FE=1 ;;
     esac

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@xterm/xterm", () => ({
@@ -35,7 +35,7 @@ class FakeWebSocket {
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { sentFiles } from "../../../mobile-web/src/components/SentFilesIndex";
 import { answerHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
-import { answerLeaves, changedFiles, rowFile } from "../../../mobile-web/src/terminal/chatFiles";
+import { answerLeaves, changedFiles, rowFile, useNamedFiles } from "../../../mobile-web/src/terminal/chatFiles";
 import type { OutboxFile, PhoneMarkupFile } from "../../../mobile-web/src/api";
 import { linkPathsInHtml } from "../../lib/terminal/pathCandidates";
 import { BRAND, storageKey } from "../../lib/brand";
@@ -131,13 +131,31 @@ describe(`${BRAND.display} Mobile shows the files a chat names and changes`, () 
     const index = screen.getByRole("navigation", { name: "Files in this conversation" });
     fireEvent.click(within(index).getByRole("button", { name: /^Files \(2\)/ }));
     const sections = within(index).getAllByRole("region");
-    expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["Changed by the agent (1)", "Named in the chat (1)"]);
+    expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["Changed by the agent (1)", "Mentioned in its answers (1)"]);
     expect(sections[1].querySelector("img")?.getAttribute("src")).toBe(`/api/v1/projects/p-1/files/raw?f=${PLOT.token}`);
     expect(within(index).getByText(/are in Diffs/)).toBeTruthy();
 
     fireEvent.click(within(sections[0]).getByRole("button", { name: "Open report.pdf · Changed by the agent" }));
     await settle();
     expect(screen.getByRole("dialog", { name: "report.pdf" })).toBeTruthy();
+  });
+
+  it("names only what the current conversation's answers name", async () => {
+    const fetcher = sidecar("", { named: { "notes.md": NOTES, "out/report.pdf": REPORT } });
+    vi.stubGlobal("fetch", fetcher);
+    const { result, rerender } = renderHook(({ texts }) => useNamedFiles("tab-7", texts, true), { initialProps: { texts: ["Read notes.md."] } });
+    await settle();
+    expect([...result.current.keys()]).toEqual(["notes.md"]);
+    // A clear: the new chat names another file, and the earlier one drops out.
+    rerender({ texts: ["See out/report.pdf."] });
+    await settle();
+    expect([...result.current.keys()]).toEqual(["out/report.pdf"]);
+    // Back on the earlier conversation, its file is known without a new ask.
+    const asks = fetcher.mock.calls.length;
+    rerender({ texts: ["Read notes.md."] });
+    await settle();
+    expect([...result.current.keys()]).toEqual(["notes.md"]);
+    expect(fetcher.mock.calls.length).toBe(asks);
   });
 
   it("stays a plain chat where the desktop refuses or there is no project", async () => {

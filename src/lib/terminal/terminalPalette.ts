@@ -59,7 +59,7 @@ export function terminalPalette(scheme: string | undefined) {
     return {
       background: "#faf9fe",
       foreground: "#2c2348",
-      cursor: "#7c5cdb",
+      cursor: "#6f4fd3",
       cursorAccent: "#faf9fe",
       selectionBackground: "#dccff2",
       selectionForeground: "#241d38",

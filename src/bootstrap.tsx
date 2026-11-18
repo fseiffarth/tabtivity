@@ -10,7 +10,6 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { installCrashReporter } from "./crashReporter";
-import { installCustomScrollbars } from "./lib/theme/customScrollbar";
 import { installNativeContextMenuGuard } from "./lib/window/nativeContextMenuGuard";
 import { installStrayDropGuard } from "./lib/window/strayDropGuard";
 import "@fontsource-variable/inter";
@@ -18,16 +17,9 @@ import "@fontsource-variable/jetbrains-mono";
 import "./styles/index.css";
 
 installCrashReporter();
-/**
- * Installed here rather than from a component, and in EVERY window: the main
- * shell, a popped-out subwindow and the presenter audience each have their own
- * document, and each needs its own thumb layer. It is a DOM-level concern with
- * no React state, so it has nothing to gain from living in the tree and would
- * only be at the mercy of when that tree mounts.
- */
-installCustomScrollbars();
-/** Same reasoning: a file dropped where nothing takes it must not navigate the
- *  window to it, in any window. */
+/** Installed here rather than from a component, and in EVERY window (the main
+ *  shell, a popped-out subwindow, the presenter audience): a file dropped where
+ *  nothing takes it must not navigate the window to it. */
 installStrayDropGuard();
 /** And no WebKit Back/Forward/Reload menu on a right-click nothing took. */
 installNativeContextMenuGuard();

@@ -66,7 +66,8 @@ pub async fn system_monitor_snapshot(
         })
         .await?;
     }
-    Ok(sysstat::system_snapshot())
+    // A `/proc` walk plus the GPU read, which spawns `nvidia-smi`/`ioreg`.
+    app_core::rt::blocking("monitor", sysstat::system_snapshot).await
 }
 
 /// The machine's CPU and memory load, ready to print. The counterpart of
@@ -162,7 +163,8 @@ pub async fn machine_load_snapshot() -> Result<MachineLoadSample, String> {
 /// does. An empty list means no GPU could be read, not that there is no GPU.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn gpu_memory_snapshot() -> Result<Vec<GpuSample>, String> {
-    Ok(gpustat::snapshot())
+    // A cache miss spawns `nvidia-smi` (or `ioreg` on macOS): off the runtime.
+    app_core::rt::blocking("gpu", gpustat::snapshot).await
 }
 
 /// [`machine_load_snapshot`] and [`gpu_memory_snapshot`] of the machine the
@@ -191,5 +193,5 @@ pub async fn models_host_load() -> Result<ModelsHostLoad, String> {
 /// an empty list means "no per-process data available", not "no GPU processes".
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn gpu_process_snapshot() -> Result<Vec<GpuProc>, String> {
-    Ok(gpustat::process_snapshot())
+    app_core::rt::blocking("gpu", gpustat::process_snapshot).await
 }

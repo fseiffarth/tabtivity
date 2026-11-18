@@ -1,4 +1,4 @@
-import { ApiError, TAB_CREATE_TIMEOUT, api, closeTab, getLaunchOptions, type AssistantLaunchOptions, type ProjectDetail, type TabRow } from "./api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, closeTab, getLaunchOptions, getProjectDetail, type AssistantLaunchOptions, type ProjectDetail, type TabRow } from "./api";
 
 /**
  * Tabby on the phone is **one chat**, as in the desktop's side panel: Home's
@@ -19,7 +19,7 @@ export class NoAssistantLaunch extends Error {
 }
 
 function detail(id: string): Promise<ProjectDetail> {
-  return api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(id)}`);
+  return getProjectDetail(id);
 }
 
 /** The launches the desktop offers for the scope; `undefined` when it lists none. */

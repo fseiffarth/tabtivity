@@ -36,7 +36,8 @@ without an sshfs/FUSE mount anywhere.
 - **Machine hub**: register SSH hosts once (independent of any project) in the
   header's machines indicator — see a live CPU/GPU usage bar per machine,
   connect/disconnect, arm silent auto-connect on launch, and drag a machine onto
-  a project to attach it as a compute host.
+  a project to attach it as a compute host. The Machines view merges project
+  hosts and global machines into one list sorted by state.
 - **Point a project at a host**: enter an SSH address (`user@host[:port]`),
   connect, and browse the remote filesystem in-app to pick the project root —
   no mount involved: the file tree and file I/O go over SFTP, terminal and
@@ -58,7 +59,9 @@ without an sshfs/FUSE mount anywhere.
   moves everything else. So your editor, agents, and Git history see the project
   locally, while gigabytes of host-side experiment output stay on the host until
   you ask for them; a setup census offers to exclude the giant folders
-  (`node_modules/`, `.venv/`, `data/`, `checkpoints/`) up front.
+  (`node_modules/`, `.venv/`, `data/`, `checkpoints/`) up front. Byte-sync moves
+  four files at once, and an opt-in per-project switch lets auto-sync settle a
+  file both sides changed by its newer copy, backing up the loser first.
 - **Many machines per project**: beyond the primary host, add extra *worker*
   machines — their code is kept in sync from the project (one-way, tracked files
   only) and their experiment outputs are pulled back on demand. A worker on a
@@ -133,7 +136,9 @@ does not have to ship a phone app for the agent you are running.
   opens a drawer that walks the project's folders
   and opens files in the same viewer. Folders and files travel as sealed
   tokens, never paths; `.git`, `.tabtivity`, `.env…` and symlinks are left out,
-  and nothing can be changed.
+  and nothing can be changed. The library's root carries the desktop's
+  **Project docs** group (template and pointer badges); with uploads on, a
+  missing standard doc's ghost row can **Create** it from its template.
 - **PDF markup for the agent** *(new, live QA pending)*: open a PDF the agent
   built — a paper, a slide deck, a plot — and mark it up with a finger, a
   stylus or the Apple Pencil (a pen starts marking on its own, fingers still
@@ -144,8 +149,9 @@ does not have to ship a phone app for the agent you are running.
 - The phone gets a touch terminal (readable-screen mode, touch scrolling, a
   composer, voice input), a to-do board, Alerts with Done actions, opt-in mail
   flag/reply actions, last-tab restore, an offline app shell, and a local lock.
-  Project boxes are selectable scopes too. Access is granted **per project**;
-  remote, VM and containerized projects are excluded.
+  Project boxes are selectable scopes too. Access is granted **per project**,
+  for every project type; tabs inside a container or VM don't reach the phone
+  yet.
 - A desktop header control shows host status; Settings carries the opt-in, the
   security-health readout, and one-click terminal setup.
 
@@ -183,7 +189,15 @@ remain; some Mobile UI has been live-tested.*
   Agents group is searchable, its quick picks are configurable, and you can
   register your own agent CLI through "＋ Add agent…". Tab layout is persisted
   per project. Settings shows installed CLI versions against the versions
-  Tabtivity was checked with.
+  Tabtivity was checked with, and **Check all for updates** / **Update all**
+  in Manage CLIs look up each installed CLI's newest release and re-run its
+  installer on request. A tab's right-click menu can **Mark as unread** an
+  agent tab you have read, to come back to it later.
+- **Per-turn checkpoints** *(experimental, off by default, live QA pending)*:
+  a local agent tab's folder is saved into a store of Tabtivity's own as each
+  turn starts and ends (Claude and Codex, which report turns through hooks); the
+  Chat's **Restore files to before this** puts the files back, with an undo, and
+  the Diffs view can compare against any checkpoint.
 - **Agents view and prompt chart** *(implemented, live QA pending)*: inspect
   each tab's activity, latest prompt, and model from the side panel; open a
   project-scoped chart tab with a zoomable timeline of sent, queued, and
@@ -226,10 +240,13 @@ current integration state.
 | **Claude** (`claude`) | Per-tab conversation via session hooks; preserves the CLI-selected permission mode on resume. | Core tab use confirmed; newer resume/activity paths still have open checks. |
 | **Codex** (`codex`) | Per-tab conversation via hooks or hook-free binding, including the SQLite session index. | Core tab use confirmed; newer binding/activity paths still have open checks. |
 | **Gemini** (`gemini`) | Continues the latest conversation in the directory. | Core tab use confirmed; restore remains less precise than Claude/Codex. |
-| **Vibe** (`vibe`) | Continues the latest saved session. | Pending. |
+| **Vibe** (`vibe`) | Per-tab session by the id its post-agent hook records; a tab with no record yet, or on a remote host, continues the latest saved session. | Pending. |
 | **Ollama via Vibe** | Isolated per-model `VIBE_HOME`; continue-latest where a resumable tab is available. | Partial. |
-| **Qwen, OpenCode, Copilot, Cursor, Grok, Antigravity, Droid** | CLI-specific continue-latest flags. | Pending. |
-| **Kiro, Cline, Aider, OpenClaw, Goose, Pi, Plandex, SWE-agent, Mini SWE-agent, Crush, Amp, Kimi, Qoder, Muse Code, Auggie, Kilo Code, Continue.dev, Junie, CodeBuddy** | Launch support; no built-in tab restore path. | Pending. |
+| **OpenCode, Copilot** | Per-tab session: OpenCode by the id its plugin records at each prompt, Copilot by a session id the tab pins at launch. Remote tabs continue the latest. | Pending. |
+| **Antigravity** (`agy`) | Per-tab conversation (1.5.2 and later): a hook records each tab's conversation and the tab resumes it with `--conversation <id>`. A tab that never took a prompt starts fresh; tabs from before the hook, and remote tabs, continue the latest. | Pending (probed offline on 1.5.2–1.5.9). |
+| **Muse Code** (`muse`) | Per-tab session (1.3.0 and later, Linux and macOS): a prompt hook records each tab's session and the tab resumes it with `resume <id>`. Otherwise `resume --last`, skipped where the folder has no prompted session. | Pending (probed offline on 1.3.0 and 1.4.15). |
+| **Qwen, Cursor, Grok, Droid** | CLI-specific continue-latest flags. | Pending. |
+| **Kiro, Cline, Aider, OpenClaw, Goose, Pi, Plandex, SWE-agent, Mini SWE-agent, Crush, Amp, Kimi, Qoder, Auggie, Kilo Code, Continue.dev, Junie, CodeBuddy** | Launch support; no built-in tab restore path. | Pending. |
 | **Custom agents** | Optional resume arguments supplied by the user. | Depends on the command. |
 | **Shell** | Respawns an ordinary shell or reattaches its tmux session where configured. | Core tab use confirmed. |
 
@@ -241,18 +258,22 @@ filesystem access; project-local XDG paths alone are not an isolation boundary.
 restarts. Tabtivity installs session hooks keyed by `TABTIVITY_TAB_UID`, so a
 `/clear` can update the recorded live session. Codex also has hook-free binding,
 including its SQLite-backed session index; its hooks may need one-time `/hooks`
-trust. Qwen, OpenCode, Copilot, Cursor, Grok, Gemini, Antigravity, and Vibe have
-continue-latest restore paths. Those cannot distinguish several conversations
-in the same directory as precisely as Claude/Codex. Custom agents can supply
+trust. OpenCode (a plugin), Vibe (a post-agent hook) and Copilot (a pinned
+session id) also come back to each tab's own session, as do Antigravity and Muse,
+each through a hook that records the tab's conversation at a prompt (Muse not on
+Windows). Qwen, Cursor, Grok, and Gemini have continue-latest restore paths.
+Those cannot distinguish several conversations in the same directory. Custom agents can supply
 resume arguments; agents without a supported resume path are not restored.
 
 **Permission and activity.** Set permission mode inside the agent CLI. On Claude
 resume, Tabtivity reapplies the mode its hook recorded to preserve that choice.
-Claude/Codex turn hooks also drive working, decision-needed, and finished states;
-agents without a hook verdict use terminal-output heuristics.
+Turn hooks also drive the working, decision-needed, and finished states for
+Claude, Codex, Vibe, Copilot, OpenCode, Antigravity, and Muse (Antigravity and
+Muse without the decision state); agents without a hook verdict use
+terminal-output heuristics.
 
-**Tabtivity's tools (MCP).** Agents opened in the root console are the one kind
-that get Tabtivity's own tools: calendar, to-do board, project sweeps, and the
+**Tabtivity's tools (MCP).** Agents opened in the root console get Tabtivity's
+own tools: calendar, to-do board, project sweeps, and the
 "open this overlay" verbs (see [Workspace apps](#workspace-apps)). Claude gets
 an inline `--mcp-config`, Codex a `-c mcp_servers.tabtivity.*` override, and every
 other CLI the `TABTIVITY_ROOT_MCP_URL`/`TABTIVITY_ROOT_MCP_TOKEN` environment — on
@@ -260,6 +281,16 @@ the command line, never in the CLI's own config files. Reads are annotated
 read-only and writes destructive, so a CLI that asks before tools asks for the
 right ones; approval itself stays the CLI's own. Settings has the single
 switch, on by default.
+
+**Lanes for project agent tabs.** Every local project agent tab also gets small
+per-tab tool lanes (cockpit notes, git push and CI, help, PDF markup, print,
+scheduled prompts, and messages to the project's other agent tabs). Claude,
+Codex, Copilot and OpenCode are given them at launch; every other CLI finds them
+through the `tabtivity-mcp` command, which a start-of-session hint announces. The
+tab messaging lane lets the agent tabs of one local project leave each other
+short plain-text notes. They reach the recipient only as a tool result marked as
+written by another agent tab, never as your prompt, and the cockpit's Messages
+fold shows you every one *(implemented, live QA pending)*.
 
 **Custom agents.** Any other agent CLI can be registered from "＋ Add agent…" in
 the tab menu and then appears in the Agents group like the built-ins.
@@ -380,7 +411,8 @@ that had Debug mode on before this change keeps the ones it was showing, ticked.
   Linux/macOS, PowerShell on Windows; read-only by default, and a missing print
   system is reported as a state rather than an error. Native viewers have a
   print preview with copy count and document-specific settings; PDFs support
-  `Ctrl+P`, and the preview follows its submitted job through the queue.
+  `Ctrl+P` (or right-click a page → Print from here), a page range edits the
+  page strip, and the preview follows its submitted job through the queue.
 - **Agent Skills library**: browse `SKILL.md` catalogs from git sources and
   one-click install a skill into a project's `.claude/skills/` or into the
   personal scope — the Tabtivity-wide agent layer (`<state_dir>/agent-global`),

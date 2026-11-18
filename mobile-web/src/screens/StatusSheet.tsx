@@ -51,7 +51,7 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
   live: SessionStatus | null;
   /** Hands a fresh panel's 5h/week windows to the facts row, so a Refresh
    * here updates it without waiting for its own poll. */
-  onLimits?: (limits: LimitMeters) => void;
+  onLimits?: (limits: LimitMeters, readAt?: number) => void;
   onClose: () => void;
   /** How this CLI signs in from here — a sign-in tab of its own, or its
    * slash command typed into the session (`signIn.ts`) — when it can; the
@@ -75,7 +75,7 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
     try {
       const next = await getAgentStatus(tab.id, refresh);
       setReport(next);
-      if (next.usage.raw) onLimits?.(limitMeters(parseUsageReport(next.usage.raw)));
+      if (next.usage.raw) onLimits?.(limitMeters(parseUsageReport(next.usage.raw)), next.usage.readAt);
     } catch (cause) {
       setError(describeFailure(cause));
     } finally {

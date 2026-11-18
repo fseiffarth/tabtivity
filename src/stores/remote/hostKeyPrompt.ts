@@ -28,9 +28,6 @@ interface HostKeyPreview {
   target: string;
   known: boolean;
   keys: HostKeyFingerprint[];
-  /** Opaque known_hosts text; handed back verbatim so what is stored is what was
-   *  shown. Never re-scanned at accept time. */
-  scan: string;
 }
 
 interface PendingPrompt {
@@ -49,7 +46,6 @@ interface HostKeyPromptState {
   status: Status;
   error: string;
   keys: HostKeyFingerprint[];
-  scan: string;
   /** Open the confirmation for `target` (`host` or `host:port`). Resolves `true`
    *  when the user accepted the key, `false` otherwise. */
   request: (target: string) => Promise<boolean>;
@@ -73,13 +69,12 @@ export const useHostKeyPromptStore = create<HostKeyPromptState>((set, get) => ({
   status: "loading",
   error: "",
   keys: [],
-  scan: "",
   request: (target) =>
     new Promise<boolean>((resolve) => {
       // A prompt already open is answered "no" before being replaced — its caller
       // must not be left hanging on a modal that is no longer on screen.
       get().pending?.resolve(false);
-      set({ pending: { target, resolve }, status: "loading", error: "", keys: [], scan: "" });
+      set({ pending: { target, resolve }, status: "loading", error: "", keys: [] });
       const { host, port } = splitTarget(target);
       void invoke<HostKeyPreview>("ssh_host_key_preview", { host, port })
         .then((preview) => {
@@ -87,28 +82,31 @@ export const useHostKeyPromptStore = create<HostKeyPromptState>((set, get) => ({
           // Already known — the gate was cleared while we were asking (another
           // connect accepted it). Nothing to confirm; let the caller retry.
           if (preview.known) {
-            set({ pending: null, status: "ready", keys: [], scan: "" });
+            set({ pending: null, status: "ready", keys: [] });
             resolve(true);
             return;
           }
-          set({ status: "ready", keys: preview.keys, scan: preview.scan });
+          set({ status: "ready", keys: preview.keys });
         })
         .catch((e) => {
           if (get().pending?.resolve !== resolve) return;
           // Can't show a fingerprint ⇒ can't ask the question. The modal says so
           // and offers only Cancel: there is nothing here to accept.
-          set({ status: "error", error: String(e), keys: [], scan: "" });
+          set({ status: "error", error: String(e), keys: [] });
         });
     }),
   accept: async () => {
     const p = get().pending;
-    const scan = get().scan;
-    if (!p || !scan || get().status === "trusting") return;
+    const keys = get().keys;
+    if (!p || keys.length === 0 || get().status === "trusting") return;
     set({ status: "trusting", error: "" });
     try {
-      await invoke("ssh_trust_host_key", { scan });
+      // The backend re-scans the host and stores only a key carrying one of the
+      // fingerprints shown here — never text this window supplies.
+      const { host, port } = splitTarget(p.target);
+      await invoke("ssh_trust_host_key", { host, port, fingerprints: keys.map((k) => k.fingerprint) });
       if (get().pending !== p) return;
-      set({ pending: null, status: "ready", error: "", keys: [], scan: "" });
+      set({ pending: null, status: "ready", error: "", keys: [] });
       p.resolve(true);
     } catch (e) {
       if (get().pending !== p) return;
@@ -118,7 +116,7 @@ export const useHostKeyPromptStore = create<HostKeyPromptState>((set, get) => ({
   cancel: () => {
     const p = get().pending;
     if (!p) return;
-    set({ pending: null, status: "ready", error: "", keys: [], scan: "" });
+    set({ pending: null, status: "ready", error: "", keys: [] });
     p.resolve(false);
   },
 }));

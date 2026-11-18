@@ -59,6 +59,8 @@ workflow="${CI_LOCAL_WORKFLOW:-$repo/.github/workflows/ci-cd.yml}"
 # SCHED_IDLE + nice 19, so a gate run never makes the window lag (the file says why).
 . "$repo/scripts/lib/low_priority.sh"
 low_priority_reexec "$repo/scripts/ci-local.sh" "$@"
+# One gate run at a time per checkout (the file says why).
+. "$repo/scripts/lib/gate_lock.sh"
 
 # ---------------------------------------------------------------------------
 # The steps, in run order: cheap checks first, then the lint job, the test
@@ -80,8 +82,8 @@ STEPS=(
   "lint-gateway|lint|Lint gateway crate|ci|always"
   "lint-daemon-lib|lint|Lint the daemon's build of the library|ci|always"
   "lint-daemon|lint|Lint daemon crate|ci|always"
-  "failed-first|test-ubuntu|Re-run the last run's failed tests first|ci|always"
   "build-frontend|test-ubuntu|Build frontend|ci|fe"
+  "failed-first|test-ubuntu|Re-run the last run's failed tests first|ci|always"
   "test-frontend|test-ubuntu|Run frontend tests|ci|fe:vitest_changed"
   "test-backend|test-ubuntu|Run backend tests|ci|backend"
   "test-core|test-ubuntu|Run core crate tests|ci|core"
@@ -104,6 +106,14 @@ ALLOW=(
   "secrets|Install gitleaks|an installed gitleaks is used, else the scan is SKIPPED"
   "test-ubuntu|Restore the last run's failed tests|the list persists in the git dir"
   "test-ubuntu|Save this run's failed tests|the list persists in the git dir"
+  "test-ubuntu|Name the tests a cut-off run left running|only a CI step timeout cuts a run off"
+  "ci-plan|Plan the OS test jobs|which CI test jobs a push skips (scripts/ci-skip.sh): needs the push event and the repo's artifacts"
+  "ci-plan|Write the carried verdict|CI-only skip bookkeeping"
+  "ci-plan|Record the carried Linux verdict|artifact upload (CI-only skip bookkeeping)"
+  "ci-plan|Record the carried Windows verdict|artifact upload (CI-only skip bookkeeping)"
+  "ci-plan|Record the carried macOS verdict|artifact upload (CI-only skip bookkeeping)"
+  "test-ubuntu|Write the passed verdict|CI-only skip bookkeeping"
+  "test-ubuntu|Record the passed verdict|artifact upload (CI-only skip bookkeeping)"
   "package-linux|Build release bundles|release packaging (npm run tauri:bundle), not a code gate"
   "package-linux|Install the Vulkan SDK|release packaging only: the bundles' GPU backend needs it, the gates build without it"
   "package-linux|Upload AppImage|artifact upload"
@@ -672,5 +682,5 @@ done
 case "$action" in
   list) list_steps ;;
   drift) check_drift ;;
-  run) run_all "$fastmode" "$from" ;;
+  run) gate_lock "ci-local.sh"; run_all "$fastmode" "$from" ;;
 esac

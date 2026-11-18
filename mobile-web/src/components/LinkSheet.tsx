@@ -3,7 +3,8 @@ import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { PATH_LINK_ATTR } from "../../../src/lib/terminal/pathCandidates";
-import { chatLinkUrl } from "../terminal/answerMarkdown";
+import { ARTIFACT_ATTR, chatLinkUrl } from "../terminal/answerMarkdown";
+import { parseAppLink } from "../../../src/lib/navigation/appLinks";
 import { HOLD_MS } from "./MessageMenu";
 import { useBackLayer } from "../backStack";
 
@@ -20,6 +21,7 @@ function LinkSheet({ url, onClose }: { url: string; onClose: () => void }) {
   const t = useT();
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
   const host = new URL(url).host;
+  const internal = parseAppLink(url) !== null;
   const open = () => {
     // Checked again at the moment of opening: only what the sheet showed goes.
     const target = chatLinkUrl(url);
@@ -43,18 +45,18 @@ function LinkSheet({ url, onClose }: { url: string; onClose: () => void }) {
         <h2>{title} {isUntested("mobile.link.title") && <small>{t("mobile.focus.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>
-      <p className={note?.error ? "sheet-note error" : "sheet-note"} role={note ? "status" : undefined}>{note ? note.text : t("mobile.link.body")}</p>
+      <p className={note?.error ? "sheet-note error" : "sheet-note"} role={note ? "status" : undefined}>{note ? note.text : t(internal ? "appLink.desktopOnly" : "mobile.link.body")}</p>
       <div className="link-sheet-target">
         <strong>{host}</strong>
         <code data-testid="link-sheet-url">{url}</code>
       </div>
       <ul className="option-list">
-        <li>
+        {!internal && <li>
           <button onClick={open}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
             <span><strong>{t("mobile.link.open")}</strong></span>
           </button>
-        </li>
+        </li>}
         <li>
           <button onClick={copy}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h8" /></svg>
@@ -79,25 +81,41 @@ export interface LinkHandlers {
  * `chatLinkUrl` accepts) opens `LinkSheet`; nothing opens without it. A press
  * held long enough to be a hold is the phone selecting the link's words, not
  * a tap. A path link (`linkPathsInHtml`) goes to `openPath` instead: it opens
- * a file of the project in the app, so it needs no confirmation.
+ * a file of the project in the app, so it needs no confirmation. So does a
+ * link to a document of an Antigravity chat (`data-artifact`): `openArtifact`
+ * asks the desktop for it, which reads only that chat's own folder.
  */
-export function useChatLinks(openPath?: (path: string) => void): { links: LinkHandlers; sheet: React.ReactNode } {
+export function useChatLinks(openPath?: (path: string) => void, openArtifact?: (target: string) => void) {
   const [url, setUrl] = useState<string | null>(null);
   const downAt = useRef(0);
   const opener = useRef(openPath);
   opener.current = openPath;
+  const artifactOpener = useRef(openArtifact);
+  artifactOpener.current = openArtifact;
+  const askUrl = useCallback((address?: string): boolean => {
+    if (address && parseAppLink(address)) {
+      setUrl(address);
+      return true;
+    }
+    const href = chatLinkUrl(address);
+    if (!href) return false;
+    setUrl(href);
+    return true;
+  }, []);
   const ask = useCallback((target: EventTarget): boolean => {
     const path = target instanceof Element ? target.closest(`[${PATH_LINK_ATTR}]`)?.getAttribute(PATH_LINK_ATTR) : null;
     if (path && opener.current) {
       opener.current(path);
       return true;
     }
-    const link = target instanceof Element ? target.closest<HTMLElement>(".md-link[data-href]") : null;
-    const href = chatLinkUrl(link?.dataset.href);
-    if (!href) return false;
-    setUrl(href);
-    return true;
-  }, []);
+    const doc = target instanceof Element ? target.closest(`[${ARTIFACT_ATTR}]`)?.getAttribute(ARTIFACT_ATTR) : null;
+    if (doc && artifactOpener.current) {
+      artifactOpener.current(doc);
+      return true;
+    }
+    const link = target instanceof Element ? target.closest<HTMLElement>(".md-link[data-href], .md-link[data-app-link]") : null;
+    return askUrl(link?.dataset.appLink ?? link?.dataset.href);
+  }, [askUrl]);
   const links = useMemo<LinkHandlers>(() => ({
     onPointerDown: (event) => { downAt.current = event.timeStamp; },
     onClick: (event) => {
@@ -109,5 +127,5 @@ export function useChatLinks(openPath?: (path: string) => void): { links: LinkHa
     },
   }), [ask]);
   const close = useCallback(() => setUrl(null), []);
-  return { links, sheet: url && <LinkSheet url={url} onClose={close} /> };
+  return { links, askUrl, close, sheet: url && <LinkSheet url={url} onClose={close} /> };
 }

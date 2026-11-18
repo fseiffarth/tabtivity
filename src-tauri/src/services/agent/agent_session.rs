@@ -49,6 +49,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "opencode" => crate::services::opencode_session::resolve(opts),
         "copilot" => crate::services::copilot_session::resolve(opts),
         "agy" => crate::services::google_chat::resolve(opts),
+        "muse" => crate::services::muse_session::resolve(opts),
         _ => opts,
     }
 }
@@ -118,7 +119,7 @@ where
 /// The most of a legacy Vibe session's `meta.json` read to match its id.
 const VIBE_META_CAP: u64 = 16 * 1024 * 1024;
 
-fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
+pub(crate) fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
     if !is_uuid_shaped(id) {
         return false;
     }
@@ -232,7 +233,7 @@ pub(crate) fn codex_session_exists(
     codex_session_exists_in(root, store, uuid)
 }
 
-fn codex_session_exists_in<'a>(
+pub(crate) fn codex_session_exists_in<'a>(
     root: &std::path::Path,
     stores: impl IntoIterator<Item = &'a std::path::Path>,
     uuid: &str,
@@ -436,7 +437,7 @@ pub(crate) fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> b
 }
 
 /// The session log behind [`claude_session_exists`], when there is one.
-fn claude_session_log(projects: &std::path::Path, uuid: &str) -> Option<PathBuf> {
+pub(crate) fn claude_session_log(projects: &std::path::Path, uuid: &str) -> Option<PathBuf> {
     let file = format!("{uuid}.jsonl");
     // By handle from the home: a slug folder the agent linked elsewhere is
     // another scope's conversations, not this one's.
@@ -491,6 +492,16 @@ pub enum TranscriptKind {
 /// with, or `None` when there is no transcript, no answer in it yet, or the
 /// agent is one whose transcript Tabtivity does not read.
 pub fn agent_session_model(cmd: &str, project_id: Option<&str>, launch_id: &str) -> Option<String> {
+    if cmd == "agy" {
+        // Antigravity keeps no transcript file: its tab's own conversation
+        // database says which model it called (`google_chat`). A remote
+        // project's store is on its host, not in this scope's home.
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return None;
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        return crate::services::google_chat::antigravity_tab_model(&home, project_id, launch_id);
+    }
     read_agent_transcript(
         cmd,
         project_id,
@@ -1326,9 +1337,43 @@ fn claude_prompt_text(text: &str) -> Option<String> {
     if CLAUDE_NOT_A_PROMPT.iter().any(|tag| text.starts_with(*tag)) || is_cli_written_block(text) {
         return None;
     }
-    let text = collapse_pasted_blocks(strip_trailing_blocks(text));
+    let text = drop_inbox_picture_chips(&collapse_pasted_blocks(strip_trailing_blocks(text)));
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
+}
+
+/// A prompt that names an inbox file: without the `[Image #N]` chips Claude
+/// Code put in for pictures pasted beside it. A Tabby chat gets each inbox
+/// picture it is sent as such a paste (`assistant_attach::picture_pastes_in`),
+/// the chip lands wherever the cursor stood when Claude took the picture, and
+/// the reference itself already draws the picture: kept, the chip made the
+/// record differ from the words sent, so the sending bubble never settled.
+/// A prompt with no inbox reference keeps its chips.
+fn drop_inbox_picture_chips(text: &str) -> String {
+    const CHIP: &str = "[Image #";
+    let names_inbox = [crate::brand::INBOX_DIR, crate::brand::LEGACY_INBOX_DIR]
+        .iter()
+        .any(|dir| text.contains(&format!("@{dir}/")));
+    if !names_inbox || !text.contains(CHIP) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(CHIP) {
+        let after = &rest[start + CHIP.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 || !after[digits..].starts_with(']') {
+            out.push_str(&rest[..start + CHIP.len()]);
+            rest = after;
+            continue;
+        }
+        // The blank Claude typed before the chip goes with it.
+        let head = &rest[..start];
+        out.push_str(head.strip_suffix(' ').unwrap_or(head));
+        rest = &after[digits + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Text pasted into Claude Code is recorded as `<pasted_content id="…">…
@@ -1596,6 +1641,11 @@ pub(crate) fn live_record_dir(project_id: Option<&str>, uid: &str) -> Option<Pat
 /// before the source and the new id, so a reader that sees `clear` sees it.
 pub const LIVE_CLEARED_SUFFIX: &str = ".prev";
 
+/// Suffix of the marker the hook leaves while a new conversation (a fresh
+/// start or a `/clear`) in a Claude tab with the cockpit lane has not had its
+/// first prompt: that prompt carries `cockpit_mcp::NAME_HINT` and spends it.
+pub const LIVE_TITLE_SUFFIX: &str = ".title";
+
 /// The Claude conversation the tab's last `/clear` ended, while taking it back
 /// is still an undo: the current session is the one that clear started (the
 /// source beside the winning record says `clear` — the undo's own `/resume`, or
@@ -1669,7 +1719,8 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// turns it into `--session <chat>` (`opencode_session::resolve`),
 /// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
 /// Copilot's record is pointed at `chat` and the tab relaunched too; its spawn
-/// pins `--session-id <chat>` (`copilot_session::resolve`).
+/// pins `--session-id <chat>` (`copilot_session::resolve`). Muse's likewise,
+/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`).
 /// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
     if !is_uuid_shaped(uid) {
@@ -1692,7 +1743,7 @@ pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: 
             restore_cleared_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
-        "agy" | "copilot" => {
+        "agy" | "copilot" | "muse" => {
             write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
@@ -1907,14 +1958,22 @@ pub enum CodexHookState {
 /// Classify Tabtivity's hook across the Tabtivity-owned agent homes: the least
 /// trusted state any home that has run Codex is in (a `sessions/` dir), since
 /// Codex asks for the trust approval per config file. `NoCodex` when no home
-/// has run it yet.
+/// has run it yet. A home counts as `Enabled` only when its approval hook
+/// (`PermissionRequest`) is trusted too, where it is registered
+/// ([`codex_reported_state_in`]).
 pub fn codex_hook_state() -> CodexHookState {
+    codex_hook_state_across(&crate::services::agent_home::existing_homes_in(&storage::state_dir()))
+}
+
+/// [`codex_hook_state`] over the given homes.
+fn codex_hook_state_across(homes: &[PathBuf]) -> CodexHookState {
     let mut worst: Option<CodexHookState> = None;
-    for home in crate::services::agent_home::existing_homes_in(&storage::state_dir()) {
-        if !home.join(".codex").join("sessions").is_dir() {
+    for home in homes {
+        // The probe home (a warm-up's Codex run) registers no hook by design.
+        if crate::services::agent_home::is_probe_home(home) || !home.join(".codex").join("sessions").is_dir() {
             continue;
         }
-        let state = codex_hook_state_of_home(&home);
+        let state = codex_reported_state_of_home(home);
         let rank = |s: CodexHookState| match s {
             CodexHookState::Enabled => 0,
             CodexHookState::NoCodex => 1,
@@ -1929,14 +1988,45 @@ pub fn codex_hook_state() -> CodexHookState {
     worst.unwrap_or(CodexHookState::NoCodex)
 }
 
-/// Tabtivity's hook as the Codex of one agent home sees it.
+/// Tabtivity's `SessionStart` hook as the Codex of one agent home sees it: the
+/// resume path, and what [`codex_binder_enabled`] goes by.
 fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
+    let (src, config) = codex_config_of_home(home);
+    codex_hook_state_in(&src, &config, &hook_command())
+}
+
+/// What [`codex_hook_state`] reports for one agent home: its `SessionStart`
+/// hook, and its `PermissionRequest` hook where that one is registered.
+fn codex_reported_state_of_home(home: &std::path::Path) -> CodexHookState {
+    let (src, config) = codex_config_of_home(home);
+    codex_reported_state_in(&src, &config, &hook_command())
+}
+
+/// One agent home's Codex config text and its path as a trust key spells it.
+fn codex_config_of_home(home: &std::path::Path) -> (String, String) {
     let config = home.join(".codex").join("config.toml");
     // The agent can rewrite its own config: never a FIFO or a link.
     let src = crate::services::home_io::open_regular(&config)
         .and_then(|f| std::io::read_to_string(f).ok())
         .unwrap_or_default();
-    codex_hook_state_in(&src, &config.to_string_lossy(), &hook_command())
+    (src, config.to_string_lossy().into_owned())
+}
+
+/// Testable core of [`codex_reported_state_of_home`]. Codex asks for trust per
+/// hook, so a home that trusted the session hooks and then skipped the "Hooks
+/// need review" for a hook added later runs without that one, silently: an
+/// untrusted or switched-off `PermissionRequest` is reported, so the one-click
+/// trust is offered for it. One not registered yet (a home no tab has spawned
+/// in since) does not count against a live `SessionStart`.
+pub fn codex_reported_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHookState {
+    let resume = codex_hook_state_in(src, config_path, cmd);
+    if resume != CodexHookState::Enabled {
+        return resume;
+    }
+    match codex_event_state_in(src, config_path, cmd, "PermissionRequest") {
+        state @ (CodexHookState::Untrusted | CodexHookState::Disabled) => state,
+        _ => resume,
+    }
 }
 
 /// Testable core of [`codex_hook_state`].
@@ -1950,6 +2040,15 @@ fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
 /// the `[[hooks.SessionStart.hooks]]` tables within each. So we find our hook by
 /// its `command`, note where it sits, and look the verdict up under that key.
 pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHookState {
+    codex_event_state_in(src, config_path, cmd, "SessionStart")
+}
+
+/// [`codex_hook_state_in`] for the hook of any one of [`CODEX_HOOK_EVENTS`].
+fn codex_event_state_in(src: &str, config_path: &str, cmd: &str, event: &str) -> CodexHookState {
+    let Some((label, _)) = codex_event_label(event) else {
+        return CodexHookState::NotRegistered;
+    };
+    let (group_table, hook_table) = (format!("[[hooks.{event}]]"), format!("[[hooks.{event}.hooks]]"));
     let mut group: i64 = -1;
     let mut hook: i64 = -1;
     let mut in_hook_table = false;
@@ -1965,10 +2064,10 @@ pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHook
         if line.starts_with('[') {
             in_hook_table = false;
             state_key = None;
-            if line.starts_with("[[hooks.SessionStart]]") {
+            if line.starts_with(&group_table) {
                 group += 1;
                 hook = -1;
-            } else if line.starts_with("[[hooks.SessionStart.hooks]]") {
+            } else if line.starts_with(&hook_table) {
                 hook += 1;
                 in_hook_table = true;
             } else if let Some(key) = toml_state_table_key(line) {
@@ -1994,7 +2093,7 @@ pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHook
     let Some((g, h)) = ours else {
         return CodexHookState::NotRegistered;
     };
-    let suffix = format!(":session_start:{g}:{h}");
+    let suffix = format!(":{label}:{g}:{h}");
     let verdict = verdicts
         .get(&format!("{config_path}{suffix}"))
         // Fall back to any entry at our position: Codex builds the key from the
@@ -2103,6 +2202,9 @@ fn codex_event_label(event: &str) -> Option<(&'static str, bool)> {
         "SessionEnd" => ("session_end", true),
         "UserPromptSubmit" => ("user_prompt_submit", false),
         "Stop" => ("stop", false),
+        // Tool-matched like PostToolUse; ours carries no matcher, and the
+        // hash this gives was accepted by 0.169.0.
+        "PermissionRequest" => ("permission_request", true),
         _ => return None,
     })
 }
@@ -2328,6 +2430,9 @@ pub fn trust_codex_hooks_in(src: &str, key_paths: &[String], cmd: &str) -> Optio
 pub fn install_session_start_hook() -> std::io::Result<()> {
     write_hook_script()?;
     crate::services::opencode_session::write_plugin()?;
+    crate::services::antigravity_session::write_script()?;
+    crate::services::muse_session::write_hook()?;
+    crate::services::copilot_session::write_turn_hook()?;
     crate::services::agent_hint::write_script()
 }
 
@@ -2366,13 +2471,20 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     // OpenCode's session plugin (`services::opencode_session`).
     crate::services::opencode_session::register_in_home(home);
     crate::services::opencode_session::disable_service_in_home(home);
+    // Antigravity's conversation hook (`services::antigravity_session`).
+    crate::services::antigravity_session::register_in_home(home);
+    // Muse's session hook (`services::muse_session`), on a Muse that takes it.
+    crate::services::muse_session::register_in_home(home);
+    // Copilot's turn hooks (`services::copilot_session`), on a Copilot that takes them.
+    crate::services::copilot_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
     // session hook above).
     crate::services::agent_hint::register_in_home(home);
 }
 
-/// Vibe's user hook runs after each completed turn and reports the live ID.
-/// Local-model homes have their own hooks.toml, so preparation calls this too.
+/// Vibe's user hooks ([`VIBE_HOOK_TYPES`]) report the live ID at each prompt
+/// and turn's end, and the turn state. Local-model homes have their own
+/// hooks.toml, so preparation calls this too.
 ///
 /// A local-model home (`<state>/vibe_local/<alias>`) is Tabtivity's own, so its
 /// file is rewritten to hold Tabtivity's hook alone: a hook a fenced agent planted
@@ -2397,28 +2509,133 @@ fn write_vibe_hooks(file: &HomeFile, app_owned: bool) -> std::io::Result<()> {
         }
         return Ok(());
     }
-    let mut content = file
+    let content = file
         .read()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
-    if content.lines().any(|line| line.trim() == format!("name = \"{}\"", crate::brand::VIBE_SESSION_HOOK)) {
+    let merged = merge_vibe_hooks(&content, &hook_command())?;
+    if merged == content {
         return Ok(());
     }
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
+    file.write(merged.as_bytes())
+}
+
+/// `content` (a user's `hooks.toml`) with the session hooks running `command`.
+/// Per hook, by name: a file from before the turn hooks has the `post_agent`
+/// one alone and gains the rest at the end; a session hook already there
+/// stays where it is, and only its `command` line is rewritten when it went
+/// stale (unquoted, `vibe_shell_command`). The user's own hooks are kept as
+/// they are. Unchanged when nothing needs it.
+fn merge_vibe_hooks(content: &str, command: &str) -> std::io::Result<String> {
+    let ours: Vec<String> = VIBE_HOOK_TYPES
+        .iter()
+        .map(|kind| format!("name = \"{}\"", vibe_hook_name(kind)))
+        .collect();
+    let wanted = format!(
+        "command = {}",
+        serde_json::to_string(&vibe_shell_command(command)).map_err(std::io::Error::other)?
+    );
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let mut present: Vec<&str> = Vec::new();
+    let mut table = 0;
+    while table < lines.len() {
+        let mut end = table + 1;
+        while end < lines.len() && !lines[end].trim_start().starts_with('[') {
+            end += 1;
+        }
+        let name = (lines[table].trim() == "[[hooks]]")
+            .then(|| lines[table..end].iter().find_map(|l| ours.iter().find(|o| l.trim() == o.as_str())))
+            .flatten();
+        if let Some(name) = name {
+            present.push(name);
+            for line in &mut lines[table..end] {
+                if line.trim_start().starts_with("command") && line.trim() != wanted {
+                    *line = wanted.clone();
+                }
+            }
+        }
+        table = end;
     }
-    content.push('\n');
-    content.push_str(&vibe_hook_block()?);
-    file.write(content.as_bytes())
+    let missing: Vec<&str> = VIBE_HOOK_TYPES
+        .iter()
+        .zip(&ours)
+        .filter(|(_, line)| !present.contains(&line.as_str()))
+        .map(|(kind, _)| *kind)
+        .collect();
+    let mut merged = lines.join("\n");
+    if content.ends_with('\n') || (!merged.is_empty() && !missing.is_empty()) {
+        merged.push('\n');
+    }
+    if !missing.is_empty() {
+        if !merged.is_empty() {
+            merged.push('\n');
+        }
+        merged.push_str(&vibe_hook_entries_running(&missing, command)?);
+    }
+    Ok(merged)
+}
+
+/// The comment line over the session hooks in a `hooks.toml`.
+fn vibe_hook_comment() -> String {
+    format!("# {DISPLAY}: remember the live Vibe session and turn state for this tab.")
+}
+
+/// The `command` Vibe gets for the session hook. Vibe hands it to `/bin/sh` as
+/// written (3.1.2: `…/hooks dir/x.sh` ran as `…/hooks`, "not found",
+/// `scripts/verify-cli/vibe/resume.py`), so a path a shell would split is
+/// quoted: macOS keeps the script under `~/Library/Application Support`. On
+/// Windows it is a PowerShell line whose path is quoted already.
+fn vibe_shell_command(command: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "/._-+:@%,=".contains(c);
+    if cfg!(windows) || command.chars().all(plain) {
+        command.to_string()
+    } else {
+        crate::quote::posix(command)
+    }
+}
+
+/// The Vibe hook types the session hook serves (Vibe 3.1.2, probed offline
+/// with `scripts/verify-cli/vibe/turn_hooks.py`; all fire in the TUI):
+/// `pre_agent` at each prompt and `post_agent` after each turn record the
+/// session and the turn's working / done, `post_tool` (which also ends an
+/// approval wait), the `approval_requested` notification (the dialog opening)
+/// and `session_end` the rest of the turn state. `session_start` is left out:
+/// it fires before a session took a prompt.
+pub const VIBE_HOOK_TYPES: [&str; 5] = ["post_agent", "pre_agent", "post_tool", "notification", "session_end"];
+
+/// The name of the hook of one of [`VIBE_HOOK_TYPES`]: Vibe wants every name
+/// once. `post_agent` keeps the name it has had since the first build.
+fn vibe_hook_name(kind: &str) -> String {
+    if kind == "post_agent" {
+        crate::brand::VIBE_SESSION_HOOK.to_string()
+    } else {
+        format!("{}-{}", crate::brand::VIBE_SESSION_HOOK, kind.replace('_', "-"))
+    }
+}
+
+fn vibe_hook_entries(kinds: &[&str]) -> std::io::Result<String> {
+    vibe_hook_entries_running(kinds, &hook_command())
+}
+
+/// [`vibe_hook_entries`] with the hook's `command` given: the app's own script,
+/// or a probe's copy of it (`writes_the_vibe_hook_for_a_probe`).
+fn vibe_hook_entries_running(kinds: &[&str], command: &str) -> std::io::Result<String> {
+    let cmd = serde_json::to_string(&vibe_shell_command(command)).map_err(std::io::Error::other)?;
+    let mut out = format!("{}\n", vibe_hook_comment());
+    for (i, kind) in kinds.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "[[hooks]]\nname = \"{name}\"\ntype = \"{kind}\"\ncommand = {cmd}\ntimeout = 10.0\n",
+            name = vibe_hook_name(kind)
+        ));
+    }
+    Ok(out)
 }
 
 fn vibe_hook_block() -> std::io::Result<String> {
-    let cmd = serde_json::to_string(&hook_command()).map_err(std::io::Error::other)?;
-    Ok(format!(
-        "# {DISPLAY}: remember the live Vibe session for this tab.\n\
-         [[hooks]]\nname = \"{name}\"\ntype = \"post_agent\"\ncommand = {cmd}\ntimeout = 10.0\n",
-        name = crate::brand::VIBE_SESSION_HOOK
-    ))
+    vibe_hook_entries(&VIBE_HOOK_TYPES)
 }
 
 /// Whether `home` is one of Tabtivity's local-model `VIBE_HOME`s — the same root
@@ -2522,7 +2739,8 @@ fn container_hook_script_path() -> PathBuf {
 /// those carrying its id under any `*_TAB_UID` name: a probe that unset only
 /// the current name still reached the hook through the legacy one, and a walk
 /// matching the current name alone counted nothing and let it through (2.1.288).
-/// The PowerShell twin has no such check yet.
+/// The PowerShell twin walks the parent chain instead (2442h,
+/// `powershell_hook_script_body`).
 #[cfg(not(windows))]
 fn hook_script_body(live_dir: &str) -> String {
     posix_hook_script_body(live_dir)
@@ -2545,10 +2763,16 @@ fn posix_hook_script_body(live_dir: &str) -> String {
 /// the hook runs under the agent's environment, which a project can shape.
 fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     let hint = crate::services::agent_hint::HINT;
+    let name_hint = crate::services::cockpit_mcp::NAME_HINT;
+    let notice = crate::services::tabs_mcp::NOTICE;
+    let mail_suffix = crate::services::agent_turn::MAIL_SUFFIX;
+    let ask_suffix = crate::services::agent_turn::ASK_SUFFIX;
     format!(
         "#!/bin/sh\n\
-         # {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\n\
-         # Notification, SessionEnd) — records, per tab, the agent's live session id\n\
+         # {DISPLAY} agent hook (SessionStart, Stop, StopFailure, UserPromptSubmit, PostToolUse,\n\
+         # PostToolUseFailure, PermissionRequest, Elicitation, ElicitationResult, Notification,\n\
+         # SessionEnd; Vibe's pre_agent, post_agent, post_tool, notification, session_end)\n\
+         # — records, per tab, the agent's live session id\n\
          # and permission mode (so {DISPLAY} resumes the current session in the mode it\n\
          # was left in, incl. after /clear), how the session started (so a prompt\n\
          # sent after a /clear is filed under the new session, linked to the old\n\
@@ -2564,6 +2788,7 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          event=$(printf '%s' \"$input\" | sed -n 's/.*\"hook_event_name\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
          ntype=$(printf '%s' \"$input\" | sed -n 's/.*\"notification_type\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
          reason=$(printf '%s' \"$input\" | sed -n 's/.*\"reason\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
+         intr=$(printf '%s' \"$input\" | sed -n 's/.*\"is_interrupt\"[[:space:]]*:[[:space:]]*\\([a-z]*\\).*/\\1/p')\n\
          tpath=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p')\n\
          tnull=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*null.*/null/p')\n\
          secs=$(printf '%s' \"$input\" | sed -n 's/.*\"seconds_since_last_response\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')\n\
@@ -2577,10 +2802,27 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          # Only the tab's own session may move the records: a nested CLI under the\n\
          # tab inherits {UPPER}_TAB_UID and fires this hook too.\n\
          case \"${UPPER}_TAB_AGENT\" in\n\
-         \x20 vibe) [ \"$event\" = post_agent ] || exit 0\n\
+         \x20 # Vibe (3.1.2): its own session only — not a subagent's (a parent set),\n\
+         \x20 # not a Vibe run by a Vibe tool's shell (`VIBE_SESSION`, which Vibe sets\n\
+         \x20 # for the commands its tools run and never for its own hooks). A prompt\n\
+         \x20 # (pre_agent) or a finished turn (post_agent) records the session; the\n\
+         \x20 # rest must come from the recorded one. Turn words as for Claude: an\n\
+         \x20 # approval notice is the dialog opening, a finished tool ends it.\n\
+         \x20 vibe) [ -z \"$VIBE_SESSION\" ] || exit 0\n\
          \x20   parent=$(printf '%s' \"$input\" | sed -n 's/.*\"parent_session_id\"[[:space:]]*:[[:space:]]*\\([^,}}]*\\).*/\\1/p')\n\
          \x20   [ \"$parent\" = null ] || exit 0\n\
-         \x20   printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"\n\
+         \x20   turn=\n\
+         \x20   case \"$event\" in\n\
+         \x20     pre_agent) printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"; turn=working ;;\n\
+         \x20     post_agent) printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"; turn=done ;;\n\
+         \x20     post_tool|notification|session_end) [ -z \"$cur\" ] || [ \"$sid\" = \"$cur\" ] || exit 0\n\
+         \x20       case \"$event:$ntype\" in\n\
+         \x20         post_tool:*) turn=working ;;\n\
+         \x20         notification:approval_requested) turn=decision ;;\n\
+         \x20         session_end:*) [ \"$reason\" = clear ] || turn=idle ;;\n\
+         \x20       esac ;;\n\
+         \x20   esac\n\
+         \x20   [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
          \x20   exit 0 ;;\n\
          \x20 codex) [ -z \"$CLAUDECODE\" ] || exit 0\n\
          \x20   # Codex mints its own ids, so a start is free-form; every later event\n\
@@ -2644,19 +2886,85 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          case \"$event:${UPPER}_TAB_AGENT\" in SessionStart:claude|SessionStart:codex) [ -z \"${UPPER}_PROJECT_DIR\" ] ||\n\
          \x20 printf '%s\\n' '{hint}' ;;\n\
          esac\n\
+         # A new conversation (a fresh start or a /clear, not a resume) in a Claude\n\
+         # tab holding the cockpit lane arms a reminder to name the tab; the first\n\
+         # real prompt carries it beside itself and spends it.\n\
+         if [ \"${UPPER}_TAB_AGENT\" = claude ] && [ -n \"${UPPER}_COCKPIT_MCP_URL\" ]; then\n\
+         \x20 title=\"$dir/${UPPER}_TAB_UID{LIVE_TITLE_SUFFIX}\"\n\
+         \x20 case \"$event\" in\n\
+         \x20   SessionStart) case \"$src\" in startup|clear) : > \"$title\" ;; resume) rm -f \"$title\" ;; esac ;;\n\
+         \x20   UserPromptSubmit) if [ -f \"$title\" ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
+         \x20     rm -f \"$title\"; printf '%s\\n' '{name_hint}'\n\
+         \x20   fi ;;\n\
+         \x20 esac\n\
+         fi\n\
+         # Another agent tab of the project left this one a message (the tab\n\
+         # messages lane): the next real prompt carries one fixed notice beside\n\
+         # itself and spends the marker. The marker is empty; nothing a sibling\n\
+         # wrote reaches the prompt.\n\
+         if [ \"$event\" = UserPromptSubmit ] && [ \"${UPPER}_TAB_AGENT\" = claude ] && [ -n \"${UPPER}_TABS_MCP_URL\" ]; then\n\
+         \x20 mail=\"$dir/${UPPER}_TAB_UID{mail_suffix}\"\n\
+         \x20 if [ -f \"$mail\" ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
+         \x20   rm -f \"$mail\"; printf '%s\\n' '{notice}'\n\
+         \x20 fi\n\
+         fi\n\
          # The turn state, from the events the agent fires as it works: a prompt\n\
          # submitted or a tool finished means working (a finished tool is also what\n\
          # ends an approval wait), Stop means done, a permission or elicitation\n\
          # notice means blocked on the user, the end of the session means idle —\n\
          # unless a /clear ended it: the CLI is still at its prompt, and the\n\
          # verdict it had (done) is what keeps the tab off its stale screen.\n\
+         # A permission request is the dialog opening (a question, an approval,\n\
+         # a plan to accept): Claude 2.1.322 sends its notice for it only 6 s\n\
+         # later, and none at all for one answered sooner. An MCP server's\n\
+         # elicitation is the same (Elicitation, ElicitationResult once\n\
+         # answered). Claude 2.1.325 ends a turn the API refused with StopFailure\n\
+         # and a failed tool with PostToolUseFailure, never Stop / PostToolUse;\n\
+         # an interrupted tool is not work going on.\n\
          turn=\n\
          case \"$event\" in\n\
-         \x20 UserPromptSubmit|PostToolUse) turn=working ;;\n\
-         \x20 Stop) turn=done ;;\n\
-         \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
+         \x20 UserPromptSubmit|PostToolUse|ElicitationResult) turn=working ;;\n\
+         \x20 PostToolUseFailure) [ \"$intr\" = true ] || turn=working ;;\n\
+         \x20 PermissionRequest|Elicitation) turn=decision ;;\n\
+         \x20 Stop|StopFailure) turn=done ;;\n\
+         \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
+         # Codex with `approvals_reviewer = \"auto_review\"` fires PermissionRequest\n\
+         # before its reviewer agent answers, and no dialog ever opens: in the\n\
+         # fence every command asks to escalate, so each one lit the tab as a\n\
+         # question for the seconds the review took. Under auto-review the turn\n\
+         # stays working; a dialog that still reaches the user is read off the\n\
+         # screen. Only the home's top-level key counts (a profile's does not).\n\
+         if [ \"$event:${UPPER}_TAB_AGENT\" = PermissionRequest:codex ] &&\n\
+         \x20 sed -n -e '/^[[:space:]]*\\[/q' -e '/^[[:space:]]*approvals_reviewer[[:space:]]*=[[:space:]]*.auto_review.[[:space:]]*\\(#.*\\)\\{{0,1\\}}$/p' \\\n\
+         \x20   \"${{CODEX_HOME:-$HOME/.codex}}/config.toml\" 2>/dev/null | grep -q .; then\n\
+         \x20 turn=\n\
+         fi\n\
+         # Codex's async question (`request_user_input_async`, 0.169.0) leaves the\n\
+         # turn running: asked, its PostToolUse comes at once, and the question\n\
+         # waits in Codex's queue (shift+← opens it) until the user's reply — a\n\
+         # prompt naming the call in `<send_user_message_question_reply>` — or\n\
+         # the turn's end, which drops it; a skip (^]) fires nothing. The open\n\
+         # calls are kept one per line, and while any is open the turn reads as\n\
+         # a question even as the agent works on.\n\
+         if [ \"${UPPER}_TAB_AGENT\" = codex ]; then\n\
+         \x20 ask=\"$dir/${UPPER}_TAB_UID{ask_suffix}\"\n\
+         \x20 case \"$event\" in\n\
+         \x20   PostToolUse) case \"$input\" in *'\"tool_name\":\"request_user_input_async\"'*)\n\
+         \x20     call=$(printf '%s' \"$input\" | sed -n 's/.*\"tool_use_id\"[[:space:]]*:[[:space:]]*\"\\([A-Za-z0-9_.-]*\\)\".*/\\1/p')\n\
+         \x20     [ -n \"$call\" ] && printf '%s\\n' \"$call\" >> \"$ask\" ;;\n\
+         \x20   esac ;;\n\
+         \x20   UserPromptSubmit) case \"$input\" in *send_user_message_question_reply*)\n\
+         \x20     if [ -f \"$ask\" ]; then\n\
+         \x20       open=$(while IFS= read -r c; do [ -z \"$c\" ] || printf '%s' \"$input\" | grep -qF -- \"$c\" || printf '%s\\n' \"$c\"; done < \"$ask\")\n\
+         \x20       if [ -n \"$open\" ]; then printf '%s\\n' \"$open\" > \"$ask\"; else rm -f \"$ask\"; fi\n\
+         \x20     fi ;;\n\
+         \x20   esac ;;\n\
+         \x20   SessionStart|SessionEnd|Stop|StopFailure) rm -f \"$ask\" ;;\n\
+         \x20 esac\n\
+         \x20 [ -s \"$ask\" ] && [ \"$turn\" = working ] && turn=decision\n\
+         fi\n\
          # A Bash call put in the background (`run_in_background`, or moved there\n\
          # while it ran) comes back with its task id, and its shell writes to\n\
          # `<id>.output`: that is how the job scan tells it from the call the\n\
@@ -2710,13 +3018,42 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
 /// `read_live_session`'s `trim()`/`is_uuidish` checks.
 #[cfg(windows)]
 fn hook_script_body(live_dir: &str) -> String {
+    let host = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| concat!(crate::app_slug!(), ".exe").to_string());
+    powershell_hook_script_body(live_dir, &host)
+}
+
+/// The PowerShell body with the app's executable name `host_exe` baked in:
+/// the clear/resume check walks the hook's ancestors up to it. Compiled for
+/// tests everywhere, so the text is checked on every OS.
+///
+/// The stray-`--resume` check (2442h) cannot read another process's
+/// environment as the POSIX twin does (`/proc/<pid>/environ`, `ps -E`), so it
+/// does not bound the walk by the tab id: it walks the parent chain from the
+/// hook up to the app that started the tab and counts the Claude processes on
+/// the way (`claude.exe`, or a Node/Bun running `@anthropic-ai/claude-code`).
+/// The tab's CLI has none above it; a `claude -p --resume` run from the
+/// agent's shell has the tab's Claude above it. One process-table read, only
+/// for a clear/resume start; an unreadable table counts nothing and the start
+/// is taken, as on POSIX.
+#[cfg(any(windows, test))]
+fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
     // `live_dir` is a Windows path (backslashes); embed it in a single-quoted
     // PowerShell literal so backslashes are not treated as escapes.
     let live_dir = crate::quote::powershell(live_dir);
+    let host_exe = crate::quote::powershell(host_exe);
     let hint = crate::services::agent_hint::HINT;
+    let name_hint = crate::services::cockpit_mcp::NAME_HINT;
+    let notice = crate::services::tabs_mcp::NOTICE;
+    let mail_suffix = crate::services::agent_turn::MAIL_SUFFIX;
+    let ask_suffix = crate::services::agent_turn::ASK_SUFFIX;
     format!(
-        "# {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
-         # Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
+        "# {DISPLAY} agent hook (SessionStart, Stop, StopFailure, UserPromptSubmit, PostToolUse,\r\n\
+         # PostToolUseFailure, PermissionRequest, Elicitation, ElicitationResult, Notification,\r\n\
+         # SessionEnd; Vibe's pre_agent, post_agent, post_tool, notification, session_end)\r\n\
+         # - records, per tab, the agent's live session id\r\n\
          # and permission mode (so {DISPLAY} resumes the current session in the mode it\r\n\
          # was left in, incl. after /clear) and its turn state (working / decision /\r\n\
          # done / idle), which lights the tab's working and finished marks. No-op\r\n\
@@ -2732,6 +3069,7 @@ fn hook_script_body(live_dir: &str) -> String {
          $me = [regex]::Match($payload, '\"hook_event_name\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mn = [regex]::Match($payload, '\"notification_type\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mr = [regex]::Match($payload, '\"reason\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
+         $mi = [regex]::Match($payload, '\"is_interrupt\"\\s*:\\s*([a-z]+)')\r\n\
          $mq = [regex]::Match($payload, '\"seconds_since_last_response\"\\s*:\\s*([0-9]+)')\r\n\
          $mc = [regex]::Match($payload, '\"context_tokens\"\\s*:\\s*([0-9]+)')\r\n\
          $mu = [regex]::Match($payload, '\"estimated_cache_write_usd\"\\s*:\\s*([0-9.]+)')\r\n\
@@ -2747,9 +3085,21 @@ fn hook_script_body(live_dir: &str) -> String {
          $rec = Join-Path $dir $uid\r\n\
          $cur = ''\r\n\
          if (Test-Path $rec) {{ $cur = [IO.File]::ReadAllText($rec).Trim() }}\r\n\
+         # Vibe: its own top-level session only, never a Vibe run by a Vibe\r\n\
+         # tool's shell (VIBE_SESSION); see the POSIX twin.\r\n\
          if ($env:{UPPER}_TAB_AGENT -eq 'vibe') {{\r\n\
-         \x20 if (($event -ne 'post_agent') -or ($payload -notmatch '\"parent_session_id\"\\s*:\\s*null')) {{ exit 0 }}\r\n\
-         \x20 [IO.File]::WriteAllText($rec, $sid)\r\n\
+         \x20 if ((-not [string]::IsNullOrEmpty($env:VIBE_SESSION)) -or ($payload -notmatch '\"parent_session_id\"\\s*:\\s*null')) {{ exit 0 }}\r\n\
+         \x20 $turn = ''\r\n\
+         \x20 if (($event -eq 'pre_agent') -or ($event -eq 'post_agent')) {{\r\n\
+         \x20   [IO.File]::WriteAllText($rec, $sid)\r\n\
+         \x20   if ($event -eq 'pre_agent') {{ $turn = 'working' }} else {{ $turn = 'done' }}\r\n\
+         \x20 }} elseif (@('post_tool', 'notification', 'session_end') -contains $event) {{\r\n\
+         \x20   if (($cur -ne '') -and ($sid -ne $cur)) {{ exit 0 }}\r\n\
+         \x20   if ($event -eq 'post_tool') {{ $turn = 'working' }}\r\n\
+         \x20   elseif (($event -eq 'notification') -and ($ntype -eq 'approval_requested')) {{ $turn = 'decision' }}\r\n\
+         \x20   elseif (($event -eq 'session_end') -and -not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }}\r\n\
+         \x20 }}\r\n\
+         \x20 if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
          \x20 exit 0\r\n\
          }}\r\n\
          # Only the tab's own session may move the records: a nested CLI under the\r\n\
@@ -2786,18 +3136,98 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20   if ($ref -eq '') {{ $ref = $uid }}\r\n\
          \x20   $tdir = Split-Path ($mt.Groups[1].Value -replace '\\\\\\\\', '\\') -Parent\r\n\
          \x20   if (Test-Path -Path (Join-Path (Split-Path $tdir -Parent) ('*\\' + $ref + '.jsonl'))) {{ exit 0 }}\r\n\
-         \x20 }} elseif (($src -ne 'clear') -and ($src -ne 'resume')) {{ exit 0 }}\r\n\
+         \x20 }} elseif (($src -eq 'clear') -or ($src -eq 'resume')) {{\r\n\
+         \x20   # A /clear or /resume typed in the tab comes from the tab's own CLI; a\r\n\
+         \x20   # `claude --resume` nested under it (the agent's shell) sends the same\r\n\
+         \x20   # start. Up to the app that started the tab, the tab's CLI has no Claude\r\n\
+         \x20   # above it, a nested one has (see powershell_hook_script_body).\r\n\
+         \x20   $procs = @{{}}\r\n\
+         \x20   foreach ($q in @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine)) {{ $procs[[int]$q.ProcessId] = $q }}\r\n\
+         \x20   $n = 0; $hops = 0; $q = $procs[[int]$PID]\r\n\
+         \x20   while ($q -and ($hops -lt 64)) {{\r\n\
+         \x20     $hops++\r\n\
+         \x20     $q = $procs[[int]$q.ParentProcessId]\r\n\
+         \x20     if ((-not $q) -or ($q.Name -ieq {host_exe})) {{ break }}\r\n\
+         \x20     if (($q.Name -ieq 'claude.exe') -or ([string]$q.CommandLine -match '@anthropic-ai[\\\\/]claude-code[\\\\/]')) {{ $n++ }}\r\n\
+         \x20   }}\r\n\
+         \x20   if ($n -ge 2) {{ exit 0 }}\r\n\
+         \x20 }} else {{ exit 0 }}\r\n\
          }}\r\n\
          if (($env:{UPPER}_TAB_AGENT -eq 'claude' -or $env:{UPPER}_TAB_AGENT -eq 'codex') -and $env:{UPPER}_PROJECT_DIR -and $event -eq 'SessionStart') {{ Write-Output '{hint}' }}\r\n\
+         # The tab-naming reminder (see the POSIX twin).\r\n\
+         if (($env:{UPPER}_TAB_AGENT -eq 'claude') -and $env:{UPPER}_COCKPIT_MCP_URL) {{\r\n\
+         \x20 $title = $rec + '{LIVE_TITLE_SUFFIX}'\r\n\
+         \x20 $how = ''\r\n\
+         \x20 if ($ms.Success) {{ $how = $ms.Groups[1].Value }}\r\n\
+         \x20 if ($event -eq 'SessionStart') {{\r\n\
+         \x20   if (($how -eq 'startup') -or ($how -eq 'clear')) {{ [IO.File]::WriteAllText($title, '') }}\r\n\
+         \x20   elseif ($how -eq 'resume') {{ Remove-Item -LiteralPath $title -Force -ErrorAction SilentlyContinue }}\r\n\
+         \x20 }} elseif (($event -eq 'UserPromptSubmit') -and (Test-Path -LiteralPath $title) -and ($payload -notmatch '\"prompt\"\\s*:\\s*\"\\s*/(clear|new|resume)')) {{\r\n\
+         \x20   Remove-Item -LiteralPath $title -Force -ErrorAction SilentlyContinue\r\n\
+         \x20   Write-Output '{name_hint}'\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
+         # A message from another agent tab of the project (see the POSIX twin).\r\n\
+         if (($event -eq 'UserPromptSubmit') -and ($env:{UPPER}_TAB_AGENT -eq 'claude') -and $env:{UPPER}_TABS_MCP_URL) {{\r\n\
+         \x20 $mail = $rec + '{mail_suffix}'\r\n\
+         \x20 if ((Test-Path -LiteralPath $mail) -and ($payload -notmatch '\"prompt\"\\s*:\\s*\"\\s*/(clear|new|resume)')) {{\r\n\
+         \x20   Remove-Item -LiteralPath $mail -Force -ErrorAction SilentlyContinue\r\n\
+         \x20   Write-Output '{notice}'\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
          # The turn state, from the events the agent fires as it works (see the\r\n\
-         # POSIX twin for the mapping).\r\n\
+         # POSIX twin for the mapping). A Codex whose approvals go to its reviewer\r\n\
+         # agent (`approvals_reviewer = \"auto_review\"`, top level) opens no dialog\r\n\
+         # on PermissionRequest: the turn stays working.\r\n\
+         $codexReviews = $false\r\n\
+         if (($event -eq 'PermissionRequest') -and ($env:{UPPER}_TAB_AGENT -eq 'codex')) {{\r\n\
+         \x20 $cfgDir = $env:CODEX_HOME\r\n\
+         \x20 if ([string]::IsNullOrEmpty($cfgDir)) {{ $cfgDir = Join-Path $HOME '.codex' }}\r\n\
+         \x20 foreach ($line in @(Get-Content -LiteralPath (Join-Path $cfgDir 'config.toml') -ErrorAction SilentlyContinue)) {{\r\n\
+         \x20   if ($line -match '^\\s*\\[') {{ break }}\r\n\
+         \x20   if ($line -match '^\\s*approvals_reviewer\\s*=\\s*.auto_review.\\s*(#.*)?$') {{ $codexReviews = $true }}\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
          $turn = ''\r\n\
          switch ($event) {{\r\n\
          \x20 'UserPromptSubmit' {{ $turn = 'working' }}\r\n\
          \x20 'PostToolUse' {{ $turn = 'working' }}\r\n\
+         \x20 'PostToolUseFailure' {{ if (-not ($mi.Success -and ($mi.Groups[1].Value -eq 'true'))) {{ $turn = 'working' }} }}\r\n\
+         \x20 'ElicitationResult' {{ $turn = 'working' }}\r\n\
+         \x20 'PermissionRequest' {{ if (-not $codexReviews) {{ $turn = 'decision' }} }}\r\n\
+         \x20 'Elicitation' {{ $turn = 'decision' }}\r\n\
          \x20 'Stop' {{ $turn = 'done' }}\r\n\
-         \x20 'Notification' {{ if (($ntype -eq 'permission_prompt') -or ($ntype -eq 'elicitation_dialog')) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
+         \x20 'StopFailure' {{ $turn = 'done' }}\r\n\
+         \x20 'Notification' {{ if (@('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input') -contains $ntype) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
          \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
+         }}\r\n\
+         # Codex's open async questions (see the POSIX twin).\r\n\
+         if ($env:{UPPER}_TAB_AGENT -eq 'codex') {{\r\n\
+         \x20 $ask = $rec + '{ask_suffix}'\r\n\
+         \x20 if (($event -eq 'PostToolUse') -and ($payload -match '\"tool_name\"\\s*:\\s*\"request_user_input_async\"')) {{\r\n\
+         \x20   $mc = [regex]::Match($payload, '\"tool_use_id\"\\s*:\\s*\"([A-Za-z0-9_.-]+)\"')\r\n\
+         \x20   if ($mc.Success) {{ [IO.File]::AppendAllText($ask, ($mc.Groups[1].Value + \"`n\")) }}\r\n\
+         \x20 }} elseif (($event -eq 'UserPromptSubmit') -and $payload.Contains('send_user_message_question_reply') -and (Test-Path -LiteralPath $ask)) {{\r\n\
+         \x20   $open = @(Get-Content -LiteralPath $ask | Where-Object {{ ($_ -ne '') -and -not $payload.Contains($_) }})\r\n\
+         \x20   if ($open.Count -gt 0) {{ [IO.File]::WriteAllText($ask, (($open -join \"`n\") + \"`n\")) }} else {{ Remove-Item -LiteralPath $ask -Force -ErrorAction SilentlyContinue }}\r\n\
+         \x20 }} elseif (@('SessionStart', 'SessionEnd', 'Stop', 'StopFailure') -contains $event) {{\r\n\
+         \x20   Remove-Item -LiteralPath $ask -Force -ErrorAction SilentlyContinue\r\n\
+         \x20 }}\r\n\
+         \x20 if (($turn -eq 'working') -and (Test-Path -LiteralPath $ask) -and ((Get-Item -LiteralPath $ask).Length -gt 0)) {{ $turn = 'decision' }}\r\n\
+         }}\r\n\
+         # A call put in the background leaves its task id for the job scan, the\r\n\
+         # last few kept, before the turn record (see the POSIX twin). A field\r\n\
+         # quoted inside a tool's output is escaped and never matches.\r\n\
+         if ($event -eq 'PostToolUse') {{\r\n\
+         \x20 $mb = [regex]::Match($payload, '\"backgroundTaskId\"\\s*:\\s*\"([A-Za-z0-9]+)\"')\r\n\
+         \x20 if ($mb.Success) {{\r\n\
+         \x20   $bgf = $rec + '.bg'\r\n\
+         \x20   $ids = @()\r\n\
+         \x20   if (Test-Path -LiteralPath $bgf) {{ $ids = @(Get-Content -LiteralPath $bgf -Tail 15) }}\r\n\
+         \x20   $tmp = $bgf + '.' + $PID\r\n\
+         \x20   [IO.File]::WriteAllText($tmp, ((@($ids) + $mb.Groups[1].Value) -join \"`n\") + \"`n\")\r\n\
+         \x20   Move-Item -LiteralPath $tmp -Destination $bgf -Force\r\n\
+         \x20 }}\r\n\
          }}\r\n\
          if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
          # A prompt in the conversation a /clear started ends that clear's undo\r\n\
@@ -2834,18 +3264,33 @@ fn hook_script_body(live_dir: &str) -> String {
 /// live session id across startup/resume/clear/compact; `Stop` re-records it
 /// *with* `permission_mode` after every response — SessionStart payloads don't
 /// carry the mode and a shift+tab mode cycle fires no event of its own, so the
-/// latest Stop record is what resume re-applies. The other four carry the tab's
+/// latest Stop record is what resume re-applies. The others carry the tab's
 /// **turn state** (`services::agent_turn`): a submitted prompt or a finished
-/// tool means working, Stop means done, a permission/elicitation notice means
-/// blocked on the user, the session's end means idle. Codex has no
-/// `Notification` hook; its approval wait is still read off its screen.
-pub const HOOK_EVENTS: [&str; 6] = [
+/// tool means working, Stop means done, a permission request (the dialog
+/// opening) or a permission/elicitation notice means blocked on the user, the
+/// session's end means idle. The notice alone came too late: Claude 2.1.322
+/// sends it 6 s after its dialog opens, and not at all for one answered sooner.
+///
+/// The four after it close gaps an offline probe of 2.1.325 showed
+/// (`scripts/verify-cli/claude/turn_hooks.py`): a turn the API refuses (a
+/// rate limit, a failed sign-in, a rejected request) ends with `StopFailure`
+/// and no `Stop`, and a tool that fails reports `PostToolUseFailure` instead
+/// of `PostToolUse`, so a working mark had nothing to end it; an MCP server's
+/// question opens with `Elicitation` (its notice again 6 s later) and is
+/// answered with `ElicitationResult`. Codex is registered for its own list
+/// ([`CODEX_HOOK_EVENTS`]).
+pub const HOOK_EVENTS: [&str; 11] = [
     "SessionStart",
     "Stop",
     "UserPromptSubmit",
     "PostToolUse",
+    "PermissionRequest",
     "Notification",
     "SessionEnd",
+    "StopFailure",
+    "PostToolUseFailure",
+    "Elicitation",
+    "ElicitationResult",
 ];
 
 /// Merge our handlers into a Claude `settings.json`, preserving all other content
@@ -2920,14 +3365,21 @@ pub(crate) fn register_hook_in_settings_as(settings: &HomeFile, cmd: &str) -> st
 /// the user trusts it — see [`codex_hook_state`], which detects that, and
 /// [`crate::services::codex_bind`], the hook-free fallback that keeps Codex tabs
 /// resumable meanwhile.
-/// The events registered with Codex: [`HOOK_EVENTS`] minus `Notification`,
-/// which Codex 0.154 does not offer (its approval wait is read off its screen).
-pub const CODEX_HOOK_EVENTS: [&str; 5] = [
+/// The events registered with Codex: the ones of [`HOOK_EVENTS`] Codex offers.
+/// `PermissionRequest` (0.169.0, probed offline with
+/// `scripts/verify-cli/codex/turn_hooks.py`) fires as the approval dialog
+/// opens, so the wait no longer depends on reading the screen; an accepted
+/// approval then fires `PostToolUse`, a declined one nothing. A home that
+/// trusted the older events gets Codex's "Hooks need review" screen once at
+/// its next start, and until the new hook is trusted it does not run — the
+/// screen reading stays the fallback for that.
+pub const CODEX_HOOK_EVENTS: [&str; 6] = [
     "SessionStart",
     "Stop",
     "UserPromptSubmit",
     "PostToolUse",
     "SessionEnd",
+    "PermissionRequest",
 ];
 
 /// Which events already carry our hook in a Codex config: every

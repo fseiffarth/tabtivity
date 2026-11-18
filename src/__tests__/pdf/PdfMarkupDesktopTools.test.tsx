@@ -5,7 +5,7 @@
  * presets, the undo history kept with the stored layer, the words each mark
  * was on logged at Submit, and a ✓ group's before/after caption.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -28,7 +28,11 @@ vi.mock("../../components/embed/pdf/markupPage", async (original) => {
   return { ...real, markupPagePicture: vi.fn(async () => ({ png: new Blob(["png"], { type: "image/png" }), composed: false, anchors: [] })) };
 });
 
-import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupBar, PdfMarkupUndoConfirm } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupAgentPanel } from "../../components/embed/pdf/PdfMarkupAgentPanel";
+import { PdfMarkupDock } from "../../components/embed/pdf/PdfMarkupDock";
+/** The harness shows the agent panel open throughout. */
+const PINNED: ReadonlySet<string> = new Set(["ask-1:0"]);
 import { PdfMarkupLayer } from "../../components/embed/pdf/PdfMarkupLayer";
 import { PdfTickBadges, tickBadgesByPage, tickCaption } from "../../components/embed/pdf/PdfMarkupTicks";
 import { markupPagePicture } from "../../components/embed/pdf/markupPage";
@@ -83,6 +87,11 @@ function stubEdit(over: Partial<MarkupEdit> = {}, base: Layer = EMPTY_LAYER): Ma
     select: vi.fn(),
     clearSelection: vi.fn(),
     commitSelection: vi.fn(),
+    restyleSelection: vi.fn(),
+    deleteSelection: vi.fn(),
+    copySelection: vi.fn(),
+    canComment: false,
+    openComment: vi.fn(),
     comment: null,
     editComment: vi.fn(),
     saveComment: vi.fn(),
@@ -188,7 +197,7 @@ describe("the layer's new gestures", () => {
   });
 
   it("selects the mark under a click, a box of marks, and moves a selection in one step", () => {
-    const edit = stubEdit({ tool: "select" }, LAYER);
+    const edit = stubEdit({ tool: "select", pen: { ...DEFAULT_PEN_PREFS, lasso: "rect" } }, LAYER);
     const layer = mount(edit);
     down(layer, 120, 120);
     up(layer, 120, 120);
@@ -211,6 +220,47 @@ describe("the layer's new gestures", () => {
     const next = called<Layer>(selected.commitSelection);
     expect(next.pages[1].marks[0]).toEqual({ ...BOX, rect: [150, 120, 50, 50] });
     expect(next.pages[1].marks[1]).toBe(STROKE);
+  });
+
+  it("catches the marks a freehand lasso loop runs around", () => {
+    const edit = stubEdit({ tool: "select" }, LAYER);
+    const layer = mount(edit);
+    // A loop around the box only.
+    down(layer, 80, 80);
+    move(layer, 180, 80);
+    move(layer, 180, 180);
+    move(layer, 80, 180);
+    up(layer, 80, 90);
+    expect(edit.select).toHaveBeenLastCalledWith(1, [0]);
+  });
+
+  it("resizes the selection from its corner handle and copies it from its bar", () => {
+    const selected = stubEdit({ tool: "select", selection: { n: 1, indices: [0] } }, LAYER);
+    const layer = mount(selected);
+    // The box spans 100–150; its handle sits just past the corner.
+    down(layer, 153, 153);
+    move(layer, 203, 203);
+    up(layer, 203, 203);
+    expect(selected.scratch).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(selected.copySelection).toHaveBeenCalledWith(16);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(selected.deleteSelection).toHaveBeenCalled();
+  });
+
+  it("erases whole strokes by default and only highlights when asked", () => {
+    const edit = stubEdit({ tool: "eraser" }, LAYER);
+    const layer = mount(edit);
+    down(layer, 350, 400);
+    up(layer, 350, 400);
+    const erased = called<Layer>(edit.commit);
+    expect(erased.pages[1].marks).toEqual([BOX]);
+    cleanup();
+    const only = stubEdit({ tool: "eraser", pen: { ...DEFAULT_PEN_PREFS, eraseHighlights: true } }, LAYER);
+    const again = mount(only);
+    down(again, 350, 400);
+    up(again, 350, 400);
+    expect(only.commit).not.toHaveBeenCalled();
   });
 
   it("changes a note's colour from its card", () => {
@@ -244,7 +294,7 @@ function Harness() {
   });
   return (
     <>
-      <PdfMarkupBar markup={markup} page={1} onReload={() => {}} onDone={() => {}} />
+      <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={() => {}} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={() => {}} /></>
       <PdfMarkupLayer n={1} size={SIZE} scale={1} edit={markup.edit} />
     </>
   );
@@ -280,41 +330,37 @@ describe("the strip's new tools over the real hook", () => {
   it("selects, recolours, moves and deletes marks — each one undo step", async () => {
     render(<Harness />);
     await waitFor(() => expect(submitButton().disabled).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    expect(screen.getByText("Click a mark or drag a box around marks · drag the selection to move it")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Lasso" }));
     down(pageLayer(), 120, 120);
     up(pageLayer(), 120, 120);
-    expect(await screen.findByText("1 selected")).toBeTruthy();
-    // A box may wear yellow: four colours, the box's own pressed.
+    const bar = await screen.findByRole("toolbar", { name: "1 selected" });
+    // A box may wear the highlighter's colours, its own pressed.
     expect(pressed("Colour: Yellow")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Colour: Blue" }));
+    fireEvent.click(within(bar).getByRole("button", { name: "Colour: Blue" }));
     await waitFor(() => expect(lastSaved()?.pages[1].marks[0]).toEqual({ ...BOX, color: "blue" }));
-    expect(screen.getByText("1 selected")).toBeTruthy();
+    expect(screen.getByRole("toolbar", { name: "1 selected" })).toBeTruthy();
     // Dragged by its outline.
     down(pageLayer(), 120, 120);
     move(pageLayer(), 140, 130);
     up(pageLayer(), 160, 140);
     await waitFor(() => expect(lastSaved()?.pages[1].marks[0]).toEqual({ ...BOX, color: "blue", rect: [140, 120, 50, 50] }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(screen.getByRole("toolbar", { name: "1 selected" })).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(lastSaved()?.pages[1].marks).toEqual([STROKE]));
-    expect(screen.queryByText("1 selected")).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "1 selected" })).toBeNull();
     // Undo walks back one step at a time; the selection is gone with it.
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(lastSaved()?.pages[1].marks[0]).toEqual({ ...BOX, color: "blue", rect: [140, 120, 50, 50] }));
-    expect(screen.queryByText("1 selected")).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "1 selected" })).toBeNull();
   });
 
-  it("restyles a selected stroke and comments on it", async () => {
+  it("restyles a selected stroke, comments on it and copies it", async () => {
     render(<Harness />);
     await waitFor(() => expect(submitButton().disabled).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lasso" }));
     down(pageLayer(), 350, 400);
     up(pageLayer(), 350, 400);
-    expect(await screen.findByText("1 selected")).toBeTruthy();
-    // One style button, the stroke's own drawn; a click opens every style.
-    fireEvent.click(screen.getByRole("button", { name: "Pen style: Plain pen" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Dashed" }));
-    expect(screen.queryByRole("menu", { name: "Pen style" })).toBeNull();
+    const bar = await screen.findByRole("toolbar", { name: "1 selected" });
+    fireEvent.change(within(bar).getByRole("combobox", { name: "Pen style" }), { target: { value: "dashed" } });
     await waitFor(() => expect(lastSaved()?.pages[1].marks[1]).toEqual({ ...STROKE, style: "dashed" }));
     fireEvent.click(screen.getByRole("button", { name: "Comment" }));
     const box = screen.getByPlaceholderText("What should change here?");
@@ -326,45 +372,55 @@ describe("the strip's new tools over the real hook", () => {
     expect((screen.getByPlaceholderText("What should change here?") as HTMLTextAreaElement).value).toBe("make this bold");
     fireEvent.click(screen.getByRole("button", { name: "Remove comment" }));
     await waitFor(() => expect(lastSaved()?.pages[1].marks[1]).toEqual({ ...STROKE, style: "dashed" }));
+    // A copy lands beside it, without the comment, and is what is selected.
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(lastSaved()?.pages[1].marks).toHaveLength(3));
+    expect(lastSaved()?.pages[1].marks[2]).toMatchObject({ kind: "ink", style: "dashed" });
   });
 
-  it("keeps the pen's styles behind one button that opens them, each drawn and named", async () => {
+  it("opens the armed tool's options on a second press, and only then", async () => {
     render(<Harness />);
     await waitFor(() => expect(submitButton().disabled).toBe(false));
-    const trigger = screen.getByRole("button", { name: "Pen style: Plain pen" });
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(trigger.querySelector("svg.file-viewer-pdf-markup-sample")).toBeTruthy();
-    fireEvent.click(trigger);
-    const items = screen.getAllByRole("menuitemradio");
-    expect(items.map((item) => item.textContent?.replace("✓", ""))).toEqual(["Plain pen", "Marker", "Dashed", "Arrow"]);
-    expect(items.every((item) => item.querySelector("svg.file-viewer-pdf-markup-sample"))).toBe(true);
-    expect(screen.getByRole("menuitemradio", { name: /Plain pen/ }).getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /Arrow/ }));
-    expect(screen.queryByRole("menuitemradio")).toBeNull();
-    expect(screen.getByRole("button", { name: "Pen style: Arrow" })).toBeTruthy();
-    // Escape closes it untouched.
-    fireEvent.click(screen.getByRole("button", { name: "Pen style: Arrow" }));
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("menuitemradio")).toBeNull();
-  });
-
-  it("arms a preset from its chip", async () => {
-    render(<Harness />);
-    await waitFor(() => expect(submitButton().disabled).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: "Preset 2" }));
-    expect(pressed("Pen")).toBe("true");
-    expect(screen.getByRole("button", { name: "Pen style: Marker" })).toBeTruthy();
-    expect(pressed("Colour: Yellow")).toBe("true");
-    expect(pressed("Preset 2")).toBe("true");
-    // Save as preset keeps a fifth pen by dropping the oldest.
+    expect(screen.queryByRole("group", { name: "Pen: options" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Pen" }));
+    const options = screen.getByRole("group", { name: "Pen: options" });
+    expect(within(options).getAllByRole("button", { name: /^Colour: / }).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Colour: Red", "Colour: Blue", "Colour: Black", "Colour: Green", "Colour: Orange", "Colour: Purple",
+    ]);
+    fireEvent.click(within(options).getByRole("button", { name: "Arrow" }));
+    expect(pressed("Arrow")).toBe("true");
+    fireEvent.change(within(options).getByRole("slider", { name: "Size" }), { target: { value: "7" } });
+    expect((within(options).getByRole("slider", { name: "Size" }) as HTMLInputElement).value).toBe("7");
+    // Pressed again it closes; another tool arms with its options shut.
+    fireEvent.click(screen.getByRole("button", { name: "Pen" }));
+    expect(screen.queryByRole("group", { name: "Pen: options" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Highlighter" }));
-    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
+    expect(screen.queryByRole("group", { name: "Highlighter: options" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Highlighter" }));
+    const hl = screen.getByRole("group", { name: "Highlighter: options" });
+    expect(within(hl).getAllByRole("button", { name: /^Colour: / }).map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Colour: Yellow", "Colour: Green", "Colour: Pink", "Colour: Blue",
+    ]);
+    expect((within(hl).getByRole("checkbox", { name: "Straight lines" }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("arms a favourite from its dot, saves one and resets them", async () => {
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Favourite 4" }));
+    expect(pressed("Highlighter")).toBe("true");
+    expect(pressed("Favourite 4")).toBe("true");
+    // A fifth favourite: the highlighter in pink.
+    fireEvent.click(screen.getByRole("button", { name: "Highlighter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Colour: Pink" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save as favourite" }));
+    expect(pressed("Favourite 5")).toBe("true");
+    // Right-click takes one out.
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Favourite 1" }));
+    expect(screen.queryByRole("button", { name: "Favourite 5" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "More" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Save as preset/ }));
-    expect(pressed("Preset 4")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "More" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /Reset presets/ }));
-    expect(pressed("Preset 4")).toBe("false");
+    fireEvent.click(screen.getByRole("menuitem", { name: /Reset favourites/ }));
+    expect(screen.getAllByRole("button", { name: /^Favourite \d$/ })).toHaveLength(4);
   });
 
   it("switches snapping and steps the pressure curve in the ⋯ menu", async () => {
@@ -382,18 +438,18 @@ describe("the strip's new tools over the real hook", () => {
     expect(screen.getByRole("menuitemcheckbox", { name: /Straighten a held stroke/ }).getAttribute("aria-checked")).toBe("false");
   });
 
-  it("offers the stamp's symbols and the text marks' modes, with their hints", async () => {
+  it("keeps the box, the stamps and the text marks in the Proof slot", async () => {
     render(<Harness />);
     await waitFor(() => expect(submitButton().disabled).toBe(false));
-    fireEvent.click(screen.getByRole("button", { name: "Stamp" }));
-    expect(screen.getByText("Tap where the stamp goes")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Swap" }));
-    expect(pressed("Swap")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Mark text" }));
-    expect(pressed("Highlight")).toBe("true");
-    expect(screen.getByText("Drag across words — the marks snap to the lines")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Underline" }));
-    expect(pressed("Underline")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Proofreading marks" }));
+    expect(pressed("Proofreading marks")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Proofreading marks" }));
+    const grid = screen.getByRole("group", { name: "Proofreading marks: options" });
+    expect(within(grid).getByRole("button", { name: /Box/ }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(grid).getByRole("button", { name: /Swap/ }));
+    expect(within(grid).getByRole("button", { name: /Swap/ }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(grid).getByRole("button", { name: /Underline/ }));
+    expect(within(grid).getByRole("button", { name: /Underline/ }).getAttribute("aria-pressed")).toBe("true");
     // Underlining draws in ink: no yellow.
     expect(screen.queryByRole("button", { name: "Colour: Yellow" })).toBeNull();
   });

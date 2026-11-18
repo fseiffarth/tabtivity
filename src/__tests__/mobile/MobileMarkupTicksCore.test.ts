@@ -14,6 +14,7 @@ import {
   type BoxMark, type InkMark, type Layer, type TextMark,
 } from "../../../mobile-web/src/markup/layer";
 import { loadLayer, saveLayer, type LayerBackend } from "../../../mobile-web/src/markup/store";
+import { ARRIVAL_GUARD_MS, arrivalGuard } from "../../lib/viewers/markupQuestionPicks";
 
 const SIZE: [number, number] = [612, 792];
 const ink = (x: number): InkMark => ({ kind: "ink", color: "red", width: 2, points: [[x, 10, 0.5], [x + 20, 30, 0.5]] });
@@ -256,5 +257,46 @@ describe("markup ticks · groups", () => {
     const after = approveShown(layer, ticks.slice(1), 1, shown);
     expect(after.sent!.pages[1].marks).toEqual([layer.sent!.pages[1].marks[0], layer.sent!.pages[1].marks[2]]);
     expect(approveShown(after, ticks.slice(1), 1, shown)).toBe(after);
+  });
+});
+
+describe("arrivalGuard (the card's and the ✓ badges' first moment)", () => {
+  const A = ink(10);
+  const B = box(20);
+
+  it("a card takes nothing for ARRIVAL_GUARD_MS after it arrives, and nothing is guarded before", () => {
+    const guard = arrivalGuard();
+    expect(guard.settling(1_000_000)).toBe(false);
+    guard.arrive(1_000);
+    expect(guard.settling(1_000 + ARRIVAL_GUARD_MS - 1)).toBe(true);
+    expect(guard.settling(1_000 + ARRIVAL_GUARD_MS)).toBe(false);
+  });
+
+  it("a badge settles from the moment it first appears; a key never seen counts as settling", () => {
+    const guard = arrivalGuard<object>();
+    expect(guard.settlingFor([A], 5_000)).toBe(true);
+    guard.see([A], 5_000);
+    expect(guard.settlingFor([A], 5_000 + ARRIVAL_GUARD_MS - 1)).toBe(true);
+    expect(guard.settlingFor([A], 5_000 + ARRIVAL_GUARD_MS)).toBe(false);
+    // Seen again later: the first stamp stands.
+    guard.see([A], 5_500);
+    expect(guard.settlingFor([A], 5_000 + ARRIVAL_GUARD_MS)).toBe(false);
+    // A group takes the newest of its marks; Approve all the newest of all.
+    guard.see([A, B], 9_000);
+    expect(guard.settlingFor([A], 9_000)).toBe(false);
+    expect(guard.settlingFor([A, B], 9_000)).toBe(true);
+    expect(guard.settlingFor(null, 9_000 + ARRIVAL_GUARD_MS - 1)).toBe(true);
+    expect(guard.settlingFor(null, 9_000 + ARRIVAL_GUARD_MS)).toBe(false);
+    expect(guard.settlingFor([], 9_000)).toBe(false);
+  });
+
+  it("a key gone from the list is forgotten and arrives anew when it comes back", () => {
+    const guard = arrivalGuard<object>();
+    guard.see([A, B], 1_000);
+    guard.see([B], 3_000);
+    expect(guard.settlingFor([A], 3_000)).toBe(true);
+    guard.see([A, B], 10_000);
+    expect(guard.settlingFor([A], 10_000)).toBe(true);
+    expect(guard.settlingFor([B], 10_000)).toBe(false);
   });
 });

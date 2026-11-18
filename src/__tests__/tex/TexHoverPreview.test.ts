@@ -10,7 +10,7 @@
  * formula that was already typeset.
  */
 import { describe, it, expect } from "vitest";
-import { texSnippetRanges, texSnippetAt, texPreamble, isPreviewableTexEnv } from "../../lib/viewers/tex/tex";
+import { texSnippetRanges, texPreamble, isPreviewableTexEnv } from "../../lib/viewers/tex/tex";
 import { texPreviewKey, firstTexErrorLine } from "../../lib/viewers/tex/texPreview";
 
 /** The source text of every range found, which is what actually gets typeset. */
@@ -68,15 +68,6 @@ describe("texSnippetRanges", () => {
   it("leaves an escaped dollar and a `\\\\[2mm]` row spacing alone", () => {
     const src = "costs \\$5 today, and a row \\\\[2mm] after it";
     expect(bodies(src)).toEqual([]);
-  });
-
-  it("finds the fragment an offset is inside, and nothing outside one", () => {
-    const src = "text $a+b$ more";
-    const inside = src.indexOf("a+b") + 1;
-    expect(texSnippetAt(src, inside)?.kind).toBe("inline");
-    expect(texSnippetAt(src, 2)).toBeNull();
-    // Exclusive at the end: the offset after the closing `$` is out.
-    expect(texSnippetAt(src, src.indexOf("$a+b$") + 5)).toBeNull();
   });
 });
 

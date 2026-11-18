@@ -160,8 +160,8 @@ describe("i18n", () => {
   });
 
   it("spells dates in the app language, keeping the browser's region when it matches", () => {
-    expect(dateLocale("de", "de-AT")).toBeUndefined();
-    expect(dateLocale("en", "en-GB")).toBeUndefined();
+    expect(dateLocale("de", "de-AT")).toBe("de-AT");
+    expect(dateLocale("en", "en-GB")).toBe("en-GB");
     expect(dateLocale("de", "en-US")).toBe("de");
     expect(dateLocale("fr", undefined)).toBe("fr");
   });

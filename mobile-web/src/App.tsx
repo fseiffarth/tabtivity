@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import type { IconProps } from "../../src/components/common/icons/Icon";
 import { AppMark } from "./AppMark";
@@ -10,6 +10,7 @@ import { carryConnectTrace, connectTrace, getMobileStatus, primeConnection, setP
 import { classifyUnavailable, describeUnavailable, suspectsTunnel, tailscaleAppLink, TUNNEL_STEPS, unavailableDetail, type UnavailableReason } from "./connection";
 import { parsePlace, rememberLastPlace, resolvePlace, restoreLastPlace, type LastPlace, type MobileSection, type RestoredPlace } from "./lastPlace";
 import { forgetDeviceData } from "./forgetDeviceData";
+import { useVisiblePoll } from "./visiblePoll";
 import { forgetProjectCovers } from "./thumbs";
 import { refreshPush } from "./push";
 import { hasLocalUnlock } from "./localLock";
@@ -24,11 +25,14 @@ import { LockedHomeShell } from "./screens/LockedHomeShell";
 import { Home } from "./screens/Home";
 import { Project } from "./screens/Project";
 import { Terminal } from "./screens/Terminal";
+import { listScrollKey, rememberListScroll } from "./listScroll";
 import { TabbyOpen } from "./screens/TabbyOpen";
 import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
-import { SECTION_ICON } from "./glyphs";
+import { DiamondIcon, SECTION_ICON } from "./glyphs";
+import { useTier } from "./useTier";
+import { readFlag, writeFlag } from "./prefs";
 import type { SubagentStep } from "./terminal/subagents";
 import type { MarkupBack } from "./components/OutboxViewer";
 /** The bundle this phone is running, on every splash: a connect that hangs or
@@ -36,7 +40,17 @@ import type { MarkupBack } from "./components/OutboxViewer";
  * the desktop's current bundle or is booting a stale one out of the cache. */
 import { BUNDLE_VERSION as SPLASH_VERSION } from "./buildInfo";
 import { BackNest, useBackLayer } from "./backStack";
+import { markDoneSeen } from "./seenDone";
+import { SteeringBar } from "./steering/SteeringBar";
+import { SteeringConfirm } from "./steering/SteeringConfirm";
+import { getSteering, requestFind, type Place } from "./steering/steeringState";
+import { focusRow, rowById } from "./steering/steeringDom";
+import { usePhoneSteering, type SteeringBase } from "./steering/usePhoneSteering";
 import { BRAND, LEGACY_NAMES, NAMES, storageDashKey } from "../../src/lib/brand";
+import { useDesktopShell } from "./shell/shellContext";
+import { DesktopStage, DesktopSwitchButton } from "./shell/DesktopFrame";
+import { isFramed, postToShell } from "./shell/frameBridge";
+import { linkedSnapshot, noteHomeStatus } from "./shell/linkedDesktops";
 
 /**
  * The four top-level sections. To-do, Calendar and Mail used to be pushed on
@@ -241,6 +255,31 @@ function TabBar({ active, open, hidden }: { active: Tab; open: (tab: Tab) => voi
 export function App() {
   const t = useT();
   const [auth, setAuth] = useState<"loading" | "paired" | "unpaired" | "setup" | "locked" | "unavailable">("loading");
+  /** Whether this page's own lock is passed (an unlock, a pairing that set
+   * the lock up, or a grace): from `resume()` until the next lock or open.
+   * The desktop shell's gate stands behind it, ahead of the connect step. */
+  const [pastLock, setPastLock] = useState(false);
+  const shell = useDesktopShell();
+  /** This page is another desktop's frame (`shell/frameBridge.ts`). */
+  const [framedPage] = useState(isFramed);
+  /** This desktop's name (`status.host`), for a frame's `ready`. */
+  const [hostName, setHostName] = useState<string | null>(() => linkedSnapshot().homeName ?? null);
+  const shellUnlocked = pastLock && (auth === "loading" || auth === "unavailable" || auth === "paired");
+  /** A linked desktop is on screen instead of this one (`DesktopStage`). */
+  const framedShown = shell.selected !== null && shellUnlocked;
+  const framedShownRef = useRef(framedShown);
+  useEffect(() => {
+    framedShownRef.current = framedShown;
+  }, [framedShown]);
+  // Before paint, so a lock never leaves the shell's picker up for a frame.
+  useLayoutEffect(() => {
+    shell.setUnlocked(shellUnlocked);
+  }, [shell, shellUnlocked]);
+  // Inside a frame: tell the shell this page is here, its name, and whether
+  // it reached its desktop; again whenever that changes.
+  useEffect(() => {
+    if (framedPage) postToShell({ type: "ready", name: hostName, desktopAvailable: auth === "paired" });
+  }, [framedPage, auth, hostName]);
   const [pairNeedsLock, setPairNeedsLock] = useState(false);
   const [, refreshTags] = useState(0);
   const [tab, setTab] = useState<Tab>("projects");
@@ -252,6 +291,20 @@ export function App() {
     if (hiddenSections.includes(tab)) setTab("projects");
   }, [hiddenSections, tab]);
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
+  /** A tablet in landscape keeps Home's list on the left and the chosen
+   * project on the right (`useTier.ts`); only the Projects section does — the
+   * others, the terminal and Tabby stay full-window. The route is the same
+   * `projectView`: the list is simply not unmounted by a project being chosen.
+   * The project header's sidebar button folds the list away (`splitListHidden`,
+   * kept per device): the project then takes the window as on a portrait
+   * tablet, and with no project chosen Home stands alone as usual. */
+  const splitTier = useTier() === "split" && tab === "projects";
+  const [splitListHidden, setSplitListHidden] = useState(() => readFlag("splitListHidden"));
+  const toggleSplitList = () => {
+    writeFlag("splitListHidden", !splitListHidden);
+    setSplitListHidden(!splitListHidden);
+  };
+  const splitProjects = splitTier && !(splitListHidden && projectView.kind === "project");
   const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
   /** Home's Tabby FAB was tapped: the assistant scope's id while its one chat
@@ -272,8 +325,17 @@ export function App() {
   /** When the reader last touched the glass — the idle lock's clock, and the
    * silent re-login's test of whether anyone is still here. */
   const lastActive = useRef(Date.now());
+  /** Touches inside a framed desktop never reach this document, so while one
+   * is on screen and the page is visible, someone counts as here: the framed
+   * desktop keeps its own idle lock, and this one still locks a page left
+   * hidden past the idle window. */
+  const noteFramedUse = useCallback(() => {
+    if (framedShownRef.current && document.visibilityState === "visible") lastActive.current = Date.now();
+  }, []);
   /** When the reader last passed the local lock; 0 once the app locks. */
   const unlockedAt = useRef(0);
+  /** Bumped by every idle lock: a `resume()` started before it is stale. */
+  const lockGen = useRef(0);
   /** Whether this page's unlock still holds: passed, and someone here within
    * the idle window since — the rule the running app locks by. The failure
    * splash's Retry signs in again without the lock while it holds, and a page
@@ -319,7 +381,8 @@ export function App() {
     if (reason !== "storage_blocked") keepUnlock();
     // A path the phone wedged gets one fresh page before the splash
     // (`takeConnectReload`), with this page's trace carried across.
-    if (suspectsTunnel(reason) && takeConnectReload()) {
+    // Not while another desktop is framed: a reload would drop it too.
+    if (suspectsTunnel(reason) && !framedShownRef.current && takeConnectReload()) {
       carryConnectTrace();
       location.reload();
       return;
@@ -329,14 +392,20 @@ export function App() {
   }, [keepUnlock]);
 
   const resume = useCallback(() => {
+    setPastLock(true);
     setAuth("loading");
+    const gen = lockGen.current;
     void resumeAuth().then(async (result) => {
+      // Locked while it ran (a framed desktop on screen meanwhile): the
+      // answer is for an unlock that no longer holds.
+      if (gen !== lockGen.current) return;
       if (result.kind === "paired") {
         clearConnectReload();
         clearConnectGrace();
         const pending = pendingPlace.current;
         pendingPlace.current = null;
         const restored = pending ? await resolvePlace(pending) : await restoreLastPlace();
+        if (gen !== lockGen.current) return;
         reset();
         if (restored) goTo(restored);
         void refreshPush().catch(() => undefined);
@@ -355,10 +424,13 @@ export function App() {
         return;
       }
       setAuth(result.kind);
-    }).catch((error: unknown) => fail(classifyUnavailable(error), unavailableDetail(error)));
+    }).catch((error: unknown) => {
+      if (gen === lockGen.current) fail(classifyUnavailable(error), unavailableDetail(error));
+    });
   }, [reset, goTo, fail]);
 
   const begin = useCallback(() => {
+    setPastLock(false);
     setAuth("loading");
     // A cold open had no warm-up at all — only a return to the front sent
     // one — so the sign-in after the fingerprint was the first request on
@@ -415,32 +487,26 @@ export function App() {
     rememberLastPlace(currentPlace(tab, projectView, terminal));
   }, [auth, tab, projectView, terminal]);
 
-  useEffect(() => {
-    if (auth !== "paired") return;
-    const refresh = () => {
-      void getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, server }) => {
-        noteDesktopTheme(color_scheme);
-        // A server has no window to read mail through (the browser client
-        // has it), so its phone leaves the section out as if hidden.
-        const onServer = server === true;
-        const hidden = hideableSections(onServer ? [...(Array.isArray(hidden_sections) ? hidden_sections : []), "mail"] : hidden_sections);
-        setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
-        try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
-        const visible = show_untested_tags === true;
-        const reworded = setOnServer(onServer);
-        if (setUntestedTagsVisible(visible) || reworded) refreshTags((tick) => tick + 1);
-        try { localStorage.setItem(storageDashKey("show-untested-tags"), String(visible)); } catch { /* unavailable */ }
-      }).catch(() => undefined);
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 30_000);
-    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [auth]);
+  useVisiblePoll(
+    () => getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, host, linked_desktops, server }) => {
+      noteDesktopTheme(color_scheme);
+      // The switcher's list, kept for a home that is down (`linkedDesktops.ts`).
+      noteHomeStatus({ host, linked_desktops });
+      if (typeof host === "string" && host) setHostName(host);
+      // A server has no window to read mail through (the browser client
+      // has it), so its phone leaves the section out as if hidden.
+      const onServer = server === true;
+      const hidden = hideableSections(onServer ? [...(Array.isArray(hidden_sections) ? hidden_sections : []), "mail"] : hidden_sections);
+      setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
+      try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
+      const visible = show_untested_tags === true;
+      const reworded = setOnServer(onServer);
+      if (setUntestedTagsVisible(visible) || reworded) refreshTags((tick) => tick + 1);
+      try { localStorage.setItem(storageDashKey("show-untested-tags"), String(visible)); } catch { /* unavailable */ }
+    }),
+    30_000,
+    { enabled: auth === "paired" },
+  );
 
   // A notification tapped while a window is already open: `sw.js` focuses it
   // and says where to go. Locked, it waits for the unlock like a cold open.
@@ -471,9 +537,11 @@ export function App() {
     // lock, and a tunnel waking up cost the reader an unlock.
     setUnauthorizedHandler(() => {
       if (authRef.current !== "paired") return Promise.resolve(false);
+      noteFramedUse();
       if (Date.now() - lastActive.current >= LOCK_AFTER_IDLE_MS) {
         reset();
         unlockedAt.current = 0;
+        setPastLock(false);
         setAuth("locked");
         return Promise.resolve(false);
       }
@@ -495,7 +563,7 @@ export function App() {
       return renewing.current;
     });
     return () => setUnauthorizedHandler(undefined);
-  }, [reset, fail]);
+  }, [reset, fail, noteFramedUse]);
 
   useEffect(() => {
     // A project the host no longer knows to this phone is off its list for
@@ -506,7 +574,19 @@ export function App() {
 
   useEffect(() => {
     const lock = () => {
-      if (authRef.current !== "paired") return;
+      if (authRef.current !== "paired") {
+        // Another desktop framed past this lock while this one is down or
+        // still connecting: the lock takes the frame away all the same. A
+        // connect still running cannot undo it (`lockGen`).
+        if (!framedShownRef.current) return;
+        lockGen.current += 1;
+        reset();
+        unlockedAt.current = 0;
+        setPastLock(false);
+        setAuth("locked");
+        return;
+      }
+      lockGen.current += 1;
       // Detach terminal UI and remove its opaque route. The server receives a
       // best-effort logout; the next local unlock always performs the signed
       // challenge login anew.
@@ -517,6 +597,7 @@ export function App() {
       // the time the user unlocked.
       reset();
       unlockedAt.current = 0;
+      setPastLock(false);
       setAuth("locked");
       void logoutAuth().catch(() => undefined);
     };
@@ -537,6 +618,7 @@ export function App() {
         // Re-armed against the wall clock rather than trusted to have slept the
         // right amount: a backgrounded page is throttled and then frozen
         // outright, so a fired timer proves nothing about elapsed time.
+        noteFramedUse();
         if (Date.now() - lastActive.current >= LOCK_AFTER_IDLE_MS) lock();
         else arm();
       }, Math.max(1_000, LOCK_AFTER_IDLE_MS - (Date.now() - lastActive.current)));
@@ -558,6 +640,8 @@ export function App() {
     };
     const onVisibility = () => {
       if (document.visibilityState !== "visible") {
+        // Visible up to now: a framed desktop was in use until this moment.
+        if (framedShownRef.current) lastActive.current = Date.now();
         leaveConnecting();
         return;
       }
@@ -573,6 +657,7 @@ export function App() {
     for (const event of ACTIVITY_EVENTS) document.addEventListener(event, noteActivity, options);
     document.addEventListener("visibilitychange", onVisibility);
     const onPageHide = () => {
+      noteFramedUse();
       if (authRef.current === "paired" && Date.now() - lastActive.current < LOCK_AFTER_IDLE_MS) noteUnlockedLeave();
       leaveConnecting();
     };
@@ -588,17 +673,38 @@ export function App() {
     // never touches this document — so after it `lastActive` still dated from
     // before the lock, no timer was armed, and the next glance away and back
     // (`onVisibility`) locked the app again seconds after it was unlocked.
-  }, [reset, auth, keepUnlock]);
+  }, [reset, auth, keepUnlock, noteFramedUse]);
 
+  /** The project to the list. Beside the list (split) the project's pane is
+   * emptied and, while keyboard steering is on, the cursor goes to the row of
+   * the project just left — the pane it stood in is gone. */
+  const leftProject = useRef<string | null>(null);
+  const leaveProject = () => {
+    if (splitProjects && projectView.kind === "project" && getSteering().active) leftProject.current = projectView.id;
+    setProjectView({ kind: "home" });
+  };
+  useEffect(() => {
+    const id = leftProject.current;
+    if (id === null || projectView.kind !== "home") return;
+    leftProject.current = null;
+    const row = rowById(id, document.querySelector("[data-steer-pane='list']") ?? document);
+    if (row) focusRow(row);
+  }, [projectView]);
   // Back: a tab returns to where it was opened from, another section to
-  // Projects, a project to the list. At the list Back leaves the app.
+  // Projects, a project to the list (in split too, where it empties the
+  // project's pane). At the list Back leaves the app.
   useBackLayer(() => {
     if (terminal) setTerminal(null);
     else if (tabby) setTabby(null);
     else if (tab !== "projects") { setTodoCard(undefined); setTab("projects"); }
-    else setProjectView({ kind: "home" });
-  }, auth === "paired" && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
-  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
+    else leaveProject();
+  }, auth === "paired" && !framedShown && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
+  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => {
+    // Only from a list on screen: a switch between tabs inside a terminal (or a
+    // Tabby chat opening one) has the terminal's offset, not the list's.
+    if (!terminal && !tabby && tab === "projects") rememberListScroll(listScrollKey(projectView.kind === "project" ? projectView.id : null));
+    setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
+  };
   // A card named by an alert opens on the To-do tab; switching tabs by hand
   // clears it, so returning to the board later does not re-open the editor a
   // reader already closed.
@@ -617,6 +723,52 @@ export function App() {
     }
     setTab(next);
   };
+  // Keyboard steering (a Bluetooth keyboard on the phone). Called here, before
+  // the early returns below, so its window listeners outlive every screen; it
+  // reads this state through a ref and acts only once the reader presses the
+  // chord. Nothing here changes what a touch does.
+  const steeringBase: SteeringBase = terminal ? "inside" : tabby || tab !== "projects" ? "section" : projectView.kind === "project" ? "tabs" : "projects";
+  const steeringPlace: Place = terminal
+    ? { kind: "terminal", project: terminal.project, tab: terminal.tab }
+    : { kind: "list", section: tab, projectId: tab === "projects" && projectView.kind === "project" ? projectView.id : null };
+  usePhoneSteering({
+    enabled: auth === "paired" && !framedShown,
+    base: steeringBase,
+    sectionLabel: steeringBase !== "section" ? null : tabby ? "assistant.title" : TABS.find((entry) => entry.id === tab)?.label ?? null,
+    place: steeringPlace,
+    openTab: (projectId, row) => {
+      // As a tap on a Needs you row: a finished tab opened here is seen.
+      if (row.agent_status === "done") markDoneSeen(row.id, row.done_at);
+      openTerminal(projectId, row);
+    },
+    openSection: (next) => {
+      if (hiddenSections.includes(next)) return;
+      // Already there: the tab bar would reseed the section, a key should not.
+      if (next === tab && !terminal && !tabby) return;
+      setTerminal(null);
+      setTabby(null);
+      openSection(next);
+    },
+    restore: (place) => {
+      setTabby(null);
+      if (place.kind === "terminal") {
+        setTerminal({ project: place.project, tab: place.tab });
+        return;
+      }
+      setTerminal(null);
+      setTodoCard(undefined);
+      setTab(place.section);
+      if (place.section === "projects") setProjectView(place.projectId ? { kind: "project", id: place.projectId } : { kind: "home" });
+    },
+    findProject: () => {
+      requestFind();
+      setTerminal(null);
+      setTabby(null);
+      setTodoCard(undefined);
+      setTab("projects");
+      setProjectView({ kind: "home" });
+    },
+  });
   // A failed sign-in after an unlock is retried as a sign-in while the unlock
   // holds: sending the reader back through the fingerprint for a network
   // hiccup made every failure cost two unlocks. A blocked key store never got
@@ -625,10 +777,16 @@ export function App() {
     if (unavailable.reason !== "storage_blocked" && unlockHolds()) resume();
     else begin();
   };
-  if (auth === "loading") return <Splash message={t("mobile.app.connecting")} progress><SlowConnectHint /></Splash>;
+  // The shell's gate: behind this page's own lock, ahead of its connect step,
+  // so another desktop opens with this one down or still connecting.
+  if (framedShown && shell.selected !== null) return <DesktopStage origin={shell.selected} />;
+  /** A way to another desktop from a screen with no header: past this page's
+   * lock in the shell, on every screen inside a frame. */
+  const floatingSwitch = framedPage || shellUnlocked ? <DesktopSwitchButton floating /> : null;
+  if (auth === "loading") return <><Splash message={t("mobile.app.connecting")} progress><SlowConnectHint /></Splash>{floatingSwitch}</>;
   if (auth === "unavailable") {
     const { title, hint } = describeUnavailable(unavailable.reason);
-    return (
+    return (<>
       <Splash message={title} tone="error">
         <p className="splash-hint">{hint}</p>
         {suspectsTunnel(unavailable.reason) && <TunnelSteps />}
@@ -641,20 +799,22 @@ export function App() {
         {isUntested("mobile.link.keepUnlock") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
         {suspectsTunnel(unavailable.reason) && isUntested("mobile.link.connectReload") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </Splash>
-    );
+      {floatingSwitch}
+    </>);
   }
   // Pairing that sets the lock up on the way is this page's unlock.
-  if (auth === "unpaired") return <Pair setupLock={pairNeedsLock} onDone={pairNeedsLock ? () => { unlockedAt.current = Date.now(); resume(); } : begin} />;
-  if (auth === "setup") return <LocalUnlock setup onUnlocked={() => setAuth("locked")} />;
+  if (auth === "unpaired") return <><Pair setupLock={pairNeedsLock} onDone={pairNeedsLock ? () => { unlockedAt.current = Date.now(); resume(); } : begin} />{floatingSwitch}</>;
+  if (auth === "setup") return <><LocalUnlock setup onUnlocked={() => setAuth("locked")} />{floatingSwitch}</>;
   if (auth === "locked") return <>
     <LockedHomeShell />
     <LocalUnlock setup={false} onUnlocked={() => { unlockedAt.current = Date.now(); traceConnect("unlocked"); resume(); }} />
+    {floatingSwitch}
   </>;
   // A terminal is the one full-bleed screen: it owns every pixel it can get,
   // and the tab bar would sit on the keyboard toolbar besides.
   // Each screen nests its sheets above the App's own step back
   // (`backStack.ts`): one opening on arrival registers before the App does.
-  if (terminal) return <BackNest><Terminal
+  if (terminal) return <><BackNest><Terminal
     key={terminal.tab.id}
     tab={terminal.tab}
     project={terminal.project}
@@ -662,34 +822,55 @@ export function App() {
     subagent={terminal.subagent}
     signInTab={terminal.signIn}
     markupBack={terminal.markupBack}
-    openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
+    openTab={(next, opts) => openTerminal(opts?.project ?? terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
+    // Spoken navigation to a project with no agent tab: its screen, from here.
+    openProject={(id) => { setTerminal(null); setTab("projects"); setProjectView({ kind: "project", id }); }}
     back={() => setTerminal(null)}
-  /></BackNest>;
-  if (tabby) return <BackNest><TabbyOpen
+  /></BackNest><SteeringBar /></>;
+  if (tabby) return <><BackNest><TabbyOpen
     key={tabby}
     id={tabby}
     ready={(row) => { setTabby(null); openTerminal(tabby, row); }}
     back={() => setTabby(null)}
-  /></BackNest>;
-  return <div className="tabbed"><BackNest>
+  /></BackNest><SteeringBar /></>;
+  const home = <Home
+    key="home"
+    selectedId={splitProjects && projectView.kind === "project" ? projectView.id : undefined}
+    open={(id) => setProjectView({ kind: "project", id })}
+    // Straight into the session, leaving the Projects tab on its
+    // list: the agents mode is a triage list, and its loop is
+    // list → tab → back to the list, not a detour through the
+    // project the tab happens to live in.
+    openTab={(projectId, row) => openTerminal(projectId, row)}
+    tabby={setTabby}
+    todo={openTodo}
+    mail={() => setTab("mail")}
+  />;
+  const project = projectView.kind === "project"
+    ? <Project key={`project:${projectView.id}`} id={projectView.id} back={leaveProject} splitList={splitTier ? { hidden: splitListHidden, toggle: toggleSplitList } : undefined} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
+    : null;
+  return <div className={splitProjects ? "tabbed split" : "tabbed"}><BackNest>
     {tab === "todo" ? <Todo key={reseed} card={todoCard} />
       : tab === "mail" ? <Mail key={reseed} />
         : tab === "calendar" ? <Calendar key={reseed} />
-          : projectView.kind === "project"
-            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
-            : <Home
-              open={(id) => setProjectView({ kind: "project", id })}
-              // Straight into the session, leaving the Projects tab on its
-              // list: the agents mode is a triage list, and its loop is
-              // list → tab → back to the list, not a detour through the
-              // project the tab happens to live in.
-              openTab={(projectId, row) => openTerminal(projectId, row)}
-              tabby={setTabby}
-              todo={openTodo}
-              mail={() => setTab("mail")}
-            />}
+          // One parent and one key per screen in every tier, so a turn of the
+          // iPad (or a Split View resize) changes which of them are drawn and
+          // never remounts the one that stays: Home is drawn beside a project in
+          // split and instead of it elsewhere; a chosen project is the same
+          // element in all of them.
+          : <>
+            {splitProjects || project === null ? home : null}
+            {project ?? (splitProjects ? <div key="empty" className="home-empty split-empty" data-steer-pane="detail">
+              <span className="home-empty-glyph" aria-hidden="true"><DiamondIcon size="1em" /></span>
+              <strong>{t("mobile.split.emptyTitle")}</strong>
+              <p>{t("mobile.split.emptyHint")}</p>
+            </div> : null)}
+          </>}
+    {/* Inside the same nest as the screen, so its back layer wins over the screen's. */}
+    <SteeringConfirm />
     </BackNest>
     <TabBar active={tab} open={openSection} hidden={hiddenSections} />
+    <SteeringBar />
     {secretsUntrusted && <SecretsRepinSheet onClose={() => setSecretsUntrusted(false)} />}
     {!secretsUntrusted && secretsNewCode && <SecretsNewCodeSheet onClose={() => setSecretsNewCode(false)} />}
   </div>;
