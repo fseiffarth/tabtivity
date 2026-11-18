@@ -1866,14 +1866,13 @@ fn host_launch_via(
     }
 }
 
-/// Whether the local session `session` is live, from the mux's one listing
-/// (cached for a restore's burst) and, where a backend keeps no listing with
-/// stamps, from its `has`.
-fn local_session_exists(mux: &dyn crate::services::session_mux::SessionMux, session: &str) -> bool {
-    match mux.mcp_marks() {
-        Ok(marks) => marks.contains(session),
-        Err(_) => mux.has(session).unwrap_or(false),
-    }
+/// Whether the local session `session` is live right now: the mux's own
+/// `has`, never the stamp listing [`local_session_plan`] reads. That listing is
+/// cached for a restore's burst (about 3 s), and this answer lets a launch
+/// through the AI switch as a rejoin, which on tmux is still a create-or-attach:
+/// a session that ended inside the cache's life would start its agent again.
+fn local_session_live(mux: &dyn crate::services::session_mux::SessionMux, session: &str) -> bool {
+    mux.holds_sessions() && mux.has(session).unwrap_or(false)
 }
 
 /// What a launch learned about the local tmux session it names, before its MCP
@@ -1974,10 +1973,8 @@ fn reattaches_session(project: Option<&str>, host: Option<&str>, session: &str, 
     });
     match target {
         None => {
-            crate::services::tmux_local::is_app_local_tmux_session(session) && {
-                let mux = crate::services::session_mux::mux();
-                mux.holds_sessions() && local_session_exists(&*mux, session)
-            }
+            crate::services::tmux_local::is_app_local_tmux_session(session)
+                && local_session_live(&*crate::services::session_mux::mux(), session)
         }
         Some(target) => {
             let probe = format!(
@@ -3053,6 +3050,39 @@ mod tests {
         fn a_session_with_no_stamp_or_no_grant() {
             assert_eq!(plan_for(true, &Stamp::Unmarked, Some(&runtime()), &|_| false, &|_| false).verdict, Reattach::Stale);
             assert_eq!(plan_for(true, &mark(OTHER, None), Some(&runtime()), &|_| false, &|_| false).verdict, Reattach::NoGrant);
+        }
+
+        /// The AI switch lets a launch through only as a rejoin of a live
+        /// session, and on tmux a rejoin is still a create-or-attach: that
+        /// answer is the mux's own `has`, never the cached stamp listing, which
+        /// may still name a session that ended a moment ago.
+        #[test]
+        fn a_rejoin_is_judged_live_not_from_the_cached_listing() {
+            use crate::services::session_mux::{ClientCmd, Key, MuxError, MuxKind, PaneInfo, SessionInfo, SessionMarks, SessionMux};
+            struct Ended;
+            impl SessionMux for Ended {
+                fn kind(&self) -> MuxKind { MuxKind::Tmux }
+                fn available(&self) -> bool { true }
+                fn wrap(&self, _opts: &mut PtyOptions) {}
+                fn spawn_detached(&self, _opts: &PtyOptions) -> Result<(), MuxError> { Ok(()) }
+                fn attach_client(&self, _name: &str, _for_phone: bool) -> Result<ClientCmd, MuxError> { Err(MuxError::NotFound) }
+                fn list(&self) -> Result<Vec<SessionInfo>, MuxError> { Ok(Vec::new()) }
+                // The cached listing still names it...
+                fn mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+                    Ok(SessionMarks::from_rows([("s".to_string(), Some(format!("{NONCE}:-:1")))]))
+                }
+                // ...but it is gone.
+                fn has(&self, _name: &str) -> Result<bool, MuxError> { Ok(false) }
+                fn pane(&self, _name: &str) -> Result<PaneInfo, MuxError> { Err(MuxError::NotFound) }
+                fn screen(&self, _name: &str) -> Result<String, MuxError> { Ok(String::new()) }
+                fn scrollback(&self, _name: &str, _lines: usize) -> Result<Vec<u8>, MuxError> { Ok(Vec::new()) }
+                fn send_keys(&self, _name: &str, _keys: &[Key]) -> Result<(), MuxError> { Ok(()) }
+                fn paste(&self, _name: &str, _text: &str, _bracketed: bool) -> Result<(), MuxError> { Ok(()) }
+                fn env_text(&self, _name: &str) -> Option<String> { None }
+                fn kill(&self, _name: &str) -> Result<(), MuxError> { Ok(()) }
+                fn rename(&self, _old: &str, _new: &str) -> Result<(), MuxError> { Ok(()) }
+            }
+            assert!(!local_session_live(&Ended, "s"), "a session that ended is no rejoin");
         }
 
         /// A backend that cannot read stamps keeps today's behaviour and writes
