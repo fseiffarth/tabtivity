@@ -501,6 +501,26 @@ fn the_stamp_grant_prefers_a_revivable_lane() {
     assert_eq!(stamp_grant(&env), Some(token_hash("h")));
 }
 
+/// R3 (finding 3): a wall clock stepped back behind the previous run's
+/// `last_alive` refuses, instead of reading as no downtime at all (which
+/// kept the cap open for as long as the step); and the listener's own clock
+/// never runs behind the wall clock it opened at.
+#[test]
+fn a_clock_stepped_back_never_stretches_the_cap() {
+    let (_dir, file) = record_file();
+    let row = row_of(vec![LaneRow::of(&identity("t", Caller::Helper), "h1")], "h1", PREV);
+    let listener = previous_run(&file, "s", row.clone(), NOW - 60);
+    assert!(listener.within_cap(PREV, NOW));
+    assert!(!listener.within_cap(PREV, NOW - 61), "before last_alive: refused");
+    assert!(!listener.pending("h1", NOW - 61));
+    assert_eq!(listener.judge(Some(&row), &mark(PREV, "h1"), NOW - 61), Err(Refusal::Expired));
+    // NOW is ahead of this machine's wall clock, as after a step back: the
+    // listener's clock still reads it, plus the time since it opened.
+    assert!(now_secs() < NOW, "the test's premise");
+    let clock = listener.clock();
+    assert!((NOW..NOW + 60).contains(&clock), "{clock}");
+}
+
 /// R3 (finding 5): a session granted no revivable lane gets no row, so its
 /// stamp's fallback grant (a schedule or root hash) is never written.
 #[test]

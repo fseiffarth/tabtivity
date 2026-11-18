@@ -2024,7 +2024,7 @@ fn local_session_plan_in(
         Err(_) => (mux.has(session).unwrap_or(false), Stamp::Unknown),
     };
     let record = reattach::listener();
-    let now = reattach::now_secs();
+    let now = record.map_or_else(reattach::now_secs, reattach::Listener::clock);
     plan_for(
         exists,
         &stamp,

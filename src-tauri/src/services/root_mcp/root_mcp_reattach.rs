@@ -308,6 +308,9 @@ pub struct Listener {
     /// delete: a write that passed the `stopped` check lands before the
     /// delete, never after it.
     io: std::sync::Mutex<()>,
+    /// The wall clock at open and the monotonic instant it was read at
+    /// ([`Listener::clock`]).
+    opened: (u64, std::time::Instant),
 }
 
 static LISTENER: OnceLock<Listener> = OnceLock::new();
@@ -391,7 +394,17 @@ impl Listener {
             pending: std::sync::Mutex::new(pending),
             stopped: AtomicBool::new(false),
             io: std::sync::Mutex::new(()),
+            opened: (now, std::time::Instant::now()),
         }
+    }
+
+    /// Unix seconds now, for the cap: never behind the wall clock at open
+    /// plus the monotonic time since, so stepping the wall clock back does
+    /// not stretch a downtime; never behind the wall clock either, so time
+    /// the machine spent suspended (which the monotonic clock skips) counts.
+    pub fn clock(&self) -> u64 {
+        let (wall, at) = self.opened;
+        now_secs().max(wall.saturating_add(at.elapsed().as_secs()))
     }
 
     /// The port a stamp must not be probed on ([`Listener::lost_port`]).
@@ -402,7 +415,9 @@ impl Listener {
     /// Whether a stamp of the previous run may still be honoured at `now`:
     /// that run passed the guards at start and its downtime is under [`CAP`].
     pub fn within_cap(&self, nonce: &str, now: u64) -> bool {
-        self.first_try && self.previous.as_ref().is_some_and(|(n, alive)| n == nonce && now.saturating_sub(*alive) < CAP.as_secs())
+        // `now` before `alive` is a clock gone wrong: refused, never a
+        // downtime of zero.
+        self.first_try && self.previous.as_ref().is_some_and(|(n, alive)| n == nonce && now >= *alive && now - alive < CAP.as_secs())
     }
 
     /// The guards of a revival of the session stamped `mark`, whose row is
@@ -422,7 +437,8 @@ impl Listener {
             0
         } else {
             match self.previous.as_ref() {
-                Some((nonce, alive)) if *nonce == row.nonce => now.saturating_sub(*alive),
+                Some((nonce, alive)) if *nonce == row.nonce && now >= *alive => now - alive,
+                Some((nonce, _)) if *nonce == row.nonce => return Err(Refusal::Expired),
                 _ => return Err(Refusal::NonceMismatch),
             }
         };
@@ -649,7 +665,7 @@ pub fn heartbeat_now() {
 /// reattach may still revive ([`Listener::pending`]).
 pub fn pending_bearer(header: Option<&str>) -> bool {
     let (Some(listener), Some(hash)) = (listener(), super::bearer_hash(header)) else { return false };
-    listener.pending(&hash, now_secs())
+    listener.pending(&hash, listener.clock())
 }
 
 /// The row of a session this launch creates: the lanes `store` holds under
