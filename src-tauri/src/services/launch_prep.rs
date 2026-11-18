@@ -448,6 +448,13 @@ fn assistant_gate(opts: &mut PtyOptions, state_dir: &std::path::Path, enabled: b
 /// the session the way every agent tab does. `home` is the prepared assistant
 /// home; `provider` the local OpenCode provider config.
 ///
+/// `reattach_url`: the web lane's url when the launch only reattaches the
+/// chat's surviving session (`root_mcp_mark::Reattach`, anything but a
+/// create). Such a launch is granted no lane (its running CLI keeps the one it
+/// started with, and tmux ignores the new command), so a local profile would
+/// otherwise refuse with `Refusal::NoLane` and the chat could not be reopened.
+/// The url only fills the ignored command line; no token is named or minted.
+///
 /// The resolver replaces a Codex tab's whole argv with `resume <id>` when it
 /// has a session to resume, so Codex resolves with an empty argv and the pinned
 /// arguments go in front of whatever it answers (a global `-c` before the
@@ -458,8 +465,9 @@ fn assemble_assistant_launch(
     plan: &AssistantPlan,
     home: &std::path::Path,
     provider: Option<&str>,
+    reattach_url: Option<&str>,
 ) -> Result<Option<crate::services::codex_bind::ResumeClaim>, String> {
-    assemble_assistant_launch_with(opts, plan, home, provider, &crate::services::agent_session::resolve_agent_session_bounded)
+    assemble_assistant_launch_with(opts, plan, home, provider, reattach_url, &crate::services::agent_session::resolve_agent_session_bounded)
 }
 
 /// [`assemble_assistant_launch`] with the session resolver given, so a test
@@ -469,10 +477,12 @@ fn assemble_assistant_launch_with(
     plan: &AssistantPlan,
     home: &std::path::Path,
     provider: Option<&str>,
+    reattach_url: Option<&str>,
     resolve: &dyn Fn(PtyOptions) -> PtyOptions,
 ) -> Result<Option<crate::services::codex_bind::ResumeClaim>, String> {
     use crate::services::assistant::{help_url_from_env, launch_line, AssistantCli, LaneGrant, LaunchCtx};
-    let lane = LaneGrant::from_env(&opts.env);
+    let lane = LaneGrant::from_env(&opts.env)
+        .or_else(|| reattach_url.map(|url| LaneGrant { url: url.to_string(), token: String::new() }));
     let help = help_url_from_env(&opts.env);
     // The home as the process sees it: the fence binds the agent home at the
     // user's home path on Linux; elsewhere `HOME` points at the home itself.
@@ -1263,7 +1273,13 @@ pub async fn prepare(
             }
             _ => None,
         };
-        resume_claim = assemble_assistant_launch(&mut opts, plan, &home.dir, provider.as_deref())?;
+        // A reattach was granted no lane (above): name the web lane's url so a
+        // local profile still builds the command line tmux will ignore.
+        let reattach_url = (verdict != Reattach::Create)
+            .then(crate::services::root_mcp::runtime)
+            .flatten()
+            .map(|runtime| crate::services::root_mcp::web_endpoint_url(runtime.port));
+        resume_claim = assemble_assistant_launch(&mut opts, plan, &home.dir, provider.as_deref(), reattach_url.as_deref())?;
         assistant_home = Some(home);
     }
 
@@ -2911,7 +2927,7 @@ mod tests {
         let claude_plan = plan(&mut claude);
         claude.env.insert(crate::services::root_mcp::WEB_URL_ENV.into(), lane_url.into());
         claude.env.insert(crate::services::root_mcp::WEB_TOKEN_ENV.into(), "web-token-0123".into());
-        assemble_assistant_launch_with(&mut claude, &claude_plan, home.path(), None, &identity).unwrap();
+        assemble_assistant_launch_with(&mut claude, &claude_plan, home.path(), None, None, &identity).unwrap();
         assert_eq!(claude.cmd, "claude");
         assert_eq!(claude.args[..2], ["--session-id".to_string(), CHAT.to_string()]);
         assert!(claude.args.iter().any(|a| a.contains(lane_url)));
@@ -2930,7 +2946,7 @@ mod tests {
         };
         let mut codex = chat_opts(AssistantCli::Codex, None);
         let codex_plan = plan(&mut codex);
-        let claim = assemble_assistant_launch_with(&mut codex, &codex_plan, home.path(), None, &resolver).unwrap();
+        let claim = assemble_assistant_launch_with(&mut codex, &codex_plan, home.path(), None, None, &resolver).unwrap();
         assert!(claim.is_some(), "the resume target is claimed for this tab");
         let at = codex.args.iter().position(|a| a == "resume").expect("resume kept");
         assert_eq!(codex.args[at + 1], live);
@@ -2940,15 +2956,43 @@ mod tests {
         // A fresh Codex chat has just the pinned arguments.
         let mut fresh = chat_opts(AssistantCli::Codex, None);
         let fresh_plan = plan(&mut fresh);
-        assemble_assistant_launch_with(&mut fresh, &fresh_plan, home.path(), None, &identity).unwrap();
+        assemble_assistant_launch_with(&mut fresh, &fresh_plan, home.path(), None, None, &identity).unwrap();
         assert!(!fresh.args.iter().any(|a| a == "resume") && fresh.args.iter().any(|a| a == "features.shell_tool=false"));
 
         // The profile's refusal is the spawn's: a Codex home with no model cache.
         let bare = tempfile::tempdir().unwrap();
         let mut refused = chat_opts(AssistantCli::Codex, None);
         let refused_plan = plan(&mut refused);
-        let err = assemble_assistant_launch_with(&mut refused, &refused_plan, bare.path(), None, &identity).err().expect("refused");
+        let err = assemble_assistant_launch_with(&mut refused, &refused_plan, bare.path(), None, None, &identity).err().expect("refused");
         assert_eq!(err, Refusal::CodexCatalog.to_string());
+    }
+
+    /// A local profile's chat whose session survived (a reattach) is granted
+    /// no lane (`root_mcp_mark::Reattach`): it still builds its (ignored)
+    /// command line on the lane's url instead of refusing with `NoLane`, so the
+    /// chat can be reopened. A create with no lane still refuses.
+    #[test]
+    fn a_reattached_local_chat_is_not_refused_for_want_of_a_lane() {
+        use crate::services::root_mcp::{web_endpoint_url, WEB_TOKEN_ENV};
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let identity = |opts: PtyOptions| opts;
+        let url = web_endpoint_url(43112);
+        let mut created = chat_opts(AssistantCli::ClaudeLocal, Some("qwen3:8b"));
+        let plan = assistant_gate(&mut created, state.path(), true).unwrap().unwrap();
+        let err = assemble_assistant_launch_with(&mut created, &plan, home.path(), None, None, &identity).err().expect("a create needs its lane");
+        assert_eq!(err, Refusal::NoLane.to_string());
+        let mut reattached = chat_opts(AssistantCli::ClaudeLocal, Some("qwen3:8b"));
+        let plan = assistant_gate(&mut reattached, state.path(), true).unwrap().unwrap();
+        assemble_assistant_launch_with(&mut reattached, &plan, home.path(), None, Some(&url), &identity).expect("a reattach builds its line");
+        assert!(reattached.args.iter().any(|a| a.contains(&url)), "{:?}", reattached.args);
+        assert!(!reattached.env.contains_key(WEB_TOKEN_ENV), "no token is named or minted for it");
+        // `prepare` hands it the url exactly when the verdict is not a create.
+        let source = include_str!("launch_prep.rs");
+        let start = source.find("pub async fn prepare(").expect("prepare");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+        assert!(body.contains("let reattach_url = (verdict != Reattach::Create)"));
+        assert!(body.contains("provider.as_deref(), reattach_url.as_deref())?"));
     }
 
     #[tokio::test]
