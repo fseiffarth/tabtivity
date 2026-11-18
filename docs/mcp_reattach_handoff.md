@@ -6,7 +6,7 @@ fixed decisions are settled). Each step appends its own section.
 ## I1: Phase 1 backend
 
 Branch `worktree-agent-a4f8603c8bd7e41a2`, based on develop `a245d4593`.
-Commits: see `git log a245d4593..` (filled in below at the end of the step).
+Commits: `31c8d7f64` (the whole step: code, tests, docs, this file) plus a one-line docs follow-up that records it.
 
 ### What landed
 
