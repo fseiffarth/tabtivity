@@ -1389,12 +1389,25 @@ const backgroundRestored = new Set<string>();
  * its pool comes up, exactly as it does on a switch today.
  */
 export async function restoreActiveProjectScopes(): Promise<void> {
-  for (const project of useProjectsStore.getState().projects) {
-    if (project.status !== "active") continue;
-    if (backgroundRestored.has(project.id)) continue;
-    backgroundRestored.add(project.id);
-    await restoreProjectScope(project).catch(() => {});
+  try {
+    for (const project of useProjectsStore.getState().projects) {
+      if (project.status !== "active") continue;
+      if (backgroundRestored.has(project.id)) continue;
+      backgroundRestored.add(project.id);
+      await restoreProjectScope(project).catch(() => {});
+    }
+  } finally {
+    activeScopesRestored = true;
   }
+}
+
+let activeScopesRestored = false;
+
+/** Whether the launch's pass over the active projects
+ *  ({@link restoreActiveProjectScopes}) has finished: the stop sweep's restore
+ *  wake ranks every restored agent tab at once, so it waits for this. */
+export function activeProjectScopesRestored(): boolean {
+  return activeScopesRestored;
 }
 
 /** §9.5: the ONE "patch one project entry in local state" helper behind every
