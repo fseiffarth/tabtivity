@@ -621,6 +621,60 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
       .toEqual(["Recent", "Muse Spark 1.3 Free", "MiMo-V2.6-Flash Free", "Ling 3.0 Flash Fin Free"]);
   });
 
+  it("ends a short list at the dialog's bottom, not at the composer under it", () => {
+    // OpenCode 2.3.0's variant dialog on a phone-sized pane (captured at 40×28
+    // and 46×32, 2026-11-17): the list stops well above the composer, with
+    // two blank rows and the composer's empty `┃` row between. `readableScreen`
+    // folds those into one blank, which read as the one blank between provider
+    // groups — and the composer's prompt, model row and status bar, cut at the
+    // dialog's column, came out as variants (`eepSeek V4.1 Flash Free
+    // OpenCode`, the status bar's `<path>:develop` cut mid-word).
+    for (const rows of [
+      [
+        "     Select variant             esc",
+        "",
+        "     Search",
+        "",
+        "   ● Default",
+        "     low",
+        "     medium",
+        "     high",
+        "",
+        "",
+        " ┃ Ask anything… \"Fix broken tests\"",
+        " ┃",
+        " ┃ stub",
+        " ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        " ~/work:develop",
+      ],
+      [
+        "     Select variant                   esc",
+        "",
+        "     Search",
+        "",
+        "   ● Default",
+        "     low",
+        "     medium",
+        "     high",
+        "",
+        "",
+        "  ┃",
+        "  ┃  Build · stub Ollama (local)",
+        "  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+        "  …/work…  shift+tab agents  ctrl+p commands",
+      ],
+    ]) {
+      const buffer: ReadableBufferLike = {
+        length: rows.length,
+        getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }),
+      };
+      const page = readOpenCodePickerPage(readableScreen(buffer).lines);
+      expect(page?.title).toBe("Select variant");
+      expect(page?.rows.map((row) => row.text)).toEqual(["Default", "low", "medium", "high"]);
+      expect(page?.rows[0].marked).toBe(true);
+    }
+  });
+
   it("is no picker for a conversation that only mentions one", () => {
     expect(readOpenCodePicker(lines("  I opened   Select model to check", "", "  Search", "  Big Pickle"))).toBeNull();
   });
