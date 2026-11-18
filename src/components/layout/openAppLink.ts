@@ -1,10 +1,10 @@
-import type { AppLink } from "./appLinks";
-import { settingsLinkTarget, isMainSection, anchorOf } from "../../components/layout/settingsIndex";
-import { translateNow } from "../i18n";
-import { voiceInputOffered } from "../voice/desktopVoice";
+import type { AppLink } from "../../lib/navigation/appLinks";
+import { settingsLinkTarget, isMainSection, anchorOf } from "./settingsIndex";
+import { translateNow } from "../../lib/i18n";
+import { voiceInputOffered } from "../../lib/voice/desktopVoice";
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore } from "../../stores/tabs";
-import { jumpToTab } from "../shortcuts/tabJump";
+import { jumpToTab } from "../../lib/shortcuts/tabJump";
 
 /** Click-only navigation. Never creates tabs, launches commands or writes settings. */
 export async function openAppLink(target: AppLink): Promise<boolean> {

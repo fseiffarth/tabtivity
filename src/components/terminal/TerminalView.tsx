@@ -63,7 +63,7 @@ import { copyableSelection, installMouseModeGuard, joinedSelectionText } from ".
 import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startKeySelect, type KeySelectState } from "../../lib/terminal/keyboardSelect";
 import { findSignInDone, findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
 import { isAppLink, parseAppLink } from "../../lib/navigation/appLinks";
-import { openAppLink } from "../../lib/navigation/openAppLink";
+import { openAppLink } from "../layout/openAppLink";
 import { openPathLink } from "../../lib/terminal/pathLinks";
 import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";

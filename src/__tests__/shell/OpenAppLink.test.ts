@@ -4,7 +4,7 @@ vi.mock("../../stores/projects", () => ({ useProjectsStore: { getState: () => ({
 vi.mock("../../stores/tabs", () => ({ useTabsStore: { getState: () => ({ scope: "project-one", tabs: state.tabs, tabsByScope: { "project-two": [{ key: "tab-two" }] } }) } }));
 vi.mock("../../lib/shortcuts/tabJump", () => ({ jumpToTab: state.jump }));
 vi.mock("../../lib/voice/desktopVoice", () => ({ voiceInputOffered: () => false }));
-import { openAppLink } from "../../lib/navigation/openAppLink";
+import { openAppLink } from "../../components/layout/openAppLink";
 
 beforeEach(() => vi.clearAllMocks());
 describe("app link navigation", () => {
