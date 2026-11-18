@@ -279,3 +279,129 @@ see the I2 rows in `git log 4c0ea87dc..` (portable protocol part, then the
 * A host started by an older build keeps answering "unknown" until it retires
   (it stays while it has sessions). Its tabs get today's behaviour, not a stale
   flag.
+
+## R1: Phase 1 review
+
+Branch `worktree-agent-a57c1d17452a56bdf`, reset to the integration commit
+`d0142ab58` (I1 + I3 + I2 on `a245d4593`). Review of `a245d4593..d0142ab58`;
+fixes are one commit each, with a regression test (`31cdbb6d8`, `4c18ef897`, `ed4c94828`).
+
+### Fixed
+
+1. **A local-model Tabby chat could not reattach** (medium;
+   `launch_prep.rs`, `assemble_assistant_launch_with`). An assistant chat is
+   a local agent session, so a reattach (Live, Stale, NoGrant) is granted no
+   lane. `assistant::launch_line` refuses `ClaudeLocal` and `OpenCodeLocal`
+   without the web lane (`Refusal::NoLane`), so `prepare` failed. The surviving
+   chat could not be reopened after a restart, or after an in-run respawn.
+   Before Phase 1 the reattach was minted a lane and went through. Fix: on a
+   non-Create verdict, `prepare` passes the web lane's url, built from this
+   listener's port. The command line tmux ignores is then built; no token is
+   named or minted. Test:
+   `launch_prep::tests::a_reattached_local_chat_is_not_refused_for_want_of_a_lane`.
+2. **The AI switch rejoin check read the 3 s cache** (low; `launch_prep.rs`,
+   `reattaches_session`). I1 moved `reattaches_session` onto the cached stamp
+   listing. With the AI switch off, that answer lets a launch through as a
+   rejoin, and on tmux a rejoin is still `new-session -A`. A session that ended
+   less than 3 s ago would start its agent again while AI is off. Fix: the
+   check asks the mux's own `has` again (`local_session_live`); the classifier
+   keeps the listing. Test:
+   `launch_prep::tests::reattach::a_rejoin_is_judged_live_not_from_the_cached_listing`.
+3. **The privacy sweep left ended sessions in the stamp cache** (low;
+   `agent_privacy::forget_sessions`). `end_sessions` and `sweep_sessions` kill
+   through tmux's argv, not the mux, so the cache was not dropped. A relaunch
+   within 3 s (`end_refused_spawn`, then a retry) read the session as live. The
+   new session then got no grant and no stamp. Fix: `forget_sessions` drops the
+   cache (`session_mux::tmux::forget_marks`, now `pub(crate)`). Test:
+   `agent_privacy::tests::a_swept_session_leaves_the_stamp_cache`.
+
+### Not fixed (reported)
+
+* **tmux re-stamps on an attach race** (low; `tmux_local::local_tmux_argv`).
+  The `; set-option` rides `new-session -A` unconditionally. If the listing
+  said "absent" but the session exists at spawn time, the attach overwrites
+  the stamp. Two cases: the Mobile host creates it inside the window's 3 s
+  window, or two concurrent spawns of one id. The agent keeps the old tokens,
+  but the stamp names a grant this run holds, so a later in-run reattach reads
+  Live. The Windows host does it right (`Created::New` only). A tmux-side fix
+  needs `set-option -o` or `if-shell` on `#{session_created}`; that wants a
+  live check, so it was left alone.
+* **Arming on a hookless agent fires on a quiet screen** (design; `mcpStale.ts`
+  `syncWatchers`). Without hook verdicts, "when this turn ends" fires when
+  `busyByTab` drops. A long silent tool call can read as the end of the turn,
+  and the restart then comes mid-turn. The user armed it, but the plan names
+  only `done`.
+* **Foreign confirm from a port squatter** (low). If the window could not
+  re-bind its port, a stale stamp's probe goes to whoever holds that port. A
+  squatter answering 204 makes the tab read Live: no card, empty MCP row. It
+  only hides the stale flag and gains no authority. A probe to the window's own
+  remembered-but-lost port could be skipped.
+* `mcp_token_handed_out` is true for any adopt, even one holding only
+  cockpit/help lanes (`holds_token` counts root, schedule and git only). Nit.
+* `note_mcp_mark` in `commit` and `forget_marks` can block an async worker for
+  up to one listing (`LIST_TIMEOUT`/`LIST_DEADLINE`), because the single-flight
+  lock is held across it. Nit.
+* `TokenStore::adopt` keeps every identity field but `tab` (project, schedule
+  target, push dir). Today `adopt` only moves a grant within one PTY id
+  (`old == tab`); no UI renames a local session. If a tab can ever move scope
+  with its session, the old scope's tokens follow it.
+
+### Checked and sound
+
+* Classifier table, stamp parse (exact `nonce:grant|-:port`, hex only, port >
+  0, tmux's trailing newline), Unmarked to Stale, Unknown to Create without a
+  stamp, no runtime to Create without a stamp.
+* `grant_lanes` runs only on Create; the stamp's grant is the first lane token
+  in `opts.env`, always one this store registered. A planted token env is
+  stripped first (`CONTROL_ENV`). `SpawnTokenGuard` on a reattach holds nothing.
+* `adopt`: own nonce and a held grant only; same-id is a no-op. A different id
+  revokes what the new id held and re-keys, and `tabs_mcp::rebind_pty` follows.
+  The tmux socket is unreachable from the fence, so a stamp cannot be forged by
+  an agent.
+* `GET /mcp/grant/{hash}`: exact Host `127.0.0.1:<port>`, no `Origin`, lower
+  hex 64; 204/404/403 only, one bit about a 256-bit hash; on every router.
+* Port: `start` binds synchronously in `setup` before the IPC loop runs; the
+  fallback is port 0 plus a holder log, and the file is written only when the
+  port changed (parents created). `bind_avoiding` holds rejected listeners, so
+  the Mobile host and the daemon never land on the window's port.
+* Windows: the stamp is kept only on `Created::New`, and attach and rename keep
+  it; the cap gate means an old host reads as unknown; `marks_answer` as I2
+  described (I agree with "none" when the setting is on and no host runs); the
+  cache drops on kill, rename, `kill_app_sessions` and `spawn_detached`. Read
+  only, never compiled here.
+* Frontend: an armed reconnect fires once (`fireArmed` disarms first); the
+  toast's button clears the toast before it runs, so a double click cannot run
+  two bulks; the bulk takes idle, `byId`, unarmed, job-free tabs, 4 slots; the
+  confirm guards `latest` before both Reconnect and arm; `noteMcpStale` skips
+  joins and attach-only views.
+* Tests: no `"a/b"` literals; the tmux tests are `#[cfg(unix)]`, the winhost
+  tests are under `cfg(windows)`, and the port tests use `Path::join`.
+
+### Tests run (targeted, no gates)
+
+* `cargo test -p tabtivity --lib -- launch_prep agent_privacy session_mux root_mcp tmux_local`:
+  400 passed, the three new tests included, no warnings.
+* `npx vitest run` on I3's three test files: 13 passed.
+* Not run: clippy, the `--no-default-features` build, Windows (no TS touched,
+  so no lint or brand-check needed).
+
+### For I4 (Phase 2)
+
+* After revival, a previous run's grants live in this store again, but the
+  stamp still carries the old nonce. `classify_reattach` treats it as foreign
+  and probes the stamp's port, which is this listener's own after a stable
+  re-bind, so it answers 204: Live, but with no `adopt`. Treat "foreign nonce,
+  port == own port" as an own-store lookup plus `adopt`, or re-stamp revived
+  sessions with the new nonce.
+* The probe hands the grant hash to whatever holds the stamp's port. Keep the
+  hash a lookup key only, never a credential, in the persisted record.
+* The 30 min cap and the never-schedule rule have to hold in `adopt` as well,
+  because `adopt` re-keys every lane of the old tab.
+* Assistant chats are local agent sessions too: a revived Tabby keeps web and
+  help lanes, and fix 1 keeps its reattach from being refused.
+
+### Flags for the user
+
+* Nothing was run live. The Windows code is still never compiled
+  (`cfg(windows)`); Windows CI compiles it first.
+* The hookless "when this turn ends" trigger (above) is a design call to make.
