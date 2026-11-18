@@ -14,7 +14,7 @@ use std::future::Future;
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
 
 use super::protocol::{
-    self, ErrorCode, PaneInfo, Reply, Request, SessionInfo, INPUT_CHUNK, KIND_CONTROL, KIND_INPUT, KIND_OUTPUT,
+    self, ErrorCode, PaneInfo, Reply, Request, SessionInfo, CAP_MCP_MARK, INPUT_CHUNK, KIND_CONTROL, KIND_INPUT, KIND_OUTPUT,
     PASTE_CHUNK, PROTO, PROTO_MIN,
 };
 use super::screen::PASTE_END_MARKER;
@@ -59,6 +59,9 @@ impl From<std::io::Error> for ClientError {
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
+
+/// `(session, MCP stamp)` per live session, as [`Client::mcp_marks`] lists them.
+pub type MarkRows = Vec<(String, Option<String>)>;
 
 /// What the host said in `Welcome`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +205,17 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> Client<IO> {
             Reply::Sessions { sessions } => Ok(sessions),
             other => Err(unexpected(other)),
         }
+    }
+
+    /// Every session with the MCP stamp it was created with, in one `List`;
+    /// `None` (nothing sent) from a host without [`CAP_MCP_MARK`], whose
+    /// listing would read every session as "no stamp" when the truth is
+    /// "unknown".
+    pub async fn mcp_marks(&mut self) -> Result<Option<MarkRows>> {
+        if !self.has_cap(CAP_MCP_MARK) {
+            return Ok(None);
+        }
+        Ok(Some(self.list().await?.into_iter().map(|s| (s.name, s.mcp_mark)).collect()))
     }
 
     /// Raw bytes, in [`INPUT_CHUNK`] requests.

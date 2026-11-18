@@ -52,6 +52,7 @@ fn spawn_req(name: &str, argv: Vec<String>, remain_on_exit: bool) -> Request {
         remain_on_exit,
         size_policy: Default::default(),
         create_only: false,
+        mcp_mark: None,
     }
 }
 

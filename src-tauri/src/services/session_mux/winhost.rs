@@ -146,6 +146,8 @@ pub fn host_spawn_for(opts: &PtyOptions, name: &str) -> Result<HostSpawn, String
         // Every agent tab keeps its pane but an assistant chat (plan, Defaults 4).
         remain_on_exit: opts.assistant.is_none(),
         size_policy: SizePolicy::Latest,
+        // Kept by the host only if this Spawn creates the session.
+        mcp_mark: opts.mcp_mark.clone(),
     })
 }
 

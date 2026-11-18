@@ -624,3 +624,83 @@ async fn a_connection_counted_by_spawn_serve_calls_off_an_exit() {
     drop(c);
     task.await.unwrap();
 }
+
+fn stamped(name: &str, mark: Option<&str>) -> Request {
+    with(spawn_req(name, false), |s| {
+        if let Request::Spawn { mcp_mark, .. } = s {
+            *mcp_mark = mark.map(str::to_string);
+        }
+    })
+}
+
+#[tokio::test]
+async fn the_mcp_stamp_is_kept_from_the_creating_spawn_and_listed() {
+    let (host, fake, _clock) = test_host();
+    let mut c = client(&host).await;
+    assert!(c.has_cap(protocol::CAP_MCP_MARK));
+    assert!(c.spawn(stamped("agent", Some("n1:g1:4000"))).await.unwrap());
+    assert!(!c.spawn(stamped("agent", Some("n2:g2:5000"))).await.unwrap(), "an attach");
+    assert!(c.spawn(stamped("shell", None)).await.unwrap());
+    assert_eq!(
+        host_code(c.spawn(stamped("bad", Some("n:g:1\u{1b}[2J"))).await),
+        ErrorCode::BadRequest,
+        "a control byte never reaches a listing"
+    );
+    assert_eq!(fake.count(), 2);
+    let rows = c.mcp_marks().await.unwrap().expect("this host keeps stamps");
+    assert_eq!(
+        rows,
+        vec![("agent".to_string(), Some("n1:g1:4000".to_string())), ("shell".to_string(), None)],
+        "the creating Spawn's stamp, every live session listed"
+    );
+    c.rename("agent", "agent-2").await.unwrap();
+    let rows = c.mcp_marks().await.unwrap().unwrap();
+    assert!(rows.contains(&("agent-2".to_string(), Some("n1:g1:4000".to_string()))), "a rename keeps it: {rows:?}");
+    c.kill("agent-2").await.unwrap();
+    assert_eq!(c.mcp_marks().await.unwrap().unwrap(), vec![("shell".to_string(), None)]);
+}
+
+/// A host of a build before [`protocol::CAP_MCP_MARK`]: it welcomes without
+/// the cap and records every later frame it is sent.
+async fn old_host(io: tokio::io::DuplexStream) -> Vec<Request> {
+    let mut io = io;
+    let Some(Request::Hello { .. }) = raw_reply_req(&mut io).await else { panic!("no hello") };
+    let caps = ["snapshot", "repaint", "paste-bracketed", "osc-cwd", "kill-prefix"];
+    let welcome = Reply::Welcome {
+        proto: 1,
+        host_version: "0.2.80".into(),
+        pid: 1,
+        caps: caps.iter().map(|c| c.to_string()).collect(),
+    };
+    protocol::write_control(&mut io, &welcome).await.unwrap();
+    let mut seen = Vec::new();
+    while let Some(req) = raw_reply_req(&mut io).await {
+        // Its listing has no stamp column: a client reading it would see
+        // "no stamp" for a session whose stamp it cannot know.
+        let reply: serde_json::Value = serde_json::json!({"type": "sessions", "sessions": [
+            {"name": "agent", "created": 1, "activity": 1, "attached": 0, "cwd": null, "argv": [], "dead": false}
+        ]});
+        protocol::write_frame(&mut io, KIND_CONTROL, reply.to_string().as_bytes()).await.unwrap();
+        seen.push(req);
+    }
+    seen
+}
+
+async fn raw_reply_req(io: &mut tokio::io::DuplexStream) -> Option<Request> {
+    let frame = protocol::read_frame(io).await.unwrap()?;
+    Some(serde_json::from_slice(&frame.payload).unwrap())
+}
+
+#[tokio::test]
+async fn an_older_host_reads_as_unknown_not_as_unstamped() {
+    let (client_io, host_io) = tokio::io::duplex(1 << 16);
+    let host = tokio::spawn(old_host(host_io));
+    let mut c = Client::handshake(client_io, TOKEN, "t").await.unwrap();
+    assert!(!c.has_cap(protocol::CAP_MCP_MARK));
+    assert_eq!(c.mcp_marks().await.unwrap(), None, "unknown, not an error");
+    // Its plain listing still works and carries no stamp.
+    let listed = c.list().await.unwrap();
+    assert_eq!((listed[0].name.as_str(), listed[0].mcp_mark.as_deref()), ("agent", None));
+    drop(c);
+    assert_eq!(host.await.unwrap(), vec![Request::List], "mcp_marks sent nothing to the old host");
+}

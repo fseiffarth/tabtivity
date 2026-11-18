@@ -1903,8 +1903,9 @@ fn local_session_plan_in(
     use crate::services::root_mcp::root_mcp_mark::{probe_grant, Stamp};
     let (exists, stamp) = match mux.mcp_marks() {
         Ok(marks) => (marks.contains(session), Stamp::of(marks.entry(session))),
-        // A backend that cannot read the stamp (the Windows session host until
-        // it carries one): a create, as before; whether it rejoins is still asked.
+        // A backend that cannot read the stamp (an older Windows session host,
+        // or none running with its setting off): a create, as before; whether
+        // it rejoins is still asked.
         Err(_) => (mux.has(session).unwrap_or(false), Stamp::Unknown),
     };
     plan_for(
