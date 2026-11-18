@@ -102,6 +102,11 @@ describe("voice text shared by the phone and the desktop", () => {
     expect(spokenText("Run this:\n```\nrm -rf x", "code block")).toBe("Run this: code block.");
   });
 
+  it("does not read out the wrapper of a Codex plan", () => {
+    expect(spokenText("<proposed_plan>\n### Changes\n- Compare the caps\n</proposed_plan>", "code"))
+      .toBe("Changes. Compare the caps.");
+  });
+
   it("reads a table as its cells", () => {
     expect(spokenText("| a | b |\n|---|:-:|\n| 1 | 2 |", "code")).toBe("a, b. 1, 2.");
   });
