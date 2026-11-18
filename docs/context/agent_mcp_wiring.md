@@ -78,3 +78,33 @@ tabtivity-mcp call print print_request '{"path":"out.pdf"}'
   command still works when the user names it.
 - Each call is an ordinary shell command, so the CLI's own permission mode
   decides whether it asks first.
+
+## 3. Reconnect after the app was down
+
+Observed 2026-11-18 (verify-cli style: the real binaries outside the app, a
+private `tmux -L`, a scratch HOME, a loopback stub model and a bearer-checked
+stub MCP server on a fixed port, wired exactly as in section 1). The stub was
+killed and restarted on the same port with the same token, between short stub
+turns that force one tool call each. The stub is stateless like the lanes (no
+`Mcp-Session-Id`), so a CLI's session-expiry handling was not exercised.
+
+| CLI | Retries after refused? | Picks up a server that was down at start? | Forced reconnect |
+|---|---|---|---|
+| Claude 2.1.326 | **Yes.** The call during the outage fails (`ECONNREFUSED`), the next call works, also after 150 s down. | **Yes**, at the next prompt after the server was up (no keypress). | `/mcp`, the server's entry (offered, not needed) |
+| Codex 0.169.0 | **Yes.** The call during the outage fails (`Transport send error`), the next works, also after 150 s down. | **No.** `tt` stays `failed` in `/mcp` and the tool is never offered; 3 turns over 65 s after the server was up. `/mcp` makes one fresh connection but does not put the tool back. | None found (`/new` not conclusive). Restart. |
+| OpenCode 2.3.0 | **Yes.** Fails once (`ECONNREFUSED`), the next call works, also after 150 s down. | **No.** `Unknown tool 'tt.ping'`, no connection attempt in 65 s. | `/mcps`, the failed server, **Space** (`retry`). |
+| Copilot 1.0.112 | **Only for short outages.** 15 s and 50 s: yes. 100 s and 150 s: the server is dropped (`Tool 'tt-ping' does not exist`) and stays dropped. Copilot pings the server about every 30 s; a failed call alone did not drop it. | **No.** `/mcp` shows `failed to initialize MCP client`; `r` (refresh) does not retry. | `/mcp disable tt` then `/mcp enable tt` (verified after a 100 s outage). |
+
+Consequences for a revival-without-restart design: Claude, Codex and OpenCode
+tolerate an app restart of any length seen here; Copilot only one under about
+a minute (the threshold between 50 s and 100 s is not pinned down). No CLI
+but Claude picks up a server that was down when it started, so a reattached
+agent whose lane was dead at spawn stays toolless without a forced command.
+
+How the tools show up while checking: Claude `mcp__<server>__<tool>`, Codex
+`mcp__<server>.<tool>` (Responses namespace), Copilot `<server>-<tool>`.
+OpenCode 2.3.0 does not list MCP tools to the model: it calls them through the
+`execute` (Code Mode) tool, as `tools.<server>.<tool>(…)`. Without
+`--standalone`, OpenCode 2.x's TUI is a client of a shared background service
+(`opencode serve --service`, one fixed port) that keeps the config of whoever
+started it, so a probe needs `--standalone`.
