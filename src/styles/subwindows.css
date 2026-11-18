@@ -4615,6 +4615,31 @@ button.terminal-reader-option:hover:not(:disabled) {
   color: var(--accent);
 }
 .terminal-reader-option-box svg { width: 14px; height: 14px; }
+/* What a permission dialog waits on (`permissionSubject`): the call named in
+   full, plain text, bounded. */
+.terminal-reader-question-subject {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+.terminal-reader-question-subject small {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.terminal-reader-question-subject code {
+  display: block;
+  max-height: 8em;
+  padding: 4px var(--space-2);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm, 4px);
+}
 .terminal-reader-working {
   align-self: flex-start;
   display: flex;

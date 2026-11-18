@@ -34,6 +34,7 @@ import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { useActivityStore } from "../../stores/activity";
 import { openReaderComposer } from "../../lib/agents/readerSteering";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
@@ -1016,6 +1017,78 @@ describe("the Reader's live rows", () => {
     expect(group.querySelector(".terminal-reader-question-context")).toBeNull();
     expect(group.textContent).not.toMatch(/☐|My fix is ready|\(Recommended\)/);
     expect(group.querySelector(".terminal-reader-recommended")?.textContent).toBe("Recommended");
+  });
+
+  describe("through the stored session's record of the call", () => {
+    const withSession = (extra: Record<string, unknown>) => invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, truncated: false, ...extra } : []));
+    const lamp = (state: "decision" | undefined) => act(() => { useActivityStore.setState({ attentionByTab: state ? { "p:agent-1": state } : {} }); });
+    const asked = {
+      kind: "answer", text: "Which colours?", at: "2026-09-30T08:03:00Z", blocking: true,
+      questions: [{ header: "Colours", question: "Which colours should the probe use?", multiSelect: true,
+        options: [{ label: "Red", description: "warm", preview: "+--+\n|  |\n+--+" }, { label: "Blue" }] }],
+    };
+    const DIALOG = [
+      "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",
+      "Do you want to make this edit to i18n.ts?",
+      "❯ 1. Yes", "  2. Yes, allow all edits during this session", "  3. No, and tell Claude what to do differently",
+      "", "  esc to cancel",
+    ];
+    afterEach(() => lamp(undefined));
+
+    it("names what a permission dialog waits on, only while the lamp says it asks", async () => {
+      withSession({ waitingTools: [{ name: "Edit", subject: "/p/src/lib/i18n.ts", at: "2026-09-30T08:03:00Z" }] });
+      term = fakeTerminal([...DIALOG]);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(group.querySelector(".terminal-reader-question-subject")).toBeNull();
+      await lamp("decision");
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject code")?.textContent).toBe("/p/src/lib/i18n.ts"));
+      expect(group.querySelector(".terminal-reader-question-subject small")?.textContent).toMatch(/approval to change/);
+      await lamp(undefined);
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject")).toBeNull());
+    });
+
+    it("names a Bash call's command in full", async () => {
+      withSession({ shells: [{ command: "rm -rf build && make all", at: "2026-09-30T08:03:00Z" }] });
+      term = fakeTerminal([...DIALOG]);
+      registerTerminal("p:agent-1", term);
+      await lamp("decision");
+      reader(host);
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject code")?.textContent).toBe("rm -rf build && make all"));
+      expect(group.querySelector(".terminal-reader-question-subject small")?.textContent).toMatch(/approval to run/);
+    });
+
+    it("shows a waiting question read-only before the terminal draws it, then clickable on its rows", async () => {
+      withSession({ entries: [...transcript.entries, asked] });
+      // The record is there, the dialog is not on screen yet.
+      const rows = ["> fix the strings", "", "✻ Thinking… (3s · ↓ 120 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"];
+      term = fakeTerminal(rows);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      // No lamp: the record alone shows nothing, and not as a chat bubble either.
+      await screen.findByText("fix the parser");
+      expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+      expect(screen.queryByRole("group", { name: "Question" })).toBeNull();
+      await lamp("decision");
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(group.textContent).toMatch(/still drawing this question/);
+      expect((within(group).getByRole("button", { name: /Red/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect(group.querySelector(".terminal-reader-question-ask")?.textContent).toBe("Which colours should the probe use?");
+      // The dialog arrives: the same words on the screen's rows, the boxes and the sample.
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "←  ☐ Colours  →", "Which colours should the probe use?", "❯ 1. [ ] Red", "       warm", "  2. [ ] Blue", "  3. [ ] Type something", "     Submit", "", "  4. Chat about this", "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"); });
+      await waitFor(() => expect(screen.queryByText(/still drawing this question/)).toBeNull());
+      const red = within(screen.getByRole("group", { name: "Waiting for your answer" })).getByRole("button", { name: /Red/ }) as HTMLButtonElement;
+      expect(red.disabled).toBe(false);
+      expect(red.getAttribute("aria-pressed")).toBe("false");
+      expect(red.querySelector(".terminal-reader-option-preview")?.textContent).toBe("+--+\n|  |\n+--+");
+      // Its keys are the screen's: Enter on the highlighted row.
+      fireEvent.click(red);
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(written).toEqual(["\r"]);
+    });
   });
 
   it("walks a several-question dialog's tabs with ←/→, so an answer can be changed before Submit", async () => {

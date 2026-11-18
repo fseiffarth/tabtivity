@@ -1770,6 +1770,12 @@ span.files-close { background:transparent; }
 /* The sample an agent put beside an answer (a question's `preview`): plain
    preformatted text in a bounded box, never rendered as markup. */
 .question-preview { display:block; max-height:11em; margin-top:6px; padding:8px 10px; overflow:auto; white-space:pre; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.74rem; line-height:1.35; color:#c8ccdb; background:#0b0d13; border:1px solid var(--edge); }
+/* What a permission dialog waits on (`permissionSubject`): the call named in
+   full — plain text, bounded — over the dialog's rows. */
+.question-subject { display:grid; gap:4px; margin:0 0 8px; }
+.question-subject small { color:#98a0b4; font-size:.78rem; }
+.question-subject small em { font-style:normal; }
+.question-subject code { display:block; max-height:8em; padding:8px 10px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; line-height:1.35; color:#e7e9f2; background:#0b0d13; border:1px solid var(--edge); }
 /* The read-only card of a question the terminal has not drawn yet. */
 .question-waiting { display:block; padding:6px 4px 0; color:#98a0b4; font-size:.8rem; }
 .question-recommended { margin-left:6px; color:#8fb8ff; font-size:.62rem; font-style:normal; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }

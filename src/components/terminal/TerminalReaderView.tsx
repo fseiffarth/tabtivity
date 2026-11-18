@@ -33,6 +33,7 @@ import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { hookLampHidesCard, withWaitingEntry, withoutCard } from "../../lib/agents/liveCardGate";
 import { waitingQuestion } from "../../../mobile-web/src/terminal/askedQuestion";
+import { isPermissionDialog, permissionSubject, permissionSubjectLabel, type PermissionSubject } from "../../../mobile-web/src/terminal/permissionSubject";
 import { CheckboxIcon, SquareIcon } from "../common/icons/Icon";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
@@ -218,10 +219,12 @@ function walkQuestionOptions(event: KeyboardEvent<HTMLElement>) {
  * opens a field under it instead: its answer is words, sent as the phone's
  * are (`answerTextKeys`). Files pasted into that field go to the tab
  * folder's inbox and in as `@` references, as the composer takes them. */
-function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, onStep }: {
+function LiveQuestion({ ptyId, live, subject, answered, failure, busy, onAnswer, onType, onStep }: {
   /** The agent's pane: where a file pasted into the typed answer is stored. */
   ptyId: string;
   live: ReaderLive;
+  /** What a permission dialog waits on, from the stored session. */
+  subject: PermissionSubject | null;
   /** A row was clicked and the session has not redrawn yet. */
   answered: boolean;
   /** The last answer's keys never reached the session, and why. */
@@ -279,6 +282,13 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
       <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /> <UntestedTag id="terminal.reader.trustPath" /></small>
       {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
       {question.readOnly && <UntestedTag id="terminal.reader.questionWaiting" />}
+      {subject && (
+        <p className="terminal-reader-question-subject">
+          <small>{t(permissionSubjectLabel(subject.kind), { tool: subject.tool })} <UntestedTag id="terminal.reader.permissionSubject" /></small>
+          {/* The call as the session recorded it: plain text, never markup. */}
+          {subject.subject && <code>{subject.subject}</code>}
+        </p>
+      )}
       {question.source === "entry" && !question.readOnly && (question.multiSelect || question.options.some((option) => option.preview)) && <UntestedTag id="terminal.reader.questionPreview" />}
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
       {live.tabs.length > 0 && !stepped && (
@@ -1763,6 +1773,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   };
   const stop = pressEscape;
   const shownLive = picking ? NO_LIVE : live;
+  /** The call a permission dialog on screen waits on, named in full from the
+   * stored session — only while the lamp says the agent asks: a running,
+   * approved `Bash` call has no result either. */
+  const permission = lampAsking && agentFamily(agentLabel) === "claude" && isPermissionDialog(shownLive.question, shownLive.tabs.length) ? permissionSubject(transcript) : null;
   /** The terminal has shown something the chat cannot draw for `STRAY_MS`:
    * the chat says so and offers the way to it. Not while a picker the facts
    * row opened or an answer is on screen — the Reader put those there. */
@@ -2771,6 +2785,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           <LiveQuestion
             ptyId={ptyId}
             live={browsed ? NO_LIVE : shownLive}
+            subject={browsed ? null : permission}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             failure={answerFailure}
             busy={held || !!shownLive.question?.readOnly}

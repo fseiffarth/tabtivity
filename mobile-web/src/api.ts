@@ -1168,12 +1168,28 @@ export interface SessionTranscript {
    * without a result, and background ones still running. The phone's API
    * masks each `command` and `description` (`services::mobile_control::shell_mask`). */
   shells?: RunningShell[];
+  /** The other tool calls (not `Bash`: those are `shells`) the agent has made
+   * since the last prompt that have no result yet, oldest first — a permission
+   * dialog's subject while the agent waits on a decision. The phone's API
+   * masks each `subject` (a path project-relative or its leaf, a URL its host
+   * only, anything else dropped). */
+  waitingTools?: WaitingTool[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
   contextCard?: string;
   /** Desktop Reader only: the read named a watch id and the backend armed
    * it, so a change will be announced (`lib/agents/transcriptWatch`). */
   watched?: boolean;
+}
+
+/** A tool call with no result yet (`SessionTranscript.waitingTools`). */
+export interface WaitingTool {
+  /** The tool: `Edit`, `Write`, `WebFetch`, … */
+  name: string;
+  /** What it works on: a file path (`Edit`, `Write`, `MultiEdit`,
+   * `NotebookEdit`) or a URL (`WebFetch`); absent for any other tool. */
+  subject?: string;
+  at?: string;
 }
 
 /** A shell command the agent started and is waiting on. The phone's API

@@ -107,6 +107,7 @@ import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chat
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { entryCardAllowed, mergeAskedQuestion, waitingQuestion } from "../terminal/askedQuestion";
 import { questionParts } from "../terminal/questionParts";
+import { isPermissionDialog, permissionSubject, permissionSubjectLabel } from "../terminal/permissionSubject";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, pendingPrompt, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
@@ -2226,6 +2227,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   } = useLiveQuestion({
     clearPending, deliver, agentLabel, liveTail, liveQuestion, askedCard,
   });
+  /** The call a permission dialog on the live screen waits on: the stored
+   * session's call without a result — its command, path or URL as the desktop
+   * masked it for this phone. The dialog on screen is the sign that the agent
+   * asks (a running, approved `Bash` call has no result either), since the
+   * phone has no live lamp. */
+  const permission = useMemo(
+    () => (agentKey === "claude" && isPermissionDialog(liveQuestion, questionTabs.length) ? permissionSubject(transcript) : null),
+    [agentKey, liveQuestion, questionTabs.length, transcript],
+  );
   const asyncAsk = useAsyncAsk({ deliver, liveTail, liveQuestion, answerQuestion });
   /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */
   const queueSteer = useRef({ shown: false, send: () => {}, pull: () => {} });
@@ -2852,6 +2862,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                         something a phone can do — and the question above them
                         is that list's heading. */}
                     {questionContextShown && <ReadableTurns lines={questionContext} chat={chat} agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />}
+                    {permission && <p className="question-subject">
+                      <small>{t(permissionSubjectLabel(permission.kind), { tool: permission.tool })}{isUntested("mobile.question.permissionSubject") && <em> · {t("mobile.focus.untested")}</em>}</small>
+                      {/* The call as the desktop masked it: plain text, never markup. */}
+                      {permission.subject && <code>{permission.subject}</code>}
+                    </p>}
                     <QuestionList prompt={liveQuestion} tabs={questionTabs} tabFocus={questionTabFocus} tabSubmit={questionTabSubmit} question={questionAsk} sent={sentSignature === questionSignature ? questionSent?.number : undefined} sendingLabel={t("mobile.transcript.answering")} onPick={answerQuestion} onType={answerQuestionText} onStep={stepQuestion} attach={tab.on_host ? undefined : attachToAnswer} />
                   </div>}
                   {unreadQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")} data-testid="question-unread">
