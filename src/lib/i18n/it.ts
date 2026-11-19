@@ -6287,6 +6287,8 @@ export const dict: Dict = {
   "terminal.reader.contextLeft": "{percent} di contesto",
   "terminal.reader.resumeCold": "Cache fredda · {tokens} token ≈ {cost} da rimettere in cache",
   "terminal.reader.resumeColdHint": "Inattiva da {idle}: la cache del prompt è scaduta, quindi il prossimo messaggio riscrive l'intera conversazione. Stima di Claude stesso.",
+  "terminal.reader.cacheCold": "Cache fredda · {tokens} token da rimettere in cache",
+  "terminal.reader.cacheColdHint": "Inattiva da {idle}, più a lungo di quanto duri la cache del prompt ({ttl}): il prossimo messaggio riscrive l'intera conversazione nella cache. Per ricominciare da capo, digita {fresh}.",
   "terminal.reader.status.button": "Stato",
   "terminal.reader.status.title": "Stato di {agent}",
   "terminal.reader.status.hint": "Mostra /status di {agent} con indicatori di contesto e utilizzo e dettagli della sessione",

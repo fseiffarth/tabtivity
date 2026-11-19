@@ -6486,6 +6486,8 @@ export const enSource = {
   "terminal.reader.contextLeft": "{percent} context",
   "terminal.reader.resumeCold": "Cache cold · {tokens} tokens ≈ {cost} to re-cache",
   "terminal.reader.resumeColdHint": "Idle for {idle}: the prompt cache has expired, so the next message writes the whole conversation to it again. Claude's own estimate.",
+  "terminal.reader.cacheCold": "Cache cold · {tokens} tokens to re-cache",
+  "terminal.reader.cacheColdHint": "Idle for {idle}, longer than the prompt cache lasts ({ttl}): the next message writes the whole conversation to the cache again. To start over instead, type {fresh}.",
   "terminal.reader.status.button": "Status",
   "terminal.reader.status.title": "{agent} status",
   "terminal.reader.status.hint": "Show {agent}’s /status as context and usage meters with session details",

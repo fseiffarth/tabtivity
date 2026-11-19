@@ -1,6 +1,6 @@
 # Agent CLI prompt caching — plan
 
-Status 2026-11-19: research done (below); phases 1a–1e and 2 implemented, not live-verified.
+Status 2026-11-19: research done (below); phases 1a–1e, 2 and 3 implemented, not live-verified.
 
 ## What the research found
 
@@ -71,9 +71,15 @@ Facts worth keeping:
    duration? }`, defaults 90 % of `cache.ttl` (4 min without one) and 30 min;
    a model's `settings.cache.warming` overrides it. `cache.ttl` stays the
    user's. Local models are warmed too (every 4 min).
-3. **Cold-resume warning**: before restoring/resuming a tab idle past its
-   CLI's TTL (Claude main 1 h, Codex 30 min, Copilot `cacheExpiresAt`), say the
-   first turn re-writes the whole context; offer a fresh session.
+3. **Cold-cache chip** (done): Claude resumes already had one, from Claude's
+   own `SessionStart` figures (`agentResumeCost`, 2026-10-21). Extended to an
+   open Claude tab idle past its cache and to Codex: the transcript read
+   (`agent_transcript::PromptCache` in `usage.cache`) gives the newest
+   answer's time and tokens and the lifetime — Claude's from the newest write's
+   `cache_creation` (1 h / 5 min), Codex 30 min — and the Reader's facts row
+   shows "Cache cold · N tokens to re-cache" past it, hint naming `/clear` /
+   `/new`. No restart button (the user's choice). Copilot later: its expiry
+   (`cacheExpiresAt`) is only written when a session ends.
 4. **Gemini auth note** in Manage CLIs: OAuth → no caching; API-key mode via
    the proxy → implicit caching. The user flips it, never Tabtivity.
 5. **Ollama keep-alive** on the server Tabtivity spawns

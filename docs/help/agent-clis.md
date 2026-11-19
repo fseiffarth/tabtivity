@@ -339,6 +339,15 @@ open Claude tab, and new Claude tabs open the same way, while Codex and
 OpenCode tabs keep their own choice. Agents without a chat view keep their
 terminal.
 
+**Cache cold.** The provider keeps a conversation's prompt cache only for a
+while after each answer: Claude for 1 hour on a subscription (5 minutes on an
+API key), Codex for 30 minutes. A Claude or Codex tab left idle longer shows
+a **Cache cold** chip in its Chat view's facts row with the conversation's
+size: your next message writes all of it to the cache again, which costs more
+than a warm turn. To start over instead, type `/clear` (Claude) or `/new`
+(Codex). The chip goes away once you send the next message. A resumed Claude
+conversation shows Claude's own estimate in dollars instead.
+
 **Diffs** lists the files the conversation changed, newest first. Click the **+**
 in the gutter of a diff line (Shift+click another line of the same hunk for a
 range) to write the agent a note; **Add to draft** in the header puts all your

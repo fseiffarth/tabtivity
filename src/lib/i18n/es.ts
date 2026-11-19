@@ -6287,6 +6287,8 @@ export const dict: Dict = {
   "terminal.reader.contextLeft": "{percent} de contexto",
   "terminal.reader.resumeCold": "Caché fría · {tokens} tokens ≈ {cost} para volver a cachear",
   "terminal.reader.resumeColdHint": "Inactiva durante {idle}: la caché del prompt ha caducado, así que el siguiente mensaje vuelve a escribir toda la conversación. Estimación del propio Claude.",
+  "terminal.reader.cacheCold": "Caché fría · {tokens} tokens para volver a cachear",
+  "terminal.reader.cacheColdHint": "Inactiva durante {idle}, más de lo que dura la caché del prompt ({ttl}): el siguiente mensaje vuelve a escribir toda la conversación en la caché. Para empezar de nuevo en su lugar, escribe {fresh}.",
   "terminal.reader.status.button": "Estado",
   "terminal.reader.status.title": "Estado de {agent}",
   "terminal.reader.status.hint": "Mostrar /status de {agent} con indicadores de contexto y uso y detalles de la sesión",

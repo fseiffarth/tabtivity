@@ -6313,6 +6313,8 @@ export const dict: Dict = {
   "terminal.reader.contextLeft": "{percent} Kontext",
   "terminal.reader.resumeCold": "Cache kalt · {tokens} Tokens ≈ {cost} zum Neucachen",
   "terminal.reader.resumeColdHint": "{idle} inaktiv: Der Prompt-Cache ist abgelaufen, die nächste Nachricht schreibt die ganze Unterhaltung erneut hinein. Schätzung von Claude selbst.",
+  "terminal.reader.cacheCold": "Cache kalt · {tokens} Tokens zum Neucachen",
+  "terminal.reader.cacheColdHint": "{idle} inaktiv, länger als der Prompt-Cache hält ({ttl}): Die nächste Nachricht schreibt die ganze Unterhaltung erneut in den Cache. Um stattdessen neu anzufangen, tippe {fresh}.",
   "terminal.reader.status.button": "Status",
   "terminal.reader.status.title": "{agent}-Status",
   "terminal.reader.status.hint": "/status von {agent} mit Anzeigen für Kontext und Nutzung sowie Sitzungsdetails anzeigen",

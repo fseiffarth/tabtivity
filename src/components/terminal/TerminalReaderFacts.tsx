@@ -21,7 +21,7 @@ import { isClaudeCommand, isCodexCommand } from "../../lib/terminal/terminalCont
 import { UntestedTag } from "../common/UntestedTag";
 import { storageKey } from "../../lib/brand";
 import { formatTokens } from "../../lib/tokenStats";
-import { formatCacheWriteUsd, formatIdleTime, useAgentResumeCostStore } from "../../stores/agents/agentResumeCost";
+import { coldPromptCache, formatCacheWriteUsd, formatIdleTime, useAgentResumeCostStore } from "../../stores/agents/agentResumeCost";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
 import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import type { TabEntry } from "../../stores/tabs";
@@ -359,6 +359,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   };
 
   const contextLeft = status?.context ?? (usage?.contextLeft != null ? `${usage.contextLeft}%` : undefined);
+  // Claude's resume figures win (they carry its cost estimate); this covers
+  // an open tab left idle past its cache's lifetime, and Codex. Gone while a
+  // turn runs: the prompt that went in is what re-caches it.
+  const coldCache = !resumeCost && !live.working && !live.question ? coldPromptCache(usage?.cache, now) : null;
   const clock = new Date(now);
   const fromPanel = !!(limits.session || limits.week);
   const shown = fromPanel ? limits : sessionLimits(usage, clock);
@@ -653,6 +657,19 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
               cost: formatCacheWriteUsd(resumeCost.cacheWriteUsd),
             })}
             <UntestedTag id="terminal.reader.resumeCold" />
+          </span>
+        )}
+        {coldCache && (
+          <span
+            className="terminal-reader-fact high"
+            title={t("terminal.reader.cacheColdHint", {
+              idle: formatIdleTime(coldCache.secondsIdle),
+              ttl: formatIdleTime(coldCache.ttlSecs),
+              fresh: codex ? "/new" : "/clear",
+            })}
+          >
+            {t("terminal.reader.cacheCold", { tokens: formatTokens(coldCache.contextTokens) })}
+            <UntestedTag id="terminal.reader.cacheCold" />
           </span>
         )}
         {limitFact(shown.session, "mobile.facts.session")}

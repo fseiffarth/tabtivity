@@ -417,6 +417,25 @@ pub struct TranscriptUsage {
     /// The weekly window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub week: Option<UsageWindow>,
+    /// The prompt cache as the session's newest answer left it (Claude,
+    /// Codex): the Reader's "cache cold" chip once it has run out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<PromptCache>,
+}
+
+/// When the session's newest answer came back, how long the provider keeps
+/// the prompt cache it wrote, and how many tokens that request carried — what
+/// the next message writes to the cache again once the time has run out.
+/// Claude says the lifetime per request (`usage.cache_creation`: 1 h for a
+/// subscription's main conversation, 5 min on an API key); Codex's is
+/// OpenAI's 30 minutes. See `docs/cli_caching_plan.md` phase 3.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptCache {
+    /// Epoch milliseconds of the newest answer.
+    pub last_at_ms: i64,
+    pub ttl_secs: u32,
+    pub context_tokens: u64,
 }
 
 /// One rate-limit window: how much of it is used, and when it rolls over.
@@ -1237,10 +1256,14 @@ fn read_transcript_in(
     }
     let (text, mut truncated) = agent_session::read_conversation_tail(&mut file, meta.len(), tail_bytes(limit))?;
     let lines: Vec<&str> = text.lines().collect();
-    let usage = match kind {
+    let mut usage = match kind {
         TranscriptKind::Codex => codex_usage(&lines),
         TranscriptKind::Claude | TranscriptKind::Copilot => None,
     };
+    // A subagent's own cache is not the one the user's next message meets.
+    if let Some(cache) = (!sidechain).then(|| newest_prompt_cache(&lines, kind)).flatten() {
+        usage.get_or_insert_with(Default::default).cache = Some(cache);
+    }
     let model = newest_model(&lines, kind);
     let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
@@ -1512,6 +1535,75 @@ fn newest_tokens(lines: &[&str], kind: TranscriptKind) -> Option<u64> {
             TranscriptKind::Copilot => crate::services::copilot_session::tokens_in_record(&value),
         }
     })
+}
+
+/// How long OpenAI keeps a prompt cache after the request that wrote it.
+const CODEX_CACHE_TTL_SECS: u32 = 30 * 60;
+const CLAUDE_CACHE_TTL_LONG_SECS: u32 = 60 * 60;
+const CLAUDE_CACHE_TTL_SHORT_SECS: u32 = 5 * 60;
+
+/// The record's own `timestamp` (RFC 3339), as epoch milliseconds.
+fn record_ms(value: &Value) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value.get("timestamp")?.as_str()?)
+        .ok()
+        .map(|at| at.timestamp_millis())
+}
+
+/// The [`PromptCache`] the newest answer in `lines` left. `None` for a CLI
+/// whose record does not say, or a Claude session none of whose requests in
+/// the tail says how long its cache writes live.
+fn newest_prompt_cache(lines: &[&str], kind: TranscriptKind) -> Option<PromptCache> {
+    match kind {
+        TranscriptKind::Claude => claude_prompt_cache(lines),
+        TranscriptKind::Codex => lines.iter().rev().filter(|line| line.contains("\"token_count\"")).find_map(|line| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            let payload = value
+                .get("payload")
+                .filter(|p| p.get("type").and_then(Value::as_str) == Some("token_count"))?;
+            let context_tokens = payload.pointer("/info/last_token_usage/total_tokens")?.as_u64().filter(|n| *n > 0)?;
+            Some(PromptCache { last_at_ms: record_ms(&value)?, ttl_secs: CODEX_CACHE_TTL_SECS, context_tokens })
+        }),
+        TranscriptKind::Copilot => None,
+    }
+}
+
+/// Claude's: the newest answer's time and tokens, and the lifetime of the
+/// newest cache write at or before it — an answer that only read the cache
+/// says nothing about how long it lives.
+fn claude_prompt_cache(lines: &[&str]) -> Option<PromptCache> {
+    let mut newest: Option<(i64, u64)> = None;
+    for line in lines.iter().rev().filter(|line| line.contains("\"usage\"")) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else { continue };
+        if value.get("type").and_then(Value::as_str) != Some("assistant")
+            || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        {
+            continue;
+        }
+        let Some(usage) = value.pointer("/message/usage") else { continue };
+        let count = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+        let total = count("input_tokens")
+            + count("cache_creation_input_tokens")
+            + count("cache_read_input_tokens")
+            + count("output_tokens");
+        // A synthetic record (an API error, an interrupt) reached no cache.
+        if total == 0 {
+            continue;
+        }
+        if newest.is_none() {
+            newest = Some((record_ms(&value)?, total));
+        }
+        let written = |name: &str| usage.pointer(&format!("/cache_creation/{name}")).and_then(Value::as_u64).unwrap_or(0);
+        let ttl_secs = if written("ephemeral_1h_input_tokens") > 0 {
+            CLAUDE_CACHE_TTL_LONG_SECS
+        } else if written("ephemeral_5m_input_tokens") > 0 {
+            CLAUDE_CACHE_TTL_SHORT_SECS
+        } else {
+            continue;
+        };
+        let (last_at_ms, context_tokens) = newest?;
+        return Some(PromptCache { last_at_ms, ttl_secs, context_tokens });
+    }
+    None
 }
 
 /// A subagent in a Claude session's folder: the agent id its file is named
