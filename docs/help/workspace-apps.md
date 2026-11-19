@@ -37,10 +37,13 @@ at the start of each day** switches the automatic opening off.
 Pick a **Period** (Day, Week, Month). It shows time per project, **Agents**
 (which agents and models you used, prompts asked, how often agents stopped to
 ask), **Work** (shell commands, commits), **Files** (created, changed,
-deleted), **Rhythm** (your busiest hours) and **Tokens**: the tokens Claude and
-Codex used, read from their own records in Tabtivity's agent homes — fresh
-input, cache writes and reads, output, per model. Other CLIs show as "not
-reported"; there are no cost figures here. Autocomplete accept and dismiss
+deleted), **Rhythm** (your busiest hours) and **Tokens**: the tokens Claude,
+Codex, OpenCode, Gemini CLI and Copilot CLI used, read from their own records in Tabtivity's agent
+homes — fresh input, cache writes and reads, output, the share of input served
+from the prompt cache, per model. For Claude a second line shows how much
+went to subagents (and how much of their input came from cache) and how the
+cache writes split between the 1-hour and 5-minute lifetimes. Other CLIs show as "not reported"; there are
+no cost figures here. Autocomplete accept and dismiss
 counts appear too.
 
 ## System monitor
