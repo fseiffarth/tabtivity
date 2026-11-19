@@ -1,6 +1,7 @@
 # Agent CLI prompt caching — plan
 
-Status 2026-11-19: research done (below); phases 1a–1e and 2–5 implemented, not live-verified.
+Status 2026-11-19: research done (below); phases 1a–1e and 2–5 implemented, not live-verified;
+phase 6 measured, not worth offering.
 
 ## What the research found
 
@@ -96,8 +97,23 @@ Facts worth keeping:
    `/v1`, which cannot send `keep_alive`. Inferred, not verified: each such
    request also resets a model pinned with Load (`keep_alive: -1`) to the
    server default — a longer default softens that too.
-6. **Claude subagent 1 h TTL**: measure before offering; estimate is
-   break-even to negative.
+6. **Claude subagent 1 h TTL** (measured 2026-11-19, not offered): every
+   subagent request in this project's agent home (535 subagent transcripts,
+   41,678 requests, 2026-10-08 – 11-19) replayed as it ran (5 min writes,
+   1.25×) and as if every write lived 1 h (2×), where a request after a
+   5–60 min gap reads what the subagent's previous request had cached.
+   - Gaps: 40,848 requests under 5 min (88 M tokens written), 280 after
+     5–60 min (50 M written, 48 M of it a 1 h cache would have read), 15 after
+     more than 1 h (3 M).
+   - Cache cost at list prices: $1,736 as run, $1,791 with 1 h: **+3.1 %**.
+     Opus 5.5 −1.5 % (reads at 0.05×), Sonnet 5.5 +9.5 %, Fable 5.2 +15.3 %
+     (reads at 0.025×: a cold rewrite costs little against a 2× premium on
+     every write).
+   - So the long gaps are real (a subagent waiting on a build or a gate run)
+     but rare, and the 2× premium on all 159 M written tokens outweighs them.
+     No switch; `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` stays the user's own.
+     Re-measure if subagents start waiting on long tool calls much more often,
+     or if Opus 5.5 carries most subagent work.
 
 ## Not doing
 
