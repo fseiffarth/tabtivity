@@ -156,19 +156,97 @@ describe("timeline items", () => {
       card: card({ id, key: id, state: "sent", strandId: "s1", history: { id, message: id, created_at: "x", sent_at: "x", tab_label: "Claude", session_id: session, result: "delivered" } }),
       at: new Date(2026, 8, 4, hour),
     });
-    const rule = { key: "r", card: card({ id: "r", key: "r", state: "scheduled" }), at: new Date(2026, 8, 4, 11) };
+    const rule = { key: "r", card: card({ id: "r", key: "r", state: "scheduled" }), at: new Date(2026, 8, 4, 14) };
     const grouped = sessionItems([sent("a", 9, "one"), sent("b", 10, "two"), sent("c", 12, "one"), rule]);
     // A lone prompt stays a card of its own, and a rule is never folded in.
     expect(grouped.map((item) => item.key)).toEqual(["session:one", "b", "r"]);
     expect(grouped[0].card.id).toBe("c");
     expect(grouped[0].members?.map((item) => item.key)).toEqual(["a", "c"]);
     // A 2400px day is 100px an hour: 9:00 to 12:00 is 300px, plus the tick room.
-    const packed = packLanes(grouped, day, 2400);
-    expect(packed.items.map((item) => [item.key, item.x, item.width, item.lane])).toEqual([
-      ["session:one", 900, 306, 0],
-      ["b", 1000, 168, 2],
-      ["r", 1100, 168, 1],
+    // The session ended at 12:00 (x 1200), so it hangs left of it; the lone
+    // prompt at 10:00 hangs left of 1000; the 14:00 rule starts at 1400.
+    const packed = packLanes(grouped, day, 2400, now);
+    expect(packed.items.map((item) => [item.key, item.x, item.width, item.lane, item.anchor])).toEqual([
+      ["session:one", 894, 306, 0, "right"],
+      ["b", 832, 168, 1, "right"],
+      ["r", 1400, 168, 0, "left"],
     ]);
+  });
+
+  describe("anchoring", () => {
+    // A 2400px day is 100px an hour; now (12:02) is at x 1203.3.
+    const day = timelineWindow("day", "2026-09-04", 1);
+    const at = (hour: number, minute = 0) => new Date(2026, 8, 4, hour, minute);
+    const sent = (id: string, start: Date, filesAt?: Date) => ({
+      key: id,
+      card: card({
+        id, key: id, state: "sent", at: start,
+        history: { id, message: id, created_at: "x", sent_at: start.toISOString(), files_at: filesAt?.toISOString(), tab_label: "Claude", session_id: id, result: "delivered" },
+      }),
+      at: start,
+    });
+    const rule = (id: string, when: Date) => ({ key: id, card: card({ id, key: id, state: "scheduled", at: when }), at: when });
+    const place = (items: Parameters<typeof packLanes>[0]) => packLanes(items, day, 2400, now).items;
+
+    it("hangs a past card left of the x of its end, and a future card right of its start", () => {
+      const [past] = place([sent("p", at(9), at(9, 30))]);
+      expect([past.x, past.anchor]).toEqual([782, "right"]);
+      const [future] = place([rule("f", at(14))]);
+      expect([future.x, future.anchor]).toEqual([1400, "left"]);
+    });
+
+    it("ends a card without a finish at its own minute and wears a minimum bar", () => {
+      const [unblamed] = place([sent("u", at(10))]);
+      expect([unblamed.x, unblamed.barWidth]).toEqual([832, 4]);
+    });
+
+    it("draws the duration bar as wide as the turn took, never wider than the card", () => {
+      const [short] = place([sent("s", at(9), at(9, 30))]);
+      expect(short.barWidth).toBe(50);
+      const [long] = place([sent("l", at(1), at(11))]);
+      expect(long.barWidth).toBe(168);
+      // A future card has no duration to show: just the corner.
+      expect(place([rule("f", at(14))])[0].barWidth).toBe(4);
+    });
+
+    it("clamps a past card at the left edge and a future card inside the body", () => {
+      const [early] = place([sent("e", at(0, 5), at(0, 10))]);
+      expect(early.x).toBe(0);
+      const [late] = place([rule("z", at(23, 50))]);
+      expect(late.x).toBe(2400 - 168);
+      // A card never starts left of the body when the body is narrower than a card.
+      expect(packLanes([rule("n", at(14))], day, 100, now).items[0].x).toBe(0);
+    });
+
+    it("never lets a past card cross the now line", () => {
+      // A turn that "ended" after now (clock skew) is not past: it is placed from its start.
+      const [skewed] = place([sent("k", at(11), at(13))]);
+      expect(skewed.anchor).toBe("left");
+      // One that ended just before now hangs entirely left of it.
+      const [recent] = place([sent("r", at(11), at(12))]);
+      expect(recent.x + recent.width).toBeLessThanOrEqual(1203.4);
+    });
+
+    it("packs on the intervals the cards occupy, not on their start positions", () => {
+      // 9:00 hangs over [732, 900]; 10:00 over [832, 1000]; a 14:00 rule over [1400, 1568].
+      const packed = packLanes([sent("a", at(9)), sent("b", at(10)), rule("c", at(14))], day, 2400, now);
+      expect(packed.items.map((item) => [item.key, item.lane])).toEqual([["a", 1], ["b", 0], ["c", 0]]);
+      // Far enough apart that nothing overlaps: one lane.
+      expect(packLanes([sent("a", at(6)), sent("b", at(9))], day, 2400, now).lanes).toBe(1);
+    });
+
+    it("measures a session card's ticks from its own left edge", () => {
+      const grouped = sessionItems([sent("a", at(9)), { ...sent("c", at(11), at(11, 30)), key: "c" }].map((item) => ({
+        ...item, card: { ...item.card, history: { ...item.card.history!, session_id: "one" } },
+      })));
+      const [session] = packLanes(grouped, day, 2400, now).items;
+      // Ends at 11:30 (x 1150); spans 9:00..11:30 = 250px + the tick room.
+      expect(session.width).toBe(256);
+      expect(session.x).toBe(1150 - 256);
+      const offsets = session.members!.map((member) => timelineX(member.at, day, 2400) - session.x);
+      expect(offsets).toEqual([900 - 894, 1100 - 894]);
+      expect(Math.max(...offsets)).toBeLessThan(session.width);
+    });
   });
 
   it("packs overlapping cards into lanes and clusters a month by day", () => {
@@ -179,11 +257,11 @@ describe("timeline items", () => {
       { key: "b", card: card({ id: "b" }), at: at(9, 30) },
       { key: "c", card: card({ id: "c" }), at: at(15) },
     ];
-    const packed = packLanes(items, day, 2400, 168, 6);
+    const packed = packLanes(items, day, 2400, now, 168, 6);
     expect(packed.lanes).toBe(2);
     // Newest on top: the 9:30 card keeps lane 0 and the 9:00 one it overlaps steps down.
     expect(packed.items.map((item) => [item.key, item.lane])).toEqual([["a", 1], ["b", 0], ["c", 0]]);
-    expect(packLanes(items, day, 24_000).lanes).toBe(1);
+    expect(packLanes(items, day, 24_000, now).lanes).toBe(1);
     const clusters = dayClusters(items, timelineWindow("month", "2026-09-04", 1), 3000);
     expect(clusters).toHaveLength(30);
     expect(clusters[3]).toMatchObject({ date: "2026-09-04", x: 300, width: 100 });

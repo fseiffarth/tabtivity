@@ -23,6 +23,8 @@ interface Props {
    *  empty target, so an unaimed draft selects it, and Send opens the tab. */
   newTabLabel?: string;
   onAgent: (targetId: string) => Promise<void>;
+  /** The tab's colour (`promptTargetColor`), worn by the dot before its name. */
+  color?: string;
   className?: string;
 }
 
@@ -31,7 +33,7 @@ interface Props {
  * or chained card wears on its face (2026-09-10: it stays there) and the
  * inspector repeats; for a sent card or an occurrence, the tab as plain text.
  */
-export function PromptAgentPick({ card, occurrence, targets, targetLabel, targetBlocked, newTabLabel, onAgent, className = "agent-prompt-card-agent" }: Props) {
+export function PromptAgentPick({ card, occurrence, targets, targetLabel, targetBlocked, newTabLabel, onAgent, color, className = "agent-prompt-card-agent" }: Props) {
   const t = useT();
   const readOnly = card.state === "sent" || !!occurrence;
   const newTab = card.state === "draft" && !occurrence ? newTabLabel : undefined;
@@ -39,10 +41,13 @@ export function PromptAgentPick({ card, occurrence, targets, targetLabel, target
     ...(newTab ? [{ value: "", label: newTab }] : []),
     ...targets.map((target) => ({ value: target.id, label: target.label })),
   ];
+  // The model the tab answered with, as the `model:` tag wears it.
+  const model = card.autoTags.find((tag) => tag.startsWith("model:"))?.slice("model:".length);
   return (
-    <div className={className} onClick={(event) => event.stopPropagation()}>
+    <div className={className} style={color ? { "--prompt-strand": color } as React.CSSProperties : undefined} onClick={(event) => event.stopPropagation()}>
+      <span className="agent-prompt-agent-dot" aria-hidden="true" />
       {readOnly || options.length === 0
-        ? <small>{targetLabel ?? targets.find((target) => target.id === card.targetId)?.label ?? t("promptChart.noAgent")}</small>
+        ? <small className="agent-prompt-agent-name">{targetLabel ?? targets.find((target) => target.id === card.targetId)?.label ?? t("promptChart.noAgent")}</small>
         : (
           <Dropdown
             className="agent-prompt-card-agent-pick"
@@ -53,6 +58,7 @@ export function PromptAgentPick({ card, occurrence, targets, targetLabel, target
             onChange={(value) => void onAgent(value)}
           />
         )}
+      {model && <small className="agent-prompt-agent-model">{model}</small>}
       {targetBlocked && <div className="agent-schedule-warn agent-prompt-card-warn">{t("promptChart.targetOccupiedShort", { tab: targetBlocked })}</div>}
     </div>
   );

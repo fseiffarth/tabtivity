@@ -33,8 +33,9 @@ interface Props {
   /** The now band — the "send now" drop zone, measured the same way. */
   nowBandRef: RefObject<HTMLDivElement>;
   /** Draws one card; `session` is set when the card stands for a whole
-   *  session's sent prompts, `drawnAt` is the instant the card sits at. */
-  renderCard: (card: PromptChartCard, occurrence?: string, session?: SessionSpan, drawnAt?: Date) => ReactNode;
+   *  session's sent prompts, `drawnAt` is the instant the card sits at and
+   *  `bar` the duration bar on its anchored corner. */
+  renderCard: (card: PromptChartCard, occurrence?: string, session?: SessionSpan, drawnAt?: Date, bar?: { anchor: "left" | "right"; width: number }) => ReactNode;
   /** Month view: a day's cluster asks to be looked at up close. */
   onRefine: (date: string) => void;
   /** The badge text for the card being carried, decided by the chart. */
@@ -126,7 +127,7 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
   // A session's sent prompts share one card on the lanes; the month's lamps
   // stay one per prompt.
   const laneItems = useMemo(() => (win.view === "month" ? items : sessionItems(items)), [items, win.view]);
-  const packed = useMemo(() => packLanes(laneItems, win, width), [laneItems, width, win]);
+  const packed = useMemo(() => packLanes(laneItems, win, width, now), [laneItems, now, width, win]);
   const clusters = useMemo(() => (win.view === "month" ? dayClusters(items, win, width) : []), [items, width, win]);
   const queued = useMemo(() => queuedStack(cards, now), [cards, now]);
   const ticks = useMemo(() => timelineTicks(win, width), [width, win]);
@@ -245,7 +246,7 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
                 {renderCard(item.card, item.occurrence, item.members && {
                   cards: item.members.map((member) => member.card),
                   offsets: item.members.map((member) => timelineX(member.at, win, width) - item.x),
-                }, item.at)}
+                }, item.at, { anchor: item.anchor, width: item.barWidth })}
               </div>
             ))}
           {queued.length > 0 && (

@@ -5,12 +5,18 @@ import { localWallClock } from "../../lib/agents/agentSchedule";
 import { AgentScheduleProposal } from "./AgentScheduleProposal";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
 import { formatTimelineInstant } from "../../lib/agents/prompt/timeline";
-import type { SentAgentPrompt } from "../../stores/agents/agentPrompts";
+import type { PromptLink, SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { UntestedTag } from "../common/UntestedTag";
 import { CloseIcon } from "../common/icons/Icon";
 import { PromptAgentPick, type PromptCardTarget } from "./PromptAgentPick";
+import { sentFactLine } from "../../lib/agents/prompt/cardFacts";
+import { promptEndedAt } from "../../lib/agents/prompt/timeline";
+import { promptStateChip } from "../../lib/agents/prompt/stateChip";
 
 export type { PromptCardTarget } from "./PromptAgentPick";
+
+/** Stored tags on a card's face; the rest are "+n". Auto tags are the inspector's. */
+const FACE_TAGS = 2;
 
 /** Inside a card, keys aimed at these belong to them, not to the card. */
 export const CARD_OWN_KEYS = "input, textarea, select, button, [contenteditable]";
@@ -62,6 +68,15 @@ interface Props {
   onAgent: (targetId: string) => Promise<void>;
   onDelete: () => Promise<void>;
   onLink: () => void;
+  /** Every link of the project: a chained card counts its steps from them. */
+  links?: PromptLink[];
+  /** The duration bar on the top edge, at the corner the card is anchored at
+   *  (`packLanes`): a past card ends at its right edge, a future one starts
+   *  at its left. Absent where the card has no place on the axis. */
+  bar?: { anchor: "left" | "right"; width: number };
+  /** The dates are the range label's to say in a day or an hour; a week or a
+   *  month writes them on each card. */
+  showDate?: boolean;
 }
 
 /** The card's one line of fact. Its instants are written by the chart's own
@@ -122,11 +137,27 @@ export function PromptCard({
   onAgent,
   onDelete,
   onLink,
+  links,
+  bar,
+  showDate = true,
 }: Props) {
   const t = useT();
   const lang = useI18nStore((s) => s.lang);
   const use24h = useUse24h();
-  const when = (at: Date | null | undefined) => (at ? formatTimelineInstant(at, lang, use24h) : "");
+  const when = (at: Date | null | undefined, withDate = showDate) => (at ? formatTimelineInstant(at, lang, use24h, withDate) : "");
+  const chip = promptStateChip(card, links);
+  const ended = promptEndedAt(card);
+  /** The face's first line: the minute it is at, or why it has none. */
+  const time = (() => {
+    if (card.state === "draft") return t("promptChart.noTime");
+    if (card.state === "chained") return card.chainStopped ? t("promptChart.chainClosed") : t("promptChart.noTime");
+    if (card.state === "queued") return t("promptChart.waiting");
+    if (card.state === "sent") return ended ? `${when(card.at)}–${when(ended, false)}` : when(card.at);
+    if (occurrence) return `↻ ${when(localWallClock(occurrence)) || occurrence.replace("T", " ")}`;
+    const at = drawnAt ?? card.at;
+    return at ? `${card.recurring ? "↻ " : ""}${when(at)}` : t("promptChart.paused");
+  })();
+  const fact = card.state === "sent" ? sentFactLine([card], t) : card.state === "chained" && !card.chainStopped ? stateFact(card, t, when) : "";
   const readOnly = card.state === "sent" || !!occurrence;
   /** A card on the drafts strip deletes from its face, without selecting. */
   const quickDelete = !occurrence && (card.state === "draft" || card.state === "chained");
@@ -176,6 +207,11 @@ export function PromptCard({
       onPointerDown={onPointerDown}
     >
       {!occurrence && <span className="agent-prompt-card-port is-in" aria-hidden="true" />}
+      {bar && <span className={`agent-prompt-card-bar is-${bar.anchor}`} style={{ width: bar.width }} aria-hidden="true" />}
+      <div className="agent-prompt-card-top">
+        <span className="agent-prompt-card-time">{time}</span>
+        <span className={`agent-prompt-chip is-${chip.tone}`}>{t(chip.key, chip.params)}</span>
+      </div>
       <div className={`agent-prompt-card-head${quickDelete ? " has-delete" : ""}`}>
         <span className="agent-prompt-card-message">{card.message}</span>
         {quickDelete && (
@@ -187,8 +223,8 @@ export function PromptCard({
             onClick={(event) => { event.stopPropagation(); void onDelete(); }}
           ><CloseIcon /></button>
         )}
-        <span className={`agent-prompt-lamp is-${card.history?.result ?? card.state}`} aria-hidden="true" />
       </div>
+      {fact && <small className="agent-prompt-card-fact">{fact}</small>}
       {projectId && card.targetId && card.schedule?.origin && <AgentScheduleProposal projectId={projectId} targetId={card.targetId} schedule={card.schedule} />}
       {(card.history?.schedule_origin || card.history?.phone_device) && <div className="agent-schedule-attribution">
         {card.history.schedule_origin && <span className="agent-schedule-pill" title={card.history.schedule_origin.session}>{t("scheduleMcp.authored")}</span>}
@@ -204,11 +240,12 @@ export function PromptCard({
         newTabLabel={newTabLabel}
         onAgent={onAgent}
       />
-      <div className="agent-prompt-card-tags">
-        {card.tags.map((tag) => <span key={`stored:${tag}`} className="agent-prompt-tag">#{tag}</span>)}
-        {card.autoTags.map((tag) => <span key={`auto:${tag}`} className="agent-prompt-tag is-auto">#{tag}</span>)}
-      </div>
-      <small className="agent-prompt-card-fact">{stateFact(card, t, when, occurrence, drawnAt)}</small>
+      {card.tags.length > 0 && (
+        <div className="agent-prompt-card-tags">
+          {card.tags.slice(0, FACE_TAGS).map((tag) => <span key={tag} className="agent-prompt-tag">#{tag}</span>)}
+          {card.tags.length > FACE_TAGS && <span className="agent-prompt-tag">+{card.tags.length - FACE_TAGS}</span>}
+        </div>
+      )}
       {!occurrence && (
         <button
           className="agent-prompt-card-port is-out"

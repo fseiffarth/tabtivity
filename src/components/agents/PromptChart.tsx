@@ -848,7 +848,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   };
 
   /** A session's sent prompts as one card, drawn under the newest of them. */
-  const renderSession = (latest: PromptChartCard, session: SessionSpan) => {
+  const renderSession = (latest: PromptChartCard, session: SessionSpan, bar?: { anchor: "left" | "right"; width: number }) => {
     if (!session.cards.some((card) => visible(card))) return null;
     const ids = session.cards.map((card) => card.id);
     const itemKey = sessionGroupKey(latest) ?? latest.key;
@@ -879,12 +879,13 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         }}
         onOpen={() => setFocusToken((value) => value + 1)}
         onLink={() => linkOrBegin(latest, armedElsewhere)}
+        bar={bar}
       />
     );
   };
 
-  const renderCard = (card: PromptChartCard, occurrence?: string, session?: SessionSpan, drawnAt?: Date) => {
-    if (session) return renderSession(card, session);
+  const renderCard = (card: PromptChartCard, occurrence?: string, session?: SessionSpan, drawnAt?: Date, bar?: { anchor: "left" | "right"; width: number }) => {
+    if (session) return renderSession(card, session, bar);
     if (!visible(card, occurrence, drawnAt)) return null;
     const itemKey = occurrence ? `${card.key}@${occurrence}` : card.key;
     // On a lane: selectable, and liftable. The strip and the queue are neither.
@@ -932,6 +933,9 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         onAgent={(targetId) => attempt(() => setAgent(card, targetId))}
         onDelete={() => attempt(() => confirmRemove(card))}
         onLink={() => linkOrBegin(card, armedElsewhere)}
+        links={links}
+        bar={bar}
+        showDate={view !== "day" && view !== "hour"}
       />
     );
   };
@@ -1167,6 +1171,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
                 editing={editId === selectedCard.id}
                 onEditing={(editing) => setEditId(editing ? selectedCard.id : null)}
                 focusToken={focusToken}
+                color={colorOf(selectedCard)}
                 retimeEarlierDisabled={!!selectedCard.at && tooSoonForEarlier(selectedCard.at.getTime() - RETIME_STEP_MS, now.getTime())}
                 targets={targetsFor(selectedCard)}
                 targetBlocked={selectedCard.state === "draft" && selectedCard.targetId && occupiedIds.has(selectedCard.targetId) ? tabOf(selectedCard.targetId)?.label : undefined}

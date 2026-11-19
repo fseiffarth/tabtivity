@@ -30,7 +30,7 @@ export const HOUR_TICK_MIN = 5;
 export const TIMELINE_CARD_WIDTH = 168;
 /** One lane's height (card plus gap), in px: a three-line message with its
  *  agent row, tags and fact line, so a full card never overlaps the lane below. */
-export const TIMELINE_LANE_HEIGHT = 120;
+export const TIMELINE_LANE_HEIGHT = 140;
 /** Room past a session card's last tick, so that tick is not cut by the edge. */
 export const SESSION_TICK_ROOM = 6;
 /** Lanes the body always shows, so an empty window has somewhere to drop. */
@@ -341,45 +341,89 @@ export function queueReorderWrites(
   return ids.map((id) => ({ id, at: times[id] }));
 }
 
+/** When a sent card's turn was over: the moment the schedule host saw the tab
+ *  idle again (`apply_blame` stamps `files_at`, in a repository or not). A row
+ *  never blamed (typed in the terminal and adopted) has none. */
+export function promptEndedAt(card: PromptChartCard): Date | null {
+  const raw = card.state === "sent" ? card.history?.files_at : undefined;
+  if (!raw) return null;
+  const at = new Date(raw);
+  return Number.isFinite(at.getTime()) && (!card.at || at.getTime() >= card.at.getTime()) ? at : null;
+}
+
+/** The instant an item's newest part is over: a session's last prompt, a
+ *  sent card's end, a rule's minute. */
+function itemEnd(item: TimelineItem): Date {
+  const last = item.members?.[item.members.length - 1] ?? item;
+  return promptEndedAt(last.card) ?? last.at;
+}
+
+/** The narrowest duration bar a card wears, in px: it also marks the corner a
+ *  card is anchored at when nothing says how long the turn took. */
+export const TIMELINE_BAR_MIN = 4;
+
 export interface LaneItem extends TimelineItem {
+  /** The card's left edge. */
   x: number;
   lane: number;
   /** The card's width: the fixed one, or a session's span when that is wider. */
   width: number;
+  /** The corner the card is pinned to: a past card ends at its right edge and
+   *  hangs left, a future one starts at its left edge and hangs right. */
+  anchor: "left" | "right";
+  /** The duration bar on the anchored corner of the card's top edge, in px. */
+  barWidth: number;
 }
 
 /**
  * Greedy interval packing, newest first: from the latest card back (a session
- * card counts from its newest prompt), each takes the lowest lane whose
- * earliest card so far starts (less a gap) after this one ends — so the
+ * card counts from its newest prompt's end), each takes the lowest lane where
+ * its interval is clear of the cards already there (less a gap) — so the
  * newest prompt is always on the top lane and older overlapping ones step
- * down beneath it. Items come back in time order. A
- * session card is as wide as its first-to-last span (and never narrower than
- * a card), so its last tick sits on its last prompt's minute.
+ * down beneath it. Items come back in time order.
+ *
+ * Nothing crosses the now line. An item whose newest instant is at or before
+ * `now` is past: its right edge sits at the x of its end (the newest member's
+ * `files_at`, else its `at`) and it hangs left, clamped to `x >= 0`. A future
+ * item starts at its left edge and hangs right, clamped so the card stays
+ * inside the body. A session card is as wide as its first-to-last span (and
+ * never narrower than a card), so its last tick sits on its last prompt's
+ * minute; the bar on its top edge runs from the first prompt to the last end.
  */
 export function packLanes(
   items: TimelineItem[],
   win: TimelineWindow,
   width: number,
+  now: Date,
   cardWidth = TIMELINE_CARD_WIDTH,
   gap = 6,
 ): { lanes: number; items: LaneItem[] } {
-  const starts: number[] = [];
-  const newest = (item: TimelineItem) => (item.members?.[item.members.length - 1] ?? item).at.getTime();
+  const lanes: [number, number][][] = [];
+  const nowX = timelineX(now, win, width);
   const placed = [...items]
-    .sort((a, b) => newest(b) - newest(a))
-    .map((item) => {
-      const x = timelineX(item.at, win, width);
+    .sort((a, b) => itemEnd(b).getTime() - itemEnd(a).getTime())
+    .map((item): LaneItem => {
+      const end = itemEnd(item);
+      const startX = timelineX(item.at, win, width);
+      const endX = timelineX(end, win, width);
       const last = item.members?.[item.members.length - 1];
-      const span = last ? timelineX(last.at, win, width) - x + SESSION_TICK_ROOM : 0;
+      const span = last ? endX - startX + SESSION_TICK_ROOM : 0;
       const itemWidth = Math.max(cardWidth, span);
-      let lane = starts.findIndex((start) => x + itemWidth + gap <= start);
-      if (lane < 0) lane = starts.length;
-      starts[lane] = x;
-      return { ...item, x, lane, width: itemWidth };
+      const past = end.getTime() <= now.getTime();
+      const x = past
+        ? Math.max(0, Math.min(endX, nowX) - itemWidth)
+        : Math.max(0, Math.min(startX, width - itemWidth));
+      const barWidth = past ? Math.min(itemWidth, Math.max(TIMELINE_BAR_MIN, endX - startX)) : TIMELINE_BAR_MIN;
+      let lane = lanes.findIndex((spans) => spans.every(([left, right]) => x + itemWidth + gap <= left || right + gap <= x));
+      if (lane < 0) {
+        lane = lanes.length;
+        lanes.push([]);
+      }
+      lanes[lane].push([x, x + itemWidth]);
+      return { ...item, x, lane, width: itemWidth, anchor: past ? "right" : "left", barWidth };
     })
     .sort((a, b) => a.at.getTime() - b.at.getTime());
-  return { lanes: starts.length, items: placed };
+  return { lanes: lanes.length, items: placed };
 }
 
 export interface DayCluster {

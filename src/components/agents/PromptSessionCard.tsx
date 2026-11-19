@@ -3,8 +3,11 @@ import { toDateStr } from "../../lib/calendar/calendarTime";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
-import { formatTimelineInstant } from "../../lib/agents/prompt/timeline";
+import { formatTimelineInstant, promptEndedAt } from "../../lib/agents/prompt/timeline";
+import { sentFactLine } from "../../lib/agents/prompt/cardFacts";
+import { promptStateChip } from "../../lib/agents/prompt/stateChip";
 import { CARD_OWN_KEYS } from "./PromptCard";
+import { PromptAgentPick } from "./PromptAgentPick";
 
 interface Props {
   /** The session's sent prompts inside the window, oldest first. */
@@ -29,6 +32,8 @@ interface Props {
   onPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
   onPortPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
   onLink: () => void;
+  /** The duration bar on the top edge, first prompt to last finish. */
+  bar?: { anchor: "left" | "right"; width: number };
 }
 
 /**
@@ -54,6 +59,7 @@ export function PromptSessionCard({
   onPointerDown,
   onPortPointerDown,
   onLink,
+  bar,
 }: Props) {
   const t = useT();
   const lang = useI18nStore((s) => s.lang);
@@ -63,7 +69,10 @@ export function PromptSessionCard({
   const latest = cards[cards.length - 1];
   // A session that runs past midnight says so: "23:10 – 01:40" alone reads
   // as a span that ends before it starts.
-  const crossesDay = !!first.at && !!latest.at && toDateStr(first.at) !== toDateStr(latest.at);
+  const ended = promptEndedAt(latest);
+  const end = ended ?? latest.at;
+  const crossesDay = !!first.at && !!end && toDateStr(first.at) !== toDateStr(end);
+  const chip = promptStateChip(latest);
   const className = [
     "agent-prompt-card todo-card is-sent is-session",
     cards.some((card) => matchedKeys.has(card.key)) ? "" : "is-dimmed",
@@ -97,16 +106,16 @@ export function PromptSessionCard({
       onPointerDown={onPointerDown}
     >
       <span className="agent-prompt-card-port is-in" aria-hidden="true" />
+      {bar && <span className={`agent-prompt-card-bar is-${bar.anchor}`} style={{ width: bar.width }} aria-hidden="true" />}
+      <div className="agent-prompt-card-top">
+        <span className="agent-prompt-card-time">{when(first.at, crossesDay)} – {when(end, crossesDay)}</span>
+        <span className={`agent-prompt-chip is-${chip.tone}`}>{t(chip.key)}</span>
+      </div>
       <div className="agent-prompt-card-head">
         <span className="agent-prompt-card-message">{latest.message}</span>
-        <span className={`agent-prompt-lamp is-${latest.history?.result ?? latest.state}`} aria-hidden="true" />
       </div>
-      <div className="agent-prompt-card-agent">
-        <small>{latest.history?.tab_label || t("promptChart.noAgent")}</small>
-      </div>
-      <small className="agent-prompt-card-fact">
-        {t("promptChart.sessionPrompts", { count: cards.length })} · {when(first.at, crossesDay)} – {when(latest.at, crossesDay)}
-      </small>
+      <small className="agent-prompt-card-fact">{sentFactLine(cards, t)}</small>
+      <PromptAgentPick card={latest} targets={[]} targetLabel={latest.history?.tab_label || undefined} onAgent={async () => {}} />
       <div className="agent-prompt-session-ticks" aria-hidden="true">
         {cards.map((card, index) => (
           <span

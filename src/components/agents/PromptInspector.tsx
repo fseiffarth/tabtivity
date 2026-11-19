@@ -26,6 +26,8 @@ interface Props {
   /** Moves focus to the heading each time it changes (Enter on a card). */
   focusToken: number;
   retimeEarlierDisabled?: boolean;
+  /** The tab's colour, worn by the dot before its name. */
+  color?: string;
   targets: PromptCardTarget[];
   targetLabel?: string;
   targetBlocked?: string;
@@ -68,6 +70,7 @@ export function PromptInspector({
   onEditing,
   focusToken,
   retimeEarlierDisabled,
+  color,
   targets,
   targetLabel,
   targetBlocked,
@@ -235,6 +238,7 @@ export function PromptInspector({
               <PromptAgentPick
                 className="agent-prompt-inspector-agent"
                 card={card}
+                color={color}
                 targets={targets}
                 targetLabel={targetLabel}
                 targetBlocked={targetBlocked}
