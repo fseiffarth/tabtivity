@@ -1,6 +1,6 @@
 # Agent CLI prompt caching — plan
 
-Status 2026-11-19: research done (below); phases 1a–1e and 2–4 implemented, not live-verified.
+Status 2026-11-19: research done (below); phases 1a–1e and 2–5 implemented, not live-verified.
 
 ## What the research found
 
@@ -86,8 +86,16 @@ Facts worth keeping:
    API does not support cached content creation"; its quota counts requests),
    API key → implicit caching; points at Accounts & keys → API keys and
    Gemini's `/auth`. The user flips it, never Tabtivity.
-5. **Ollama keep-alive** on the server Tabtivity spawns
-   (`OLLAMA_KEEP_ALIVE`), so OpenCode's first request does not get 5 min.
+5. **Ollama keep-alive** (done): `settings.ollama_keep_alive` (`30m` / `1h` /
+   `-1`, unset = Ollama's 5 min), the "Keep a model loaded after its last
+   use" card on the Local models page. A server Tabtivity spawns gets
+   `OLLAMA_KEEP_ALIVE` at start (Restart applies it; the user's env wins); a
+   systemd service gets a one-click `sudo` drop-in
+   (`<slug>-keep-alive.conf`, removed again for the default), its current
+   value read from `systemctl show -p Environment`. Agents reach Ollama through
+   `/v1`, which cannot send `keep_alive`. Inferred, not verified: each such
+   request also resets a model pinned with Load (`keep_alive: -1`) to the
+   server default — a longer default softens that too.
 6. **Claude subagent 1 h TTL**: measure before offering; estimate is
    break-even to negative.
 

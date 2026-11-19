@@ -2810,6 +2810,13 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
         }
     }
 
+    // And for how long a model stays loaded after its last request.
+    if std::env::var_os(KEEP_ALIVE_VAR).is_none() {
+        if let Some(value) = configured_keep_alive(crate::services::ollama_client::configured_keep_alive().as_deref()) {
+            cmd.env(KEEP_ALIVE_VAR, value);
+        }
+    }
+
     let pid = crate::paths::spawn_reaped(cmd)
         .map_err(|e| format!("failed to start ollama serve: {e}"))?;
     // Recorded before the wait, not after: a server that came up too slowly for
@@ -2951,6 +2958,103 @@ pub async fn ollama_context_plan() -> OllamaContextPlan {
         env: std::env::var(CONTEXT_LENGTH_VAR).ok().filter(|v| !v.trim().is_empty()),
         auto: spawned_context_length(max_vram_total()),
         systemd: ollama_under_systemd(),
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// The variable that sets how long a server keeps a model loaded after its
+/// last request (Ollama's default: 5 minutes). A request can ask for its own,
+/// but agents talk to Ollama through `/v1`, which cannot — so an idle local
+/// OpenCode tab's model was gone after 5 minutes, and with it the prompt Ollama
+/// had already read (`docs/cli_caching_plan.md` phase 5).
+const KEEP_ALIVE_VAR: &str = "OLLAMA_KEEP_ALIVE";
+
+/// The values the setting may hold; anything else (a hand edit) is unset.
+const KEEP_ALIVE_CHOICES: &[&str] = &["30m", "1h", "-1"];
+
+/// The setting as a value to hand Ollama, or `None` for its default. Pure +
+/// tested: only the listed choices reach an environment or a drop-in.
+fn configured_keep_alive(setting: Option<&str>) -> Option<&'static str> {
+    let setting = setting?.trim();
+    KEEP_ALIVE_CHOICES.iter().copied().find(|c| *c == setting)
+}
+
+/// The systemd drop-in that sets it on the service. Its own file, so it is
+/// undone by deleting one file and never touches the models or iGPU ones.
+const KEEP_ALIVE_DROPIN: &str = concat!(crate::app_slug!(), "-keep-alive.conf");
+
+/// The terminal command that gives the **service** `value` (or, for `None`,
+/// takes the drop-in back out), then restarts it — which unloads every model.
+/// Empty when there is no service to configure.
+fn keep_alive_service_command(value: Option<&str>, systemd: bool) -> String {
+    if !systemd {
+        return String::new();
+    }
+    let dropin = format!("/etc/systemd/system/ollama.service.d/{KEEP_ALIVE_DROPIN}");
+    let write = match value.and_then(|v| configured_keep_alive(Some(v))) {
+        Some(v) => format!(
+            "sudo mkdir -p /etc/systemd/system/ollama.service.d && \
+             printf '[Service]\\nEnvironment=\"{KEEP_ALIVE_VAR}={v}\"\\n' | sudo tee {dropin} && "
+        ),
+        None => format!("sudo rm -f {dropin} && "),
+    };
+    format!("{write}sudo systemctl daemon-reload && sudo systemctl restart ollama")
+}
+
+/// `OLLAMA_KEEP_ALIVE` among the `Environment=` assignments `systemctl show`
+/// prints for the service (space-separated `KEY=value` pairs). Pure + tested.
+fn keep_alive_in_unit_env(env: &str) -> Option<String> {
+    env.split_whitespace()
+        .find_map(|pair| pair.strip_prefix(KEEP_ALIVE_VAR)?.strip_prefix('='))
+        .map(str::to_string)
+}
+
+/// What the keep-alive field on the Local models page needs to say truthfully.
+#[derive(serde::Serialize, Clone, Default)]
+pub struct OllamaKeepAlivePlan {
+    /// `OLLAMA_KEEP_ALIVE` as this process sees it, which every server it
+    /// starts inherits and the setting never overrides.
+    pub env: Option<String>,
+    /// A systemd unit runs the server, keeping its own environment.
+    pub systemd: bool,
+    /// The service's own value, from its unit and drop-ins; `None` is
+    /// Ollama's default.
+    pub service_value: Option<String>,
+    /// The command that gives the service `value`, for `runInstallInTab`;
+    /// empty without a service.
+    pub service_cmd: String,
+    pub shell_kind: String,
+}
+
+/// The facts behind the keep-alive setting, for `value` (the setting as it
+/// stands or as just picked). On demand (a page opening, a pick), never a
+/// poll: it spawns `systemctl`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn ollama_keep_alive_plan(value: Option<String>) -> OllamaKeepAlivePlan {
+    app_core::rt::spawn_blocking(move || {
+        let systemd = ollama_under_systemd();
+        #[cfg(target_os = "linux")]
+        let service_value = if systemd {
+            std::process::Command::new("systemctl")
+                .args(["show", "-p", "Environment", "--value", "ollama"])
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .and_then(|out| keep_alive_in_unit_env(&String::from_utf8_lossy(&out.stdout)))
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "linux"))]
+        let service_value = None;
+        let service_cmd = keep_alive_service_command(value.as_deref(), systemd);
+        OllamaKeepAlivePlan {
+            env: std::env::var(KEEP_ALIVE_VAR).ok().filter(|v| !v.trim().is_empty()),
+            systemd,
+            service_value,
+            shell_kind: if service_cmd.is_empty() { String::new() } else { "bash".to_string() },
+            service_cmd,
+        }
     })
     .await
     .unwrap_or_default()

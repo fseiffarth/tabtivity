@@ -394,6 +394,7 @@ export const UNTESTED = {
   "ollama.hfCopyKey": { area: "layout", what: "SettingsSubPanels · Browse the Ollama registry → Hugging Face: a gated card (and the realm-host pull error) offers Copy Ollama's key: copies ~/.ollama/id_ed25519.pub, or /usr/share/ollama/.ollama/id_ed25519.pub when Ollama is the systemd service; says when there is no key yet, it is not readable (names the file), or Ollama runs on another machine" },
   "ollama.modelLocationTitle": { area: "layout", what: "SettingsSubPanels · Model download location" },
   "ollama.contextTitle": { area: "layout", what: "Ollama panel · Context window setting for the server the app starts" },
+  "ollama.keepAliveTitle": { area: "layout", what: "Ollama panel · Keep a model loaded after its last use (OLLAMA_KEEP_ALIVE): a spawned server gets it at start (Restart after a change); a systemd service via the "Apply to the service…" drop-in; does an idle OpenCode local-model tab keep its model past 5 min?" },
   "ollama.restart": { area: "layout", what: "Ollama panel · Restart Ollama beside Refresh" },
   "projectSwitcher.addProjectsToBox": { area: "layout", what: "ProjectSwitcher · Add projects to Box" },
   "projectSwitcher.hpcPipeline": { area: "layout", what: "ProjectSwitcher · HPC pipeline…" },

@@ -53,6 +53,12 @@ pub(crate) fn configured_models_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+/// The user's chosen keep-alive (`Settings::ollama_keep_alive`), read when a
+/// server is spawned; `commands::ollama` checks it against its choices.
+pub fn configured_keep_alive() -> Option<String> {
+    crate::storage::load_settings().and_then(|s| s.ollama_keep_alive)
+}
+
 /// The user's chosen context window (`Settings::ollama_context_length`), read
 /// on every use like [`configured_models_dir`].
 pub(crate) fn configured_context_length() -> Option<u32> {

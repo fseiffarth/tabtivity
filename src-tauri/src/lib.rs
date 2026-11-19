@@ -2749,6 +2749,7 @@ pub fn run() {
             commands::ollama::ollama_status,
             commands::ollama::ollama_gpu_status,
             commands::ollama::ollama_context_plan,
+            commands::ollama::ollama_keep_alive_plan,
             commands::ollama::ollama_models_dir_plan,
             commands::ollama::ollama_registry_details,
             commands::ollama::list_ollama_models_detailed,

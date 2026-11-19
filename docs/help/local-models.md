@@ -159,6 +159,15 @@ calling; the Models & agents menu tags models without it "no tools".
   press **Restart Ollama**, then open a new agent tab. It applies to the
   server Tabtivity starts; `OLLAMA_CONTEXT_LENGTH` set in your environment, or
   on a system service, wins.
+- **An idle agent tab's next message is slow** (it waits for the model to
+  load and re-reads the whole conversation): Ollama unloads a model 5 minutes
+  after its last request, and agents cannot ask for longer. In **Manage
+  models**, **Keep a model loaded after its last use** sets 30 minutes, 1 hour
+  or until unloaded, at the cost of the memory the model holds. A server
+  Tabtivity starts takes it after **Restart Ollama**; for Ollama running as a
+  system service, **Apply to the service…** opens a terminal with the `sudo`
+  command (a systemd drop-in), which restarts the service and unloads every
+  model. `OLLAMA_KEEP_ALIVE` set in your environment wins.
 - **Integrated GPU ignored**: some Ollama versions need `OLLAMA_IGPU_ENABLE=1`
   in the server's environment; the Models & agents menu offers the fix.
 - **Server won't start**: run `ollama serve` in a terminal to see its error.
