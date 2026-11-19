@@ -17,7 +17,7 @@ typed prompt. The backend never sends a prompt.
 
 A `voice:partial` is written into the draft at once as the segment's
 *provisional* text (`lib/voice/provisionalDraft.ts`, glued to the composer by
-`useLiveDictation`): one span per segment, at the end of the draft, replaced by
+`useLiveDictation`): one span per segment, at the composer selection when the mic takes focus from it or otherwise at the end, replaced by
 each newer partial (so a whole-segment or a tail transcript never doubles
 text) and removed when the segment's final arrives, which is inserted where the
 span stood. Partials bypass the composer's undo history, so Ctrl+Z and
@@ -28,7 +28,12 @@ send's words, or, in hands-free, a stop word or the answer to an open dialog.
 A span tracks by offset and its own text: typing before it shifts it, after it
 leaves it, inside it makes the words the user's own (the final is then not
 typed again). A pause (the backend drops the open segment, no final comes), a
-send and the session's end remove the spans still open.
+send and the session's end remove the spans still open. An untouched selection
+displaced by a preview is restored when the preview clears. Only settled words
+are saved. A failed final, or a stop deadline with queued finals, offers the
+visible words from each affected segment for explicit recovery. A restore is
+one undoable edit. An overlapping manual edit makes the location ambiguous
+and the recovery action offers to append the words.
 
 ## Why there is no `claude -p`
 
@@ -86,8 +91,8 @@ split sentences at thinking pauses, and the field already shows the words.
 ## One listener per machine
 
 The mic belongs to one Chat tab at a time (`voice::ACTIVE`); a new start
-stops the old session, whose last final still arrives under its own id and
-is ignored by the renderer. The header indicator shows the owner and stops
+aborts the old session and clears its unsettled words. The renderer filters
+events by session id and detaches its listeners when the session ends. The header indicator shows the owner and stops
 it. A hidden tab pauses its session (`voice_listen_pause`), keeping it.
 
 ## Half-duplex with the OS voice

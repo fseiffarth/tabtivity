@@ -97,6 +97,28 @@ describe("dictating into the Chat's composer", () => {
     emit("voice:state", { session: 11, state: "listening" });
   }
 
+  it.each([true, false])("replaces a selection and undoes it (preview %s)", async preview => {
+    const box = await composer(host);
+    fireEvent.change(box, { target: { value: "use red paint" } });
+    box.focus();
+    box.setSelectionRange(4, 7, "backward");
+    const mic = screen.getByRole("button", { name: "Dictate" });
+    fireEvent.pointerDown(mic);
+    mic.focus();
+    await startMic();
+    emit("voice:vad", { session: 11, segment: 1, state: "start" });
+    if (preview) {
+      emit("voice:partial", { session: 11, segment: 1, text: "dark" });
+      expect(box.value).toBe("use dark paint");
+    }
+    emit("voice:final", { session: 11, segment: 1, text: "dark blue" });
+    expect(box.value).toBe("use dark blue paint");
+    fireEvent.keyDown(box, { key: "z", code: "KeyZ", ctrlKey: true });
+    expect(box.value).toBe("use red paint");
+    fireEvent.keyDown(box, { key: "z", code: "KeyZ", ctrlKey: true, shiftKey: true });
+    expect(box.value).toBe("use dark blue paint");
+  });
+
   it("writes what it hears into the draft as it is said, and the final replaces it", async () => {
     const box = await composer(host);
     fireEvent.change(box, { target: { value: "please" } });
@@ -117,6 +139,87 @@ describe("dictating into the Chat's composer", () => {
     emit("voice:final", { session: 11, segment: 2, text: "" });
     expect(box.value).toBe("please fix the login");
     expect(sendSteeringPrompt).not.toHaveBeenCalled();
+  });
+
+  it("restores an unfinished phrase as plain words with one undo", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:final", { session: 11, segment: 1, text: "First." });
+    emit("voice:partial", { session: 11, segment: 2, text: "fix it" });
+    emit("voice:final", { session: 11, segment: 2, text: "", outcome: "incomplete" });
+    emit("voice:state", { session: 11, state: "stopped" });
+    expect(box.value).toBe("First.");
+    fireEvent.click(screen.getByRole("button", { name: "Restore words" }));
+    expect(box.value).toBe("First. fix it");
+    expect(screen.queryByRole("button", { name: "Restore words" })).toBeNull();
+    fireEvent.keyDown(box, { key: "z", code: "KeyZ", ctrlKey: true });
+    expect(box.value).toBe("First.");
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+  });
+
+  it("restores a failed segment before a later successful final", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "first" });
+    emit("voice:final", { session: 11, segment: 1, text: "", outcome: "failed" });
+    emit("voice:final", { session: 11, segment: 2, text: "second go Tabby" });
+    expect(box.value).toBe("second");
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Restore words" }));
+    expect(box.value).toBe("first second");
+  });
+
+  it("leaves a typed-over phrase alone after its final fails", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the parser" });
+    fireEvent.change(box, { target: { value: "fix my parser" } });
+    emit("voice:final", { session: 11, segment: 1, text: "", outcome: "incomplete" });
+    expect(box.value).toBe("fix my parser");
+    expect(screen.queryByRole("button", { name: "Restore words" })).toBeNull();
+  });
+
+  it("switching tabs clears unfinished words and ignores the old mic", async () => {
+    const second = { ...tab, key: "agent-2", sessionId: "launch-2" };
+    useTabsStore.setState({ tabsByScope: { p: [tab, second] } });
+    const view = (key: string) => <TerminalReaderView host={host} ptyId={`p:${key}`} scope="p" tabKey={key} cwd="/p" visible focused />;
+    const { rerender } = render(view(tab.key));
+    await screen.findByText("fix the parser");
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "old words" });
+    emit("voice:final", { session: 11, segment: 1, text: "", outcome: "failed" });
+    expect(screen.getByRole("button", { name: "Restore words" })).toBeTruthy();
+    rerender(view(second.key));
+    await screen.findByText("fix the parser");
+    emit("voice:final", { session: 11, segment: 2, text: "late" });
+    expect(screen.queryByRole("button", { name: "Restore words" })).toBeNull();
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByRole("button", { name: "Dictate" })).toBeTruthy();
+  });
+
+  it("identifies an unheard failed phrase and clears the offer on the next start", async () => {
+    await composer(host);
+    await startMic();
+    emit("voice:final", { session: 11, segment: 2, text: "", outcome: "failed" });
+    emit("voice:state", { session: 11, state: "stopped" });
+    expect(screen.getByText("Repeat phrase 2.")).toBeTruthy();
+    await startMic();
+    expect(screen.queryByText("Repeat phrase 2.")).toBeNull();
+  });
+
+  it("an early stopped event leaves its mic idle and listeners detached", async () => {
+    await composer(host);
+    const previous = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string) => {
+      if (command === "voice_listen_start") {
+        for (const handler of handlers.get("voice:state") ?? []) handler({ payload: { session: 11, state: "stopped" } });
+        return Promise.resolve(11);
+      }
+      return previous(command);
+    });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Dictate" })); });
+    expect(screen.getByRole("button", { name: "Dictate" })).toBeTruthy();
+    expect(handlers.get("voice:partial")?.size).toBe(0);
   });
 
   it("undoes a settled sentence as one step, never its partials", async () => {

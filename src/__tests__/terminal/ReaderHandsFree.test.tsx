@@ -122,6 +122,22 @@ describe("hands-free and read-aloud in the Chat", () => {
     expect(screen.getByText(/Waiting for the agent/)).toBeTruthy();
   }, 15_000);
 
+  it("an unfinished phrase cancels the send window and disarms subsequent finals", async () => {
+    const box = await open({ voice_hands_free: true, voice_hands_free_on: true });
+    await startHandsFree();
+    emit("voice:final", { session: 11, segment: 1, text: "check the parser" });
+    await wait(20);
+    expect(screen.getByRole("button", { name: /Sending/ })).toBeTruthy();
+    emit("voice:partial", { session: 11, segment: 2, text: "go on with tests" });
+    emit("voice:final", { session: 11, segment: 2, text: "", outcome: "failed" });
+    emit("voice:final", { session: 11, segment: 3, text: "next" });
+    expect(screen.queryByRole("button", { name: /Sending/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Restore words" }));
+    await wait(1600);
+    expect(box.value).toContain("go on with tests");
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+  }, 15_000);
+
   it("writes the words into the draft as they are heard, but keeps a stop word out of it", async () => {
     const box = await open({ voice_hands_free: true, voice_hands_free_on: true });
     await startHandsFree();
@@ -141,6 +157,18 @@ describe("hands-free and read-aloud in the Chat", () => {
     await wait(1700);
     expect(sendSteeringPrompt).not.toHaveBeenCalled();
   }, 15_000);
+
+  it("a filtered segment leaves an existing draft unsent", async () => {
+    const box = await open({ voice_hands_free: true, voice_hands_free_on: true });
+    fireEvent.change(box, { target: { value: "manual draft" } });
+    await startHandsFree();
+    emit("voice:vad", { session: 11, segment: 1, state: "start" });
+    emit("voice:final", { session: 11, segment: 1, text: "", outcome: "filtered" });
+    await wait(20);
+    expect(box.value).toBe("manual draft");
+    expect(chime).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Sending/ })).toBeNull();
+  });
 
   it("does not open the send window on words that are still being said", async () => {
     const box = await open({ voice_hands_free: true, voice_hands_free_on: true });

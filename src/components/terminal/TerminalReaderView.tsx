@@ -16,6 +16,7 @@ import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { NO_LIVE, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
 import { isAiOffRefusal } from "../../lib/aiSwitch";
 import { forgetSentPrompts, onSentPrompt, useSentPrompts, type SentPrompt } from "../../lib/agents/sentPrompts";
+import { replaceDictated } from "../../lib/voice/provisionalDraft";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { DraftUndo, caretAfterSwap } from "../../lib/agents/draftUndo";
 import { actionMatches } from "../../lib/shortcuts/shortcuts";
@@ -722,7 +723,6 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const t = useT();
   const assistantChat = scope === ASSISTANT_SCOPE;
   const [draft, setDraft] = useState(() => readerDraft(scope, tabKey));
-  useEffect(() => setReaderDraft(scope, tabKey, draft), [scope, tabKey, draft]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   /** Send was pressed while the agent asked something: typed into the pane,
@@ -746,7 +746,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
   /** Dictation writes the words of a segment still being said into the draft
    * (`useLiveDictation`); it keeps the caret where the user had it. */
-  const dictation = useLiveDictation({ draftRef, setDraft, boxRef: composerRef, language: editLanguage });
+  const dictation = useLiveDictation({ draftRef, setDraft, boxRef: composerRef, language: editLanguage,
+    record: (before, after) => undo.current.record(before, after, false),
+  });
+  const settledDraft = useRef(dictation.settledDraft);
+  settledDraft.current = dictation.settledDraft;
+  useEffect(() => setReaderDraft(scope, tabKey, settledDraft.current()), [scope, tabKey, draft]);
   const renderedRef = useRef(dictation.rendered);
   renderedRef.current = dictation.rendered;
   useLayoutEffect(() => {
@@ -754,7 +759,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const moved = caretAt.current !== null;
     if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
-    renderedRef.current(draft, moved);
+    renderedRef.current(moved);
   }, [draft]);
   // Three lines until the text needs more: the box grows with it (upward, the
   // composer stays on the pane's last row) up to its CSS max-height.
@@ -782,8 +787,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     [slashClosed, draft, cli, usedSlash],
   );
   const editDraft = (next: string, typing = false) => {
-    undo.current.record(draftRef.current, next, typing);
+    const before = dictation.settledDraft();
     draftRef.current = next;
+    undo.current.record(before, dictation.settledDraft(), typing);
     setDraft(next);
     setSendError("");
     setSlashAt(null);
@@ -961,11 +967,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
    * leaves the draft first, so none of that is ever left behind in it and the
    * undo history only sees the settled step. An empty `heard` only settles. */
   const dictated = (heard: string, segment: number) => {
-    const { at, taken } = dictation.settle(segment);
+    const { at, taken, removed } = dictation.settle(segment);
     const clean = sanitizeVoiceTranscript(heard);
     if (!clean) return;
     const edit = matchDraftEdit(clean, editLanguage);
+    const recovering = dictation.live.hasRecovery();
     if (edit) {
+      if (recovering) return;
       const outcome = voiceEdits.apply(edit, draftRef.current, (draft, command) => leadDraft(draft, command, prefixCommands));
       if (outcome.draft !== null) editDraft(outcome.draft);
       setEditNote(outcome.note);
@@ -974,24 +982,31 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     }
     // The user edited the provisional words into their own: not typed twice.
     if (taken) {
-      if (spokenSend(clean) !== null) void send();
+      if (!recovering && spokenSend(clean) !== null) void send();
       return;
     }
     const current = draftRef.current;
     const where = at === null ? current.length : Math.min(at, current.length);
     // Mid-draft the spoken send is judged on the dictated words alone.
+    const range = { start: where, end: where + removed };
     const appended = where === current.length;
-    const sendless = appended ? spokenSend(spliceSpaced(current, where, clean)) : spokenSend(clean);
+    const withWords = replaceDictated(current, range, clean);
+    const sendless = spokenSend(appended ? withWords : clean);
     const spoken = sendless !== null;
-    const next = appended ? sendless ?? spliceSpaced(current, where, clean)
-      : sendless === null ? spliceSpaced(current, where, clean)
-      : sendless ? spliceSpaced(current, where, sendless) : current;
-    if (!spoken) {
-      voiceEdits.piece(current, next, clean);
-      dictation.inserted(current, next, where);
+    const next = sendless === null ? withWords : appended ? sendless
+      : sendless ? replaceDictated(current, range, sendless) : current;
+    if (!spoken) voiceEdits.piece(current, next, clean);
+    if (next !== current) {
+      const before = dictation.settledDraft();
+      dictation.inserted(current, next, where, removed, segment);
+      draftRef.current = next;
+      undo.current.record(before, dictation.settledDraft(), false);
+      setDraft(next);
+      setSendError("");
+      setSlashAt(null);
+      setSlashClosed(false);
     }
-    if (next !== current) editDraft(next);
-    if (spoken) void send();
+    if (spoken && !recovering) void send();
   };
   const voice = useReaderVoice({
     tabKey,
@@ -1253,7 +1268,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   /** Undo (or redo) the composer's last change, the caret after it. */
   const swapDraft = (redo: boolean) => {
-    const next = redo ? undo.current.redo(draft) : undo.current.undo(draft);
+    const settled = dictation.settledDraft();
+    const next = redo ? undo.current.redo(settled) : undo.current.undo(settled);
     if (next === null) return;
     caretAt.current = caretAfterSwap(draft, next);
     historyAt.current = null;
@@ -1348,6 +1364,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           aria-label={subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}`
             : t("terminal.reader.placeholder")}
+          onPointerUp={e => dictation.capture(e.currentTarget)}
+          onKeyUp={e => dictation.capture(e.currentTarget)}
           onChange={(e) => editDraft(e.target.value, true)}
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
@@ -2914,6 +2932,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           </button>
         </div>
       ) : <ReaderComposer
+        key={JSON.stringify([scope, tabKey])}
         scope={scope}
         tabKey={tabKey}
         tabRef={tabRef}

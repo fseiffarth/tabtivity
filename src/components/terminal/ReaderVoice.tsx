@@ -173,6 +173,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   /** Hands-free waits for the turn what was sent (or answered) starts. */
   const awaitTurn = () => {
     guard.current?.reset();
+    waitingRef.current = true;
     answerAtSend.current = lastAnswerRef.current;
     handlers.current.live.removeAll();
     setHeard("");
@@ -183,6 +184,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
    * `lang`: the language choice to listen in, else the setting's. */
   const start = async (use: string = model, lang: VoiceLangChoice = langChoice) => {
     const mine = ++attempt.current;
+    handlers.current.live.dismissRecovery();
     handlers.current.live.removeAll();
     setProblem(null);
     setInstall(null);
@@ -204,6 +206,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
         return;
       }
       setUsing({ models: whisper, id: use as VoiceModel });
+      sessionHandsFree.current = loop;
       const dictation = await startDesktopDictation({
         tabKey,
         model: use,
@@ -213,31 +216,42 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
         headset: settings?.voice_headset ?? false,
         gpu: settings?.voice_gpu ?? true,
       }, {
-        onPreparing: () => setPhase("preparing"),
-        onDevice: setDevice,
+        onPreparing: () => { if (mine === attempt.current) setPhase("preparing"); },
+        onDevice: (next) => { if (mine === attempt.current) setDevice(next); },
         // Also the backend's "sound is back" after a muted-mic warning.
         onStart: () => {
+          if (mine !== attempt.current) return;
           setProblem(null);
           setPhase("listening");
         },
         onSegment: (open, segment) => {
+          if (mine !== attempt.current) return;
           if (!open) {
             openSegment.current = null;
             setHeard("");
           } else {
             openSegment.current = segment;
+            if (!waitingRef.current) handlers.current.live.begin?.(segment);
             if (sessionHandsFree.current && !waitingRef.current) guard.current?.speechStarted();
           }
         },
         onPartial: (text, segment) => {
-          if (waitingRef.current) return;
+          if (mine !== attempt.current || waitingRef.current) return;
           // Hands-free keeps what may be a stop word or a dialog's answer out
           // of the draft until it has settled; the Heard line says it.
           const held = loop && (isStopWord(text) || questionOpenRef.current);
+          if (held) handlers.current.live.hide?.(segment);
           const written = !held && handlers.current.live.show(segment, text);
           setHeard(written ? "" : text);
         },
-        onFinal: (text, segment) => {
+        onIncomplete: (segment) => {
+          if (mine !== attempt.current || waitingRef.current) return;
+          guard.current?.reset();
+          handlers.current.live.fail(segment);
+          setHeard("");
+        },
+        onFinal: (text, segment, filtered) => {
+          if (mine !== attempt.current) return;
           setHeard("");
           if (openSegment.current === segment) openSegment.current = null;
           if (!sessionHandsFree.current) {
@@ -247,6 +261,17 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
           // Words still on their way from before a send are not the next prompt.
           if (waitingRef.current) {
             handlers.current.live.remove(segment);
+            return;
+          }
+          if (filtered) {
+            handlers.current.live.remove(segment);
+            if (guard.current?.phase() === "holding") guard.current.settled("");
+            else guard.current?.reset();
+            return;
+          }
+          if (handlers.current.live.hasRecovery()) {
+            if (questionOpenRef.current || isStopWord(text)) handlers.current.live.remove(segment);
+            else handlers.current.onText(text, segment);
             return;
           }
           // Any new utterance supersedes a staged pick ("stop" cancels it).
@@ -274,24 +299,26 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
           }
           handlers.current.onText(text, segment);
         },
-        onLevel: (level) => paintMicLevel(buttonRef.current, level),
+        onLevel: (level) => { if (mine === attempt.current) paintMicLevel(buttonRef.current, level); },
         // Pausing drops the open segment: no final comes for it.
         onPaused: (paused) => {
-          if (!paused || openSegment.current === null) return;
+          if (mine !== attempt.current || !paused || openSegment.current === null) return;
           handlers.current.live.remove(openSegment.current);
           openSegment.current = null;
           setHeard("");
         },
-        onError: (key) => setProblem(key),
-        onEnd: () => {
-          if (session.current === dictation) reset();
+        onError: (key) => { if (mine === attempt.current) setProblem(key); },
+        onEnd: (discarded) => {
+          if (mine !== attempt.current) return;
+          attempt.current += 1;
+          if (discarded) handlers.current.live.dismissRecovery();
+          reset();
         },
       });
       if (mine !== attempt.current) {
         dictation.abort();
         return;
       }
-      sessionHandsFree.current = loop;
       session.current = dictation;
       if (!visible || waitingRef.current) dictation.pause(true);
     } catch (error) {
@@ -306,16 +333,19 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   startRef.current = start;
 
   const stop = () => {
-    attempt.current += 1;
     setWaitingSince(null);
     guard.current?.reset();
     const active = session.current;
     if (active) active.stop();
-    else reset();
+    else {
+      attempt.current += 1;
+      reset();
+    }
   };
 
   /** Ends the session at once: nothing still on its way lands anywhere. */
   const drop = () => {
+    handlers.current.live.dismissRecovery();
     attempt.current += 1;
     const active = session.current;
     reset();
@@ -325,6 +355,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   /** A send empties the draft: what is still on its way must not land in it.
    * Hands-free keeps the session, paused, for the answer's turn. */
   const end = () => {
+    handlers.current.live.dismissRecovery();
     if (session.current && sessionHandsFree.current) {
       awaitTurn();
       return;
@@ -355,6 +386,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   // The composer going away ends its dictation.
   useEffect(() => () => {
     attempt.current += 1;
+    handlers.current.live.dismissRecovery();
     session.current?.abort();
     session.current = null;
     guard.current?.reset();
@@ -442,6 +474,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       type="button"
       className={`terminal-reader-mic${listening ? " listening" : ""}${busy ? " preparing" : ""}${waiting ? " waiting" : ""}`}
       disabled={disabled && phase === "off" && !waiting}
+      onPointerDown={() => { if (document.activeElement instanceof HTMLTextAreaElement) live.capture?.(document.activeElement); }}
+      onFocus={(event) => live.capture?.(event.relatedTarget)}
       onClick={toggle}
       aria-label={label}
       aria-pressed={listening || waiting}
@@ -493,7 +527,9 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       )}
     </div>
   ) : null;
-  const strip = (line || install || picker) ? (
+  const recovery = live.recovery;
+  const recoverable = recovery.filter((item) => item.text);
+  const strip = (line || install || picker || recovery.length > 0) ? (
     <div className="terminal-reader-voice">
       {install && (
         <div className="terminal-reader-voice-card" role="dialog" aria-label={t("terminal.reader.voice.installTitle")}>
@@ -523,13 +559,27 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       ) : line && (
         <div className={shownProblem ? "terminal-reader-voice-line error" : "terminal-reader-voice-line"} role={shownProblem ? "alert" : "status"} aria-live="polite">
           {line}
-          {listening && !heard && !shownProblem && <UntestedTag id="terminal.reader.voice.liveDraft" />}
+          {listening && !heard && !shownProblem && <><UntestedTag id="terminal.reader.voice.liveDraft" /><UntestedTag id="terminal.reader.voice.caret" /></>}
           {listening && !heard && !shownProblem && note && <UntestedTag id="terminal.reader.voice.draftEdits" />}
           {listening && !heard && !shownProblem && !note && (sessionHandsFree.current
             ? <UntestedTag id="terminal.reader.voice.handsFree" />
             : <UntestedTag id="terminal.reader.voice.spokenSend" />)}
           {(heard || phase === "preparing") && !shownProblem && <UntestedTag id="terminal.reader.voice.dictate" />}
           {problem === "terminal.reader.voice.err.silent" && <UntestedTag id="terminal.reader.voice.silent" />}
+        </div>
+      )}
+      {recovery.length > 0 && (
+        <div className="terminal-reader-voice-card">
+          <div role="status">{recovery.map(({ segment, text }) => (
+            <div key={segment}>{text || t("terminal.reader.voice.repeatPhrase", { segment })}</div>
+          ))}</div>
+          <div className="terminal-reader-voice-actions">
+            {recoverable.length > 0 && <button type="button" className="settings-btn" onClick={() => live.restoreRecovery()}>
+              {t(recoverable.some((item) => item.ambiguous) ? "terminal.reader.voice.appendWords" : "terminal.reader.voice.restoreWords")}
+            </button>}
+            <button type="button" className="settings-btn" onClick={() => live.dismissRecovery()}>{t("terminal.reader.voice.dismissRecovery")}</button>
+          </div>
+          <UntestedTag id="terminal.reader.voice.recovery" />
         </div>
       )}
       {picker}

@@ -40,6 +40,7 @@ function recorder() {
     onLevel: () => {},
     onPaused: (paused) => calls.push(paused ? "paused" : "resumed"),
     onError: (key) => calls.push(`error ${key}`),
+    onIncomplete: (segment) => calls.push(`incomplete ${segment}`),
     onEnd: () => calls.push("end"),
   };
   return { calls, handlers };
@@ -113,6 +114,28 @@ describe("the desktop dictation session", () => {
       "final 1 fix the login",
       "end",
     ]);
+  });
+
+  it("settles each segment once and routes failures separately from filtered words", async () => {
+    invoke.mockResolvedValue(4);
+    const { calls, handlers: h } = recorder();
+    await startDesktopDictation(options, h);
+    for (const [segment, outcome] of [[1, "filtered"], [2, "failed"], [3, "incomplete"], [2, "transcribed"]]) {
+      emit("voice:final", { session: 4, segment, text: "", outcome });
+    }
+    emit("voice:partial", { session: 4, segment: 3, text: "too late" });
+    expect(calls).toEqual(["final 1 ", "incomplete 2", "incomplete 3"]);
+  });
+
+  it("a rejected stop identifies outstanding segments before detaching listeners", async () => {
+    invoke.mockResolvedValueOnce(4).mockRejectedValueOnce("device-failed");
+    const { calls, handlers: h } = recorder();
+    const active = await startDesktopDictation(options, h);
+    emit("voice:partial", { session: 4, segment: 1, text: "words" });
+    active.stop();
+    await Promise.resolve();
+    expect(calls).toEqual(["partial words", "incomplete 1", `error ${VOICE_ERROR_KEYS["device-failed"]}`, "end"]);
+    expect([...handlers.values()].every((set) => set.size === 0)).toBe(true);
   });
 
   it("says why a session stopped", async () => {
