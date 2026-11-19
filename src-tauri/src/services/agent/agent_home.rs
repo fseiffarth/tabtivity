@@ -427,8 +427,7 @@ fn prepare_home_with(
     // scope must not interleave the seeding, the global layer's merge, the
     // hook registration or the login placement (final review B4). Outside
     // the homes root, so no fence ever sees the lock file.
-    let home_key = home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let _one_at_a_time = storage::FileLock::exclusive(&crate::services::process_lease::path_in(state_dir, &format!("home-{home_key}")))?;
+    let _one_at_a_time = home_lock(state_dir, home)?;
     // A home an older build seeded carries its markers under the old name:
     // bring it to the current names first, or it would count as fresh and be
     // seeded a second time. The launch does this for every home; this covers
@@ -500,6 +499,36 @@ fn prepare_home_with(
         dir: home.to_path_buf(),
         fresh,
     })
+}
+
+/// The cross-process lock of one home's preparation (final review B4): kept
+/// outside the homes root, so no fence ever sees the lock file.
+fn home_lock(state_dir: &Path, home: &Path) -> io::Result<storage::FileLock> {
+    let home_key = home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    storage::FileLock::exclusive(&crate::services::process_lease::path_in(state_dir, &format!("home-{home_key}")))
+}
+
+/// Record Claude's folder trust in `home` for the box roots a spawn passes
+/// with `--add-dir` (`agent_fence::add_box_root_args`). Claude 2.1.326+ asks
+/// "Adding a new directory" for every added folder without a trust record,
+/// and its "Yes, add it" lasts only that session, so each new tab of a box
+/// asked again. The roots come from the box record, never from a project
+/// folder, and the fence bounds them either way. The tab's own folder is not
+/// written: its startup trust dialog stays the user's answer. Under the
+/// home's preparation lock, so a concurrent spawn's trust is not lost.
+pub fn trust_claude_added_dirs(home: &Path, dirs: &[PathBuf]) -> io::Result<()> {
+    trust_claude_added_dirs_in(&storage::state_dir(), home, dirs)
+}
+
+fn trust_claude_added_dirs_in(state_dir: &Path, home: &Path, dirs: &[PathBuf]) -> io::Result<()> {
+    if dirs.is_empty() {
+        return Ok(());
+    }
+    let _one_at_a_time = home_lock(state_dir, home)?;
+    let spellings: Vec<String> = dirs.iter().flat_map(|dir| trust_spellings(dir)).collect();
+    let file = HomeFile::open(home, ".claude.json")
+        .ok_or_else(|| io::Error::other(format!(".claude.json in {} is not a plain path", home.display())))?;
+    trust_claude_json(&file, &spellings)
 }
 
 /// One-time seeding of a new home:
@@ -1258,6 +1287,39 @@ mod tests {
         write_file(&home.join(".codex/config.toml"), "projects = 3\n");
         trust_chat_folder(&home, Path::new(&dirs[0])).unwrap();
         assert!(std::fs::read_to_string(home.join(".codex/config.toml")).unwrap().contains("trust_level"));
+    }
+
+    /// A box tab's `--add-dir` roots get Claude's folder trust, so a new tab
+    /// no longer stops at "Adding a new directory"; the tab's own folder and
+    /// every other entry are left as they were.
+    #[test]
+    fn the_added_box_roots_get_claude_trust_and_nothing_else_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        let own = tmp.path().join("box").join("member");
+        let sibling = tmp.path().join("box").join("other");
+        let box_root = tmp.path().join("box");
+        let key = |p: &Path| p.to_string_lossy().into_owned();
+        write_file(
+            &home.join(".claude.json"),
+            &serde_json::json!({
+                "oauthAccount": {"emailAddress": "a@b"},
+                "projects": {key(&sibling): {"allowedTools": ["t"]}},
+            })
+            .to_string(),
+        );
+        trust_claude_added_dirs_in(&state, &home, &[box_root.clone(), sibling.clone()]).unwrap();
+        let claude: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(claude["projects"][key(&box_root)]["hasTrustDialogAccepted"], true);
+        assert_eq!(claude["projects"][key(&sibling)]["hasTrustDialogAccepted"], true);
+        assert_eq!(claude["projects"][key(&sibling)]["allowedTools"][0], "t");
+        assert_eq!(claude["oauthAccount"]["emailAddress"], "a@b");
+        assert!(claude["projects"].get(key(&own)).is_none());
+        // Nothing added, nothing written: no home file appears.
+        let empty = tmp.path().join("empty-home");
+        trust_claude_added_dirs_in(&state, &empty, &[]).unwrap();
+        assert!(!empty.join(".claude.json").exists());
     }
 
     #[test]

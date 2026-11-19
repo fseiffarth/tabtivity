@@ -333,6 +333,23 @@ async fn prepare_agent_home(
     .await
 }
 
+/// Claude's folder trust for the box roots this spawn passes with `--add-dir`
+/// (`agent_home::trust_claude_added_dirs`), off the async worker: it waits on
+/// the home's preparation lock. Not written, the spawn still runs; Claude then
+/// asks about each folder as before.
+async fn trust_added_box_roots(cli: &str, home: &std::path::Path, dirs: &[std::path::PathBuf]) {
+    if cli != "claude" || dirs.is_empty() {
+        return;
+    }
+    let (home, dirs) = (home.to_path_buf(), dirs.to_vec());
+    let written = tokio::task::spawn_blocking(move || crate::services::agent_home::trust_claude_added_dirs(&home, &dirs)).await;
+    match written {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => eprintln!("launch_prep: trust the box roots for Claude: {e}"),
+        Err(e) => eprintln!("launch_prep: trust the box roots for Claude: {e}"),
+    }
+}
+
 /// What the assistant gate decided about one spawn ([`assistant_gate`]).
 #[derive(Debug)]
 struct AssistantPlan {
@@ -1145,6 +1162,7 @@ pub async fn prepare(
     // boundary: pass them on every platform for local multi-root runs.  Pick the
     // root containing cwd as "own" so box-scoped member tabs do not receive a
     // redundant flag for the directory they already started in.
+    let mut added_box_roots = Vec::new();
     if let Some(roots) = fence_roots.as_deref() {
         let own = roots
             .iter()
@@ -1152,7 +1170,7 @@ pub async fn prepare(
             .max_by_key(|root| root.components().count())
             .cloned()
             .unwrap_or_else(|| std::path::PathBuf::from(&opts.cwd));
-        crate::services::agent_fence::add_box_root_args(&mut opts, roots, &own);
+        added_box_roots = crate::services::agent_fence::add_box_root_args(&mut opts, roots, &own);
     }
 
     // The spawn's generation, before any grant: a teardown of an earlier spawn
@@ -1628,6 +1646,7 @@ pub async fn prepare(
                     Some(home) => home,
                     None => prepare_agent_home(&scope_id, roots, opts.local_model).await?,
                 };
+                trust_added_box_roots(&agent_cli, &home.dir, &added_box_roots).await;
                 #[cfg(target_os = "linux")]
                 crate::services::agent_fence::wrap_pty_options_bwrap(
                     &mut opts, roots, &scope_id, &home.dir,
@@ -1679,6 +1698,7 @@ pub async fn prepare(
                     Some(home) => home,
                     None => prepare_agent_home(&scope_id, roots, opts.local_model).await?,
                 };
+                trust_added_box_roots(&agent_cli, &home.dir, &added_box_roots).await;
                 features = Some(LocalAgentFeatures {
                     cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
                     sandbox: crate::services::agent_features::Sandbox::Unfenced,

@@ -297,7 +297,12 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
         .max_by_key(|root| root.components().count())
         .cloned()
         .unwrap_or_else(|| cwd.clone());
-    crate::services::agent_fence::add_box_root_args(&mut opts, &roots, &own);
+    let added = crate::services::agent_fence::add_box_root_args(&mut opts, &roots, &own);
+    if cli == "claude" {
+        if let Err(e) = crate::services::agent_home::trust_claude_added_dirs(&home_dir, &added) {
+            eprintln!("agent shim: trust the box roots for Claude: {e}");
+        }
+    }
     #[cfg(target_os = "linux")]
     crate::services::agent_fence::wrap_pty_options_bwrap(&mut opts, &roots, &scope_id, &home_dir)?;
     #[cfg(target_os = "macos")]
