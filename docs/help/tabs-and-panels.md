@@ -1,7 +1,7 @@
 ---
 id: tabs-and-panels
 title: Tabs, panes and panels
-keywords: [tab, pane, split, subwindow, detach, popout, file panel, file tree, viewer, root console, header, menu, restore]
+keywords: [tab, tab search, find tab, pane, split, subwindow, detach, popout, file panel, file tree, viewer, root console, header, menu, restore]
 related: [files-and-viewers, root-console, keyboard, scheduled-prompts, project-desktop]
 ---
 
@@ -66,6 +66,18 @@ Settings → Agents → Manage CLIs (see `agent-clis`).
   to go to it). Right-click again to open or unlink the card.
 
 Your layout is saved automatically per project.
+
+## Find a tab
+
+Press **Ctrl+Shift+A** (also from a focused terminal), or pick `+` →
+**Search tabs…**, to search every project's tabs at once. The project on
+screen comes first. Type part of a tab's name, or its project's name, to narrow
+the list; ↑/↓ and Enter jump to the tab, switching project when needed.
+Ctrl+Enter opens it beside the focused subwindow instead. In a popped-out
+window the search covers that window's tabs.
+
+The search is the command palette (Ctrl+K) narrowed to tabs: typing `@` at the
+start of the palette does the same. Rebind the chord in Settings → Keyboard.
 
 ## What comes back after a restart
 

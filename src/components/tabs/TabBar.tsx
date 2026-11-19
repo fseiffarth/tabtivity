@@ -113,6 +113,7 @@ import { CliHandoffMenuItem } from "../agents/CliHandoffMenuItem";
 import { useTabSchedule } from "../../lib/agents/useTabSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
 import { useHoverAnchorGuard } from "../../lib/useHoverAnchorGuard";
+import { openPalette, openTabSearch } from "../../lib/shortcuts/paletteEvent";
 import { ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
@@ -2083,7 +2084,19 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   disabled: false,
                   shortcut: "commandPalette",
                   onPick: () => {
-                    window.dispatchEvent(new Event("app:open-palette"));
+                    openPalette();
+                    setMenuPos(null);
+                  },
+                }, {
+                  key: "search-tabs",
+                  label: t("palette.menuRowTabs"),
+                  dot: <SearchIcon />,
+                  color: "var(--text-secondary)",
+                  disabled: false,
+                  shortcut: "searchTabs",
+                  untested: "palette.tabSearch",
+                  onPick: () => {
+                    openTabSearch();
                     setMenuPos(null);
                   },
                 }, {

@@ -163,6 +163,20 @@ afterEach(() => {
 });
 
 describe("steering in a popout", () => {
+  it("the tab search chord opens the popout's palette on @, from a focused field too", async () => {
+    mount();
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+    field.focus();
+    act(() => {
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "A", ctrlKey: true, shiftKey: true, bubbles: true }));
+    });
+    await settle();
+    const input = document.querySelector<HTMLInputElement>(".command-palette-input");
+    expect(input?.value).toBe("@");
+    expect([...document.querySelectorAll(".command-palette-label")].map((el) => el.textContent)).toEqual(["A", "B", "C"]);
+  });
+
   it("the chord turns it on, on the popout's tabs, and lights the markers", () => {
     mount();
     chord();

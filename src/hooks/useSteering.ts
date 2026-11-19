@@ -117,6 +117,7 @@ import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../lib/terminal/terminalScroll";
 import { documentScroller, focusDocumentEditor, focusDocumentEditorWhenReady, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
 import { chordMatches, isLoneModifier, resolveChord, type ShortcutMap } from "../lib/shortcuts/shortcuts";
+import { openTabSearch } from "../lib/shortcuts/paletteEvent";
 
 export type SteeringSurface = "main" | "popout";
 
@@ -1433,6 +1434,13 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       if (!popout && !modalUp && chordMatches(resolveChord("projectShell", overrides), e)) {
         swallow();
         openProjectShellInRootConsole();
+        return;
+      }
+      // The tab search (the palette on `@`), from a focused terminal too and
+      // in a popout, whose palette lists that window's tabs.
+      if (!modalUp && chordMatches(resolveChord("searchTabs", overrides), e)) {
+        swallow();
+        openTabSearch();
         return;
       }
       // A new tab in the focused pane, keyboard focus and all — from a focused
