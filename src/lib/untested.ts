@@ -185,6 +185,7 @@ export const UNTESTED = {
   "compareView.sideTimes": { area: "embed", what: "CompareView · sync resolver: per-side modified time, \"newer\" badge, per-change commit/save times beside Take and on the numbered chips" },
   "syncHandoff.resolver": { area: "embed", what: "SyncMergeView · Hand to an agent: writes both versions + CONFLICTS.md into the project's agent home (~/handoff/<id>), then opens an agent tab / queues the prompt at an open one / copies it; Load resolved reads the agent's resolved/<file> into Result (never saves or syncs)" },
   "syncHandoff.reveal": { area: "embed", what: "Sync resolver / side panel · Hand to an agent dialog · Show folder opens the export folder (~/handoff/<id> in the project's agent home) in the OS file manager" },
+  "syncHandoff.newAgent": { area: "embed", what: "Sync resolver / side panel · Choose which local agent opens in a new tab with the handoff prompt" },
   "syncHandoff.panel": { area: "files", what: "ProjectFilesView · orange list · Hand N to an agent: the files both sides changed, exported in one folder" },
   "deckView.presentationTitle": { area: "embed", what: "DeckView · Presentation" },
   "fileViewer.autocompleteLabel": { area: "embed", what: "FileViewerPane · Autocomplete" },

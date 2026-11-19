@@ -9729,6 +9729,8 @@ export const enSource = {
   "syncHandoff.where": "That folder is in the project's agent home, outside the project, and an agent tab of this project can read and write it. The agent is asked to write each merged file to resolved/ there; nothing is saved or synced until you review it in the resolver and press Resolve.",
   "syncHandoff.skipped": "{count} file(s) could not be read and were left out.",
   "syncHandoff.newTab": "Open a new agent tab with this prompt",
+  "syncHandoff.newAgent": "Agent for the new tab",
+  "syncHandoff.noNewAgents": "No local agent is available for a new tab.",
   "syncHandoff.sendTo": "Send the prompt to an open agent tab",
   "syncHandoff.noTabs": "No open local agent tab in this project.",
   "syncHandoff.promptLabel": "Prompt",

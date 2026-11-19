@@ -9336,6 +9336,8 @@ export const dict: Dict = {
   "syncHandoff.where": "Der Ordner liegt im Agenten-Home des Projekts, außerhalb des Projekts, und ein Agenten-Tab dieses Projekts kann ihn lesen und beschreiben. Der Agent soll jede zusammengeführte Datei nach resolved/ schreiben; nichts wird gespeichert oder abgeglichen, bis du sie im Konfliktlöser prüfst und auf Auflösen drückst.",
   "syncHandoff.skipped": "{count} Datei(en) konnten nicht gelesen werden und wurden ausgelassen.",
   "syncHandoff.newTab": "Neuen Agenten-Tab mit diesem Prompt öffnen",
+  "syncHandoff.newAgent": "Agent für den neuen Tab",
+  "syncHandoff.noNewAgents": "Für einen neuen Tab ist kein lokaler Agent verfügbar.",
   "syncHandoff.sendTo": "Prompt an einen offenen Agenten-Tab senden",
   "syncHandoff.noTabs": "Kein offener lokaler Agenten-Tab in diesem Projekt.",
   "syncHandoff.promptLabel": "Prompt",

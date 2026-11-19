@@ -6,14 +6,15 @@ import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, effectiveTabLocation, type TabEntry } from "../../stores/tabs";
 import { queuePromptForTab } from "../../stores/agents/agentPrompts";
 import { isPromptTargetTab } from "../agents/promptTarget";
-import { agentItemFor, newAgentTabForDraft, promptChartNewTabAgent } from "../../lib/agents/prompt/newTab";
-import { EMPTY_CUSTOM_AGENTS } from "../../lib/tabs/newTabItems";
+import { newAgentTabForDraft, promptChartNewTabAgent } from "../../lib/agents/prompt/newTab";
+import { AGENT_ITEMS, customAgentToItem } from "../../lib/tabs/newTabItems";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { resolveProjectDirectory } from "../../types";
 import type { HandoffFile } from "../../lib/viewers/syncHandoff";
 import { DialogShell } from "../common/PromptDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
+import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
 
 /** What the backend answers (`services::sync_handoff::HandoffExport`). */
 export interface HandoffExport {
@@ -58,22 +59,36 @@ export function SyncHandoffButton({
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
   const tabs = useTabsStore((s) => (projectId ? s.tabsByScope[projectId] : undefined)) ?? EMPTY_TABS;
   const addTabToScope = useTabsStore((s) => s.addTabToScope);
-  const newTabAgent = useSettingsStore((s) => promptChartNewTabAgent(s.settings));
-  const customAgents = useSettingsStore((s) => s.settings?.custom_agents ?? EMPTY_CUSTOM_AGENTS);
+  const defaultAgent = useSettingsStore((s) => promptChartNewTabAgent(s.settings));
 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ out: HandoffExport; skipped: number } | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [pickedAgentKey, setPickedAgentKey] = useState("");
+  const hostPinned = isHostPinned(project);
+  const { enabledAgents, customAgents, installedCustom } = useAddTabMenuData(projectId ?? "", {
+    active: result !== null && !hostPinned,
+  });
+  const agentChoices = hostPinned ? [] : [
+    ...AGENT_ITEMS.filter((item) => enabledAgents?.has(item.cmd)).map((item) => ({ value: item.cmd, item })),
+    ...customAgents
+      .filter((agent) => installedCustom?.has(agent.cmd))
+      .map((agent) => ({ value: `custom:${agent.id}`, item: customAgentToItem(agent) })),
+  ];
+  const pickedAgent = agentChoices.find((choice) => choice.value === pickedAgentKey)
+    ?? agentChoices.find((choice) => choice.item.cmd === defaultAgent)
+    ?? agentChoices[0];
+  const loadingAgents = !hostPinned && (enabledAgents === null || installedCustom === null);
 
   // Only a tab that runs on THIS machine can read the folder (it sits in the
   // project's local agent home); a tab on the host cannot.
   const localTabs = useMemo(
     () =>
       tabs.filter(
-        (tab) => isPromptTargetTab(tab) && effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }) === "local",
+        (tab) => isPromptTargetTab(tab) && effectiveTabLocation(tab, { hostPinned }) === "local",
       ),
-    [tabs, project],
+    [tabs, hostPinned],
   );
   // Agent tabs are often all called "Claude": a repeated label gets the tab's
   // place in the project's tab strip, so the picker tells them apart.
@@ -117,17 +132,16 @@ export function SyncHandoffButton({
   };
 
   const openNew = () => {
-    if (!projectId) return;
+    if (!projectId || !pickedAgent) return;
     const spec = newAgentTabForDraft({
-      agent: newTabAgent,
-      customAgents,
+      agent: pickedAgent.item,
       cwd: project ? resolveProjectDirectory(project) : "",
       projectName: project?.name ?? "",
       t,
     });
     addTabToScope(projectId, spec.tab);
     void queuePromptForTab(projectId, spec.tab.scheduleTargetId, prompt, { preface: spec.preface })
-      .then(() => setNote(t("syncHandoff.opened", { agent: agentItemFor(newTabAgent, customAgents).label })))
+      .then(() => setNote(t("syncHandoff.opened", { agent: pickedAgent.item.label })))
       .catch((e) => setError(t("syncHandoff.failed", { reason: String(e) })));
   };
 
@@ -195,9 +209,23 @@ export function SyncHandoffButton({
             {t("syncHandoff.promptLabel")}
             <textarea readOnly value={prompt} rows={5} onFocus={(e) => e.currentTarget.select()} />
           </label>
-          <button type="button" className="btn-primary sync-handoff-new" autoFocus onClick={openNew}>
-            {t("syncHandoff.newTab")}
-          </button>
+          <div className="sync-handoff-send" role="group" aria-label={t("syncHandoff.newAgent")}>
+            <span className="sync-handoff-label">
+              {t("syncHandoff.newAgent")} <UntestedTag id="syncHandoff.newAgent" />
+            </span>
+            <Dropdown
+              className="dropdown-block sync-handoff-tab"
+              value={pickedAgent?.value ?? ""}
+              options={agentChoices.map(({ value, item }) => ({ value, label: item.label }))}
+              ariaLabel={t("syncHandoff.newAgent")}
+              placeholder={t(loadingAgents ? "common.loading" : "syncHandoff.noNewAgents")}
+              disabled={!pickedAgent}
+              onChange={setPickedAgentKey}
+            />
+            <button type="button" className="btn-primary sync-handoff-new" autoFocus disabled={!pickedAgent} onClick={openNew}>
+              {t("syncHandoff.newTab")}
+            </button>
+          </div>
           <div className="sync-handoff-send" role="group" aria-label={t("syncHandoff.sendTo")}>
             <span className="sync-handoff-label">{t("syncHandoff.sendTo")}</span>
             {picked ? (
