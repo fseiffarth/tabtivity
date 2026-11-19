@@ -5,7 +5,7 @@
  * main `TabBar`'s press on a × leaves the tab's own click path alone.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue([]) }));
 
@@ -261,7 +261,7 @@ describe("a closed tab's slot", () => {
   });
 });
 
-describe("TabBar: a press on a tab's ×", () => {
+describe("TabBar scrolling and close behavior", () => {
   function seed() {
     useTabsStore.setState({
       scope: "p",
@@ -288,6 +288,27 @@ describe("TabBar: a press on a tab's ×", () => {
   };
 
   afterEach(cleanup);
+
+  it("scrolls straight to the end when a jump activates the last tab", async () => {
+    const group = seed();
+    const [first, , last] = useTabsStore.getState().tabs;
+    useTabsStore.getState().setGroupActive(group.id, first.key);
+    const { container } = await act(async () =>
+      render(<TabBar groupId={group.id} projectCwd="/p" showGroupClose={false} />),
+    );
+    const strip = stripOf(container);
+    Object.defineProperty(strip, "scrollWidth", { value: 450 });
+    Object.defineProperty(strip, "clientWidth", { value: 300 });
+    let scrollLeft = 0;
+    Object.defineProperty(strip, "scrollLeft", {
+      get: () => scrollLeft,
+      set: (left: number) => { scrollLeft = Math.min(left, strip.scrollWidth - strip.clientWidth); },
+    });
+
+    await act(async () => useTabsStore.getState().setGroupActive(group.id, last.key));
+
+    expect(strip.scrollLeft + strip.clientWidth).toBe(strip.scrollWidth);
+  });
 
   it("does not start a rename on the active tab", () => {
     const group = seed();

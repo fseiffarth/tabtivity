@@ -737,11 +737,17 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     el.scrollBy({ left: dir * Math.max(120, el.clientWidth * 0.7), behavior: "smooth" });
   }, []);
 
-  // A clicked tab cut off at either edge of the strip scrolls fully into view —
-  // just far enough, and not at all when it already shows whole.
+  // Reveal a tab cut off at either edge of the strip.
   const revealTab = useCallback((tabEl: HTMLElement) => {
     const el = stripRef.current;
     if (!el || !el.contains(tabEl)) return;
+    if (tabEl === el.lastElementChild) {
+      // Go straight to the end so observeStripResize can keep it pinned.
+      // A smooth scroll can stop short when the left chevron appears mid-scroll
+      // and takes space from the viewport.
+      el.scrollLeft = el.scrollWidth;
+      return;
+    }
     const strip = el.getBoundingClientRect();
     const r = tabEl.getBoundingClientRect();
     const delta =
