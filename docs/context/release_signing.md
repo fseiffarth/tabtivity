@@ -82,12 +82,13 @@ Run these in your own terminal, not in a fenced agent tab — the fence hides
 
 ## How a release is cut
 
-A release only ever ships a commit `ci-cd.yml` passed on a branch push, and
-`release.yml` never rebuilds: it signs and publishes the bundles that green
+A release only ever ships a commit `ci-cd.yml` passed on a push to `main` —
+a run of the same commit on another branch never counts, since a branch push
+may skip an OS's tests (`CI-Only:`) — and `release.yml` never rebuilds: it signs and publishes the bundles that green
 run built (its `package*` artifacts). `ci-cd.yml` itself no longer runs on
 tags. Only `main` is released — `develop` reaches it by PR, and the in-app
 updater installs whatever is released. Every way in also waits for the
-commit's `security.yml` push run (cargo-audit, cargo-deny, npm audit, CodeQL)
+commit's `security.yml` run of the push to `main` (cargo-audit, cargo-deny, npm audit, CodeQL)
 under the same deadline as ci-cd, and refuses unless it passed — so a fresh
 advisory blocks a release even without a code change. Three ways in:
 
@@ -104,7 +105,8 @@ advisory blocks a release even without a code change. Three ways in:
   must equal `v<package.json version>` at its commit, and that commit must be
   on `main` (its tip or older; the pre-push hook checks this against the last
   fetch, the workflow against GitHub). The workflow waits for
-  that commit's ci-cd run; if it did not pass, or anything fails before the
+  that commit's own ci-cd run on `main` (a commit that was never the head of
+  a push to `main` has none and is refused); if it did not pass, or anything fails before the
   Release is published, it **deletes the tag again**, so every `v*` tag on
   GitHub has a Release and the name can be pushed again after a fix. The
   Release button already refuses while the tip's CI is running or red

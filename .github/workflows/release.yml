@@ -1,7 +1,7 @@
 name: release
 
 # A release is cut only from a commit ci-cd.yml and security.yml (dependency
-# advisories, CodeQL) already passed on a branch push, and nothing is rebuilt: the signed assets are the bundles that very
+# advisories, CodeQL) already passed on a push to main, and nothing is rebuilt: the signed assets are the bundles that very
 # run built and tested. Only main is released (RELEASE_BRANCH): develop
 # reaches it by PR, and the in-app updater installs whatever is released.
 # Three ways in:
@@ -15,7 +15,9 @@ name: release
 #     every check below passed and right before the Release is published.
 #   - Pushing a v* tag on a commit main holds (the app's Release button,
 #     which already refuses while CI is running or red, or a plain
-#     `git push`): waits for the tagged commit's ci-cd and security runs. If either did not
+#     `git push`): waits for the tagged commit's own ci-cd and security runs
+#     on main (a commit main never had at the head of a push has none and
+#     is refused). If either did not
 #     pass, or anything below fails before
 #     the Release is out, the tag is deleted again — a v* tag on GitHub always
 #     has a Release behind it, and the same name can be pushed again.
@@ -136,8 +138,10 @@ jobs:
           echo "Releasing ${SHA} as $tag"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      # The newest run of each gating workflow for this commit that a branch
-      # push started (old runs on v* tags don't count): ci-cd, which built the
+      # The newest run of each gating workflow for this commit that a push to
+      # RELEASE_BRANCH started — a run on another branch never counts, since a
+      # branch push may skip an OS's tests (`CI-Only:`, scripts/ci-skip.sh)
+      # and runs only related vitest files: ci-cd, which built the
       # bundles released below, and security (cargo-audit, cargo-deny, npm
       # audit, zizmor, CodeQL), so a dependency with a fresh advisory is not
       # signed and shipped through the updater on a green ci-cd alone. Green
@@ -162,9 +166,9 @@ jobs:
               fi
               # A failed read is retried, never taken for a verdict: failing
               # here would delete a pushed tag over an API blip.
-              if ! runs="$(gh api "repos/$GH_REPO/actions/workflows/$workflow/runs?head_sha=$SHA&event=push&per_page=50" \
-                --jq '[.workflow_runs[] | select((.head_branch // "") | test("^v[0-9]") | not)
-                       | {id, status, conclusion, branch: .head_branch, url: .html_url}]')"; then
+              if ! all="$(gh api "repos/$GH_REPO/actions/workflows/$workflow/runs?head_sha=$SHA&event=push&branch=$RELEASE_BRANCH&per_page=50")" \
+                || ! runs="$(jq --arg branch "$RELEASE_BRANCH" '[.workflow_runs[] | select(.head_branch == $branch)
+                       | {id, status, conclusion, branch: .head_branch, url: .html_url}]' <<<"$all")"; then
                 echo "Could not read the $name runs; trying again in a minute."
                 sleep 60
                 continue
@@ -182,7 +186,7 @@ jobs:
                 exit 1
               fi
               if [ "$total" -eq 0 ] && [ "$SECONDS" -ge "$appear_deadline" ]; then
-                echo "::error::No branch push ran $name on ${SHA::7}. Release a commit that is on a pushed branch."
+                echo "::error::$name has no run of its own on $RELEASE_BRANCH for ${SHA::7}: only a push to $RELEASE_BRANCH counts, since a run on another branch may have skipped tests. Release $RELEASE_BRANCH's tip (Actions → release → Run workflow on $RELEASE_BRANCH), or tag a commit that was the head of a push to $RELEASE_BRANCH."
                 exit 1
               fi
               echo "Waiting for $name on ${SHA::7} ($going running, $total runs)…"
