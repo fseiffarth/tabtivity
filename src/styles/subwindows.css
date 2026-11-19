@@ -4596,7 +4596,7 @@ button.terminal-reader-option:hover:not(:disabled) {
   padding-bottom: 20px;
   border-color: var(--border-color);
 }
-.terminal-reader-question.asked .terminal-reader-option {
+.terminal-reader-question.asked div.terminal-reader-option {
   cursor: var(--cur-default, default);
   opacity: 0.55;
 }

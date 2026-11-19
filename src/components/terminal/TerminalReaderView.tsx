@@ -90,6 +90,7 @@ import { useReaderVoice } from "./ReaderVoice";
 import { matchDraftEdit } from "../../lib/voice/voiceCommands";
 import { DraftVoiceHistory, type DraftEditNote } from "../../lib/voice/draftEdit";
 import { useReaderReadAloud } from "./ReaderReadAloud";
+import { useReaderAsyncAsk } from "./useReaderAsyncAsk";
 import { useAgentTurn } from "../../lib/voice/agentTurn";
 import { useExperimental } from "../../lib/experimental";
 import { useSettingsStore } from "../../stores/settings";
@@ -416,26 +417,34 @@ function LiveQuestion({ ptyId, live, subject, answered, failure, busy, onAnswer,
   );
 }
 
-/** A question the agent asked, kept in the chat once answered (the phone's
- * `AskedCard`): `LiveQuestion`'s card, its rows no longer buttons — the ones
- * the answer took ticked, an answer typed instead of picked as a row of its
- * own, and one turned down saying so. */
-function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion[]; time: ReactNode }) {
+/** The transcript's question card. Codex's pending questions can be answered
+ * here while it works. A recorded answer keeps the chosen rows ticked. */
+function AskedQuestions({ questions, time, asking, busy, sending, pick }: {
+  questions: readonly AskedQuestion[];
+  time: ReactNode;
+  asking?: boolean;
+  busy?: boolean;
+  sending?: boolean;
+  pick?: (question: AskedQuestion, row: number) => void;
+}) {
   const t = useT();
   return (
     <div className="terminal-reader-question asked" role="group" aria-label={t("mobile.transcript.asked")}>
-      <small className="terminal-reader-question-head">{t("mobile.transcript.asked")} <UntestedTag id="mobile.focus.askedCard" /></small>
+      <small className="terminal-reader-question-head">
+        {t("mobile.transcript.asked")}{" "}
+        {asking ? <UntestedTag id="terminal.reader.asyncAsk" /> : <UntestedTag id="mobile.focus.askedCard" />}
+      </small>
       {questions.map((asked, index) => {
         const typed = asked.answer !== undefined && !asked.options?.some((option) => option.chosen);
+        const pending = asking && asked.answer === undefined;
         return (
           <Fragment key={index}>
             {asked.header && <div className="terminal-reader-question-tabs"><span>{asked.header}</span></div>}
             <p className="terminal-reader-question-ask">{asked.question}</p>
-            <div className="terminal-reader-options">
+            <div className="terminal-reader-options" onKeyDown={pending && pick ? walkQuestionOptions : undefined}>
               {asked.options?.map((option, row) => {
                 const recommended = RECOMMENDED.exec(option.label);
-                return (
-                  <div key={row} className={option.chosen ? "terminal-reader-option chosen" : "terminal-reader-option"}>
+                const content = <>
                     <span className="terminal-reader-option-number">{option.chosen ? "✓" : row + 1}</span>
                     <span className="terminal-reader-option-label">
                       <span>
@@ -444,8 +453,10 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
                       </span>
                       {option.description && <small>{option.description}</small>}
                     </span>
-                  </div>
-                );
+                </>;
+                return pending && pick
+                  ? <button key={row} type="button" className="terminal-reader-option" disabled={busy} onClick={() => pick(asked, row)}>{content}</button>
+                  : <div key={row} className={option.chosen ? "terminal-reader-option chosen" : "terminal-reader-option"}>{content}</div>;
               })}
               {typed && (
                 <div className="terminal-reader-option chosen">
@@ -454,10 +465,11 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
                 </div>
               )}
             </div>
-            {asked.answer === undefined && <small className="terminal-reader-question-more">{t("mobile.transcript.notAnswered")}</small>}
+            {asked.answer === undefined && !sending && <small className="terminal-reader-question-more">{t(pending ? "mobile.transcript.asyncWaiting" : "mobile.transcript.notAnswered")}</small>}
           </Fragment>
         );
       })}
+      {sending && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
       {time}
     </div>
   );
@@ -540,7 +552,7 @@ type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflo
 
 /** Memoised: the Reader re-renders on every live-screen tick while an agent
  * streams, and a turn already drawn has nothing new to say then. */
-const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore }: {
+const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore, pickAsync, asyncBusy, asyncSending }: {
   /** A prompt bubble's "Restore files to before this" (`ReaderCheckpoints`). */
   restore?: ReactNode;
   action?: ReactNode;
@@ -551,6 +563,9 @@ const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, a
   agentLabel: string;
   use24h: boolean;
   onOpenAgent: (turn: SubagentPick) => void;
+  pickAsync?: ReturnType<typeof useReaderAsyncAsk>["pick"];
+  asyncBusy?: boolean;
+  asyncSending?: boolean;
 }) {
   const withFiles = useDrawsInbox(turn.text);
   const moment = chatMoment(turn.stamp);
@@ -604,7 +619,8 @@ const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, a
       </div>
     );
   }
-  if (turn.questions) return <AskedQuestions questions={turn.questions} time={time} />;
+  if (turn.questions) return <AskedQuestions questions={turn.questions} time={time} asking={turn.asking} busy={asyncBusy} sending={asyncSending}
+    pick={pickAsync && ((question, row) => { void pickAsync(turn.key, question, row); })} />;
   return (
     <div className={turn.plan ? "terminal-reader-turn agent plan" : "terminal-reader-turn agent"}>
       {turn.plan && <small className="terminal-reader-plan-head">{planLabel}</small>}
@@ -1758,6 +1774,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The dialog on screen takes no answer: one is on its way, or it has just
    * replaced the one answered. */
   const held = (!!answered && answered === live.signature) || (!!heldSignature && heldSignature === live.signature);
+  const canAnswerAsync = visible && shown && !changesOpen && !filesOpen && !browsed && !openStep
+    && !picking && agentFamily(agentLabel) === "codex";
+  const asyncAsk = useReaderAsyncAsk(ptyId, tab?.sessionId, canAnswerAsync);
 
   const answerFailed = (error: unknown) => {
     setAnswered("");
@@ -2767,7 +2786,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                     <span>{chatDayLabel(moment, now, dayLabels)}</span>
                   </div>
                 )}
-                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} restore={turn.kind === "prompt" ? checkpoints.restoreFor(turn.stamp) : undefined} action={
+                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent}
+                  pickAsync={turn.asking && canAnswerAsync ? asyncAsk.pick : undefined}
+                  asyncBusy={turn.asking && (!!asyncAsk.sending || !!answered || held)}
+                  asyncSending={turn.asking && asyncAsk.sending === turn.key}
+                  restore={turn.kind === "prompt" ? checkpoints.restoreFor(turn.stamp) : undefined} action={
                   !browsed && !openStep && canLogIn
                   && index === turns.length - 1 && turn.kind === "answer"
                   && readSignedOut(turn.text.split(/\r?\n/u).map((text) => ({ text }))) ? (
@@ -2815,7 +2838,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             subject={browsed ? null : permission}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             failure={answerFailure}
-            busy={held || !!shownLive.question?.readOnly}
+            busy={held || !!asyncAsk.sending || !!shownLive.question?.readOnly}
             onAnswer={answer}
             onType={answerText}
             onStep={step}
@@ -2946,8 +2969,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         acceptInserts={visible && shown}
         onReveal={onShowChat}
         steering={steering}
-        questionOpen={!!shownLive.question}
-        inputBlocked={!!shownLive.question || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working)}
+        questionOpen={!!shownLive.question || !!asyncAsk.sending}
+        inputBlocked={!!shownLive.question || !!asyncAsk.sending || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working)}
         suggestion={shownLive.suggestion}
         chipSlot={actionSlot || scope === ASSISTANT_SCOPE ? null : chipSlot}
         actionSlot={actionSlot}
