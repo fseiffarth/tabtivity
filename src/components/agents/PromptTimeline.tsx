@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { formatTime, weekdayLabel } from "../../lib/calendar/calendarTime";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
@@ -343,7 +344,11 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
           )}
         </div>
       </div>
-      {drag?.kind === "marquee" && (
+      {/* The marquee and the ghost are fixed to the viewport and placed in client
+          coordinates. The chart is a size container (`container-type` applies
+          layout containment), which makes IT their containing block: drawn in
+          place they would sit offset by the chart's own origin. They go to the body. */}
+      {drag?.kind === "marquee" && createPortal(
         <div
           className="agent-prompt-timeline-marquee"
           data-testid="prompt-timeline-marquee"
@@ -354,9 +359,10 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
             width: Math.abs(drag.x - drag.x1),
             height: Math.abs(drag.y - drag.y1),
           }}
-        />
+        />,
+        document.body,
       )}
-      {drag?.kind === "card" && (
+      {drag?.kind === "card" && createPortal(
         <div
           className="agent-prompt-timeline-ghost"
           style={{ width: drag.width, transform: `translate(${drag.x - drag.grabDx}px, ${drag.y - drag.grabDy}px)` }}
@@ -366,7 +372,8 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
           {drag.zone.kind !== "time" && dropLabel && (
             <span className={`agent-prompt-timeline-badge${drag.zone.kind === "none" || dropBlocked ? " is-blocked" : ""}`}>{dropLabel}</span>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

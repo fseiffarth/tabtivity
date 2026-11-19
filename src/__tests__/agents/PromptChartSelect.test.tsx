@@ -217,4 +217,30 @@ describe("PromptChart timeline selection", () => {
     expect(screen.queryByTestId("prompt-chart-selection")).toBeNull();
     expect(calls("agent_schedule_upsert")).toHaveLength(0);
   });
+
+  it("draws the carry ghost and the rubber band outside the chart, which is a size container", async () => {
+    // `container-type` gives the chart layout containment, and so makes it the
+    // containing block of any `position: fixed` child: the ghost and the band
+    // are placed in client coordinates and would be drawn offset by the chart's
+    // own origin. They are portaled to the body.
+    await act(async () => { render(<PromptChart scope="p" active tabs={[tab]} />); });
+    layout();
+    const chart = document.querySelector(".agent-prompt-chart")!;
+    fireEvent.pointerDown(cardOf("Early task"), { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 10, clientY: 20 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 750, clientY: 180 });
+    const ghost = document.querySelector(".agent-prompt-timeline-ghost")!;
+    expect(ghost).toBeTruthy();
+    expect(chart.contains(ghost)).toBe(false);
+    expect(ghost.parentElement).toBe(document.body);
+    await act(async () => { fireEvent.pointerUp(window, { pointerId: 1, clientX: 750, clientY: 180 }); });
+    expect(document.querySelector(".agent-prompt-timeline-ghost")).toBeNull();
+
+    fireEvent.pointerDown(screen.getByTestId("prompt-timeline-body"), { button: 0, pointerId: 1, clientX: 500, clientY: 105 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 480, clientY: 130 });
+    const band = screen.getByTestId("prompt-timeline-marquee");
+    expect(chart.contains(band)).toBe(false);
+    expect(band.parentElement).toBe(document.body);
+    await act(async () => { fireEvent.pointerUp(window, { pointerId: 1, clientX: 480, clientY: 130 }); });
+  });
 });
