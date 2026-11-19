@@ -413,3 +413,63 @@ Because of that failure the job skipped `test-dlib`; run by hand:
 5. A running turn: its card says Running with "n min so far", the bar on top
    reaches the Now line and grows; a tab asking a question reads Needs answer.
 6. Narrow the split below 900 px and select a card: the inspector scrolls into view.
+
+---
+
+# Final review (steps 1-10, reviewer C)
+
+Branch `prompt-chart-redesign-final` (from `prompt-chart-redesign-b` at `890c70cb7`). Range
+`4cf65018d..HEAD`; `develop` has moved on to `2d88a8224` and was neither merged nor
+rebased. Nothing was run live. No Rust changed in the review, so no `backend:stale`.
+
+## Fixed (each with a test that fails before)
+
+| Commit | Bug | Test |
+| --- | --- | --- |
+| `5034425f0` | Resume cleared `paused` first, then looked the tab up and sent. A closed tab, or a failed send, left the step unheld and unsent with nothing to trigger it (its predecessor had already finished). Now the tab is resolved and the step sent first; the flag is cleared after. | `PromptChartSequence.test.tsx`: Resume onto a closed tab, Resume whose send fails |
+| `4c7ce465b` | "After another prompt..." leaves the focus in the composer field, and the chart's Escape handler ignores keys in fields, so the documented Escape did nothing. Inside the composer Escape now ends an armed pick, and only that. | `PromptChartComposer.test.tsx` (two tests) |
+| `bda4b7ec4` | The inspector focused its heading on every mount once `focusToken > 0`, and the token never reset, so after one Enter every mouse selection stole the focus. The token is handed over only for the card the keyboard opened. | new `PromptChartFocus.test.tsx` |
+| `5724213e8` | The chart is a size container (`container-type: inline-size`, layout containment), which makes it the containing block of `position: fixed` children. The carry ghost and the marquee are fixed and placed in client coordinates, so they would draw offset by the chart's origin. Both are portaled to the body. Not measured in WebKitGTK (no display reachable from the review sandbox); the portal is right whatever the engine does. | `PromptChartSelect.test.tsx` (parent is `document.body`) |
+| `da16b8660` | Dead `.agent-prompt-session-row-head .agent-prompt-lamp` rule. | none (CSS) |
+
+## Flagged for user
+
+- **Container query vs. engine:** please confirm in the window that the carry ghost
+  follows the pointer and the stacked layout switches below 900 px.
+- **Skip next step when the predecessor already finished** (a stalled chain, e.g. a
+  closed tab): the new edge predecessor -> successor is written, but the host only
+  reacts to a turn ending, so nothing sends it. Resume handles this case
+  (`resumeSendsAtOnce`); Skip does not. `PromptChart.tsx` `skipStep`.
+- **Resume relies on `files_at`:** if the predecessor was never stamped (blame
+  failed, adopted row), Resume clears the pause and sends nothing.
+  `sequences.ts` `resumeSendsAtOnce`.
+- **Running on a stale row:** `livePromptStates` marks the newest delivered row with
+  no `files_at` as Running while the tab works; a terminal-typed prompt not yet
+  adopted makes an older never-stamped row read Running. `outcome.ts`.
+- **Inspector editor buffer:** `PromptInspector.tsx` resets the text on any
+  `card.message` change, so an edit arriving from elsewhere (phone, agent) while the
+  editor is open overwrites what was typed.
+- **Skip is three sequential link writes** (two deletes, one upsert); a failure in
+  the middle leaves the chain cut (the banner says why). The backend's join check
+  forbids a safer order.
+- **`terminal::pty_child` (outside this range):** the new spawn path does not reset
+  inherited SIGINT/SIGQUIT/SIGHUP dispositions the way `portable-pty` did. A product
+  launched with those ignored (nohup, a background job) hands the ignore to every
+  agent terminal, so Ctrl-C would not interrupt there. See below.
+
+## The two `pty_child` failures
+
+Not caused by this branch: the range changes only `schema/agent_prompts.rs` and
+`services/agent/agent_prompts.rs` under `src-tauri`; nothing in `terminal/`.
+
+- Foreground (`cargo test -p tabtivity --lib terminal::pty_child`, shell with
+  `SigIgn:4`): 7 passed. With `-- --test-threads=6`: 7 passed.
+- Under the gate job's launch (`nohup setsid bash -c ... &`, `SigIgn:0000000000000007`)
+  both fail identically on this branch and on a `develop` worktree
+  (`2d88a8224`), same command:
+  `left: "SigBlk:0000000000000000,SigIgn:0000000000000007,"` vs
+  `right: "...SigIgn:0000000000000000,"` and `ctrl_c_on_the_master_interrupts_the_foreground_program`:
+  `the child did not exit; output "ready\r\n"`.
+- Cause: a backgrounded non-interactive shell ignores SIGINT/SIGQUIT and `nohup`
+  ignores SIGHUP; the test process inherits that and `pty_child`'s spawn passes it to
+  the child, where the `portable-pty` path reset it. The tests were not edited.
