@@ -27,7 +27,6 @@ import { useTabLandStore } from "../../stores/drag/tabLand";
 import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
-import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
 import { tabDisplayLabel, tabTaskName } from "../../lib/agents/autoTabName";
 import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { useRemoteAgentMachines } from "./useRemoteAgentMachines";
@@ -874,12 +873,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     void worktreePicker.specFor(item).then((spec) => {
       if (!spec) return;
       focusGroup(groupId);
-      const launch = location ? { ...spec, location } : spec;
-      // An agent of this very launch that has not been asked anything yet is
-      // taken over instead of opening a second blank one.
-      const empty = findEmptyAgentTab(scope, useTabsStore.getState().tabs, launch);
-      if (empty) setActive(empty.key);
-      else addTab(launch, place);
+      addTab(location ? { ...spec, location } : spec, place);
     });
   }
 
