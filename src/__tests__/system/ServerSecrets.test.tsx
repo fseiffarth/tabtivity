@@ -4,7 +4,7 @@
  * the code.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ServerSecrets } from "../../components/server/ServerSecrets";
 import { loadSecrets, repinIdentity, signedAction, unlockWith } from "../../../mobile-web/src/secretsCore";
 
@@ -26,10 +26,18 @@ describe("ServerSecrets", () => {
   });
 
   it("renders nothing where no server answers", async () => {
-    const fetch = vi.fn(() => answer({ available: false }));
+    // The panel renders nothing before an answer too, so wait until the
+    // "not available" answer has been read and applied before asserting.
+    const answered = vi.fn();
+    const fetch = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => { answered(); return Promise.resolve({ available: false }); },
+    } as Response));
     vi.stubGlobal("fetch", fetch);
     const { container } = render(<ServerSecrets />);
-    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    await waitFor(() => expect(answered).toHaveBeenCalled());
+    await act(async () => {});
     expect(container.textContent).toBe("");
   });
 

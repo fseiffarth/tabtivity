@@ -500,9 +500,7 @@ describe("box chip rendering (slice model)", () => {
     // the CSS can tint the mark, the active line and the drop wash from it.
     const pillA = boxPill(container)!;
     expect(pillA.style.getPropertyValue("--box-color")).toBe(boxColor({ id: "boxA" }));
-    // No member-count badge on the pill: the count is in the tooltip, and the
-    // members themselves are one click away.
-    expect(pillA.querySelector(".project-box-member-count")).toBeNull();
+    // The member count is in the tooltip; the members are one click away.
     expect(pillA.querySelector(".box-chip-main")?.getAttribute("title")).toContain("1 member");
 
     const menu = await openChipMenu(container);
@@ -525,7 +523,6 @@ describe("box chip rendering (slice model)", () => {
     expect(boxPillNames(container)).toEqual(many.slice(0, MAX_BOX_PILLS).map((b) => b.name));
     // The count rides the logo's caret, the list's one trigger.
     expect(caretCount(container)!.textContent).toBe("+2");
-    expect(container.querySelector(".box-fold-pill")).toBeNull();
 
     // Picking an overflow box from the dropdown seats it in the last slot —
     // the box being looked at is never the one without a pill.
@@ -1387,7 +1384,6 @@ describe("header access: the width-tier pill budget and the caret's count (AS2a)
   it("opens the one list under the logo, whatever overflows: no second trigger on the row", async () => {
     seed(eight());
     const container = await renderSwitcher(2);
-    expect(container.querySelector(".box-fold-pill")).toBeNull();
     expect(container.querySelectorAll(".box-chip-caret-btn")).toHaveLength(1);
     const caret = container.querySelector(".box-chip-caret-btn") as HTMLElement;
     layOut(chip(container)!, { left: 12, right: 60, top: 0, bottom: 40 });

@@ -98,7 +98,7 @@ describe("drafts an agent wrote", () => {
     expect(openAgentDraft).toHaveBeenCalledWith(d);
     fireEvent.click(screen.getByRole("button", { name: /^Approve: file it under Drafted by agents/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("mail_agent_drafts_file", { drafts: [d] }));
-    expect(invoke).not.toHaveBeenCalledWith("mail_send", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("mail_draft_send", expect.anything());
   });
 
   it("✗ discards a waiting draft, and the mail group's Approve all files every waiting draft", async () => {

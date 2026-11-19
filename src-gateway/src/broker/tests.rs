@@ -126,8 +126,16 @@ async fn a_token_is_swapped_for_the_key_and_the_stream_is_metered_for_its_user()
     // A JSON answer is metered too; the user's own usage request sees it.
     let (status, _) = post(&base, &alice, r#"{"model":"m"}"#).await;
     assert_eq!(status, 200);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let own = ask(dir.path(), Peer::User("alice".into()), Request::Usage { cli: "claude".into() }).usage.unwrap();
+    // The meter records once the answer is dropped: poll for the second
+    // request (up to 2 s, like `month`) instead of sleeping a fixed time.
+    let mut own = ask(dir.path(), Peer::User("alice".into()), Request::Usage { cli: "claude".into() }).usage.unwrap();
+    for _ in 0..100 {
+        if own.usage.requests >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        own = ask(dir.path(), Peer::User("alice".into()), Request::Usage { cli: "claude".into() }).usage.unwrap();
+    }
     assert_eq!((own.usage.input, own.usage.output, own.usage.requests), (107, 53, 2));
     assert_eq!(own.billed, keys_wire::billed(&own.usage));
     let status = ask(dir.path(), Peer::Gateway, Request::Status).status.remove(0);

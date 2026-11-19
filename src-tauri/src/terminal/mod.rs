@@ -4740,7 +4740,7 @@ mod client_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn two_clients_on_one_tmux_tab_each_get_their_own_size_and_stream() {
         if !crate::services::tmux_local::tmux_available() {
-            eprintln!("tmux not installed; skipping");
+            crate::test_util::skip_or_fail("tmux", "tmux not installed");
             return;
         }
         let socket = format!("t2347-{}", std::process::id());

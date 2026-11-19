@@ -206,7 +206,7 @@ fn a_hover_preview_runs_no_shell_command_even_where_the_default_allows_it() {
         .into_iter()
         .find(|e| crate::paths::resolve_executable(e).is_some())
     else {
-        eprintln!("no TeX engine on PATH — skipping");
+        crate::test_util::skip_or_fail("tex", "no TeX engine on PATH");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -233,7 +233,7 @@ fn a_hover_preview_runs_no_shell_command_even_where_the_default_allows_it() {
     let bare: Vec<&String> = args.iter().filter(|a| *a != NO_SHELL_ESCAPE).collect();
     let _ = run_in_within_env(&doc, eng, &bare, PREVIEW_TIMEOUT, &envs);
     if !pwned.exists() {
-        eprintln!("{eng} ignores shell_escape=t here — skipping");
+        crate::test_util::skip_or_fail("tex", &format!("{eng} ignores shell_escape=t here"));
         return;
     }
     fs::remove_file(&pwned).unwrap();
@@ -270,7 +270,7 @@ fn a_hover_preview_reads_only_below_the_document() {
         .into_iter()
         .find(|e| crate::paths::resolve_executable(e).is_some())
     else {
-        eprintln!("no TeX engine on PATH — skipping");
+        crate::test_util::skip_or_fail("tex", "no TeX engine on PATH");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -321,7 +321,7 @@ fn a_hover_preview_reads_only_below_the_document() {
 #[test]
 fn a_build_engine_run_confines_luatex_writes() {
     if crate::paths::resolve_executable("lualatex").is_none() {
-        eprintln!("lualatex not on PATH — skipping");
+        crate::test_util::skip_or_fail("tex", "lualatex not on PATH");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -348,7 +348,7 @@ fn a_build_engine_run_confines_luatex_writes() {
     cmd.args(&args).current_dir(&doc).env("openout_any", "a");
     let _ = cmd.output();
     if !abs.exists() {
-        eprintln!("lualatex refuses the write even with openout_any=a — skipping");
+        crate::test_util::skip_or_fail("tex", "lualatex refuses the write even with openout_any=a");
         return;
     }
     fs::remove_file(&abs).unwrap();

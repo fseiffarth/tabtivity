@@ -839,8 +839,20 @@ fn every_lane_token_env_is_in_the_one_table() {
     let src = include_str!("../root_mcp.rs");
     let declared: Vec<&str> = src
         .lines()
-        .filter_map(|l| l.trim_start().strip_prefix("pub const "))
+        .filter_map(|l| {
+            // `const NAME` after any visibility: none, `pub`, `pub(crate)`, `pub(super)`, ...
+            let l = l.trim_start();
+            let l = match l.strip_prefix("pub") {
+                Some(rest) => match rest.strip_prefix('(') {
+                    Some(restricted) => restricted.split_once(')')?.1,
+                    None => rest,
+                },
+                None => l,
+            };
+            l.trim_start().strip_prefix("const ")
+        })
         .filter_map(|l| l.split(':').next())
+        .map(str::trim)
         .filter(|name| name.ends_with("TOKEN_ENV"))
         .collect();
     assert!(declared.len() >= 8, "{declared:?}");

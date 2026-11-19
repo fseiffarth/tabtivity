@@ -70,6 +70,25 @@ function reduceMotion(reduce: boolean) {
 
 const type = (label: string | RegExp, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 
+/** The auto-submit debounce in `mobile-web/src/screens/LocalUnlock.tsx` (a
+ *  literal `250` there, not exported). */
+const AUTO_SUBMIT_MS = 250;
+
+/** Types `value` under a fake clock and lets twice the auto-submit debounce
+ *  pass, so "nothing was submitted" is proven past the production timer rather
+ *  than raced against a real sleep. The clock is real again on return. */
+async function typeAndLetDebounceLapse(label: string | RegExp, value: string) {
+  vi.useFakeTimers();
+  try {
+    type(label, value);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_SUBMIT_MS * 2);
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("Mobile local unlock — setup", () => {
   it("keeps digits only, and enables Set PIN only for a long-enough, confirmed PIN", async () => {
     const onUnlocked = vi.fn();
@@ -123,8 +142,7 @@ describe("Mobile local unlock — unlock", () => {
     expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
     expect(field.maxLength).toBe(6);
     // Five digits: valid as a PIN, but not the record's length, so nothing runs.
-    type("PIN", "12345");
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await typeAndLetDebounceLapse("PIN", "12345");
     expect(lock.unlock).not.toHaveBeenCalled();
     type("PIN", "1234567");
     // Trimmed to the recorded length rather than submitting a 7-digit guess.
@@ -155,10 +173,9 @@ describe("Mobile local unlock — unlock", () => {
     expect(button.disabled).toBe(true);
     type("PIN", "123");
     expect(button.disabled).toBe(true);
-    type("PIN", "1234");
+    await typeAndLetDebounceLapse("PIN", "1234");
     expect(button.disabled).toBe(false);
     // Nothing auto-submits without a known length, however long the reader waits.
-    await new Promise((resolve) => setTimeout(resolve, 400));
     expect(lock.unlock).not.toHaveBeenCalled();
     fireEvent.click(button);
     await waitFor(() => expect(onUnlocked).toHaveBeenCalledOnce());
@@ -190,7 +207,9 @@ describe("Mobile local unlock — unlock", () => {
     const onUnlocked = vi.fn();
     render(<LocalUnlock setup={false} onUnlocked={onUnlocked} />);
     await screen.findByRole("button", { name: "Unlock with fingerprint" });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The prompt effect runs with the render the button above belongs to; this
+    // only lets any queued promise callbacks settle (no timer is involved).
+    await act(async () => {});
     expect(lock.biometric).not.toHaveBeenCalled();
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     act(() => { window.dispatchEvent(new Event("focus")); });

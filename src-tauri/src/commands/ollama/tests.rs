@@ -2000,8 +2000,9 @@ fn the_vibe_provider_points_at_the_same_server() {
     assert!(block.ends_with("/v1\"\napi_key_env_var = \"\"\napi_style = \"openai\"\nbackend = \"generic\"\nreasoning_field_name = \"reasoning_content\"\nproject_id = \"\"\nregion = \"\"\n\n[providers.extra_headers]\n"), "{block}");
 }
 
-/// Integration test: only runs when Ollama is reachable and has models.
+/// Integration test: needs a live Ollama with models; run with `--ignored`.
 #[test]
+#[ignore = "needs a running Ollama"]
 fn prepare_local_agent_integration_if_ollama_running() {
     if TcpStream::connect_timeout(
         &"127.0.0.1:11434".parse().unwrap(),

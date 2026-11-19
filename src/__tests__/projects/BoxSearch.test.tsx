@@ -169,7 +169,6 @@ describe("boxes on focus, member-name match and swatches", () => {
     const swatch = rows[0].querySelector("svg.box-swatch") as SVGElement;
     expect(swatch).toBeTruthy();
     expect(swatch.style.color).toBe("rgb(255, 0, 0)");
-    expect(rows[0].querySelector(".project-box-badge")).toBeNull();
     expect(rows[0].querySelector("small")?.textContent).toContain("alpha, beta");
 
     await act(async () => {

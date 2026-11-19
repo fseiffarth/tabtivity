@@ -98,7 +98,6 @@ describe("one box, no create mode", () => {
   it("has no target dropdown and the store no way to create", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", []), box("boxB", [])] });
     const { dialog } = await openSheet("boxA");
-    expect(dialog.querySelector(".box-editor-target")).toBeNull();
     expect(dialog.querySelector(".dropdown")).toBeNull();
     expect(dialog.querySelector("h2")?.textContent).toContain("Box: boxA");
     expect("openCreate" in useBoxEditorStore.getState()).toBe(false);

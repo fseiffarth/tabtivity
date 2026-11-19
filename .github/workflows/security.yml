@@ -133,6 +133,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: '"$RUNNER_TEMP/zizmor" --format github .github'
 
+      # The helper scripts' own unit tests (stdlib only), once per run; no
+      # gate or CI step ran them before.
+      - name: Test the gate-job and fresh-VM scripts
+        run: |
+          python3 -m unittest discover -s scripts -p test_gate_job.py
+          python3 -m unittest discover -s scripts -p test_fresh_vm.py
+
   # SAST. Findings land in the repo's Security → Code scanning tab, not in the
   # job result: analyze succeeds whatever it finds, so this never blocks a push.
   # build-mode none: all three extract from source, so the job needs neither

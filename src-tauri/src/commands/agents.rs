@@ -2941,7 +2941,7 @@ mod tests {
                 .into_iter()
                 .flatten()
             {
-                if cmd.trim_start().starts_with("npm install -g") {
+                if cmd.contains("npm install -g") {
                     assert!(
                         npm_package_from_cmd(cmd).is_some(),
                         "{}'s npm install command did not parse: {cmd}",
@@ -3043,13 +3043,18 @@ mod tests {
     #[test]
     fn an_npm_installed_agent_checks_the_package_it_installs() {
         use crate::services::agent_latest::{source_for, Source};
+        let mut compared = 0;
         for spec in AGENTS {
             if let Some(pkg) = npm_package_from_cmd(spec.install_cmd) {
                 if let Some(source) = source_for(spec.id) {
                     assert_eq!(source, Source::Npm(pkg), "{}", spec.id);
+                    compared += 1;
                 }
             }
         }
+        // A registry that stops pairing npm installers with an update source
+        // must not leave this loop comparing nothing.
+        assert!(compared > 0, "no npm-installed agent has an update source");
     }
 
     #[cfg(windows)]

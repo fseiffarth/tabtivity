@@ -8,7 +8,8 @@
 //! `default_directory`). It was ripped out on 2026-06-30; this test fails the
 //! build if any such foreign-config write marker reappears in the source tree.
 //!
-//! Privacy: the scan reads only files under this crate's own `src/` tree, and on
+//! Privacy: the scan reads only files under the workspace's own `src-tauri/src`
+//! and `src-core/src` trees (services move from the former to the latter), and on
 //! failure reports only the repo-relative file path and the matched marker —
 //! never file contents, absolute paths, or any user/home data. This test file
 //! is excluded from its own scan so its marker literals don't self-match
@@ -46,15 +47,19 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 fn no_source_writes_foreign_browser_config() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let src_dir = manifest_dir.join("src");
+    let workspace = manifest_dir.parent().expect("src-tauri sits in the workspace root");
+    let src_dirs = [manifest_dir.join("src"), workspace.join("src-core").join("src")];
 
     let mut files = Vec::new();
-    collect_rs_files(&src_dir, &mut files);
-    assert!(
-        !files.is_empty(),
-        "guard scanned no source files — expected {}/**.rs to exist",
-        src_dir.display()
-    );
+    for src_dir in &src_dirs {
+        let before = files.len();
+        collect_rs_files(src_dir, &mut files);
+        assert!(
+            files.len() > before,
+            "guard scanned no source files — expected {}/**.rs to exist",
+            src_dir.display()
+        );
+    }
 
     // Report only repo-relative paths + the matched marker; never file contents.
     let mut violations: Vec<String> = Vec::new();
@@ -64,7 +69,7 @@ fn no_source_writes_foreign_browser_config() {
             Err(_) => continue,
         };
         let rel = file
-            .strip_prefix(&manifest_dir)
+            .strip_prefix(workspace)
             .unwrap_or(file)
             .to_string_lossy()
             .to_string();

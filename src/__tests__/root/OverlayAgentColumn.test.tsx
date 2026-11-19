@@ -168,7 +168,12 @@ describe("OverlayAgentColumn", () => {
     await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} />);
 
     expect(screen.getByText("Shown in a popout window")).toBeTruthy();
-    expect(screen.queryByText("Shown in the root console")).toBeNull();
+    // The open console does not claim the tab: no pane is drawn here, the key
+    // is not marked shown (so nothing else steps aside for it), there is no ↗
+    // door into the console for it.
+    expect(screen.queryByTestId("pane")).toBeNull();
+    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(false);
+    expect(screen.queryByTitle("Open in the root console")).toBeNull();
   });
 
   it("↗ hides the column and opens the root console on the tab", async () => {

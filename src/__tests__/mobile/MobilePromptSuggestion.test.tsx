@@ -80,6 +80,7 @@ class FakeWebSocket {
   close() { this.readyState = 3; }
 }
 
+import { DRAFT_SAVE_DELAY } from "../../../mobile-web/src/drafts";
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { BRAND, storageKey } from "../../lib/brand";
 
@@ -104,7 +105,11 @@ const paint = async (text: string) => {
   const payload = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(payload).set(bytes);
   act(() => FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent));
-  await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+  await act(async () => {
+    // Under a fake clock the 200 ms are advanced, not slept.
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(200);
+    else await new Promise((resolve) => window.setTimeout(resolve, 200));
+  });
 };
 
 const hint = () => (field().classList.contains("suggested") ? field() : null);
@@ -191,9 +196,17 @@ describe(`${BRAND.display} Mobile composer — Claude's prompt suggestion`, () =
   });
 
   it("does not keep an untouched suggestion as the tab's saved draft", async () => {
-    await open(`${DIM}❯ ${SUGGESTION}`);
-    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 600)); });
-    expect(localStorage.getItem(storageKey("mobile.drafts")) ?? "").not.toContain("ask for my name");
+    // On a fake clock from the start, so the draft-save timer (armed when the
+    // suggestion is filled in) is certainly past its delay when we look.
+    vi.useFakeTimers();
+    try {
+      await open(`${DIM}❯ ${SUGGESTION}`);
+      expect(field().value).toBe(SUGGESTION);
+      await act(async () => { await vi.advanceTimersByTimeAsync(DRAFT_SAVE_DELAY * 3); });
+      expect(localStorage.getItem(storageKey("mobile.drafts")) ?? "").not.toContain("ask for my name");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reads a typed (not dim) draft in the CLI's box as no suggestion", async () => {

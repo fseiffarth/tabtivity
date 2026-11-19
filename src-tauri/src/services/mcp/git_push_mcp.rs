@@ -1997,6 +1997,44 @@ mod tests {
     use std::process::Command;
 
     fn have_git() -> bool { Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success()) }
+
+    /// Process env is shared by every parallel test. A test that sets a
+    /// variable holds this lock until the guard drops (which also restores the
+    /// prior value), so no other env-touching test can remove it mid-run and
+    /// turn a "the token never reaches the hook" check into a trivial pass.
+    /// Unix only, like the tests that use it.
+    #[cfg(unix)]
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(unix)]
+    struct ScopedEnv {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    #[cfg(unix)]
+    impl ScopedEnv {
+        fn set(vars: &[(&'static str, &str)]) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let saved = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
+            for (k, v) in vars {
+                std::env::set_var(k, v);
+            }
+            ScopedEnv { saved, _lock: lock }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ScopedEnv {
+        fn drop(&mut self) {
+            for (k, prior) in self.saved.drain(..) {
+                match prior {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
     fn sh(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git").args(args).current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
@@ -2407,9 +2445,10 @@ mod tests {
         assert_eq!(resolve_pre_push_hook(&work).unwrap(), hook);
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
         let before = plan(&work, &policy, None, &GitAuth::none()).unwrap();
-        std::env::set_var(crate::app_env!("GIT_TOKEN"), "leak-me-not");
-        let (after, output) = preflight(&work, HookBoundary::Host, before.clone()).unwrap();
-        std::env::remove_var(crate::app_env!("GIT_TOKEN"));
+        let (after, output) = {
+            let _env = ScopedEnv::set(&[(crate::app_env!("GIT_TOKEN"), "leak-me-not")]);
+            preflight(&work, HookBoundary::Host, before.clone()).unwrap()
+        };
         assert!(output.contains("hook says hi"), "{output}");
         let seen_file = work.join(".git").join("seen.txt");
         let seen = std::fs::read_to_string(&seen_file).unwrap();
@@ -2426,16 +2465,18 @@ mod tests {
         assert_eq!(output.matches("hook says hi").count(), 2, "{output}");
         // A hook that adds a commit on every run is refused, not chased.
         std::fs::remove_file(&seen_file).unwrap();
-        std::env::set_var("HOOK_ALWAYS", "1");
-        let failure = preflight(&work, HookBoundary::Host, plan(&work, &policy, None, &GitAuth::none()).unwrap()).unwrap_err();
-        std::env::remove_var("HOOK_ALWAYS");
+        let failure = {
+            let _env = ScopedEnv::set(&[("HOOK_ALWAYS", "1")]);
+            preflight(&work, HookBoundary::Host, plan(&work, &policy, None, &GitAuth::none()).unwrap()).unwrap_err()
+        };
         assert_eq!(failure.category, Category::PreflightFailed);
         assert!(failure.message.contains("again"), "{}", failure.message);
         assert_eq!(std::fs::read_to_string(&seen_file).unwrap().lines().filter(|l| l.starts_with("refs/heads/")).count(), 2, "run twice, never a third time");
         // Exit 1 refuses with the output.
-        std::env::set_var("HOOK_EXIT", "1");
-        let failure = preflight(&work, HookBoundary::Host, plan(&work, &policy, None, &GitAuth::none()).unwrap()).unwrap_err();
-        std::env::remove_var("HOOK_EXIT");
+        let failure = {
+            let _env = ScopedEnv::set(&[("HOOK_EXIT", "1")]);
+            preflight(&work, HookBoundary::Host, plan(&work, &policy, None, &GitAuth::none()).unwrap()).unwrap_err()
+        };
         assert_eq!(failure.category, Category::PreflightFailed);
         assert!(failure.output.contains("hook says hi"));
     }
@@ -2533,9 +2574,10 @@ mod tests {
         assert_eq!(failure.trust.as_ref().and_then(|t| t["fingerprint"].as_str()), Some("f"));
         assert!(!marker.exists(), "an unapproved hook ran on the host");
         let approve = |_: &Path| Ok::<(), String>(());
-        std::env::set_var(crate::app_env!("GIT_TOKEN"), "leak-me-not");
-        let ran = preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, &GitAuth::none()).unwrap(), &approve);
-        std::env::remove_var(crate::app_env!("GIT_TOKEN"));
+        let ran = {
+            let _env = ScopedEnv::set(&[(crate::app_env!("GIT_TOKEN"), "leak-me-not")]);
+            preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, &GitAuth::none()).unwrap(), &approve)
+        };
         ran.map_err(|f| f.message).expect("an approved hook lets the push go on");
         assert_eq!(std::fs::read_to_string(&marker).unwrap(), "tok=unset");
     }

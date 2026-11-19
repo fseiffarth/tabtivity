@@ -352,6 +352,11 @@ jobs:
     if: ${{ !cancelled() && needs.ci-plan.outputs.skip_linux != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      # The tests that need an outside tool fail, not skip, for these (see
+      # src-tauri/src/test_util.rs): tex = pdflatex/xelatex/lualatex from the
+      # texlive packages below, tmux, isoinfo (genisoimage), python3 (preinstalled).
+      CI_REQUIRE_TOOLS: tex,tmux,isoinfo,python3
 
     steps:
       - name: Checkout
@@ -370,7 +375,11 @@ jobs:
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            genisoimage \
+            texlive-latex-base \
+            texlive-luatex \
+            tmux
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
