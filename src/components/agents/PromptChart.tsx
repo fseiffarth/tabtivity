@@ -221,8 +221,10 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const [selectedSeq, setSelectedSeq] = useState<string | null>(null);
   /** The card whose prompt is open in the inspector's editor. */
   const [editId, setEditId] = useState<string | null>(null);
-  /** Bumped when a keyboard open should move focus into the inspector. */
+  /** Bumped when a keyboard open should move focus into the inspector, and the
+   *  card it was asked for: an inspector that mounts for a click is not focused. */
   const [focusToken, setFocusToken] = useState(0);
+  const [focusFor, setFocusFor] = useState<string | null>(null);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [linkKind, setLinkKind] = useState<"related" | "after">("after");
   /** The composer's "After another prompt…": the draft it wrote, waiting for
@@ -641,9 +643,16 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const closeInspectorRef = useRef<() => void>(() => {});
   /** Selecting another card closes the inspector's editor. */
   const select = (id: string) => {
+    setFocusFor(null);
     setSelected(id);
     setSelectedSeq(null);
     setEditId((current) => (current === id ? current : null));
+  };
+  /** Enter or Space on a card: select was just called for it (batched with
+   *  this), and the inspector takes the focus. */
+  const openInspector = (id: string) => {
+    setFocusFor(id);
+    setFocusToken((value) => value + 1);
   };
   const selectedCard = selected ? cardById(selected) : undefined;
   const selectedSequence = selectedSeq ? sequences.find((sequence) => sequence.id === selectedSeq) : undefined;
@@ -1060,7 +1069,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
           select(latest.id);
           clearMulti();
         }}
-        onOpen={() => setFocusToken((value) => value + 1)}
+        onOpen={() => openInspector(latest.id)}
         onLink={() => linkOrBegin(latest, armedElsewhere)}
         bar={bar}
       />
@@ -1119,7 +1128,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
           select(card.id);
           clearMulti();
         }}
-        onOpen={() => setFocusToken((value) => value + 1)}
+        onOpen={() => openInspector(card.id)}
         onEdit={() => { select(card.id); setEditId(card.id); }}
         onAgent={(targetId) => attempt(() => setAgent(card, targetId))}
         onDelete={() => attempt(() => confirmRemove(card))}
@@ -1401,7 +1410,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
                 session={selectedSession}
                 editing={editId === selectedCard.id}
                 onEditing={(editing) => setEditId(editing ? selectedCard.id : null)}
-                focusToken={focusToken}
+                focusToken={focusFor === selectedCard.id ? focusToken : 0}
                 color={colorOf(selectedCard)}
                 retimeEarlierDisabled={!!selectedCard.at && tooSoonForEarlier(selectedCard.at.getTime() - RETIME_STEP_MS, now.getTime())}
                 targets={targetsFor(selectedCard)}
