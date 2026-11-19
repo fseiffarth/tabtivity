@@ -1741,7 +1741,7 @@ export function ProjectFilesView({
           onMouseEnter={
             !activeBox && project
               ? (e) => void nameHover.open(
-                e.currentTarget.getBoundingClientRect(),
+                e.currentTarget,
                 leftDockedPanel ? "start" : "center",
               )
               : undefined

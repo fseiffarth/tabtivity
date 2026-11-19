@@ -15,6 +15,7 @@ import { projectTypeTags } from "./projectTypeTags";
 import { OrbitSpinner } from "../common/OrbitSpinner";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { formatWorkedTime } from "../../lib/formatWorkedTime";
+import { useHoverAnchorGuard } from "../../lib/useHoverAnchorGuard";
 
 const POPUP_GAP = 6;
 const POPUP_MARGIN = 8;
@@ -63,7 +64,10 @@ export function formatGitRemote(url?: string): string | null {
 /** Live per-hover state for a project: the popup anchor position, today's tracked
  *  time, CPU%, and the scaffold-missing flag. Shared by the pill and the right
  *  file-viewer so both surface the identical hover card. `open`/`close` drive it
- *  from the hovering element's bounding rect. */
+ *  from the hovering element. The card also closes once that element is no
+ *  longer under the pointer without a `mouseleave` saying so (the pointer
+ *  leaving the window, the window losing focus, the pill re-rendering or moving
+ *  away under it): it used to hang on screen until the pill was hovered again. */
 export function useProjectHoverCard(project: ProjectEntry | undefined) {
   const projectId = project?.id;
   const [popupPos, setPopupPos] = useState<{
@@ -71,6 +75,7 @@ export function useProjectHoverCard(project: ProjectEntry | undefined) {
     y: number;
     alignment: "center" | "start";
   } | null>(null);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [timeToday, setTimeToday] = useState<number | null>(null);
   const [cpu, setCpu] = useState<number | null>(null);
   // Resolved once per hover (cheap local-FS stat, no SFTP).
@@ -132,8 +137,10 @@ export function useProjectHoverCard(project: ProjectEntry | undefined) {
   }, [popupPos, projectId]);
 
   const open = useCallback(
-    async (rect: DOMRect, alignment: "center" | "start" = "center") => {
+    async (el: HTMLElement, alignment: "center" | "start" = "center") => {
       if (!projectId) return;
+      const rect = el.getBoundingClientRect();
+      setAnchor(el);
       setPopupPos({
         x: alignment === "start" ? rect.left : rect.left + rect.width / 2,
         y: rect.bottom,
@@ -154,9 +161,12 @@ export function useProjectHoverCard(project: ProjectEntry | undefined) {
 
   const close = useCallback(() => {
     setPopupPos(null);
+    setAnchor(null);
     setTimeToday(null);
     setCpu(null);
   }, []);
+
+  useHoverAnchorGuard(popupPos ? anchor : null, close);
 
   return { popupPos, timeToday, cpu, scaffoldMissing, isLiveProject, timerPaused, open, close };
 }
