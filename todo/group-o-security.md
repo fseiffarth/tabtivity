@@ -1597,6 +1597,85 @@ with synthetic inputs; nothing was run live.
       language server across activation, the Windows admin pipe, phone
       steering's K/L queue keys.
 
+### Threat-model recheck follow-ups (2026-11-19)
+
+From the review of the week's code (`214933ab5..4cf65018d`) in
+`docs/threat_model.md` ("Gaps found 2026-11-19", gaps 115–122) and its
+evidence file `docs/threat_recheck_2026_11_19_handoff.md`. Read from the code
+with two synthetic checks; nothing was run live and nothing is fixed.
+
+2443. **Checkpoint restore must not write or delete through a swapped
+    folder.** The restore checks each path, then removes and checks out by
+    path; a writer in the folder's fence swaps a subfolder for a link in
+    between and the file lands outside the fence (gap 115, medium). Check out
+    into a private directory and install through held directory handles, or
+    run the store's git in a one-shot fence; the idle gate must not rest on
+    the agent's own hook record. Same change: a file the undo snapshot left
+    out for its size budget is not overwritten without an undo copy.
+    - [ ] 🤖 Automated test
+2444. **The Poetry probe needs an approval that covers what Poetry reads.**
+    `exec_trust::approved_for` is true for any current approval of the
+    folder; none fingerprints `pyproject.toml` or `poetry.toml` (gap 116).
+    - [ ] Decide: a trust kind of its own for Poetry, the probe inside the
+      project's fence, or no probe when the project names a Poetry plugin.
+    - [ ] Settle on a machine with Poetry 2.x: does `poetry env info -p` load
+      project plugins?
+    - [ ] 🤖 Automated test
+2445. **`shell_mask` must cut every host path to its leaf.** Paths after
+    `>`, `<`, `@`, `;`, `{`, a glued flag or `file://`, and quoted paths with
+    spaces, cross to the phone whole (gap 117). Find a path by content, not
+    by what precedes it; add the reviewers' lines to `shell_mask/tests.rs`.
+    - [ ] 🤖 Automated test
+2446. **Archived tabs on the phone follow the phone's own rules.** The
+    restore route starts shells with "No shells on the phone" on and tabs the
+    phone could not create (gap 118); the rows send the raw `cmd` and list
+    shell and viewer labels with their switches off (gap 119).
+    - [ ] Decide: should the phone list and restore agent tabs only?
+    - [ ] 🤖 Automated test
+2447. **Linked desktops: the framed page's guard and the frame.** The guard
+    misses a frame moved by layout or cropped by an ancestor, and one page
+    renders outside it (gap 120). Require a full intersection and a stable
+    on-screen offset, guard every page, sandbox the frame without top
+    navigation, show the origin before the name a framed desktop claims.
+    - [ ] Decide: may a linked frame use the microphone under the home
+      page's grant?
+    - [ ] Settle with a two-page browser test: can an in-frame script see a
+      layout-only move of a fully visible frame?
+    - [ ] 🤖 Automated test
+2448. **A release takes only a full run on `main`.** The release gate
+    accepts the newest green push run of the commit on any branch, and
+    branch runs may skip an OS's tests or most frontend tests (gap 121).
+    Count only `main`'s run, or require a "full run" marker. Same change:
+    the release-notes script runs in a job without the signing key.
+    - [ ] 🤖 Automated test
+2449. **The remote agent folder's home is private and the login's own.**
+    `mkdir -p` under the host's umask, no ownership test, its `.local/bin`
+    first on `PATH` (gap 122). `umask 077`, then refuse a home that is a
+    link, not owned by the login or writable by others.
+    - [ ] 🤖 Automated test
+2450. **Hardening from the 2026-11-19 recheck** (handoff, "Hardening"):
+    (H2) say that the checkpoint store keeps captured files for 14 days and
+    offer to forget one; (H3) the `tabtivity-mcp.sh` loopback check matches
+    what the PowerShell twin's does; (H4) a hooked user push gets only the
+    token of its remote's origin; (H9) hold the staged Windows installer
+    with a deny-write handle from the hash to the elevated launch; (H10) the
+    sidecar's archive read goes through the sanitizer; (H11)
+    `home_io::create_subdir` on Windows; (H12) which lanes a revived MCP
+    token reaches off Linux, where the peer check does not run; (H13) a
+    child's death signal where `setpriv` is missing.
+    - [ ] 🤖 Automated test
+2451. **Read what the 2026-11-19 recheck left unread** (handoff, "Coverage
+    limits"): the Windows session host and mux internals, the week's macOS
+    Seatbelt and Windows shim commits, the Codex-hooks and
+    Antigravity-plugins import into the agent layer, the new hook bodies
+    (Muse, Antigravity, Copilot, OpenCode), Copilot's server modules, the
+    box docs fix (screen H5), the Hugging Face pull path, the new `vt100`
+    crate, and the frontend of the week's agent features.
+    - [ ] Settle the open questions: the gap-50 owner gate on an Ollama
+      restart without systemd; whether the CLI hand-off can name a
+      Host-session conversation with no project id; the read-side variant of
+      gap 115 during the automatic snapshot.
+
 ### Safe for everyone — non-expert users (2026-09-24)
 
 Plan: `docs/safe_for_everyone_plan.md`. Goal: every "⚠️ yours" row in
