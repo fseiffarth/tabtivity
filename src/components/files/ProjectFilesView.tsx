@@ -118,6 +118,8 @@ import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
 import { isHostPinned } from "../../lib/projectTabHost";
+import { setBarSolo, useBarHidden } from "../../lib/projects/barHidden";
+import { useBoxSliceStore } from "../../stores/boxSlice";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
@@ -155,6 +157,26 @@ function fsChangeIsUnder(payload: unknown, dir: string): boolean {
   if (payload === dir) return true;
   const base = dir.replace(/[/\\]+$/, "");
   return payload.startsWith(`${base}/`) || payload.startsWith(`${base}\\`);
+}
+
+/** Glyph for the header's hide-mode switch: a row of three pills, the middle
+ *  one (this project) solid. While hide mode is on the two others are drawn
+ *  dashed — still open, just off the All projects row. Inherits `currentColor`. */
+function HideOthersIcon({ on }: { on: boolean }) {
+  const side = on ? { strokeDasharray: "1.4 1.3", opacity: 0.75 } : {};
+  return (
+    <svg
+      className="side-panel-mobile-btn-icon"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <rect x="0.9" y="5.6" width="3.6" height="4.8" rx="1.2" stroke="currentColor" strokeWidth="1.2" {...side} />
+      <rect x="5.6" y="4.9" width="4.8" height="6.2" rx="1.4" fill="currentColor" />
+      <rect x="11.5" y="5.6" width="3.6" height="4.8" rx="1.2" stroke="currentColor" strokeWidth="1.2" {...side} />
+    </svg>
+  );
 }
 
 /** Phone glyph for the header's Mobile access button — the same silhouette as
@@ -1336,6 +1358,9 @@ export function ProjectFilesView({
   // it is named for what it is rather than falling back to a bare "Files". The
   // check is the scope's, not "no project": a box scope has none either.
   const isRootScope = !project && !activeBox && scope === ROOT_SCOPE;
+  const barHidden = useBarHidden();
+  const sliceBoxId = useBoxSliceStore((s) => s.sliceBoxId);
+  const soloAvailable = !activeBox && !!project && !sliceBoxId;
 
   const openInOsBrowser = () => {
     if (!projectDir) return;
@@ -1822,6 +1847,32 @@ export function ProjectFilesView({
             switch, and a chip that looked like them would invite reading it as
             another fact about the project. It is the header's own icon-button
             family instead — square, hover-lit, phone slashed while off. */}
+        {/* Hide mode (`lib/projects/barHidden`): the pill menu's "Hide other
+            projects" / "Show other projects" as a header switch. Only where
+            the mode applies — a project on the unsliced strip; a box's slice
+            ignores it. */}
+        {soloAvailable && projectId && (
+          <>
+            <button
+              type="button"
+              className={`side-panel-mobile-btn side-panel-solo-btn${barHidden.solo ? " on" : ""}`}
+              aria-pressed={barHidden.solo}
+              aria-label={t(barHidden.solo ? "pill.showOtherProjects" : "pill.hideOtherProjects")}
+              title={t(barHidden.solo ? "pill.showOtherProjectsTitle" : "pill.hideOtherProjectsTitle")}
+              onClick={() => {
+                // Hide mode keeps the project in scope, so turning it on from
+                // a view of another project switches there first (as the pill does).
+                if (!barHidden.solo && useTabsStore.getState().scope !== projectId) {
+                  void useProjectsStore.getState().setActive(projectId);
+                }
+                void setBarSolo(!barHidden.solo);
+              }}
+            >
+              <HideOthersIcon on={barHidden.solo} />
+            </button>
+            <UntestedTag id="barHidden.solo" />
+          </>
+        )}
         {/* "Open in <IDE>": only for a project whose tree carries IDE
             markers; the same rows as the pill menu's View group. */}
         {!activeBox && project && projectId && !isRootScope && !hostPinned && (
