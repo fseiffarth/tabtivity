@@ -301,6 +301,14 @@ impl Store {
         checkpoint_git_command(&repo, args)
     }
 
+    /// [`Self::git`] with another work tree and index: a restore's private
+    /// staging folder under the store, never the folder.
+    pub fn git_in(&self, work_tree: &Path, index: &Path, args: &[&str]) -> std::process::Command {
+        let (git_dir, exclude) = (self.git_dir(), self.ignore_file());
+        let repo = CheckpointRepo { git_dir: &git_dir, work_tree, index, exclude: &exclude };
+        checkpoint_git_command(&repo, args)
+    }
+
     /// Run a command built by [`Self::git`], bounded (`timeout`: `None` = its
     /// verb's own ceiling): its output, and whether stdout was stopped at `cap`
     /// bytes (git was stopped there too). The folder's own repo is not
