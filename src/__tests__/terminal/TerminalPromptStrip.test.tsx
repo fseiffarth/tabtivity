@@ -141,7 +141,8 @@ describe("the prompt strip over an agent pane", () => {
       // The same conversation as a chat page.
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "Export as chat…" })));
       expect(vi.mocked(save)).toHaveBeenLastCalledWith(expect.objectContaining({ defaultPath: "Claude-chat.html" }));
-      const page = calls.mock.calls.filter((c) => c[0] === "agent_session_export_write").at(-1)?.[1] as { content: string };
+      const writes = calls.mock.calls.filter((c) => c[0] === "agent_session_export_write");
+      const page = writes[writes.length - 1]?.[1] as { content: string };
       expect(page.content).toMatch(/<div class="turn user">.*the first prompt.*<div class="turn agent">.*the answer/s);
     } finally {
       calls.mockImplementation((() => Promise.resolve([])) as typeof invoke);
