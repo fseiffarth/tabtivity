@@ -384,6 +384,25 @@ export function openSubagentList(frame: HTMLElement): boolean {
   return true;
 }
 
+/** Go up from the pane's open subagent (its bar's Back): to the conversation
+ *  that spawned it. False when no subagent is open. */
+export function subagentGoUp(frame: HTMLElement): boolean {
+  const back = frame.querySelector<HTMLElement>(
+    ".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar) .terminal-reader-subagent-nav:not(:disabled)",
+  );
+  if (!back) return false;
+  back.click();
+  return true;
+}
+
+/** Whether the pane shows anything the subagents region walks besides the
+ *  Subagents toggle: an open list, or an open subagent's bar. */
+export function subagentStopsShown(frame: HTMLElement): boolean {
+  return !!frame.querySelector(
+    ".terminal-reader-subagent-list, .terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)",
+  );
+}
+
 /** Close whichever of the pane's lists is open. */
 export function closeSubagentList(frame: HTMLElement): void {
   frame.querySelector<HTMLElement>('.terminal-reader-subagent-toggle[aria-expanded="true"]')?.click();

@@ -2775,14 +2775,21 @@ pub fn box_root_arg(cmd: &str) -> Option<&'static str> {
 /// Codex's `--add-dir` asks for extra writable roots and is ignored with a
 /// warning under read-only or managed permissions. Its mode belongs to Codex,
 /// so the outer fence supplies box access without adding that flag.
-pub fn add_box_root_args(opts: &mut PtyOptions, roots: &[PathBuf], own_dir: &Path) {
+///
+/// Returns the roots now named by the flag (added here or already there), so
+/// a Claude spawn can record their folder trust in its home
+/// (`agent_home::trust_claude_added_dirs`): Claude 2.1.326+ otherwise asks
+/// "Adding a new directory" for each of them on every new tab.
+pub fn add_box_root_args(opts: &mut PtyOptions, roots: &[PathBuf], own_dir: &Path) -> Vec<PathBuf> {
     if roots.len() <= 1 || runs_subcommand(&opts.args) {
-        return;
+        return Vec::new();
     }
     let Some(flag) = box_root_arg(&opts.cmd) else {
-        return;
+        return Vec::new();
     };
+    let mut named = Vec::new();
     for root in roots.iter().filter(|root| root.as_path() != own_dir) {
+        named.push(root.clone());
         let value = root.to_string_lossy().into_owned();
         let already = opts
             .args
@@ -2793,6 +2800,7 @@ pub fn add_box_root_args(opts: &mut PtyOptions, roots: &[PathBuf], own_dir: &Pat
             opts.args.push(value);
         }
     }
+    named
 }
 
 fn platform_reason() -> &'static str {

@@ -68,6 +68,13 @@ function mount(remembered: unknown = REMEMBERED, ptyId = "p1:t1") {
 
 const keeps = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === "remember_model_rows");
 
+// `PICKER_POLL_MS` (150) and `KEEP_SETTLE_MS` (500) in src/hooks/useSessionPicker.ts
+// are not exported, so these are their values. A "nothing was kept" check runs on
+// a fake clock and lets the poll plus the settle window pass several times over.
+const POLL_MS = 150;
+const PAST_KEEP_SETTLE_MS = 4 * (POLL_MS + 500);
+const elapse = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
 describe("the model list remembered for the CLI's build", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
@@ -76,26 +83,33 @@ describe("the model list remembered for the CLI's build", () => {
   });
 
   it("lists the remembered rows at once and answers a tapped one in the live picker by its label", async () => {
-    const { result, typeKeys } = mount();
-    act(() => result.current.open());
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith("remembered_model_rows", { agent: "claude", scope: "p1" });
-    await waitFor(() => expect(result.current.shownStep?.options.map((option) => option.label))
-      .toEqual(["Default (recommended)", "Opus 5.5", "Opus 4.1", "Sonnet 5.5"]));
-    expect(result.current.remembered).toBe(true);
-    expect(result.current.busy).toBe(false);
+    vi.useFakeTimers();
+    try {
+      const { result, typeKeys } = mount();
+      act(() => result.current.open());
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("remembered_model_rows", { agent: "claude", scope: "p1" });
+      await elapse(0);
+      expect(result.current.shownStep?.options.map((option) => option.label))
+        .toEqual(["Default (recommended)", "Opus 5.5", "Opus 4.1", "Sonnet 5.5"]);
+      expect(result.current.remembered).toBe(true);
+      expect(result.current.busy).toBe(false);
 
-    act(() => result.current.choose(1));
-    expect(result.current.busy).toBe(true);
-    expect(typeKeys).not.toHaveBeenCalled();
+      act(() => result.current.choose(1));
+      expect(result.current.busy).toBe(true);
+      expect(typeKeys).not.toHaveBeenCalled();
 
-    // The live picker lists Opus third: the walk goes to it, not to row 2.
-    mocks.rows = PICKER;
-    await waitFor(() => expect(typeKeys).toHaveBeenCalledWith([UP, "\r"]));
-    expect(typeKeys).toHaveBeenCalledTimes(1);
-    expect(result.current.remembered).toBe(false);
-    // Answered as soon as it was drawn: a list that never settled is not kept.
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
-    expect(keeps()).toHaveLength(0);
+      // The live picker lists Opus third: the walk goes to it, not to row 2.
+      mocks.rows = PICKER;
+      await elapse(POLL_MS * 2);
+      expect(typeKeys).toHaveBeenCalledWith([UP, "\r"]);
+      expect(typeKeys).toHaveBeenCalledTimes(1);
+      expect(result.current.remembered).toBe(false);
+      // Answered as soon as it was drawn: a list that never settled is not kept.
+      await elapse(PAST_KEEP_SETTLE_MS);
+      expect(keeps()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("asks for and keeps the rows under the tab's own scope, a box's included (gap 95)", async () => {
@@ -150,13 +164,20 @@ describe("the model list remembered for the CLI's build", () => {
         { label: "Sonnet 5.5", description: "Most efficient for simpler tasks", number: 4 },
       ],
     };
-    const { result } = mount(same);
-    act(() => result.current.open());
-    await waitFor(() => expect(result.current.remembered).toBe(true));
-    mocks.rows = PICKER;
-    await waitFor(() => expect(result.current.remembered).toBe(false));
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
-    expect(keeps()).toHaveLength(0);
+    vi.useFakeTimers();
+    try {
+      const { result } = mount(same);
+      act(() => result.current.open());
+      await elapse(0);
+      expect(result.current.remembered).toBe(true);
+      mocks.rows = PICKER;
+      await elapse(POLL_MS * 2);
+      expect(result.current.remembered).toBe(false);
+      await elapse(PAST_KEEP_SETTLE_MS);
+      expect(keeps()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for the live picker as before when nothing is remembered", async () => {

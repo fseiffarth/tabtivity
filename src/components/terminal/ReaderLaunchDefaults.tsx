@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { basename } from "../../lib/paths";
@@ -25,10 +25,16 @@ function commandStem(cmd: string): string {
  * model and effort new sessions of the CLI start on. Nothing shows for a CLI
  * with no verified startup choice.
  */
-export function ReaderLaunchDefaults({ cmd }: { cmd: string }) {
+export function ReaderLaunchDefaults({ cmd, onSaved }: { cmd: string; onSaved: () => void }) {
   const t = useT();
   const bin = commandStem(cmd);
   const [agent, setAgent] = useState<AgentInfo | null>(null);
+  // Use the current picker state and ignore a save from a dismissed picker.
+  const onSavedRef = useRef<(() => void) | null>(null);
+  useLayoutEffect(() => {
+    onSavedRef.current = onSaved;
+    return () => { onSavedRef.current = null; };
+  }, [onSaved]);
   const saved = useSettingsStore((s) => s.settings?.agent_launch_defaults?.[bin]);
   useEffect(() => {
     let live = true;
@@ -48,7 +54,7 @@ export function ReaderLaunchDefaults({ cmd }: { cmd: string }) {
   return (
     <AgentsFold className="terminal-reader-defaults" label={<>{t("terminal.reader.defaultsTitle", { value })} <UntestedTag id="terminal.reader.launchDefaults" /></>}>
       <small className="terminal-reader-question-more">{t("terminal.reader.defaultsNote")}</small>
-      <AgentDefaults agent={agent} compact />
+      <AgentDefaults agent={agent} compact onSaved={() => onSavedRef.current?.()} />
     </AgentsFold>
   );
 }

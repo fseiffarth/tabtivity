@@ -29,6 +29,8 @@ import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
 import { formatWorkedTime } from "../../lib/formatWorkedTime";
 import { dayAnchorMs, type WelcomeBack } from "../../lib/welcomeBack";
 import {
+  cacheHitShare,
+  cacheLifetimes,
   fetchTokenReport,
   foldTokens,
   formatShare,
@@ -36,6 +38,7 @@ import {
   grandTotal,
   outputShare,
   splitSum,
+  subagentPart,
   usedAgentClis,
   type TokenReport,
   type TokenRows,
@@ -169,7 +172,8 @@ function HourSparkline({
 }
 
 /** One CLI's or model's split, as the line under its bar: fresh in · cache
- *  write · cache read · output · output share, or the unsplit total. */
+ *  write · cache read · output · output share · cache-hit share, or the
+ *  unsplit total. */
 function splitText(s: TokenSplit, t: ReturnType<typeof useT>): string {
   const parts: string[] = [];
   if (splitSum(s) > 0 || s.total === 0) {
@@ -181,6 +185,8 @@ function splitText(s: TokenSplit, t: ReturnType<typeof useT>): string {
     );
     const share = outputShare(s);
     if (share !== null) parts.push(t("stats.tokensOutputShare", { share: formatShare(share) }));
+    const hit = cacheHitShare(s);
+    if (hit !== null) parts.push(t("stats.tokensCacheHit", { share: formatShare(hit) }));
   }
   if (s.total > 0) {
     parts.push(
@@ -190,6 +196,31 @@ function splitText(s: TokenSplit, t: ReturnType<typeof useT>): string {
     );
   }
   return parts.join(" · ");
+}
+
+/** The details line under a split, when its CLI reports any: the subagents'
+ *  part and the cache writes by lifetime. Empty when there is none. */
+function detailText(s: TokenSplit, t: ReturnType<typeof useT>): string {
+  const parts: string[] = [];
+  const sub = subagentPart(s);
+  if (sub) {
+    parts.push(
+      sub.hit === null
+        ? t("stats.tokensSubagentsShare", { share: formatShare(sub.share) })
+        : t("stats.tokensSubagents", { share: formatShare(sub.share), hit: formatShare(sub.hit) }),
+    );
+  }
+  const life = cacheLifetimes(s);
+  if (life) {
+    parts.push(t("stats.tokensCacheLifetimes", { long: formatShare(life.long), short: formatShare(life.short) }));
+  }
+  return parts.join(" · ");
+}
+
+/** A split's details as their own line, or nothing. */
+function DetailLine({ split, t }: { split: TokenSplit; t: ReturnType<typeof useT> }) {
+  const text = detailText(split, t);
+  return text ? <p className="settings-help stats-token-split">{text}</p> : null;
 }
 
 /**
@@ -261,6 +292,7 @@ function TokensSection({
                         </button>
                       )}
                     </p>
+                    <DetailLine split={row.split} t={t} />
                     {expanded && (
                       <div className="stats-bars stats-token-models">
                         {row.models.map((m) => {
@@ -271,6 +303,7 @@ function TokensSection({
                               <p className="settings-help stats-token-split">
                                 <span>{splitText(m.split, t)}</span>
                               </p>
+                              <DetailLine split={m.split} t={t} />
                             </Fragment>
                           );
                         })}

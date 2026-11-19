@@ -17,6 +17,10 @@ import { useSettingsStore } from "../../stores/settings";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import { ollamaVersionStatus } from "../../lib/agents/localDrivers";
 import { runOllamaUpdateCheck, upgradeOllamaInTab } from "../../lib/agents/ollamaUpdateActions";
+import { askRestartOllama, restartOllamaServer } from "../../lib/agents/ollamaRestart";
+import { useDialogs } from "../common/PromptDialogs";
+import { OllamaContextCard } from "./OllamaContextCard";
+import { OllamaKeepAliveCard } from "./OllamaKeepAliveCard";
 import { runInstallInTab, type InstallShellKind } from "../../lib/installCommand";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
@@ -543,6 +547,20 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     const el = installLogRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [installLog]);
+
+  // Restart Ollama, the one way a new context window reaches the server
+  // (`lib/agents/ollamaRestart`, shared with the Local models page).
+  const { confirmAction, dialogs } = useDialogs();
+  const [restarting, setRestarting] = useState(false);
+  const restartOllama = async () => {
+    if (!(await askRestartOllama(t, confirmAction))) return;
+    setRestarting(true);
+    setError(null);
+    const failed = await restartOllamaServer(t);
+    setRestarting(false);
+    if (failed) setError(failed);
+    else await refresh();
+  };
 
   const startServer = async () => {
     setError(null);
@@ -1168,6 +1186,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   return (
     <>
       <SettingsHeader title={t("ollama.modelsTitle")} onBack={onBack} onClose={onClose} />
+      {dialogs}
       <div className="dialog-scroll">
 
       <div className={`ollama-status-card${serverRunning === false ? " down" : ""}`}>
@@ -1196,6 +1215,18 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
               onClick={() => void refresh()}
             >
               {loading ? "..." : t("ollama.refresh")}
+            </button>
+          )}
+          {serverRunning === true && (
+            <button
+              type="button"
+              className="ollama-action-btn"
+              disabled={restarting}
+              title={t("localModel.restartOllamaTitle")}
+              onClick={() => void restartOllama()}
+            >
+              {restarting ? t("localModel.restartingOllama") : t("localModel.restartOllama")}{" "}
+              <UntestedTag id="ollama.restart" />
             </button>
           )}
         </div>
@@ -1259,6 +1290,9 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         </div>
         {vibeInstalled === false && <div className="ollama-runtime-install">{vibeInstallBlock}</div>}
       </div>
+
+      {serverRunning === true && <OllamaContextCard restarting={restarting} onRestart={() => void restartOllama()} />}
+      {serverRunning === true && <OllamaKeepAliveCard restarting={restarting} onRestart={() => void restartOllama()} />}
 
       {error && <ErrorNote className="project-dialog-error" error={error} />}
       {error === t("ollama.hfRealmHost") && <CopyOllamaKey />}

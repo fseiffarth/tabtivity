@@ -70,6 +70,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A test that failed between useFakeTimers and its own restore must not
+  // leave the rest of the file on a fake clock.
+  vi.useRealTimers();
   cleanup();
 });
 

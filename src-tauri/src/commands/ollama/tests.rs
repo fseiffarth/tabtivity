@@ -20,6 +20,56 @@ fn a_spawned_server_raises_only_the_small_gpu_context_default() {
     assert_eq!(spawned_context_length(24 * GIB), None);
 }
 
+/// The user's context setting wins over the automatic one on any GPU; a value
+/// outside the range falls back to automatic instead of reaching Ollama.
+#[test]
+fn the_context_setting_overrides_the_automatic_window() {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    assert_eq!(configured_context(Some(65_536), 8 * GIB), Some(65_536));
+    assert_eq!(configured_context(Some(8_192), 48 * GIB), Some(8_192));
+    assert_eq!(configured_context(None, 8 * GIB), Some(32_768));
+    assert_eq!(configured_context(None, 48 * GIB), None);
+    assert_eq!(configured_context(Some(0), 8 * GIB), Some(32_768));
+    assert_eq!(configured_context(Some(u32::MAX), 48 * GIB), None);
+}
+
+/// Only the offered keep-alive choices reach an environment or a drop-in;
+/// anything else is Ollama's default.
+#[test]
+fn only_the_offered_keep_alive_choices_reach_ollama() {
+    assert_eq!(configured_keep_alive(Some("30m")), Some("30m"));
+    assert_eq!(configured_keep_alive(Some(" 1h ")), Some("1h"));
+    assert_eq!(configured_keep_alive(Some("-1")), Some("-1"));
+    for bad in ["", "5m", "24h", "30m; reboot", "\"x\""] {
+        assert_eq!(configured_keep_alive(Some(bad)), None, "{bad}");
+    }
+    assert_eq!(configured_keep_alive(None), None);
+}
+
+/// The service gets its own drop-in, written for a choice and taken back out
+/// for the default; a hand-edited value never reaches the root shell.
+#[test]
+fn the_keep_alive_drop_in_writes_a_choice_and_removes_the_default() {
+    assert_eq!(keep_alive_service_command(Some("30m"), false), "");
+    let on = keep_alive_service_command(Some("1h"), true);
+    assert!(on.contains("OLLAMA_KEEP_ALIVE=1h"), "{on}");
+    assert!(on.contains(&format!("ollama.service.d/{KEEP_ALIVE_DROPIN}")));
+    assert!(on.ends_with("sudo systemctl daemon-reload && sudo systemctl restart ollama"));
+    let off = keep_alive_service_command(None, true);
+    assert!(off.starts_with(&format!("sudo rm -f /etc/systemd/system/ollama.service.d/{KEEP_ALIVE_DROPIN} && ")), "{off}");
+    assert_eq!(keep_alive_service_command(Some("30m; reboot"), true), off);
+    assert!(KEEP_ALIVE_DROPIN.ends_with("-keep-alive.conf"));
+}
+
+/// The service's value is read off `systemctl show -p Environment`.
+#[test]
+fn the_service_keep_alive_is_read_from_its_environment() {
+    assert_eq!(keep_alive_in_unit_env("PATH=/usr/bin OLLAMA_KEEP_ALIVE=30m OLLAMA_IGPU_ENABLE=1\n"), Some("30m".into()));
+    assert_eq!(keep_alive_in_unit_env("OLLAMA_IGPU_ENABLE=1"), None);
+    assert_eq!(keep_alive_in_unit_env("OLLAMA_KEEP_ALIVE_X=1"), None);
+    assert_eq!(keep_alive_in_unit_env(""), None);
+}
+
 /// An interrupted-pull list that does not parse keeps its entries: a new
 /// pull fails to record itself rather than replacing them with its own.
 #[test]
@@ -1987,8 +2037,9 @@ fn the_vibe_provider_points_at_the_same_server() {
     assert!(block.ends_with("/v1\"\napi_key_env_var = \"\"\napi_style = \"openai\"\nbackend = \"generic\"\nreasoning_field_name = \"reasoning_content\"\nproject_id = \"\"\nregion = \"\"\n\n[providers.extra_headers]\n"), "{block}");
 }
 
-/// Integration test: only runs when Ollama is reachable and has models.
+/// Integration test: needs a live Ollama with models; run with `--ignored`.
 #[test]
+#[ignore = "needs a running Ollama"]
 fn prepare_local_agent_integration_if_ollama_running() {
     if TcpStream::connect_timeout(
         &"127.0.0.1:11434".parse().unwrap(),

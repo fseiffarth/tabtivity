@@ -1351,11 +1351,16 @@ export function ProjectPill({
     // It falls back to the pill's plain name tooltip.
     if (fastMode) return;
     if (!pillRef.current) return;
-    void hover.open(pillRef.current.getBoundingClientRect());
+    void hover.open(pillRef.current);
   };
   // A status bar opens its tab's own card: the project card steps aside while
-  // it is up and comes back when the pointer is on the pill again.
-  const handleBarHover = (on: boolean) => (on ? hover.close() : handleMouseEnter());
+  // it is up and comes back when the pointer is on the pill again. Only then:
+  // the bar's card also closes when the pointer left the window or the pill,
+  // and reopening the project card there left it hanging with nothing to close it.
+  const handleBarHover = (on: boolean) => {
+    if (on) hover.close();
+    else if (pillRef.current?.matches(":hover")) handleMouseEnter();
+  };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();

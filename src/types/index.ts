@@ -630,6 +630,14 @@ export interface Settings {
    *  starts itself; a systemd-managed one is pointed at the same folder by the
    *  Settings panel's one-click drop-in (`ollama_models_dir_plan`). */
   ollama_models_path?: string | null;
+  /** Context window (tokens) for a server Tabtivity starts, as
+   *  `OLLAMA_CONTEXT_LENGTH`; `null` = automatic. Restart Ollama applies it. */
+  ollama_context_length?: number | null;
+  /** How long Ollama keeps a model loaded after its last request, as
+   *  `OLLAMA_KEEP_ALIVE`: `"30m"`, `"1h"` or `"-1"` (until unloaded); `null` =
+   *  Ollama's 5 minutes. A server Tabtivity starts gets it; a systemd service
+   *  through the drop-in `ollama_keep_alive_plan` offers. */
+  ollama_keep_alive?: string | null;
   /** Per-task local-model assignments (🧠 menu role chips). Maps a task key —
    *  `"autocomplete"`, `"autocomplete_prose"`, `"tabs"` or `"mail"` —
    *  to the model name that should serve it (`autocomplete_prose` covers plain

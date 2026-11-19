@@ -1081,6 +1081,9 @@ export interface TranscriptEntry {
   /** `interrupted`: the user cut the turn off; `text` is the CLI's own words. */
   kind: "prompt" | "answer" | "agent" | "interrupted";
   text: string;
+  /** On a slash-command `prompt`: what it left set, as the CLI confirmed it
+   * (Claude's `/model` → `Fable 5.2`, `/effort` → `high`). */
+  setting?: string;
   at?: string;
   cut?: boolean;
   subagent?: string;
@@ -1215,6 +1218,10 @@ export interface SessionUsage {
   contextLeft?: number;
   session?: SessionUsageWindow;
   week?: SessionUsageWindow;
+  /** The prompt cache the newest answer left (`agent_transcript::PromptCache`):
+   *  when it came back, how long the provider keeps the cache, and the tokens
+   *  the next message re-caches once that has run out. */
+  cache?: { lastAtMs: number; ttlSecs: number; contextTokens: number };
 }
 
 /** `GET /api/v1/tabs/{id}/transcript` — the Focus view's stored-session feed.

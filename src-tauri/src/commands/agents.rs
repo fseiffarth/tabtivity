@@ -2391,6 +2391,15 @@ pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
+/// The Manage CLIs switch for OpenCode's cache warming in the Tabtivity-wide
+/// layer; every OpenCode tab picks it up at its next start.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_global_set_opencode_warming(enabled: bool) -> Result<(), String> {
+    app_core::rt::blocking("agent", move || crate::services::agent_global::set_opencode_warming(enabled))
+        .await?
+        .map_err(|e| e.to_string())
+}
+
 /// Open the Tabtivity-wide layer's folder in the file manager, creating it first.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_open() -> Result<(), String> {
@@ -2401,9 +2410,86 @@ pub async fn agent_global_open() -> Result<(), String> {
     .await
 }
 
+/// Extensions an exported conversation may be saved under.
+const SESSION_EXPORT_EXTENSIONS: [&str; 5] = ["md", "markdown", "txt", "html", "htm"];
+/// The largest export written: a thousand entries at their read bounds
+/// stay well under it.
+const MAX_SESSION_EXPORT_BYTES: usize = 32 * 1024 * 1024;
+
+/// Write the Prompts panel's export (the whole session as Markdown or as a
+/// chat-looking HTML page, or only the user's prompts, rendered by the renderer) to the path the user picked
+/// in the save dialog. The renderer's file writers are confined to the known
+/// roots; this is the calendar export's narrow door (`calendar_write_ics`)
+/// for a text file instead: a Markdown, text or HTML extension only, a size cap,
+/// and never through a link.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_session_export_write(path: String, content: String) -> Result<(), String> {
+    app_core::rt::try_blocking("agent", move || session_export_write_blocking(&path, &content)).await
+}
+
+fn session_export_write_blocking(path: &str, content: &str) -> Result<(), String> {
+    let target = std::path::PathBuf::from(path);
+    if !target.is_absolute() {
+        return Err("export path must be absolute".to_string());
+    }
+    let ext = target
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !SESSION_EXPORT_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!(
+            "not a text file: expected one of {}, got '{}'",
+            SESSION_EXPORT_EXTENSIONS.join(", "),
+            if ext.is_empty() { "no extension" } else { &ext }
+        ));
+    }
+    if content.len() > MAX_SESSION_EXPORT_BYTES {
+        return Err(format!("export too large ({} bytes; limit {MAX_SESSION_EXPORT_BYTES})", content.len()));
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(&target) {
+        if !meta.file_type().is_file() {
+            return Err("the export path is not a regular file".to_string());
+        }
+    }
+    std::fs::write(&target, content).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_export_writes_only_a_text_file_and_never_through_a_link() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let md = dir.path().join("session.md");
+        session_export_write_blocking(&md.to_string_lossy(), "# hi\n").expect("md is written");
+        let html = dir.path().join("session.html");
+        session_export_write_blocking(&html.to_string_lossy(), "<!doctype html>").expect("html is written");
+        assert_eq!(std::fs::read_to_string(&md).expect("read back"), "# hi\n");
+        // An existing export is overwritten (the save dialog asked).
+        session_export_write_blocking(&md.to_string_lossy(), "again").expect("overwrite");
+        assert_eq!(std::fs::read_to_string(&md).expect("read back"), "again");
+        for refused in ["key", "config.json", "session"] {
+            let path = dir.path().join(refused);
+            assert!(session_export_write_blocking(&path.to_string_lossy(), "x").is_err(), "{refused}");
+            assert!(!path.exists());
+        }
+        assert!(session_export_write_blocking("session.md", "x").is_err(), "a relative path is refused");
+        // A folder named like an export is not written over.
+        let folder = dir.path().join("folder.md");
+        std::fs::create_dir(&folder).expect("mkdir");
+        assert!(session_export_write_blocking(&folder.to_string_lossy(), "x").is_err());
+        #[cfg(unix)]
+        {
+            let outside = dir.path().join("victim.txt");
+            std::fs::write(&outside, "keep").expect("write");
+            let link = dir.path().join("link.md");
+            std::os::unix::fs::symlink(&outside, &link).expect("symlink");
+            assert!(session_export_write_blocking(&link.to_string_lossy(), "x").is_err());
+            assert_eq!(std::fs::read_to_string(&outside).expect("read"), "keep");
+        }
+    }
 
     #[test]
     fn the_generated_agent_cli_table_ts_is_current() {
@@ -2864,7 +2950,7 @@ mod tests {
                 .into_iter()
                 .flatten()
             {
-                if cmd.trim_start().starts_with("npm install -g") {
+                if cmd.contains("npm install -g") {
                     assert!(
                         npm_package_from_cmd(cmd).is_some(),
                         "{}'s npm install command did not parse: {cmd}",
@@ -2966,13 +3052,18 @@ mod tests {
     #[test]
     fn an_npm_installed_agent_checks_the_package_it_installs() {
         use crate::services::agent_latest::{source_for, Source};
+        let mut compared = 0;
         for spec in AGENTS {
             if let Some(pkg) = npm_package_from_cmd(spec.install_cmd) {
                 if let Some(source) = source_for(spec.id) {
                     assert_eq!(source, Source::Npm(pkg), "{}", spec.id);
+                    compared += 1;
                 }
             }
         }
+        // A registry that stops pairing npm installers with an update source
+        // must not leave this loop comparing nothing.
+        assert!(compared > 0, "no npm-installed agent has an update source");
     }
 
     #[cfg(windows)]

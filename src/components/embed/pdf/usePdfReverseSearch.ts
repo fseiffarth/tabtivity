@@ -1,6 +1,7 @@
+import { useRemoteStatusStore } from "../../../stores/remote/remoteStatus";
 /** The PDF viewer's SyncTeX reverse search (#66, #250): a Ctrl/Cmd-click on a page
  *  opens the source line that produced it, and every outcome is worded. */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { jumpToSource } from "../fileViewer/sourceJump";
 import { useTexPdfHost } from "../fileViewer/texPdfHost";
 import { canRecompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
@@ -16,7 +17,7 @@ import {
 import type { FileSource } from "../../../lib/files/fileAccess";
 
 /**
- * Probes for the map and the `.tex` by name (local files only), arms the crosshair
+ * Probes for the map beside a visible PDF, arms the crosshair
  * cursor while Ctrl/Cmd is held (an attribute on the scroller, never React state),
  * and answers each click with a jump, a notice, or both.
  */
@@ -30,7 +31,7 @@ export function usePdfReverseSearch({
 }: {
   path: string;
   scope: string | null;
-  /** Where the file is read from: a remote PDF's map is out of the commands' reach. */
+  /** Where the PDF and its map are read from. */
   fileSource: FileSource;
   /** Bumped per disk change: a recompile may just have written the map. */
   diskVersion: number;
@@ -82,8 +83,7 @@ export function usePdfReverseSearch({
   // a hit, the PDF's sibling `.tex` otherwise); `canRecompile` gates the button,
   // since a PDF opened on its own has no workspace to hand the build to.
   const [syncNotice, setSyncNotice] = useState<{
-    /** `"remote"`: the PDF is read from a remote host, whose map the SyncTeX
-     *  commands (local disk only) cannot reach — no call is made. */
+    /** `"remote"`: the host is disconnected. */
     kind: SyncNoticeKind | "remote";
     /** True when the click opened `source` at its top for want of a map. */
     opened: boolean;
@@ -97,23 +97,21 @@ export function usePdfReverseSearch({
     return () => window.clearTimeout(id);
   }, [syncNotice]);
 
-  // Probe for SyncTeX data beside the PDF; re-checked after each disk change
-  // (a recompile may have just written it). Not for a PDF read from a remote
-  // host: the SyncTeX commands read local disk only, so a map found over SFTP
-  // could arm nothing but a refusal — and the stat ran on every reload.
   const remoteSource = fileSource === "remote";
+  const connected = useRemoteStatusStore((s) => !!scope && s.byProject[scope]?.ssh === "connected");
+  const mapProbe = useRef<Promise<boolean> | null>(null);
   useEffect(() => {
-    if (remoteSource) {
-      setSyncable(false);
-      return;
-    }
+    setSyncable(false);
+    if (!paneVisible || (remoteSource && !connected)) return;
     let cancelled = false;
     const base = path.replace(/\.pdf$/i, "");
-    void Promise.all(
-      [`${base}.synctex.gz`, `${base}.synctex`].map((map) => texPathExists(map, scope)),
-    ).then((found) => { if (!cancelled) setSyncable(found.some(Boolean)); });
-    return () => { cancelled = true; };
-  }, [path, scope, diskVersion, remoteSource]);
+    const probe = remoteSource
+      ? synctexStatus(path, scope).then((s) => !!s?.has_map)
+      : Promise.all([`${base}.synctex.gz`, `${base}.synctex`].map((p) => texPathExists(p, scope))).then((found) => found.some(Boolean));
+    mapProbe.current = probe;
+    void probe.then((found) => { if (!cancelled) setSyncable(found); });
+    return () => { cancelled = true; mapProbe.current = null; };
+  }, [path, scope, diskVersion, remoteSource, connected, paneVisible]);
 
   // The source by name — a PDF with no map still opens the `.tex` that built it.
   // Probed once per local file; a remote one is asked only on a click
@@ -144,7 +142,7 @@ export function usePdfReverseSearch({
   // probe runs after the resolve, not before, so a clean hit on a current map
   // costs one extra command answered from the map cache and a few stats.
   //
-  // With no map to ask (none beside the PDF, or a remote PDF's out of reach) the
+  // With no map to ask (none beside the PDF) the
   // click still opens the `.tex` that built the PDF, at its top, and says why.
   const onSyncClick = useCallback(
     async (page: number, x: number, y: number) => {
@@ -160,27 +158,19 @@ export function usePdfReverseSearch({
         if (source) void jump(source, 1);
         return source != null;
       };
-      // The SyncTeX commands read the map off local disk; a PDF read from a
-      // remote host has none there, so say so and ask nothing. A mirror path is
-      // local and goes on.
-      if (remoteSource) {
-        const found = await findTexSource();
-        setSyncNotice({
-          kind: "remote",
-          opened: openByName(found),
-          source: found ?? path,
-          sources: [],
-          canRecompile: false,
-        });
+      const hasMap = await mapProbe.current ?? syncable;
+      if (remoteSource && (!scope || useRemoteStatusStore.getState().byProject[scope]?.ssh !== "connected")) {
+        setSyncNotice({ kind: "remote", opened: false, source: path, sources: [], canRecompile: false });
         return;
       }
-      const src = syncable ? await synctexEdit(path, page, x, y, scope) : null;
+      const src = hasMap ? await synctexEdit(path, page, x, y, scope) : null;
       if (src) await jump(src.input, src.line);
-      const status = syncable ? await synctexStatus(path, scope) : null;
-      const kind = syncable ? syncNoticeKind(status, src != null) : "noMap";
+      const status = hasMap ? await synctexStatus(path, scope) : null;
+      const kind = hasMap ? syncNoticeKind(status, src != null) : "noMap";
       if (!kind) return;
-      const opened = kind === "noMap" && !src && openByName(texSource);
-      const source = src?.input ?? texSource ?? texSourceCandidates(path)[0] ?? path;
+      const fallback = kind === "noMap" && remoteSource ? await findTexSource() : texSource;
+      const opened = kind === "noMap" && !src && openByName(fallback);
+      const source = src?.input ?? fallback ?? texSourceCandidates(path)[0] ?? path;
       const canRecompile = await canRecompileTexSource(source).catch(() => false);
       setSyncNotice({ kind, opened, source, sources: status?.newer_sources ?? [], canRecompile });
     },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
-import { commandArgsInline, slashCommand, transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { commandArgsInline, commandLabel, slashCommand, transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { BRAND } from "../../lib/brand";
 
 const prompt = (text: string, at?: string): TranscriptEntry => ({ kind: "prompt", text, at });
@@ -83,6 +83,16 @@ describe("slashCommand", () => {
     expect(commandArgsInline("opus")).toBe(true);
     expect(commandArgsInline("fix tests")).toBe(false);
     expect(commandArgsInline("make the chat look like a chat")).toBe(false);
+  });
+  it("names what a picker command left set on its rule", () => {
+    const [model, typed, plain] = transcriptTurns([
+      { kind: "prompt", text: "/model", setting: "Fable 5.2", at: "1" },
+      { kind: "prompt", text: "/model opus", setting: "Opus 5.5", at: "2" },
+      { kind: "prompt", text: "/clear", at: "3" },
+    ]);
+    expect(commandLabel(model.command!)).toBe("/model → Fable 5.2");
+    expect(commandLabel(typed.command!)).toBe("/model opus → Opus 5.5");
+    expect(commandLabel(plain.command!)).toBe("/clear");
   });
   it("marks only prompts as commands", () => {
     const turns = transcriptTurns([

@@ -18,10 +18,17 @@
 //! Elsewhere, and on a Linux without that `setsid`, the slave spawns it as
 //! before.
 //!
-//! What the hook did that this does not: reset signal dispositions (the
-//! app ignores none, `std` puts `SIGPIPE` back itself, and an `exec` resets
-//! every handler), and close every inherited fd above 2. The second is a
-//! real difference: it relies on every fd the app opens being close-on-exec,
+//! Signal dispositions: an `exec` resets every handler and `std` puts
+//! `SIGPIPE` back, but an *ignored* signal stays ignored across `exec`. The
+//! app ignores none of its own; one started under `nohup`, or by a launcher
+//! that ignores `SIGINT`/`SIGQUIT`, would hand that on to every shell — and
+//! Ctrl+C would interrupt nothing. Then the root-owned coreutils `env
+//! --default-signal=…` goes in front of `setsid` to put back the ones the
+//! hook reset ([`linux::RESET`]); without an `env` that can, the spawn takes
+//! the hook's way after all.
+//!
+//! What the hook did that this still does not: close every inherited fd
+//! above 2. That is a real difference: it relies on every fd the app opens being close-on-exec,
 //! as the hundreds of other spawns in the app already do (see
 //! `docs/context/agent_authority.md`, inherited descriptors).
 //! `CommandBuilder` is read through its public getters because its
@@ -39,7 +46,15 @@ pub(crate) fn spawn_in_pty(
 ) -> Result<Box<dyn Child + Send + Sync>, String> {
     #[cfg(target_os = "linux")]
     if let (Some(setsid), Some(tty), true) = (linux::setsid(), master.tty_name(), linux::eligible(&builder)) {
-        return linux::spawn(setsid, &tty, &builder);
+        let ignored = linux::ignored_signals();
+        if ignored.is_empty() {
+            return linux::spawn(None, setsid, &tty, &builder);
+        }
+        if let Some(env) = linux::env_with_default_signal() {
+            return linux::spawn(Some((env, &ignored)), setsid, &tty, &builder);
+        }
+        // No `env` that can put them back: `portable-pty`'s hook does, at the
+        // cost of a fork.
     }
     let _ = master;
     slave.spawn_command(builder).map_err(|e| e.to_string())
@@ -60,6 +75,56 @@ mod linux {
         SETSID.get_or_init(|| crate::paths::spawn_wrapper("setsid")).as_deref()
     }
 
+    /// The signals `portable-pty`'s hook puts back to their default, by the
+    /// name `env --default-signal` takes.
+    pub(super) const RESET: [(libc::c_int, &str); 6] = [
+        (libc::SIGCHLD, "CHLD"),
+        (libc::SIGHUP, "HUP"),
+        (libc::SIGINT, "INT"),
+        (libc::SIGQUIT, "QUIT"),
+        (libc::SIGTERM, "TERM"),
+        (libc::SIGALRM, "ALRM"),
+    ];
+
+    /// Those of [`RESET`] this process ignores, which a spawned program
+    /// would inherit. Asked per spawn: six `sigaction` queries, and the
+    /// answer can change while the app runs.
+    pub(super) fn ignored_signals() -> Vec<&'static str> {
+        RESET
+            .iter()
+            .filter(|(signal, _)| {
+                // SAFETY: a query only (null new action); `old` is ours.
+                unsafe {
+                    let mut old: libc::sigaction = std::mem::zeroed();
+                    libc::sigaction(*signal, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_IGN
+                }
+            })
+            .map(|(_, name)| *name)
+            .collect()
+    }
+
+    /// The system's `env`, once, if it takes `--default-signal` (coreutils
+    /// 8.31 and later, uutils): asked by running it, only the first time a
+    /// spawn needs it.
+    pub(super) fn env_with_default_signal() -> Option<&'static Path> {
+        static ENV: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        ENV.get_or_init(|| {
+            let env = crate::paths::spawn_wrapper("env")?;
+            let works = Command::new(&env)
+                .arg("--default-signal=INT")
+                .arg("--")
+                .arg("true")
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            works.then_some(env)
+        })
+        .as_deref()
+    }
+
     /// What `setsid` can stand in for: a program named by `args[0]`, the
     /// pty as controlling terminal. The login-shell default program (a
     /// different `argv[0]`) and a pty that is not to be the terminal go the
@@ -68,7 +133,10 @@ mod linux {
         !builder.is_default_prog() && builder.get_controlling_tty()
     }
 
+    /// `reset`: the system `env` and the signal names it is to put back to
+    /// their default before it execs `setsid` (same pid).
     pub(super) fn spawn(
+        reset: Option<(&Path, &[&str])>,
         setsid: &Path,
         tty: &Path,
         builder: &CommandBuilder,
@@ -93,7 +161,14 @@ mod linux {
             .map_err(|e| format!("open {}: {e}", tty.display()))?;
         let clone = |file: &std::fs::File| file.try_clone().map_err(|e| format!("dup {}: {e}", tty.display()));
 
-        let mut command = Command::new(setsid);
+        let mut command = match reset {
+            Some((env, signals)) => {
+                let mut command = Command::new(env);
+                command.arg(format!("--default-signal={}", signals.join(","))).arg("--").arg(setsid);
+                command
+            }
+            None => Command::new(setsid),
+        };
         command.arg("-c").arg("--").arg(&program).args(&argv[1..]);
         command.current_dir(&dir);
         command.env_clear();
@@ -339,23 +414,79 @@ mod tests {
     #[test]
     fn signals_and_open_files_match_the_portable_pty_spawn() {
         let script = r#"echo "sig=$(grep -E '^(SigIgn|SigBlk)' /proc/$$/status | tr -d '\t ' | tr '\n' ',')" "fds=$(ls /proc/$$/fd | tr '\n' ',') end=1""#;
+        // An fd the test process got already open and inheritable from
+        // whatever started it (CI's runner hands down two) reaches every
+        // `posix_spawn` of it, not just this one; the app opens none such.
+        // `portable-pty` closes those too, so they are left out here.
+        // Taken before either spawn, so nothing of theirs is left out.
+        let outside = inheritable_fds();
         let mut old = Session::through_portable_pty(script);
         let old_text = old.wait_for("end=1");
-        // Another test of this binary can be between `openpty` and setting
-        // close-on-exec on its fds just as this spawn runs, and the child
-        // inherits them (CI saw two such strays). Spawning again finds the
-        // window closed; a leak of this spawn's own would show every time.
-        let mut new_text = String::new();
-        for _ in 0..5 {
-            let mut new = Session::through_setsid(script);
-            new_text = new.wait_for("end=1");
-            if field(&new_text, "fds") == field(&old_text, "fds") {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        let mut new = Session::through_setsid(script);
+        let new_text = new.wait_for("end=1");
+        let own = |text: &str| -> String {
+            field(text, "fds").split(',').filter(|fd| !fd.is_empty() && !outside.iter().any(|out| out == fd)).map(|fd| format!("{fd},")).collect()
+        };
         assert_eq!(field(&new_text, "sig"), field(&old_text, "sig"), "{new_text} vs {old_text}");
-        assert_eq!(field(&new_text, "fds"), field(&old_text, "fds"), "{new_text} vs {old_text}");
+        assert_eq!(own(&new_text), own(&old_text), "{new_text} vs {old_text} (left out: {outside:?})");
+    }
+
+    /// The variable that has [`ignored_signals_reach_the_shell_at_their_default`]
+    /// run its check: set only by the test that starts it under ignored signals.
+    const UNDER_IGNORED_SIGNALS: &str = "PTY_CHILD_TEST_UNDER_IGNORED_SIGNALS";
+
+    /// An app started under `nohup`, or by a launcher that ignores
+    /// `SIGINT`/`SIGQUIT`: its shells still get those at their default, so
+    /// Ctrl+C interrupts. Runs the check below in a copy of this test binary
+    /// that coreutils `env --ignore-signal` started ignoring them — the
+    /// dispositions are process-wide, so this process must not change its own.
+    #[test]
+    fn a_launcher_that_ignores_signals_does_not_hand_them_to_the_shell() {
+        let Some(env) = linux::env_with_default_signal() else {
+            eprintln!("no env that takes --default-signal: skipped");
+            return;
+        };
+        let name = "terminal::pty_child::tests::ignored_signals_reach_the_shell_at_their_default";
+        let out = std::process::Command::new(env)
+            .arg("--ignore-signal=HUP,INT,QUIT")
+            .arg("--")
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env(UNDER_IGNORED_SIGNALS, "1")
+            .output()
+            .unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "{text}");
+        assert!(text.contains("1 passed"), "the check did not run: {text}");
+        assert!(text.contains("checked under ignored signals"), "{text}");
+    }
+
+    #[test]
+    fn ignored_signals_reach_the_shell_at_their_default() {
+        if std::env::var_os(UNDER_IGNORED_SIGNALS).is_none() {
+            return; // Only meaningful as started by the test above.
+        }
+        assert_eq!(linux::ignored_signals(), ["HUP", "INT", "QUIT"], "the launcher's ignores did not arrive");
+        let mut session = Session::through_setsid(r#"echo "sig=$(grep -E '^SigIgn' /proc/$$/status | tr -d '\t ')" end=1"#);
+        let text = session.wait_for("end=1");
+        assert_eq!(field(&text, "sig"), "SigIgn:0000000000000000", "{text}");
+        drop(session);
+        let mut session = Session::through_setsid("echo ready; exec sleep 60");
+        session.wait_for("ready");
+        std::thread::sleep(Duration::from_millis(100));
+        session.master.take_writer().unwrap().write_all(&[3]).unwrap();
+        assert_eq!(session.wait_exit().signal(), Some("Interrupt"));
+        println!("checked under ignored signals");
+    }
+
+    /// This process's fds above 2 without close-on-exec.
+    fn inheritable_fds() -> Vec<String> {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|&fd| fd > 2 && unsafe { libc::fcntl(fd, libc::F_GETFD) } & libc::FD_CLOEXEC == 0)
+            .map(|fd| fd.to_string())
+            .collect()
     }
 
     /// The environment is the builder's alone, a relative directory that is

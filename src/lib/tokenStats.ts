@@ -19,20 +19,28 @@ export interface TokenReport extends BucketReport<Counters> {
   /** The scan stopped at its byte budget; the counts are short and the next
    *  call carries on from where it stopped. */
   partial: boolean;
-  /** The CLIs whose records are read at all (`claude`, `codex`). A CLI used in
+  /** The CLIs whose records are read at all (`claude`, `codex`, `opencode`, `gemini`, `copilot`). A CLI used in
    *  the period but missing here is "not reported" — never zero. */
   sources: string[];
 }
 
 /** One CLI's or model's tokens. `total` is the part reported with no split
  *  (only Codex's SQLite fallback writes one); it is never folded into the four
- *  split fields. */
+ *  split fields. The optional fields are details of the split, present only
+ *  for a CLI that reports them (Claude) and never added to it: the cache
+ *  writes by lifetime, and the subagents' part of each split kind. */
 export interface TokenSplit {
   fresh: number;
   cacheWrite: number;
   cacheRead: number;
   output: number;
   total: number;
+  cacheWrite5m?: number;
+  cacheWrite1h?: number;
+  subFresh?: number;
+  subCacheWrite?: number;
+  subCacheRead?: number;
+  subOutput?: number;
 }
 
 export interface TokenModelRow {
@@ -62,6 +70,12 @@ const KIND_BY_PREFIX: [string, Kind][] = [
   [METRIC.TOKENS_CACHE_R, "cacheRead"],
   [METRIC.TOKENS_OUT, "output"],
   [METRIC.TOKENS_TOTAL, "total"],
+  [METRIC.TOKENS_CACHE_W5M, "cacheWrite5m"],
+  [METRIC.TOKENS_CACHE_W1H, "cacheWrite1h"],
+  [METRIC.TOKENS_SUB_IN, "subFresh"],
+  [METRIC.TOKENS_SUB_CACHE_W, "subCacheWrite"],
+  [METRIC.TOKENS_SUB_CACHE_R, "subCacheRead"],
+  [METRIC.TOKENS_SUB_OUT, "subOutput"],
 ];
 
 const emptySplit = (): TokenSplit => ({ fresh: 0, cacheWrite: 0, cacheRead: 0, output: 0, total: 0 });
@@ -102,8 +116,47 @@ export function outputShare(s: TokenSplit): number | null {
   return sum > 0 ? s.output / sum : null;
 }
 
+/**
+ * The share of input served from the provider's prompt cache, 0–1: cache read
+ * over everything that went in (fresh + cache write + cache read). `null` when
+ * no input was split — 0/0 is not 0 %.
+ */
+export function cacheHitShare(s: TokenSplit): number | null {
+  const input = s.fresh + s.cacheWrite + s.cacheRead;
+  return input > 0 ? s.cacheRead / input : null;
+}
+
+/**
+ * The subagents' part: their share of the split tokens and their own
+ * cache-hit share, both 0–1. `null` when no subagent tokens were reported.
+ */
+export function subagentPart(s: TokenSplit): { share: number; hit: number | null } | null {
+  const sub: TokenSplit = {
+    fresh: s.subFresh ?? 0,
+    cacheWrite: s.subCacheWrite ?? 0,
+    cacheRead: s.subCacheRead ?? 0,
+    output: s.subOutput ?? 0,
+    total: 0,
+  };
+  const sum = splitSum(s);
+  const subSum = splitSum(sub);
+  if (!(subSum > 0) || !(sum > 0)) return null;
+  return { share: Math.min(1, subSum / sum), hit: cacheHitShare(sub) };
+}
+
+/**
+ * The cache writes by lifetime as shares of those whose lifetime is known,
+ * 0–1. `null` when no write said its lifetime.
+ */
+export function cacheLifetimes(s: TokenSplit): { long: number; short: number } | null {
+  const short = s.cacheWrite5m ?? 0;
+  const long = s.cacheWrite1h ?? 0;
+  const known = short + long;
+  return known > 0 ? { long: long / known, short: short / known } : null;
+}
+
 function addInto(into: TokenSplit, kind: Kind, n: number): void {
-  if (Number.isFinite(n) && n > 0) into[kind] += n;
+  if (Number.isFinite(n) && n > 0) into[kind] = (into[kind] ?? 0) + n;
 }
 
 /**

@@ -1264,8 +1264,9 @@ fn a_fifo_at_a_control_path_is_replaced_without_blocking() {
 fn add_dir_flags_are_agent_specific_and_idempotent() {
     let roots = vec![PathBuf::from("/p"), PathBuf::from("/sibling")];
     let mut claude = opts("claude");
-    add_box_root_args(&mut claude, &roots, Path::new("/p"));
-    add_box_root_args(&mut claude, &roots, Path::new("/p"));
+    assert_eq!(add_box_root_args(&mut claude, &roots, Path::new("/p")), vec![PathBuf::from("/sibling")]);
+    // A second pass names the same root (its trust is recorded again) but adds no flag.
+    assert_eq!(add_box_root_args(&mut claude, &roots, Path::new("/p")), vec![PathBuf::from("/sibling")]);
     assert_eq!(claude.args, vec!["--add-dir", "/sibling"]);
     let mut gemini = opts("gemini");
     add_box_root_args(&mut gemini, &roots, Path::new("/p"));
@@ -1274,12 +1275,12 @@ fn add_dir_flags_are_agent_specific_and_idempotent() {
     add_box_root_args(&mut shell, &roots, Path::new("/p"));
     assert!(shell.args.is_empty());
     let mut one = opts("codex");
-    add_box_root_args(&mut one, &roots, Path::new("/p"));
+    assert!(add_box_root_args(&mut one, &roots, Path::new("/p")).is_empty());
     assert!(one.args.is_empty());
     // A sign-in tab runs a subcommand, which takes no session flags.
     let mut login = opts("claude");
     login.args = vec!["auth".into(), "login".into(), "--claudeai".into()];
-    add_box_root_args(&mut login, &roots, Path::new("/p"));
+    assert!(add_box_root_args(&mut login, &roots, Path::new("/p")).is_empty());
     assert_eq!(login.args, vec!["auth", "login", "--claudeai"]);
     assert!(runs_subcommand(&login.args));
     assert!(!runs_subcommand(&["--resume".to_string(), "id".to_string()]));

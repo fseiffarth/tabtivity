@@ -43,12 +43,13 @@ import { AgentsHelp, AgentsStatus, AgentsFold, AgentsGroup } from "./agentsUi";
 import {
   CodexHookNotice,
   ClaudeRemoteControlNotice,
+  GeminiCachingNotice,
   NODE_ENGINE_FAILURE,
   useNodeRuntimeStatus,
   NodeRuntimeNotice,
 } from "./agentNotices";
 import type { AgentLogin } from "./AgentLoginsRows";
-import { CodexAutoReviewToggle, AgentAccounts } from "./AgentAccounts";
+import { CodexAutoReviewToggle, OpenCodeWarmingToggle, AgentAccounts } from "./AgentAccounts";
 import { ClaudeTokenRow } from "./ClaudeTokenRow";
 import { AgentFenceCard } from "./AgentFenceCard";
 import { AgentCronSection } from "./AgentCronSection";
@@ -591,7 +592,7 @@ export function AgentsPanel({
     const parts = a.installed ? versionParts(a) : null;
     const signIn = a.installed ? loginFacts(a) : null;
     const busy = installing !== null || removing !== null;
-    const hasOptions = (a.id === "claude") || (a.id === "codex" && a.installed);
+    const hasOptions = a.id === "claude" || ((a.id === "codex" || a.id === "opencode" || a.id === "gemini") && a.installed);
     // Install on a remote machine, one click from the foot: picking a machine
     // opens the watched install tab at once (the fold below is the same install
     // with the machine picked first). Only when a remote machine exists, so a local-only setup sees
@@ -804,7 +805,9 @@ export function AgentsPanel({
           <div className="agents-block">
             <div className="settings-subheader">{t("agents.options")}</div>
             {a.id === "codex" && a.installed && <CodexAutoReviewToggle />}
+            {a.id === "opencode" && a.installed && <OpenCodeWarmingToggle />}
             {a.id === "claude" && <ClaudeRemoteControlNotice />}
+            {a.id === "gemini" && a.installed && <GeminiCachingNotice />}
           </div>
         )}
         {!a.installed && !adminInstalls && a.install_cmd !== "" && (

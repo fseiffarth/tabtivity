@@ -70,6 +70,15 @@ export const METRIC = {
   TOKENS_OUT: "tokens.out",
   /** A total with no split — only Codex's SQLite fallback reports one. */
   TOKENS_TOTAL: "tokens.total",
+  // Details of the split above, never added to it: cache writes kept 5 min
+  // and 1 h (together `TOKENS_CACHE_W`, for a CLI that says which), and the
+  // part of each split kind subagents used.
+  TOKENS_CACHE_W5M: "tokens.cache_w5m",
+  TOKENS_CACHE_W1H: "tokens.cache_w1h",
+  TOKENS_SUB_IN: "tokens.sub_in",
+  TOKENS_SUB_CACHE_W: "tokens.sub_cache_w",
+  TOKENS_SUB_CACHE_R: "tokens.sub_cache_r",
+  TOKENS_SUB_OUT: "tokens.sub_out",
 } as const;
 
 /** Compose `agent.prompt` + `claude` → `agent.prompt.claude`. */

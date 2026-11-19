@@ -302,7 +302,9 @@ describe("RootOverlayHost", () => {
     expect(screen.getByRole("region", { name: "Agent proposals" })).toBeTruthy();
     // The tools' own switch stays in Settings: the console writes none.
     const { invoke } = await import("@tauri-apps/api/core");
-    expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
+    // The settings store writes through `patch_settings`, falling back to `save_settings`.
+    expect(invoke).not.toHaveBeenCalledWith("patch_settings", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("save_settings", expect.anything());
     await act(async () => { fireEvent.click(approvals); });
     expect(screen.queryByRole("region", { name: "Agent proposals" })).toBeNull();
   });

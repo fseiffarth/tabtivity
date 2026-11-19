@@ -1613,37 +1613,55 @@ fn closed_tab_rows(rows: Vec<super::protocol::ClosedAgentTab>) -> Vec<serde_json
 /// itself keeps more (`services::tab_archive`); the desktop lists them all.
 const MAX_ARCHIVED_ROWS: usize = 100;
 
+/// What an archived tab comes back as, in the phone's terms (`create_tab`'s
+/// kinds): an agent — a local-model tab included — or a shell. `None` for
+/// any other kind (a viewer, a files tab), which the phone neither lists nor
+/// restores. A kind-less entry reads as a shell.
+fn archived_tab_kind(tab: &crate::schema::project::TabEntry) -> Option<CreateTabKind> {
+    match tab.extra.get("kind").and_then(serde_json::Value::as_str).unwrap_or("shell") {
+        "agent" | "local_agent" => Some(CreateTabKind::Agent),
+        "shell" => Some(CreateTabKind::Shell),
+        _ => None,
+    }
+}
+
 /// The project's archived tabs (`services::tab_archive`) for the phone's
 /// Archived fold, read off the state dir so they show with no window too:
-/// the opaque id, the label, the tab kind, the agent CLI for an agent tab and
-/// when it was archived. No folder, command line or session id crosses. The
+/// the opaque id, the label, the tab kind, the agent's name for an agent tab
+/// and when it was archived. Only what the phone may start is listed: agent
+/// tabs, and shell tabs while shells are on the phone (`shells_open`) — never
+/// a viewer, whose label is a file name. The agent is named as the live list
+/// names it (`discovery::agent_label_for`: the registry's name for its CLI,
+/// else the tab's label). No folder, command line or session id crosses. The
 /// assistant's scope has no archive.
 fn archived_tab_rows(state_dir: &std::path::Path, raw_id: &str, assistant: bool) -> Vec<serde_json::Value> {
     use crate::services::tab_archive;
     if assistant {
         return Vec::new();
     }
+    let shells = shells_open(state_dir);
     let clean = |text: &str| -> String { text.chars().filter(|c| !c.is_control()).take(MAX_TAB_LABEL).collect() };
     tab_archive::list_at(&tab_archive::archive_path_in(state_dir, raw_id))
         .into_iter()
         .filter(|entry| tab_archive::archive_id_ok(&entry.id))
-        .take(MAX_ARCHIVED_ROWS)
-        .map(|entry| {
-            let kind = entry.tab.extra.get("kind").and_then(serde_json::Value::as_str).unwrap_or("shell");
-            let kind = match kind {
-                "agent" | "local_agent" => "agent",
-                "shell" => "shell",
-                _ => "other",
+        .filter_map(|entry| {
+            let (kind, agent) = match archived_tab_kind(&entry.tab)? {
+                CreateTabKind::Agent => (
+                    "agent",
+                    clean(&super::discovery::agent_label_for(&entry.tab.cmd, &entry.tab.label, entry.tab.extra.get("localLaunch"))),
+                ),
+                CreateTabKind::Shell if shells => ("shell", String::new()),
+                CreateTabKind::Shell => return None,
             };
-            let agent = if kind == "agent" { clean(&entry.tab.cmd) } else { String::new() };
-            json!({
+            Some(json!({
                 "id": entry.id,
                 "label": clean(&entry.tab.label),
                 "kind": kind,
                 "agent": agent,
                 "archived_at": entry.archived_at,
-            })
+            }))
         })
+        .take(MAX_ARCHIVED_ROWS)
         .collect()
 }
 
@@ -2110,6 +2128,13 @@ async fn reopen_tab(
 /// { restored, on_desktop }` when it opened on the desktop only; `409
 /// nothing_to_restore` once the entry is gone. Needs the window: with none,
 /// `503 desktop_unavailable`.
+///
+/// A restore starts a tab, so it follows the phone's create rules, checked on
+/// the entry before the window is asked: a shell is refused while shells are
+/// off the phone (`403 shells_off`, as `create_tab`), an agent while AI is
+/// off, anything that is neither (`409 not_attachable`), and the scope's
+/// create verdict holds (`creatable`). The window checks the entry's own
+/// location again (`restoreMobileArchivedTab`).
 async fn restore_archived_tab(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -2130,6 +2155,27 @@ async fn restore_archived_tab(
     };
     if project.public.kind == ScopeKind::Assistant {
         return api_error(StatusCode::NOT_FOUND, "nothing_to_restore");
+    }
+    let archive = crate::services::tab_archive::archive_path_in(&state.config.state_dir, &project.raw_id);
+    let Some(entry) = crate::services::tab_archive::list_at(&archive).into_iter().find(|entry| entry.id == archive_id) else {
+        return api_error(StatusCode::CONFLICT, "nothing_to_restore");
+    };
+    let Some(kind) = archived_tab_kind(&entry.tab) else {
+        return api_error(StatusCode::CONFLICT, "not_attachable");
+    };
+    match kind {
+        CreateTabKind::Shell if !shells_open(&state.config.state_dir) => {
+            return api_error(StatusCode::FORBIDDEN, "shells_off");
+        }
+        CreateTabKind::Agent => {
+            if let Err(error) = ai_off_guard(&state) {
+                return error;
+            }
+        }
+        CreateTabKind::Shell => {}
+    }
+    if let Err(error) = creatable(project, &kind, false) {
+        return error;
     }
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
@@ -8753,6 +8799,11 @@ async fn project_files_zip(
         .unwrap_or_else(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response())
 }
 
+/// The largest model list a phone keeps (`POST …/model-rows`): OpenCode's
+/// picker lists every connected provider's catalog, past the control-message
+/// cap with a few keys; `model_rows` bounds the rows after parsing.
+const MODEL_ROWS_BODY: usize = 512 * 1024;
+
 /// The largest remarks body: a page's worth of highlights and notes is a few
 /// KB; the markup bounds (`markup::validate_body`) apply after parsing.
 const REMARKS_BODY: usize = 2 * 1024 * 1024;
@@ -9029,7 +9080,10 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/locations", get(tab_locations))
         .route("/api/v1/tabs/{tab_id}/location", post(move_tab_location))
         .route("/api/v1/tabs/{tab_id}/assistant-models", get(assistant_models))
-        .route("/api/v1/tabs/{tab_id}/model-rows", get(model_rows).post(remember_model_rows))
+        .route(
+            "/api/v1/tabs/{tab_id}/model-rows",
+            get(model_rows).merge(post(remember_model_rows).layer(DefaultBodyLimit::max(MODEL_ROWS_BODY))),
+        )
         .route("/api/v1/tabs/{tab_id}/assistant-model", post(switch_assistant_model))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
         .route("/api/v1/tabs/{tab_id}/teleport", post(teleport_tab))

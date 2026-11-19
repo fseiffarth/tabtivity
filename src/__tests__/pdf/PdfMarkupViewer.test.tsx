@@ -143,6 +143,9 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
 });
 afterEach(() => {
+  // A test that failed between useFakeTimers and its own restore must not
+  // leave the rest of the file on a fake clock.
+  vi.useRealTimers();
   cleanup();
   setDetachedWindowContext(null);
   _clearMarkupClaimsForTest();

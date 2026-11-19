@@ -1,7 +1,7 @@
 ---
 id: talking-to-an-agent
 title: Talking to an agent (dictation, read-aloud, hands-free)
-keywords: [voice, dictate, dictation, microphone, mic, speech, speech model, whisper, read aloud, read-aloud, speak, voice language, hands-free, handsfree, headset, stop word, go on, los, chime, barge-in, talk, correct, correction, scratch that, replace, undo, Tabby plan, Tabby goal]
+keywords: [voice, dictate, dictation, microphone, mic, speech, speech model, whisper, read aloud, read-aloud, speak, voice language, hands-free, handsfree, headset, stop word, go on, go tabby, los, chime, barge-in, talk, correct, correction, scratch that, replace, undo, Tabby plan, Tabby goal]
 related: [agent-clis, mobile, keyboard, settings-and-appearance]
 ---
 
@@ -21,7 +21,7 @@ as you speak them, at the end of the draft, and are corrected as you go on
 spoken correction, a send or a stop word until they are settled. Each finished
 sentence stays in the text box, where Ctrl+Z takes it back. Words you change by hand
 while they are still provisional become yours and are not typed again.
-End with **"go on"** (German **"los"**) to send without
+End with **"go Tabby"** (German **"los"**) to send without
 those words, or press Send.
 
 ### Correcting what you said
@@ -37,7 +37,7 @@ whole sentence must be one of these, or it is dictated as usual:
 | "Tabby, clear all" ("alles löschen") | empties the box; "scratch that" brings it back |
 | "Tabby, plan" / "Tabby, goal" | starts the prompt with `/plan` or `/goal`, as the chips do |
 
-The line under the box says what changed. Add "go on" to send right after.
+The line under the box says what changed. Add "go Tabby" to send right after.
 Once you have typed into the box, "scratch that" only takes back what you
 say from then on. It works the same on the phone, in the voice language you
 dictate in, and the English phrases work in every language.
@@ -79,7 +79,7 @@ Turn on **Hands-free voice in the Chat** in Settings → Experimental, then the
    plays and **Sending…** shows for about a second and a half.
 2. Say **"stop"** (or "stopp"), press the stop key or click the line in that
    moment, and the prompt stays in the box unsent. Otherwise it is sent.
-   "go on" still sends at once.
+   "go Tabby" still sends at once.
 3. While the agent works, the mic rests. Once its turn is over and the answer
    has been read aloud (with read-aloud on), the mic listens again.
 4. When the agent asks a question, it is read out with its numbered choices;
@@ -97,14 +97,14 @@ listening: a small mic on the steering badge says so.
 The Focus view's mic dictates with the phone's speech (on the device where it
 can), and the words show in its text box live, as on the desktop. Its menu holds **Read answers aloud**, the voice language and
 **Hands-free**: the same pause, chime and "stop" window, then the answer is
-read and the mic opens again. Ending with **"go on"** sends and leaves the
+read and the mic opens again. Ending with **"go Tabby"** sends and leaves the
 mic open, so the next prompt can follow straight away; with Hands-free on,
 the answer still waits until you stop talking, then the mic pauses while it
 is read. Keep the screen on and the page open — a web page cannot hold the
 microphone from a pocket. A tap on the line stops the voice or cancels a
 send.
 
-With Hands-free on, a spoken **"go on"** also plays a chime and shows "Sent —
+With Hands-free on, a spoken **"go Tabby"** also plays a chime and shows "Sent —
 say Tabby for your next prompt": from then until the next send the open mic
 dictates only what you start with **"Tabby"**; talk before it is dropped, and
 a prompt you have already begun carries on without it.

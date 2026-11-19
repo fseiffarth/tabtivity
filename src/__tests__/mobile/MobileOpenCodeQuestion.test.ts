@@ -189,6 +189,50 @@ describe("OpenCode live questions shared by phone Chat and desktop Reader", () =
     expect(answerRowKeys(review, review.options[0])).toEqual(["\r"]);
   });
 
+  it("reads a form whose footer ran off a short pane's bottom, and nothing else without one", () => {
+    // The phone screenshot of 2026-11-18: question 1 of four, five rows with
+    // two- and three-line descriptions, filled the pane down to its last row.
+    const [muted, text, accent] = ["#808080", "#eeeeee", "#fab283"];
+    const span = (value: string, color: string, className?: string): ReadableSpan => ({ text: value, color, ...(className && { className }) });
+    const row = (spans: ReadableSpan[], afterRule = false): ReadableLine => {
+      const value = spans.map((part) => part.text).join("");
+      return { key: value, text: value, spans, ...(afterRule && { afterRule }) };
+    };
+    const option = (number: number, label: string, current: boolean) => row(
+      [span(`${number}.`, current ? accent : muted), span(" ", text), span(label, current ? accent : text)],
+      number === 1,
+    );
+    const note = (words: string) => row([span(`   ${words}`, muted)]);
+    const head = [
+      row([span("Questions", muted)], true),
+      row(["Activation", "WASD placement", "Thumbs", "Scope", "Submit"].flatMap((label, index) => [
+        ...(index > 0 ? [span("  ", text)] : []),
+        span(label, index === 0 ? text : muted, index === 0 ? "b" : undefined),
+      ]), true),
+      row([span("How should the Game layer be turned on?", text)], true),
+    ];
+    const body = [
+      option(1, "Thumb-tap toggle (Recommended)", true), note("A thumb tap toggles Game and it stays"), note("on until tapped again."),
+      option(2, "Add to Lyt cycle", false), note("Game becomes a base layer in the cycle."),
+      option(3, "Momentary thumb hold", false), note("Hold a thumb to get Game."),
+      option(4, "Type your own answer", false),
+    ];
+
+    const question = read([...head, ...body]);
+    expect(question).toMatchObject({ title: "How should the Game layer be turned on?", current: 0 });
+    expect(question.options.map((choice) => choice.label)).toEqual(["Thumb-tap toggle (Recommended)", "Add to Lyt cycle", "Momentary thumb hold", "Type your own answer"]);
+    expect(question.options[0].description).toBe("A thumb tap toggles Game and it stays on until tapped again.");
+    expect(question.options[0].keys).toEqual(["1"]);
+    expect(question.options[3].input).toBe("opencode");
+    expect(question.navigation).toMatchObject({ focus: 0, submit: true });
+    expect(question.navigation?.tabs.map((tab) => tab.label)).toEqual(["Activation", "WASD placement", "Thumbs", "Scope"]);
+
+    // No tab row over it: a numbered list in the answer, not a form.
+    expect(readSelectPrompt([head[2], ...body], "OpenCode")?.source).not.toBe("opencode");
+    // Something under the rows that is not theirs: the form ended above it.
+    expect(readSelectPrompt([...head, ...body, row([span("┃  Build  LongCat 2.5 Free", text)])], "OpenCode")?.source).not.toBe("opencode");
+  });
+
   /** The colours of the captures below (2.2.4, 2026-10-30). */
   const ACCENT = "rgb(250,178,131)";
   const MUTED = "rgb(128,128,128)";
@@ -313,7 +357,9 @@ describe("OpenCode live questions shared by phone Chat and desktop Reader", () =
   it("ignores earlier numbered prose and refuses ordinary lists, other agents and stale dialogs", () => {
     expect(read([line("1. Earlier item"), line("2. Another item"), line(""), ...screenshot()]).options).toHaveLength(5);
     expect(readSelectPrompt(screenshot(), "Claude Code")).toBeNull();
-    expect(readSelectPrompt(screenshot().slice(0, -1), "OpenCode")).toBeNull();
+    // Footerless, the form's tab row is what says it is one (a form cut off at
+    // the pane's bottom, above): numbered rows under a question are not.
+    expect(readSelectPrompt(screenshot().slice(4, -1), "OpenCode")).toBeNull();
     expect(readSelectPrompt([...screenshot(), line("The agent continued.")], "OpenCode")).toBeNull();
     expect(dialogFooterShown(screenshot())).toBe(true);
   });

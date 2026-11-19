@@ -1239,35 +1239,76 @@ async fn tab_edits_close_and_reopen_are_the_owners_with_no_window() {
     assert_eq!(json(&body)["error"], "nothing_to_reopen");
 }
 
-/// The project's archived tabs (`services::tab_archive`) reach the phone as
-/// labels, kinds and the agent's CLI only — read off the state dir, so with
-/// no window too — while archiving and restoring need the window and say so.
-#[tokio::test]
-async fn archived_tabs_list_without_a_window_and_their_verbs_need_one() {
-    let host = headless_host(Arc::new(|_opts: PtyOptions| Box::pin(async { Ok(()) })));
-    let cookie = host.pair_device(&signing_key(52)).await.0;
-    let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+/// Write the `with_project` host's tab archive: an agent tab of a built-in
+/// CLI, an agent tab whose configured command is a path, a local-model tab, a
+/// shell, a viewer and an entry with a malformed id. Answers the archive file
+/// and the folder its tabs name.
+fn write_test_archive(host: &Fixture) -> (std::path::PathBuf, String, String) {
     let archive = host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join(crate::services::tab_archive::ARCHIVE_FILE);
     let secret_dir = host.root.join("deep").to_string_lossy().to_string();
+    let secret_bin = host.root.join("wrappers").join("private-bot").to_string_lossy().to_string();
     std::fs::write(
         &archive,
         json!({ "entries": [
             { "id": "a1b2", "archivedAt": 7, "tab": { "key": "k", "label": "Review\u{7}", "cmd": "claude", "cwd": secret_dir, "kind": "agent", "sessionId": "9d0f-archived" } },
+            { "id": "b2c3", "archivedAt": 7, "tab": { "key": "k1", "label": "My bot", "cmd": format!("{secret_bin} --token t0p"), "cwd": secret_dir, "kind": "agent" } },
+            { "id": "e5f6", "archivedAt": 7, "tab": { "key": "k4", "label": "Local", "cmd": "ollama", "cwd": secret_dir, "kind": "local_agent", "localLaunch": { "driver": "claude", "model": "m", "args": [] } } },
+            { "id": "s1s1", "archivedAt": 6, "tab": { "key": "k5", "label": "build shell", "cmd": "bash", "cwd": secret_dir, "kind": "shell" } },
             { "id": "c3d4", "archivedAt": 6, "tab": { "key": "k2", "label": "notes.pdf", "cmd": "", "cwd": secret_dir, "kind": "embed", "embedPath": secret_dir } },
             { "id": "../bad", "archivedAt": 5, "tab": { "key": "k3", "label": "x", "cmd": "", "cwd": "/" } }
         ] })
         .to_string(),
     )
     .unwrap();
+    (archive, secret_dir, secret_bin)
+}
 
+/// Turn the phone's shells switch on or off for the `with_project` host.
+fn set_phone_shells(host: &Fixture, on: bool) {
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "shell_tabs": on } }).to_string(),
+    )
+    .expect("write settings");
+}
+
+/// The project's archived tabs (`services::tab_archive`) reach the phone as
+/// labels, kinds and the agent's name only — read off the state dir, so with
+/// no window too — while archiving and restoring need the window and say so.
+/// The agent is named as the live list names it (the registry's name for its
+/// CLI, else the tab's label), never by its command; only the kinds the
+/// phone may start are listed: agents, and shells while the shells switch is
+/// on — never a viewer (gap 119).
+#[tokio::test]
+async fn archived_tabs_list_without_a_window_and_their_verbs_need_one() {
+    let host = headless_host(Arc::new(|_opts: PtyOptions| Box::pin(async { Ok(()) })));
+    let cookie = host.pair_device(&signing_key(52)).await.0;
+    let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+    let (archive, secret_dir, secret_bin) = write_test_archive(&host);
+
+    let rows = |body: &str| json(body)["archived"].clone();
     let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
-    let detail = json(&body);
-    assert_eq!(detail["archived"].as_array().map(Vec::len), Some(2), "{body}");
-    assert_eq!(detail["archived"][0], json!({ "id": "a1b2", "label": "Review", "kind": "agent", "agent": "claude", "archived_at": 7 }));
-    assert_eq!(detail["archived"][1]["kind"], "other");
-    assert_eq!(detail["archived"][1]["agent"], "");
+    assert_eq!(
+        rows(&body),
+        json!([
+            { "id": "a1b2", "label": "Review", "kind": "agent", "agent": "Claude", "archived_at": 7 },
+            { "id": "b2c3", "label": "My bot", "kind": "agent", "agent": "My bot", "archived_at": 7 },
+            { "id": "e5f6", "label": "Local", "kind": "agent", "agent": "Claude", "archived_at": 7 },
+            { "id": "s1s1", "label": "build shell", "kind": "shell", "agent": "", "archived_at": 6 },
+        ]),
+        "{body}"
+    );
     assert!(!body.contains(&secret_dir), "path leaked: {body}");
+    assert!(!body.contains(&secret_bin), "command leaked: {body}");
+    assert!(!body.contains("t0p"), "command leaked: {body}");
+    assert!(!body.contains("notes.pdf"), "a viewer's file name leaked: {body}");
     assert!(!body.contains("9d0f-archived"), "session id leaked: {body}");
+    // Shells off the phone: the archived shell is not listed either.
+    set_phone_shells(&host, false);
+    let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+    let ids: Vec<_> = rows(&body).as_array().unwrap().iter().map(|row| row["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(ids, ["a1b2", "b2c3", "e5f6"], "{body}");
+    assert!(!body.contains("build shell"), "{body}");
 
     let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/archive"), &cookie, None)).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
@@ -1281,7 +1322,63 @@ async fn archived_tabs_list_without_a_window_and_their_verbs_need_one() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     // Nothing was taken out by a refused restore.
-    assert_eq!(crate::services::tab_archive::list_at(&archive).len(), 3);
+    assert_eq!(crate::services::tab_archive::list_at(&archive).len(), 6);
+}
+
+/// A phone restores from the archive what it could have created (gap 118):
+/// the entry is read before the window is asked, a shell is refused while
+/// shells are off the phone with `create_tab`'s own code, anything that is
+/// neither an agent nor a shell is refused, and an entry the archive no
+/// longer holds is gone — none of them reaches the desktop, and nothing is
+/// taken out of the archive.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_archived_tab_restores_from_the_phone_only_as_a_tab_it_could_create() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let host = Fixture::with_project();
+    set_phone_shells(&host, false);
+    let cookie = host.pair_device(&signing_key(57)).await.0;
+    let (project_id, _) = project_and_tab(&host, &cookie).await;
+    let (archive, _, _) = write_test_archive(&host);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let seen = calls.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            if matches!(request, DesktopRequest::RestoreArchivedTab { .. }) {
+                seen.fetch_add(1, Ordering::SeqCst);
+                admin::write_frame(&mut stream, &DesktopResponse::Activated).await.expect("answer");
+            }
+        }
+    });
+    let restore = |archive_id: &str| request_as("POST", &format!("/api/v1/projects/{project_id}/tabs/archived/{archive_id}/restore"), &cookie, None);
+
+    let (status, _, body) = host.send(restore("s1s1")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "answered: {body}");
+    assert_eq!(json(&body)["error"], "shells_off");
+    let (status, _, body) = host.send(restore("c3d4")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+    assert_eq!(json(&body)["error"], "not_attachable");
+    let (status, _, body) = host.send(restore("ffff")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
+    assert_eq!(json(&body)["error"], "nothing_to_restore");
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "a refused restore asked the desktop");
+    assert_eq!(crate::services::tab_archive::list_at(&archive).len(), 6);
+
+    // An agent goes to the window, and so does a shell once shells are on.
+    let (status, _, body) = host.send(restore("a1b2")).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    set_phone_shells(&host, true);
+    let (status, _, body) = host.send(restore("s1s1")).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    desktop.abort();
 }
 
 /// Bind the `with_project` host's agent tab to schedule target `tgt-1`.

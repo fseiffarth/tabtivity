@@ -864,6 +864,7 @@ const WALK_STEP_WAIT_MS = 600;
  * highlight without scrolling for up to half a frame — two steps. */
 const WALK_STILL_STEPS = 3;
 const MAX_WALK_STEPS = 200;
+/** Also the most rows a remembered list keeps (`services::model_rows`). */
 const MAX_WALK_ROWS = 600;
 
 /** The rows the walk has seen. `main` runs from the frame the dialog opened on

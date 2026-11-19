@@ -39,6 +39,7 @@ Search settings also offers Copy link beside each result. Prefer those links or 
 | hintsOnboarding | Reset hints | tabtivity://settings/hintsOnboarding/settings.resetHints |
 | shortcuts | Keyboard Shortcuts | tabtivity://settings/shortcuts |
 | updates | Updates | tabtivity://settings/updates |
+| updates | Installed version | tabtivity://settings/updates/updates.installedVersion |
 | help | Feature Guide | tabtivity://settings/help |
 | global | Global Apps | tabtivity://settings/global |
 | filetypes | File Type Apps | tabtivity://settings/filetypes |
@@ -76,18 +77,31 @@ Search settings also offers Copy link beside each result. Prefer those links or 
 | agents | Google Gemini API key | tabtivity://settings/agents/settings.searchProviderKey.google-gemini |
 | agents | Global agent config | tabtivity://settings/agents/settings.agentGlobal |
 | agents | Copilot sign-in for sandboxed tabs | tabtivity://settings/agents/settings.copilotFenceAuth |
+| agents | Claude long-lived token | tabtivity://settings/agents/settings.claudeToken |
+| agents | Also use on remote hosts | tabtivity://settings/agents/settings.claudeTokenRemote |
 | agents | Agent sandbox | tabtivity://settings/agents/settings.agentFenceTitle |
 | agents | Read-only toolchain/config paths (one per line) | tabtivity://settings/agents/settings.agentFencePaths |
+| agents | Allow Cargo registry credential files | tabtivity://settings/agents/settings.agentFenceCargoCredentials |
+| agents | Root agent reads projects | tabtivity://settings/agents/settings.rootFenceProjects |
 | agents | Scheduled warm-up | tabtivity://settings/agents/agentCron.title |
+| agents | Send scheduled warm-up messages | tabtivity://settings/agents/agentCron.enable |
+| agents | All agents | tabtivity://settings/agents/agentCron.allAgents |
 | agents | Tabtivity tools | tabtivity://settings/agents/agents.groupTools |
+| agents | Let agents rename their own tab and leave notes (Cockpit MCP) | tabtivity://settings/agents/cockpitMcp.title |
+| agents | Offer Tabtivity's help to agent tabs | tabtivity://settings/agents/intro.ask.toggle |
 | agents | Let project agents propose scheduled prompts (MCP) | tabtivity://settings/agents/scheduleMcp.title |
 | agents | Let project agents ask Tabtivity to push, tag releases and read CI (MCP) | tabtivity://settings/agents/gitPushMcp.title |
 | agents | Let project agents ask about your PDF marks (MCP) | tabtivity://settings/agents/markupMcp.title |
+| agents | Let project agents ask to print PDFs (MCP) | tabtivity://settings/agents/printMcp.title |
+| agents | Let agent tabs of a project message each other (MCP) | tabtivity://settings/agents/tabsMcp.title |
+| agents | Root-console tools | tabtivity://settings/agents/agents.tools.root |
+| agents | Web tools for Tabby | tabtivity://settings/agents/agents.tools.web |
 | agents | Prompt composer | tabtivity://settings/agents/agents.composerHeading |
 | agents | Prefix commands | tabtivity://settings/agents/agents.composerCommands |
 | agents | Models | tabtivity://settings/agents/agents.composerModels |
 | ollama | Ollama Models | tabtivity://settings/ollama |
 | ollama | Load on Tabtivity start | tabtivity://settings/ollama/ollama.autostartTitle |
+| ollama | Load even in Energy Saver mode | tabtivity://settings/ollama/ollama.autostartInSaver |
 | ollama | Local model runtime (Vibe) | tabtivity://settings/ollama/ollama.vibeTitle |
 | ollama | Storage | tabtivity://settings/ollama/ollama.storageTitle |
 | ollama | Model download location | tabtivity://settings/ollama/ollama.modelLocationTitle |
@@ -113,9 +127,14 @@ Search settings also offers Copy link beside each result. Prefer those links or 
 | assistant | Web search | tabtivity://settings/assistant/assistant.settings.search |
 | assistant | Search service | tabtivity://settings/assistant/assistant.search.kind |
 | voice | Voice | tabtivity://settings/voice |
+| voice | Hands-free pause | tabtivity://settings/voice/settings.voice.pause |
 | voice | Speech model | tabtivity://settings/voice/settings.voice.model |
 | voice | Speech language | tabtivity://settings/voice/settings.voice.lang |
+| voice | Read-aloud speed | tabtivity://settings/voice/settings.voice.rate |
+| voice | Natural voice | tabtivity://settings/voice/settings.voice.natural |
+| voice | Headset mode | tabtivity://settings/voice/settings.voice.headset |
 | voice | Use the GPU | tabtivity://settings/voice/settings.voice.gpu |
+| voice | Speech runs on | tabtivity://settings/voice/settings.voice.device |
 | remoteFeatures | Remote features | tabtivity://settings/remoteFeatures |
 | remoteFeatures | OpenVPN tunnel control | tabtivity://settings/remoteFeatures/settings.vpnEnabled |
 | remoteFeatures | Global remote machines | tabtivity://settings/remoteFeatures/settings.machinesEnabled |

@@ -5,6 +5,8 @@ import { useT } from "../../lib/i18n";
 import { MarkdownPromptField } from "../common/MarkdownPromptField";
 import type { ChartDrag } from "./usePromptChartDrag";
 import { NAMES } from "../../lib/brand";
+import type { PromptSequence } from "../../lib/agents/prompt/sequences";
+import { PromptSequenceGroup, PromptSequenceHeader, PromptSequenceOutline, PromptSequenceRow } from "./PromptSequenceGroup";
 
 interface Point { x: number; y: number }
 interface Layout { free: boolean; positions: Record<string, Point> }
@@ -12,10 +14,13 @@ export interface DraftBoardHandle {
   place: (id: string, x: number, y: number) => boolean;
   /** Whether cards can be moved at all: in row layout `place` refuses. */
   free: boolean;
-  /** Open the board's own composer — at the next free spot on the canvas, or
-   *  at the row's end — the one composer the chart's ＋ opens too. */
-  compose: () => void;
+  /** The List | Free switch, which the Drafts column's header draws. Free
+   *  starts from where the list shows each card now. */
+  setFree: (free: boolean) => void;
 }
+
+/** The room a sequence's heading takes under its outline on the free canvas. */
+const SEQUENCE_HEAD_HEIGHT = 34;
 
 /** The composer's size on the free canvas, so the canvas grows to hold it. */
 const COMPOSER_WIDTH = 460;
@@ -43,7 +48,17 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
   onLayout: () => void;
   /** Write a new draft; resolves to its id, rejects when the write failed. */
   onCreate: (message: string, tags: string[]) => Promise<string>;
-}>(function PromptDraftBoard({ scope, cards, drag, renderCard, onLayout, onCreate }, ref) {
+  /** Every sequence; the ones with a member among `cards` are drawn as a group
+   *  (List) or an outline (Free). */
+  sequences?: PromptSequence[];
+  /** The sequence open in the inspector, and the card selected. */
+  activeSequence?: string | null;
+  selectedId?: string | null;
+  onOpenSequence?: (id: string) => void;
+  /** A one-line row of a member that lives on the timeline was picked. */
+  onPickStep?: (card: PromptChartCard) => void;
+  onPauseToggle?: (sequence: PromptSequence) => void;
+}>(function PromptDraftBoard({ scope, cards, drag, renderCard, onLayout, onCreate, sequences = [], activeSequence = null, selectedId = null, onOpenSequence, onPickStep, onPauseToggle }, ref) {
   const t = useT();
   const key = `${NAMES.storagePrefix}promptChart.drafts.${scope}`;
   const [layout, setLayout] = useState(() => readLayout(key));
@@ -60,21 +75,6 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
     const rect = canvas.current?.getBoundingClientRect();
     return { x: Math.max(0, x - (rect?.left ?? 0)), y: Math.max(0, y - (rect?.top ?? 0)) };
   };
-  /** The first grid spot the composer covers no card at, reading row by row;
-   *  below the lowest card when the canvas is full. */
-  const freeSpot = (): Point => {
-    const boxes = cards.map((card, index) => ({ ...pointOf(card.id, index), ...(sizes[card.id] ?? { width: 168, height: 120 }) }));
-    const clear = (x: number, y: number) => boxes.every((box) =>
-      x + COMPOSER_WIDTH <= box.x || box.x + box.width <= x || y + COMPOSER_HEIGHT <= box.y || box.y + box.height <= y);
-    for (let row = 0; row < 64; row += 1) {
-      for (let column = 0; column < columns; column += 1) {
-        const x = column * 192 + 8;
-        const y = row * 152 + 8;
-        if ((column === 0 || x + COMPOSER_WIDTH <= width) && clear(x, y)) return { x, y };
-      }
-    }
-    return { x: 8, y: Math.max(8, ...boxes.map((box) => box.y + box.height + 8)) };
-  };
   useImperativeHandle(ref, () => ({
     place: (id, x, y) => {
       if (!layout.free) return false;
@@ -83,7 +83,7 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
       return true;
     },
     free: layout.free,
-    compose: () => setComposer(layout.free ? freeSpot() : { x: 0, y: 0 }),
+    setFree: (free) => setLayout((value) => value.free === free ? value : { free, positions: Object.fromEntries(cards.map((card, index) => [card.id, pointOf(card.id, index)])) }),
   }));
   useEffect(() => {
     try { localStorage.setItem(key, JSON.stringify(layout)); } catch { /* retain it for this session */ }
@@ -132,6 +132,37 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
   const points = cards.map((card, index) => drag?.kind === "card" && drag.zone.kind === "strip" && drag.card.id === card.id
     ? clientPoint(drag.x - drag.grabDx, drag.y - drag.grabDy)
     : pointOf(card.id, index));
+  const cardById = new Map(cards.map((card) => [card.id, card]));
+  const groups = sequences.filter((sequence) => sequence.steps.some((step) => cardById.has(step.card.id)));
+  const grouped = new Set(groups.flatMap((sequence) => sequence.steps.map((step) => step.card.id)));
+  const header = (sequence: PromptSequence) => (
+    <PromptSequenceHeader
+      sequence={sequence}
+      active={activeSequence === sequence.id}
+      onOpen={() => onOpenSequence?.(sequence.id)}
+      onPauseToggle={() => onPauseToggle?.(sequence)}
+    />
+  );
+  /** The Free canvas's outline: the box around a group's cards, its heading below them. */
+  const outline = (sequence: PromptSequence) => {
+    const boxes = cards.flatMap((card, index) => sequence.steps.some((step) => step.card.id === card.id)
+      ? [{ ...points[index], ...(sizes[card.id] ?? { width: 168, height: 120 }) }] : []);
+    if (boxes.length === 0) return null;
+    const left = Math.min(...boxes.map((box) => box.x)) - 6;
+    const top = Math.min(...boxes.map((box) => box.y)) - 6;
+    return (
+      <PromptSequenceOutline
+        key={`outline:${sequence.id}`}
+        box={{
+          left: Math.max(0, left),
+          top: Math.max(0, top),
+          width: Math.max(...boxes.map((box) => box.x + box.width)) + 6 - Math.max(0, left),
+          height: Math.max(...boxes.map((box) => box.y + box.height)) + 6 + SEQUENCE_HEAD_HEIGHT - Math.max(0, top),
+        }}
+        header={header(sequence)}
+      />
+    );
+  };
   const composerNode = composer && (
     <div
       className={`agent-prompt-draft-composer${layout.free ? " agent-prompt-draft-position" : ""}`}
@@ -159,25 +190,31 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
     </div>
   );
   return <>
-    <div className="agent-prompt-draft-layout-bar">
-      <button type="button" className={`agent-composer-chip${layout.free ? " active" : ""}`} aria-pressed={layout.free}
-        onClick={() => setLayout((value) => ({ free: !value.free, positions: Object.fromEntries(cards.map((card, index) => [card.id, pointOf(card.id, index)])) }))}>
-        {t("promptChart.freeLayout")}
-      </button>
-      {/* "Move cards freely" is true only in free layout; the row does not move them. */}
-      <small>{layout.free ? `${t("promptChart.draftFreeHint")} ` : ""}{t("promptChart.draftLayoutHint")} {t("promptChart.draftCreateHint")}</small>
-    </div>
-    <small className="agent-prompt-completion-hint">{t("promptChart.completionHint")}</small>
-    <div ref={viewport} className={layout.free ? "agent-prompt-draft-viewport" : undefined}>
+    <div ref={viewport} className="agent-prompt-draft-viewport">
       <div ref={canvas} data-testid="prompt-draft-board" className={layout.free ? "agent-prompt-draft-canvas" : "agent-prompt-drafts-row"}
         onDoubleClick={openComposer}
         style={layout.free ? {
           width: Math.max(width, ...points.map((point, index) => point.x + (sizes[cards[index].id]?.width ?? 168) + 32), composer ? composer.x + COMPOSER_WIDTH + 32 : 0),
           height: Math.max(320, ...points.map((point, index) => point.y + (sizes[cards[index].id]?.height ?? 120) + 64), composer ? composer.y + COMPOSER_HEIGHT + 64 : 0),
         } : undefined}>
-        {cards.map((card, index) => layout.free
-          ? <div key={card.key} data-draft-id={card.id} className="agent-prompt-draft-position" style={{ left: points[index].x, top: points[index].y }}>{renderCard(card)}</div>
-          : renderCard(card))}
+        {layout.free && groups.map(outline)}
+        {layout.free
+          ? cards.map((card, index) => <div key={card.key} data-draft-id={card.id} className="agent-prompt-draft-position" style={{ left: points[index].x, top: points[index].y }}>{renderCard(card)}</div>)
+          : (
+            <>
+              {groups.map((sequence) => (
+                <PromptSequenceGroup key={sequence.id} header={header(sequence)}>
+                  {sequence.steps.map((step) => {
+                    const own = cardById.get(step.card.id);
+                    return own
+                      ? renderCard(own)
+                      : <PromptSequenceRow key={step.card.key} step={step} selected={selectedId === step.card.id} onPick={() => onPickStep?.(step.card)} />;
+                  })}
+                </PromptSequenceGroup>
+              ))}
+              {cards.filter((card) => !grouped.has(card.id)).map((card) => renderCard(card))}
+            </>
+          )}
         {composerNode}
         {cards.length === 0 && !composer && <div className="file-tree-empty">{t("promptChart.noDrafts")}</div>}
       </div>

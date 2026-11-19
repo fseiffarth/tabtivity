@@ -195,7 +195,12 @@ belongs to project boxes, every box folder and member root is added
 read-write; membership in several boxes produces the union. A `box:<id>` tab
 receives that box's roots directly. Claude also receives `--add-dir` and
 Gemini receives `--include-directories`, so their own working-dir checks
-agree with the OS boundary. Codex receives no automatic `--add-dir`: that
+agree with the OS boundary. Each Claude spawn also records folder trust in
+its home's `.claude.json` for exactly the roots it passes with `--add-dir`
+(`agent_home::trust_claude_added_dirs`): Claude 2.1.326+ otherwise asks
+"Adding a new directory" for each one on every new tab, and that answer only
+lasts for the session. Trust for the tab's own folder is never written, so
+its startup dialog is still the user's to answer. Codex receives no automatic `--add-dir`: that
 flag requests extra writable roots, and Codex warns and ignores it when its
 own effective permissions are read-only or managed. A root-console agent's
 fence is `~/tabtivity/root` read-write and, only with
@@ -274,7 +279,9 @@ At every spawn, before Tabtivity's hooks are registered, its plain files are
 copied over the home's (a scope file replaced the first time is kept in
 `.tabtivity-global-backup/`) and its fragments of the files the CLIs write
 themselves (`.claude/settings.json`, `.claude.json`, `.codex/config.toml`,
-`.gemini/settings.json`, and the Cursor/Droid/Vibe hook files) are merged: objects recurse, arrays gain elements,
+`.gemini/settings.json`, OpenCode's `.config/opencode/opencode.json` — where
+Tabtivity adds its instructions file per home, and the Manage CLIs cache-warming
+switch writes `warming` — and the Cursor/Droid/Vibe hook files) are merged: objects recurse, arrays gain elements,
 scalars take the layer's value. A per-home manifest records what was placed
 and merged, so the next spawn first takes exactly that back out — a key the
 user drops from the layer leaves every home, while a model a tab picked

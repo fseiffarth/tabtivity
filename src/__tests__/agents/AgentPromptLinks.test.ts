@@ -20,6 +20,14 @@ describe("prompt links", () => {
     expect(rows[0]).toMatchObject({ prompt: draft, stopped: null, strand: { label: "Codex" } });
   });
 
+  it("queues nothing for a paused edge, and resumes with the same edge once the flag is gone", () => {
+    const strands = [{ scheduleTargetId: "tab-1", label: "Codex" }];
+    const held = [{ ...links[0], paused: true }];
+    expect(nextAfter("source", held, [draft], strands)).toEqual([]);
+    expect(nextAfter("source@2026-09-04T09:00", held, [draft], strands)).toEqual([]);
+    expect(nextAfter("source", [links[0]], [draft], strands)).toHaveLength(1);
+  });
+
   it("keeps a closed target visible but refuses to nominate a strand", () => {
     expect(nextAfter("source", links, [draft], [])[0]).toMatchObject({ stopped: "closed", strand: undefined });
   });

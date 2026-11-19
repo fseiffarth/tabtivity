@@ -857,7 +857,7 @@ export type DraftEdit =
   | { kind: "restate"; text: string };
 
 /** A spoken edit, the language its phrase was matched in (the draft's words
- * are compared in it), and whether "go on" followed it: send after. */
+ * are compared in it), and whether "go Tabby" followed it: send after. */
 export type SpokenDraftEdit = DraftEdit & { lang: Language; send: boolean };
 
 type EditPart = { lit: string } | { slot: "from" | "to" | "text" };
@@ -905,7 +905,7 @@ function slotText(source: Words, tokens: readonly Token[], span: [number, number
 }
 
 function draftEditIn(utterance: string, lang: Language): SpokenDraftEdit | null {
-  // "Tabby scratch that, go on": the edit, then the send.
+  // "Tabby scratch that, go Tabby": the edit, then the send.
   const sendless = spokenSend(utterance);
   const send = sendless !== null;
   const source = words(sendless ?? utterance, lang);
@@ -962,7 +962,7 @@ export function mayEditDraft(utterance: string, lang: Language): boolean {
   const fits = (parts: readonly EditPart[]) => {
     for (let at = 0; at < heard.length; at++) {
       const part = parts[at];
-      // A slot takes whatever follows; a phrase heard whole may carry "go on".
+      // A slot takes whatever follows; a phrase heard whole may carry "go Tabby".
       if (!part || "slot" in part) return true;
       const last = at === heard.length - 1;
       if (last ? !part.lit.startsWith(heard[at]) : part.lit !== heard[at]) return false;

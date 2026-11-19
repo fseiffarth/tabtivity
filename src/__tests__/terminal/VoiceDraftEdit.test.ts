@@ -64,9 +64,9 @@ describe("matchDraftEdit", () => {
     });
   });
 
-  it("takes a trailing \"go on\" as a send after the edit", () => {
-    expect(edit("Tabby scratch that, go on")).toMatchObject({ kind: "undo", send: true });
-    expect(edit("Tabby correction fix the parser go on")).toMatchObject({ kind: "restate", text: "fix the parser", send: true });
+  it("takes a trailing \"go Tabby\" as a send after the edit", () => {
+    expect(edit("Tabby scratch that, go Tabby")).toMatchObject({ kind: "undo", send: true });
+    expect(edit("Tabby correction fix the parser go Tabby")).toMatchObject({ kind: "restate", text: "fix the parser", send: true });
   });
 
   it("falls back to the English phrases in another language", () => {

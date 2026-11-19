@@ -1,7 +1,8 @@
 /**
  * The command palette: one box that finds a tab, a project, a file, an action
  * or a setting. `#` narrows it to files, which is what the Quick open chord
- * opens it on. Enter opens the row, Ctrl+Enter opens a tab or file in a new
+ * opens it on; `@` narrows it to tabs, every scope's, which is the tab search
+ * (the `searchTabs` chord and the tab bar's + menu open it there). Enter opens the row, Ctrl+Enter opens a tab or file in a new
  * subwindow beside the focused one, Esc closes. No agent and no model: it only
  * ranks what the renderer already holds, so it needs no backend of its own.
  *
@@ -39,15 +40,14 @@ import { UntestedTag } from "../common/UntestedTag";
 import { BoxSwatch } from "../common/icons/Icon";
 import { useQuickCreateBox } from "../projects/useQuickCreateBox";
 import { searchSettings, type NavEntry } from "./settingsIndex";
+import { FILE_FILTER, OPEN_PALETTE_EVENT, TAB_FILTER } from "../../lib/shortcuts/paletteEvent";
 
-/** Opens the palette; a `CustomEvent` detail of `{ filter: "#" }` opens it on
- *  that filter. Every door (the chord, Quick open's chord, the menus) fires this. */
-export const OPEN_PALETTE_EVENT = "app:open-palette";
+export { OPEN_PALETTE_EVENT };
 
-const FILE_FILTER = "#";
-/** Rows shown per group, and when the whole box is one group of files. */
+/** Rows shown per group, and when the whole box is one group of files or tabs. */
 const GROUP_LIMIT = 6;
 const FILE_LIMIT = 50;
+const TAB_LIMIT = 50;
 
 /** The groups an action is offered from: what acts on the window. A key that
  *  only means something inside a terminal or editor stays out. */
@@ -215,7 +215,8 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
   }, [open]);
 
   const filesOnly = input.startsWith(FILE_FILTER);
-  const query = (filesOnly ? input.slice(FILE_FILTER.length) : input).trim();
+  const tabsOnly = input.startsWith(TAB_FILTER);
+  const query = (filesOnly || tabsOnly ? input.slice(1) : input).trim();
 
   const rows = useMemo<Row[]>(() => {
     if (!open) return [];
@@ -225,13 +226,39 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
     };
 
     if (local) {
-      take(t("palette.group.tabs"), local.tabs.map((tab) => tabRow(local.scope, tab, null, () => local.activate(tab.key))));
+      take(
+        t("palette.group.tabs"),
+        local.tabs.map((tab) => tabRow(local.scope, tab, null, query, () => local.activate(tab.key))),
+        tabsOnly ? TAB_LIMIT : GROUP_LIMIT,
+      );
       return out;
     }
 
     const { projects, activeId, setActive } = useProjectsStore.getState();
     const { boxes } = useBoxesStore.getState();
     const dir = projectDir();
+    if (tabsOnly) {
+      // The tab search: every scope's tabs, the one on screen first, each
+      // findable by its project's (or box's) name too.
+      const tabs = useTabsStore.getState();
+      const byScope: [string, readonly TabEntry[]][] = [
+        [tabs.scope, tabs.tabs],
+        ...Object.entries(tabs.tabsByScope).filter(([scope]) => scope !== tabs.scope),
+      ];
+      const name = (scope: string) => scopeDisplayName(scope, projects, boxes, t);
+      take(
+        t("palette.group.tabs"),
+        byScope.flatMap(([scope, list]) => {
+          const scopeName = name(scope);
+          return list.map((tab) => ({
+            ...tabRow(scope, tab, scopeName, query, (beside) => showTab(scope, tab.key, beside)),
+            text: `${tab.label} ${scopeName}`,
+          }));
+        }),
+        TAB_LIMIT,
+      );
+      return out;
+    }
     if (!filesOnly) {
       const tabs = useTabsStore.getState();
       const byScope: Record<string, readonly TabEntry[]> = { ...tabs.tabsByScope, [tabs.scope]: tabs.tabs };
@@ -240,7 +267,7 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
       take(
         t("palette.group.tabs"),
         Object.entries(byScope).flatMap(([scope, list]) =>
-          list.map((tab) => tabRow(scope, tab, name(scope), (beside) => showTab(scope, tab.key, beside))),
+          list.map((tab) => tabRow(scope, tab, name(scope), query, (beside) => showTab(scope, tab.key, beside))),
         ),
       );
       take(
@@ -386,7 +413,7 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
     // `open` re-reads the stores once per opening: a row list that followed
     // them live would move under the pointer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, query, filesOnly, files, local, overrides, t]);
+  }, [open, query, filesOnly, tabsOnly, files, local, overrides, t]);
 
   useEffect(() => {
     setSelected((s) => (rows.length === 0 ? 0 : Math.min(s, rows.length - 1)));
@@ -419,6 +446,7 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
   if (!open) return <>{quickCreateDialogs}</>;
 
   const emptyLine = () => {
+    if (tabsOnly) return t("palette.noTabs");
     if (filesLoading) return t("quickOpen.loading");
     if (note === "declined") return t("search.hostDeclined");
     if (note) return t("projectFilesPane.disconnectedHostOnly", { host: note.host });
@@ -440,7 +468,7 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
           ref={inputRef}
           className="command-palette-input"
           type="text"
-          placeholder={t("palette.placeholder")}
+          placeholder={t(tabsOnly ? (local ? "palette.menuRowTabs" : "palette.placeholderTabs") : "palette.placeholder")}
           value={input}
           spellCheck={false}
           autoComplete="off"
@@ -493,6 +521,7 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
           </span>
           <UntestedTag id="desktop.palette" />
           <UntestedTag id="palette.boxes" />
+          {tabsOnly && <UntestedTag id="palette.tabSearch" />}
         </div>
       </div>
     </div>
@@ -501,7 +530,7 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
   );
 }
 
-function tabRow(scope: string, tab: TabEntry, scopeName: string | null, run: Row["run"]): Row {
+function tabRow(scope: string, tab: TabEntry, scopeName: string | null, query: string, run: Row["run"]): Row {
   const stateClass = statusClassOf(scope, tab);
   return {
     id: `tab:${scope}:${tab.key}`,
@@ -509,7 +538,7 @@ function tabRow(scope: string, tab: TabEntry, scopeName: string | null, run: Row
     label: (
       <>
         <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
-        {tab.label}
+        <Highlighted text={tab.label} query={query} />
       </>
     ),
     text: tab.label,

@@ -247,6 +247,14 @@ export function snapPromptTime(date: Date, minutes = 5): Date {
   return new Date(Math.round((date.getTime() + offset) / step) * step - offset);
 }
 
+/** The first `minutes` step of the LOCAL wall clock at or after `date`: where a
+ *  prompt that has to wait for an instant (a limit's reset) is allowed to land. */
+export function ceilPromptTime(date: Date, minutes = 5): Date {
+  const step = minutes * 60_000;
+  const offset = -date.getTimezoneOffset() * 60_000;
+  return new Date(Math.ceil((date.getTime() + offset) / step) * step - offset);
+}
+
 export function queueOrderTimes(ids: string[], now: Date): Record<string, string> {
   const first = new Date(now.getTime() - Math.min(59, Math.max(0, ids.length - 1)) * 60_000);
   return Object.fromEntries(ids.map((id, index) => [

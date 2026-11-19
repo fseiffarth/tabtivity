@@ -27,11 +27,21 @@ describe("the untested register", () => {
   });
 
   it("hides a pill once its row is stamped tested", () => {
-    const [first] = untestedEntries();
-    expect(isUntested(first.id)).toBe(!first.tested);
-    // The register is a const object, so the check goes through a copy.
-    const stamped: Record<string, UntestedEntry> = { x: { ...first, tested: "2026-01-01" } };
-    expect(stamped.x.tested).toBe("2026-01-01");
+    const row = untestedEntries().find((r) => !r.tested);
+    expect(row, "the register has no row still tagged").toBeDefined();
+    const id = row!.id;
+    // `as const` freezes the type, not the object: stamp the live row the way
+    // `npm run untested -- tested` does, and put it back afterwards.
+    const live = (UNTESTED as Record<string, UntestedEntry>)[id];
+    try {
+      expect(isUntested(id)).toBe(true);
+      live.tested = "2026-01-01";
+      expect(isUntested(id)).toBe(false);
+      delete live.tested;
+      expect(isUntested(id)).toBe(true);
+    } finally {
+      delete live.tested;
+    }
     expect(isUntested(undefined)).toBe(false);
     expect(isUntested(false)).toBe(false);
   });

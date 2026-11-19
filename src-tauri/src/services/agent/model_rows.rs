@@ -28,9 +28,13 @@ use std::path::{Path, PathBuf};
 
 use crate::services::agent_versions::VersionSource;
 
-/// The most rows, screens and characters one entry keeps. The pickers list a
-/// dozen or two models; anything past these is not a model list.
-const MAX_ROWS: usize = 64;
+/// The most rows, screens and characters one entry keeps; anything past these
+/// is not a model list. Claude's and Codex's pickers list a dozen models, but
+/// OpenCode's lists every connected provider's whole catalog — well past a
+/// hundred rows with a few keys — so the row cap is the phone walk's own
+/// (`openCodeMini` `MAX_WALK_ROWS`): a lower one kept only the list's top, and
+/// the sheet's remembered list came back short every time.
+const MAX_ROWS: usize = 600;
 const MAX_LABEL: usize = 200;
 const MAX_DESCRIPTION: usize = 400;
 const MAX_SCREENS: usize = 24;
@@ -246,7 +250,7 @@ mod tests {
         let (old, _) = builds(dir.path());
         remember_rows_in(&store, "claude", "p1", Some(&old), list(&["  "])).unwrap();
         assert!(!store.exists());
-        let many: Vec<Row> = (0..100)
+        let many: Vec<Row> = (0..MAX_ROWS as u32 + 40)
             .map(|n| Row { label: format!("{n}{}", "x".repeat(500)), description: Some(" ".to_string()), number: Some(n) })
             .collect();
         remember_rows_in(&store, "claude", "p1", Some(&old), Rows { title: Some(" ".to_string()), rows: many }).unwrap();
@@ -254,6 +258,21 @@ mod tests {
         assert_eq!(title, None);
         assert_eq!(rows.len(), MAX_ROWS);
         assert!(rows.iter().all(|row| row.label.chars().count() == MAX_LABEL && row.description.is_none()));
+    }
+
+    /// OpenCode's picker lists every connected provider's catalog: a list of
+    /// that size is kept whole, not cut to its first few groups.
+    #[test]
+    fn an_opencode_sized_list_is_kept_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("model_rows.json");
+        let (old, _) = builds(dir.path());
+        let labels: Vec<String> = (0..180).map(|n| format!("Model {n}")).collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        remember_rows_in(&store, "opencode", "p1", Some(&old), list(&labels)).unwrap();
+        let rows = rows_in(&store, "opencode", "p1", Some(&old)).unwrap().rows;
+        assert_eq!(rows.len(), 180);
+        assert_eq!(rows.last().map(|row| row.label.as_str()), Some("Model 179"));
     }
 
     #[test]

@@ -128,6 +128,22 @@ export function ClaudeRemoteControlNotice() {
   );
 }
 
+/** Gemini CLI's prompt caching depends on how it signs in (its
+ *  `docs/cli/token-caching.md`): a Google account gets none, a Gemini API key
+ *  gets Google's implicit caching. Only says so and where the switch is —
+ *  the user flips it, Tabtivity never does (`docs/cli_caching_plan.md` phase 4). */
+export function GeminiCachingNotice() {
+  const t = useT();
+  return (
+    <div className="agents-option">
+      <p className="settings-help">
+        <strong>{t("settings.geminiCaching")}</strong> <UntestedTag id="settings.geminiCaching" />{" "}
+        {t("settings.geminiCachingHelp")}
+      </p>
+    </div>
+  );
+}
+
 /** npm's words for "this package wants a newer Node" — a warning it installs
  *  through anyway (the CLI then fails at start) or the error it stops on. */
 export const NODE_ENGINE_FAILURE = /EBADENGINE|Unsupported engine|engine "node" is incompatible/i;

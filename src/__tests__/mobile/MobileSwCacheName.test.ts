@@ -7,14 +7,13 @@
  * phone then drops its cache and re-downloads a bundle that did not change.
  *
  * Builds the phone bundle twice, as `npm run mobile:bundle` does, into scratch
- * directories outside the tree.
+ * directories under the project's git-ignored `tmp/` (the system temp dir is a
+ * small tmpfs here), removed after each build.
  */
 // @ts-expect-error node:child_process has no type declarations in this project (no @types/node)
 import { spawnSync } from "node:child_process";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-// @ts-expect-error node:os has no type declarations in this project (no @types/node)
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 // @ts-expect-error node:path has no type declarations in this project (no @types/node)
 import { dirname, join } from "node:path";
 // @ts-expect-error node:url has no type declarations in this project (no @types/node)
@@ -28,7 +27,9 @@ const repoRoot: string = join(dirname(fileURLToPath(import.meta.url)), "..", "..
 
 /** One phone build into a fresh scratch dir: its worker's cache name and entry script. */
 function buildPhone(): { cache: string; entry: string } {
-  const outDir = mkdtempSync(join(tmpdir(), `${BRAND.slug}-sw-cache-`));
+  const scratch = join(repoRoot, "tmp");
+  mkdirSync(scratch, { recursive: true });
+  const outDir = mkdtempSync(join(scratch, `${BRAND.slug}-sw-cache-`));
   try {
     const run = spawnSync(
       process.execPath,

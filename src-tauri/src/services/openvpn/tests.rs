@@ -325,8 +325,8 @@ fn interactive_connect_argv_arms_a_management_socket() {
 #[cfg(unix)]
 #[test]
 fn config_declaring_management_is_detected() {
-    let dir = std::env::temp_dir().join(concat!(crate::app_slug!(), "-mgmt-detect"));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     let own = dir.join("own.ovpn");
     std::fs::write(
@@ -347,8 +347,6 @@ fn config_declaring_management_is_detected() {
         !config_declares_management(plain.to_str().unwrap()),
         "a commented-out directive is not a declaration"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `--management <ip> <port> <pwfile>`, in that order — OpenVPN is positional

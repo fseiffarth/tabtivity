@@ -149,7 +149,8 @@ export type VoiceState = "preparing" | "listening" | "paused" | "stopped";
 export interface LevelEvent { session: number; level: number }
 export interface VadEvent { session: number; segment: number; state: "start" | "end" }
 export interface TextEvent { session: number; segment: number; text: string }
-export interface StateEvent { session: number; state: VoiceState; reason?: VoiceErrorCode; device?: VoiceDevice }
+export interface FinalEvent extends TextEvent { outcome?: "transcribed" | "filtered" | "failed" | "incomplete" }
+export interface StateEvent { discarded?: boolean; session: number; state: VoiceState; reason?: VoiceErrorCode; device?: VoiceDevice }
 export interface ErrorEvent { session: number; code: VoiceErrorCode }
 /** What became of a read (`voice_speak`); `done` comes after the mic's mute
  * tail, so the room is quiet by then. */
@@ -238,12 +239,13 @@ export interface DesktopDictationHandlers {
    * backends sent only its last seconds). Each replaces the segment's last. */
   onPartial(text: string, segment: number): void;
   /** A settled segment: its text, or empty when it was dropped. */
-  onFinal(text: string, segment: number): void;
+  onIncomplete(segment: number): void;
+  onFinal(text: string, segment: number, filtered?: boolean): void;
   onLevel(level: number | null): void;
   onPaused(paused: boolean): void;
   onError(key: TranslationKey): void;
   /** The session is over; no more events come. */
-  onEnd(): void;
+  onEnd(discarded?: boolean): void;
 }
 
 export interface DesktopDictationOptions {
@@ -283,12 +285,16 @@ export async function startDesktopDictation(
   const early: [string, Payload][] = [];
   const unlisten: UnlistenFn[] = [];
 
-  const finish = () => {
+  const pending = new Set<number>();
+  const settled = new Set<number>();
+  let open: number | null = null;
+
+  const finish = (discarded?: boolean) => {
     if (ended) return;
     ended = true;
     for (const off of unlisten.splice(0)) off();
     handlers.onLevel(null);
-    handlers.onEnd();
+    handlers.onEnd(discarded);
   };
 
   const handle = (event: string, payload: Payload) => {
@@ -299,15 +305,27 @@ export async function startDesktopDictation(
         break;
       case VOICE_EVENTS.vad: {
         const vad = payload as VadEvent;
+        if (settled.has(vad.segment)) break;
+        pending.add(vad.segment);
+        open = vad.state === "start" ? vad.segment : null;
         handlers.onSegment(vad.state === "start", vad.segment);
         break;
       }
-      case VOICE_EVENTS.partial:
-        handlers.onPartial((payload as TextEvent).text, (payload as TextEvent).segment);
+      case VOICE_EVENTS.partial: {
+        const partial = payload as TextEvent;
+        if (settled.has(partial.segment)) break;
+        pending.add(partial.segment);
+        handlers.onPartial(partial.text, partial.segment);
         break;
+      }
       case VOICE_EVENTS.final: {
-        const final = payload as TextEvent;
-        handlers.onFinal(final.text, final.segment);
+        const final = payload as FinalEvent;
+        if (settled.has(final.segment)) break;
+        settled.add(final.segment);
+        pending.delete(final.segment);
+        if (open === final.segment) open = null;
+        if (final.outcome === "failed" || final.outcome === "incomplete") handlers.onIncomplete(final.segment);
+        else handlers.onFinal(final.text, final.segment, final.outcome === "filtered");
         break;
       }
       case VOICE_EVENTS.error:
@@ -320,10 +338,14 @@ export async function startDesktopDictation(
         else if (state.state === "listening") {
           handlers.onPaused(false);
           handlers.onStart();
-        } else if (state.state === "paused") handlers.onPaused(true);
+        } else if (state.state === "paused") {
+          if (open !== null) pending.delete(open);
+          open = null;
+          handlers.onPaused(true);
+        }
         else {
           if (state.reason) handlers.onError(voiceErrorKey(state.reason));
-          finish();
+          finish(state.discarded);
         }
         break;
       }
@@ -356,7 +378,12 @@ export async function startDesktopDictation(
   const id = session;
   return {
     stop: () => {
-      if (!ended) void invoke("voice_listen_stop", { session: id }).catch(finish);
+      if (!ended) void invoke("voice_listen_stop", { session: id }).catch((error: unknown) => {
+        if (ended) return;
+        for (const segment of pending) handlers.onIncomplete(segment);
+        handlers.onError(voiceErrorKey(error));
+        finish();
+      });
     },
     abort: () => {
       if (ended) return;

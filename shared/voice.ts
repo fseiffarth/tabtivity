@@ -10,9 +10,15 @@ export function sanitizeVoiceTranscript(value: string): string {
     .trim();
 }
 
-/** "go on", or German "los", said last sends the draft. Only after a word
- * boundary, so "ziellos" or a "Los Angeles" mid-draft stays text. */
-const SPOKEN_SEND = /(^|[\s\p{P}])(go\s+on|los)[\s\p{P}]*$/iu;
+/** The assistant's name as a recognizer writes it: "Tabby" and the spellings
+ * in the dictionaries' `voice.assistantAliases` (a test keeps them in step),
+ * or two words ("tab bi"). Pure and language-free, so it lives here. */
+const ASSISTANT_NAME = "tabb?y|tabbie|tabie|tabee|tabi|tabe|tavv?[iy]|te(?:bb?)[iy]|tab\\s+(?:by|bi|bie|bee)";
+
+/** "go Tabby", or German "los", said last sends the draft. Only after a word
+ * boundary, so "ziellos" or a "Los Angeles" mid-draft stays text, and a
+ * "Tabby" alone at the end (a name in the prose) does not send. */
+const SPOKEN_SEND = new RegExp(`(^|[\\s\\p{P}])(go\\s+(?:${ASSISTANT_NAME})|los)[\\s\\p{P}]*$`, "iu");
 
 /**
  * The draft without its spoken send, when it ends in one; `null` otherwise.

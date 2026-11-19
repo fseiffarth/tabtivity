@@ -34,7 +34,7 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
       if (checking || aiIsOff()) return;
       const term = terminalFor(ptyId);
       if (!term) return;
-      const matched = cliLimitNoticeLine(readableScreen(term.buffer.active, 25, { plain: true }).lines.join("\n"));
+      const matched = cliLimitNoticeLine(readableScreen(term.buffer.active, 25, { plain: true }).lines.map((row) => row.text).join("\n"));
       if (matched === null) {
         handled.delete(identity);
         attempted.current = false;

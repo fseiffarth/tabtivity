@@ -19,7 +19,18 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),
 }));
 
-import { AgentContinueHost } from "../../components/layout/AgentContinueHost";
+/** What the tab's screen shows, as `readableScreen` rows; null = no terminal mounted. */
+const screen = vi.hoisted(() => ({ lines: null as string[] | null }));
+vi.mock("../../lib/terminal/terminalRegistry", async (original) => ({
+  ...(await original<typeof import("../../lib/terminal/terminalRegistry")>()),
+  terminalFor: () => (screen.lines ? { buffer: { active: {} } } : undefined),
+}));
+vi.mock("../../../mobile-web/src/terminal/readableScreen", async (original) => ({
+  ...(await original<typeof import("../../../mobile-web/src/terminal/readableScreen")>()),
+  readableScreen: () => ({ lines: (screen.lines ?? []).map((text, i) => ({ key: String(i), text, spans: [] })), clipped: false }),
+}));
+
+import { AgentContinueHost, NOTICE_RETRY_MS } from "../../components/layout/AgentContinueHost";
 import {
   _clearScheduledAgentInputsForTest,
   registerScheduledAgentInput,
@@ -101,6 +112,7 @@ beforeEach(() => {
   useActivityStore.setState({ busyByTab: {}, attentionByTab: {} });
   useAgentPromptsStore.setState({ byProject: {}, historyByProject: {}, loading: {} });
   seedTabs(tab());
+  screen.lines = null;
 });
 
 afterEach(() => {
@@ -151,6 +163,97 @@ describe("auto-continue", () => {
     const status = useAgentContinueStore.getState().byTarget[KEY];
     expect(status?.phase).toBe("unsupported");
     expect(status?.armedAt).toBeUndefined();
+  });
+
+  describe("a CLI with no usage panel, by the limit notice on its screen", () => {
+    const GEMINI = { agent: "gemini", label: "Gemini", supported: false, error: "no usage readout", cached: false };
+    const COMPOSER = ["", "╭──────────────╮", "│ >            │", "╰──────────────╯", "  ? for shortcuts"];
+
+    beforeEach(() => {
+      seedTabs(tab({ cmd: "gemini", label: "Gemini" }));
+      usageAnswer = GEMINI;
+    });
+
+    it("arms a minute after the time the notice names", async () => {
+      screen.lines = ["working…", "■ You've hit your usage limit. Try again at 4:30 PM.", ...COMPOSER];
+      const { writes } = seedReadyTerminal();
+
+      await act(async () => {
+        render(<AgentContinueHost />);
+      });
+
+      const status = useAgentContinueStore.getState().byTarget[KEY];
+      expect(status?.phase).toBe("armed");
+      expect(status?.source).toBe("screen");
+      expect(status?.resets).toBe("4:30 PM");
+      expect(status?.armedAt).toBe(new Date(2026, 8, 1, 16, 31).getTime());
+
+      vi.setSystemTime(new Date(2026, 8, 1, 16, 32));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(writes.join("")).toContain("continue");
+      expect(useAgentContinueStore.getState().byTarget[KEY]?.sent).toBe(1);
+    });
+
+    it("retries on its own cadence when the notice names no time", async () => {
+      screen.lines = ["Usage limit reached.", ...COMPOSER];
+      invokeMock.mockImplementation(() => Promise.resolve(usageAnswer));
+
+      await act(async () => {
+        render(<AgentContinueHost />);
+      });
+
+      const status = useAgentContinueStore.getState().byTarget[KEY];
+      expect(status?.phase).toBe("armed");
+      expect(status?.resets).toBeUndefined();
+      expect(status?.armedAt).toBe(NOW.getTime() + NOTICE_RETRY_MS);
+    });
+
+    it("stands down when the notice leaves the screen before it is due", async () => {
+      screen.lines = ["Rate limit exceeded. Retry in 20 minutes.", ...COMPOSER];
+      const { writes } = seedReadyTerminal();
+      await act(async () => {
+        render(<AgentContinueHost />);
+      });
+      expect(useAgentContinueStore.getState().byTarget[KEY]?.armedAt).toBe(NOW.getTime() + 21 * 60_000);
+
+      screen.lines = ["Rate limit exceeded. Retry in 20 minutes.", "> keep going", "Sure — picking up where I left off.", "a", "b", "c", "d", "e", ...COMPOSER];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(useAgentContinueStore.getState().byTarget[KEY]?.armedAt).toBeUndefined();
+
+      vi.setSystemTime(new Date(NOW.getTime() + 25 * 60_000));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(writes.join("")).not.toContain("continue");
+    });
+
+    it("stays unsupported while the screen shows no limit notice", async () => {
+      screen.lines = ["All done.", ...COMPOSER];
+      invokeMock.mockImplementation(() => Promise.resolve(usageAnswer));
+      await act(async () => {
+        render(<AgentContinueHost />);
+      });
+      expect(useAgentContinueStore.getState().byTarget[KEY]?.phase).toBe("unsupported");
+    });
+
+    it("leaves a readable panel in charge even with a notice on screen", async () => {
+      seedTabs(tab());
+      usageAnswer = { agent: "claude", label: "Claude Code", supported: true, raw: PANEL, cached: false };
+      screen.lines = ["Usage limit reached. Try again at 4:30 PM.", ...COMPOSER];
+      invokeMock.mockImplementation(() => Promise.resolve(usageAnswer));
+      await act(async () => {
+        render(<AgentContinueHost />);
+      });
+      const status = useAgentContinueStore.getState().byTarget[KEY];
+      expect(status?.source).toBe("panel");
+      expect(status?.armedAt).toBe(new Date(2026, 8, 1, 18, 21).getTime());
+    });
   });
 
   it("reports a panel that named no time it could place", async () => {

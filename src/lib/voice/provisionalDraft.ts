@@ -1,4 +1,35 @@
-import { spliceSpaced } from "../terminal/terminalDrop";
+export interface DraftRange {
+  start: number;
+  end: number;
+}
+
+/** Separate words at either edge while keeping punctuation and line breaks attached. */
+export function replaceDictated(draft: string, range: DraftRange, words: string): string {
+  const before = draft.slice(0, range.start);
+  const after = draft.slice(range.end);
+  const left = before && !/[\s([{]$/u.test(before) && !/^[\s,.;:!?)]/u.test(words) ? " " : "";
+  const right = after && !/^[\s,.;:!?)}\]]/u.test(after) && !/\s$/u.test(words) ? " " : "";
+  return before + left + words + right + after;
+}
+
+/** The changed portion of a user edit, expressed against the previous draft. */
+export function draftChange(old: string, draft: string): Splice {
+  let head = 0;
+  const most = Math.min(old.length, draft.length);
+  while (head < most && old[head] === draft[head]) head++;
+  let tail = 0;
+  while (tail < most - head && old[old.length - 1 - tail] === draft[draft.length - 1 - tail]) tail++;
+  return { at: head, removed: old.length - head - tail, inserted: draft.length - head - tail };
+}
+
+/** An overlapping edit makes an unattended replacement position ambiguous. */
+export function rebaseRange(range: DraftRange, splice: Splice): DraftRange | null {
+  if (splice.at + splice.removed <= range.start) {
+    const delta = splice.inserted - splice.removed;
+    return { start: range.start + delta, end: range.end + delta };
+  }
+  return splice.at >= range.end ? range : null;
+}
 
 // Dictation writes what the speech engine hears into the composer's draft
 // while it is still being said. The words of an unsettled segment are
@@ -20,6 +51,8 @@ export interface Splice {
 }
 
 interface Span {
+  original: string;
+  words: string;
   segment: number;
   start: number;
   /** What the span put in the draft, a joining space included. */
@@ -62,13 +95,9 @@ export class ProvisionalDraft {
     const old = this.seen;
     this.seen = draft;
     if (old === draft || !this.spans.length) return;
-    let head = 0;
-    const most = Math.min(old.length, draft.length);
-    while (head < most && old[head] === draft[head]) head++;
-    let tail = 0;
-    while (tail < most - head && old[old.length - 1 - tail] === draft[draft.length - 1 - tail]) tail++;
-    const changedTo = old.length - tail;
-    const delta = draft.length - old.length;
+    const { at: head, removed, inserted } = draftChange(old, draft);
+    const changedTo = head + removed;
+    const delta = inserted - removed;
     this.spans = this.spans.filter((span) => {
       if (end(span) <= head) return true;
       if (span.start >= changedTo) {
@@ -108,6 +137,20 @@ export class ProvisionalDraft {
     this.verify();
   }
 
+  /** Reserve the selection even when the engine sends a final without a preview. */
+  begin(draft: string, segment: number, range: DraftRange): void {
+    this.sync(draft);
+    if (this.spans.some(span => span.segment === segment) || this.taken.has(segment)) return;
+    // A later segment starts after an earlier preview if their ranges overlap.
+    let { start, end: finish } = range;
+    for (const span of this.spans) {
+      if (start < end(span) && finish > span.start) start = finish = end(span);
+    }
+    const original = draft.slice(start, finish);
+    this.spans.push({ segment, start, original, text: original, words: "" });
+    this.spans.sort((a, b) => a.start - b.start || a.segment - b.segment);
+  }
+
   /** `segment`'s newest partial: its provisional text replaces the one it
    * had, or goes in where a final would land (the end of the draft). `null`
    * for a segment the user already took over. */
@@ -115,14 +158,16 @@ export class ProvisionalDraft {
     this.sync(draft);
     if (this.taken.has(segment)) return null;
     const old = this.spans.find((span) => span.segment === segment);
-    const rest = old ? draft.slice(0, old.start) + draft.slice(end(old)) : draft;
     const at = old ? old.start : draft.length;
-    const next = spliceSpaced(rest, at, text);
-    const inserted = next.length - rest.length;
-    const splice: Splice = { at, removed: old ? old.text.length : 0, inserted };
-    const piece: Span = { segment, start: at, text: next.slice(at, at + inserted) };
+    const removed = old?.text.length ?? 0;
+    const next = replaceDictated(draft, { start: at, end: at + removed }, text);
+    const inserted = next.length - draft.length + removed;
+    const splice: Splice = { at, removed, inserted };
+    const piece: Span = { segment, start: at, original: old?.original ?? "", words: text, text: next.slice(at, at + inserted) };
     this.spans = this.spans.filter((span) => span !== old);
-    for (const span of this.spans) if (span.start >= at) span.start += inserted - splice.removed;
+    for (const span of this.spans) {
+      if (span.start > at || (span.start === at && span.segment > segment)) span.start += inserted - removed;
+    }
     this.spans.push(piece);
     this.spans.sort((a, b) => a.start - b.start);
     this.seen = next;
@@ -133,20 +178,31 @@ export class ProvisionalDraft {
    * draft. `at` is where the final goes: the span's place, else before the
    * provisional text of a later segment, else (`null`) the end. `taken`: the
    * user made the span their own, so the final's words must not go in again. */
-  settle(draft: string, segment: number): { draft: string; splice: Splice | null; at: number | null; taken: boolean } {
+  settle(draft: string, segment: number): { draft: string; splice: Splice | null; at: number | null; taken: boolean; original: string; words: string } {
     this.sync(draft);
-    if (this.taken.delete(segment)) return { draft, splice: null, at: null, taken: true };
+    if (this.taken.delete(segment)) return { draft, splice: null, at: null, taken: true, original: "", words: "" };
     const old = this.spans.find((span) => span.segment === segment);
     if (!old) {
       const later = this.spans.find((span) => span.segment > segment);
-      return { draft, splice: null, at: later ? later.start : null, taken: false };
+      return { draft, splice: null, at: later ? later.start : null, taken: false, original: "", words: "" };
     }
-    const next = draft.slice(0, old.start) + draft.slice(end(old));
-    const splice: Splice = { at: old.start, removed: old.text.length, inserted: 0 };
+    const next = draft.slice(0, old.start) + old.original + draft.slice(end(old));
+    const splice: Splice = { at: old.start, removed: old.text.length, inserted: old.original.length };
     this.spans = this.spans.filter((span) => span !== old);
-    for (const span of this.spans) if (span.start >= old.start) span.start -= old.text.length;
+    for (const span of this.spans) if (span.start > old.start || (span.start === old.start && span.segment > segment)) span.start += old.original.length - old.text.length;
     this.seen = next;
-    return { draft: next, splice, at: old.start, taken: false };
+    return { draft: next, splice, at: old.start, taken: false, original: old.original, words: old.words };
+  }
+
+  /** A potential command stays out of the draft, retaining its insertion range. */
+  hide(draft: string, segment: number): { draft: string; splice: Splice | null } {
+    this.sync(draft);
+    if (this.taken.has(segment)) return { draft, splice: null };
+    const result = this.settle(draft, segment);
+    if (result.at !== null) {
+      this.begin(result.draft, segment, { start: result.at, end: result.at + result.original.length });
+    }
+    return result;
   }
 
   /** Every provisional span out of `draft`, and no tracking after; `splices`
@@ -157,8 +213,8 @@ export class ProvisionalDraft {
     const splices: Splice[] = [];
     // Last to first, so each offset still holds.
     for (const span of [...this.spans].reverse()) {
-      next = next.slice(0, span.start) + next.slice(end(span));
-      splices.push({ at: span.start, removed: span.text.length, inserted: 0 });
+      next = next.slice(0, span.start) + span.original + next.slice(end(span));
+      splices.push({ at: span.start, removed: span.text.length, inserted: span.original.length });
     }
     this.reset();
     this.seen = next;
@@ -169,7 +225,7 @@ export class ProvisionalDraft {
   settled(draft: string): string {
     this.sync(draft);
     let next = draft;
-    for (const span of [...this.spans].reverse()) next = next.slice(0, span.start) + next.slice(end(span));
+    for (const span of [...this.spans].reverse()) next = next.slice(0, span.start) + span.original + next.slice(end(span));
     return next;
   }
 }

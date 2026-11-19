@@ -28,6 +28,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 | AltGr+Tab / AltGr+Shift+Tab | Next / previous project (AltGr = the right Alt key) — from a focused terminal too; Alt+Shift+→ / ← work as well, and are the default on macOS |
 | Ctrl+Shift+PageDown / PageUp | Next / previous box |
 | Ctrl+Shift+R | Open / close the root console |
+| Ctrl+Shift+A | Search tabs: every project's tabs in one list (the command palette on `@`) — from a focused terminal too |
 | Shift+Space | Enter Tabtivity navigation |
 | F1 | Shortcut help |
 

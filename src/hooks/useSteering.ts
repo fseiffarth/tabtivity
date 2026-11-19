@@ -93,6 +93,8 @@ import {
   resumeRegionCursor,
   scrollRegion,
   settingsDialog,
+  subagentGoUp,
+  subagentStopsShown,
   steeringAppEnabled,
   stepSettingsPage,
   topLayer,
@@ -117,6 +119,7 @@ import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../lib/terminal/terminalScroll";
 import { documentScroller, focusDocumentEditor, focusDocumentEditorWhenReady, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
 import { chordMatches, isLoneModifier, resolveChord, type ShortcutMap } from "../lib/shortcuts/shortcuts";
+import { openTabSearch } from "../lib/shortcuts/paletteEvent";
 
 export type SteeringSurface = "main" | "popout";
 
@@ -1083,10 +1086,12 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           if (activeTabCard()) enterRegion("card");
           return;
         // The agent tab's subagents: its Subagents list opened under the
-        // cursor (Enter opens one in the Chat), or an open one's bar.
+        // cursor (Enter opens one in the Chat). With a subagent open, G goes
+        // straight up to the conversation that spawned it.
         case "subagents": {
           const frame = activeSubagentFrame();
           if (!frame) return;
+          if (subagentGoUp(frame)) return;
           if (!openSubagentList(frame)) {
             enterRegion("subagents");
             return;
@@ -1435,6 +1440,13 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         openProjectShellInRootConsole();
         return;
       }
+      // The tab search (the palette on `@`), from a focused terminal too and
+      // in a popout, whose palette lists that window's tabs.
+      if (!modalUp && chordMatches(resolveChord("searchTabs", overrides), e)) {
+        swallow();
+        openTabSearch();
+        return;
+      }
       // A new tab in the focused pane, keyboard focus and all — from a focused
       // terminal too, which is where the hands are when the next one is
       // wanted. It lands in the workspace, so the root console steps aside.
@@ -1609,6 +1621,24 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           if (region === "side" && steerSidePanel(e, action, bindings, sidePanelHooks)) return;
           // The key that opened the side panel leaves it again, as Back does.
           const sideBack = !action && region === "side" && steeringKeyIs(e, "sidePanel", bindings);
+          // G in the subagents region goes up from the open subagent; at the
+          // main conversation it leaves the region, as Back does.
+          if (!action && region === "subagents" && steeringKeyIs(e, "subagents", bindings)) {
+            const frame = regionRoot(region);
+            if (frame && subagentGoUp(frame)) {
+              clearRegionCursor();
+              syncSoon(() => {
+                const s = useKeyboardSteeringStore.getState();
+                if (!s.active || s.region !== region) return;
+                const now = regionRoot(region);
+                if (now && subagentStopsShown(now)) placeCursorSoon(region);
+                else leaveRegion(region);
+              });
+              return;
+            }
+            steerRegion("back", region);
+            return;
+          }
           // W over its own "Close tab?" box closes: W twice closes a tab.
           const root = region === "overlay" && !action ? regionRoot(region) : null;
           const closeAgain =

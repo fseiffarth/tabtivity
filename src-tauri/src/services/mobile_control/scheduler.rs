@@ -1254,6 +1254,7 @@ mod tests {
     #[test]
     fn keys_reach_the_pane_on_a_private_socket() {
         if !crate::services::tmux_local::tmux_available() {
+            crate::test_util::skip_or_fail("tmux", "tmux not installed");
             return;
         }
         let socket = format!(concat!(crate::app_slug!(), "-test-h2-{}"), std::process::id());
@@ -1299,6 +1300,7 @@ mod tests {
     #[test]
     fn a_kill_ends_the_session_and_its_process_on_a_private_socket() {
         if !crate::services::tmux_local::tmux_available() {
+            crate::test_util::skip_or_fail("tmux", "tmux not installed");
             return;
         }
         let socket = format!(concat!(crate::app_slug!(), "-test-h3-{}"), std::process::id());

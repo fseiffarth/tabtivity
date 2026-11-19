@@ -9,6 +9,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  cacheHitShare,
+  cacheLifetimes,
   fetchTokenReport,
   foldTokens,
   formatShare,
@@ -16,6 +18,8 @@ import {
   grandTotal,
   outputShare,
   parseTokenKey,
+  splitSum,
+  subagentPart,
   usedAgentClis,
   type TokenReport,
 } from "../../lib/tokenStats";
@@ -142,6 +146,11 @@ describe("output share and formatting", () => {
     expect(outputShare({ fresh: 0, cacheWrite: 0, cacheRead: 0, output: 0, total: 0 })).toBeNull();
   });
 
+  it("is cache read over all input, output and the unsplit total left out", () => {
+    expect(cacheHitShare({ fresh: 10, cacheWrite: 30, cacheRead: 160, output: 500, total: 999 })).toBe(0.8);
+    expect(cacheHitShare({ fresh: 0, cacheWrite: 0, cacheRead: 0, output: 20, total: 999 })).toBeNull();
+  });
+
   it("formats shares", () => {
     expect(formatShare(0.2)).toBe("20%");
     expect(formatShare(0.004)).toBe("0.4%");
@@ -218,5 +227,39 @@ describe("fetchTokenReport", () => {
     await expect(
       fetchTokenReport(async () => { throw new Error("boom"); }, () => {}, { sleep: async () => {} }),
     ).rejects.toThrow("boom");
+  });
+});
+
+describe("split details", () => {
+  const counters = {
+    "tokens.in.claude.opus": 10,
+    "tokens.cache_w.claude.opus": 400,
+    "tokens.cache_r.claude.opus": 1500,
+    "tokens.out.claude.opus": 90,
+    "tokens.cache_w5m.claude.opus": 100,
+    "tokens.cache_w1h.claude.opus": 300,
+    "tokens.sub_in.claude.opus": 5,
+    "tokens.sub_cache_w.claude.opus": 100,
+    "tokens.sub_cache_r.claude.opus": 395,
+    "tokens.sub_out.claude.opus": 0,
+  };
+
+  it("folds the details beside the split, never into it", () => {
+    const [claude] = foldTokens(counters, ["claude"]).reported;
+    expect(splitSum(claude.split)).toBe(2000);
+    expect(claude.split.cacheWrite1h).toBe(300);
+    expect(claude.models[0].split.subCacheRead).toBe(395);
+  });
+
+  it("gives the subagents' part and the write lifetimes as shares", () => {
+    const [claude] = foldTokens(counters, ["claude"]).reported;
+    expect(subagentPart(claude.split)).toEqual({ share: 0.25, hit: 0.79 });
+    expect(cacheLifetimes(claude.split)).toEqual({ long: 0.75, short: 0.25 });
+  });
+
+  it("is null for a CLI that reports no details", () => {
+    const split = { fresh: 1, cacheWrite: 2, cacheRead: 3, output: 4, total: 0 };
+    expect(subagentPart(split)).toBeNull();
+    expect(cacheLifetimes(split)).toBeNull();
   });
 });

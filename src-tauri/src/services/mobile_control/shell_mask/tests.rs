@@ -243,3 +243,161 @@ fn a_url_shows_its_scheme_and_host_and_nothing_else() {
     let token = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
     assert_eq!(mask_url(&format!("https://{token}.example.org/x")), format!("https://{HIDDEN}.example.org"));
 }
+
+/// Each line, what it masks to, and the components above the leaf that must
+/// not cross (threat model gap 117): a path is found by what it is, not by
+/// what precedes it.
+const GLUED_POSIX_PATHS: &[(&str, &str, &[&str])] = &[
+    ("make 2>/home/alice/private/build.log", "make 2>…/build.log", &["home", "alice", "private"]),
+    ("sort </home/alice/in.txt >/home/alice/out.txt", "sort <…/in.txt >…/out.txt", &["home", "alice"]),
+    (
+        "curl -d @/home/alice/private/body.json https://example.org",
+        "curl -d @…/body.json https://example.org",
+        &["home", "alice", "private"],
+    ),
+    ("gcc -I/home/alice/sdk/include -L/home/alice/sdk/lib x.c", "gcc -I…/include -L…/lib x.c", &["home", "alice", "sdk"]),
+    ("ls;/home/alice/bin/tool", "ls;…/tool", &["home", "alice", "bin"]),
+    ("echo `/home/alice/bin/tool`", "echo `…/tool`", &["home", "alice", "bin"]),
+    ("cp {/home/alice/a/b,/home/alice/c/d} .", "cp {…/b,…/d} .", &["home", "alice", "a/", "c/"]),
+    ("xdg-open file:///home/alice/Documents/tax/2026.pdf", "xdg-open file://…/2026.pdf", &["home", "alice", "Documents", "tax"]),
+    ("x=$(cat</home/alice/secret/key.txt)", "x=$(cat<…/key.txt)", &["home", "alice", "secret"]),
+    (
+        r#"cat "/home/alice/My Documents/secret plan/file.txt""#,
+        r#"cat "…/file.txt""#,
+        &["home", "alice", "My", "Documents", "secret", "plan"],
+    ),
+    ("cat '/home/alice/My Documents/secret plan/file.txt'", "cat '…/file.txt'", &["home", "alice", "My", "Documents", "secret", "plan"]),
+    (r"cat /home/alice/My\ Documents/secret\ plan/file.txt", "cat …/file.txt", &["home", "alice", "My", "Documents", "secret", "plan"]),
+    ("cat ~/private/notes/x.md|wc -l", "cat ~/…/x.md|wc -l", &["private", "notes"]),
+    (
+        r#"sh -c "cat '/home/alice/My Documents/a.txt' >/home/alice/out/b.txt""#,
+        r#"sh -c "cat '…/a.txt' >…/b.txt""#,
+        &["home", "alice", "My", "Documents", "out"],
+    ),
+];
+
+#[test]
+fn a_path_glued_to_an_operator_or_a_short_flag_keeps_only_its_leaf() {
+    for (line, want, hidden) in GLUED_POSIX_PATHS {
+        let out = masked(line);
+        assert_eq!(out, *want, "{line}");
+        for part in *hidden {
+            assert!(!out.contains(part), "{part} crossed in {out:?} from {line}");
+        }
+    }
+}
+
+const GLUED_WINDOWS_PATHS: &[(&str, &str, &[&str])] = &[
+    (r"make 2>C:\Users\alice\private\build.log", r"make 2>…\build.log", &["Users", "alice", "private"]),
+    (r"sort <C:\Users\alice\in.txt >C:\Users\alice\out.txt", r"sort <…\in.txt >…\out.txt", &["Users", "alice"]),
+    (
+        r"curl -d @C:\Users\alice\private\body.json https://example.org",
+        r"curl -d @…\body.json https://example.org",
+        &["Users", "alice", "private"],
+    ),
+    (r"cl /IC:\Users\alice\sdk\include -LC:\Users\alice\sdk\lib x.c", r"cl /I…\include -L…\lib x.c", &["Users", "alice", "sdk"]),
+    (r"dir;C:\Users\alice\bin\tool", r"dir;…\tool", &["Users", "alice", "bin"]),
+    (r"echo `C:\Users\alice\bin\tool`", r"echo `…\tool`", &["Users", "alice", "bin"]),
+    (r"copy {C:\Users\alice\a\b,C:\Users\alice\c\d} .", r"copy {…\b,…\d} .", &["Users", "alice", r"a\", r"c\"]),
+    ("start file:///C:/Users/alice/Documents/tax/2026.pdf", "start file://…/2026.pdf", &["Users", "alice", "Documents", "tax"]),
+    (r"x=$(type<C:\Users\alice\secret\key.txt)", r"x=$(type<…\key.txt)", &["Users", "alice", "secret"]),
+    (
+        r#"type "C:\Users\alice\My Documents\secret plan\file.txt""#,
+        r#"type "…\file.txt""#,
+        &["Users", "alice", "My", "Documents", "secret", "plan"],
+    ),
+    (r"copy 2>\\fileserver\team\private\log.txt", r"copy 2>…\log.txt", &["fileserver", "team", "private"]),
+    (r#"copy "\\fileserver\team\My Docs\a b.txt" x"#, r#"copy "…\a b.txt" x"#, &["fileserver", "team", "My", "Docs"]),
+];
+
+#[test]
+fn a_windows_path_glued_to_an_operator_or_a_short_flag_keeps_only_its_leaf() {
+    for (line, want, hidden) in GLUED_WINDOWS_PATHS {
+        let out = masked(line);
+        assert_eq!(out, *want, "{line}");
+        for part in *hidden {
+            assert!(!out.contains(part), "{part} crossed in {out:?} from {line}");
+        }
+    }
+}
+
+#[test]
+fn relative_paths_urls_and_quoted_text_are_not_taken_for_paths() {
+    for plain in [
+        "cat src/lib/x.ts",
+        "ls ./src/a/b ../c/d",
+        "a-I/b/c",
+        "cp src/*/a/b dist",
+        "curl http://localhost:8080/a/b",
+        "git push git@example.org:team/repo.git",
+        "npm i @scope/pkg",
+        "open file:///tmp",
+        r#"git commit -m "fix /tmp handling""#,
+        "echo 'it is fine'",
+    ] {
+        assert_eq!(masked(plain), plain);
+    }
+    // A quoted command is no single path: each path in it is cut alone.
+    assert_eq!(masked(r#"sh -c "/home/alice/bin/tool --in /home/alice/x/y""#), r#"sh -c "…/tool --in …/y""#);
+}
+
+/// Paths that crossed whole: one glued to a parameter default's sign or to a
+/// `git+` scheme, another user's `~alice/` home, and a path whose backslash
+/// escapes (`\'`, `\(`, `\;`, `\"` in double quotes) ended it early.
+const MORE_POSIX_PATHS: &[(&str, &str, &[&str])] = &[
+    ("echo ${DIR:-/home/alice/private/out}", "echo ${DIR:-…/out}", &["home", "alice", "private"]),
+    ("echo ${DIR:+/home/alice/private/out}", "echo ${DIR:+…/out}", &["home", "alice", "private"]),
+    ("pip install git+file:///home/alice/private/proj", "pip install git+file://…/proj", &["home", "alice", "private"]),
+    ("cat ~alice/.ssh/id_ed25519", "cat …/id_ed25519", &["alice", ".ssh"]),
+    ("ls ~bob/notes", "ls …/notes", &["bob"]),
+    (r"cat /home/alice/Alice\'s\ Docs/tax/2026.pdf", "cat …/2026.pdf", &["home", "alice", "Docs", "tax"]),
+    (r"cd /home/alice/My\ Files\ \(old\)/work && ls", "cd …/work && ls", &["home", "alice", "Files", "old"]),
+    (r"cat /home/alice/a\;b/private/x", "cat …/x", &["home", "alice", ";b", "private"]),
+    (r#"cat "/home/alice/\"hi\"/private/x" -n"#, r#"cat "…/x" -n"#, &["home", "alice", "hi", "private"]),
+];
+
+#[test]
+fn a_path_after_a_sign_a_scheme_or_another_users_home_or_with_escapes_keeps_only_its_leaf() {
+    for (line, want, hidden) in MORE_POSIX_PATHS {
+        let out = masked(line);
+        assert_eq!(out, *want, "{line}");
+        for part in *hidden {
+            assert!(!out.contains(part), "{part} crossed in {out:?} from {line}");
+        }
+    }
+    // Not another user's home: a revision, the directory stack.
+    for plain in ["git diff HEAD~1/x", "ls ~1/a/b", "ls ~+/a/b", "ls ~-/a/b"] {
+        assert_eq!(masked(plain), plain);
+    }
+}
+
+/// Paths that still showed a parent: one with a quoted stretch glued inside
+/// the word (one word to the shell), and a POSIX network path, whose server
+/// and share name a host as a UNC path's do.
+const GLUED_QUOTES_AND_NETWORK_PATHS: &[(&str, &str, &[&str])] = &[
+    ("cat /home/alice/x'y/z'/w", "cat …/w", &["home", "alice", "y/z"]),
+    (r#"cat /home/alice/"My Docs"/tax/2026.pdf -n"#, "cat …/2026.pdf -n", &["home", "alice", "Docs", "tax"]),
+    ("ls /home/alice/'secret dir'/x; echo done", "ls …/x; echo done", &["home", "alice", "secret"]),
+    ("smbclient //nas/finance/q3/report.xlsx", "smbclient …/report.xlsx", &["nas", "finance", "q3"]),
+    ("cp a.txt //nas/finance/", "cp a.txt …", &["nas", "finance"]),
+    ("mount //nas/finance /mnt", "mount … /mnt", &["nas", "finance"]),
+    (r#"cp "//nas/finance/My Docs/x" ."#, r#"cp "…/x" ."#, &["nas", "finance", "Docs"]),
+];
+
+#[test]
+fn a_path_with_a_glued_quote_or_a_network_path_keeps_only_its_leaf() {
+    for (line, want, hidden) in GLUED_QUOTES_AND_NETWORK_PATHS {
+        let out = masked(line);
+        assert_eq!(out, *want, "{line}");
+        for part in *hidden {
+            assert!(!out.contains(part), "{part} crossed in {out:?} from {line}");
+        }
+    }
+    // A URL's host stays, and so do a lone `//`, a quote that never closes
+    // and a quote after the word.
+    for plain in ["curl https://example.com/a", "echo a // b", "echo /tmp 'x y'"] {
+        assert_eq!(masked(plain), plain);
+    }
+    assert_eq!(mask_path("//nas/finance/q3/report.xlsx", &[]), "…/report.xlsx");
+    assert_eq!(mask_path("//nas/finance", &[]), "…");
+}

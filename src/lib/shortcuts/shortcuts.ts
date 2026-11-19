@@ -76,6 +76,7 @@ export type ShortcutAction =
   | "cycleBoxBack"
   | "shortcutHelp"
   | "commandPalette"
+  | "searchTabs"
   | "rootConsole"
   | "projectShell"
   | "newShellTab"
@@ -328,6 +329,17 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     group: "navigation",
     default: { key: "k", ctrl: true },
     untested: "desktop.palette",
+  },
+  // The tab search: the palette on its `@` filter. Unlike the palette's own
+  // chord it is taken in the steering capture handler (`useSteering`), so it
+  // works from a focused terminal and in a popout. Ctrl+Shift+A is no terminal
+  // or editor chord here (readline's line start is plain Ctrl+A).
+  {
+    action: "searchTabs",
+    labelKey: "shortcut.searchTabs",
+    group: "navigation",
+    default: { key: "a", ctrl: true, shift: true },
+    untested: "palette.tabSearch",
   },
   // The root console (`layout/RootOverlay`): the cross-project management
   // overlay that replaced switching to the root scope. Handled in the same

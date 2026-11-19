@@ -58,7 +58,9 @@ compile from Tabtivity writes beside the PDF. If the PDF is older or newer
 than that data, or the source changed since the last compile, Tabtivity tells
 you and offers **Recompile**.
 A PDF built into the output folder in an earlier session is found again, and a
-PDF open in the root console offers **Recompile** too.
+PDF open in the root console offers **Recompile** too. On a remote project’s
+**Remote** side, connect to SSH and compile on the host. Both jumps use the
+map beside the host PDF without copying it to your local mirror.
 
 ## Previews and Beamer
 

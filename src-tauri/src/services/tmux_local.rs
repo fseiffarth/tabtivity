@@ -1466,9 +1466,11 @@ mod tests {
     #[test]
     fn a_real_tmux_session_gets_the_secret_from_the_client_environment() {
         let Ok(v) = std::process::Command::new("tmux").arg("-V").output() else {
+            crate::test_util::skip_or_fail("tmux", "tmux not installed");
             return;
         };
         if !v.status.success() || !version_supports_session_env(&String::from_utf8_lossy(&v.stdout)) {
+            crate::test_util::skip_or_fail("tmux", "tmux older than 3.2");
             return;
         }
         let socket = format!(concat!(crate::app_slug!(), "-test-864-{}"), std::process::id());
@@ -1824,6 +1826,7 @@ mod tests {
     #[test]
     fn a_fenced_agent_that_exits_leaves_a_dead_pane_that_takes_no_input() {
         if !tmux_available() {
+            crate::test_util::skip_or_fail("tmux", "tmux not installed");
             return;
         }
         let socket = format!(concat!(crate::app_slug!(), "-test-dead-{}"), std::process::id());
@@ -1869,6 +1872,7 @@ mod tests {
     #[test]
     fn a_detached_spawn_creates_a_session_the_server_finds() {
         if !tmux_available() {
+            crate::test_util::skip_or_fail("tmux", "tmux not installed");
             return;
         }
         let socket = format!(concat!(crate::app_slug!(), "-test-h1b-{}"), std::process::id());
@@ -1956,6 +1960,7 @@ mod tests {
     #[test]
     fn a_real_tmux_session_keeps_the_stamp_it_was_created_with() {
         if !tmux_available() {
+            crate::test_util::skip_or_fail("tmux", "tmux not installed");
             return;
         }
         use crate::services::session_mux::{tmux::TmuxMux, SessionMux};
@@ -1979,8 +1984,20 @@ mod tests {
         assert_eq!(marks.entry(bare), Some(&None));
         assert_eq!(marks.entry("nothing-here"), None);
         assert!(marks.contains(stamped) && marks.contains(bare) && !marks.contains("nothing-here"));
-        // With the server gone the listing is empty, not an error.
-        assert_eq!(mux.mcp_marks().unwrap(), crate::services::session_mux::SessionMarks::default());
+        // With the server gone the listing is empty, not an error. A listing
+        // that reaches it while it is still exiting reads "server exited
+        // unexpectedly" (CI, 2026-11-18), which stays an error by design:
+        // wait for the exit to finish.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let gone = loop {
+            match mux.mcp_marks() {
+                Err(e) if std::time::Instant::now() < deadline && format!("{e:?}").contains("server exited") => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                other => break other,
+            }
+        };
+        assert_eq!(gone.unwrap(), crate::services::session_mux::SessionMarks::default());
     }
 
     /// R1's race: the listing judged the session absent, but by the spawn it
@@ -1994,6 +2011,7 @@ mod tests {
     #[test]
     fn a_stamp_rides_a_create_only_and_never_overwrites_on_an_attach() {
         if !tmux_available() {
+            crate::test_util::skip_or_fail("tmux", "tmux not installed");
             return;
         }
         use crate::services::session_mux::{tmux::TmuxMux, SessionMux};

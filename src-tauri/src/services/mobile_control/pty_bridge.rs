@@ -2054,7 +2054,7 @@ mod tests {
     #[test]
     fn keeping_dim_appends_once_and_never_overwrites_the_users_entries() {
         let Some(tmux) = crate::paths::resolve_executable("tmux") else {
-            eprintln!("no tmux: skipped");
+            crate::test_util::skip_or_fail("tmux", "no tmux");
             return;
         };
         let socket = format!("keep-dim-append-{}", std::process::id());
@@ -2070,7 +2070,7 @@ mod tests {
         };
         let started = private(vec!["-f".into(), "/dev/null".into(), "new-session".into(), "-d".into(), "-s".into(), "k".into(), "sleep 30".into()]).status();
         if !started.is_ok_and(|status| status.success()) {
-            eprintln!("tmux did not start: skipped");
+            crate::test_util::skip_or_fail("tmux", "tmux did not start");
             return;
         }
         let run = || crate::services::session_mux::tmux::keep_dim(private(from(tmux_dim_check_command())), private(from(tmux_keep_dim_command()))).expect("tmux answers");

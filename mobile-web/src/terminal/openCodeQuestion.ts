@@ -165,6 +165,23 @@ export function openCodePermissionShown(screen: readonly QuestionLine[]): boolea
   return footer >= 0 && readOpenCodePermission(screen, footer) !== null;
 }
 
+/** The footer a form cut off at the pane's bottom is read with: the full
+ * TUI's, for a single-choice step. Its tab hint holds the read to a form with
+ * a tab row (Submit or Confirm last), which a plain numbered list in the
+ * transcript never has. */
+const CLIPPED_FOOTER = "⇆ tab  ↑↓ select  enter confirm  esc dismiss";
+
+/** Whether the screen ends inside the option block `rows` (the 2026-11-18
+ * phone screenshot: a first question of five two- and three-line rows filled
+ * the pane, its footer below the last row): every row under the last option
+ * is that option's description, set in at its label's column. */
+function clipped(lines: readonly QuestionLine[], rows: readonly { row: number; match: RegExpExecArray }[], end: number): boolean {
+  const last = rows[rows.length - 1];
+  if (!last) return false;
+  const column = last.match[0].length - last.match[3].length;
+  return lines.slice(last.row + 1, end).every((line) => !line.text.trim() || line.text.search(/\S/u) >= column);
+}
+
 export function readOpenCodeQuestion(screen: readonly QuestionLine[]): SelectPrompt | null {
   const lines = withoutSidebar(screen);
   let footer = lines.length - 1;
@@ -172,7 +189,16 @@ export function readOpenCodeQuestion(screen: readonly QuestionLine[]): SelectPro
   if (footer < 0) return null;
   const permission = readOpenCodePermission(lines, footer);
   if (permission) return permission;
-  const hints = FOOTER.exec(lines[footer].text);
+  let hints = FOOTER.exec(lines[footer].text);
+  // The form runs off the pane's bottom: a short pane, a question whose rows
+  // carry long descriptions. Read as if its footer stood under the last row —
+  // only with its tab row over it (`⇆ tab` asks for one, below) and the screen
+  // ending inside its rows (`clipped`).
+  const cut = !hints;
+  if (cut) {
+    hints = FOOTER.exec(CLIPPED_FOOTER);
+    footer += 1;
+  }
   if (!hints) return null;
   const first = Math.max(0, footer - 80);
   let heading: RegExpExecArray | null = null;
@@ -188,6 +214,7 @@ export function readOpenCodeQuestion(screen: readonly QuestionLine[]): SelectPro
     }
   }
 
+  if (cut && !clipped(lines, rows, footer)) return null;
   if (hints[1] !== "choose" && !/↑↓\s+select/u.test(hints[0])) {
     if (heading?.[3] && hints[1] === "submit") {
       return {

@@ -581,6 +581,43 @@ fn a_slash_command_recorded_as_a_local_command_is_a_prompt() {
 }
 
 #[test]
+fn a_model_or_effort_picker_s_choice_rides_on_its_command() {
+    // `/model` is typed bare and answered in a picker: the chat's divider
+    // read only `/model`, never the model chosen (2026-11-19). Shapes as
+    // Claude 2.1.327 writes them; an older release's `user` record too.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let command = |name: &str| format!(
+        "{{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<command-name>/{name}</command-name>\\n  <command-message>{name}</command-message>\\n  <command-args></command-args>\"}}\n"
+    );
+    let stdout = |body: &str| format!(
+        "{{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<local-command-stdout>{body}</local-command-stdout>\"}}\n"
+    );
+    std::fs::write(
+        &path,
+        [
+            command("model"),
+            stdout("Set model to `Fable 5.2` and saved as your default for new sessions"),
+            command("effort"),
+            stdout("Set effort level to high (this session only): deeper reasoning"),
+            command("model"),
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Kept model as `Opus 5.5`</local-command-stdout>\"}}\n".to_string(),
+            // A confirmation with no `/model` just before it joins nothing.
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"fix it\"}}\n".to_string(),
+            stdout("Set model to `Sonnet 5.5`"),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    let settings: Vec<(&str, Option<&str>)> = read.entries.iter().map(|e| (e.text.as_str(), e.setting.as_deref())).collect();
+    assert_eq!(
+        settings,
+        vec![("/model", Some("Fable 5.2")), ("/effort", Some("high")), ("/model", Some("Opus 5.5")), ("fix it", None)]
+    );
+}
+
+#[test]
 fn a_command_claude_refused_as_unknown_is_its_prompt_and_claude_s_warning() {
     // Claude 2.1.323 records a mistyped command only as two warnings: the
     // Chat view's bubble for `/simplity …` stayed "Sending…" (2026-11-14).
@@ -855,6 +892,7 @@ fn a_codex_rollout_carries_its_context_and_limits() {
             context_left: Some(68),
             session: Some(UsageWindow { used: 15, resets_at: Some(1789856635) }),
             week: Some(UsageWindow { used: 89, resets_at: Some(1790243849) }),
+            cache: None,
         })
     );
     let wire = serde_json::to_value(&read).unwrap();
@@ -1775,4 +1813,67 @@ fn only_a_tab_that_runs_remotely_has_its_opencode_store_elsewhere() {
     let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10);
     assert_eq!(read(true).reason.as_deref(), Some("unsupported"));
     assert_eq!(read(false).reason.as_deref(), Some("no_transcript"));
+}
+
+fn claude_answer(at: &str, usage: &str, sidechain: bool) -> String {
+    format!(
+        "{{\"isSidechain\":{sidechain},\"type\":\"assistant\",\"timestamp\":\"{at}\",\"message\":{{\"role\":\"assistant\",\"model\":\"claude-opus-5\",\"content\":[{{\"type\":\"text\",\"text\":\"ok\"}}],\"usage\":{usage}}}}}\n"
+    )
+}
+
+#[test]
+fn a_claude_session_says_when_its_prompt_cache_runs_out() {
+    let wrote_1h = r#"{"input_tokens":3,"cache_creation_input_tokens":500,"cache_read_input_tokens":90000,"output_tokens":200,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":500}}"#;
+    let read_only = r#"{"input_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":90700,"output_tokens":98,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}}"#;
+    let synthetic = r#"{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}"#;
+    // The newest answer only read the cache: its lifetime comes from the
+    // write before it, its time and size from the answer itself. A synthetic
+    // record after it reached no cache.
+    let read = read_claude(
+        probe_prompt("go")
+            + &claude_answer("2026-11-19T10:00:00.000Z", wrote_1h, false)
+            + &claude_answer("2026-11-19T10:05:00.000Z", read_only, false)
+            + &claude_answer("2026-11-19T10:06:00.000Z", synthetic, false),
+    );
+    let cache = read.usage.and_then(|u| u.cache).unwrap();
+    assert_eq!(cache.ttl_secs, 3600);
+    assert_eq!(cache.context_tokens, 90800);
+    assert_eq!(cache.last_at_ms, chrono::DateTime::parse_from_rfc3339("2026-11-19T10:05:00.000Z").unwrap().timestamp_millis());
+
+    // An API-key session writes 5-minute entries.
+    let wrote_5m = r#"{"input_tokens":3,"cache_creation_input_tokens":40,"cache_read_input_tokens":20000,"output_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":40,"ephemeral_1h_input_tokens":0}}"#;
+    let read = read_claude(probe_prompt("go") + &claude_answer("2026-11-19T10:00:00.000Z", wrote_5m, false));
+    assert_eq!(read.usage.and_then(|u| u.cache).map(|c| c.ttl_secs), Some(300));
+
+    // No write says its lifetime (an older Claude Code): no chip, no guess.
+    let unsplit = r#"{"input_tokens":3,"cache_creation_input_tokens":40,"cache_read_input_tokens":20000,"output_tokens":9}"#;
+    let read = read_claude(probe_prompt("go") + &claude_answer("2026-11-19T10:00:00.000Z", unsplit, false));
+    assert_eq!(read.usage, None);
+
+    // A subagent's answer in the session's file is not the session's cache.
+    let read = read_claude(probe_prompt("go") + &claude_answer("2026-11-19T10:00:00.000Z", wrote_1h, true));
+    assert_eq!(read.usage, None);
+}
+
+#[test]
+fn a_codex_rollout_says_when_its_prompt_cache_runs_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"timestamp\":\"2026-11-19T09:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"total_tokens\":51000},\"model_context_window\":258400},\"rate_limits\":null}}\n",
+            // An event without counts says nothing about the cache.
+            "{\"timestamp\":\"2026-11-19T09:30:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":null,\"rate_limits\":null}}\n",
+        ),
+    )
+    .unwrap();
+    let read = read_transcript(&path, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap();
+    let cache = read.usage.as_ref().and_then(|u| u.cache.clone()).unwrap();
+    assert_eq!(cache.ttl_secs, 1800);
+    assert_eq!(cache.context_tokens, 51000);
+    assert_eq!(cache.last_at_ms, chrono::DateTime::parse_from_rfc3339("2026-11-19T09:00:00.000Z").unwrap().timestamp_millis());
+    let wire = serde_json::to_value(&read).unwrap();
+    assert_eq!(wire["usage"]["cache"]["ttlSecs"], 1800);
+    assert_eq!(wire["usage"]["cache"]["contextTokens"], 51000);
 }

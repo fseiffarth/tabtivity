@@ -1902,7 +1902,16 @@ mod install_phone_script_tests {
         let python = which("python3").filter(|python| {
             Command::new(python).args(["-I", "-c", "import json"]).output().is_ok_and(|out| out.status.success())
         });
+        if python.is_none() {
+            // jq alone would keep this green with the python3 parser untested.
+            crate::test_util::skip_or_fail("python3", "no python3 that imports json");
+        }
         let parsers: Vec<PathBuf> = python.into_iter().chain(which("jq")).collect();
+        if parsers.is_empty() {
+            // Neither parser: nothing below would run.
+            crate::test_util::skip_or_fail("python3", "neither python3 nor jq is installed");
+            return;
+        }
         let settings = format!(r#"{{"{}":{{"serve_origin":"https://desk.example.ts.net"}}}}"#, crate::brand::MOBILE_HOST_KEY);
         let good = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"desk.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8742"}}}}}"#;
         let funnel = r#"{"TCP":{"443":{"HTTPS":true}},"Web":{"desk.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8742"}}}},"AllowFunnel":{"desk.example.ts.net:443":true}}"#;

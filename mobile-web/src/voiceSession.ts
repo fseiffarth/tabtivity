@@ -154,6 +154,7 @@ export function startDictation(
     wanted = false;
     scope.clearTimeout(restartTimer);
     scope.clearTimeout(idleTimer);
+    scope.document.removeEventListener("visibilitychange", visibilityChanged);
     releaseScreen();
     meter?.close();
     meter = undefined;
@@ -171,6 +172,15 @@ export function startDictation(
     if (failure) handlers.onError(failure);
     handlers.onEnd();
   };
+  // A page can be hidden during restart backoff, or the browser can suspend
+  // without delivering onend. Release now so returning shows an idle mic.
+  function visibilityChanged() {
+    if (!scope.document.hidden || over) return;
+    failure ??= "mobile.voice.errInterrupted";
+    finish();
+    if (running) recognizer.abort();
+  }
+  scope.document.addEventListener("visibilitychange", visibilityChanged);
   const armIdle = () => {
     scope.clearTimeout(idleTimer);
     idleTimer = scope.setTimeout(() => {
@@ -181,6 +191,7 @@ export function startDictation(
     }, IDLE_LIMIT_MS);
   };
   const begin = () => {
+    if (scope.document.hidden) { visibilityChanged(); return; }
     try {
       startedAt = Date.now();
       running = true;

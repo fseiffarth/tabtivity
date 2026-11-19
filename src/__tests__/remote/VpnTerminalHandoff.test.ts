@@ -110,7 +110,9 @@ describe("VPN terminal handoff", () => {
     await g.useVpnPromptStore.getState().handoffToTerminal();
 
     expect(g.useSettingsStore.getState().settings?.connections_headless).toBe(true);
-    expect(calls("update_settings")).toHaveLength(0);
+    // The settings store writes through `patch_settings`, falling back to `save_settings`.
+    expect(calls("patch_settings")).toHaveLength(0);
+    expect(calls("save_settings")).toHaveLength(0);
   });
 
   /** A headless attempt in flight would tear the terminal tunnel back down when it

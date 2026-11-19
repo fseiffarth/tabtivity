@@ -1,5 +1,5 @@
 // The Tabby gate (docs/voice_nav_mode_plan.md decision 7), hands-free only: from
-// a spoken send ("go on") the open mic dictates only an utterance that starts
+// a spoken send ("go Tabby") the open mic dictates only an utterance that starts
 // with the start word, and a chime plus a line tell the user they can go on.
 // This holds the gate's state; `voiceInput.ts` applies it to the utterances
 // (`stepUtterances`) and `useVoiceInput` feeds it.

@@ -866,6 +866,50 @@ describe("the Reader's live rows", () => {
     expect((screen.getByRole("button", { name: /No, and tell Claude/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it.each(["matching", "older", "closed after moving"])("handles a %s Codex queued question after clicking its transcript card", async (scenario) => {
+    useTabsStore.setState({ tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex" }] } });
+    const question = "Which window shows the bug?";
+    const options = [{ label: "Main window" }, { label: "Popped-out window" }, { label: "Phone" }];
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? {
+      ...transcript,
+      entries: [transcript.entries[0], {
+        kind: "answer", text: question, asking: true, questions: [{ question, options }],
+      }, {
+        kind: "answer", text: "An earlier question", questions: [{ question: "An earlier question", options }],
+      }],
+    } : []));
+    const working = ["• Working (8s • esc to interrupt)", "• Queued follow-up inputs"];
+    const idlePicker = [...working, "  ? 1 question", "    shift+← to answer", "", "› "];
+    const rows = [...idlePicker];
+    const opened = (current: number) => [
+      ...working, scenario === "older" ? "  Which file?" : `  ${question}`,
+      ...[...options.map((option) => option.label), "Other"].map((label, index) =>
+        `  ${current === index ? "›" : " "} ${index + 1}. ${label}`),
+      "  enter submit   ^] skip   shift+→ main prompt",
+    ];
+    const onKey = (key: string) => {
+      if (key === "\u001b[1;2D") rows.splice(0, rows.length, ...opened(0));
+      if (key === "\u001b[B") rows.splice(0, rows.length, ...(scenario === "closed after moving" ? ["› "] : opened(1)));
+      if (key === "\r") rows.splice(0, rows.length, "› ");
+    };
+    onWritten.add(onKey);
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    try {
+      reader(host);
+      const [pending, earlier] = await screen.findAllByRole("group", { name: "Question" });
+      expect(within(earlier).queryByRole("button")).toBeNull();
+      const option = within(pending).getByRole("button", { name: /Popped-out window/ });
+      fireEvent.click(option);
+      expect((option as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(written).toEqual(scenario === "matching" ? ["\u001b[1;2D", "\u001b[B", "\r"]
+        : scenario === "older" ? ["\u001b[1;2D"] : ["\u001b[1;2D", "\u001b[B"]);
+    } finally {
+      onWritten.delete(onKey);
+    }
+  });
+
   it("walks question buttons while the composer stays disabled", async () => {
     term = fakeTerminal([
       "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",

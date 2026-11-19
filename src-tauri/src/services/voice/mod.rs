@@ -337,9 +337,9 @@ pub fn listen_start(ctx: &CoreCtx, req: ListenRequest) -> Result<u64, VoiceError
         return Err(VoiceError::ModelMissing);
     }
     let mut guard = ACTIVE.lock_ok();
-    // The old session lets go of the mic first; its last final still comes.
+    // Replacing the owner discards the old session and its unsettled phrases.
     if let Some(old) = guard.take() {
-        old.control.stop();
+        old.control.abort();
         announce_owner(ctx, None);
     }
     let source = capture::open()?;

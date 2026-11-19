@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn isoinfo_reads_the_rock_ridge_names_and_contents() {
         if crate::paths::resolve_executable("isoinfo").is_none() {
-            eprintln!("isoinfo not installed; skipping the reference cross-check");
+            crate::test_util::skip_or_fail("isoinfo", "isoinfo not installed");
             return;
         }
         let dir = tempfile::tempdir().unwrap();

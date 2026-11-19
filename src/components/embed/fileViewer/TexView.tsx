@@ -1,3 +1,4 @@
+import { useRemoteStatusStore } from "../../../stores/remote/remoteStatus";
 import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -220,8 +221,6 @@ export function TexView({
   // in its own pane instead of tabs (`texPdfHost`).
   const pdfHost = useTexPdfHost();
   const scope = useFileScope();
-  // The SyncTeX commands read the map off local disk; a file read from a remote
-  // host (not its local mirror) has none there.
   const remoteSource = useFileSource() === "remote";
   // A host-pinned project (VM, remote-only) has no local tree to build in, and
   // a remote project's file read from the host (its Remote side, not the
@@ -231,6 +230,8 @@ export function TexView({
   // which typesets in the document's local folder — is off.
   const scopeProject = useProjectsStore((s) => (scope ? s.projects.find((p) => p.id === scope) : undefined));
   const hostPinned = isHostPinned(scopeProject);
+  const connected = useRemoteStatusStore((s) => !!scope && s.byProject[scope]?.ssh === "connected");
+  const disconnected = remoteSource && !connected;
   const hostBuild = hostPinned || (remoteSource && !!scopeProject?.remote);
   const ai = useTabAiPrefs(tabKey, "tex");
   const ac = ai.ac;
@@ -427,8 +428,7 @@ export function TexView({
   // regardless). The kinds are reverse search's (`syncNoticeKind`, worded from
   // the same `synctexStatus`) plus two of forward search's own: `"noPdf"` = a
   // Ctrl/⌘+click before the document was ever compiled, so there is no PDF to
-  // jump into yet; `"remote"` = the PDF is read from a remote host, whose map the
-  // SyncTeX commands (local disk only) cannot reach. `files` names the sources
+  // jump into yet; `"remote"` = the host is disconnected. `files` names the sources
   // edited since the build on a `"stale"` notice. Auto-cleared by the effect below.
   const [syncNote, setSyncNote] = useState<null | {
     kind: SyncNoticeKind | "noPdf" | "remote";
@@ -678,9 +678,7 @@ export function TexView({
   // caret's line moved it, which counts this file as stale (Compile saves first).
   const revealInPdf = useCallback(
     async (pdf: string, text: string, caret: number, opts: { afterCompile: boolean; saved: string | null }) => {
-      // A PDF read from a remote host has no map on local disk (the PDF sits on
-      // the same side as its source). A mirror path is local and goes on.
-      if (remoteSource) {
+      if (disconnected) {
         setSyncNote({ kind: "remote", files: [] });
         if (opts.afterCompile) usePdfSyncStore.getState().requestReload(pdf);
         return;
@@ -702,7 +700,7 @@ export function TexView({
       const kind = syncNoticeKind(status, rect != null);
       if (kind) setSyncNote({ kind, files: status?.newer_sources ?? [] });
     },
-    [remoteSource, path, openPdf, scope],
+    [disconnected, path, openPdf, scope],
   );
 
   // SyncTeX forward search on demand: reveal the caret's box in the PDF without
@@ -716,23 +714,23 @@ export function TexView({
       setSyncNote(null);
       // Not compiled yet: say so, rather than letting SyncTeX fail on the
       // missing PDF and read as a miss.
-      if (!(await texPathExists(pdf, scope))) {
+      if (!disconnected && !(await texPathExists(pdf, scope))) {
         setSyncNote({ kind: "noPdf", files: [] });
         return;
       }
       await revealInPdf(pdf, draftRef.current, caret, { afterCompile: false, saved: unsavedBaseRef.current });
     },
-    [targetPdf, scope, revealInPdf],
+    [targetPdf, scope, revealInPdf, disconnected],
   );
 
   // Ctrl/⌘+click in the editor: follow a `\input{…}`-style reference when the
   // caret sits on one, otherwise forward-sync that caret position into the PDF.
   const onEditorFollow = useCallback(
     async (caret: number) => {
-      if (await followLink(caret)) return;
+      if (!disconnected && await followLink(caret)) return;
       await forwardSync(caret);
     },
-    [followLink, forwardSync],
+    [followLink, forwardSync, disconnected],
   );
 
   const compile = useCallback(async () => {
@@ -740,7 +738,7 @@ export function TexView({
     setCompiling(true);
     // The PDF this build rewrites (known from the last one) holds its mtime
     // poll until the build is over and asks for the one reload itself below.
-    const rewriting = pdfPath;
+    const rewriting = hostBuild ? targetPdf() : pdfPath;
     if (rewriting) usePdfSyncStore.getState().beginCompile(rewriting);
     setCompileError(null);
     setErrors([]);
@@ -843,6 +841,7 @@ export function TexView({
     }
   }, [
     compiling,
+    targetPdf,
     pdfPath,
     save,
     onSaveAll,
@@ -1230,6 +1229,7 @@ export function TexView({
           )}
           {syncNote.kind === "noPdf" && <UntestedTag id="fileViewer.syncNoPdfMsg" />}
           {syncNote.kind === "stale" && <UntestedTag id="fileViewerPane.9" />}
+          {remoteSource && <UntestedTag id="pdfViewer.syncRemote" />}
           {syncNote.kind === "remote" && <UntestedTag id="pdfViewer.syncRemoteMsg" />}
         </div>
       )}

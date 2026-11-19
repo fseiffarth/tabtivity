@@ -536,6 +536,21 @@ pub struct Settings {
     /// resumable download in the custom dir is still found.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_models_path: Option<String>,
+    /// The context window (tokens) a server **Tabtivity starts itself** gets, as
+    /// `OLLAMA_CONTEXT_LENGTH`. `None` is automatic (`commands::ollama::
+    /// spawned_context_length`). Like `ollama_models_path` it never reaches a
+    /// server someone else started, nor wins over the variable the user set in
+    /// the environment; Restart Ollama is what applies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_context_length: Option<u32>,
+    /// How long Ollama keeps a model loaded after its last request, as
+    /// `OLLAMA_KEEP_ALIVE` (`30m`, `1h`, `-1` = until unloaded). `None` keeps
+    /// Ollama's own 5 minutes. A server **Tabtivity starts itself** gets it at
+    /// start; a systemd service only through the drop-in Settings offers
+    /// (`commands::ollama::ollama_keep_alive_plan`). Agents reach Ollama through
+    /// its OpenAI-compatible API, which cannot ask for a keep-alive per request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_keep_alive: Option<String>,
     /// Preserved for Python rollback; not used by the Tauri app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ollama_model: Option<String>,

@@ -98,9 +98,12 @@ function press(key: string, init: KeyboardEventInit = {}) {
   });
 }
 
+// Past `syncSoon`'s late 150 ms pass plus one 50 ms `placeCursorSoon` retry
+// (src/hooks/useSteering.ts), so a chain of retries has landed too.
+const SETTLE_MS = 200;
 async function settle() {
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, SETTLE_MS));
   });
 }
 
@@ -163,6 +166,20 @@ afterEach(() => {
 });
 
 describe("steering in a popout", () => {
+  it("the tab search chord opens the popout's palette on @, from a focused field too", async () => {
+    mount();
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+    field.focus();
+    act(() => {
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "A", ctrlKey: true, shiftKey: true, bubbles: true }));
+    });
+    await settle();
+    const input = document.querySelector<HTMLInputElement>(".command-palette-input");
+    expect(input?.value).toBe("@");
+    expect([...document.querySelectorAll(".command-palette-label")].map((el) => el.textContent)).toEqual(["A", "B", "C"]);
+  });
+
   it("the chord turns it on, on the popout's tabs, and lights the markers", () => {
     mount();
     chord();

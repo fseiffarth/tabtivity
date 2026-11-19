@@ -114,10 +114,10 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
   };
   const cue = `Sent — say ${T} for your next prompt`;
 
-  /** A first prompt sent with "go on": the gate is on and the cue shows. */
+  /** A first prompt sent with "go Tabby": the gate is on and the cue shows. */
   async function sentOnce() {
     const speech = await dictate();
-    await say(speech, ["fix the login go on", true]);
+    await say(speech, ["fix the login go Tabby", true]);
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     return speech;
   }
@@ -125,7 +125,7 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
   it("chimes and says to go on after a spoken send, and keeps the mic open", async () => {
     const speech = await dictate();
     expect(chime.calls).toBe(0);
-    await say(speech, ["fix the login", true], ["go on", true]);
+    await say(speech, ["fix the login", true], ["go Tabby", true]);
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     expect(sentText()).toContain("fix the login");
     expect(chime.calls).toBe(1);
@@ -136,7 +136,7 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
 
   it("drops talk that does not start with the start word, until the next send", async () => {
     const speech = await sentOnce();
-    await say(speech, ["fix the login go on", true], ["so I was thinking about lunch", true]);
+    await say(speech, ["fix the login go Tabby", true], ["so I was thinking about lunch", true]);
     expect(box().value).toBe("");
     expect(screen.getByText(cue)).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
@@ -145,12 +145,12 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
 
   it("drafts the words after the start word, and a spoken send then sends them", async () => {
     const speech = await sentOnce();
-    const base: [string, boolean][] = [["fix the login go on", true], ["so I was thinking", true]];
+    const base: [string, boolean][] = [["fix the login go Tabby", true], ["so I was thinking", true]];
     await say(speech, ...base, [`${T}, and add a test`, true]);
     expect(box().value).toBe("and add a test");
     expect(screen.getByText("Heard: and add a test")).toBeTruthy();
     const before = sentText();
-    await say(speech, ...base, [`${T}, and add a test, go on`, true]);
+    await say(speech, ...base, [`${T}, and add a test, go Tabby`, true]);
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     expect(sentText().slice(before.length)).toContain("and add a test");
     expect(sentText().slice(before.length)).not.toContain(T);
@@ -173,7 +173,7 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
 
   it("judges an utterance once: a growing one is kept, the start word taken off", async () => {
     const speech = await sentOnce();
-    const base: [string, boolean][] = [["fix the login go on", true]];
+    const base: [string, boolean][] = [["fix the login go Tabby", true]];
     await say(speech, ...base, [T, true]);
     await say(speech, ...base, [`${T} and`, true]);
     await say(speech, ...base, [`${T} and add`, true]);
@@ -183,7 +183,7 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
 
   it("does not rescue a dropped utterance because it later says the start word", async () => {
     const speech = await sentOnce();
-    const base: [string, boolean][] = [["fix the login go on", true]];
+    const base: [string, boolean][] = [["fix the login go Tabby", true]];
     await say(speech, ...base, ["so I said", true]);
     await say(speech, ...base, [`so I said ${T} add a test`, true]);
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
@@ -192,7 +192,7 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
 
   it("says it is listening after the start word alone, and the next utterance starts the draft", async () => {
     const speech = await sentOnce();
-    const base: [string, boolean][] = [["fix the login go on", true]];
+    const base: [string, boolean][] = [["fix the login go Tabby", true]];
     chime.calls = 0;
     await say(speech, ...base, [T, true]);
     await act(async () => { await vi.advanceTimersByTimeAsync(900); });
@@ -208,7 +208,7 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
 
   it("closes the wait for a prompt after about ten seconds", async () => {
     const speech = await sentOnce();
-    const base: [string, boolean][] = [["fix the login go on", true]];
+    const base: [string, boolean][] = [["fix the login go Tabby", true]];
     await say(speech, ...base, [T, true]);
     await act(async () => { await vi.advanceTimersByTimeAsync(900); });
     expect(screen.getByText("Listening for your prompt")).toBeTruthy();
@@ -220,7 +220,7 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
 
   it("keeps listening for the rest of a prompt without the start word once it has begun", async () => {
     const speech = await sentOnce();
-    const base: [string, boolean][] = [["fix the login go on", true]];
+    const base: [string, boolean][] = [["fix the login go Tabby", true]];
     await say(speech, ...base, [`${T} fix the parser`, true]);
     await say(speech, ...base, [`${T} fix the parser`, true], ["and the tests", true]);
     expect(box().value).toBe("fix the parser and the tests");
@@ -243,21 +243,21 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
     const speech = await sentOnce();
     fireEvent.change(box(), { target: { value: "typed" } });
     expect(screen.queryByText(cue)).toBeNull();
-    await say(speech, ["fix the login go on", true], ["and then spoken", true]);
+    await say(speech, ["fix the login go Tabby", true], ["and then spoken", true]);
     expect(box().value).toBe("typed and then spoken");
   });
 
-  it("starts nothing with hands-free off: the start word is dictation, \"go on\" has no cue", async () => {
+  it("starts nothing with hands-free off: the start word is dictation, \"go Tabby\" has no cue", async () => {
     const speech = await dictate(false);
     await say(speech, [`${T} navigate`, true]);
     expect(box().value).toBe(`${T} navigate`);
-    await say(speech, [`${T} navigate`, true], ["fix the login go on", true]);
+    await say(speech, [`${T} navigate`, true], ["fix the login go Tabby", true]);
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     expect(sentText()).toContain("fix the login");
     expect(chime.calls).toBe(0);
     expect(screen.queryByText(cue)).toBeNull();
     // Mic still open, nothing gated: talk lands as it always did.
-    await say(speech, [`${T} navigate`, true], ["fix the login go on", true], ["plain talk", true]);
+    await say(speech, [`${T} navigate`, true], ["fix the login go Tabby", true], ["plain talk", true]);
     expect(box().value).toBe("plain talk");
   });
 

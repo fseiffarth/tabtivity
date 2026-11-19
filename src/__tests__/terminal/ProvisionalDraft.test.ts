@@ -155,3 +155,29 @@ describe("a caret across a splice", () => {
     expect(shiftOffset(5, { at: 5, removed: 0, inserted: 3 })).toBe(8);
   });
 });
+
+describe("dictation at a selection", () => {
+  it("preserves the selected text through previews, cancellation and persistence", () => {
+    const spans = new ProvisionalDraft();
+    const original = "use red paint";
+    spans.begin(original, 1, { start: 4, end: 7 });
+    let draft = show(spans, original, 1, "dark");
+    draft = show(spans, draft, 1, "dark blue");
+    expect(draft).toBe("use dark blue paint");
+    expect(spans.settled(draft)).toBe(original);
+    expect(spans.clear(draft).draft).toBe(original);
+  });
+
+  it("tracks a multiline selection for a final without partials", () => {
+    const spans = new ProvisionalDraft();
+    spans.begin("a\nb end", 1, { start: 0, end: 3 });
+    expect(spans.settle("say a\nb end", 1)).toMatchObject({ at: 4, original: "a\nb" });
+  });
+
+  it("relinquishes a selected span edited by hand", () => {
+    const spans = new ProvisionalDraft();
+    spans.begin("red.", 1, { start: 0, end: 3 });
+    expect(show(spans, "red.", 1, "green")).toBe("green.");
+    expect(spans.settle("grey.", 1)).toMatchObject({ draft: "grey.", taken: true });
+  });
+});

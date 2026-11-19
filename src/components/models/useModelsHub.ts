@@ -17,6 +17,7 @@ import {
   type OllamaGpuStatus,
 } from "../../lib/agents/localDrivers";
 import { runOllamaUpdateCheck, upgradeOllamaInTab } from "../../lib/agents/ollamaUpdateActions";
+import { askRestartOllama, restartOllamaServer } from "../../lib/agents/ollamaRestart";
 import type { GpuSample } from "../../lib/gpu";
 import { readModelsMachine, type MachineLoad } from "../../lib/agents/modelsMachine";
 import { useT } from "../../lib/i18n";
@@ -302,27 +303,16 @@ export function useModelsHub(active: boolean) {
       );
   };
 
-  // Restart the server, whoever started it. It stops everything Ollama is doing
-  // (other programs' requests too), so it asks first.
+  // Restart the server, whoever started it (`lib/agents/ollamaRestart`, shared
+  // with the Ollama panel).
   const [restartingOllama, setRestartingOllama] = useState(false);
   const restartOllama = async () => {
-    const ok = await confirmAction({
-      title: t("localModel.restartConfirmTitle"),
-      body: t("localModel.restartConfirmBody"),
-      confirmLabel: t("localModel.restartOllama"),
-      danger: true,
-    });
-    if (!ok) return;
+    if (!(await askRestartOllama(t, confirmAction))) return;
     setRestartingOllama(true);
     setError(null);
-    try {
-      await invoke("restart_ollama_server");
-      await fetchModels();
-    } catch (e) {
-      setError(e === "ollama_remote" ? t("localModel.restartRemote") : t("localModel.restartFailed"));
-    } finally {
-      setRestartingOllama(false);
-    }
+    const failed = await restartOllamaServer(t);
+    if (failed) setError(failed);
+    setRestartingOllama(false);
   };
 
   // One click, both questions — the models *and* the server they run on
