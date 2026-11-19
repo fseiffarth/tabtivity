@@ -9,11 +9,13 @@
 //!    credential headers, `Bearer`/`Basic` credentials, `name=value` and
 //!    `--flag value` pairs whose name says secret, well-known token prefixes,
 //!    private-key blocks and long mixed-case random runs;
-//! 3. every other absolute, `~/` or `~user/` path and `file://` address keeps
-//!    only its leaf (`…/config`), since host paths never cross the browser API.
+//! 3. every other absolute, `~/` or `~user/` path, `//server/share` network
+//!    path and `file://` address keeps only its leaf (`…/config`), since host
+//!    paths never cross the browser API.
 //!    A path is found by what it is, wherever it starts (after `2>`, `<`, `@`,
 //!    `;`, a glued `-I`, `${X:-`, `git+`, …); a quoted one is cut as one path,
-//!    spaces included, and a backslash-escaped character does not end one.
+//!    spaces included, and neither a backslash-escaped character nor a quote
+//!    glued inside the word (`/a/x'y z'/w`) ends one.
 //!
 //! A heuristic, not a guarantee: the paired phone could already read the same
 //! text off the Terminal view. Pure + tested.
@@ -248,7 +250,8 @@ pub fn mask_path(path: &str, folders: &[&str]) -> String {
     let hidden = hide_secrets(&relative);
     let home = hidden == "~" || hidden.starts_with("~/");
     let plain = without_verbatim(&hidden).unwrap_or_else(|| hidden.clone());
-    let unc = plain.starts_with(r"\\");
+    // `//server/share/…` names a host and a share as much as `\\server\share`.
+    let unc = plain.starts_with(r"\\") || is_network_path(&plain);
     let drive = !unc && is_windows_absolute(&plain);
     if !(home || unc || drive || hidden.starts_with('/')) {
         // Relative as written, and nothing else: a `..` (it climbs out of the
@@ -348,8 +351,8 @@ enum Kind {
     /// A drive path (`C:\a`, `C:/a`), a UNC one (`\\server\share`) or anything
     /// verbatim (`\\?\…`).
     Windows,
-    /// An absolute (`/a/b`, not `//host`), home (`~/a`, `~user/a`) or
-    /// `file://` path.
+    /// An absolute (`/a/b`), home (`~/a`, `~user/a`), network
+    /// (`//server/share/a`, not a URL's `scheme://host`) or `file://` path.
     Posix,
 }
 
@@ -358,7 +361,7 @@ enum Kind {
 /// (`/tmp`, `~/x`) names nothing private and stays. A Windows path the same,
 /// after `…\`: a drive path of one component (`C:\Users`) stays; a UNC path
 /// shows no more than what follows its server and share, since those name a
-/// host.
+/// host — and so does a POSIX `//server/share/…` one.
 ///
 /// A path is found by what it is, wherever it starts: after a redirection
 /// (`2>/a/b`, `</a/b`), `@`, `;`, `{`, a backtick or a glued short flag
@@ -395,7 +398,10 @@ fn scan_paths(text: &str, kind: Kind) -> String {
         // A file address may also follow a scheme it is glued to (`git+file://`).
         let after_scheme = kind == Kind::Posix && text[..at].ends_with('+') && is_file_address(rest);
         if after_scheme || may_start_path(&text[..at], kind) {
-            if let Some(len) = path_len(rest, kind) {
+            // `//` after a `:` is a URL's host (`https://host/a`), not a path.
+            let network = kind == Kind::Posix && !text[..at].ends_with(':');
+            let len = path_len(rest, kind).or_else(|| network.then(|| network_path_len(rest)).flatten());
+            if let Some(len) = len {
                 out.push_str(&leaf_of_path(&rest[..len], kind));
                 at += len;
                 continue;
@@ -456,19 +462,43 @@ fn ends_path(ch: char, kind: Kind) -> bool {
 }
 
 /// Byte length of the run that continues a path, from the start of `body`.
-/// A POSIX backslash escape (`\ `, `\'`, `\(`, `\;`, …) does not end it.
+/// Neither a POSIX backslash escape (`\ `, `\'`, `\(`, `\;`, …) nor a quoted
+/// stretch glued inside the word (`/a/x'y z'/w`, one word to the shell) ends
+/// it; a quote that never closes does.
 fn body_len(body: &str, kind: Kind) -> usize {
-    let mut chars = body.char_indices();
-    while let Some((at, ch)) = chars.next() {
+    let mut at = 0;
+    while let Some(ch) = body[at..].chars().next() {
+        let next = at + ch.len_utf8();
         if kind == Kind::Posix && ch == '\\' {
-            chars.next();
+            at = next + body[next..].chars().next().map_or(0, char::len_utf8);
             continue;
+        }
+        if kind == Kind::Posix && matches!(ch, '\'' | '"') {
+            if let Some(len) = closing_quote(&body[next..], ch, kind) {
+                at = next + len + 1;
+                continue;
+            }
         }
         if ends_path(ch, kind) {
             return at;
         }
+        at = next;
     }
     body.len()
+}
+
+/// `text` starts a POSIX network path, `//server…` (`/` alone after the `//`,
+/// or nothing, is none).
+fn is_network_path(text: &str) -> bool {
+    text.strip_prefix("//")
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|first| first != '/' && !ends_path(first, Kind::Posix))
+}
+
+/// Byte length of the network path that starts `text`, if one does. The
+/// caller rules out a URL's `scheme://`.
+fn network_path_len(text: &str) -> Option<usize> {
+    is_network_path(text).then(|| 2 + body_len(&text[2..], Kind::Posix))
 }
 
 /// Byte length of the path of `kind` that starts `text`, if one does.
@@ -524,7 +554,7 @@ fn path_len(text: &str, kind: Kind) -> Option<usize> {
 /// A quoted string that is one path and nothing else: it starts as one, and
 /// no shell operator or later word that starts a flag or another path follows.
 fn is_one_path(inner: &str, kind: Kind) -> bool {
-    path_len(inner, kind).is_some()
+    (path_len(inner, kind).is_some() || (kind == Kind::Posix && is_network_path(inner)))
         && !inner.contains([';', '|', '&', '<', '>', '`'])
         && !inner.split_whitespace().skip(1).any(|word| {
             word.starts_with(['-', '/', '\\', '~']) || path_len(word, Kind::Windows).is_some() || path_len(word, Kind::Posix).is_some()
@@ -569,6 +599,14 @@ fn posix_leaf(path: &str) -> String {
         return match parts.last().filter(|_| parts.len() > 1) {
             Some(leaf) => format!("{}…/{leaf}{slash}", &path[..7]),
             None => path.to_string(),
+        };
+    }
+    if let Some(rest) = path.strip_prefix("//") {
+        // A network path: its server and share name a host, so they never show.
+        let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
+        return match parts.last().filter(|_| parts.len() > 2) {
+            Some(leaf) => format!("…/{leaf}{slash}"),
+            None => "…".to_string(),
         };
     }
     if path.starts_with('~') && !path.starts_with("~/") {

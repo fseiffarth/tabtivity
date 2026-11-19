@@ -370,3 +370,34 @@ fn a_path_after_a_sign_a_scheme_or_another_users_home_or_with_escapes_keeps_only
         assert_eq!(masked(plain), plain);
     }
 }
+
+/// Paths that still showed a parent: one with a quoted stretch glued inside
+/// the word (one word to the shell), and a POSIX network path, whose server
+/// and share name a host as a UNC path's do.
+const GLUED_QUOTES_AND_NETWORK_PATHS: &[(&str, &str, &[&str])] = &[
+    ("cat /home/alice/x'y/z'/w", "cat …/w", &["home", "alice", "y/z"]),
+    (r#"cat /home/alice/"My Docs"/tax/2026.pdf -n"#, "cat …/2026.pdf -n", &["home", "alice", "Docs", "tax"]),
+    ("ls /home/alice/'secret dir'/x; echo done", "ls …/x; echo done", &["home", "alice", "secret"]),
+    ("smbclient //nas/finance/q3/report.xlsx", "smbclient …/report.xlsx", &["nas", "finance", "q3"]),
+    ("cp a.txt //nas/finance/", "cp a.txt …", &["nas", "finance"]),
+    ("mount //nas/finance /mnt", "mount … /mnt", &["nas", "finance"]),
+    (r#"cp "//nas/finance/My Docs/x" ."#, r#"cp "…/x" ."#, &["nas", "finance", "Docs"]),
+];
+
+#[test]
+fn a_path_with_a_glued_quote_or_a_network_path_keeps_only_its_leaf() {
+    for (line, want, hidden) in GLUED_QUOTES_AND_NETWORK_PATHS {
+        let out = masked(line);
+        assert_eq!(out, *want, "{line}");
+        for part in *hidden {
+            assert!(!out.contains(part), "{part} crossed in {out:?} from {line}");
+        }
+    }
+    // A URL's host stays, and so do a lone `//`, a quote that never closes
+    // and a quote after the word.
+    for plain in ["curl https://example.com/a", "echo a // b", "echo /tmp 'x y'"] {
+        assert_eq!(masked(plain), plain);
+    }
+    assert_eq!(mask_path("//nas/finance/q3/report.xlsx", &[]), "…/report.xlsx");
+    assert_eq!(mask_path("//nas/finance", &[]), "…");
+}
