@@ -191,6 +191,26 @@ describe("quick composer", () => {
     expect(calls("agent_prompt_upsert")).toHaveLength(1);
   });
 
+  it("Escape typed in the composer's own field (where Enter left the focus) ends the pick too", async () => {
+    await renderChart();
+    type("follow-up");
+    chooseWhen(/^After another prompt/);
+    await act(async () => { press({}); });
+    expect(await screen.findByTestId("prompt-chart-link-armed")).toBeTruthy();
+    fireEvent.keyDown(composer().getByRole("textbox", { name: "Write a prompt" }), { key: "Escape" });
+    expect(screen.queryByTestId("prompt-chart-link-armed")).toBeNull();
+    expect(calls("agent_prompt_link_upsert")).toHaveLength(0);
+  });
+
+  it("Escape in the composer with nothing armed leaves the selection alone", async () => {
+    await renderChart();
+    await act(async () => { fireEvent.click(screen.getByText("Source prompt").closest("article")!); });
+    expect(screen.getByTestId("prompt-chart-inspector")).toBeTruthy();
+    type("half a thought");
+    fireEvent.keyDown(composer().getByRole("textbox", { name: "Write a prompt" }), { key: "Escape" });
+    expect(screen.getByTestId("prompt-chart-inspector")).toBeTruthy();
+  });
+
   it("keeps the text when the draft's own write fails", async () => {
     await renderChart();
     vi.mocked(invoke).mockImplementation(async (command) => {

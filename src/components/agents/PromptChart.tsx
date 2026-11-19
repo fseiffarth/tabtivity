@@ -861,6 +861,14 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       const origin = event.target as Element | null;
+      // The composer's field keeps the focus after Enter: its Escape has no edit
+      // of its own to cancel, so while a pick is armed it ends that pick (and
+      // nothing else: typing a prompt must not close the inspector).
+      if (typeof origin?.closest === "function" && origin.closest(".agent-prompt-composer")) {
+        if (linkFrom) setLinkFrom(null);
+        else if (afterFor) setAfterFor(null);
+        return;
+      }
       if (typeof origin?.closest === "function" && origin.closest("input, textarea, [contenteditable], [role=dialog], .context-menu")) return;
       if (linkFrom) setLinkFrom(null);
       else if (afterFor) setAfterFor(null);
