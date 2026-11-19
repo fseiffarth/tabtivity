@@ -26,6 +26,9 @@ function domRect(rect: { left: number; top: number; width: number; height: numbe
 
 /** A 1000px-wide day in client space, as `PromptChart.test.tsx` lays it out. */
 function layout() {
+  // A plain 24-hour day: open the folded night first.
+  const fold = screen.queryByTestId("prompt-timeline-fold");
+  if (fold) fireEvent.click(fold);
   vi.spyOn(screen.getByTestId("prompt-chart-strip"), "getBoundingClientRect").mockReturnValue(domRect({ left: 0, top: 0, width: 1000, height: 60 }));
   vi.spyOn(screen.getByTestId("prompt-timeline-body"), "getBoundingClientRect").mockReturnValue(domRect({ left: 0, top: 100, width: 1000, height: 300 }));
   vi.spyOn(screen.getByTestId("prompt-timeline-now-band"), "getBoundingClientRect").mockReturnValue(domRect({ left: 491, top: 100, width: 20, height: 300 }));

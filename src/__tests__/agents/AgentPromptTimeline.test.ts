@@ -19,6 +19,8 @@ import {
   timelineX,
   zoomTimelineView,
   hourAnchor,
+  dayFold,
+  TIMELINE_FOLD_PX,
   type TimelineRects,
 } from "../../lib/agents/prompt/timeline";
 
@@ -392,5 +394,70 @@ describe("timeline zoom and clock", () => {
     expect(formatTimelineInstant(at, "en", true, false)).toBe("22:02");
     expect(formatTimelineInstant(at, "de", true)).toMatch(/^Mo\.? 14 Sep · 22:02$/u);
     expect(formatTimelineInstant(new Date(Number.NaN), "en", true)).toBe("");
+  });
+});
+
+describe("the folded night", () => {
+  const base = timelineWindow("day", "2026-09-04", 1);
+  const at = (hour: number, minute = 0) => new Date(2026, 8, 4, hour, minute);
+  const fold = dayFold(base, [at(12)])!;
+  const folded = { ...base, fold };
+
+  it("folds 00:00–06:00 to 40px only on an empty night of a Day view", () => {
+    expect(fold).toEqual({ start: at(0), end: at(6), px: TIMELINE_FOLD_PX });
+    // Anything in the stretch, its edges included, keeps the night open.
+    expect(dayFold(base, [at(12), at(0)])).toBeUndefined();
+    expect(dayFold(base, [at(5, 59)])).toBeUndefined();
+    // 06:00 itself is outside the stretch.
+    expect(dayFold(base, [at(6)])).toBeDefined();
+    // Other views never fold.
+    expect(dayFold(timelineWindow("week", "2026-09-04", 1), [])).toBeUndefined();
+    expect(dayFold(timelineWindow("month", "2026-09-04", 1), [])).toBeUndefined();
+    expect(dayFold(timelineWindow("hour", "2026-09-04T13", 1), [])).toBeUndefined();
+  });
+
+  it("draws the night as the first 40px and shares the rest in proportion", () => {
+    // 1000px: 960px for 18 hours, 53.33px an hour.
+    expect(timelineX(at(0), folded, 1000)).toBe(0);
+    expect(timelineX(at(3), folded, 1000)).toBeCloseTo(20, 6);
+    expect(timelineX(at(6), folded, 1000)).toBeCloseTo(40, 6);
+    expect(timelineX(at(12), folded, 1000)).toBeCloseTo(40 + 6 * 53.3333333, 4);
+    expect(timelineX(new Date(2026, 8, 5), folded, 1000)).toBeCloseTo(1000, 6);
+    // Unfolded, nothing changes.
+    expect(timelineX(at(12), base, 1000)).toBeCloseTo(500, 6);
+  });
+
+  it("round-trips x and time across the fold", () => {
+    for (const time of [at(0), at(2, 30), at(5, 59), at(6), at(6, 1), at(12), at(18, 45), at(23, 59)]) {
+      const back = timelineTimeAt(timelineX(time, folded, 1000), folded, 1000);
+      expect(Math.abs(back.getTime() - time.getTime())).toBeLessThan(2);
+    }
+    for (const x of [0, 10, 39, 40, 41, 500, 999, 1000]) {
+      expect(timelineX(timelineTimeAt(x, folded, 1000), folded, 1000)).toBeCloseTo(x, 4);
+    }
+    // Past either end clamps.
+    expect(timelineTimeAt(-5, folded, 1000)).toEqual(at(0));
+    expect(timelineTimeAt(2000, folded, 1000)).toEqual(new Date(2026, 8, 5));
+  });
+
+  it("snaps a pointer inside the block to the grid, like anywhere else", () => {
+    // x 20 of the 40px block is 03:00; x 21 is 03:11.25, snapped to 03:10.
+    expect(snapTimelineTime(timelineTimeAt(20, folded, 1000), folded)).toEqual(at(3));
+    expect(snapTimelineTime(timelineTimeAt(21, folded, 1000), folded)).toEqual(at(3, 10));
+    // And a hit inside the block lands on the same minute.
+    const rects: TimelineRects = { strip: null, body: { left: 0, top: 0, width: 1000, height: 300 }, nowBand: null };
+    const zone = timelineHitZone({ x: 20, y: 50 }, rects, folded, 1000, 0, new Date(2026, 8, 3));
+    expect(zone).toEqual({ kind: "time", at: at(3) });
+  });
+
+  it("leaves no hour ticks inside the block, and labels the hours that remain", () => {
+    const ticks = timelineTicks(folded, 1000);
+    expect(ticks).toHaveLength(18);
+    expect(ticks[0].at).toEqual(at(6));
+    expect(ticks[0].x).toBeCloseTo(40, 6);
+    expect(ticks[0].major).toBe(true);
+    // 53px an hour is wide enough to label every one.
+    expect(ticks.every((tick) => tick.labelled)).toBe(true);
+    expect(timelineTicks(base, 1000)).toHaveLength(24);
   });
 });

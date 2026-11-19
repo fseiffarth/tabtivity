@@ -36,6 +36,20 @@ export const SESSION_TICK_ROOM = 6;
 /** Lanes the body always shows, so an empty window has somewhere to drop. */
 export const TIMELINE_MIN_LANES = 2;
 
+/** A stretch of the window drawn narrower than its time: the Day view's quiet
+ *  night, folded into one block of `px` pixels while nothing lies in it. The
+ *  rest of the window shares the remaining width in proportion. */
+export interface TimelineFold {
+  start: Date;
+  end: Date;
+  px: number;
+}
+
+/** The width of the folded night, in px. */
+export const TIMELINE_FOLD_PX = 40;
+/** The folded stretch ends at this wall-clock hour (it starts at midnight). */
+export const TIMELINE_FOLD_END_HOUR = 6;
+
 export interface TimelineWindow {
   view: TimelineView;
   /** `YYYY-MM-DD`; the day, or any day of the week or month shown. The Hour
@@ -46,6 +60,10 @@ export interface TimelineWindow {
   /** Exclusive. */
   end: Date;
   snapMinutes: number;
+  /** Set by the chart when the night is folded (`dayFold`): `timelineX` and
+   *  `timelineTimeAt` are then piecewise, and everything that draws or
+   *  hit-tests the axis reads the same two functions. */
+  fold?: TimelineFold;
 }
 
 function localMidnight(stamp: string): Date {
@@ -140,14 +158,56 @@ export function shiftAnchor(view: TimelineView, anchor: string, step: -1 | 1): s
   return addMonths(day, step);
 }
 
+/** The fold's geometry: px per ms outside it, and the pieces' bounds in ms. */
+function foldScale(win: TimelineWindow, width: number) {
+  const fold = win.fold!;
+  const start = win.start.getTime();
+  const foldStart = fold.start.getTime();
+  const foldEnd = fold.end.getTime();
+  const rest = win.end.getTime() - start - (foldEnd - foldStart);
+  return { start, foldStart, foldEnd, px: fold.px, k: rest > 0 ? Math.max(0, width - fold.px) / rest : 0 };
+}
+
 export function timelineX(at: Date, win: TimelineWindow, width: number): number {
+  if (win.fold) {
+    const { start, foldStart, foldEnd, px, k } = foldScale(win, width);
+    const t = at.getTime();
+    const before = (foldStart - start) * k;
+    if (t <= foldStart) return (t - start) * k;
+    if (t < foldEnd) return before + ((t - foldStart) / (foldEnd - foldStart)) * px;
+    return before + px + (t - foldEnd) * k;
+  }
   const span = win.end.getTime() - win.start.getTime();
   return ((at.getTime() - win.start.getTime()) / span) * width;
 }
 
 export function timelineTimeAt(x: number, win: TimelineWindow, width: number): Date {
+  const clamped = Math.max(0, Math.min(width, x));
+  if (win.fold) {
+    const { start, foldStart, foldEnd, px, k } = foldScale(win, width);
+    const before = (foldStart - start) * k;
+    if (k === 0) return new Date(start);
+    if (clamped <= before) return new Date(start + clamped / k);
+    if (clamped < before + px) return new Date(foldStart + ((clamped - before) / px) * (foldEnd - foldStart));
+    return new Date(Math.min(win.end.getTime(), foldEnd + (clamped - before - px) / k));
+  }
   const ratio = Math.max(0, Math.min(1, x / Math.max(1, width)));
   return new Date(win.start.getTime() + ratio * (win.end.getTime() - win.start.getTime()));
+}
+
+/**
+ * The Day view's quiet night: the leading 00:00–06:00 stretch folded to one
+ * narrow block, but only while nothing lies in it — no item (or its end), no
+ * queued card, no reset mark, and not `now`. `instants` is everything the
+ * caller draws on the axis; Hour, Week and Month never fold. Returns the fold
+ * for the chart to put on the window, or undefined.
+ */
+export function dayFold(win: TimelineWindow, instants: readonly Date[]): TimelineFold | undefined {
+  if (win.view !== "day") return undefined;
+  const start = win.start;
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate(), TIMELINE_FOLD_END_HOUR);
+  const inside = instants.some((at) => Number.isFinite(at.getTime()) && at.getTime() >= start.getTime() && at.getTime() < end.getTime());
+  return inside ? undefined : { start, end, px: TIMELINE_FOLD_PX };
 }
 
 export function snapTimelineTime(at: Date, win: TimelineWindow): Date {
@@ -185,9 +245,13 @@ export function timelineTicks(win: TimelineWindow, width: number): TimelineTick[
     return ticks;
   }
   if (win.view === "day") {
-    const everyHour = width / 24 >= DAY_HOUR_LABEL_MIN_PX;
+    // A folded night has no hour ticks: its block is one mark, the first hour
+    // after it is the first tick.
+    const hours = win.fold ? 24 - (win.fold.end.getTime() - win.fold.start.getTime()) / 3_600_000 : 24;
+    const everyHour = (win.fold ? Math.max(0, width - win.fold.px) : width) / hours >= DAY_HOUR_LABEL_MIN_PX;
     for (let t = win.start.getTime(); t < win.end.getTime(); t += 3_600_000) {
       const at = new Date(t);
+      if (win.fold && t >= win.fold.start.getTime() && t < win.fold.end.getTime()) continue;
       const major = at.getHours() % 6 === 0;
       ticks.push({ x: timelineX(at, win, width), at, major, label: "hour", labelled: everyHour || major });
     }

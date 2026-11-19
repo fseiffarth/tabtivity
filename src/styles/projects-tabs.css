@@ -4402,8 +4402,15 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-timeline { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); overflow: clip; }
 /* Sticky, and above every card layer: scrolling the tab keeps the clock and
    the NOW label in view over the lanes. */
-.agent-prompt-timeline-axis { position: sticky; top: 0; z-index: 7; height: 18px; border-bottom: 1px solid var(--border-color); background: var(--bg-panel); overflow: clip; }
-.agent-prompt-timeline-tick { position: absolute; top: 2px; padding-left: 3px; border-left: 1px solid var(--border-color); color: var(--text-muted); font-size: var(--text-sm); line-height: 14px; white-space: nowrap; }
+.agent-prompt-timeline-axis { position: sticky; top: 0; z-index: 7; height: 28px; border-bottom: 1px solid var(--border-color); background: var(--bg-panel); overflow: clip; }
+.agent-prompt-timeline-axis-marks { position: absolute; inset: 0; }
+/* The Day view's folded night: one narrow block at the left edge that opens
+   the whole day when clicked, and its shade down the lanes. */
+.agent-prompt-timeline-fold { position: absolute; top: 0; bottom: 0; left: 0; z-index: 1; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-right: 1px solid var(--border-color); background: var(--bg-hover); color: var(--text-secondary); font-size: var(--text-sm); white-space: nowrap; cursor: var(--cur-pointer, pointer); }
+.agent-prompt-timeline-fold:hover { background: var(--pill-hover-bg); color: var(--text-primary); }
+.agent-prompt-timeline-fold:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: -2px; }
+.agent-prompt-timeline-fold-shade { position: absolute; top: 0; bottom: 0; left: 0; border-right: 1px solid var(--border-color); background: color-mix(in srgb, var(--text-muted) 10%, transparent); pointer-events: none; }
+.agent-prompt-timeline-tick { position: absolute; top: 7px; padding-left: 3px; border-left: 1px solid var(--border-color); color: var(--text-muted); font-size: var(--text-sm); line-height: 14px; white-space: nowrap; }
 .agent-prompt-timeline-tick.is-major { color: var(--text-secondary); border-left-color: var(--text-muted); }
 /* The body is sized for its lanes and its queue; whatever outgrows that (an
    expanded card) scrolls within it rather than being clipped away. */
@@ -4438,13 +4445,14 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-timeline-now::before { content: ""; position: absolute; top: -1px; left: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
 .agent-prompt-timeline-now-band { position: absolute; top: 0; bottom: 0; z-index: 2; border-radius: var(--radius-sm); }
 .agent-prompt-timeline-now-band.is-drop-over { background: color-mix(in srgb, var(--danger) 18%, transparent); outline: 1px dashed var(--danger); }
-.agent-prompt-timeline-now-label { position: absolute; top: 2px; z-index: 1; transform: translateX(-50%); padding: 0 3px; background: var(--bg-panel); color: var(--danger); font-size: var(--text-sm); line-height: 14px; text-transform: uppercase; }
-.agent-prompt-timeline-now-label.is-outside { opacity: .5; }
+/* The Now pill: the clock's reading on the line, kept inside the axis. */
+.agent-prompt-timeline-now-pill { position: absolute; top: 4px; z-index: 2; transform: translateX(-50%); height: 20px; padding: 0 var(--space-2); border-radius: var(--radius-full); background: var(--danger); color: var(--accent-contrast, #fff); font-size: var(--text-sm); font-weight: 700; line-height: 20px; white-space: nowrap; }
+.agent-prompt-timeline-now-pill.is-outside { opacity: .55; }
 /* An agent's own rate-limit rollover: a dashed line under the cards (it marks
    time, like the grid) and a coloured label in the axis carrying the tooltip.
    Session (5 h) and weekly windows differ by colour. */
 .agent-prompt-timeline-reset { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--reset-color); opacity: .8; pointer-events: none; }
-.agent-prompt-timeline-reset-label { position: absolute; top: 2px; padding: 0 3px; border-left: 1px dashed var(--reset-color); background: var(--bg-panel); color: var(--reset-color); font-size: var(--text-sm); line-height: 14px; white-space: nowrap; }
+.agent-prompt-timeline-reset-label { position: absolute; top: 7px; padding: 0 3px; border-left: 1px dashed var(--reset-color); background: var(--bg-panel); color: var(--reset-color); font-size: var(--text-sm); line-height: 14px; white-space: nowrap; }
 .agent-prompt-timeline-reset.is-session,
 .agent-prompt-timeline-reset-label.is-session { --reset-color: var(--warning); }
 .agent-prompt-timeline-reset.is-week,

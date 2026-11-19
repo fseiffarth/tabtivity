@@ -19,6 +19,7 @@ import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
 import { agentItemFor, newAgentTabForDraft, promptChartNewTabAgent } from "../../lib/agents/prompt/newTab";
 import { useUse24h } from "../../lib/timeFormat";
 import {
+  dayFold,
   formatTimelineInstant,
   hourAnchor,
   promptTargetColor,
@@ -28,7 +29,9 @@ import {
   timelineDropAction,
   timelineGroupDrop,
   timelineGroupMovable,
+  timelineItems,
   timelineWindow,
+  promptEndedAt,
   zoomTimelineView,
   type PromptTimelineDrop,
   type SessionSpan,
@@ -290,7 +293,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     return () => clearInterval(timer);
   }, [active]);
 
-  const win = useMemo(() => timelineWindow(view, anchor, weekStart), [anchor, view, weekStart]);
+  const baseWin = useMemo(() => timelineWindow(view, anchor, weekStart), [anchor, view, weekStart]);
 
   const liveStrands = useMemo<PromptChartStrand[]>(() => tabs.map((tab) => ({
     id: `strand:${tab.scheduleTargetId}`,
@@ -347,7 +350,21 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const allTagCounts = useMemo(() => tagCounts(cards.map((card) => ({ tags: [...card.tags, ...card.autoTags] }))), [cards]);
   const allAgents = useMemo(() => agentsOf(cards), [cards]);
   const tabAgents = useMemo(() => tabs.map((tab) => tab.cmd), [tabs]);
-  const usageResets = usePromptChartUsage(tabAgents, active, now, win.start, win.end, filter.agent);
+  const usageResets = usePromptChartUsage(tabAgents, active, now, baseWin.start, baseWin.end, filter.agent);
+  // The Day view folds its quiet night (00:00–06:00) into one block while
+  // nothing lies in it. The window carries the fold, so the axis, the drag
+  // hook and every drop computation read the same piecewise scale.
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
+  const win = useMemo(() => {
+    if (baseWin.view !== "day" || unfolded.has(baseWin.anchor)) return baseWin;
+    const instants = [
+      now,
+      ...timelineItems(cards, baseWin, now).flatMap((item) => [item.at, promptEndedAt(item.card) ?? item.at]),
+      ...usageResets.map((mark) => mark.at),
+    ];
+    const fold = dayFold(baseWin, instants);
+    return fold ? { ...baseWin, fold } : baseWin;
+  }, [baseWin, cards, now, unfolded, usageResets]);
   /** Whether a card passes the filter. On the timeline the When window is
    *  asked of the instant the card is DRAWN at: a recurring rule's first
    *  occurrence in a future window is not its `at` (the next one from now). */
@@ -1159,6 +1176,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
             lifts={lifts[view]}
             resets={usageResets}
             onBodyPointerDown={onMarqueePointerDown}
+            onUnfold={() => setUnfolded((days) => new Set(days).add(baseWin.anchor))}
           />
           {selectedCard && (() => {
             const strand = strandById.get(selectedCard.strandId);
