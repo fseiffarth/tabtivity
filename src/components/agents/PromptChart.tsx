@@ -110,6 +110,10 @@ export const DRAFTS_MAX_WIDTH = 720;
 const DRAFTS_DEFAULT_WIDTH = 288;
 /** What an arrow key on the column's resize handle moves it by. */
 const DRAFTS_KEY_STEP = 16;
+/** Below this much width of the chart itself the three columns stack (the same
+ *  number as the stylesheet's container query), and the inspector sits below
+ *  the timeline, out of sight until something brings it in. */
+export const PROMPT_CHART_STACK_WIDTH = 900;
 
 function readDraftsCollapsed(): boolean {
   try { return localStorage.getItem(DRAFTS_STORAGE_KEY) === "collapsed"; } catch { return false; }
@@ -730,6 +734,14 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [active, hasEscapable, linkFrom, multi.size]);
+
+  // Stacked, the inspector is under the timeline: selecting a card scrolls it
+  // into view so the click is not answered off-screen.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!selected || !root || root.clientWidth >= PROMPT_CHART_STACK_WIDTH) return;
+    root.querySelector(".agent-prompt-inspector")?.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
 
   const { drag, onCardPointerDown, onLiftPointerDown, onMarqueePointerDown, onPortPointerDown } = usePromptChartDrag({
     win,

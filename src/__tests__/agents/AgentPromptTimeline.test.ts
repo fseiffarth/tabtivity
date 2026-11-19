@@ -450,6 +450,25 @@ describe("the folded night", () => {
     expect(zone).toEqual({ kind: "time", at: at(3) });
   });
 
+  it("keeps a card that hangs left of its end off the folded block", () => {
+    const sentRow = (id: string, start: Date, end: Date) => ({
+      key: id,
+      at: start,
+      card: card({
+        id, key: id, state: "sent", at: start,
+        history: { id, message: id, created_at: "x", sent_at: start.toISOString(), files_at: end.toISOString(), tab_label: "Claude", session_id: id, result: "delivered" },
+      }),
+    });
+    const later = new Date(2026, 8, 4, 12, 2);
+    // Ends at 06:30, 53px past the block: unfolded it would start at x -80.
+    const [early] = packLanes([sentRow("e", at(6, 10), at(6, 30))], folded, 1000, later).items;
+    expect(early.x).toBe(TIMELINE_FOLD_PX);
+    // Unfolded there is no block, and the card hangs from its end as usual.
+    expect(packLanes([sentRow("e", at(6, 10), at(6, 30))], base, 1000, later).items[0].x).toBeCloseTo((6.5 / 24) * 1000 - 168, 3);
+    // A card clear of the block is placed as before.
+    expect(packLanes([sentRow("c", at(9), at(10))], folded, 1000, later).items[0].x).toBeCloseTo(40 + 4 * 53.3333333 - 168, 3);
+  });
+
   it("leaves no hour ticks inside the block, and labels the hours that remain", () => {
     const ticks = timelineTicks(folded, 1000);
     expect(ticks).toHaveLength(18);

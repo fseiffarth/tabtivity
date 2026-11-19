@@ -450,9 +450,10 @@ export interface LaneItem extends TimelineItem {
  * `now` is past: its right edge sits at the x of its end (the newest member's
  * `files_at`, else its `at`) and it hangs left, clamped to `x >= 0`. A future
  * item starts at its left edge and hangs right, clamped so the card stays
- * inside the body. A session card is as wide as its first-to-last span (and
- * never narrower than a card), so its last tick sits on its last prompt's
- * minute; the bar on its top edge runs from the first prompt to the last end.
+ * inside the body; neither is drawn over the folded night. A session card is
+ * as wide as its first-to-last span (and never narrower than a card), so its
+ * last tick sits on its last prompt's minute; the bar on its top edge runs from
+ * the first prompt to the last end.
  */
 export function packLanes(
   items: TimelineItem[],
@@ -464,6 +465,11 @@ export function packLanes(
 ): { lanes: number; items: LaneItem[] } {
   const lanes: [number, number][][] = [];
   const nowX = timelineX(now, win, width);
+  // The folded night is the first `fold.px` of the body (`timelineX`): a card
+  // that hangs left of its end would be drawn over that block, so it stops at
+  // the block's edge instead. Nothing lies in the night while it is folded
+  // (`dayFold`), so no card starts there.
+  const floor = win.fold ? win.fold.px : 0;
   const placed = [...items]
     .sort((a, b) => itemEnd(b).getTime() - itemEnd(a).getTime())
     .map((item): LaneItem => {
@@ -475,8 +481,8 @@ export function packLanes(
       const itemWidth = Math.max(cardWidth, span);
       const past = end.getTime() <= now.getTime();
       const x = past
-        ? Math.max(0, Math.min(endX, nowX) - itemWidth)
-        : Math.max(0, Math.min(startX, width - itemWidth));
+        ? Math.max(floor, Math.min(endX, nowX) - itemWidth)
+        : Math.max(floor, Math.min(startX, width - itemWidth));
       const barWidth = past ? Math.min(itemWidth, Math.max(TIMELINE_BAR_MIN, endX - startX)) : TIMELINE_BAR_MIN;
       let lane = lanes.findIndex((spans) => spans.every(([left, right]) => x + itemWidth + gap <= left || right + gap <= x));
       if (lane < 0) {
