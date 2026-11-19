@@ -138,7 +138,8 @@ describe("settings category navigation", () => {
     fireEvent.change(search, { target: { value: "zoom" } });
     const buttons = within(links()).getAllByRole("button");
     // Each result also offers its own "Copy link" button beside it.
-    expect(buttons.map((b) => b.textContent).filter((text) => !text?.startsWith("Copy link"))).toEqual(["Window zoomLayout"]);
+    expect(buttons.filter((b) => b.getAttribute("aria-label") !== "Copy link").map((b) => b.textContent)).toEqual(["Window zoomLayout"]);
+    expect(buttons.filter((b) => b.getAttribute("aria-label") === "Copy link")).toHaveLength(1);
     // Enter opens the first match, at the setting itself.
     await act(async () => { fireEvent.keyDown(search, { key: "Enter" }); });
     expect(document.getElementById("settings-anchor-layout")).toBeTruthy();

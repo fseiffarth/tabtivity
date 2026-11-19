@@ -1389,6 +1389,12 @@
 }
 .settings-navigation-links .settings-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; white-space: normal; }
 .settings-navigation-links [aria-current] { color: var(--accent); border-color: var(--accent); }
+/* One search result row: the result fills the rail, its copy-link glyph beside it. */
+.settings-navigation-result { display: flex; align-items: stretch; gap: 4px; }
+.settings-navigation-result > .settings-btn:first-child { flex: 1 1 auto; min-width: 0; }
+.settings-navigation-links .settings-navigation-copy { flex: 0 0 auto; flex-direction: row; align-items: center; justify-content: center; color: var(--text-secondary); }
+/* The copy outcome for screen readers; the glyph and its tooltip show it on screen. */
+.settings-navigation-copy-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Under a search result: where it is (its page, and the folds on the way). */
 .settings-navigation-hit { font-size: var(--text-sm); font-weight: 400; color: var(--text-secondary); }
 /* The setting a picked search result went to: an accent outline that fades.
