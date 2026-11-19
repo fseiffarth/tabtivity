@@ -237,7 +237,7 @@ export function useHandsFree({
   }, [handsFreeWait]);
   // Once the turn is over and the answer has been read — at once with
   // read-aloud off — the mic opens again, after the busy row stayed off a
-  // moment (`TURN_SETTLE_MS`). A spoken "go on" left the mic open: with
+  // moment (`TURN_SETTLE_MS`). A spoken "go Tabby" left the mic open: with
   // nothing to read the wait just ends; answers to read wait while words are
   // being dictated (the next send carries them), else the mic closes for
   // them and opens again after.

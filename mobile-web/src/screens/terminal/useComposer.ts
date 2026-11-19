@@ -377,7 +377,7 @@ export function useComposerSend({
     setVoicePreview("");
     setVoiceStatus(null);
   };
-  /** Set by dictation's spoken send ("go on") around its submit: the draft
+  /** Set by dictation's spoken send ("go Tabby") around its submit: the draft
    * empties but the mic stays open for the next prompt. What it heard so far
    * was settled first (`forgetDictation`), so none of it comes back. */
   const keepMicOnSend = useRef(false);

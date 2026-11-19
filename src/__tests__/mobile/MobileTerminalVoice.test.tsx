@@ -163,7 +163,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("sends the dictated words when \"go on\" or \"los\" is said last, and keeps listening", async () => {
+  it("sends the dictated words when \"go Tabby\" or \"los\" is said last, and keeps listening", async () => {
     render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
 

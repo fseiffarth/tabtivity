@@ -44,7 +44,7 @@ const REOPEN_SETTLE_MS = 800;
  * words of a segment still being said are written into the draft as they are
  * heard (`live`, provisional text the segment's next partial and its final
  * replace); a settled segment goes to `onText`, which swaps them for the
- * final, and the composer sends on a spoken "go on". The "Heard:" line is for
+ * final, and the composer sends on a spoken "go Tabby". The "Heard:" line is for
  * words that cannot go in the draft yet: a spoken edit in the making, a stop
  * word, an answer to a dialog. One mic per machine: starting it here stops it
  * in any other tab, whose session then ends.

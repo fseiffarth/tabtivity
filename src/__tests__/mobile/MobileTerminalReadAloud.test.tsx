@@ -224,7 +224,7 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
     }
   });
 
-  it("hands-free: \"go on\" sends with the mic left open; the answer waits, then the mic closes for it", async () => {
+  it("hands-free: \"go Tabby\" sends with the mic left open; the answer waits, then the mic closes for it", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       FakeRecognition.instances = [];
@@ -239,7 +239,7 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
       await act(async () => {});
       const mic = FakeRecognition.instances[0];
       const abort = vi.spyOn(mic, "abort");
-      act(() => mic.onresult?.(heard("fix the login go on")));
+      act(() => mic.onresult?.(heard("fix the login go Tabby")));
       // Sent at once, no window; the mic is still the same open one.
       expect(abort).not.toHaveBeenCalled();
       expect(screen.getByRole("button", { name: "Stop dictation" })).toBeTruthy();

@@ -155,10 +155,10 @@ describe("dictating into the Chat's composer", () => {
   it("shows a spoken send's words nowhere, and sends without them", async () => {
     const box = await composer(host);
     await startMic();
-    emit("voice:partial", { session: 11, segment: 1, text: "Fix the login. Go on" });
+    emit("voice:partial", { session: 11, segment: 1, text: "Fix the login. Go Tabby" });
     expect(box.value).toBe("Fix the login.");
     await act(async () => {
-      emit("voice:final", { session: 11, segment: 1, text: "Fix the login. Go on." });
+      emit("voice:final", { session: 11, segment: 1, text: "Fix the login. Go Tabby." });
     });
     expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "Fix the login.");
     // A late partial never lands in the emptied draft.
@@ -212,11 +212,11 @@ describe("dictating into the Chat's composer", () => {
     expect(box.value).toBe("");
   });
 
-  it("sends on a spoken \"go on\", without those words, and ends the dictation", async () => {
+  it("sends on a spoken \"go Tabby\", without those words, and ends the dictation", async () => {
     await composer(host);
     await startMic();
     await act(async () => {
-      emit("voice:final", { session: 11, segment: 1, text: "Fix the login. Go on." });
+      emit("voice:final", { session: 11, segment: 1, text: "Fix the login. Go Tabby." });
     });
     expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "Fix the login.");
     expect(invoke).toHaveBeenCalledWith("voice_listen_stop", { session: 11 });

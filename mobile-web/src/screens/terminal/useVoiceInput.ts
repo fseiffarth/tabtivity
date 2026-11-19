@@ -212,7 +212,7 @@ export function useVoiceInput({
         onWithheld: (text) => (after ? after.capture || matchNavigate(text, spokenIn) !== null || matchDraftEdit(text, spokenIn) !== null : dispatch(text)),
       };
     };
-    /** A spoken send ("go on" last): it skips the hands-free window, so the
+    /** A spoken send ("go Tabby" last): it skips the hands-free window, so the
      * guard goes back to idle first; `beforeSubmit` runs between that reset and
      * the submit. Sent, the draft empties and hands-free waits for the turn. */
     const sendSpoken = (text: string, guard: SendGuard | undefined, beforeSubmit?: () => void) => {
@@ -241,7 +241,7 @@ export function useVoiceInput({
       }
       showEditNote(outcome.note);
       if (edit.send && draftRef.current.trim()) {
-        // "… go on" after the edit: sent as a spoken send is.
+        // "… go Tabby" after the edit: sent as a spoken send is.
         sendSpoken(draftRef.current, guard);
       } else {
         // Hands-free: the pause before a send counts again from here; an
@@ -337,7 +337,7 @@ export function useVoiceInput({
         }
       }
       // Speech is inserted into the current prompt, not submitted: the user
-      // reviews it and presses Send — or says "go on" / "los" last, which
+      // reviews it and presses Send — or says "go Tabby" / "los" last, which
       // leaves the draft and sends the rest (`spokenSend`). The ref, not
       // the state, is read and moved: two results can land in one render.
       if (insert) {

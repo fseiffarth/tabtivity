@@ -955,7 +955,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   }, [editNote]);
   /** A dictated segment's final (`useReaderVoice`) joins the draft as typed
    * text would, undoable, in the place its provisional text held (else at the
-   * end); one that ends in the spoken send ("go on" / "los") sends the draft
+   * end); one that ends in the spoken send ("go Tabby" / "los") sends the draft
    * without those words. "Tabby scratch that", "Tabby replace X by Y",
    * "Tabby plan" … edit the draft instead. The provisional text of the segment
    * leaves the draft first, so none of that is ever left behind in it and the
