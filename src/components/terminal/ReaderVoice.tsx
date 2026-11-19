@@ -27,6 +27,7 @@ import { sentTurnOver, useAgentTurn } from "../../lib/voice/agentTurn";
 import { createPickStage, createStagedSendGuard, type GuardPhase, type PickStage, type SendGuard, type VoicePick, type VoicePickResult } from "../../../shared/handsFree";
 import { useSettingsStore } from "../../stores/settings";
 import { Dropdown } from "../common/Dropdown";
+import { MicIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { isStopWord, paintMicLevel } from "../../../shared/voice";
 import type { LiveDictation } from "./useLiveDictation";
@@ -483,7 +484,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     >
       {listening || waiting
         ? <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" fill="currentColor" /></svg>
-        : <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}
+        : <MicIcon size={16} />}
     </button>
   ) : null;
 
