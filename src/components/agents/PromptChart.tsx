@@ -73,10 +73,11 @@ import { PromptTimeline } from "./PromptTimeline";
 import { usePromptChartDrag } from "./usePromptChartDrag";
 import { usePromptChartUsage } from "./usePromptChartUsage";
 import { PromptDraftBoard, type DraftBoardHandle } from "./PromptDraftBoard";
+import { PromptComposer, type ComposeSubmit } from "./PromptComposer";
 import { draftSequence } from "../../lib/agents/prompt/drafts";
 import { AGENT_ITEMS, EMPTY_CUSTOM_AGENTS } from "../../lib/tabs/newTabItems";
 import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
-import { ChevronLeftIcon, ChevronRightIcon, PlusIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { storageKey } from "../../lib/brand";
 
@@ -210,6 +211,11 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const [focusToken, setFocusToken] = useState(0);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [linkKind, setLinkKind] = useState<"related" | "after">("after");
+  /** The composer's "After another prompt…": the draft it wrote, waiting for
+   *  the card it follows. The next card clicked becomes that edge's source. */
+  const [afterFor, setAfterFor] = useState<string | null>(null);
+  /** Where a composed prompt would land on a reset, drawn dashed on the axis. */
+  const [preview, setPreview] = useState<{ at: Date; message: string } | null>(null);
   const [dialog, setDialog] = useState<{ tab: TabEntry; message?: string; promptId?: string } | null>(null);
   const [error, setError] = useState("");
   const [linksVersion, setLinksVersion] = useState(0);
@@ -354,7 +360,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const allTagCounts = useMemo(() => tagCounts(cards.map((card) => ({ tags: [...card.tags, ...card.autoTags] }))), [cards]);
   const allAgents = useMemo(() => agentsOf(cards), [cards]);
   const tabAgents = useMemo(() => tabs.map((tab) => tab.cmd), [tabs]);
-  const usageResets = usePromptChartUsage(tabAgents, active, now, baseWin.start, baseWin.end, filter.agent);
+  const { marks: usageResets, upcoming: upcomingResets } = usePromptChartUsage(tabAgents, active, now, baseWin.start, baseWin.end, filter.agent);
   // The Day view folds its quiet night (00:00–06:00) into one block while
   // nothing lies in it. The window carries the fold, so the axis, the drag
   // hook and every drop computation read the same piecewise scale.
@@ -451,10 +457,12 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     }
     return { tab: addTabToScope(scope, spec.tab), preface: spec.preface };
   };
-  const sendToNewTab = async (card: PromptChartCard) => {
-    if (!card.prompt) return;
+  const sendPromptToNewTab = async (prompt: ProjectAgentPrompt) => {
     const { tab, preface } = openNewTab();
-    await sendCollectedPrompt(scope, target(tab), card.prompt, preface);
+    await sendCollectedPrompt(scope, target(tab), prompt, preface);
+  };
+  const sendToNewTab = async (card: PromptChartCard) => {
+    if (card.prompt) await sendPromptToNewTab(card.prompt);
   };
   const colorOf = (card: PromptChartCard) => {
     const strand = strandById.get(card.strandId);
@@ -639,17 +647,17 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     const refusal = afterLinkRefusal(links, from, to, ignoreLinkId);
     if (refusal) throw new Error(t(refusal === "cycle" ? "promptChart.linkCycle" : "promptChart.linkJoin"));
   };
-  const linkCards = async (fromId: string, toId: string) => {
+  const linkCards = async (fromId: string, toId: string, kind: "related" | "after" = linkKind) => {
     if (fromId === toId) return;
     const source = cardById(fromId);
     const to = cardById(toId);
     if (!source || !to) return;
-    if (linkKind === "after") refuseAfterLink(fromId, toId);
+    if (kind === "after") refuseAfterLink(fromId, toId);
     await ensureLinkEndpoint(source);
     await ensureLinkEndpoint(to);
     await upsertLink(scope, {
-      id: crypto.randomUUID(), from: fromId, to: toId, kind: linkKind,
-      target: linkKind === "after" ? targetOf(to) ?? targetOf(source) : undefined,
+      id: crypto.randomUUID(), from: fromId, to: toId, kind,
+      target: kind === "after" ? targetOf(to) ?? targetOf(source) : undefined,
     });
   };
   const linkTo = async (to: PromptChartCard) => {
@@ -657,10 +665,21 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     setLinkFrom(null);
     if (from) await linkCards(from, to.id);
   };
+  /** The composer's draft is waiting for the prompt it follows: this card is it. */
+  const linkAfter = async (source: PromptChartCard) => {
+    const draft = afterFor;
+    setAfterFor(null);
+    if (draft) await linkCards(source.id, draft, "after");
+  };
+  /** Whether a click on the card `ids` finishes a pick that another card began:
+   *  a link armed from it, or the composer's draft waiting for its source. */
+  const pickArmed = (ids: string[]) =>
+    (!!linkFrom && !ids.includes(linkFrom)) || (!!afterFor && !ids.includes(afterFor));
+  const finishPick = (card: PromptChartCard) => (afterFor ? linkAfter(card) : linkTo(card));
   /** The port (a click or Enter on it) and a card's Link button: finish the
-   *  link armed on another card, else arm one from this card. */
+   *  pick armed on another card, else arm one from this card. */
   const linkOrBegin = (card: PromptChartCard, armedElsewhere: boolean) =>
-    void attempt(() => (armedElsewhere ? linkTo(card) : beginLink(card)));
+    void attempt(() => (armedElsewhere ? finishPick(card) : beginLink(card)));
   /** The tab an edge queues its target on: its own, else the target's, else the source's. */
   const edgeTarget = (link: PromptLink) =>
     link.target ?? targetOf(cardById(link.to)) ?? targetOf(cardById(link.from));
@@ -673,6 +692,51 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     });
   };
   const openEdgeEditor = (link: PromptLink, x: number, y: number) => setEdgeEdit({ id: link.id, x, y });
+
+  /** The tabs the composer offers: the free ones, as a draft's picker does. */
+  const composeTargets = useMemo(() => targets.filter((item) => !occupiedIds.has(item.id)), [occupiedIds, targets]);
+  const composeAgentOf = useCallback(
+    (targetId: string) => (targetId ? tabByTarget.get(targetId)?.cmd : newTabAgent),
+    [newTabAgent, tabByTarget],
+  );
+  /** The composer's write: the prompt as a draft first, so every choice is the
+   *  draft's own gesture — send it, schedule it, link it After another card.
+   *  The draft's own write failing is the composer's (it keeps its text); what
+   *  comes after it reports in the banner, since the draft already exists. */
+  const submitCompose = async ({ message, targetId, when, resetAt }: ComposeSubmit) => {
+    setError("");
+    if (targetId && occupiedIds.has(targetId)) {
+      const text = occupiedError(targetId);
+      setError(text);
+      throw new Error(text);
+    }
+    const id = crypto.randomUUID();
+    let prompt: ProjectAgentPrompt | undefined;
+    try {
+      prompt = (await upsertPrompt(scope, { id, message, tags: [], target: targetId || undefined })).find((item) => item.id === id);
+    } catch (cause) {
+      setError(formatError(cause));
+      throw cause;
+    }
+    if (!prompt || when === "draft") return;
+    const written = prompt;
+    if (when === "after") { setAfterFor(id); return; }
+    await attempt(async () => {
+      if (when === "now") {
+        const tab = targetId ? tabOf(targetId) : undefined;
+        if (targetId && !tab) throw new Error(t("promptChart.tabGone"));
+        if (tab) await sendCollectedPrompt(scope, target(tab), written);
+        else await sendPromptToNewTab(written);
+        return;
+      }
+      // A time and a reset both need a tab to hold the rule: a new one opens first.
+      const tab = targetId ? tabOf(targetId) : openNewTab().tab;
+      if (!tab) throw new Error(t("promptChart.tabGone"));
+      if (when === "time") { setDialog({ tab, message, promptId: id }); return; }
+      if (!resetAt) return;
+      await upsertSchedule(scope, tab.scheduleTargetId!, { id, enabled: true, message, rule: { type: "once", at: localOccurrenceKey(resetAt) } });
+    });
+  };
 
   const applyDrop = async (card: PromptChartCard, drop: PromptTimelineDrop) => {
     if (drop.type === "send") {
@@ -720,7 +784,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   // (its own Escape cancels the edit) or one typed into a field or a dialog is
   // not the chart's.
   const hasSelection = !!selectedCard;
-  const hasEscapable = !!linkFrom || multi.size > 0 || hasSelection;
+  const hasEscapable = !!linkFrom || !!afterFor || multi.size > 0 || hasSelection;
   useEffect(() => {
     if (!active || !hasEscapable) return;
     const onKey = (event: KeyboardEvent) => {
@@ -728,12 +792,13 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
       const origin = event.target as Element | null;
       if (typeof origin?.closest === "function" && origin.closest("input, textarea, [contenteditable], [role=dialog], .context-menu")) return;
       if (linkFrom) setLinkFrom(null);
+      else if (afterFor) setAfterFor(null);
       else if (multi.size > 0) setMulti(new Set());
       else closeInspectorRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, hasEscapable, linkFrom, multi.size]);
+  }, [active, afterFor, hasEscapable, linkFrom, multi.size]);
 
   // Stacked, the inspector is under the timeline: selecting a card scrolls it
   // into view so the click is not answered off-screen.
@@ -881,7 +946,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     if (!session.cards.some((card) => visible(card))) return null;
     const ids = session.cards.map((card) => card.id);
     const itemKey = sessionGroupKey(latest) ?? latest.key;
-    const armedElsewhere = !!linkFrom && !ids.includes(linkFrom);
+    const armedElsewhere = pickArmed(ids);
     return (
       <PromptSessionCard
         cards={session.cards}
@@ -902,7 +967,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         onPointerDown={onLiftPointerDown(liftKeysFor(itemKey))}
         onPortPointerDown={onPortPointerDown(latest)}
         onSelect={() => {
-          if (armedElsewhere) void attempt(() => linkTo(latest));
+          if (armedElsewhere) void attempt(() => finishPick(latest));
           select(latest.id);
           clearMulti();
         }}
@@ -919,7 +984,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     const itemKey = occurrence ? `${card.key}@${occurrence}` : card.key;
     // On a lane: selectable, and liftable. The strip and the queue are neither.
     const onLane = !stripIds.has(card.id) && card.state !== "queued";
-    const armedElsewhere = !!linkFrom && linkFrom !== card.id;
+    const armedElsewhere = pickArmed([card.id]);
     const pointerDown = card.state === "sent"
       ? onLiftPointerDown(liftKeysFor(itemKey))
       // A recurring rule never carries; with Shift it still lifts.
@@ -953,7 +1018,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         onPointerDown={pointerDown}
         onPortPointerDown={onPortPointerDown(card)}
         onSelect={() => {
-          if (armedElsewhere) void attempt(() => linkTo(card));
+          if (armedElsewhere) void attempt(() => finishPick(card));
           select(card.id);
           clearMulti();
         }}
@@ -1061,8 +1126,9 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         viewLifted={viewLifted}
         // Lifts are view state: putting them back writes nothing.
         onResetLifts={() => setLifts((all) => ({ ...all, [view]: {} }))}
-        linkArmed={!!linkFrom}
-        onCancelLink={() => setLinkFrom(null)}
+        linkArmed={!!linkFrom || !!afterFor}
+        linkArmedText={afterFor ? t("promptChart.pickAfterSource") : undefined}
+        onCancelLink={() => { setLinkFrom(null); setAfterFor(null); }}
         trailing={(
           <>
             <PromptChartOptions
@@ -1078,6 +1144,16 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
             <PromptChartHelp />
           </>
         )}
+      />
+      <PromptComposer
+        targets={composeTargets}
+        newTabLabel={newTabLabel}
+        agentOf={composeAgentOf}
+        resets={upcomingResets}
+        now={now}
+        snapMinutes={win.snapMinutes}
+        onSubmit={submitCompose}
+        onPreview={setPreview}
       />
       {error && (
         <div className="project-dialog-error agent-prompt-chart-error" role="alert" data-testid="prompt-chart-error">
@@ -1111,7 +1187,6 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
               <span>{stripCards.length}</span>
               {!draftsCollapsed && (
                 <>
-                  <button className="settings-btn sm is-icon" type="button" aria-label={t("promptChart.newDraft")} title={t("promptChart.newDraft")} onClick={() => draftBoard.current?.compose()}><PlusIcon /></button>
                   <div className="agent-prompt-bar-spacer" />
                   <div className="agent-prompt-seg" role="group" aria-label={t("promptChart.draftLayout")}>
                     <button type="button" aria-label={t("promptChart.listLayout")} aria-pressed={!boardFree} onClick={() => draftBoard.current?.setFree(false)}>{t("promptChart.layoutList")}</button>
@@ -1187,6 +1262,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
             onZoom={zoom}
             lifts={lifts[view]}
             resets={usageResets}
+            preview={preview}
             onBodyPointerDown={onMarqueePointerDown}
             onUnfold={() => setUnfolded((days) => new Set(days).add(baseWin.anchor))}
           />
@@ -1222,7 +1298,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
                 onCollect={() => attempt(() => collect(selectedCard))}
                 onRetime={(minutes) => attempt(() => nudge(selectedCard, minutes))}
                 onQueueMove={(step) => attempt(() => reorderQueue(selectedCard, step))}
-                onLink={() => linkOrBegin(selectedCard, !!linkFrom && linkFrom !== selectedCard.id)}
+                onLink={() => linkOrBegin(selectedCard, pickArmed([selectedCard.id]))}
                 onUnlink={(linkId) => attempt(() => removeLink(scope, linkId))}
                 onEditLink={openEdgeEditor}
                 onGoToTab={strand?.tabKey ? () => jumpToTab(scope, strand.tabKey!) : undefined}

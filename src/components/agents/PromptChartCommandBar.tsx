@@ -74,6 +74,8 @@ interface Props {
   onResetLifts: () => void;
   /** A link is armed on another card: the bar says so, and cancels it. */
   linkArmed: boolean;
+  /** What the armed chip asks for, when it is not "pick the other card". */
+  linkArmedText?: string;
   onCancelLink: () => void;
   /** The options and help buttons. */
   trailing?: ReactNode;
@@ -88,7 +90,7 @@ interface Props {
  */
 export function PromptChartCommandBar({
   text, onText, filterCount, filterPanel, view, onView, onPrev, onToday, onNext, rangeLabel,
-  selectedCount, onClearSelection, viewLifted, onResetLifts, linkArmed, onCancelLink, trailing,
+  selectedCount, onClearSelection, viewLifted, onResetLifts, linkArmed, linkArmedText, onCancelLink, trailing,
 }: Props) {
   const t = useT();
   return (
@@ -111,7 +113,7 @@ export function PromptChartCommandBar({
       <div className="agent-prompt-bar-spacer" />
       {linkArmed && (
         <span className="agent-prompt-chart-selection" data-testid="prompt-chart-link-armed">
-          {t("promptChart.pickLink")}
+          {linkArmedText ?? t("promptChart.pickLink")}
           <button type="button" className="agent-composer-chip" onClick={onCancelLink}>{t("common.cancel")}</button>
         </span>
       )}

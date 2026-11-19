@@ -56,6 +56,8 @@ interface Props {
   onBodyPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
   /** A click on the folded night (`win.fold`): show this day in full. */
   onUnfold?: () => void;
+  /** Where the prompt the composer holds would land, drawn dashed. */
+  preview?: { at: Date; message: string } | null;
 }
 
 const BODY_PADDING = 8;
@@ -83,7 +85,7 @@ function hhmm(at: Date): string {
  * that scrolled the body took the now line away with it. The axis, with the
  * NOW label, is sticky, so scrolling the tab keeps the clock in view too.
  */
-export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, renderCard, onRefine, dropLabel, dropBlocked, emptyHint, onZoom, lifts, resets = [], onBodyPointerDown, onUnfold }: Props) {
+export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, renderCard, onRefine, dropLabel, dropBlocked, emptyHint, onZoom, lifts, resets = [], onBodyPointerDown, onUnfold, preview }: Props) {
   const t = useT();
   const lang = useI18nStore((s) => s.lang);
   const use24h = useUse24h();
@@ -286,6 +288,19 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
             data-testid="prompt-timeline-now-band"
             style={{ left: nowX - NOW_BAND_WIDTH / 2, width: NOW_BAND_WIDTH }}
           />
+          {preview && win.view !== "month" && preview.at >= win.start && preview.at < win.end && (
+            <div
+              className="agent-prompt-timeline-preview"
+              data-testid="prompt-timeline-preview"
+              style={{ left: Math.max(win.fold?.px ?? 0, Math.min(timelineX(preview.at, win, width), width - TIMELINE_CARD_WIDTH)), top: BODY_PADDING, width: TIMELINE_CARD_WIDTH }}
+            >
+              <span className="agent-prompt-card-top">
+                <strong>{formatTime(hhmm(preview.at), use24h)}</strong>
+                <span>{t("promptChart.lands")}</span>
+              </span>
+              <span className="agent-prompt-card-message">{preview.message}</span>
+            </div>
+          )}
           {dropAt && (
             <div className="agent-prompt-timeline-indicator" style={{ left: timelineX(dropAt, win, width) }}>
               <span className={`agent-prompt-timeline-badge${dropBlocked ? " is-blocked" : ""}`}>{dropLabel ? `${dropLabel} · ` : ""}{dropDate(dropAt)}</span>

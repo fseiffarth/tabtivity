@@ -15,9 +15,6 @@ export interface DraftBoardHandle {
   /** The List | Free switch, which the Drafts column's header draws. Free
    *  starts from where the list shows each card now. */
   setFree: (free: boolean) => void;
-  /** Open the board's own composer — at the next free spot on the canvas, or
-   *  at the row's end — the one composer the chart's ＋ opens too. */
-  compose: () => void;
 }
 
 /** The composer's size on the free canvas, so the canvas grows to hold it. */
@@ -63,21 +60,6 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
     const rect = canvas.current?.getBoundingClientRect();
     return { x: Math.max(0, x - (rect?.left ?? 0)), y: Math.max(0, y - (rect?.top ?? 0)) };
   };
-  /** The first grid spot the composer covers no card at, reading row by row;
-   *  below the lowest card when the canvas is full. */
-  const freeSpot = (): Point => {
-    const boxes = cards.map((card, index) => ({ ...pointOf(card.id, index), ...(sizes[card.id] ?? { width: 168, height: 120 }) }));
-    const clear = (x: number, y: number) => boxes.every((box) =>
-      x + COMPOSER_WIDTH <= box.x || box.x + box.width <= x || y + COMPOSER_HEIGHT <= box.y || box.y + box.height <= y);
-    for (let row = 0; row < 64; row += 1) {
-      for (let column = 0; column < columns; column += 1) {
-        const x = column * 192 + 8;
-        const y = row * 152 + 8;
-        if ((column === 0 || x + COMPOSER_WIDTH <= width) && clear(x, y)) return { x, y };
-      }
-    }
-    return { x: 8, y: Math.max(8, ...boxes.map((box) => box.y + box.height + 8)) };
-  };
   useImperativeHandle(ref, () => ({
     place: (id, x, y) => {
       if (!layout.free) return false;
@@ -87,7 +69,6 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
     },
     free: layout.free,
     setFree: (free) => setLayout((value) => value.free === free ? value : { free, positions: Object.fromEntries(cards.map((card, index) => [card.id, pointOf(card.id, index)])) }),
-    compose: () => setComposer(layout.free ? freeSpot() : { x: 0, y: 0 }),
   }));
   useEffect(() => {
     try { localStorage.setItem(key, JSON.stringify(layout)); } catch { /* retain it for this session */ }

@@ -9,6 +9,18 @@ import { usePoll, type PollRun } from "../../lib/usePoll";
  *  at most once per window, so there is nothing to gain from asking often. */
 const USAGE_POLL_MS = 5 * 60_000;
 
+/** How far ahead the composer and the limit warning look for a reset, however
+ *  far the axis itself is scrolled: past the weekly one. */
+const UPCOMING_MS = 8 * 86_400_000;
+
+export interface PromptChartUsage {
+  /** Marks inside the axis window, for the agent facet. */
+  marks: UsageResetMark[];
+  /** Every agent's next resets from now, whatever the window or the facet:
+   *  what "after the 5h reset" and the limit warning are decided on. */
+  upcoming: UsageResetMark[];
+}
+
 /**
  * The rate-limit resets of the scope's agents, as marks for the timeline.
  * Reads each distinct agent once (an agent without a usage recipe — anything
@@ -16,7 +28,7 @@ const USAGE_POLL_MS = 5 * 60_000;
  * timeline is visible, and filters by the timeline's agent facet so a filtered
  * axis does not keep another agent's lines.
  */
-export function usePromptChartUsage(agents: string[], enabled: boolean, now: Date, from: Date, to: Date, agentFilter: string): UsageResetMark[] {
+export function usePromptChartUsage(agents: string[], enabled: boolean, now: Date, from: Date, to: Date, agentFilter: string): PromptChartUsage {
   const [reports, setReports] = useState<Record<string, UsageReport>>({});
   const agentsKey = [...new Set(agents)].sort().join("\n");
 
@@ -37,11 +49,17 @@ export function usePromptChartUsage(agents: string[], enabled: boolean, now: Dat
   usePoll(read, USAGE_POLL_MS, { enabled: enabled && !!agentsKey });
 
   return useMemo(() => {
-    if (!enabled) return [];
+    if (!enabled) return { marks: [], upcoming: [] };
     const live = new Set(agentsKey.split("\n"));
-    return Object.entries(reports)
-      .filter(([agent]) => live.has(agent) && (!agentFilter || agent === agentFilter))
-      .flatMap(([agent, report]) => usageResetMarks(agent, report, now, from, to))
-      .sort((a, b) => a.at.getTime() - b.at.getTime());
+    const byTime = (a: UsageResetMark, b: UsageResetMark) => a.at.getTime() - b.at.getTime();
+    const reported = Object.entries(reports).filter(([agent]) => live.has(agent));
+    const until = new Date(now.getTime() + UPCOMING_MS);
+    return {
+      marks: reported
+        .filter(([agent]) => !agentFilter || agent === agentFilter)
+        .flatMap(([agent, report]) => usageResetMarks(agent, report, now, from, to))
+        .sort(byTime),
+      upcoming: reported.flatMap(([agent, report]) => usageResetMarks(agent, report, now, now, until)).sort(byTime),
+    };
   }, [agentFilter, agentsKey, enabled, from, now, reports, to]);
 }

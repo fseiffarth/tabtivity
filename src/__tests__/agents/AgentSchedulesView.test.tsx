@@ -156,11 +156,11 @@ describe("AgentSchedulesView prompt chart", () => {
     expect((call?.[1] as { schedule: { message: string; preface: string[] } }).schedule).toMatchObject({ message: "Check it", preface: ["/clear"] });
   });
 
-  it("collects a new draft through the chart toolbar", async () => {
+  it("collects a new draft through the chart's composer row", async () => {
     await act(async () => { render(<PromptChartTab scope="p" />); });
-    fireEvent.click(screen.getByRole("button", { name: "New draft" }));
-    fireEvent.change(screen.getByLabelText("Write a prompt to keep for later…"), { target: { value: "Summarise the diff" } });
-    await act(async () => { fireEvent.click(screen.getByText("Add prompt")); });
+    const field = screen.getByRole("textbox", { name: "Write a prompt" });
+    fireEvent.change(field, { target: { value: "Summarise the diff" } });
+    await act(async () => { fireEvent.keyDown(field, { key: "Enter" }); });
     const call = vi.mocked(invoke).mock.calls.find(([name]) => name === "agent_prompt_upsert");
     expect((call?.[1] as { prompt: { message: string } }).prompt.message).toBe("Summarise the diff");
   });
