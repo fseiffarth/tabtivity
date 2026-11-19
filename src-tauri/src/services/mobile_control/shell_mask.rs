@@ -9,10 +9,11 @@
 //!    credential headers, `Bearer`/`Basic` credentials, `name=value` and
 //!    `--flag value` pairs whose name says secret, well-known token prefixes,
 //!    private-key blocks and long mixed-case random runs;
-//! 3. every other absolute or `~/` path and `file://` address keeps only its
-//!    leaf (`…/config`), since host paths never cross the browser API. A path
-//!    is found by what it is, wherever it starts (after `2>`, `<`, `@`, `;`, a
-//!    glued `-I`, …); a quoted one is cut as one path, spaces included.
+//! 3. every other absolute, `~/` or `~user/` path and `file://` address keeps
+//!    only its leaf (`…/config`), since host paths never cross the browser API.
+//!    A path is found by what it is, wherever it starts (after `2>`, `<`, `@`,
+//!    `;`, a glued `-I`, `${X:-`, `git+`, …); a quoted one is cut as one path,
+//!    spaces included, and a backslash-escaped character does not end one.
 //!
 //! A heuristic, not a guarantee: the paired phone could already read the same
 //! text off the Terminal view. Pure + tested.
@@ -347,7 +348,8 @@ enum Kind {
     /// A drive path (`C:\a`, `C:/a`), a UNC one (`\\server\share`) or anything
     /// verbatim (`\\?\…`).
     Windows,
-    /// An absolute (`/a/b`, not `//host`), home (`~/a`) or `file://` path.
+    /// An absolute (`/a/b`, not `//host`), home (`~/a`, `~user/a`) or
+    /// `file://` path.
     Posix,
 }
 
@@ -377,7 +379,7 @@ fn scan_paths(text: &str, kind: Kind) -> String {
     while let Some(ch) = text[at..].chars().next() {
         let rest = &text[at..];
         if matches!(ch, '\'' | '"') {
-            if let Some(len) = rest[1..].find(ch) {
+            if let Some(len) = closing_quote(&rest[1..], ch, kind) {
                 let inner = &rest[1..1 + len];
                 out.push(ch);
                 if is_one_path(inner, kind) {
@@ -390,7 +392,9 @@ fn scan_paths(text: &str, kind: Kind) -> String {
                 continue;
             }
         }
-        if may_start_path(&text[..at], kind) {
+        // A file address may also follow a scheme it is glued to (`git+file://`).
+        let after_scheme = kind == Kind::Posix && text[..at].ends_with('+') && is_file_address(rest);
+        if after_scheme || may_start_path(&text[..at], kind) {
             if let Some(len) = path_len(rest, kind) {
                 out.push_str(&leaf_of_path(&rest[..len], kind));
                 at += len;
@@ -403,6 +407,23 @@ fn scan_paths(text: &str, kind: Kind) -> String {
     out
 }
 
+/// Byte offset in `after` (what follows an opening `quote`) of the quote that
+/// closes it. In a POSIX double-quoted string `\"` closes nothing.
+fn closing_quote(after: &str, quote: char, kind: Kind) -> Option<usize> {
+    if quote == '\'' || kind == Kind::Windows {
+        return after.find(quote);
+    }
+    let mut chars = after.char_indices();
+    while let Some((at, ch)) = chars.next() {
+        if ch == '\\' {
+            chars.next();
+        } else if ch == quote {
+            return Some(at);
+        }
+    }
+    None
+}
+
 /// A character a path or a word is made of: a path never starts right after
 /// one (`src/a/b`, `https://host/a`, `$HOME/a`, `a*/b`).
 fn is_word_char(ch: char) -> bool {
@@ -410,16 +431,21 @@ fn is_word_char(ch: char) -> bool {
 }
 
 /// Whether a path may start right after `before`: at the line start, after a
-/// character no word is made of, or after a glued short flag (`-I`, and for
-/// Windows tools `/I`) that itself starts a word.
+/// character no word is made of, after a sign that starts a word (a parameter
+/// default, `${X:-/a/b}`, `${X:+/a/b}`), or after a glued short flag (`-I`,
+/// and for Windows tools `/I`) that itself starts a word.
 fn may_start_path(before: &str, kind: Kind) -> bool {
     let mut back = before.chars().rev();
     let Some(prev) = back.next() else { return true };
     if !is_word_char(prev) {
         return true;
     }
+    let before_prev = back.next();
+    if matches!(prev, '-' | '+') && before_prev.is_none_or(|c| !is_word_char(c)) {
+        return true;
+    }
     let flag = |c: char| c == '-' || (kind == Kind::Windows && c == '/');
-    prev.is_ascii_alphabetic() && back.next().is_some_and(flag) && back.next().is_none_or(|c| !is_word_char(c))
+    prev.is_ascii_alphabetic() && before_prev.is_some_and(flag) && back.next().is_none_or(|c| !is_word_char(c))
 }
 
 /// What ends an unquoted path.
@@ -430,11 +456,11 @@ fn ends_path(ch: char, kind: Kind) -> bool {
 }
 
 /// Byte length of the run that continues a path, from the start of `body`.
-/// A POSIX `\ ` (an escaped space) does not end it.
+/// A POSIX backslash escape (`\ `, `\'`, `\(`, `\;`, …) does not end it.
 fn body_len(body: &str, kind: Kind) -> usize {
-    let mut chars = body.char_indices().peekable();
+    let mut chars = body.char_indices();
     while let Some((at, ch)) = chars.next() {
-        if kind == Kind::Posix && ch == '\\' && chars.peek().is_some_and(|&(_, next)| next == ' ') {
+        if kind == Kind::Posix && ch == '\\' {
             chars.next();
             continue;
         }
@@ -454,22 +480,31 @@ fn path_len(text: &str, kind: Kind) -> Option<usize> {
                 4
             } else if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/') {
                 3
-            } else if let Some(unc) = text.strip_prefix(r"\\") {
-                // A server name, then `\`.
+            } else {
+                // A UNC path: `\\`, a server name, then `\`.
+                let unc = text.strip_prefix(r"\\")?;
                 let server = unc.find(|c: char| c == '\\' || c == '/' || c == '?' || ends_path(c, kind)).filter(|&n| n > 0)?;
                 if !unc[server..].starts_with('\\') {
                     return None;
                 }
                 2 + server + 1
-            } else {
-                return None;
             }
         }
         Kind::Posix => {
             if is_file_address(text) {
                 7
             } else {
-                let slash = usize::from(text.starts_with("~/"));
+                // `~/a`, or another user's home, `~alice/a` (not `~1`, `~+`, `~-`).
+                let slash = match text.strip_prefix('~') {
+                    Some(user) => {
+                        let name = user.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))).unwrap_or(user.len());
+                        if name > 0 && !user.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+                            return None;
+                        }
+                        1 + name
+                    }
+                    None => 0,
+                };
                 if !text[slash..].starts_with('/') {
                     return None;
                 }
@@ -535,6 +570,11 @@ fn posix_leaf(path: &str) -> String {
             Some(leaf) => format!("{}…/{leaf}{slash}", &path[..7]),
             None => path.to_string(),
         };
+    }
+    if path.starts_with('~') && !path.starts_with("~/") {
+        // Another user's home: even one component under it names that user.
+        let leaf = path.rsplit('/').find(|part| !part.is_empty()).unwrap_or_default();
+        return format!("…/{leaf}{slash}");
     }
     let body = path.trim_start_matches('~').trim_matches('/');
     if !body.contains('/') {

@@ -10,7 +10,7 @@
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -315,8 +315,8 @@ describe("Mobile bridge — remote, container and VM projects", () => {
       ctr: [entry("a-ctr", "agent")],
     };
     const base = vi.mocked(invoke).getMockImplementation()!;
-    vi.mocked(invoke).mockImplementation((command: string, args?: unknown) => {
-      const scope = (args as { projectId?: string } | undefined)?.projectId ?? "";
+    vi.mocked(invoke).mockImplementation((command: string, args?: InvokeArgs) => {
+      const scope =(args as { projectId?: string } | undefined)?.projectId ?? "";
       if (command === "tab_archive_list") return Promise.resolve(archive[scope] ?? []);
       if (command === "tab_archive_take") {
         const id = (args as { id: string }).id;
@@ -341,7 +341,7 @@ describe("Mobile bridge — remote, container and VM projects", () => {
     expect(took()).toBe(false);
     expect(activateProject).not.toHaveBeenCalled();
     // A local agent of the remote project is one the phone could start: taken.
-    expect(await restore("rem", "a-local")).not.toMatchObject({ code: "not_attachable" });
+    expect(await restore("rem", "a-local")).toMatchObject({ status: "created" });
     expect(took()).toBe(true);
     expect(activateProject).toHaveBeenCalledWith("rem");
   });

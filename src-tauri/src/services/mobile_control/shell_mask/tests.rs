@@ -340,3 +340,33 @@ fn relative_paths_urls_and_quoted_text_are_not_taken_for_paths() {
     // A quoted command is no single path: each path in it is cut alone.
     assert_eq!(masked(r#"sh -c "/home/alice/bin/tool --in /home/alice/x/y""#), r#"sh -c "…/tool --in …/y""#);
 }
+
+/// Paths that crossed whole: one glued to a parameter default's sign or to a
+/// `git+` scheme, another user's `~alice/` home, and a path whose backslash
+/// escapes (`\'`, `\(`, `\;`, `\"` in double quotes) ended it early.
+const MORE_POSIX_PATHS: &[(&str, &str, &[&str])] = &[
+    ("echo ${DIR:-/home/alice/private/out}", "echo ${DIR:-…/out}", &["home", "alice", "private"]),
+    ("echo ${DIR:+/home/alice/private/out}", "echo ${DIR:+…/out}", &["home", "alice", "private"]),
+    ("pip install git+file:///home/alice/private/proj", "pip install git+file://…/proj", &["home", "alice", "private"]),
+    ("cat ~alice/.ssh/id_ed25519", "cat …/id_ed25519", &["alice", ".ssh"]),
+    ("ls ~bob/notes", "ls …/notes", &["bob"]),
+    (r"cat /home/alice/Alice\'s\ Docs/tax/2026.pdf", "cat …/2026.pdf", &["home", "alice", "Docs", "tax"]),
+    (r"cd /home/alice/My\ Files\ \(old\)/work && ls", "cd …/work && ls", &["home", "alice", "Files", "old"]),
+    (r"cat /home/alice/a\;b/private/x", "cat …/x", &["home", "alice", ";b", "private"]),
+    (r#"cat "/home/alice/\"hi\"/private/x" -n"#, r#"cat "…/x" -n"#, &["home", "alice", "hi", "private"]),
+];
+
+#[test]
+fn a_path_after_a_sign_a_scheme_or_another_users_home_or_with_escapes_keeps_only_its_leaf() {
+    for (line, want, hidden) in MORE_POSIX_PATHS {
+        let out = masked(line);
+        assert_eq!(out, *want, "{line}");
+        for part in *hidden {
+            assert!(!out.contains(part), "{part} crossed in {out:?} from {line}");
+        }
+    }
+    // Not another user's home: a revision, the directory stack.
+    for plain in ["git diff HEAD~1/x", "ls ~1/a/b", "ls ~+/a/b", "ls ~-/a/b"] {
+        assert_eq!(masked(plain), plain);
+    }
+}
