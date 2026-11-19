@@ -85,6 +85,9 @@ export interface PromptLink {
   /** Commands (`/clear`, …) an `after` edge types between its two prompts:
    *  the queued target's preface. */
   preface?: string[];
+  /** An `after` edge held back by Pause: its source finishing queues nothing
+   *  until the flag is cleared. Absent (never `false`) when not paused. */
+  paused?: boolean;
 }
 
 /** Send-time facts a history entry records. */
@@ -280,10 +283,11 @@ export const useAgentPromptsStore = create<AgentPromptsStore>((set, get) => ({
   },
 
   link: async (projectId, link) => {
-    // An edge with no commands is sent without the key, the shape a backend
-    // predating edge commands still accepts.
-    const { preface, ...plain } = link;
-    const payload = preface?.length ? link : plain;
+    // An edge with no commands, or not paused, is sent without those keys, the
+    // shape a backend predating them still accepts (`PromptLinkInput` denies
+    // unknown fields). The upsert replaces the edge, so a missing `paused` clears it.
+    const { preface, paused, ...plain } = link;
+    const payload = { ...plain, ...(preface?.length ? { preface } : {}), ...(paused ? { paused: true } : {}) };
     const links = await invoke<PromptLink[]>("agent_prompt_link_upsert", { projectId, link: payload });
     set((state) => ({ linksByProject: { ...state.linksByProject, [projectId]: links } }));
     return links;

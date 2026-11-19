@@ -2042,6 +2042,53 @@ unchanged; the new agents are additive.
         has landed (the rows still say bottom port → top port, and that
         cycles and joins are refused only at schedule time).
 
+      - **Rework (2026-11-19), never run live.** The chart is redesigned
+        (`docs/prompt_chart_redesign_plan.md`, handoff beside it): one command
+        bar and a quick composer row over three columns (Drafts, a timeline
+        that fills the tab, an inspector); past cards end at their right edge
+        and say how the turn went (Running, Needs answer, Finished, Delivered,
+        Missed, Failed; no Cut off: no per-turn signal records a limit stop);
+        an After chain of two or more prompts is a sequence (group in Drafts,
+        step n of m on the cards, Pause / Skip / Stop in the inspector; the one
+        backend change is `PromptLink.paused`, so it needs a backend restart);
+        a usage band under the axis carries the reset labels, a drop near a
+        reset lands after it, and a scheduled card due before a 90%-used reset
+        warns with Move after reset.
+      - [x] 🤖 Automated test — `AgentPromptCompose`, `PromptChartComposer`,
+        `AgentPromptOutcome`, `PromptChartOutcome`, `AgentPromptSequences`,
+        `PromptChartSequence`, `AgentPromptLinks` (a paused edge queues
+        nothing), `AgentPromptLimits`, `PromptChartLimits`,
+        `AgentPromptTimeline` (anchoring, folded night, hanging cards stay off
+        the fold), `PromptChartLayout` (stacked inspector scrolls into view),
+        cargo `a_paused_flag_is_kept_on_an_after_edge_only_and_round_trips`,
+        `a_link_file_written_before_the_flag_loads_unpaused`,
+        `re_saving_an_edge_without_the_flag_resumes_it`.
+      - [ ] 🖐️ Manual test — after a backend restart, in a project with two
+        agent tabs: (1) Day view: the 00-06 block folds the night, click it to
+        open the day; select a card (the inspector opens, Esc closes it), open
+        Filters, Options and ?; narrow the split below 900 px and select a
+        card (the inspector scrolls into view). (2) Type a prompt in the
+        composer and try each When option: Keep as draft, Send now, At a time…
+        (the schedule dialog opens), After another prompt… (click the card it
+        follows), After the 5h reset (a dashed Lands here card; the rule lands
+        on the first minute after the reset). (3) Link three drafts After one
+        another, put `/clear` on one edge, send the first: the group in Drafts
+        says Sequence · 3 steps and step 2 of 3; Pause (the next card says
+        Paused, nothing is sent when step 1 ends), Resume (it goes out at
+        once), Skip next step, Stop. (4) Drag a draft to within a few pixels
+        of a reset in the usage band: the badge says after the 5h reset and
+        the rule lands just after it. (5) With the 5h window at 90 % or more, a
+        scheduled card due before the reset warns May hit the limit; Move
+        after reset retimes it. (6) A running turn's bar reaches the Now line
+        and grows; a tab asking a question reads Needs answer.
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
 263. **Agent panes: double-click pastes, and a drag still selects while the TUI
     holds the mouse.** Two gestures the terminal owed an agent tab. A
     **double-click** at the agent's prompt inserts the clipboard — the press is

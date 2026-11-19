@@ -156,16 +156,16 @@ describe("AgentSchedulesView prompt chart", () => {
     expect((call?.[1] as { schedule: { message: string; preface: string[] } }).schedule).toMatchObject({ message: "Check it", preface: ["/clear"] });
   });
 
-  it("collects a new draft through the chart toolbar", async () => {
+  it("collects a new draft through the chart's composer row", async () => {
     await act(async () => { render(<PromptChartTab scope="p" />); });
-    fireEvent.click(screen.getByRole("button", { name: "New draft" }));
-    fireEvent.change(screen.getByLabelText("Write a prompt to keep for later…"), { target: { value: "Summarise the diff" } });
-    await act(async () => { fireEvent.click(screen.getByText("Add prompt")); });
+    const field = screen.getByRole("textbox", { name: "Write a prompt" });
+    fireEvent.change(field, { target: { value: "Summarise the diff" } });
+    await act(async () => { fireEvent.keyDown(field, { key: "Enter" }); });
     const call = vi.mocked(invoke).mock.calls.find(([name]) => name === "agent_prompt_upsert");
     expect((call?.[1] as { prompt: { message: string } }).prompt.message).toBe("Summarise the diff");
   });
 
-  it("filters the drafts and the timeline apart, each dimming and hiding only its own cards", async () => {
+  it("filters drafts and timeline with the one filter, each dimming and hiding by the same rules", async () => {
     const queued = { id: "q", enabled: true, message: "Wait for idle", rule: { type: "once", at: localOccurrenceKey(new Date(Date.now() - 60_000)) } };
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "agent_prompts_list") return [{ id: "draft", message: "Run the tests", tags: ["tests"], created_at: "x", updated_at: "x" }];
@@ -173,53 +173,52 @@ describe("AgentSchedulesView prompt chart", () => {
       return [];
     });
     await act(async () => { render(<PromptChartTab scope="p" />); });
-    const draftBar = within(screen.getByTestId("prompt-chart-draft-filter"));
-    const timelineBar = within(screen.getByTestId("prompt-chart-timeline-filter"));
     const draft = await screen.findByTestId("prompt-chart-card-draft");
     const waiting = await screen.findByTestId("prompt-chart-card-queued");
 
-    fireEvent.change(screen.getByLabelText("Search drafts or #tag…"), { target: { value: "nothing" } });
+    fireEvent.change(screen.getByLabelText("Search prompts or #tag…"), { target: { value: "nothing" } });
     expect(draft.className).toContain("is-dimmed");
-    expect(waiting.className).not.toContain("is-dimmed");
-    fireEvent.click(draftBar.getByRole("button", { name: "Hide others" }));
-    expect(screen.queryByTestId("prompt-chart-card-draft")).toBeNull();
-    expect(screen.getByTestId("prompt-chart-card-queued")).toBeTruthy();
+    expect(waiting.className).toContain("is-dimmed");
+    fireEvent.change(screen.getByLabelText("Search prompts or #tag…"), { target: { value: "" } });
+    expect(draft.className).not.toContain("is-dimmed");
 
-    // The timeline's When window: a queued card waits at now, so it is upcoming.
-    fireEvent.click(timelineBar.getByRole("button", { name: /Any time/ }));
-    fireEvent.click(screen.getByRole("option", { name: "Past" }));
+    // The When window applies to the timeline only: a queued card waits at now,
+    // so it is upcoming; the draft has no instant and is left alone.
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    const panel = within(screen.getByRole("dialog", { name: "Filters" }));
+    fireEvent.click(panel.getByRole("button", { name: "Past" }));
     expect(screen.getByTestId("prompt-chart-card-queued").className).toContain("is-dimmed");
-    fireEvent.click(timelineBar.getByRole("button", { name: "Hide others" }));
+    expect(screen.getByTestId("prompt-chart-card-draft").className).not.toContain("is-dimmed");
+    fireEvent.click(panel.getByRole("button", { name: "Hide non-matching" }));
     expect(screen.queryByTestId("prompt-chart-card-queued")).toBeNull();
+    expect(screen.getByTestId("prompt-chart-card-draft")).toBeTruthy();
   });
 
-  it("hides the timeline to leave the drafts alone, and remembers it", async () => {
-    localStorage.removeItem(storageKey("promptChart.timeline"));
+  it("collapses the drafts column to leave the timeline alone, and remembers it", async () => {
+    localStorage.removeItem(storageKey("promptChart.drafts"));
     const { unmount } = await act(async () => render(<PromptChartTab scope="p" />));
     expect(screen.getByTestId("prompt-timeline")).toBeTruthy();
-    // The toggle lives in the timeline's own head, beside its name and count.
-    const head = within(screen.getByTestId("prompt-chart-timeline-bar"));
-    expect(head.getByText("Timeline")).toBeTruthy();
-    fireEvent.click(head.getByRole("button", { name: "Hide" }));
-    expect(screen.queryByTestId("prompt-timeline")).toBeNull();
-    expect(screen.queryByTestId("prompt-chart-timeline-filter")).toBeNull();
-    // The head stays, or there would be nothing to bring the axis back with.
-    expect(head.getByRole("button", { name: "Show" })).toBeTruthy();
     expect(await screen.findByTestId("prompt-chart-card-draft")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse drafts" }));
+    expect(screen.queryByTestId("prompt-chart-card-draft")).toBeNull();
+    // The timeline stays whole; the rail keeps the button that brings the column back.
+    expect(screen.getByTestId("prompt-timeline")).toBeTruthy();
     unmount();
     await act(async () => { render(<PromptChartTab scope="p" />); });
-    expect(screen.queryByTestId("prompt-timeline")).toBeNull();
-    fireEvent.click(within(screen.getByTestId("prompt-chart-timeline-bar")).getByRole("button", { name: "Show" }));
-    expect(screen.getByTestId("prompt-timeline")).toBeTruthy();
-    localStorage.removeItem(storageKey("promptChart.timeline"));
+    expect(screen.queryByTestId("prompt-chart-card-draft")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand drafts" }));
+    expect(await screen.findByTestId("prompt-chart-card-draft")).toBeTruthy();
+    localStorage.removeItem(storageKey("promptChart.drafts"));
   });
 
   it("opens a draft's Markdown editor on double click and saves the edit", async () => {
     await act(async () => { render(<PromptChartTab scope="p" />); });
     const card = await screen.findByTestId("prompt-chart-card-draft");
     fireEvent.doubleClick(within(card).getByText("Run the tests"));
-    const field = within(card).getByLabelText("Write a prompt to keep for later…");
-    expect(card.querySelector(".md-prompt")).toBeTruthy();
+    const inspector = screen.getByTestId("prompt-chart-inspector");
+    const field = within(inspector).getByLabelText("Write a prompt to keep for later…");
+    expect(inspector.querySelector(".md-prompt")).toBeTruthy();
+    expect(card.querySelector(".md-prompt")).toBeNull();
     fireEvent.change(field, { target: { value: "Run the unit tests" } });
     await act(async () => { fireEvent.keyDown(field, { key: "Enter", ctrlKey: true }); });
     const call = vi.mocked(invoke).mock.calls.find(([name]) => name === "agent_prompt_upsert");

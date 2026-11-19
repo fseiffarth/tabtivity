@@ -4,7 +4,8 @@ import {
   localOccurrenceKey,
   nextScheduleOccurrence,
 } from "../agentSchedule";
-import { queueOrderTimes, snapPromptTime, type PromptChartCard } from "./chart";
+import { ceilPromptTime, queueOrderTimes, snapPromptTime, type PromptChartCard } from "./chart";
+import type { UsageResetMark, UsageWindowKind } from "../agentUsageResets";
 
 /**
  * The prompt chart's time axis: one proportional, horizontal scale that a Day,
@@ -30,11 +31,25 @@ export const HOUR_TICK_MIN = 5;
 export const TIMELINE_CARD_WIDTH = 168;
 /** One lane's height (card plus gap), in px: a three-line message with its
  *  agent row, tags and fact line, so a full card never overlaps the lane below. */
-export const TIMELINE_LANE_HEIGHT = 120;
+export const TIMELINE_LANE_HEIGHT = 140;
 /** Room past a session card's last tick, so that tick is not cut by the edge. */
 export const SESSION_TICK_ROOM = 6;
 /** Lanes the body always shows, so an empty window has somewhere to drop. */
 export const TIMELINE_MIN_LANES = 2;
+
+/** A stretch of the window drawn narrower than its time: the Day view's quiet
+ *  night, folded into one block of `px` pixels while nothing lies in it. The
+ *  rest of the window shares the remaining width in proportion. */
+export interface TimelineFold {
+  start: Date;
+  end: Date;
+  px: number;
+}
+
+/** The width of the folded night, in px. */
+export const TIMELINE_FOLD_PX = 40;
+/** The folded stretch ends at this wall-clock hour (it starts at midnight). */
+export const TIMELINE_FOLD_END_HOUR = 6;
 
 export interface TimelineWindow {
   view: TimelineView;
@@ -46,6 +61,10 @@ export interface TimelineWindow {
   /** Exclusive. */
   end: Date;
   snapMinutes: number;
+  /** Set by the chart when the night is folded (`dayFold`): `timelineX` and
+   *  `timelineTimeAt` are then piecewise, and everything that draws or
+   *  hit-tests the axis reads the same two functions. */
+  fold?: TimelineFold;
 }
 
 function localMidnight(stamp: string): Date {
@@ -140,14 +159,56 @@ export function shiftAnchor(view: TimelineView, anchor: string, step: -1 | 1): s
   return addMonths(day, step);
 }
 
+/** The fold's geometry: px per ms outside it, and the pieces' bounds in ms. */
+function foldScale(win: TimelineWindow, width: number) {
+  const fold = win.fold!;
+  const start = win.start.getTime();
+  const foldStart = fold.start.getTime();
+  const foldEnd = fold.end.getTime();
+  const rest = win.end.getTime() - start - (foldEnd - foldStart);
+  return { start, foldStart, foldEnd, px: fold.px, k: rest > 0 ? Math.max(0, width - fold.px) / rest : 0 };
+}
+
 export function timelineX(at: Date, win: TimelineWindow, width: number): number {
+  if (win.fold) {
+    const { start, foldStart, foldEnd, px, k } = foldScale(win, width);
+    const t = at.getTime();
+    const before = (foldStart - start) * k;
+    if (t <= foldStart) return (t - start) * k;
+    if (t < foldEnd) return before + ((t - foldStart) / (foldEnd - foldStart)) * px;
+    return before + px + (t - foldEnd) * k;
+  }
   const span = win.end.getTime() - win.start.getTime();
   return ((at.getTime() - win.start.getTime()) / span) * width;
 }
 
 export function timelineTimeAt(x: number, win: TimelineWindow, width: number): Date {
+  const clamped = Math.max(0, Math.min(width, x));
+  if (win.fold) {
+    const { start, foldStart, foldEnd, px, k } = foldScale(win, width);
+    const before = (foldStart - start) * k;
+    if (k === 0) return new Date(start);
+    if (clamped <= before) return new Date(start + clamped / k);
+    if (clamped < before + px) return new Date(foldStart + ((clamped - before) / px) * (foldEnd - foldStart));
+    return new Date(Math.min(win.end.getTime(), foldEnd + (clamped - before - px) / k));
+  }
   const ratio = Math.max(0, Math.min(1, x / Math.max(1, width)));
   return new Date(win.start.getTime() + ratio * (win.end.getTime() - win.start.getTime()));
+}
+
+/**
+ * The Day view's quiet night: the leading 00:00–06:00 stretch folded to one
+ * narrow block, but only while nothing lies in it — no item (or its end), no
+ * queued card, no reset mark, and not `now`. `instants` is everything the
+ * caller draws on the axis; Hour, Week and Month never fold. Returns the fold
+ * for the chart to put on the window, or undefined.
+ */
+export function dayFold(win: TimelineWindow, instants: readonly Date[]): TimelineFold | undefined {
+  if (win.view !== "day") return undefined;
+  const start = win.start;
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate(), TIMELINE_FOLD_END_HOUR);
+  const inside = instants.some((at) => Number.isFinite(at.getTime()) && at.getTime() >= start.getTime() && at.getTime() < end.getTime());
+  return inside ? undefined : { start, end, px: TIMELINE_FOLD_PX };
 }
 
 export function snapTimelineTime(at: Date, win: TimelineWindow): Date {
@@ -185,9 +246,13 @@ export function timelineTicks(win: TimelineWindow, width: number): TimelineTick[
     return ticks;
   }
   if (win.view === "day") {
-    const everyHour = width / 24 >= DAY_HOUR_LABEL_MIN_PX;
+    // A folded night has no hour ticks: its block is one mark, the first hour
+    // after it is the first tick.
+    const hours = win.fold ? 24 - (win.fold.end.getTime() - win.fold.start.getTime()) / 3_600_000 : 24;
+    const everyHour = (win.fold ? Math.max(0, width - win.fold.px) : width) / hours >= DAY_HOUR_LABEL_MIN_PX;
     for (let t = win.start.getTime(); t < win.end.getTime(); t += 3_600_000) {
       const at = new Date(t);
+      if (win.fold && t >= win.fold.start.getTime() && t < win.fold.end.getTime()) continue;
       const major = at.getHours() % 6 === 0;
       ticks.push({ x: timelineX(at, win, width), at, major, label: "hour", labelled: everyHour || major });
     }
@@ -341,45 +406,99 @@ export function queueReorderWrites(
   return ids.map((id) => ({ id, at: times[id] }));
 }
 
+/** When a sent card's turn was over: the moment the schedule host saw the tab
+ *  idle again (`apply_blame` stamps `files_at`, in a repository or not). A row
+ *  never blamed (typed in the terminal and adopted) has none. */
+export function promptEndedAt(card: PromptChartCard): Date | null {
+  const raw = card.state === "sent" ? card.history?.files_at : undefined;
+  if (!raw) return null;
+  const at = new Date(raw);
+  return Number.isFinite(at.getTime()) && (!card.at || at.getTime() >= card.at.getTime()) ? at : null;
+}
+
+/** The instant an item's newest part is over: a session's last prompt, a
+ *  sent card's end, a rule's minute. */
+function itemEnd(item: TimelineItem, running: ReadonlySet<string>, now: Date): Date {
+  const last = item.members?.[item.members.length - 1] ?? item;
+  // A turn still going has no end: it reaches the now line and grows with it.
+  if (running.has(last.card.id)) return now;
+  return promptEndedAt(last.card) ?? last.at;
+}
+
+/** The narrowest duration bar a card wears, in px: it also marks the corner a
+ *  card is anchored at when nothing says how long the turn took. */
+export const TIMELINE_BAR_MIN = 4;
+
 export interface LaneItem extends TimelineItem {
+  /** The card's left edge. */
   x: number;
   lane: number;
   /** The card's width: the fixed one, or a session's span when that is wider. */
   width: number;
+  /** The corner the card is pinned to: a past card ends at its right edge and
+   *  hangs left, a future one starts at its left edge and hangs right. */
+  anchor: "left" | "right";
+  /** The duration bar on the anchored corner of the card's top edge, in px. */
+  barWidth: number;
 }
 
 /**
  * Greedy interval packing, newest first: from the latest card back (a session
- * card counts from its newest prompt), each takes the lowest lane whose
- * earliest card so far starts (less a gap) after this one ends — so the
+ * card counts from its newest prompt's end), each takes the lowest lane where
+ * its interval is clear of the cards already there (less a gap) — so the
  * newest prompt is always on the top lane and older overlapping ones step
- * down beneath it. Items come back in time order. A
- * session card is as wide as its first-to-last span (and never narrower than
- * a card), so its last tick sits on its last prompt's minute.
+ * down beneath it. Items come back in time order.
+ *
+ * Nothing crosses the now line. An item whose newest instant is at or before
+ * `now` is past: its right edge sits at the x of its end (the newest member's
+ * `files_at`, else its `at`) and it hangs left, clamped to `x >= 0`. A future
+ * item starts at its left edge and hangs right, clamped so the card stays
+ * inside the body; neither is drawn over the folded night. A session card is
+ * as wide as its first-to-last span (and never narrower than a card), so its
+ * last tick sits on its last prompt's minute; the bar on its top edge runs from
+ * the first prompt to the last end.
  */
 export function packLanes(
   items: TimelineItem[],
   win: TimelineWindow,
   width: number,
+  now: Date,
   cardWidth = TIMELINE_CARD_WIDTH,
   gap = 6,
+  /** Ids of the sent cards whose turn is running right now. */
+  running: ReadonlySet<string> = new Set(),
 ): { lanes: number; items: LaneItem[] } {
-  const starts: number[] = [];
-  const newest = (item: TimelineItem) => (item.members?.[item.members.length - 1] ?? item).at.getTime();
+  const lanes: [number, number][][] = [];
+  const nowX = timelineX(now, win, width);
+  // The folded night is the first `fold.px` of the body (`timelineX`): a card
+  // that hangs left of its end would be drawn over that block, so it stops at
+  // the block's edge instead. Nothing lies in the night while it is folded
+  // (`dayFold`), so no card starts there.
+  const floor = win.fold ? win.fold.px : 0;
   const placed = [...items]
-    .sort((a, b) => newest(b) - newest(a))
-    .map((item) => {
-      const x = timelineX(item.at, win, width);
+    .sort((a, b) => itemEnd(b, running, now).getTime() - itemEnd(a, running, now).getTime())
+    .map((item): LaneItem => {
+      const end = itemEnd(item, running, now);
+      const startX = timelineX(item.at, win, width);
+      const endX = timelineX(end, win, width);
       const last = item.members?.[item.members.length - 1];
-      const span = last ? timelineX(last.at, win, width) - x + SESSION_TICK_ROOM : 0;
+      const span = last ? endX - startX + SESSION_TICK_ROOM : 0;
       const itemWidth = Math.max(cardWidth, span);
-      let lane = starts.findIndex((start) => x + itemWidth + gap <= start);
-      if (lane < 0) lane = starts.length;
-      starts[lane] = x;
-      return { ...item, x, lane, width: itemWidth };
+      const past = end.getTime() <= now.getTime();
+      const x = past
+        ? Math.max(floor, Math.min(endX, nowX) - itemWidth)
+        : Math.max(floor, Math.min(startX, width - itemWidth));
+      const barWidth = past ? Math.min(itemWidth, Math.max(TIMELINE_BAR_MIN, endX - startX)) : TIMELINE_BAR_MIN;
+      let lane = lanes.findIndex((spans) => spans.every(([left, right]) => x + itemWidth + gap <= left || right + gap <= x));
+      if (lane < 0) {
+        lane = lanes.length;
+        lanes.push([]);
+      }
+      lanes[lane].push([x, x + itemWidth]);
+      return { ...item, x, lane, width: itemWidth, anchor: past ? "right" : "left", barWidth };
     })
     .sort((a, b) => a.at.getTime() - b.at.getTime());
-  return { lanes: starts.length, items: placed };
+  return { lanes: lanes.length, items: placed };
 }
 
 export interface DayCluster {
@@ -413,7 +532,7 @@ export type TimelineZone =
   | { kind: "strip" }
   | { kind: "now" }
   | { kind: "past" }
-  | { kind: "time"; at: Date };
+  | { kind: "time"; at: Date; reset?: UsageWindowKind };
 
 export interface TimelineRect {
   left: number;
@@ -567,4 +686,35 @@ const TARGET_COLORS = [
 /** The stripe colour of the n-th agent tab; a closed session is grey. */
 export function promptTargetColor(index: number): string {
   return index < 0 ? "var(--text-muted)" : TARGET_COLORS[index % TARGET_COLORS.length];
+}
+
+/** How close, in px, a snapped instant must be to a reset to land after it. */
+export const RESET_SNAP_PX = 10;
+
+/**
+ * While a card is carried, a snapped instant within `RESET_SNAP_PX` of a reset
+ * mark of that card's agent becomes the first snap minute at or after the
+ * reset: dropped there it waits for the limit to roll over instead of landing
+ * a minute or two before it. Only resets still ahead of `now` count. Returns
+ * the new instant and which window it follows, or null when nothing is near.
+ */
+export function snapToReset(
+  at: Date,
+  marks: readonly UsageResetMark[],
+  agent: string | undefined,
+  win: TimelineWindow,
+  width: number,
+  now: Date,
+): { at: Date; reset: UsageWindowKind } | null {
+  if (!agent) return null;
+  const x = timelineX(at, win, width);
+  let best: { distance: number; mark: UsageResetMark; landing: Date } | null = null;
+  for (const mark of marks) {
+    if (mark.agent !== agent) continue;
+    const landing = ceilPromptTime(mark.at, win.snapMinutes);
+    const distance = Math.abs(timelineX(mark.at, win, width) - x);
+    if (landing.getTime() <= now.getTime() || distance > RESET_SNAP_PX) continue;
+    if (!best || distance < best.distance) best = { distance, mark, landing };
+  }
+  return best ? { at: best.landing, reset: best.mark.kind } : null;
 }

@@ -67,7 +67,7 @@ describe("PromptChart sent-card lift", () => {
     expect(card.querySelector(".agent-prompt-card-expanded")).toBeNull();
     // The body grows to hold a card lifted below the lanes.
     await lift(card, 400);
-    expect(parseFloat(screen.getByTestId("prompt-timeline-body").style.height)).toBeGreaterThanOrEqual(458 + 120);
+    expect(parseFloat((screen.getByTestId("prompt-timeline-body").querySelector(".agent-prompt-timeline-sizer") as HTMLElement).style.height)).toBeGreaterThanOrEqual(458 + 120);
 
     const commands = vi.mocked(invoke).mock.calls.map(([command]) => command);
     for (const write of WRITES) expect(commands).not.toContain(write);

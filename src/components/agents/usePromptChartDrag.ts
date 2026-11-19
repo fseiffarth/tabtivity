@@ -1,7 +1,9 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
+import type { UsageResetMark } from "../../lib/agents/agentUsageResets";
 import {
+  snapToReset,
   timelineHitZone,
   type TimelineRect,
   type TimelineRects,
@@ -74,6 +76,10 @@ interface Options {
   /** Every card's rect, read once when a link drag starts. */
   measureCards: () => ChartCardRect[];
   onDropCard: (card: PromptChartCard, zone: TimelineZone, drag: Extract<ChartDrag, { kind: "card" }>) => void;
+  /** The reset marks in view, and the agent a card belongs to: a snapped
+   *  instant near a mark of the carried card's agent lands after the reset. */
+  resets?: readonly UsageResetMark[];
+  agentOf?: (card: PromptChartCard) => string | undefined;
   /** The chart's newest cards. A carry is committed from the card as it is
    *  NOW, looked up by key — the one pressed may have been delivered, removed
    *  or re-stated by the scheduler while it was in the air. */
@@ -244,9 +250,12 @@ export function usePromptChartDrag(options: Options) {
     const lift = liftKeys ? liftGesture(event, liftKeys) : null;
     const pressShift = event.shiftKey;
     const zoneAt = (pointer: PointerEvent): TimelineZone => {
-      const { win, now, measure } = latest.current;
+      const { win, now, measure, resets, agentOf } = latest.current;
       const measured = measure();
-      return timelineHitZone({ x: pointer.clientX, y: pointer.clientY }, measured.rects, win, measured.width, measured.scrollLeft, now);
+      const zone = timelineHitZone({ x: pointer.clientX, y: pointer.clientY }, measured.rects, win, measured.width, measured.scrollLeft, now);
+      if (zone.kind !== "time" || !resets?.length) return zone;
+      const snapped = snapToReset(zone.at, resets, agentOf?.(card), win, measured.width, now);
+      return snapped ? { kind: "time", at: snapped.at, reset: snapped.reset } : zone;
     };
     start(event, {
       begin: (pointer) => (lift && (pressShift || pointer.shiftKey) ? lift.begin(pointer) : {

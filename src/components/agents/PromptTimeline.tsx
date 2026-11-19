@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { formatTime, weekdayLabel } from "../../lib/calendar/calendarTime";
 import { useI18nStore, useT } from "../../lib/i18n";
+import { UntestedTag } from "../common/UntestedTag";
+import { AGENT_ITEMS } from "../../lib/tabs/newTabItems";
 import { useUse24h } from "../../lib/timeFormat";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
-import type { UsageResetMark } from "../../lib/agents/agentUsageResets";
+import { usageBandRows, type UsageResetMark } from "../../lib/agents/agentUsageResets";
 import {
   TIMELINE_CARD_WIDTH,
   TIMELINE_LANE_HEIGHT,
@@ -33,8 +36,9 @@ interface Props {
   /** The now band — the "send now" drop zone, measured the same way. */
   nowBandRef: RefObject<HTMLDivElement>;
   /** Draws one card; `session` is set when the card stands for a whole
-   *  session's sent prompts, `drawnAt` is the instant the card sits at. */
-  renderCard: (card: PromptChartCard, occurrence?: string, session?: SessionSpan, drawnAt?: Date) => ReactNode;
+   *  session's sent prompts, `drawnAt` is the instant the card sits at and
+   *  `bar` the duration bar on its anchored corner. */
+  renderCard: (card: PromptChartCard, occurrence?: string, session?: SessionSpan, drawnAt?: Date, bar?: { anchor: "left" | "right"; width: number }) => ReactNode;
   /** Month view: a day's cluster asks to be looked at up close. */
   onRefine: (date: string) => void;
   /** The badge text for the card being carried, decided by the chart. */
@@ -53,15 +57,24 @@ interface Props {
   resets?: UsageResetMark[];
   /** A press on the empty lanes (not on a card): the selection marquee. */
   onBodyPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  /** A click on the folded night (`win.fold`): show this day in full. */
+  onUnfold?: () => void;
+  /** Where the prompt the composer holds would land, drawn dashed. */
+  preview?: { at: Date; message: string } | null;
+  /** Ids of the sent cards whose turn is running: their bar grows with `now`. */
+  running?: ReadonlySet<string>;
 }
 
 const BODY_PADDING = 8;
 /** The band is the width of the line plus a grip either side. */
 const NOW_BAND_WIDTH = 22;
+/** Half the Now pill's width, so the pill stays inside the axis at both ends. */
+const NOW_PILL_HALF = 46;
 /** The queue's caption above its first card. */
 const QUEUE_LABEL_HEIGHT = 16;
-/** A card's width while it is edited on the timeline (the CSS `is-editing` rule). */
-export const TIMELINE_EDIT_WIDTH = 460;
+
+/** An agent as the "+" menu names it ("Claude"), else its command. */
+const agentName = (cmd: string) => AGENT_ITEMS.find((item) => item.cmd === cmd)?.label ?? cmd;
 
 function hhmm(at: Date): string {
   return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
@@ -80,7 +93,7 @@ function hhmm(at: Date): string {
  * that scrolled the body took the now line away with it. The axis, with the
  * NOW label, is sticky, so scrolling the tab keeps the clock in view too.
  */
-export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, renderCard, onRefine, dropLabel, dropBlocked, emptyHint, onZoom, lifts, resets = [], onBodyPointerDown }: Props) {
+export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, renderCard, onRefine, dropLabel, dropBlocked, emptyHint, onZoom, lifts, resets = [], onBodyPointerDown, onUnfold, preview, running }: Props) {
   const t = useT();
   const lang = useI18nStore((s) => s.lang);
   const use24h = useUse24h();
@@ -128,12 +141,14 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
   // A session's sent prompts share one card on the lanes; the month's lamps
   // stay one per prompt.
   const laneItems = useMemo(() => (win.view === "month" ? items : sessionItems(items)), [items, win.view]);
-  const packed = useMemo(() => packLanes(laneItems, win, width), [laneItems, width, win]);
+  const packed = useMemo(() => packLanes(laneItems, win, width, now, undefined, undefined, running), [laneItems, now, running, width, win]);
   const clusters = useMemo(() => (win.view === "month" ? dayClusters(items, win, width) : []), [items, width, win]);
   const queued = useMemo(() => queuedStack(cards, now), [cards, now]);
   const ticks = useMemo(() => timelineTicks(win, width), [width, win]);
   const nowInside = now >= win.start && now < win.end;
   const nowX = Math.max(0, Math.min(width, timelineX(now, win, width)));
+  // The pill's centre: on the line, but never so near an end that it is cut.
+  const pillX = Math.max(NOW_PILL_HALF, Math.min(width - NOW_PILL_HALF, nowX));
   const lanes = Math.max(TIMELINE_MIN_LANES, win.view === "month" ? TIMELINE_MIN_LANES : packed.lanes);
   // The queue is a column at the now line, outside the lanes: the body is as
   // tall as the taller of the two, so no waiting card sits below the edge.
@@ -157,10 +172,9 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
   };
 
   const visibleResets = resets.filter((mark) => mark.at >= win.start && mark.at < win.end);
-  // The agent is named on the label only once there is more than one to tell apart.
-  const resetAgents = new Set(visibleResets.map((mark) => mark.agent)).size;
-  const resetText = (mark: UsageResetMark) =>
-    `${resetAgents > 1 ? `${mark.agent} ` : ""}${t(`promptChart.reset.${mark.kind}` as "promptChart.reset.session")}`;
+  // The usage band under the axis: one row per agent with a mark in view. The
+  // reset labels used to share the hour axis and collide with its hours.
+  const bandRows = useMemo(() => usageBandRows(resets, win), [resets, win]);
   const resetTitle = (mark: UsageResetMark) => t("promptChart.resetTitle", {
     agent: mark.agent,
     labels: mark.labels.join(", "),
@@ -175,35 +189,77 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
   const dropNow = drag?.kind === "card" && (drag.zone.kind === "now" || (drag.zone.kind === "past" && !dropBlocked));
   // Inside one day, the date is the range label's to say.
   const dropDate = (at: Date) => formatTimelineInstant(at, lang, use24h, win.view !== "day" && win.view !== "hour");
-  /** How far left a card edited at `x` must grow to keep its editor inside
-   *  the body, which clips sideways; 0 where it fits as it is. */
-  const editShift = (x: number) => Math.max(-x, Math.min(0, width - x - TIMELINE_EDIT_WIDTH));
 
   return (
     <div className={`agent-prompt-timeline is-${win.view}`} data-testid="prompt-timeline" ref={rootRef}>
-      <div className="agent-prompt-timeline-axis" aria-hidden="true">
-        {/* Keyed by position, not instant: on a spring-forward day two wall
-            hours are one instant, and the key would repeat. */}
-        {ticks.filter((tick) => tick.major || win.view === "day" || win.view === "hour").map((tick, index) => (
-          <span key={index} className={`agent-prompt-timeline-tick${tick.major ? " is-major" : ""}`} style={{ left: tick.x }}>
-            {tick.labelled ? tickLabel(tick.at, tick.label, tick.major) : ""}
+      <div className="agent-prompt-timeline-axis">
+        <div className="agent-prompt-timeline-axis-marks" aria-hidden="true">
+          {/* Keyed by position, not instant: on a spring-forward day two wall
+              hours are one instant, and the key would repeat. */}
+          {ticks.filter((tick) => tick.major || win.view === "day" || win.view === "hour").map((tick, index) => (
+            <span key={index} className={`agent-prompt-timeline-tick${tick.major ? " is-major" : ""}`} style={{ left: tick.x }}>
+              {tick.labelled ? tickLabel(tick.at, tick.label, tick.major) : ""}
+            </span>
+          ))}
+          <span className={`agent-prompt-timeline-now-pill${nowInside ? "" : " is-outside"}`} style={{ left: pillX }} title={t("promptChart.nowBand")}>
+            {t("promptChart.nowAt", { time: formatTime(hhmm(now), use24h) })}
           </span>
-        ))}
-        {visibleResets.map((mark) => (
-          <span key={`reset:${mark.key}`} className={`agent-prompt-timeline-reset-label is-${mark.kind}`} style={{ left: timelineX(mark.at, win, width) }} title={resetTitle(mark)}>
-            {resetText(mark)}
-          </span>
-        ))}
-        <span className={`agent-prompt-timeline-now-label${nowInside ? "" : " is-outside"}`} style={{ left: nowX }} title={t("promptChart.nowBand")}>
-          {t("promptChart.now")}
-        </span>
+        </div>
+        {win.fold && (
+          <button
+            type="button"
+            className="agent-prompt-timeline-fold"
+            data-testid="prompt-timeline-fold"
+            style={{ width: win.fold.px }}
+            title={t("promptChart.foldTitle")}
+            aria-label={t("promptChart.foldTitle")}
+            onClick={onUnfold}
+          >
+            {String(win.fold.start.getHours()).padStart(2, "0")}–{String(win.fold.end.getHours()).padStart(2, "0")}
+          </button>
+        )}
       </div>
+      {bandRows.length > 0 && (
+        <div className="agent-prompt-usage-band" data-testid="prompt-usage-band">
+          <span className="agent-prompt-usage-pill"><UntestedTag id="promptChart.usageBand" /></span>
+          {bandRows.map((row) => (
+            <div key={row.agent} className="agent-prompt-usage-row" data-testid="prompt-usage-row">
+              {row.sessions.map(({ mark, start, end, tone }) => {
+                const left = timelineX(start, win, width);
+                const right = timelineX(end, win, width);
+                return (
+                  <Fragment key={mark.key}>
+                    <span className={`agent-prompt-usage-bar is-${tone}`} style={{ left, width: Math.max(2, right - left) }} title={resetTitle(mark)}>
+                      <span>{t("promptChart.band.session", { agent: agentName(mark.agent), percent: Math.round(mark.percent) })}</span>
+                    </span>
+                    <span className="agent-prompt-usage-after" style={{ left: right + 6 }}>
+                      {t("promptChart.band.newWindow", { time: formatTime(hhmm(end), use24h) })}
+                    </span>
+                  </Fragment>
+                );
+              })}
+              {row.weekly.map((mark) => (
+                <span key={mark.key} className="agent-prompt-usage-week" style={{ left: timelineX(mark.at, win, width) }} title={resetTitle(mark)}>
+                  {t("promptChart.band.weekly", { agent: agentName(mark.agent) })}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="agent-prompt-timeline-stage">
         <div className="agent-prompt-timeline-underlay" aria-hidden="true">
+          {win.fold && <div className="agent-prompt-timeline-fold-shade" style={{ width: win.fold.px }} />}
           {(nowInside || now >= win.end) && <div className="agent-prompt-timeline-past" style={{ width: nowInside ? nowX : width }} />}
           {ticks.map((tick, index) => (
             <span key={`line:${index}`} className={`agent-prompt-timeline-line${tick.major ? " is-major" : ""}`} style={{ left: tick.x }} />
           ))}
+          {bandRows.flatMap((row) => row.sessions)
+            .filter((window) => window.tone === "high" && window.end > now)
+            .map((window) => {
+              const left = timelineX(window.start > now ? window.start : now, win, width);
+              return <div key={`limit:${window.mark.key}`} className="agent-prompt-timeline-limit" style={{ left, width: Math.max(0, timelineX(window.end, win, width) - left) }} />;
+            })}
           {visibleResets.map((mark) => (
             <span key={`reset:${mark.key}`} className={`agent-prompt-timeline-reset is-${mark.kind}`} style={{ left: timelineX(mark.at, win, width) }} />
           ))}
@@ -212,12 +268,12 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
           className="agent-prompt-timeline-body"
           ref={bodyRef}
           data-testid="prompt-timeline-body"
-          style={{ height: bodyHeight }}
           // Only a press on the lanes themselves: a card's press is its own.
           onPointerDown={win.view === "month" || !onBodyPointerDown ? undefined : (event) => {
             if (event.target === event.currentTarget) onBodyPointerDown(event);
           }}
         >
+          <div className="agent-prompt-timeline-sizer" style={{ height: bodyHeight }} aria-hidden="true" />
           {emptyHint && <div className="file-tree-empty" data-testid="prompt-timeline-empty">{emptyHint}</div>}
           {win.view === "month"
             ? clusters.map((cluster) => (
@@ -242,15 +298,15 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
             : packed.items.map((item) => (
               <div
                 key={item.key}
-                className={`agent-prompt-timeline-item${lifting(item.key) ? " is-lifting" : ""}${editShift(item.x) < 0 ? " is-edit-flip" : ""}`}
-                style={{ left: item.x, top: itemTop(item), width: item.width, ...(editShift(item.x) < 0 ? { "--edit-shift": `${editShift(item.x)}px` } as CSSProperties : {}) }}
+                className={`agent-prompt-timeline-item${lifting(item.key) ? " is-lifting" : ""}`}
+                style={{ left: item.x, top: itemTop(item), width: item.width }}
                 data-lane-top={laneTop(item)}
                 data-item-key={item.key}
               >
                 {renderCard(item.card, item.occurrence, item.members && {
                   cards: item.members.map((member) => member.card),
                   offsets: item.members.map((member) => timelineX(member.at, win, width) - item.x),
-                }, item.at)}
+                }, item.at, { anchor: item.anchor, width: item.barWidth })}
               </div>
             ))}
           {queued.length > 0 && (
@@ -268,6 +324,19 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
             data-testid="prompt-timeline-now-band"
             style={{ left: nowX - NOW_BAND_WIDTH / 2, width: NOW_BAND_WIDTH }}
           />
+          {preview && win.view !== "month" && preview.at >= win.start && preview.at < win.end && (
+            <div
+              className="agent-prompt-timeline-preview"
+              data-testid="prompt-timeline-preview"
+              style={{ left: Math.max(win.fold?.px ?? 0, Math.min(timelineX(preview.at, win, width), width - TIMELINE_CARD_WIDTH)), top: BODY_PADDING, width: TIMELINE_CARD_WIDTH }}
+            >
+              <span className="agent-prompt-card-top">
+                <strong>{formatTime(hhmm(preview.at), use24h)}</strong>
+                <span>{t("promptChart.lands")}</span>
+              </span>
+              <span className="agent-prompt-card-message">{preview.message}</span>
+            </div>
+          )}
           {dropAt && (
             <div className="agent-prompt-timeline-indicator" style={{ left: timelineX(dropAt, win, width) }}>
               <span className={`agent-prompt-timeline-badge${dropBlocked ? " is-blocked" : ""}`}>{dropLabel ? `${dropLabel} · ` : ""}{dropDate(dropAt)}</span>
@@ -275,7 +344,11 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
           )}
         </div>
       </div>
-      {drag?.kind === "marquee" && (
+      {/* The marquee and the ghost are fixed to the viewport and placed in client
+          coordinates. The chart is a size container (`container-type` applies
+          layout containment), which makes IT their containing block: drawn in
+          place they would sit offset by the chart's own origin. They go to the body. */}
+      {drag?.kind === "marquee" && createPortal(
         <div
           className="agent-prompt-timeline-marquee"
           data-testid="prompt-timeline-marquee"
@@ -286,9 +359,10 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
             width: Math.abs(drag.x - drag.x1),
             height: Math.abs(drag.y - drag.y1),
           }}
-        />
+        />,
+        document.body,
       )}
-      {drag?.kind === "card" && (
+      {drag?.kind === "card" && createPortal(
         <div
           className="agent-prompt-timeline-ghost"
           style={{ width: drag.width, transform: `translate(${drag.x - drag.grabDx}px, ${drag.y - drag.grabDy}px)` }}
@@ -298,7 +372,8 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
           {drag.zone.kind !== "time" && dropLabel && (
             <span className={`agent-prompt-timeline-badge${drag.zone.kind === "none" || dropBlocked ? " is-blocked" : ""}`}>{dropLabel}</span>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
