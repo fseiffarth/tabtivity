@@ -57,6 +57,8 @@ vi.mock("../../stores/tabs", async (importActual) => {
   };
 });
 
+let installedAgents: { id: string; bin: string; installed: boolean }[] = [];
+
 import { SyncHandoffButton } from "../../components/embed/SyncHandoffButton";
 
 const file = { relPath: "a.py", localText: "l", remoteText: "r", localMtime: 1, remoteMtime: 2, newer: null, newerBasis: null, changes: [] };
@@ -80,7 +82,23 @@ describe("SyncHandoffButton", () => {
     mockInvoke.mockReset();
     queuePrompt.mockClear();
     addTabToScope.mockClear();
-    mockInvoke.mockResolvedValue({ id: "conflicts-1", agentDir: "~/handoff/conflicts-1", fileCount: 1 });
+    installedAgents = [
+      { id: "claude", bin: "claude", installed: true },
+      { id: "codex", bin: "codex", installed: true },
+    ];
+    // The "+" menu's probes (`useAddTabMenuData`) answer in the backend's real shapes.
+    mockInvoke.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "list_agents":
+          return Promise.resolve(installedAgents);
+        case "list_local_drivers":
+          return Promise.resolve([]);
+        case "probe_binaries":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve({ id: "conflicts-1", agentDir: "~/handoff/conflicts-1", fileCount: 1 });
+      }
+    });
   });
 
   it("is disabled while the host is not connected", () => {
@@ -143,14 +161,46 @@ describe("SyncHandoffButton", () => {
     }
   });
 
-  it("opens a new agent tab with the prompt queued", async () => {
+  it("opens a new agent tab with the prompt queued, in the default agent", async () => {
     setup();
     fireEvent.click(screen.getByRole("button", { name: /Hand to an agent/ }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
-    fireEvent.click(screen.getByText("Open a new agent tab with this prompt"));
+    const open = screen.getByText("Open a new agent tab with this prompt") as HTMLButtonElement;
+    await waitFor(() => expect(open.disabled).toBe(false));
+    fireEvent.click(open);
     await waitFor(() => expect(addTabToScope).toHaveBeenCalled());
     await waitFor(() => expect(queuePrompt).toHaveBeenCalled());
+    expect(addTabToScope.mock.calls[0][0]).toBe("p1");
+    expect(addTabToScope.mock.calls[0][1]).toMatchObject({ cmd: "claude" });
     expect(queuePrompt.mock.calls[0][0]).toBe("p1");
+  });
+
+  it("opens the new tab in the agent picked for it, among the installed ones", async () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: /Hand to an agent/ }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    const open = screen.getByText("Open a new agent tab with this prompt") as HTMLButtonElement;
+    await waitFor(() => expect(open.disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Agent for the new tab", expanded: false }));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Claude", "Codex"]);
+    fireEvent.click(screen.getByRole("option", { name: "Codex" }));
+    fireEvent.click(open);
+    await waitFor(() => expect(addTabToScope).toHaveBeenCalled());
+    expect(addTabToScope.mock.calls[0][1]).toMatchObject({ cmd: "codex" });
+    await waitFor(() => expect(queuePrompt).toHaveBeenCalled());
+  });
+
+  it("says no local agent is available, and opens nothing, when none is installed", async () => {
+    installedAgents = [];
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: /Hand to an agent/ }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("No local agent is available for a new tab.")).toBeTruthy());
+    const open = screen.getByText("Open a new agent tab with this prompt") as HTMLButtonElement;
+    expect(open.disabled).toBe(true);
+    fireEvent.click(open);
+    expect(addTabToScope).not.toHaveBeenCalled();
+    expect(queuePrompt).not.toHaveBeenCalled();
   });
 
   it("says why when the export fails", async () => {
