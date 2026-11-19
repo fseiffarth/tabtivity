@@ -1059,6 +1059,7 @@ export const enSource = {
   "mobile.voice.errNetwork": "The phone's speech service is unavailable. Check its connection and try again.",
   "mobile.voice.errLanguage": "The phone's speech service does not support this language.",
   "mobile.voice.errNoSpeech": "No speech was heard. Tap the microphone and try again.",
+  "mobile.voice.errInterrupted": "Dictation paused when you left this screen. Tap the microphone to resume.",
   "mobile.voice.errStopped": "Voice typing stopped unexpectedly. Try again or use the keyboard microphone.",
   "mobile.voice.handsFree": "Hands-free",
   "mobile.voice.handsFreeHint": "A pause sends what you dictated after a chime; the mic opens again once the answer is over. Keep the screen on and this page open.",

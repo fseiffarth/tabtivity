@@ -1065,6 +1065,7 @@ export const dict: Dict = {
   "mobile.voice.errNetwork": "Il servizio vocale del telefono non è disponibile. Controlla la connessione e riprova.",
   "mobile.voice.errLanguage": "Il servizio vocale del telefono non supporta questa lingua.",
   "mobile.voice.errNoSpeech": "Nessuna voce rilevata. Tocca il microfono e riprova.",
+  "mobile.voice.errInterrupted": "La dettatura si è interrotta quando hai lasciato questa schermata. Tocca il microfono per riprendere.",
   "mobile.voice.errStopped": "La dettatura si è interrotta inaspettatamente. Riprova o usa il microfono della tastiera.",
   "mobile.voice.handsFree": "Vivavoce",
   "mobile.voice.handsFreeHint": "Una pausa invia il dettato dopo un segnale acustico; il microfono si riapre a risposta finita. Tieni lo schermo acceso e questa pagina aperta.",

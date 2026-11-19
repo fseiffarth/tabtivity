@@ -127,6 +127,28 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     expect(composerStatus().textContent).toContain("Heard: fix the mobile voice input");
   });
 
+  it("keeps settled words when hidden and resumes with a fresh recognizer", async () => {
+    render(<Terminal tab={{ id: "opaque-tab", label: "Codex", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await act(async () => {});
+    const speech = FakeRecognition.instances[0];
+    act(() => speech.onresult?.(finalResult("first phrase")));
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    } finally {
+      hidden.mockRestore();
+    }
+    expect(screen.getByText(/Tap the microphone to resume/)).toBeTruthy();
+    expect(speech.onresult).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await act(async () => {});
+    act(() => FakeRecognition.instances[1].onresult?.(finalResult("second phrase")));
+    expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value)
+      .toBe("first phrase second phrase");
+  });
+
   it("listens in the phone's language, or in the one the Reader's picker chose", async () => {
     Object.defineProperty(window.navigator, "language", { configurable: true, value: "en-GB" });
     render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);

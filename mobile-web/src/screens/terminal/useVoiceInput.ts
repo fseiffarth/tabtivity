@@ -378,6 +378,7 @@ export function useVoiceInput({
       if (!layered()) return guess;
       return !isStopWord(guess) && handsFree.previewOk.current(guess) ? guess : "";
     };
+    let ended = false;
     const session: DictationSession = startDictation(Recognition, { lang: language, local: mode === "local" }, {
       onStart: () => {
         setListening(true);
@@ -422,20 +423,21 @@ export function useVoiceInput({
       onError: (message) => setVoiceFailure({ key: message }),
       onLevel: (level) => paintMicLevel(dictateButton.current, level),
       onEnd: () => {
+        ended = true;
         // The last words the recognizer finalized for a stop are still held.
         settle(true);
         setVoiceInterim("");
         window.clearTimeout(settleTimer.current);
         settleNow.current = () => {};
         tabbyGate.clear();
-        if (recognition.current === session) recognition.current = undefined;
+        recognition.current = undefined;
         handsFree.sendGuard.current?.reset();
         voiceOpen.current = false;
         setListening(false);
         setVoiceStatus(null);
       },
     });
-    recognition.current = session;
+    if (!ended) recognition.current = session;
   };
   useEffect(() => () => {
     window.clearTimeout(settleTimer.current);

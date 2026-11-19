@@ -1065,6 +1065,7 @@ export const dict: Dict = {
   "mobile.voice.errNetwork": "Der Sprachdienst des Telefons ist nicht erreichbar. Prüfe die Verbindung und versuche es erneut.",
   "mobile.voice.errLanguage": "Der Sprachdienst des Telefons unterstützt diese Sprache nicht.",
   "mobile.voice.errNoSpeech": "Es wurde keine Sprache erkannt. Tippe auf das Mikrofon und versuche es erneut.",
+  "mobile.voice.errInterrupted": "Die Diktierfunktion wurde beim Verlassen dieser Ansicht angehalten. Tippe auf das Mikrofon, um fortzufahren.",
   "mobile.voice.errStopped": "Die Spracheingabe wurde unerwartet beendet. Versuche es erneut oder nutze das Mikrofon der Tastatur.",
   "mobile.voice.handsFree": "Freihändig",
   "mobile.voice.handsFreeHint": "Eine Pause sendet das Diktierte nach einem Ton; das Mikrofon öffnet sich wieder, sobald die Antwort vorbei ist. Lass den Bildschirm an und diese Seite offen.",
