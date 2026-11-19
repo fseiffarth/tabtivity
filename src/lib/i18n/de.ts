@@ -6042,7 +6042,7 @@ export const dict: Dict = {
   "terminal.promptStrip.exportSubagent": "Subagent",
   "terminal.promptStrip.exportInterrupted": "Unterbrochen",
   "terminal.promptStrip.exportCut": "(an der Längengrenze abgeschnitten)",
-  "terminal.promptStrip.exportEarlier": "Nur die letzten {n} Einträge der Sitzung sind enthalten; frühere Runden nicht.",
+  "terminal.promptStrip.exportEarlier": "Nur die letzten {n} Einträge der Sitzung sind enthalten; frühere Durchgänge nicht.",
   "terminal.promptStrip.exportNoSession": "Für diesen Tab gibt es noch keine gespeicherte Unterhaltung zum Exportieren.",
   "terminal.promptStrip.exported": "Gespeichert unter {path}",
   "terminal.promptStrip.exportFailed": "Export fehlgeschlagen: {error}",

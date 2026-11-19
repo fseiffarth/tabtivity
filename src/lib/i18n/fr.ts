@@ -6006,7 +6006,7 @@ export const dict: Dict = {
   "terminal.promptStrip.keysChat": "↑ ↓ parcourir · Entrée ou double-clic le place dans la zone de saisie · {modifier}+C copier · Échap fermer",
   "terminal.promptStrip.exportSession": "Exporter la session…",
   "terminal.promptStrip.exportSessionHint": "Enregistrer toute la conversation de cet onglet — vos prompts, les réponses de l'agent, ses sous-agents — dans un fichier Markdown",
-  "terminal.promptStrip.exportChat": "Exporter comme Chat…",
+  "terminal.promptStrip.exportChat": "Exporter au format Chat…",
   "terminal.promptStrip.exportChatHint": "Enregistrer toute la conversation de cet onglet sous forme de page web qui ressemble au Chat — s'ouvre dans n'importe quel navigateur, s'imprime en PDF",
   "terminal.promptStrip.exportPrompts": "Exporter mes prompts…",
   "terminal.promptStrip.exportPromptsHint": "Enregistrer uniquement les prompts envoyés dans cet onglet, du plus ancien au plus récent, dans un fichier Markdown",
