@@ -2375,9 +2375,7 @@ function PdfCanvas({
           <span>
             {t(
               syncNotice.opened
-                ? syncNotice.kind === "remote"
-                  ? "pdfViewer.syncRemoteOpenedMsg"
-                  : "pdfViewer.syncNoMapOpenedMsg"
+                ? "pdfViewer.syncNoMapOpenedMsg"
                 : syncNotice.kind === "miss"
                   ? "pdfViewer.syncMissMsg"
                   : SYNC_NOTICE_MSG[syncNotice.kind],
@@ -2386,6 +2384,7 @@ function PdfCanvas({
                 file: basename(syncNotice.source),
               },
             )}
+            {fileSource === "remote" && <UntestedTag id="pdfViewer.syncRemote" />}
             {syncNotice.kind === "remote" && <UntestedTag id="pdfViewer.syncRemoteMsg" />}
             {syncNotice.opened && <UntestedTag id="pdfViewer.syncOpenedByName" />}
           </span>
@@ -2532,7 +2531,7 @@ function PdfCanvas({
                     // Wired whether or not a map exists: without one the click
                     // explains itself (a "recompile" notice) instead of doing
                     // nothing. The crosshair cursor still only arms with a map.
-                    onSyncClick={ref.src === SELF ? onSyncClick : undefined}
+                    onSyncClick={ref.src === SELF && !compileHeld ? onSyncClick : undefined}
                     highlight={highlight && i === syncSheetIndex ? highlight : null}
                     onReveal={() => { restoreScroll.current = null; }}
                     searchMatches={searchByPage.get(i + 1)}

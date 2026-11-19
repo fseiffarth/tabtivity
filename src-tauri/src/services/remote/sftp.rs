@@ -1057,16 +1057,19 @@ pub async fn metadata_opt_with_mode_on(
     sftp: &Sftp,
     path: &str,
 ) -> Result<Option<(u64, Option<u64>, Option<u32>)>, String> {
+    let Some(meta) = metadata_attrs_opt_on(sftp, path).await? else {
+        return Ok(None);
+    };
+    let size = meta.len().ok_or_else(|| format!("sftp metadata for '{path}' carries no size"))?;
+    let modified = meta.modified().map(|t| t.as_duration().as_secs());
+    Ok(Some((size, modified, permission_bits(&meta))))
+}
+
+/// Keep the file type for readers which may open only regular files.
+pub(crate) async fn metadata_attrs_opt_on(sftp: &Sftp, path: &str) -> Result<Option<openssh_sftp_client::metadata::MetaData>, String> {
     use openssh_sftp_client::error::{Error as SftpClientError, SftpErrorKind};
-    let mut fs = sftp.fs();
-    match fs.metadata(path).await {
-        Ok(meta) => {
-            let size = meta
-                .len()
-                .ok_or_else(|| format!("sftp metadata for '{path}' carries no size"))?;
-            let modified = meta.modified().map(|t| t.as_duration().as_secs());
-            Ok(Some((size, modified, permission_bits(&meta))))
-        }
+    match sftp.fs().metadata(path).await {
+        Ok(meta) => Ok(Some(meta)),
         Err(SftpClientError::SftpError(SftpErrorKind::NoSuchFile, _)) => Ok(None),
         Err(e) => Err(format!("sftp metadata failed: {e}")),
     }
@@ -1091,7 +1094,7 @@ pub async fn is_dir_opt_on(sftp: &Sftp, path: &str) -> Result<Option<bool>, Stri
 
 /// Open a one-shot session, run `op` against it, then close + reap (even on op
 /// error). Cuts the per-wrapper boilerplate while keeping teardown guaranteed.
-async fn with_oneshot<F, Fut, T>(
+pub(crate) async fn with_oneshot<F, Fut, T>(
     user: &Option<String>,
     host: &str,
     port: Option<u16>,

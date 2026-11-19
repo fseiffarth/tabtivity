@@ -1461,3 +1461,24 @@ fn page_offsets_hold_for_windows_line_endings() {
     assert_eq!(boxes.iter().map(|b| b.rec.line).collect::<Vec<_>>(), [5]);
     assert_eq!(walk_start(&crlf, &pre, &wanted(&[3])), pre.pages.get(&3).copied());
 }
+
+#[test]
+fn compressed_host_map_respells_physical_inputs_for_both_directions() {
+    use std::io::Write;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(DOC.as_bytes()).unwrap();
+    let bytes = gz.finish().unwrap();
+    let map = parse_map(bytes.as_slice(), true, MAX_MAP_BYTES).unwrap();
+    let base = PathBuf::from("/linked");
+    let spelling = Spelling::from_roots(&base, vec![(base.clone(), PathBuf::from("/proj"))]);
+    let local = Spelling::new(Path::new("/proj"));
+    let rects = view_among(map.line_boxes(), &map.pre, &spelling, "/linked/main.tex", 3);
+    assert_eq!(rects, view_in(DOC, &map.pre, &local, "/proj/main.tex", 3));
+    let rect = &rects[0];
+    assert_eq!(resolve_in(&map, &spelling, rect.page, rect.x, rect.y), Some(("/linked/main.tex".into(), 3)));
+    let epoch = SystemTime::UNIX_EPOCH;
+    let stale = stale_inputs(&map.pre.inputs, &spelling, &base, epoch, |p| {
+        (p == base.join("main.tex")).then_some(epoch + STALE_GRACE + std::time::Duration::from_secs(1))
+    });
+    assert_eq!(stale, ["/linked/main.tex"]);
+}

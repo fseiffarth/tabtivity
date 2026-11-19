@@ -7,11 +7,17 @@
 //! comes from the webview, and a map that is a link out of the project would
 //! otherwise be read wherever it points.
 
+use crate::services::{
+    remote::{remote_target_for, RemotePoolState},
+    remote_sync::is_under_mirror,
+    synctex::remote::{load, RemoteMap},
+};
+use crate::tauri_host::Ctx;
 use std::path::{Path, PathBuf};
 
-pub use crate::services::synctex::{MapStatus, PageLines, SyncRect, SyncSource};
 use crate::services::fs_confine::{allowed_roots, confine_abs_within};
 use crate::services::synctex::{map_candidates, page_lines, resolve, status, view, MAX_MAP_BYTES};
+pub use crate::services::synctex::{MapStatus, PageLines, SyncRect, SyncSource};
 
 /// Refuse `pdf` unless it, and each `.synctex(.gz)` beside it that exists, lies
 /// inside `roots`.
@@ -28,11 +34,43 @@ fn confine_pdf(pdf: &Path, roots: &[PathBuf]) -> Result<(), String> {
 /// `read` on `pdf`, off the main thread (a sync command runs on it, and a large
 /// document's map is megabytes to inflate), once [`confine_pdf`] passed against
 /// the roots of `project_id`'s scope.
-async fn on_confined_pdf<T: Send + 'static>(
+async fn on_confined_pdf<T: Default + Send + 'static>(
     pdf: String,
     project_id: Option<String>,
+    ctx: Ctx,
+    freshness: bool,
+    input: Option<&str>,
+    host_read: impl FnOnce(&RemoteMap, &Path) -> T + Send + 'static,
     read: impl FnOnce(&Path) -> T + Send + 'static,
 ) -> Result<T, String> {
+    if crate::services::synctex::is_network_path(&pdf) {
+        return Err("network PDF paths are unavailable for SyncTeX".into());
+    }
+    let route_pdf = pdf.clone();
+    let route_project = project_id.clone();
+    let target = app_core::rt::try_blocking("synctex route", move || {
+        Ok(route_project
+            .as_deref()
+            .and_then(remote_target_for)
+            .filter(|target| !is_under_mirror(&target.project_id, &route_pdf)))
+    })
+    .await?;
+    if let Some(target) = target {
+        let map = load(
+            ctx.get::<RemotePoolState>(),
+            &target,
+            &pdf,
+            freshness,
+            input,
+        )
+        .await?;
+        return app_core::rt::try_blocking("remote synctex search", move || {
+            Ok(map
+                .map(|m| host_read(&m, Path::new(&pdf)))
+                .unwrap_or_default())
+        })
+        .await;
+    }
     app_core::rt::try_blocking("synctex", move || {
         let pdf = PathBuf::from(pdf);
         confine_pdf(&pdf, &allowed_roots(project_id.as_deref()))?;
@@ -48,8 +86,21 @@ async fn on_confined_pdf<T: Send + 'static>(
 /// something that did not emit one, is an ordinary case that falls back to
 /// content fingerprinting. A path outside the project is refused.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn synctex_page_lines(pdf: String, project_id: Option<String>) -> Result<Vec<PageLines>, String> {
-    on_confined_pdf(pdf, project_id, |pdf| page_lines(pdf, MAX_MAP_BYTES)).await
+pub async fn synctex_page_lines(
+    pdf: String,
+    project_id: Option<String>,
+    ctx: Ctx,
+) -> Result<Vec<PageLines>, String> {
+    on_confined_pdf(
+        pdf,
+        project_id,
+        ctx,
+        false,
+        None,
+        |map, pdf| map.pages(pdf),
+        |pdf| page_lines(pdf, MAX_MAP_BYTES),
+    )
+    .await
 }
 
 /// Reverse search: which source line produced the point `(x, y)` (big points
@@ -62,10 +113,20 @@ pub async fn synctex_edit(
     x: f64,
     y: f64,
     project_id: Option<String>,
+    ctx: Ctx,
 ) -> Result<Option<SyncSource>, String> {
-    on_confined_pdf(pdf, project_id, move |pdf| {
-        resolve(pdf, page, x, y).map(|(input, line)| SyncSource { input, line })
-    })
+    on_confined_pdf(
+        pdf,
+        project_id,
+        ctx,
+        false,
+        None,
+        move |map, _| {
+            map.resolve(page, x, y)
+                .map(|(input, line)| SyncSource { input, line })
+        },
+        move |pdf| resolve(pdf, page, x, y).map(|(input, line)| SyncSource { input, line }),
+    )
     .await
 }
 
@@ -75,8 +136,21 @@ pub async fn synctex_edit(
 /// a hit, to warn that the line it just jumped to belongs to the build before
 /// the edit — and words a "recompile" notice from the answer.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn synctex_status(pdf: String, project_id: Option<String>) -> Result<MapStatus, String> {
-    on_confined_pdf(pdf, project_id, status).await
+pub async fn synctex_status(
+    pdf: String,
+    project_id: Option<String>,
+    ctx: Ctx,
+) -> Result<MapStatus, String> {
+    on_confined_pdf(
+        pdf,
+        project_id,
+        ctx,
+        true,
+        None,
+        |map, _| map.status.clone(),
+        status,
+    )
+    .await
 }
 
 /// Forward search: where in `pdf` the source line `input:line` landed, as every
@@ -88,8 +162,20 @@ pub async fn synctex_view(
     input: String,
     line: u32,
     project_id: Option<String>,
+    ctx: Ctx,
 ) -> Result<Vec<SyncRect>, String> {
-    on_confined_pdf(pdf, project_id, move |pdf| view(pdf, &input, line)).await
+    let host_input = input.clone();
+    let local_input = input.clone();
+    on_confined_pdf(
+        pdf,
+        project_id,
+        ctx,
+        false,
+        Some(&input),
+        move |map, _| map.view(&host_input, line),
+        move |pdf| view(pdf, &local_input, line),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -112,7 +198,11 @@ mod tests {
         std::fs::write(&stray, b"%PDF").unwrap();
         assert!(confine_pdf(&stray, &roots).is_err());
         // A `..` walk out of it.
-        assert!(confine_pdf(&root.join("sub").join("..").join("..").join("x.pdf"), &roots).is_err());
+        assert!(confine_pdf(
+            &root.join("sub").join("..").join("..").join("x.pdf"),
+            &roots
+        )
+        .is_err());
     }
 
     #[cfg(unix)]

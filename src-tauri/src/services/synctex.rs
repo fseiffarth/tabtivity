@@ -611,7 +611,10 @@ fn resolve_in_hbox(bx: &HBox, cx: f64) -> (u32, u32) {
 /// canonical form prefixes it, it is spelled through that ancestor as the
 /// caller spelled it. A lexical cleanup would not do, since the `./` pdfTeX
 /// writes is the least of it.
+#[derive(Clone)]
 struct Spelling {
+    remote: bool,
+    missing_input: Option<PathBuf>,
     base: PathBuf,
     /// `(as spelled, canonical)`, deepest first.
     roots: Vec<(PathBuf, PathBuf)>,
@@ -622,7 +625,7 @@ struct Spelling {
 /// verbatim *local* path (`\\?\C:\…`) is not one. Lexical on purpose: the
 /// map is project content, and resolving a hostile path it names would
 /// contact that host on Windows with the user's sign-in (gap 53).
-fn is_network_path(s: &str) -> bool {
+pub(crate) fn is_network_path(s: &str) -> bool {
     let b = s.as_bytes();
     let sep = |c: u8| c == b'\\' || c == b'/';
     if b.len() < 2 || !sep(b[0]) || !sep(b[1]) {
@@ -662,6 +665,10 @@ fn lexical_clean(p: &Path) -> PathBuf {
 }
 
 impl Spelling {
+    fn from_roots(base: &Path, roots: Vec<(PathBuf, PathBuf)>) -> Self {
+        Self { base: base.to_owned(), roots, remote: true, missing_input: None }
+    }
+
     fn new(base: &Path) -> Self {
         let roots = base
             .ancestors()
@@ -669,6 +676,8 @@ impl Spelling {
             .filter_map(|a| std::fs::canonicalize(a).ok().map(|c| (a.to_path_buf(), c)))
             .collect();
         Spelling {
+            remote: false,
+            missing_input: None,
             base: base.to_path_buf(),
             roots,
         }
@@ -683,12 +692,16 @@ impl Spelling {
             return input.to_string();
         }
         let p = Path::new(input);
-        let abs: PathBuf = if p.is_absolute() {
+        let abs: PathBuf = if p.is_absolute() || (self.remote && input.starts_with('/')) {
             p.to_path_buf()
         } else {
             self.base.join(p)
         };
-        let Ok(canonical) = std::fs::canonicalize(&abs) else {
+        let canonical = if self.remote {
+            lexical_clean(&abs)
+        } else if let Ok(path) = std::fs::canonicalize(&abs) {
+            path
+        } else {
             return crate::paths::display_path(&abs);
         };
         for (spelled, root) in &self.roots {
@@ -698,10 +711,18 @@ impl Spelling {
                 } else {
                     spelled.join(rest)
                 };
-                return crate::paths::display_path(&respelled);
+                return self.display(&respelled);
             }
         }
-        crate::paths::display_path(&canonical)
+        self.display(&canonical)
+    }
+
+    fn display(&self, path: &Path) -> String {
+        if self.remote && cfg!(windows) {
+            path.to_string_lossy().replace('\\', "/")
+        } else {
+            crate::paths::display_path(path)
+        }
     }
 
     /// Whether an `Input:` path lies under `root` by its *spelling* alone, no
@@ -713,7 +734,7 @@ impl Spelling {
             return false;
         }
         let p = Path::new(input);
-        let abs = lexical_clean(&if p.is_absolute() { p.to_path_buf() } else { self.base.join(p) });
+        let abs = lexical_clean(&if p.is_absolute() || (self.remote && input.starts_with('/')) { p.to_path_buf() } else { self.base.join(p) });
         let root = lexical_clean(root);
         if abs.starts_with(&root) {
             return true;
@@ -737,8 +758,15 @@ pub(crate) const MAX_MAP_BYTES: u64 = 512 * 1024 * 1024;
 static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
 
 /// The cached map and the file it was read from.
+#[derive(PartialEq)]
+enum CacheKey {
+    Local(PathBuf),
+    Remote { project: String, host: String, user: Option<String>, port: Option<u16>, path: String, canonical: PathBuf },
+}
+
 struct Cached {
-    path: PathBuf,
+    path: CacheKey,
+    remote_spelling: Option<Spelling>,
     /// The file's mtime and size when it was read.
     stamp: (SystemTime, u64),
     map: Arc<Map>,
@@ -846,6 +874,12 @@ fn stale_inputs(
     mtime_of: impl Fn(&Path) -> Option<SystemTime>,
 ) -> Vec<String> {
     let threshold = map_mtime + STALE_GRACE;
+    source_paths(inputs, spelling, root).into_iter()
+        .filter(|abs| mtime_of(Path::new(abs)).is_some_and(|m| m > threshold))
+        .collect()
+}
+
+fn source_paths(inputs: &HashMap<u32, String>, spelling: &Spelling, root: &Path) -> Vec<String> {
     let mut out: Vec<String> = inputs
         .values()
         // By extension first: only the few sources are worth resolving.
@@ -858,11 +892,19 @@ fn stale_inputs(
         .filter(|p| spelling.lexically_within(p, root))
         .map(|p| spelling.absolutise(p))
         .filter(|abs| Path::new(abs).starts_with(root))
-        .filter(|abs| mtime_of(Path::new(abs)).is_some_and(|m| m > threshold))
         .collect();
     out.sort();
     out.dedup();
     out
+}
+
+/// An out-dir build may write its PDF outside the main source directory.
+fn source_root(map: &Map, spelling: &Spelling) -> PathBuf {
+    map.pre.inputs.iter().min_by_key(|(tag, _)| **tag)
+        .filter(|(_, p)| !is_network_path(p))
+        .map(|(_, p)| PathBuf::from(spelling.absolutise(p)))
+        .and_then(|main| main.parent().map(Path::to_owned))
+        .unwrap_or_else(|| spelling.base.clone())
 }
 
 /// Probe the map beside `pdf` ({@link MapStatus}). The map is loaded through the
@@ -884,17 +926,7 @@ pub fn status(pdf: &Path) -> MapStatus {
         Some(map) => {
             let pdf_dir = pdf_dir(pdf);
             let spelling = Spelling::new(pdf_dir);
-            // The main document is the lowest-numbered input; its directory is
-            // the tree the person edits (an out-dir build puts the PDF elsewhere).
-            let root = map
-                .pre
-                .inputs
-                .iter()
-                .min_by_key(|(tag, _)| **tag)
-                .filter(|(_, p)| !is_network_path(p))
-                .map(|(_, p)| PathBuf::from(spelling.absolutise(p)))
-                .and_then(|main| main.parent().map(Path::to_path_buf))
-                .unwrap_or_else(|| pdf_dir.to_path_buf());
+            let root = source_root(&map, &spelling);
             stale_inputs(&map.pre.inputs, &spelling, &root, map_mtime, mtime)
         }
         None => Vec::new(),
@@ -912,18 +944,18 @@ pub fn status(pdf: &Path) -> MapStatus {
 /// Only a regular file is opened: a FIFO planted under the map's name would
 /// hold the reading thread forever.
 fn read_map(path: &Path, cap: u64) -> Option<Map> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > cap { return None; }
+    parse_map(std::fs::File::open(path).ok()?, path.extension().is_some_and(|e| e == "gz"), cap)
+}
+
+fn parse_map(reader: impl std::io::Read, gz: bool, cap: u64) -> Option<Map> {
     use std::io::Read;
-    if !std::fs::metadata(path).ok()?.is_file() {
-        return None;
-    }
     let mut text = String::new();
-    let read = if path.extension().is_some_and(|e| e == "gz") {
-        let file = std::fs::File::open(path).ok()?;
-        flate2::read::GzDecoder::new(file.take(cap))
-            .take(cap + 1)
-            .read_to_string(&mut text)
+    let read = if gz {
+        flate2::read::GzDecoder::new(reader.take(cap)).take(cap + 1).read_to_string(&mut text)
     } else {
-        std::fs::File::open(path).ok()?.take(cap + 1).read_to_string(&mut text)
+        reader.take(cap + 1).read_to_string(&mut text)
     };
     if read.is_err() || text.len() as u64 > cap {
         return None;
@@ -940,13 +972,17 @@ fn load_map(pdf: &Path) -> Option<Arc<Map>> {
     let path = map_path(pdf)?;
     let meta = std::fs::metadata(&path).ok()?;
     let stamp = (meta.modified().ok()?, meta.len());
-    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(hit) = cache.as_ref().filter(|c| c.path == path && c.stamp == stamp) {
+    static LOCAL_LOAD: Mutex<()> = Mutex::new(());
+    let _guard = LOCAL_LOAD.lock().unwrap_or_else(PoisonError::into_inner);
+    let key = CacheKey::Local(path.clone());
+    if let Some(hit) = CACHE.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+        .filter(|c| c.path == key && c.stamp == stamp) {
         return Some(hit.map.clone());
     }
     let map = Arc::new(read_map(&path, MAX_MAP_BYTES)?);
-    *cache = Some(Cached {
-        path,
+    *CACHE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Cached {
+        path: key,
+        remote_spelling: None,
         stamp,
         map: map.clone(),
     });
@@ -976,8 +1012,12 @@ fn resolve_point(map: &Map, spelling: &Spelling, boxes: &[HBox], x: f64, y: f64)
 /// record names an input the map never declared.
 pub fn resolve(pdf: &Path, page: u32, x: f64, y: f64) -> Option<(String, u32)> {
     let map = load_map(pdf)?;
+    resolve_in(&map, &Spelling::new(pdf_dir(pdf)), page, x, y)
+}
+
+fn resolve_in(map: &Map, spelling: &Spelling, page: u32, x: f64, y: f64) -> Option<(String,u32)> {
     let boxes = drop_backgrounds(page_hboxes(&map.text, page, &map.pre));
-    resolve_point(&map, &Spelling::new(pdf_dir(pdf)), &boxes, x, y)
+    resolve_point(map, spelling, &boxes, x, y)
 }
 
 /// {@link resolve} for many points on many pages, walking the map once: what a
@@ -988,6 +1028,10 @@ pub fn resolve_pages(pdf: &Path, points: &BTreeMap<u32, Vec<(f64, f64)>>) -> BTr
     let Some(map) = load_map(pdf) else {
         return unanswered();
     };
+    resolve_pages_in(&map, &Spelling::new(pdf_dir(pdf)), points)
+}
+
+fn resolve_pages_in(map: &Map, spelling: &Spelling, points: &BTreeMap<u32, Vec<(f64, f64)>>) -> BTreeMap<u32, Vec<Option<(String, u32)>>> {
     let wanted: BTreeSet<u32> = points.keys().copied().collect();
     let mut by_page: BTreeMap<u32, Vec<HBox>> = BTreeMap::new();
     for (page, bx) in walk_hboxes(&map.text, &map.pre, Some(&wanted)) {
@@ -995,14 +1039,13 @@ pub fn resolve_pages(pdf: &Path, points: &BTreeMap<u32, Vec<(f64, f64)>>) -> BTr
     }
     let by_page: BTreeMap<u32, Vec<HBox>> =
         by_page.into_iter().map(|(page, boxes)| (page, drop_backgrounds(boxes))).collect();
-    let spelling = Spelling::new(pdf_dir(pdf));
     points
         .iter()
         .map(|(page, list)| {
             let boxes = by_page.get(page).map(Vec::as_slice).unwrap_or_default();
             let answers = list
                 .iter()
-                .map(|&(x, y)| resolve_point(&map, &spelling, boxes, x, y))
+                .map(|&(x, y)| resolve_point(map, spelling, boxes, x, y))
                 .collect();
             (*page, answers)
         })
@@ -1023,6 +1066,12 @@ pub fn resolve_pages(pdf: &Path, points: &BTreeMap<u32, Vec<(f64, f64)>>) -> BTr
 /// longer exists. Two recorded files sharing the name is an honest miss — never
 /// the other file's line.
 fn input_tags(pre: &Preamble, input: &str, spelling: &Spelling) -> BTreeSet<u32> {
+    input_tags_with(pre, input, spelling, |p| {
+        if spelling.remote { spelling.missing_input.as_deref() == Some(p) } else { !p.exists() }
+    })
+}
+
+fn input_tags_with(pre: &Preamble, input: &str, spelling: &Spelling, mut missing: impl FnMut(&Path) -> bool) -> BTreeSet<u32> {
     if is_network_path(input) {
         return BTreeSet::new();
     }
@@ -1054,7 +1103,7 @@ fn input_tags(pre: &Preamble, input: &str, spelling: &Spelling) -> BTreeSet<u32>
         .map(|(_, path)| path.as_path())
         .collect();
     match named.into_iter().collect::<Vec<_>>().as_slice() {
-        [only] if !only.exists() => recorded
+        [only] if missing(only) => recorded
             .iter()
             .filter(|(_, path)| path == only)
             .map(|(tag, _)| *tag)
@@ -1432,6 +1481,10 @@ pub(crate) fn page_lines(pdf: &Path, cap: u64) -> Vec<PageLines> {
     let Some(map) = map_path(pdf).and_then(|path| read_map(&path, cap)) else {
         return Vec::new();
     };
+    page_lines_in(&map, stem)
+}
+
+fn page_lines_in(map: &Map, stem: &str) -> Vec<PageLines> {
     // No input named like the job: no line of the main file to anchor to.
     match main_input_tag(&map.pre, stem) {
         Some(tag) => parse_synctex_pages(&map.text, &map.pre, tag),
@@ -1441,3 +1494,5 @@ pub(crate) fn page_lines(pdf: &Path, cap: u64) -> Vec<PageLines> {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) mod remote;

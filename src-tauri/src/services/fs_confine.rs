@@ -19,6 +19,33 @@ use crate::schema::boxes::BoxesList;
 use crate::schema::projects::{ProjectEntry, ProjectsList};
 use crate::storage;
 
+/// Confine an **absolute** remote path to the project's remote root: reject any
+/// parent-directory component and require the path to sit at or under
+/// `remote_root` on a path boundary (so `/srv/proj-evil` is NOT inside
+/// `/srv/proj`). The remote analogue of `confine_abs_within`. Pure, unit-tested.
+pub(crate) fn confine_remote_abs(remote_root: &str, path: &str) -> Result<(), String> {
+    if Path::new(path)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "remote path '{path}' contains a parent-directory component"
+        ));
+    }
+    let root = remote_root.trim_end_matches('/');
+    let p = path.trim_end_matches('/');
+    let inside = root.is_empty() // remote_path "/" → the whole remote fs is the root
+        || p == root
+        || p.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'));
+    if inside {
+        Ok(())
+    } else {
+        Err(format!(
+            "remote path '{path}' is outside the project root '{remote_root}'"
+        ))
+    }
+}
+
 // ── Absolute-path confinement (Security #1) ────────────────────────────────
 
 /// The set of directories the absolute-path file commands may touch for a given
