@@ -3560,8 +3560,6 @@ export const dict: Dict = {
   "promptChart.queue": "In coda ({count})",
   "promptChart.refineDay": "Apri questo giorno",
   "promptChart.nowBand": "Rilascia qui per inviare ora",
-  "promptChart.reset.session": "5 h",
-  "promptChart.reset.week": "settimana",
   "promptChart.resetTitle": "{agent} · {labels}: {percent}% usato · si azzera {resets}",
   "promptChart.band.session": "{agent} · finestra di 5 h · {percent}% usato",
   "promptChart.band.newWindow": "nuova finestra dalle {time}",

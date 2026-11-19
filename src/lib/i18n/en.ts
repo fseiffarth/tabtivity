@@ -3602,8 +3602,6 @@ export const enSource = {
   "promptChart.queue": "Queued ({count})",
   "promptChart.refineDay": "Open this day",
   "promptChart.nowBand": "Drop here to send now",
-  "promptChart.reset.session": "5h",
-  "promptChart.reset.week": "week",
   "promptChart.resetTitle": "{agent} · {labels}: {percent}% used · resets {resets}",
   "promptChart.band.session": "{agent} · 5h window · {percent}% used",
   "promptChart.band.newWindow": "new window from {time}",
