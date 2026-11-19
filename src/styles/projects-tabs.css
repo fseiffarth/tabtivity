@@ -2292,19 +2292,19 @@
 /* Dots along the bar's length — literally "· · ·", the ellipsis of a thing still
    going. Round rather than square marks, because at 6px a square dash and a
    solid bar are the same silhouette to a glance while a row of circles is not:
-   a radial-gradient tile 9px wide holding one ~5.5px dot (nearly the bar's full
-   height, so it reads as large as the solid bars beside it), repeated across,
-   which at the bar's 18px preferred width is two dots and at its 6px minimum is
-   one — never a length that reads as solid. `background-color` stays unset so the
+   a radial-gradient tile 7px wide holding one ~4.5px dot (clearly inside the
+   bar's 6px height: a dot as tall as the bar outweighs the solid finished bar
+   beside it), repeated across, which at the bar's 18px preferred width is two
+   dots and at its 6px minimum is one — never a length that reads as solid. `background-color` stays unset so the
    gaps are the pill behind them, and the 0.25px feather is what keeps the dots
    from aliasing into diamonds. */
 .pill-status-bar.working {
   background-image: radial-gradient(
     circle,
-    var(--pill-status-dot, var(--status-working)) 2.75px,
-    transparent 3px
+    var(--pill-status-dot, var(--status-working)) 2.25px,
+    transparent 2.5px
   );
-  background-size: 9px 100%;
+  background-size: 7px 100%;
   background-position: center;
   background-repeat: repeat-x;
 }
