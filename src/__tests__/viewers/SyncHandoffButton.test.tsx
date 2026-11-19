@@ -186,8 +186,16 @@ describe("SyncHandoffButton", () => {
     fireEvent.click(screen.getByRole("option", { name: "Codex" }));
     fireEvent.click(open);
     await waitFor(() => expect(addTabToScope).toHaveBeenCalled());
-    expect(addTabToScope.mock.calls[0][1]).toMatchObject({ cmd: "codex" });
-    await waitFor(() => expect(queuePrompt).toHaveBeenCalled());
+    const [scope, tab] = addTabToScope.mock.calls[0];
+    expect(scope).toBe("p1");
+    expect(tab).toMatchObject({ cmd: "codex", scheduleTargetId: expect.any(String) });
+    expect(queuePrompt).toHaveBeenCalledWith(
+      scope,
+      tab.scheduleTargetId,
+      expect.stringContaining("~/handoff/conflicts-1/CONFLICTS.md"),
+      { preface: [] },
+    );
+    expect(await screen.findByText("Opened Codex with the prompt.")).toBeTruthy();
   });
 
   it("says no local agent is available, and opens nothing, when none is installed", async () => {
