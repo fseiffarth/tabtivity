@@ -41,7 +41,7 @@ import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type Proj
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { undoAgentClear } from "../../stores/agents/agentClearUndo";
 import { reopenClosedAgentTab, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
-import { archiveTabs, canArchiveTab, restoreArchivedTab } from "../../stores/tabArchive";
+import { archiveTabs, canArchiveTab, restoreArchivedTab, type ArchivedTab } from "../../stores/tabArchive";
 import { isTabColor } from "../../lib/theme/tabColors";
 import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
 import type { CliOverviewRow } from "../../../shared/cliOverview";
@@ -1555,12 +1555,34 @@ async function archiveMobileTab(projectId: string, tmuxSession: string): Promise
  * does: a new tab in the window, built the way a restart builds it. Like a
  * reopen, the scope is shown first, since only the shown scope's panes spawn
  * a terminal. A tab the phone can attach to is answered as created; one that
- * came back on the desktop only (a viewer, a tab running on a host the phone
- * cannot reach) as activated. */
+ * came back on the desktop only (the twin of a conversation already open on a
+ * host) as activated.
+ *
+ * The phone's create rules hold first, as for a reopen: the entry is looked
+ * at before it is taken and before the scope is shown, and only an agent or a
+ * shell the phone could have started here, on this machine, comes back —
+ * never a viewer, a shell where the phone starts agents only, or a tab that
+ * would run on a host, in a container or in a VM. A refused restore takes
+ * nothing and switches nothing. (The sidecar has already refused a shell
+ * while shells are off the phone.) */
 async function restoreMobileArchivedTab(projectId: string, archiveId: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope || scope.id === ASSISTANT_SCOPE) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  }
+  let listed: ArchivedTab[];
+  try {
+    listed = await invoke<ArchivedTab[]>("tab_archive_list", { projectId: scope.id });
+  } catch {
+    return { status: "error", code: "restore_failed", message: "The tab could not be restored" };
+  }
+  const wanted = Array.isArray(listed) ? listed.find((archived) => archived.id === archiveId) : undefined;
+  if (!wanted) return { status: "error", code: "nothing_to_restore", message: "That archived tab is gone" };
+  // A kind-less entry is a shell, as the sidecar reads it.
+  const kind = wanted.tab.kind ?? "shell";
+  const createKind = kind === "agent" || kind === "local_agent" ? "agent" : kind === "shell" ? "shell" : null;
+  if (!createKind || !phoneMayCreate(scope, createKind) || !phoneReachesTab(scope.project, { kind, location: wanted.tab.location }, scope.id)) {
+    return { status: "error", code: "not_attachable", message: "That tab would run where the phone cannot attach" };
   }
   await enterScope(scope);
   let entry: TabEntry | null;
