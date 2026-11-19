@@ -8705,6 +8705,11 @@ async fn project_files_zip(
         .unwrap_or_else(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response())
 }
 
+/// The largest model list a phone keeps (`POST …/model-rows`): OpenCode's
+/// picker lists every connected provider's catalog, past the control-message
+/// cap with a few keys; `model_rows` bounds the rows after parsing.
+const MODEL_ROWS_BODY: usize = 512 * 1024;
+
 /// The largest remarks body: a page's worth of highlights and notes is a few
 /// KB; the markup bounds (`markup::validate_body`) apply after parsing.
 const REMARKS_BODY: usize = 2 * 1024 * 1024;
@@ -8981,7 +8986,10 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/locations", get(tab_locations))
         .route("/api/v1/tabs/{tab_id}/location", post(move_tab_location))
         .route("/api/v1/tabs/{tab_id}/assistant-models", get(assistant_models))
-        .route("/api/v1/tabs/{tab_id}/model-rows", get(model_rows).post(remember_model_rows))
+        .route(
+            "/api/v1/tabs/{tab_id}/model-rows",
+            get(model_rows).merge(post(remember_model_rows).layer(DefaultBodyLimit::max(MODEL_ROWS_BODY))),
+        )
         .route("/api/v1/tabs/{tab_id}/assistant-model", post(switch_assistant_model))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
         .route("/api/v1/tabs/{tab_id}/teleport", post(teleport_tab))
