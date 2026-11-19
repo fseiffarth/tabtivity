@@ -218,3 +218,198 @@ it, the day opens; go to the next day, it folds again. Select a card: the
 inspector appears; Esc closes it; Enter on a focused card moves focus into it.
 Open Filters, Options and `?`: each drops under its button and Esc closes it.
 Drag the right edge of the Drafts column; collapse it and reload the window.
+
+---
+
+# Implementer B (steps 6-10)
+
+Branch `prompt-chart-redesign-b` (worktree `.claude/worktrees/agent-adaa2e87be644ad8d`),
+on top of A's `e77f8270c`. Nothing was run live; every claim is from tests,
+`tsc`, lint, cargo and reading the CSS.
+
+| Step | Commit | State |
+| --- | --- | --- |
+| A's flagged defects (fold vs hanging cards, stacked inspector) | `ee3caef90` | done |
+| 6. Quick composer | `659b895d5` | done |
+| 7. Outcome on past cards | `d0ee512fd` | done, no "Cut off" |
+| 8. Sequences + `PromptLink.paused` | `d908b9c82` | done |
+| 9. Limit-aware scheduling | `b466b51e5` | done |
+| 10. Wrap-up (file maps, todo, dead style and keys) | `da458cfaa` | done |
+
+## Defects from A's range
+
+- **Fold vs hanging cards:** `packLanes` now stops a card at the folded block's
+  edge (`x >= fold.px`) instead of 0. Test in `AgentPromptTimeline.test.ts`.
+- **Stacked inspector:** selecting a card (or a sequence) below 900 px of the
+  chart's width scrolls `.agent-prompt-inspector` into view, `block: "nearest"`
+  (`PROMPT_CHART_STACK_WIDTH`, test `PromptChartLayout.test.tsx`).
+- A's other gotchas were notes; none turned out to be a bug.
+
+## Where the plan was silent
+
+Step 6
+- The composer's text goes through the draft first, always (`submitCompose`).
+  The draft's own write failing keeps the text; anything after it reports in the
+  banner and clears the field (the draft exists, resubmitting would duplicate).
+- Its tab picker offers the free tabs (a draft's options) and the new tab. A
+  reset choice is offered only when the chosen tab's agent has that mark ahead;
+  a stale pick falls back to "Keep as draft".
+- `usePromptChartUsage` now returns `{ marks, upcoming }`: `upcoming` is every
+  agent's resets from now to +8 days regardless of the axis window or the agent
+  facet. The composer and the limit warning read it; the band and snapping read
+  the window's `marks`.
+- "After another prompt..." arms `afterFor` (the draft id); the next card clicked
+  becomes the edge's **source** (the draft is the target). Esc / Cancel leave the
+  draft unlinked. The command bar chip reads "Pick the prompt it follows".
+- The Lands here preview is drawn in the timeline's overlay at the top lane, over
+  whatever card sits there (pointer-events none).
+- `DraftBoardHandle.compose` and `promptChart.newDraft` are gone (the button was
+  the only caller); a double click on the board still opens its own composer.
+
+Step 7
+- Live states come from `useActivityStore.statusTabsByScope`: the newest
+  delivered row of each live tab, with no `files_at`, while the tab is `working`
+  (Running) or `needs-decision` (Needs answer). Shell-only busy tabs are ignored.
+- `packLanes(..., running)`: a running card ends at `now` (its bar is `now -
+  sent_at`, capped at the card width) and grows with the chart's 30 s tick.
+- Chips: Finished is a delivered row with `files_at`; a delivered row without it
+  stays "Delivered". Missed / Failed facts say what happened ("Nothing was sent at
+  its minute", "Could not be delivered to the tab"); a session card adds its
+  prompt count. The inspector has a Result row.
+- **Cut off was left out.** `limitHandoff.ts` reads a limit notice off a live
+  screen only; nothing per turn records that a turn ended on a usage limit, and
+  the plan forbids a new detector.
+- The `paused?: boolean` field on the TS `PromptLink` and the store's payload
+  trimming landed in this commit (step 8 needed them first by the chip).
+
+Step 8
+- A sequence is a plain chain only (every node one in, one out, no loop). Joins,
+  forks and loops are left out; `roll:` edges are not sequences.
+- Statuses: sent+delivered is `done` (or `running` when live), missed/failed
+  `stopped`, an edge with `paused` is `paused`, `chainStopped` is `stopped`; the
+  first open step after a done one is `next`, later ones `waiting`.
+- Only a chained member can be skipped / stopped / paused ("the next pending
+  member" = first chained, not-yet-sent step). Pause toggles to Resume while any
+  step is paused. Skip keeps a pause (the new edge inherits it) and carries the
+  removed out-edge's tab and commands. The edge writes of a Skip are sequential;
+  a failure in the middle leaves the chain cut and the banner says why.
+- Resume sends the held step through `sendCollectedPrompt` only when its
+  predecessor is a sent row with `files_at` and not live; a running predecessor
+  needs nothing (the host reacts when it ends).
+- A sequence is selected from its Drafts header; the inspector then shows the
+  sequence instead of a card. Picking a step selects that card. A sequence with
+  every step done is not drawn in Drafts (it is history; its cards say step n of m).
+- The mock's "a step that ends on a question, is cut off or fails pauses the
+  sequence" is not claimed: the inspector's note says what the host does (a
+  failed or missed step stops the chain, a step waiting on an answer holds the
+  next back until its turn ends).
+- Host test: there is no positive after-link host test to extend (the existing
+  ones are negatives), so pause is pinned at `nextAfter` (the host's only reader)
+  plus the chart's Resume test; no new host-level test.
+
+Step 9
+- Band row per agent with a mark in view: session bar `reset - 5 h` (cut at the
+  view start) to the reset, tone by percent (below 70, 70-89, 90+), the text
+  always carries the number; a "new window from" note after it; weekly resets as
+  ticks. A 90 %+ window also shades the lanes from now to the reset.
+- The agent is named by the "+" menu's label ("Claude"), else its command.
+- `snapToReset` runs in the drag hook's zone computation (time zones carry
+  `reset`); only marks in view and of the card's agent; the agent is the card's
+  `agent:` tag, so an unaimed draft uses the chart's new-tab agent.
+- The warning is raised for scheduled cards (the next occurrence of a recurring
+  one); Move after reset is offered on face and inspector, not for a recurring
+  rule. The mock's "Claude is nearly out until 14:20" stretch label is not drawn
+  (the shade and the card's own warning carry it).
+
+Step 10
+- Untested rows: `promptChart.composer`, `.outcome`, `.sequences`, `.usageBand`.
+- Dead: `.agent-prompt-chart-select-hint`, the axis `.agent-prompt-timeline-reset-label`
+  rules, i18n `promptChart.newDraft` and `promptChart.reset.session|week`. A sweep of
+  every `.agent-prompt-*` class against the sources found nothing else unused.
+- File maps: the frontend row now lists all the chart files (A had not updated it).
+
+## Backend
+
+`PromptLink.paused` (`skip_serializing_if = Not::not`) and `PromptLinkInput.paused`
+(`#[serde(default)]`); `validate_link` keeps it on `after` edges only. The store
+sends `paused` only when true and omits `preface` when empty, so an older backend
+(which denies unknown fields) accepts an ordinary link. An upsert replaces the
+edge, so re-saving without the key resumes it. The shape is not mirrored strictly
+anywhere else (`core_dispatch`, `mobile-web`, `src/lib/transport` hold no link
+shape). No new Tauri command. Cargo tests:
+`a_paused_flag_is_kept_on_an_after_edge_only_and_round_trips`,
+`a_link_file_written_before_the_flag_loads_unpaused`,
+`re_saving_an_edge_without_the_flag_resumes_it`.
+
+`npm run backend:stale` (run after the Rust change), abridged:
+
+```
+EMBEDDED MOBILE PWA IS STALE - the sidecar on 127.0.0.1:8742 is serving a
+  different bundle than the one built in mobile-dist/. The phone is on the old one.
+THE OPEN WINDOW PREDATES THE CURRENT BUILD - the sidecar is serving a bundle
+  built before the one in mobile-dist/, so the window's compiled-in frontend is
+  behind your tree as well. It is not only the phone that is on the old code.
+```
+
+Meaning: the running window needs the new build, and the paused flag needs a
+backend restart to be stored.
+
+## Gates
+
+Full range `scripts/gates-job.sh start --base develop` at `da458cfaa`: brand PASS,
+whitespace PASS, lint PASS (0 errors, 30 warnings, none in the chart files),
+clippy x3 PASS, `npm run build` PASS, vitest PASS (941 files, 9509 tests), cargo
+`test -p tabtivity -p app-serverd`: 6272 passed, 2 failed:
+`terminal::pty_child::tests::signals_and_open_files_match_the_portable_pty_spawn`
+(`left: "SigBlk:0000000000000000,SigIgn:0000000000000007,"`, `right: "...SigIgn:0000000000000000,"`)
+and `terminal::pty_child::tests::ctrl_c_on_the_master_interrupts_the_foreground_program`.
+Both failed in the step-6 gate run too and pass alone in a foreground shell
+(`cargo test -p tabtivity --lib terminal::pty_child`: 7 passed): the gate job's
+shell ignores SIGINT/QUIT/ILL and the tests inherit that. Unrelated to this change.
+Because of that failure the job skipped `test-dlib`; run by hand:
+`cargo test -p tabtivity --no-default-features --lib --test server_secrets`:
+6086 passed, 16 ignored. Per step: `tsc`, eslint on the touched dirs and
+`vitest run src/__tests__/agents src/__tests__/theme src/__tests__/shell`
+(2365 tests at step 9).
+
+## Flagged for user (added)
+
+- **Nothing was run live.** Unseen: the composer row's wrapping, the When menu,
+  the band's bars and tones in the user's themes, the sequence group / outline on
+  the Free canvas (its heading sits under the cards), the dashed Lands here card
+  (it can cover a card on the top lane), the Running / Needs answer chips.
+- **Cut off has no state.** If wanted, a per-turn signal has to be recorded first
+  (e.g. the schedule host stamping a limit notice it sees on the screen when a
+  turn ends); then `promptOutcome` gains the word.
+- **A paused edge needs a backend restart** to be stored at all; before that the
+  Pause button fails with the backend's unknown-field refusal in the banner.
+- **Sequences with a fork are not shown** as sequences (no group, no step n of m),
+  though the draft runtime still sends both branches; the backend allows forks.
+- **A finished sequence is listed nowhere** except through its cards' "step n of
+  m"; Drafts lists only sequences with a draft member.
+- **Resume timing:** it sends at once if the predecessor has `files_at`; the
+  host's 5-minute idle wait is skipped on that path (the scheduler's idle gate
+  still applies).
+- **Delivered vs Finished:** a row typed in the terminal and adopted has no
+  `files_at` and so never reads Finished.
+
+## Click-through for the user (additions)
+
+1. Composer: type a prompt, Enter (draft). Pick a tab and try Send now, At a
+   time... (the schedule dialog opens with the text), After another prompt...
+   (the bar asks "Pick the prompt it follows"; click a card; Esc instead leaves
+   the draft), and, if Claude's usage panel is read, After the 5h reset (dashed
+   Lands here card, the rule lands on the first 5-minute mark after the reset).
+2. Sequence: link three drafts After one another (a `/clear` on one edge), send
+   the first. Drafts shows Sequence - 3 steps; click its heading: progress, one
+   line per step, the `/clear` row with Edit. Pause (the next card says Paused;
+   when step 1 ends nothing is sent), Resume (it goes out), Skip next step (its
+   neighbours are linked, it is a loose draft again), Stop (the edge goes, the
+   rest stays linked).
+3. Drag a draft to within a few pixels of a reset in the usage band: the badge
+   reads "Schedule on <tab> - after the 5h reset", the rule lands just after it.
+4. With the 5h window at 90 % or more, a scheduled card due before the reset
+   warns "May hit the limit"; Move after reset retimes it; a daily rule has no button.
+5. A running turn: its card says Running with "n min so far", the bar on top
+   reaches the Now line and grows; a tab asking a question reads Needs answer.
+6. Narrow the split below 900 px and select a card: the inspector scrolls into view.
