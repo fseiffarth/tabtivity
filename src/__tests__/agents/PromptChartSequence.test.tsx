@@ -122,6 +122,34 @@ describe("pause, skip and stop", () => {
     expect(calls("agent_prompt_archive")).toHaveLength(1);
   });
 
+  it("Resume onto a tab that closed leaves the step paused: nothing is sent, the flag stays, and it can be retried", async () => {
+    links = links.map((link) => (link.id === "ab" ? { ...link, target: "gone", paused: true } : link));
+    await renderChart();
+    openSequence();
+    await act(async () => { fireEvent.click(inspector().getByRole("button", { name: "Resume" })); });
+    expect(screen.getByTestId("prompt-chart-error").textContent).toContain("That agent tab closed. Nothing was sent.");
+    expect(calls("agent_prompt_link_upsert")).toHaveLength(0);
+    expect(calls("agent_schedule_upsert")).toHaveLength(0);
+    expect(links.find((link) => link.id === "ab")?.paused).toBe(true);
+    // Still offered as Resume, not as Pause.
+    expect(inspector().getByRole("button", { name: "Resume" })).toBeTruthy();
+  });
+
+  it("Resume whose send fails keeps the flag, so the step is not left unheld and unsent", async () => {
+    links = links.map((link) => (link.id === "ab" ? { ...link, paused: true } : link));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "agent_schedule_upsert") throw new Error("queue refused");
+      return base(command, args);
+    });
+    await renderChart();
+    openSequence();
+    await act(async () => { fireEvent.click(inspector().getByRole("button", { name: "Resume" })); });
+    expect(screen.getByTestId("prompt-chart-error").textContent).toContain("queue refused");
+    expect(calls("agent_prompt_link_upsert")).toHaveLength(0);
+    expect(links.find((link) => link.id === "ab")?.paused).toBe(true);
+  });
+
   it("sends the key paused only when it is true", async () => {
     await renderChart();
     await act(async () => {

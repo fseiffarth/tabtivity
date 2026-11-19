@@ -777,17 +777,20 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
 
   /** Pause holds the next step back (a flag on the edge into it); Resume clears
    *  it, and when the step before it had already finished — so the host has no
-   *  turn left to react to — sends the held step itself, with the edge's commands. */
+   *  turn left to react to — sends the held step itself, with the edge's commands.
+   *  The tab is found, and the step sent, BEFORE the flag is cleared: a tab that
+   *  closed, or a send that failed, leaves the step paused and Resume retryable,
+   *  instead of a step no longer held that nothing will ever send. */
   const togglePause = (sequence: PromptSequence) => attempt(async () => {
     const held = sequence.steps.find((step) => step.status === "paused");
     if (held?.edge) {
       const edge = held.edge;
-      await upsertLink(scope, { ...edge, paused: undefined });
       if (held.card.prompt && resumeSendsAtOnce(sequence, held, live)) {
         const tab = tabOf(edgeTarget(edge));
         if (!tab) throw new Error(t("promptChart.tabGone"));
         await sendCollectedPrompt(scope, target(tab), held.card.prompt, edge.preface?.length ? edge.preface : undefined);
       }
+      await upsertLink(scope, { ...edge, paused: undefined });
       return;
     }
     const edge = nextPendingStep(sequence)?.edge;
