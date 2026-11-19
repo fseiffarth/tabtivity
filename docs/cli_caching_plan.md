@@ -1,6 +1,6 @@
 # Agent CLI prompt caching — plan
 
-Status 2026-11-19: research done (below); phases 1a–1e, 2 and 3 implemented, not live-verified.
+Status 2026-11-19: research done (below); phases 1a–1e and 2–4 implemented, not live-verified.
 
 ## What the research found
 
@@ -80,8 +80,12 @@ Facts worth keeping:
    shows "Cache cold · N tokens to re-cache" past it, hint naming `/clear` /
    `/new`. No restart button (the user's choice). Copilot later: its expiry
    (`cacheExpiresAt`) is only written when a session ends.
-4. **Gemini auth note** in Manage CLIs: OAuth → no caching; API-key mode via
-   the proxy → implicit caching. The user flips it, never Tabtivity.
+4. **Gemini auth note** (done): a static note on the Gemini card's Options
+   (`GeminiCachingNotice`) and in the `gemini-cli` help page — Google sign-in
+   → no caching (Gemini CLI's `docs/cli/token-caching.md`: "the Code Assist
+   API does not support cached content creation"; its quota counts requests),
+   API key → implicit caching; points at Accounts & keys → API keys and
+   Gemini's `/auth`. The user flips it, never Tabtivity.
 5. **Ollama keep-alive** on the server Tabtivity spawns
    (`OLLAMA_KEEP_ALIVE`), so OpenCode's first request does not get 5 min.
 6. **Claude subagent 1 h TTL**: measure before offering; estimate is

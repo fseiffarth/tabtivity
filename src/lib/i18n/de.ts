@@ -2594,6 +2594,8 @@ export const dict: Dict = {
   "settings.energyInactive": "Inaktiv — im Netzbetrieb.",
   "settings.claudeRemoteHelp1": "Startet Claude-Agenten-Tabs mit",
   "settings.claudeRemoteHelp2": "damit du sie über die Claude-App oder das Web überwachen und steuern kannst. Erfordert eine Claude-Abo-Anmeldung (kein API-Schlüssel); nur Claude unterstützt dies.",
+  "settings.geminiCaching": "Prompt-Caching.",
+  "settings.geminiCachingHelp": "Mit einem Google-Konto angemeldet nutzt Gemini CLI keinen Prompt-Cache (Googles Code-Assist-API hat keinen), deshalb zeigt die Nutzungsübersicht für Gemini nichts aus dem Cache; das Kontingent dieser Anmeldung zählt Anfragen, nicht Tokens. Mit einem Gemini-API-Schlüssel cacht Google wiederholten Kontext von selbst und berechnet ihn zum günstigeren Cache-Preis, was sich lohnt, wenn du pro Token zahlst. Zum Umstellen speichere deinen Schlüssel unter Konten & Schlüssel → API-Schlüssel, lass Gemini darüber laufen und wähle dann in Geminis /auth „Use Gemini API key“. Geminis /stats zeigt die gecachten Tokens.",
   "settings.headlessRemoteHelp": "An (Standard): {app} verbindet SSH/OpenVPN im Hintergrund und hält das Passwort nur kurz. Aus: Jede Verbindung öffnet als Terminal in der Root-Konsole, und du gibst das Passwort dort selbst ein.",
   "settings.persistLocalHelp1": "Wenn an (Standard), laufen lokale Shell- und Python-/Skript-Tabs in einer tmux-Sitzung, sodass lange Läufe einen Absturz von {app} überstehen und sich beim Neustart wieder verbinden. Benötigt",
   "settings.persistLocalHelp2": "; Agenten-Tabs sind davon nicht betroffen.",

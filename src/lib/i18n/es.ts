@@ -2592,6 +2592,8 @@ export const dict: Dict = {
   "settings.energyInactive": "Inactivo — con corriente.",
   "settings.claudeRemoteHelp1": "Genera pestañas de agente Claude con",
   "settings.claudeRemoteHelp2": "para que puedas monitorearlas y dirigirlas desde la app o la web de Claude. Requiere iniciar sesión con una suscripción de Claude (no una clave de API); solo Claude lo admite.",
+  "settings.geminiCaching": "Caché de prompt.",
+  "settings.geminiCachingHelp": "Con una cuenta de Google, Gemini CLI no usa caché de prompt (la API Code Assist de Google no la tiene), así que el resumen de uso no muestra nada de caché para él; la cuota de ese inicio de sesión cuenta peticiones, no tokens. Con una clave API de Gemini, Google cachea por sí mismo el contexto repetido y lo cobra a la tarifa reducida de caché, lo que compensa si pagas por token. Para cambiar, guarda tu clave en Cuentas y claves → Claves de API, haz que Gemini funcione con ella y elige “Use Gemini API key” en /auth de Gemini. /stats de Gemini muestra los tokens en caché.",
   "settings.headlessRemoteHelp": "Activado (predeterminado): {app} conecta SSH/OpenVPN en segundo plano y retiene la contraseña solo un momento. Desactivado: cada conexión se abre como terminal en la consola raíz y escribes tú mismo la contraseña.",
   "settings.persistLocalHelp1": "Si está activado (predeterminado), las pestañas locales de shell y Python/script se ejecutan en una sesión tmux, así las ejecuciones largas sobreviven a un fallo de {app} y se reconectan al reiniciar. Requiere",
   "settings.persistLocalHelp2": "; las pestañas de agente no se ven afectadas.",

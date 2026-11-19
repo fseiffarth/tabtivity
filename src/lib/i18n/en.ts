@@ -2524,6 +2524,8 @@ export const enSource = {
   "settings.energyInactive": "Inactive — on AC power.",
   "settings.claudeRemoteHelp1": "Spawns Claude agent tabs with",
   "settings.claudeRemoteHelp2": "so you can monitor and steer them from the Claude app or web. Requires a Claude subscription login (not an API key); only Claude supports it.",
+  "settings.geminiCaching": "Prompt caching.",
+  "settings.geminiCachingHelp": "Signed in with a Google account, Gemini CLI uses no prompt cache (Google's Code Assist API has none), so the usage recap shows nothing from cache for it; that sign-in's quota counts requests, not tokens. On a Gemini API key, Google caches repeated context by itself and bills it at the lower cached rate, which pays off when you pay per token. To switch, save your key under Accounts & keys → API keys, set Gemini to run on it, then pick “Use Gemini API key” in Gemini's /auth. Gemini's /stats shows the cached tokens.",
   "settings.agentFenceSharedState": "Each project, box and the root console has its own agent home inside {app}, never in your home folder. Logins are shared (below); your own instructions, skills and MCP entries are not brought in — add them per project.",
   "settings.agentGlobal": "Global agent config",
   "settings.agentGlobalHelp": "Instructions, skills, commands, hooks and MCP servers every {app} agent gets — your CLAUDE.md, AGENTS.md, settings.json hooks and the like. Import copies them from ~/.claude, ~/.codex, ~/.gemini and other CLIs (never logins or history). Each new agent tab gets a fresh copy; agents cannot change it.",

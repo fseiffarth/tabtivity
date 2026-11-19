@@ -2593,6 +2593,8 @@ export const dict: Dict = {
   "settings.energyInactive": "Inactif — sur secteur.",
   "settings.claudeRemoteHelp1": "Lance des onglets d'agent Claude avec",
   "settings.claudeRemoteHelp2": "afin que vous puissiez les surveiller et les piloter depuis l'application ou le web Claude. Nécessite une connexion par abonnement Claude (pas une clé API) ; seul Claude le prend en charge.",
+  "settings.geminiCaching": "Cache de prompt.",
+  "settings.geminiCachingHelp": "Connecté avec un compte Google, Gemini CLI n'utilise aucun cache de prompt (l'API Code Assist de Google n'en a pas) : le récapitulatif d'utilisation ne montre donc rien venant du cache pour lui ; le quota de cette connexion compte des requêtes, pas des tokens. Avec une clé API Gemini, Google met en cache le contexte répété de lui-même et le facture au tarif réduit du cache, ce qui est rentable si vous payez au token. Pour changer, enregistrez votre clé sous Comptes et clés → Clés d'API, faites tourner Gemini dessus, puis choisissez « Use Gemini API key » dans /auth de Gemini. /stats de Gemini montre les tokens en cache.",
   "settings.headlessRemoteHelp": "Activé (par défaut) : {app} établit les connexions SSH/OpenVPN en arrière-plan et ne garde le mot de passe qu'un instant. Désactivé : chaque connexion s'ouvre comme terminal dans la console racine et vous y tapez vous-même le mot de passe.",
   "settings.persistLocalHelp1": "Activé (par défaut), les onglets shell et Python/script locaux tournent dans une session tmux : les longues exécutions survivent à un plantage de {app} et se rattachent au redémarrage. Nécessite",
   "settings.persistLocalHelp2": " ; les onglets d'agent ne sont pas concernés.",
