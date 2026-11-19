@@ -2356,10 +2356,39 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 }
 .prompt-strip-keys {
   flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-sm);
   color: var(--text-muted);
   border-top: 1px solid var(--border-subtle);
+}
+.prompt-strip-keys > span:first-child {
+  flex: 1 1 14em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.prompt-strip-note { color: var(--text-primary); }
+.prompt-strip-note.error { color: var(--danger); }
+/* Export session / my prompts: the strip's pills, also in the Reader's top
+   bar, whose own pills drop the border. */
+.prompt-strip-export {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+.prompt-strip-panel .prompt-strip-reader.prompt-strip-export-btn {
+  color: var(--text-primary);
+  border-color: var(--border-color);
+  border-radius: var(--radius-full);
+}
+.prompt-strip-panel .prompt-strip-reader.prompt-strip-export-btn:disabled {
+  opacity: 0.4;
+  cursor: var(--cur-default, default);
 }
 .prompt-strip-reader {
   flex: none;

@@ -359,6 +359,16 @@ ones you pasted) are listed under the files, with the address's host and path,
 who wrote it and when. Clicking one asks first, naming the exact address, and
 only opens your browser once you confirm; Tabtivity never loads the page itself.
 
+**Prompts** (beside Resume) lists the prompts you sent in the tab. At its
+bottom, **Export session…** saves the whole conversation (your prompts, the
+agent's answers and plans, its subagents) as a Markdown file, **Export as
+chat…** saves it as a web page that looks like the Chat (bubbles, dates and
+times; it opens in any browser and prints to PDF), and **Export my
+prompts…** saves only your prompts, oldest first. You pick where in a save
+dialog. An agent without a chat view offers only **Export my prompts…**,
+from the prompts the panel lists. A very long session is exported from its
+last 1000 entries, and the file says so.
+
 ## Switch all AI off
 
 The power button (⏻) in the side panel header switches all of Tabtivity's AI

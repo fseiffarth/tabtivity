@@ -2734,6 +2734,7 @@ pub fn run() {
             commands::agents::agent_tab_last_prompt,
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
+            commands::agents::agent_session_export_write,
             commands::agents::agent_tab_artifact,
             commands::agents::agent_cli_handoff_prepare,
             commands::agents::agent_tab_changes,

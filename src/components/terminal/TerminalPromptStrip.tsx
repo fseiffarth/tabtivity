@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../lib/i18n";
 import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { useUse24h } from "../../lib/timeFormat";
@@ -15,6 +16,15 @@ import { ReaderScheduleButton } from "./ReaderScheduleButton";
 import { chatsOffered } from "../../lib/agents/agentChats";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
+import { readerRequest, type SessionTranscript } from "../../lib/agents/agentReader";
+import { exportFileName, promptsMarkdown, sessionHtml, sessionMarkdown, trailPrompts, transcriptPrompts, type ExportWords } from "../../lib/agents/prompt/export";
+import { projectIdOfScope } from "../../lib/terminal/ptyId";
+import { useProjectsStore } from "../../stores/projects";
+import { hostTabId } from "../../stores/tabs/tabLocation";
+
+/** The most entries one export reads: the backend's own cap
+ * (`agent_transcript::MAX_LIMIT`). */
+const EXPORT_LIMIT = 1000;
 
 /** Prompt history under a terminal; readable agents use the same controls
  * as a top toolbar with resource/action slots and Chat / Diffs / Terminal tabs.
@@ -92,6 +102,13 @@ export function TerminalPromptStrip({
   const [picked, setPicked] = useState<{ at: number; text: string } | null>(null);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  /** The last export's outcome, shown in the panel's footer for a moment. */
+  const [exportNote, setExportNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  // The host a remote project's tab runs on, whose copy of the conversation
+  // the export reads (as the Reader reads it).
+  const remoteHost = useProjectsStore((s) =>
+    !tab || !reader?.onHost ? null : hostTabId(tab, s.projects.find((p) => p.id === projectIdOfScope(scope))));
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
 
@@ -120,6 +137,11 @@ export function TerminalPromptStrip({
     }
   }, [open, index]);
   useEffect(() => {
+    if (!exportNote) return;
+    const timer = setTimeout(() => setExportNote(null), exportNote.ok ? 4000 : 8000);
+    return () => clearTimeout(timer);
+  }, [exportNote]);
+  useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1400);
     return () => clearTimeout(timer);
@@ -141,6 +163,61 @@ export function TerminalPromptStrip({
       .then(done)
       .catch(() => navigator.clipboard?.writeText(current.text).then(done))
       .catch(() => {});
+  };
+  /** The tab's stored conversation, read whole (up to the backend's cap) —
+   * null for an agent whose transcript is not read, or none recorded yet. */
+  const readSession = async (): Promise<SessionTranscript | null> => {
+    if (!reader || !tab) return null;
+    const args = readerRequest(scope, tab, reader.cwd, undefined, EXPORT_LIMIT, undefined, undefined, remoteHost);
+    if (!args) return null;
+    const read = await invoke<SessionTranscript>("agent_tab_transcript", args).catch(() => null);
+    return read?.available ? read : null;
+  };
+  /** Save the whole session, or only the user's prompts, as Markdown where
+   * the user picks. The prompts come from the transcript when it is read
+   * and holds any (with their line breaks, where the history folds them to
+   * one line), else from this panel's own list. */
+  const exportAs = async (what: "session" | "chat" | "prompts") => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const session = await readSession();
+      if (what !== "prompts" && !session) {
+        setExportNote({ ok: false, text: t("terminal.promptStrip.exportNoSession") });
+        return;
+      }
+      const label = tab?.label;
+      const words: ExportWords = {
+        title: t(what === "prompts" ? "terminal.promptStrip.exportPromptsTitle" : "terminal.promptStrip.exportSessionTitle", { tab: label || t("terminal.promptStrip.label") }),
+        you: t("terminal.promptStrip.exportYou"),
+        agent: t("terminal.promptStrip.exportAgent"),
+        plan: t("terminal.promptStrip.exportPlan"),
+        subagent: t("terminal.promptStrip.exportSubagent"),
+        interrupted: t("terminal.promptStrip.exportInterrupted"),
+        cut: t("terminal.promptStrip.exportCut"),
+        earlier: t("terminal.promptStrip.exportEarlier", { n: EXPORT_LIMIT }),
+      };
+      const read = session ? transcriptPrompts(session.entries) : [];
+      const text = what === "chat" && session
+        ? sessionHtml(session.entries, { words, use24h, truncated: session.truncated })
+        : what === "session" && session
+        ? sessionMarkdown(session.entries, { words, use24h, truncated: session.truncated })
+        : read.length
+          ? promptsMarkdown(read, { words, use24h, truncated: session?.truncated })
+          : promptsMarkdown(trailPrompts(trail), { words, use24h });
+      const path = await saveDialog({
+        defaultPath: exportFileName(label, what),
+        filters: what === "chat" ? [{ name: "HTML", extensions: ["html"] }] : [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (typeof path !== "string") return;
+      await invoke("agent_session_export_write", { path, content: text });
+      setExportNote({ ok: true, text: t("terminal.promptStrip.exported", { path }) });
+    } catch (err) {
+      setExportNote({ ok: false, text: t("terminal.promptStrip.exportFailed", { error: String(err) }) });
+    } finally {
+      setExporting(false);
+      panelRef.current?.focus({ preventScroll: true });
+    }
   };
   /** Over the chat: the picked prompt into its text box (at the caret), to
    * send again or edit; the box takes the keyboard. */
@@ -395,7 +472,28 @@ export function TerminalPromptStrip({
             </ol>
           )}
           <div className="prompt-strip-keys">
-            {t(chatShown ? "terminal.promptStrip.keysChat" : "terminal.promptStrip.keys", { modifier: modifierLabel() })}
+            <span className={exportNote ? (exportNote.ok ? "prompt-strip-note" : "prompt-strip-note error") : undefined} role={exportNote ? "status" : undefined}>
+              {exportNote?.text ?? t(chatShown ? "terminal.promptStrip.keysChat" : "terminal.promptStrip.keys", { modifier: modifierLabel() })}
+            </span>
+            <span className="prompt-strip-export">
+              <UntestedTag id="terminal.promptStrip.export" />
+              {reader && (
+                <button type="button" className="prompt-strip-reader prompt-strip-export-btn" onMouseDown={keepFocus} disabled={exporting}
+                  onClick={() => void exportAs("session")} title={t("terminal.promptStrip.exportSessionHint")}>
+                  {t("terminal.promptStrip.exportSession")}
+                </button>
+              )}
+              {reader && (
+                <button type="button" className="prompt-strip-reader prompt-strip-export-btn" onMouseDown={keepFocus} disabled={exporting}
+                  onClick={() => void exportAs("chat")} title={t("terminal.promptStrip.exportChatHint")}>
+                  {t("terminal.promptStrip.exportChat")}
+                </button>
+              )}
+              <button type="button" className="prompt-strip-reader prompt-strip-export-btn" onMouseDown={keepFocus} disabled={exporting}
+                onClick={() => void exportAs("prompts")} title={t("terminal.promptStrip.exportPromptsHint")}>
+                {t("terminal.promptStrip.exportPrompts")}
+              </button>
+            </span>
           </div>
         </div>
       )}

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve([])) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn(() => Promise.resolve("/home/u/out.md")) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn(() => Promise.resolve()) }));
 
 import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStrip";
@@ -11,6 +12,8 @@ import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useMarkupLinksStore } from "../../stores/viewers/markupLinks";
 import { onReaderInsert } from "../../lib/terminal/terminalDrop";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1" };
 const iso = "2026-09-30T08:00:00Z";
@@ -117,5 +120,47 @@ describe("the prompt strip over an agent pane", () => {
     } finally {
       setActive.mockRestore();
     }
+  });
+
+  it("exports the whole session as Markdown where the save dialog says", async () => {
+    const calls = vi.mocked(invoke);
+    calls.mockImplementation(((cmd: string) => Promise.resolve(cmd === "agent_tab_transcript"
+      ? { available: true, truncated: false, entries: [{ kind: "prompt", text: "the first prompt" }, { kind: "answer", text: "the answer" }] }
+      : [])) as typeof invoke);
+    try {
+      render(<TerminalPromptStrip ptyId="p:agent-1" scope="p" tabKey="agent-1" background="#000" foreground="#fff" onReturnFocus={() => {}} reader={{ open: false, onToggle: () => {}, cwd: "/p" }} />);
+      fireEvent.click(screen.getByRole("button", { name: /Show the whole prompt/ }));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Export session…" })));
+      expect(vi.mocked(save)).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Claude-session.md" }));
+      const write = calls.mock.calls.find((c) => c[0] === "agent_session_export_write");
+      const args = write?.[1] as { path: string; content: string };
+      expect(args.path).toBe("/home/u/out.md");
+      expect(args.content).toContain("## You\n\nthe first prompt");
+      expect(args.content).toContain("## Agent\n\nthe answer");
+      expect(screen.getByRole("status").textContent).toBe("Saved to /home/u/out.md");
+      // The same conversation as a chat page.
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Export as chat…" })));
+      expect(vi.mocked(save)).toHaveBeenLastCalledWith(expect.objectContaining({ defaultPath: "Claude-chat.html" }));
+      const page = calls.mock.calls.filter((c) => c[0] === "agent_session_export_write").at(-1)?.[1] as { content: string };
+      expect(page.content).toMatch(/<div class="turn user">.*the first prompt.*<div class="turn agent">.*the answer/s);
+    } finally {
+      calls.mockImplementation((() => Promise.resolve([])) as typeof invoke);
+    }
+  });
+
+  it("exports only the prompts from the panel's list when no transcript is read", async () => {
+    const calls = vi.mocked(invoke);
+    calls.mockClear();
+    strip();
+    fireEvent.click(screen.getByRole("button", { name: /Show the whole prompt/ }));
+    // No Chat for this agent: only its prompts can be exported.
+    expect(screen.queryByRole("button", { name: "Export session…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export as chat…" })).toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Export my prompts…" })));
+    expect(calls.mock.calls.some((c) => c[0] === "agent_tab_transcript")).toBe(false);
+    const write = calls.mock.calls.find((c) => c[0] === "agent_session_export_write");
+    const content = (write?.[1] as { content: string }).content;
+    expect(content.startsWith("# My prompts — Claude")).toBe(true);
+    expect(content).toMatch(/## 1 · .+\n\nthe first prompt\n$/);
   });
 });
