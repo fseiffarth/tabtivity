@@ -2671,7 +2671,7 @@ export const dict: Dict = {
   "steering.tabCard.desc": "Percorre la scheda sopra il terminale della tab attiva: annulla la pulizia, un link di accesso, un avviso di aggiornamento. Esc torna alle tab.",
   "steering.region.subagents": "Subagenti",
   "steering.subagents.label": "I suoi subagenti",
-  "steering.subagents.desc": "Apre l'elenco dei subagenti della tab dell'agente nella Chat e lo percorre: Invio apre la conversazione di un subagente, poi la sua barra torna indietro o passa al precedente / successivo. Esc torna alle tab.",
+  "steering.subagents.desc": "Apre l'elenco dei subagenti della tab dell'agente nella Chat e lo percorre: Invio apre la conversazione di un subagente, poi la sua barra torna indietro o passa al precedente / successivo. Con un subagente aperto, G risale direttamente alla conversazione che lo ha avviato. Esc torna alle tab.",
   "steering.region.header": "Barra superiore",
   "steering.region.chrome": "Barra della finestra",
   "steering.upChrome.label": "Alla barra della finestra",

@@ -2671,7 +2671,7 @@ export const dict: Dict = {
   "steering.tabCard.desc": "Recorre la tarjeta sobre el terminal de la pestaña activa: deshacer el borrado, un enlace de inicio de sesión, un aviso de actualización. Escape vuelve a las pestañas.",
   "steering.region.subagents": "Subagentes",
   "steering.subagents.label": "Sus subagentes",
-  "steering.subagents.desc": "Abre la lista de subagentes de la pestaña del agente en el Chat y la recorre: Enter abre la conversación de un subagente; luego su barra vuelve atrás o pasa al anterior / siguiente. Escape vuelve a las pestañas.",
+  "steering.subagents.desc": "Abre la lista de subagentes de la pestaña del agente en el Chat y la recorre: Enter abre la conversación de un subagente; luego su barra vuelve atrás o pasa al anterior / siguiente. Con un subagente abierto, G sube directamente a la conversación que lo lanzó. Escape vuelve a las pestañas.",
   "steering.region.header": "Barra superior",
   "steering.region.chrome": "Barra de la ventana",
   "steering.upChrome.label": "A la barra de la ventana",

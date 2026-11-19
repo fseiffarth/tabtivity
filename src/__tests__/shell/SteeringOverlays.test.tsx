@@ -695,13 +695,39 @@ describe("the agent tab's subagents", () => {
     expect(steering()).toMatchObject({ level: "region", region: "subagents" });
     expect(regionCursor()?.id).toBe("sub-back");
 
-    // Back out, then G again with a subagent open: straight onto its bar.
+    // G in the region goes straight up to the main conversation, and out of
+    // the region with nothing left to walk.
+    press({ key: "g" });
+    await settle();
+    expect(document.getElementById("sub-title")).toBeNull();
+    expect(steering()).toMatchObject({ level: "tabs", region: null });
+  });
+
+  it("G on the tabs level with a subagent open goes straight up", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    await settle();
+    press({ key: "Enter" });
+    await settle();
+    expect(document.getElementById("sub-title")?.textContent).toBe("agent 0");
     press({ key: "Escape" });
     expect(steering()).toMatchObject({ level: "tabs", region: null });
     press({ key: "g" });
     await settle();
+    expect(document.getElementById("sub-title")).toBeNull();
     expect(document.querySelector(".terminal-reader-subagent-list")).toBeNull();
-    expect(regionCursor()?.id).toBe("sub-back");
+    expect(steering()).toMatchObject({ level: "tabs", region: null });
+    // At the main conversation G opens the list again.
+    press({ key: "g" });
+    await settle();
+    expect(steering()).toMatchObject({ level: "region", region: "subagents" });
+    expect(regionCursor()?.id).toBe("agent-0");
   });
 
   it("Escape closes the list it opened", async () => {

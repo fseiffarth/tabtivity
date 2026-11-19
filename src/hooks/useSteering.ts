@@ -93,6 +93,8 @@ import {
   resumeRegionCursor,
   scrollRegion,
   settingsDialog,
+  subagentGoUp,
+  subagentStopsShown,
   steeringAppEnabled,
   stepSettingsPage,
   topLayer,
@@ -1084,10 +1086,12 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           if (activeTabCard()) enterRegion("card");
           return;
         // The agent tab's subagents: its Subagents list opened under the
-        // cursor (Enter opens one in the Chat), or an open one's bar.
+        // cursor (Enter opens one in the Chat). With a subagent open, G goes
+        // straight up to the conversation that spawned it.
         case "subagents": {
           const frame = activeSubagentFrame();
           if (!frame) return;
+          if (subagentGoUp(frame)) return;
           if (!openSubagentList(frame)) {
             enterRegion("subagents");
             return;
@@ -1617,6 +1621,24 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           if (region === "side" && steerSidePanel(e, action, bindings, sidePanelHooks)) return;
           // The key that opened the side panel leaves it again, as Back does.
           const sideBack = !action && region === "side" && steeringKeyIs(e, "sidePanel", bindings);
+          // G in the subagents region goes up from the open subagent; at the
+          // main conversation it leaves the region, as Back does.
+          if (!action && region === "subagents" && steeringKeyIs(e, "subagents", bindings)) {
+            const frame = regionRoot(region);
+            if (frame && subagentGoUp(frame)) {
+              clearRegionCursor();
+              syncSoon(() => {
+                const s = useKeyboardSteeringStore.getState();
+                if (!s.active || s.region !== region) return;
+                const now = regionRoot(region);
+                if (now && subagentStopsShown(now)) placeCursorSoon(region);
+                else leaveRegion(region);
+              });
+              return;
+            }
+            steerRegion("back", region);
+            return;
+          }
           // W over its own "Close tab?" box closes: W twice closes a tab.
           const root = region === "overlay" && !action ? regionRoot(region) : null;
           const closeAgain =

@@ -2672,7 +2672,7 @@ export const dict: Dict = {
   "steering.tabCard.desc": "Parcourt la carte au-dessus du terminal de l'onglet actif — annuler l'effacement, un lien de connexion, un avis de mise à jour. Échap revient aux onglets.",
   "steering.region.subagents": "Sous-agents",
   "steering.subagents.label": "Ses sous-agents",
-  "steering.subagents.desc": "Ouvre la liste des sous-agents de l'onglet d'agent dans le Chat et la parcourt : Entrée ouvre la conversation d'un sous-agent, puis sa barre revient en arrière ou passe au précédent / suivant. Échap revient aux onglets.",
+  "steering.subagents.desc": "Ouvre la liste des sous-agents de l'onglet d'agent dans le Chat et la parcourt : Entrée ouvre la conversation d'un sous-agent, puis sa barre revient en arrière ou passe au précédent / suivant. Avec un sous-agent ouvert, G remonte directement à la conversation qui l'a lancé. Échap revient aux onglets.",
   "steering.region.header": "Barre du haut",
   "steering.region.chrome": "Barre de la fenêtre",
   "steering.upChrome.label": "Vers la barre de la fenêtre",

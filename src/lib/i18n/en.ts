@@ -2691,7 +2691,7 @@ export const enSource = {
   "steering.tabCard.desc": "Walk the card over the active tab's terminal — Undo clear, a sign-in link, an update notice. Escape goes back to the tabs.",
   "steering.region.subagents": "Subagents",
   "steering.subagents.label": "Its subagents",
-  "steering.subagents.desc": "Open the agent tab's Subagents list in the Chat and walk it: Enter opens a subagent's conversation, then its bar steps back or to the previous / next one. Escape goes back to the tabs.",
+  "steering.subagents.desc": "Open the agent tab's Subagents list in the Chat and walk it: Enter opens a subagent's conversation, then its bar steps back or to the previous / next one. With a subagent open, G goes straight up to the conversation that spawned it. Escape goes back to the tabs.",
   "steering.region.header": "Top bar",
   "steering.region.chrome": "Window bar",
   "steering.upChrome.label": "To the window bar",
