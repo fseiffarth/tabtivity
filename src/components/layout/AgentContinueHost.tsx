@@ -10,6 +10,9 @@ import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdsTimerLease } from "../../stores/timerLease";
 import { aiIsOff } from "../../lib/aiSwitch";
+import { limitNoticeReset } from "../../lib/agents/limitHandoff";
+import { terminalFor } from "../../lib/terminal/terminalRegistry";
+import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 
 /**
  * Keeps an agent tab going across its own CLI's rate-limit windows.
@@ -29,6 +32,13 @@ import { aiIsOff } from "../../lib/aiSwitch";
  *    ones they did. The only persisted trace is the switch itself.
  *  - a way to choose the agent's mode or model. It submits one word into the
  *    tab, through the same composer path everything else uses.
+ *
+ * A CLI with no usage panel (or one that could not be read) falls back to its
+ * own screen: an exhaustion notice in the last lines of the tab — the same
+ * notices the CLI hand-off reacts to — arms the continue at the time the notice
+ * names (`try again at 3:45 PM`, `retry in 2h 5m`), or, when it names none,
+ * retries every `NOTICE_RETRY_MS` while the notice stays the last word. Reading
+ * the screen spawns nothing, so it is checked every tick.
  *
  * It reuses the scheduler's delivery path and its gate (`lib/agents/scheduledAgentInput`
  * plus the idle/decision/settle checks): a continue typed into a tab that is
@@ -72,6 +82,16 @@ const CATCH_UP_MS = 60 * 60_000;
 
 /** The PTY must have been quiet this long. Same figure the scheduler uses. */
 const OUTPUT_SETTLE_MS = 1_200;
+
+/** A limit notice on screen that names no time is retried this often while it
+ *  stays the last thing the session said: often enough that a lifted limit is
+ *  not left idle for hours, rarely enough that a day-long quota costs a couple
+ *  of dozen refused prompts rather than one per tick. */
+export const NOTICE_RETRY_MS = 30 * 60_000;
+
+/** The phases that mean the panel gave nothing to arm off — the only ones the
+ *  screen is consulted in. A readable panel always wins over the screen. */
+const NO_PANEL = new Set(["unsupported", "unreadable", "error"]);
 
 interface Binding {
   projectId: string;
@@ -166,12 +186,39 @@ export function AgentContinueHost() {
       }
       patch(key, {
         phase: "armed",
+        source: "panel",
         armedAt: reset.at.getTime() + CONTINUE_DELAY_MS,
         window: reset.label,
         resets: reset.resets,
         error: undefined,
         checkAt: undefined,
       });
+    };
+
+    /** The limit notice at the bottom of the tab's screen, if one is there. */
+    const screenNotice = (binding: Binding, now: Date) => {
+      const term = terminalFor(`${binding.projectId}:${binding.tab.key}`);
+      if (!term) return null;
+      const screen = readableScreen(term.buffer.active, 25, { plain: true }).lines.map((row) => row.text).join("\n");
+      return limitNoticeReset(screen, now);
+    };
+
+    /** For a tab whose panel gave nothing to arm off: arm off a limit notice at
+     *  the bottom of its own screen. False when there is none to be seen. */
+    const armFromScreen = (binding: Binding, key: string): boolean => {
+      const now = new Date();
+      const notice = screenNotice(binding, now);
+      if (!notice) return false;
+      useAgentContinueStore.getState().patch(key, {
+        phase: "armed",
+        source: "screen",
+        armedAt: notice.at ? notice.at.getTime() + CONTINUE_DELAY_MS : now.getTime() + NOTICE_RETRY_MS,
+        window: undefined,
+        resets: notice.resets,
+        error: undefined,
+        checkAt: undefined,
+      });
+      return true;
     };
 
     /** Submit one continue, once the tab is in a state to take it. */
@@ -250,13 +297,26 @@ export function AgentContinueHost() {
               useAgentContinueStore.getState().patch(key, { phase: "reading", armedAt: undefined, checkAt: status.armedAt + REARM_AFTER_SEND_MS });
               continue;
             }
+            // A continue armed off the screen answers that notice only: once the
+            // session has moved past it (the user typed, the CLI recovered), the
+            // reason to send is gone. Only its presence is checked — re-reading
+            // its time every tick would push a "no time named" retry forever out.
+            if (status.source === "screen" && !screenNotice(binding, new Date(now))) {
+              useAgentContinueStore.getState().patch(key, { phase: "reading", source: undefined, armedAt: undefined, resets: undefined, checkAt: undefined });
+              continue;
+            }
             if (now >= status.armedAt) await send(binding, key, status.armedAt);
             continue;
           }
+          // No panel to arm off: the screen is free to read, so it is looked at
+          // every tick rather than only when the panel is asked again.
+          if (status && NO_PANEL.has(status.phase) && armFromScreen(binding, key)) continue;
           if (status?.checkAt !== undefined && now < status.checkAt) continue;
           // A read that follows a send asks the CLI again rather than taking the
           // cached panel, which still describes the window that has just ended.
           await arm(binding, key, status?.lastSentAt !== undefined);
+          const after = useAgentContinueStore.getState().byTarget[key];
+          if (!disposed && after && NO_PANEL.has(after.phase)) armFromScreen(binding, key);
         }
       } finally {
         running.current = false;
