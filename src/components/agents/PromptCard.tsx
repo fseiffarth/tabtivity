@@ -12,6 +12,7 @@ import { PromptAgentPick, type PromptCardTarget } from "./PromptAgentPick";
 import { sentFactLine } from "../../lib/agents/prompt/cardFacts";
 import { promptEndedAt } from "../../lib/agents/prompt/timeline";
 import { promptStateChip } from "../../lib/agents/prompt/stateChip";
+import type { PromptLiveState } from "../../lib/agents/prompt/outcome";
 
 export type { PromptCardTarget } from "./PromptAgentPick";
 
@@ -77,6 +78,10 @@ interface Props {
   /** The dates are the range label's to say in a day or an hour; a week or a
    *  month writes them on each card. */
   showDate?: boolean;
+  /** The turn this sent card started is running, or waiting for an answer. */
+  live?: PromptLiveState;
+  /** The chart's clock, for a running turn's length so far. */
+  now?: Date;
 }
 
 /** The card's one line of fact. Its instants are written by the chart's own
@@ -140,12 +145,14 @@ export function PromptCard({
   links,
   bar,
   showDate = true,
+  live,
+  now,
 }: Props) {
   const t = useT();
   const lang = useI18nStore((s) => s.lang);
   const use24h = useUse24h();
   const when = (at: Date | null | undefined, withDate = showDate) => (at ? formatTimelineInstant(at, lang, use24h, withDate) : "");
-  const chip = promptStateChip(card, links);
+  const chip = promptStateChip(card, links, live);
   const ended = promptEndedAt(card);
   /** The face's first line: the minute it is at, or why it has none. */
   const time = (() => {
@@ -157,7 +164,7 @@ export function PromptCard({
     const at = drawnAt ?? card.at;
     return at ? `${card.recurring ? "↻ " : ""}${when(at)}` : t("promptChart.paused");
   })();
-  const fact = card.state === "sent" ? sentFactLine([card], t) : card.state === "chained" && !card.chainStopped ? stateFact(card, t, when) : "";
+  const fact = card.state === "sent" ? sentFactLine([card], t, live && now ? { state: live, now } : undefined) : card.state === "chained" && !card.chainStopped ? stateFact(card, t, when) : "";
   const readOnly = card.state === "sent" || !!occurrence;
   /** A card on the drafts strip deletes from its face, without selecting. */
   const quickDelete = !occurrence && (card.state === "draft" || card.state === "chained");

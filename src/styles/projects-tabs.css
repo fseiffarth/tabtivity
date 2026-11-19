@@ -4365,6 +4365,10 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-chip.is-scheduled { background: var(--accent-soft); color: var(--accent); }
 .agent-prompt-chip.is-queued { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
 .agent-prompt-chip.is-chained { border: 1px dashed var(--accent); background: transparent; color: var(--accent); }
+.agent-prompt-chip.is-running { background: var(--accent-soft); color: var(--accent); }
+.agent-prompt-chip.is-needs,
+.agent-prompt-chip.is-paused { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.agent-prompt-chip.is-finished,
 .agent-prompt-chip.is-delivered { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
 .agent-prompt-chip.is-missed { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
 .agent-prompt-chip.is-failed { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }

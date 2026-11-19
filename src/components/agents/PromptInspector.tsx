@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { formatTags, parseTags } from "../../lib/agents/prompt/tags";
 import { promptStateChip } from "../../lib/agents/prompt/stateChip";
+import { sentFactLine } from "../../lib/agents/prompt/cardFacts";
+import type { PromptLiveState } from "../../lib/agents/prompt/outcome";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
 import { formatTimelineInstant } from "../../lib/agents/prompt/timeline";
 import type { PromptLink } from "../../stores/agents/agentPrompts";
@@ -19,6 +21,9 @@ interface Props {
   /** The card's whole session, oldest first, when it is one of several sent
    *  prompts of a session: the inspector then lists them all. */
   session?: PromptChartCard[];
+  /** The card's turn is running, or waiting for an answer, right now. */
+  live?: PromptLiveState;
+  now?: Date;
   /** The prompt is open in the editor (a double click on its card opens the
    *  inspector already editing, so the chart owns this). */
   editing: boolean;
@@ -66,6 +71,8 @@ export function PromptInspector({
   projectId,
   card,
   session,
+  live,
+  now,
   editing,
   onEditing,
   focusToken,
@@ -104,7 +111,8 @@ export function PromptInspector({
   const [copied, setCopied] = useState(false);
   const storedTags = formatTags(card.tags);
   const readOnly = card.state === "sent";
-  const chip = promptStateChip(card, links);
+  const chip = promptStateChip(card, links, live);
+  const liveFact = live && now ? { state: live, now } : undefined;
   const ownLinks = links.filter((link) => link.from === card.id || link.to === card.id);
   const canSend = targets.length > 0 || (card.state === "draft" && !!newTabLabel);
   const sessionId = card.history?.session_id;
@@ -173,7 +181,7 @@ export function PromptInspector({
           )}
           <ol className="agent-prompt-session-list">
             {[...session].reverse().map((item) => {
-              const itemChip = promptStateChip(item);
+              const itemChip = promptStateChip(item, [], item.id === card.id ? live : undefined);
               return (
                 <li key={item.key} data-testid="prompt-chart-session-row">
                   <div className="agent-prompt-session-row-head">
@@ -233,6 +241,12 @@ export function PromptInspector({
           <dl className="agent-prompt-inspector-grid">
             <dt>{t("promptChart.window")}</dt>
             <dd>{timeRow}</dd>
+            {card.state === "sent" && sentFactLine([card], t, liveFact) && (
+              <>
+                <dt>{t("promptChart.outcome")}</dt>
+                <dd data-testid="prompt-chart-inspector-outcome">{sentFactLine([card], t, liveFact)} <UntestedTag id="promptChart.outcome" /></dd>
+              </>
+            )}
             <dt>{t("promptChart.agent")}</dt>
             <dd>
               <PromptAgentPick

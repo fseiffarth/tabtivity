@@ -72,6 +72,7 @@ import { PromptLinkEditor } from "./PromptLinkEditor";
 import { PromptTimeline } from "./PromptTimeline";
 import { usePromptChartDrag } from "./usePromptChartDrag";
 import { usePromptChartUsage } from "./usePromptChartUsage";
+import { usePromptLiveState } from "./usePromptLiveState";
 import { PromptDraftBoard, type DraftBoardHandle } from "./PromptDraftBoard";
 import { PromptComposer, type ComposeSubmit } from "./PromptComposer";
 import { draftSequence } from "../../lib/agents/prompt/drafts";
@@ -343,6 +344,11 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const strandById = useMemo(() => new Map(strands.map((strand) => [strand.id, strand])), [strands]);
   const tabByTarget = useMemo(() => new Map(tabs.map((tab) => [tab.scheduleTargetId, tab])), [tabs]);
   const cards = useMemo(() => buildPromptChart({ prompts, history, strands, links, now, newTabAgent, newTabModel }), [history, links, newTabAgent, newTabModel, now, prompts, strands]);
+  // The turns running or waiting for an answer right now (read off the tabs'
+  // activity, never stored): their cards wear Running or Needs answer, and the
+  // running ones' bars grow with `now`.
+  const live = usePromptLiveState(scope, cards, strands, active);
+  const runningIds = useMemo(() => new Set([...live].filter(([, state]) => state === "running").map(([id]) => id)), [live]);
   // Tabs already holding a live rule: not offered to a draft or to another
   // rule, since two rules on one tab fire in no set order. A further prompt
   // reaches such a tab by an `after` link from the rule it holds.
@@ -965,6 +971,8 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
           }
         }}
         onPointerDown={onLiftPointerDown(liftKeysFor(itemKey))}
+        live={live.get(latest.id)}
+        now={now}
         onPortPointerDown={onPortPointerDown(latest)}
         onSelect={() => {
           if (armedElsewhere) void attempt(() => finishPick(latest));
@@ -999,6 +1007,8 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         occurrence={occurrence}
         drawnAt={drawnAt}
         matched={matches(card, occurrence, drawnAt)}
+        live={live.get(card.id)}
+        now={now}
         selected={selected === card.id}
         multiSelected={onLane && multi.has(itemKey)}
         onToggleSelect={onLane ? () => toggleMulti(itemKey) : undefined}
@@ -1263,6 +1273,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
             lifts={lifts[view]}
             resets={usageResets}
             preview={preview}
+            running={runningIds}
             onBodyPointerDown={onMarqueePointerDown}
             onUnfold={() => setUnfolded((days) => new Set(days).add(baseWin.anchor))}
           />
@@ -1273,6 +1284,8 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
                 key={selectedCard.id}
                 projectId={scope}
                 card={selectedCard}
+                live={live.get(selectedCard.id)}
+                now={now}
                 session={selectedSession}
                 editing={editId === selectedCard.id}
                 onEditing={(editing) => setEditId(editing ? selectedCard.id : null)}

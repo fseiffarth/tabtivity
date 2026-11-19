@@ -1,13 +1,18 @@
 import type { PromptChartCard } from "./chart";
 import { promptEndedAt } from "./timeline";
+import type { PromptLiveState } from "./outcome";
 
 type FactKey =
   | "promptChart.durationMin"
   | "promptChart.durationHourMin"
   | "promptChart.filesOne"
   | "promptChart.filesMany"
-  | "promptChart.sessionPrompts";
-type FactT = (key: FactKey, params?: Record<string, number>) => string;
+  | "promptChart.sessionPrompts"
+  | "promptChart.soFar"
+  | "promptChart.waitingForAnswer"
+  | "promptChart.missedFact"
+  | "promptChart.failedFact";
+type FactT = (key: FactKey, params?: Record<string, number | string>) => string;
 
 /** A turn's length for a fact line: "6 min", "1 h 12 min". Under a minute
  *  still reads "1 min" — a turn is never "0 min". */
@@ -34,11 +39,22 @@ export function sentFileCount(cards: PromptChartCard[]): number {
 
 /** A sent card's one line of fact: "6 min · 4 files · 2 prompts". Each part
  *  is left out when it is unknown or zero, so a bare card has an empty line. */
-export function sentFactLine(cards: PromptChartCard[], t: FactT): string {
-  const duration = sentDurationMs(cards);
+export function sentFactLine(cards: PromptChartCard[], t: FactT, live?: { state: PromptLiveState; now: Date }): string {
+  const result = cards[cards.length - 1]?.history?.result;
+  // A missed or failed row has no turn to measure: it says what happened.
+  if (result === "missed" || result === "failed") {
+    return [
+      t(result === "missed" ? "promptChart.missedFact" : "promptChart.failedFact"),
+      cards.length > 1 ? t("promptChart.sessionPrompts", { count: cards.length }) : "",
+    ].filter(Boolean).join(" · ");
+  }
+  const first = cards[0]?.at;
+  // A live turn has no end yet: its length is measured to now.
+  const duration = live ? (first ? Math.max(0, live.now.getTime() - first.getTime()) : null) : sentDurationMs(cards);
   const files = sentFileCount(cards);
   return [
-    duration === null ? "" : formatPromptDuration(duration, t),
+    duration === null ? "" : live ? t("promptChart.soFar", { duration: formatPromptDuration(duration, t) }) : formatPromptDuration(duration, t),
+    live?.state === "needsAnswer" ? t("promptChart.waitingForAnswer") : "",
     files > 0 ? t(files === 1 ? "promptChart.filesOne" : "promptChart.filesMany", { count: files }) : "",
     cards.length > 1 ? t("promptChart.sessionPrompts", { count: cards.length }) : "",
   ].filter(Boolean).join(" · ");

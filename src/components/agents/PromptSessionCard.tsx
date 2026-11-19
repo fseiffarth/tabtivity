@@ -6,6 +6,7 @@ import type { PromptChartCard } from "../../lib/agents/prompt/chart";
 import { formatTimelineInstant, promptEndedAt } from "../../lib/agents/prompt/timeline";
 import { sentFactLine } from "../../lib/agents/prompt/cardFacts";
 import { promptStateChip } from "../../lib/agents/prompt/stateChip";
+import type { PromptLiveState } from "../../lib/agents/prompt/outcome";
 import { CARD_OWN_KEYS } from "./PromptCard";
 import { PromptAgentPick } from "./PromptAgentPick";
 
@@ -34,6 +35,9 @@ interface Props {
   onLink: () => void;
   /** The duration bar on the top edge, first prompt to last finish. */
   bar?: { anchor: "left" | "right"; width: number };
+  /** The newest prompt's turn is running, or waiting for an answer. */
+  live?: PromptLiveState;
+  now?: Date;
 }
 
 /**
@@ -60,6 +64,8 @@ export function PromptSessionCard({
   onPortPointerDown,
   onLink,
   bar,
+  live,
+  now,
 }: Props) {
   const t = useT();
   const lang = useI18nStore((s) => s.lang);
@@ -72,7 +78,7 @@ export function PromptSessionCard({
   const ended = promptEndedAt(latest);
   const end = ended ?? latest.at;
   const crossesDay = !!first.at && !!end && toDateStr(first.at) !== toDateStr(end);
-  const chip = promptStateChip(latest);
+  const chip = promptStateChip(latest, [], live);
   const className = [
     "agent-prompt-card todo-card is-sent is-session",
     cards.some((card) => matchedKeys.has(card.key)) ? "" : "is-dimmed",
@@ -114,7 +120,7 @@ export function PromptSessionCard({
       <div className="agent-prompt-card-head">
         <span className="agent-prompt-card-message">{latest.message}</span>
       </div>
-      <small className="agent-prompt-card-fact">{sentFactLine(cards, t)}</small>
+      <small className="agent-prompt-card-fact">{sentFactLine(cards, t, live && now ? { state: live, now } : undefined)}</small>
       <PromptAgentPick card={latest} targets={[]} targetLabel={latest.history?.tab_label || undefined} onAgent={async () => {}} />
       <div className="agent-prompt-session-ticks" aria-hidden="true">
         {cards.map((card, index) => (

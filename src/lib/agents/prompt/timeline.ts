@@ -417,8 +417,10 @@ export function promptEndedAt(card: PromptChartCard): Date | null {
 
 /** The instant an item's newest part is over: a session's last prompt, a
  *  sent card's end, a rule's minute. */
-function itemEnd(item: TimelineItem): Date {
+function itemEnd(item: TimelineItem, running: ReadonlySet<string>, now: Date): Date {
   const last = item.members?.[item.members.length - 1] ?? item;
+  // A turn still going has no end: it reaches the now line and grows with it.
+  if (running.has(last.card.id)) return now;
   return promptEndedAt(last.card) ?? last.at;
 }
 
@@ -462,6 +464,8 @@ export function packLanes(
   now: Date,
   cardWidth = TIMELINE_CARD_WIDTH,
   gap = 6,
+  /** Ids of the sent cards whose turn is running right now. */
+  running: ReadonlySet<string> = new Set(),
 ): { lanes: number; items: LaneItem[] } {
   const lanes: [number, number][][] = [];
   const nowX = timelineX(now, win, width);
@@ -471,9 +475,9 @@ export function packLanes(
   // (`dayFold`), so no card starts there.
   const floor = win.fold ? win.fold.px : 0;
   const placed = [...items]
-    .sort((a, b) => itemEnd(b).getTime() - itemEnd(a).getTime())
+    .sort((a, b) => itemEnd(b, running, now).getTime() - itemEnd(a, running, now).getTime())
     .map((item): LaneItem => {
-      const end = itemEnd(item);
+      const end = itemEnd(item, running, now);
       const startX = timelineX(item.at, win, width);
       const endX = timelineX(end, win, width);
       const last = item.members?.[item.members.length - 1];

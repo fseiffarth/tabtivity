@@ -58,6 +58,8 @@ interface Props {
   onUnfold?: () => void;
   /** Where the prompt the composer holds would land, drawn dashed. */
   preview?: { at: Date; message: string } | null;
+  /** Ids of the sent cards whose turn is running: their bar grows with `now`. */
+  running?: ReadonlySet<string>;
 }
 
 const BODY_PADDING = 8;
@@ -85,7 +87,7 @@ function hhmm(at: Date): string {
  * that scrolled the body took the now line away with it. The axis, with the
  * NOW label, is sticky, so scrolling the tab keeps the clock in view too.
  */
-export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, renderCard, onRefine, dropLabel, dropBlocked, emptyHint, onZoom, lifts, resets = [], onBodyPointerDown, onUnfold, preview }: Props) {
+export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, renderCard, onRefine, dropLabel, dropBlocked, emptyHint, onZoom, lifts, resets = [], onBodyPointerDown, onUnfold, preview, running }: Props) {
   const t = useT();
   const lang = useI18nStore((s) => s.lang);
   const use24h = useUse24h();
@@ -133,7 +135,7 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
   // A session's sent prompts share one card on the lanes; the month's lamps
   // stay one per prompt.
   const laneItems = useMemo(() => (win.view === "month" ? items : sessionItems(items)), [items, win.view]);
-  const packed = useMemo(() => packLanes(laneItems, win, width, now), [laneItems, now, width, win]);
+  const packed = useMemo(() => packLanes(laneItems, win, width, now, undefined, undefined, running), [laneItems, now, running, width, win]);
   const clusters = useMemo(() => (win.view === "month" ? dayClusters(items, win, width) : []), [items, width, win]);
   const queued = useMemo(() => queuedStack(cards, now), [cards, now]);
   const ticks = useMemo(() => timelineTicks(win, width), [width, win]);
