@@ -384,6 +384,8 @@ export const UNTESTED = {
   "ollama.filterSource": { area: "layout", what: "SettingsSubPanels · Browse the Ollama registry → Source: Hugging Face lists GGUF repos (Hugging Face badge, parameter count, gated note) with their single-file quantizations in the picker; Pull downloads hf.co/<user>/<repo>:<quant>; the size line shows on hover; Check for updates answers for it; scrolling loads more; the type/runs/size filters hide; Popular/Newest/Name sort applies" },
   "ollama.hfCopyKey": { area: "layout", what: "SettingsSubPanels · Browse the Ollama registry → Hugging Face: a gated card (and the realm-host pull error) offers Copy Ollama's key: copies ~/.ollama/id_ed25519.pub, or /usr/share/ollama/.ollama/id_ed25519.pub when Ollama is the systemd service; says when there is no key yet, it is not readable (names the file), or Ollama runs on another machine" },
   "ollama.modelLocationTitle": { area: "layout", what: "SettingsSubPanels · Model download location" },
+  "ollama.contextTitle": { area: "layout", what: "Ollama panel · Context window setting for the server the app starts" },
+  "ollama.restart": { area: "layout", what: "Ollama panel · Restart Ollama beside Refresh" },
   "projectSwitcher.addProjectsToBox": { area: "layout", what: "ProjectSwitcher · Add projects to Box" },
   "projectSwitcher.hpcPipeline": { area: "layout", what: "ProjectSwitcher · HPC pipeline…" },
   "projectSwitcher.newBox": { area: "layout", what: "ProjectSwitcher · New Box" },

@@ -152,6 +152,13 @@ calling; the Models & agents menu tags models without it "no tools".
   `qwen2.5-coder`).
 - **"Running on CPU — load onto GPU"**: click it; if the model still lands on
   the CPU, it may not fit into VRAM — choose a smaller size.
+- **The agent forgets what you said, or writes tool calls as text**
+  (`<google_search>…`): the model's context window is too small, and Ollama
+  cuts the prompt without an error. Open **Manage models**: **Context window**
+  shows what each loaded model has. Pick a size (at least 16,384 tokens) and
+  press **Restart Ollama**, then open a new agent tab. It applies to the
+  server Tabtivity starts; `OLLAMA_CONTEXT_LENGTH` set in your environment, or
+  on a system service, wins.
 - **Integrated GPU ignored**: some Ollama versions need `OLLAMA_IGPU_ENABLE=1`
   in the server's environment; the Models & agents menu offers the fix.
 - **Server won't start**: run `ollama serve` in a terminal to see its error.

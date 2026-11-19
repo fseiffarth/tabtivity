@@ -53,6 +53,12 @@ pub(crate) fn configured_models_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+/// The user's chosen context window (`Settings::ollama_context_length`), read
+/// on every use like [`configured_models_dir`].
+pub(crate) fn configured_context_length() -> Option<u32> {
+    crate::storage::load_settings().and_then(|s| s.ollama_context_length)
+}
+
 /// The pure core of [`ollama_addr`]: what the user wrote → what we dial.
 ///
 /// Liberal about spelling (Ollama's own `OLLAMA_HOST` accepts most of these, and

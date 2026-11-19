@@ -20,6 +20,19 @@ fn a_spawned_server_raises_only_the_small_gpu_context_default() {
     assert_eq!(spawned_context_length(24 * GIB), None);
 }
 
+/// The user's context setting wins over the automatic one on any GPU; a value
+/// outside the range falls back to automatic instead of reaching Ollama.
+#[test]
+fn the_context_setting_overrides_the_automatic_window() {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    assert_eq!(configured_context(Some(65_536), 8 * GIB), Some(65_536));
+    assert_eq!(configured_context(Some(8_192), 48 * GIB), Some(8_192));
+    assert_eq!(configured_context(None, 8 * GIB), Some(32_768));
+    assert_eq!(configured_context(None, 48 * GIB), None);
+    assert_eq!(configured_context(Some(0), 8 * GIB), Some(32_768));
+    assert_eq!(configured_context(Some(u32::MAX), 48 * GIB), None);
+}
+
 /// An interrupted-pull list that does not parse keeps its entries: a new
 /// pull fails to record itself rather than replacing them with its own.
 #[test]
