@@ -7,7 +7,7 @@ import type { PromptChartCard } from "../../lib/agents/prompt/chart";
 import { formatTimelineInstant } from "../../lib/agents/prompt/timeline";
 import type { PromptLink, SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { UntestedTag } from "../common/UntestedTag";
-import { CloseIcon } from "../common/icons/Icon";
+import { CloseIcon, WarningIcon } from "../common/icons/Icon";
 import { PromptAgentPick, type PromptCardTarget } from "./PromptAgentPick";
 import { sentFactLine } from "../../lib/agents/prompt/cardFacts";
 import { promptEndedAt } from "../../lib/agents/prompt/timeline";
@@ -15,6 +15,28 @@ import { promptStateChip } from "../../lib/agents/prompt/stateChip";
 import type { PromptLiveState } from "../../lib/agents/prompt/outcome";
 
 export type { PromptCardTarget } from "./PromptAgentPick";
+
+/** What a scheduled card on a nearly exhausted agent is warned with. */
+export interface LimitNotice {
+  percent: number;
+  /** The reset it is due before. */
+  until: Date;
+}
+
+/** The "may hit the limit" notice of a scheduled card, with its one action. The
+ *  face and the inspector wear the same one. */
+export function PromptLimitWarning({ limit, onMove }: { limit: LimitNotice; onMove?: () => void }) {
+  const t = useT();
+  const lang = useI18nStore((s) => s.lang);
+  const use24h = useUse24h();
+  return (
+    <div className="agent-prompt-card-limit" role="note" data-testid="prompt-limit-warning">
+      <WarningIcon />
+      <span>{t("promptChart.limit.warning", { percent: Math.round(limit.percent), time: formatTimelineInstant(limit.until, lang, use24h, false) })}</span>
+      {onMove && <button type="button" className="settings-btn sm" onClick={(event) => { event.stopPropagation(); onMove(); }}>{t("promptChart.limit.move")}</button>}
+    </div>
+  );
+}
 
 /** Stored tags on a card's face; the rest are "+n". Auto tags are the inspector's. */
 const FACE_TAGS = 2;
@@ -80,6 +102,10 @@ interface Props {
   showDate?: boolean;
   /** The turn this sent card started is running, or waiting for an answer. */
   live?: PromptLiveState;
+  /** Due before its agent's window resets, with the window nearly used up. */
+  limit?: LimitNotice;
+  /** Put it just after the reset; absent where the card cannot be retimed (a recurring rule). */
+  onMoveAfterReset?: () => void;
   /** Its place in a sequence, when it belongs to one. */
   step?: { n: number; of: number };
   /** The chart's clock, for a running turn's length so far. */
@@ -148,6 +174,8 @@ export function PromptCard({
   bar,
   showDate = true,
   live,
+  limit,
+  onMoveAfterReset,
   step,
   now,
 }: Props) {
@@ -235,6 +263,7 @@ export function PromptCard({
         )}
       </div>
       {fact && <small className="agent-prompt-card-fact">{fact}</small>}
+      {limit && !occurrence && <PromptLimitWarning limit={limit} onMove={onMoveAfterReset} />}
       {step && card.state !== "chained" && !occurrence && <small className="agent-prompt-card-fact agent-prompt-card-step" data-testid="prompt-card-step">{t("promptChart.seq.stepOf", step)}</small>}
       {projectId && card.targetId && card.schedule?.origin && <AgentScheduleProposal projectId={projectId} targetId={card.targetId} schedule={card.schedule} />}
       {(card.history?.schedule_origin || card.history?.phone_device) && <div className="agent-schedule-attribution">

@@ -1,4 +1,5 @@
 import { resolveResetAt, type UsageReport } from "../../../shared/usageReport";
+import { ceilPromptTime, type PromptChartCard } from "./prompt/chart";
 
 /**
  * Where an agent's own rate-limit windows roll over, as marks on the prompt
@@ -80,4 +81,70 @@ export function usageResetMarks(agent: string, report: UsageReport, now: Date, f
     }
   }
   return [...marks.values()].sort((a, b) => a.at.getTime() - b.at.getTime());
+}
+
+/** A 5-hour window is 5 hours long: its bar starts that long before the reset. */
+export const SESSION_WINDOW_MS = 5 * 3_600_000;
+/** From this much used, a prompt due before the reset may not get through. */
+export const LIMIT_WARNING_PERCENT = 90;
+
+export type UsageTone = "ok" | "warn" | "high";
+
+/** The band's three tones; the number is always printed beside it. */
+export function usageTone(percent: number): UsageTone {
+  return percent >= LIMIT_WARNING_PERCENT ? "high" : percent >= 70 ? "warn" : "ok";
+}
+
+/** One agent's row in the usage band: its session windows as bars from
+ *  `reset − 5 h` (cut at the view's start) to the reset, and its weekly resets
+ *  as ticks. */
+export interface UsageBandRow {
+  agent: string;
+  sessions: { mark: UsageResetMark; start: Date; end: Date; tone: UsageTone }[];
+  weekly: UsageResetMark[];
+}
+
+export function usageBandRows(marks: readonly UsageResetMark[], view: { start: Date; end: Date }): UsageBandRow[] {
+  const rows = new Map<string, UsageBandRow>();
+  for (const mark of marks) {
+    if (mark.at < view.start || mark.at >= view.end) continue;
+    const row = rows.get(mark.agent) ?? { agent: mark.agent, sessions: [], weekly: [] };
+    rows.set(mark.agent, row);
+    if (mark.kind === "week") row.weekly.push(mark);
+    else {
+      const start = new Date(Math.max(view.start.getTime(), mark.at.getTime() - SESSION_WINDOW_MS));
+      row.sessions.push({ mark, start, end: mark.at, tone: usageTone(mark.percent) });
+    }
+  }
+  return [...rows.values()];
+}
+
+export interface LimitWarning {
+  mark: UsageResetMark;
+  /** The first snap minute after the reset: where "Move after reset" puts it. */
+  moveTo: Date;
+}
+
+/**
+ * A scheduled prompt on an agent whose 5-hour window is at 90 % or more, due
+ * between now and that window's reset: it may hit the limit, and the warning
+ * says so. Only the agent's own next session reset counts, and only a rule
+ * with a minute of its own; a recurring rule is warned about at its next
+ * occurrence (the caller offers no move for it).
+ */
+export function limitWarning(
+  card: Pick<PromptChartCard, "state" | "at" | "schedule" | "autoTags">,
+  marks: readonly UsageResetMark[],
+  now: Date,
+  snapMinutes = 5,
+): LimitWarning | null {
+  if (card.state !== "scheduled" || !card.schedule || !card.at) return null;
+  const agent = card.autoTags.find((tag) => tag.startsWith("agent:"))?.slice(6);
+  if (!agent) return null;
+  const due = card.at.getTime();
+  const mark = marks
+    .filter((item) => item.agent === agent && item.kind === "session" && item.percent >= LIMIT_WARNING_PERCENT && item.at.getTime() > now.getTime())
+    .sort((a, b) => a.at.getTime() - b.at.getTime())[0];
+  if (!mark || due <= now.getTime() || due >= mark.at.getTime()) return null;
+  return { mark, moveTo: ceilPromptTime(mark.at, snapMinutes) };
 }

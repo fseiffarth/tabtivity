@@ -4,7 +4,8 @@ import {
   localOccurrenceKey,
   nextScheduleOccurrence,
 } from "../agentSchedule";
-import { queueOrderTimes, snapPromptTime, type PromptChartCard } from "./chart";
+import { ceilPromptTime, queueOrderTimes, snapPromptTime, type PromptChartCard } from "./chart";
+import type { UsageResetMark, UsageWindowKind } from "../agentUsageResets";
 
 /**
  * The prompt chart's time axis: one proportional, horizontal scale that a Day,
@@ -531,7 +532,7 @@ export type TimelineZone =
   | { kind: "strip" }
   | { kind: "now" }
   | { kind: "past" }
-  | { kind: "time"; at: Date };
+  | { kind: "time"; at: Date; reset?: UsageWindowKind };
 
 export interface TimelineRect {
   left: number;
@@ -685,4 +686,35 @@ const TARGET_COLORS = [
 /** The stripe colour of the n-th agent tab; a closed session is grey. */
 export function promptTargetColor(index: number): string {
   return index < 0 ? "var(--text-muted)" : TARGET_COLORS[index % TARGET_COLORS.length];
+}
+
+/** How close, in px, a snapped instant must be to a reset to land after it. */
+export const RESET_SNAP_PX = 10;
+
+/**
+ * While a card is carried, a snapped instant within `RESET_SNAP_PX` of a reset
+ * mark of that card's agent becomes the first snap minute at or after the
+ * reset: dropped there it waits for the limit to roll over instead of landing
+ * a minute or two before it. Only resets still ahead of `now` count. Returns
+ * the new instant and which window it follows, or null when nothing is near.
+ */
+export function snapToReset(
+  at: Date,
+  marks: readonly UsageResetMark[],
+  agent: string | undefined,
+  win: TimelineWindow,
+  width: number,
+  now: Date,
+): { at: Date; reset: UsageWindowKind } | null {
+  if (!agent) return null;
+  const x = timelineX(at, win, width);
+  let best: { distance: number; mark: UsageResetMark; landing: Date } | null = null;
+  for (const mark of marks) {
+    if (mark.agent !== agent) continue;
+    const landing = ceilPromptTime(mark.at, win.snapMinutes);
+    const distance = Math.abs(timelineX(mark.at, win, width) - x);
+    if (landing.getTime() <= now.getTime() || distance > RESET_SNAP_PX) continue;
+    if (!best || distance < best.distance) best = { distance, mark, landing };
+  }
+  return best ? { at: best.landing, reset: best.mark.kind } : null;
 }

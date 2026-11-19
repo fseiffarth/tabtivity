@@ -73,6 +73,7 @@ import { PromptTimeline } from "./PromptTimeline";
 import { usePromptChartDrag } from "./usePromptChartDrag";
 import { usePromptChartUsage } from "./usePromptChartUsage";
 import { usePromptLiveState } from "./usePromptLiveState";
+import { limitWarning } from "../../lib/agents/agentUsageResets";
 import { PromptDraftBoard, type DraftBoardHandle } from "./PromptDraftBoard";
 import { PromptComposer, type ComposeSubmit } from "./PromptComposer";
 import { PromptSequenceInspector } from "./PromptSequenceGroup";
@@ -440,6 +441,12 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     if (reason === "past") return t(pastRefusalKey(zoneKind));
     if (reason === "no-target") return t("promptChart.dropNoTarget");
     return "";
+  };
+  /** A scheduled card due before its agent's window resets, with the window
+   *  nearly used up: the warning, and the retime that is its one action. */
+  const limitFor = (card: PromptChartCard) => {
+    const warning = limitWarning(card, upcomingResets, now, win.snapMinutes);
+    return warning && { warning, notice: { percent: warning.mark.percent, until: warning.mark.at } };
   };
   const newTabItem = agentItemFor(newTabAgent, customAgents);
   const newTabLabel = t("promptChart.newAgentTab", { agent: newTabItem.label });
@@ -873,6 +880,8 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     win,
     now,
     cards,
+    resets: usageResets,
+    agentOf: (card) => card.history?.agent ?? card.autoTags.find((tag) => tag.startsWith("agent:"))?.slice(6),
     onStale: () => setError(t("promptChart.cardChanged")),
     measure: () => {
       const body = bodyRef.current;
@@ -951,9 +960,10 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   // the same write all across its width (a time zone per snapped minute).
   const zoneKind = drag?.kind === "card" ? drag.zone.kind : null;
   const zoneAt = drag?.kind === "card" && drag.zone.kind === "time" ? drag.zone.at.getTime() : 0;
+  const zoneReset = drag?.kind === "card" && drag.zone.kind === "time" ? drag.zone.reset : undefined;
   const dropBadge = useMemo<{ label: string; blocked: boolean } | null>(() => {
     if (!dragCard || !zoneKind) return null;
-    const zone = (zoneKind === "time" ? { kind: "time", at: new Date(zoneAt) } : { kind: zoneKind }) as TimelineZone;
+    const zone = (zoneKind === "time" ? { kind: "time", at: new Date(zoneAt), reset: zoneReset } : { kind: zoneKind }) as TimelineZone;
     if (zone.kind === "strip" && stripIds.has(dragCard.id)) {
       return boardFree
         ? { label: t("promptChart.dropMoveHere"), blocked: false }
@@ -989,12 +999,16 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
       : tabLabel && drop.type === "schedule" ? t("promptChart.dropScheduleOn", { tab: tabLabel })
         : t(keys[drop.type]);
     const sequence = draftSequence(dragCard.id, cards, links);
+    // A drop snapped to a reset says so: "Schedule on Claude · after the 5h reset".
+    const named = zoneReset && (drop.type === "schedule" || drop.type === "retime")
+      ? `${action} · ${t(`promptChart.afterReset.${zoneReset}` as "promptChart.afterReset.session")}`
+      : action;
     return {
       label: sequence && sequence.length > 1 && (drop.type === "send" || drop.type === "schedule")
-        ? t("promptChart.dropSequence", { action, count: sequence.length }) : action,
+        ? t("promptChart.dropSequence", { action: named, count: sequence.length }) : named,
       blocked: false,
     };
-  }, [boardFree, cards, carried, dragCard, dropSource, links, now, occupiedIds, stripIds, t, tabByTarget, targetIds, win, zoneAt, zoneKind]);
+  }, [boardFree, cards, carried, dragCard, dropSource, links, now, occupiedIds, stripIds, t, tabByTarget, targetIds, win, zoneAt, zoneKind, zoneReset]);
 
   const linkLabel = (id: string) => {
     const card = cardById(id);
@@ -1064,6 +1078,11 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         drawnAt={drawnAt}
         matched={matches(card, occurrence, drawnAt)}
         live={live.get(card.id)}
+        limit={occurrence ? undefined : limitFor(card)?.notice}
+        onMoveAfterReset={(() => {
+          const found = limitFor(card);
+          return found && !card.recurring ? () => void attempt(() => retime(card, found.warning.moveTo, card.targetId, false)) : undefined;
+        })()}
         step={occurrence ? undefined : places.get(card.id)}
         now={now}
         selected={selected === card.id}
@@ -1363,6 +1382,11 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
                 card={selectedCard}
                 live={live.get(selectedCard.id)}
                 now={now}
+                limit={limitFor(selectedCard)?.notice}
+                onMoveAfterReset={(() => {
+                  const found = limitFor(selectedCard);
+                  return found && !selectedCard.recurring ? () => void attempt(() => retime(selectedCard, found.warning.moveTo, selectedCard.targetId, false)) : undefined;
+                })()}
                 session={selectedSession}
                 editing={editId === selectedCard.id}
                 onEditing={(editing) => setEditId(editing ? selectedCard.id : null)}

@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { formatTime, weekdayLabel } from "../../lib/calendar/calendarTime";
 import { useI18nStore, useT } from "../../lib/i18n";
+import { UntestedTag } from "../common/UntestedTag";
+import { AGENT_ITEMS } from "../../lib/tabs/newTabItems";
 import { useUse24h } from "../../lib/timeFormat";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
-import type { UsageResetMark } from "../../lib/agents/agentUsageResets";
+import { usageBandRows, type UsageResetMark } from "../../lib/agents/agentUsageResets";
 import {
   TIMELINE_CARD_WIDTH,
   TIMELINE_LANE_HEIGHT,
@@ -69,6 +71,9 @@ const NOW_BAND_WIDTH = 22;
 const NOW_PILL_HALF = 46;
 /** The queue's caption above its first card. */
 const QUEUE_LABEL_HEIGHT = 16;
+
+/** An agent as the "+" menu names it ("Claude"), else its command. */
+const agentName = (cmd: string) => AGENT_ITEMS.find((item) => item.cmd === cmd)?.label ?? cmd;
 
 function hhmm(at: Date): string {
   return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
@@ -166,10 +171,9 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
   };
 
   const visibleResets = resets.filter((mark) => mark.at >= win.start && mark.at < win.end);
-  // The agent is named on the label only once there is more than one to tell apart.
-  const resetAgents = new Set(visibleResets.map((mark) => mark.agent)).size;
-  const resetText = (mark: UsageResetMark) =>
-    `${resetAgents > 1 ? `${mark.agent} ` : ""}${t(`promptChart.reset.${mark.kind}` as "promptChart.reset.session")}`;
+  // The usage band under the axis: one row per agent with a mark in view. The
+  // reset labels used to share the hour axis and collide with its hours.
+  const bandRows = useMemo(() => usageBandRows(resets, win), [resets, win]);
   const resetTitle = (mark: UsageResetMark) => t("promptChart.resetTitle", {
     agent: mark.agent,
     labels: mark.labels.join(", "),
@@ -196,11 +200,6 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
               {tick.labelled ? tickLabel(tick.at, tick.label, tick.major) : ""}
             </span>
           ))}
-          {visibleResets.map((mark) => (
-            <span key={`reset:${mark.key}`} className={`agent-prompt-timeline-reset-label is-${mark.kind}`} style={{ left: timelineX(mark.at, win, width) }} title={resetTitle(mark)}>
-              {resetText(mark)}
-            </span>
-          ))}
           <span className={`agent-prompt-timeline-now-pill${nowInside ? "" : " is-outside"}`} style={{ left: pillX }} title={t("promptChart.nowBand")}>
             {t("promptChart.nowAt", { time: formatTime(hhmm(now), use24h) })}
           </span>
@@ -219,6 +218,34 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
           </button>
         )}
       </div>
+      {bandRows.length > 0 && (
+        <div className="agent-prompt-usage-band" data-testid="prompt-usage-band">
+          <span className="agent-prompt-usage-pill"><UntestedTag id="promptChart.usageBand" /></span>
+          {bandRows.map((row) => (
+            <div key={row.agent} className="agent-prompt-usage-row" data-testid="prompt-usage-row">
+              {row.sessions.map(({ mark, start, end, tone }) => {
+                const left = timelineX(start, win, width);
+                const right = timelineX(end, win, width);
+                return (
+                  <Fragment key={mark.key}>
+                    <span className={`agent-prompt-usage-bar is-${tone}`} style={{ left, width: Math.max(2, right - left) }} title={resetTitle(mark)}>
+                      <span>{t("promptChart.band.session", { agent: agentName(mark.agent), percent: Math.round(mark.percent) })}</span>
+                    </span>
+                    <span className="agent-prompt-usage-after" style={{ left: right + 6 }}>
+                      {t("promptChart.band.newWindow", { time: formatTime(hhmm(end), use24h) })}
+                    </span>
+                  </Fragment>
+                );
+              })}
+              {row.weekly.map((mark) => (
+                <span key={mark.key} className="agent-prompt-usage-week" style={{ left: timelineX(mark.at, win, width) }} title={resetTitle(mark)}>
+                  {t("promptChart.band.weekly", { agent: agentName(mark.agent) })}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="agent-prompt-timeline-stage">
         <div className="agent-prompt-timeline-underlay" aria-hidden="true">
           {win.fold && <div className="agent-prompt-timeline-fold-shade" style={{ width: win.fold.px }} />}
@@ -226,6 +253,12 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
           {ticks.map((tick, index) => (
             <span key={`line:${index}`} className={`agent-prompt-timeline-line${tick.major ? " is-major" : ""}`} style={{ left: tick.x }} />
           ))}
+          {bandRows.flatMap((row) => row.sessions)
+            .filter((window) => window.tone === "high" && window.end > now)
+            .map((window) => {
+              const left = timelineX(window.start > now ? window.start : now, win, width);
+              return <div key={`limit:${window.mark.key}`} className="agent-prompt-timeline-limit" style={{ left, width: Math.max(0, timelineX(window.end, win, width) - left) }} />;
+            })}
           {visibleResets.map((mark) => (
             <span key={`reset:${mark.key}`} className={`agent-prompt-timeline-reset is-${mark.kind}`} style={{ left: timelineX(mark.at, win, width) }} />
           ))}

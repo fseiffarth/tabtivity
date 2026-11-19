@@ -4509,14 +4509,29 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-timeline-now-pill { position: absolute; top: 4px; z-index: 2; transform: translateX(-50%); height: 20px; padding: 0 var(--space-2); border-radius: var(--radius-full); background: var(--danger); color: var(--accent-contrast, #fff); font-size: var(--text-sm); font-weight: 700; line-height: 20px; white-space: nowrap; }
 .agent-prompt-timeline-now-pill.is-outside { opacity: .55; }
 /* An agent's own rate-limit rollover: a dashed line under the cards (it marks
-   time, like the grid) and a coloured label in the axis carrying the tooltip.
-   Session (5 h) and weekly windows differ by colour. */
+   time, like the grid); the label lives in the usage band below. Session (5 h)
+   and weekly windows differ by colour. */
 .agent-prompt-timeline-reset { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--reset-color); opacity: .8; pointer-events: none; }
-.agent-prompt-timeline-reset-label { position: absolute; top: 7px; padding: 0 3px; border-left: 1px dashed var(--reset-color); background: var(--bg-panel); color: var(--reset-color); font-size: var(--text-sm); line-height: 14px; white-space: nowrap; }
-.agent-prompt-timeline-reset.is-session,
-.agent-prompt-timeline-reset-label.is-session { --reset-color: var(--warning); }
-.agent-prompt-timeline-reset.is-week,
-.agent-prompt-timeline-reset-label.is-week { --reset-color: var(--accent); }
+.agent-prompt-timeline-reset.is-session { --reset-color: var(--warning); }
+.agent-prompt-timeline-reset.is-week { --reset-color: var(--accent); }
+/* The usage band under the axis: one row per agent with a mark in view. The
+   session window is a bar from 5 h before the reset to the reset, in a tone by
+   how much is used (the number is always printed); the weekly reset is a tick.
+   The reset labels used to sit in the hour axis and collide with its hours. */
+.agent-prompt-usage-band { position: sticky; top: 28px; z-index: 6; display: flex; flex-direction: column; gap: 2px; padding: 3px 0; border-bottom: 1px solid var(--border-color); background: var(--bg-panel); overflow: clip; }
+.agent-prompt-usage-row { position: relative; height: 20px; }
+.agent-prompt-usage-pill { position: absolute; right: 4px; top: 0; z-index: 2; }
+.agent-prompt-usage-bar { position: absolute; top: 0; bottom: 0; box-sizing: border-box; display: flex; align-items: center; padding: 0 var(--space-2); border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--text-primary); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; }
+.agent-prompt-usage-bar.is-warn { background: color-mix(in srgb, var(--warning) 22%, transparent); }
+.agent-prompt-usage-bar.is-high { background: color-mix(in srgb, var(--danger) 22%, transparent); border-color: var(--danger); }
+.agent-prompt-usage-after { position: absolute; top: 0; line-height: 20px; color: var(--text-muted); font-size: var(--text-sm); white-space: nowrap; }
+.agent-prompt-usage-week { position: absolute; top: 0; height: 20px; padding-left: 4px; border-left: 2px solid var(--accent); color: var(--accent); font-size: var(--text-sm); line-height: 20px; white-space: nowrap; }
+/* The stretch before a nearly used-up window resets, down the lanes. */
+.agent-prompt-timeline-limit { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--danger) 8%, transparent); }
+/* A scheduled card's limit notice, on its face and in the inspector. */
+.agent-prompt-card-limit { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 4px var(--space-2); border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--text-primary); font-size: var(--text-sm); }
+.agent-prompt-card-limit > svg { flex: none; width: 14px; height: 14px; color: var(--warning); }
+.agent-prompt-card-limit > span { flex: 1 1 120px; min-width: 0; }
 .agent-prompt-timeline-queue { position: absolute; top: 8px; z-index: 4; display: flex; flex-direction: column; gap: 5px; }
 .agent-prompt-timeline-queue > small { color: var(--warning); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: .04em; }
 /* Month view: one column per day, the cards as lamps; the whole day is the
@@ -4541,7 +4556,6 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-timeline-marquee { position: fixed; z-index: 40; border: 1px dashed var(--accent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 12%, transparent); pointer-events: none; }
 .agent-prompt-card.is-multi-selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 .agent-prompt-chart-selection { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--text-sm); }
-.agent-prompt-chart-select-hint { color: var(--text-muted); font-size: var(--text-sm); }
 /* The chart's error line and its Dismiss: `.mail-error-strip`'s row layout. */
 .agent-prompt-chart-error { display: flex; align-items: center; gap: 10px; }
 .agent-prompt-chart-error > span { flex: 1; word-break: break-word; }

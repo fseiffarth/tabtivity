@@ -13,7 +13,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { CheckIcon, CloseIcon } from "../common/icons/Icon";
 import { AgentScheduleProposal } from "./AgentScheduleProposal";
 import { PromptAgentPick, type PromptCardTarget } from "./PromptAgentPick";
-import { PromptPhoneChip, stateFact } from "./PromptCard";
+import { PromptLimitWarning, PromptPhoneChip, stateFact, type LimitNotice } from "./PromptCard";
 
 interface Props {
   projectId?: string;
@@ -24,6 +24,8 @@ interface Props {
   /** The card's turn is running, or waiting for an answer, right now. */
   live?: PromptLiveState;
   now?: Date;
+  limit?: LimitNotice;
+  onMoveAfterReset?: () => void;
   /** The prompt is open in the editor (a double click on its card opens the
    *  inspector already editing, so the chart owns this). */
   editing: boolean;
@@ -73,6 +75,8 @@ export function PromptInspector({
   session,
   live,
   now,
+  limit,
+  onMoveAfterReset,
   editing,
   onEditing,
   focusToken,
@@ -235,6 +239,8 @@ export function PromptInspector({
               <p className="agent-prompt-card-full" data-testid="prompt-chart-inspector-prompt">{card.message}</p>
             )}
           </div>
+
+          {limit && <PromptLimitWarning limit={limit} onMove={onMoveAfterReset} />}
 
           {projectId && card.targetId && card.schedule?.origin && <AgentScheduleProposal projectId={projectId} targetId={card.targetId} schedule={card.schedule} />}
 
