@@ -20,8 +20,7 @@ function sent(id: string, at: Date): PromptChartCard {
   } as unknown as PromptChartCard;
 }
 
-function renderSession(cards: PromptChartCard[]) {
-  const noop = vi.fn(async () => {});
+function renderSession(cards: PromptChartCard[], handlers: { onSelect?: () => void; onOpen?: () => void } = {}) {
   render(
     <PromptSessionCard
       cards={cards}
@@ -31,10 +30,9 @@ function renderSession(cards: PromptChartCard[]) {
       linking={false}
       linkOver={false}
       color="var(--accent)"
-      onSelect={vi.fn()}
+      onSelect={handlers.onSelect ?? vi.fn()}
+      onOpen={handlers.onOpen}
       onLink={vi.fn()}
-      onCollect={noop}
-      onDelete={noop}
     />,
   );
   return screen.getByTestId("prompt-chart-session");
@@ -55,11 +53,15 @@ describe("PromptSessionCard span", () => {
     expect(fact).toContain("2 prompts");
   });
 
-  it("opens from the keyboard like a prompt card", () => {
-    const card = renderSession([sent("a", new Date(2026, 8, 4, 9, 10)), sent("b", new Date(2026, 8, 4, 11, 40))]);
+  it("selects from the keyboard like a prompt card, and lists nothing inside itself", () => {
+    const onSelect = vi.fn();
+    const onOpen = vi.fn();
+    const card = renderSession([sent("a", new Date(2026, 8, 4, 9, 10)), sent("b", new Date(2026, 8, 4, 11, 40))], { onSelect, onOpen });
     expect(card.getAttribute("tabindex")).toBe("0");
     fireEvent.keyDown(card, { key: "Enter" });
-    expect(card.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getAllByTestId("prompt-chart-session-row")).toHaveLength(2);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    // The session's prompts are the inspector's list, not an expanded body.
+    expect(screen.queryAllByTestId("prompt-chart-session-row")).toHaveLength(0);
   });
 });

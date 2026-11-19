@@ -4328,13 +4328,48 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-chart { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
 .agent-prompt-chart-columns { flex: 1; display: grid; grid-template-columns: var(--drafts-width, 288px) minmax(0, 1fr); gap: var(--space-2); min-height: 480px; }
 .agent-prompt-chart-columns:has(> .agent-prompt-drafts-strip.is-collapsed) { grid-template-columns: 36px minmax(0, 1fr); }
+/* The inspector is a third column that exists only while a card is selected. */
+.agent-prompt-chart-columns.has-inspector { grid-template-columns: var(--drafts-width, 288px) minmax(0, 1fr) minmax(280px, 340px); }
+.agent-prompt-chart-columns.has-inspector:has(> .agent-prompt-drafts-strip.is-collapsed) { grid-template-columns: 36px minmax(0, 1fr) minmax(280px, 340px); }
 @container (max-width: 899px) {
   .agent-prompt-chart-columns,
-  .agent-prompt-chart-columns:has(> .agent-prompt-drafts-strip.is-collapsed) { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .agent-prompt-chart-columns.has-inspector,
+  .agent-prompt-chart-columns:has(> .agent-prompt-drafts-strip.is-collapsed),
+  .agent-prompt-chart-columns.has-inspector:has(> .agent-prompt-drafts-strip.is-collapsed) { grid-template-columns: minmax(0, 1fr); min-height: 0; }
   .agent-prompt-drafts-strip:not(.is-collapsed) { max-height: 50vh; }
   .agent-prompt-drafts-resize { display: none; }
   .agent-prompt-timeline { min-height: 420px; }
 }
+
+/* The word a card's state is written in (never a colour alone): the card face
+   and the inspector wear the same chip. */
+.agent-prompt-chip { display: inline-block; padding: 0 var(--space-2); border: 1px solid transparent; border-radius: var(--radius-full); background: var(--bg-hover); color: var(--text-secondary); font-size: var(--text-sm); font-weight: 600; line-height: 18px; white-space: nowrap; }
+.agent-prompt-chip.is-scheduled { background: var(--accent-soft); color: var(--accent); }
+.agent-prompt-chip.is-queued { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.agent-prompt-chip.is-chained { border: 1px dashed var(--accent); background: transparent; color: var(--accent); }
+.agent-prompt-chip.is-delivered { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.agent-prompt-chip.is-missed { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.agent-prompt-chip.is-failed { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+
+/* The inspector: the selected card in full, a column of its own. */
+.agent-prompt-inspector { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; min-height: 0; overflow-y: auto; padding: var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-elevated, var(--bg-panel)); color: var(--text-primary); }
+.agent-prompt-inspector-head { display: flex; align-items: center; gap: var(--space-2); }
+.agent-prompt-inspector-label { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.agent-prompt-inspector-label:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 2px; }
+.agent-prompt-inspector-field { display: flex; flex-direction: column; gap: 6px; }
+.agent-prompt-inspector .agent-prompt-card-full { font-size: var(--text-md); line-height: 1.45; }
+.agent-prompt-inspector textarea,
+.agent-prompt-inspector input:not([type="checkbox"]) { width: 100%; box-sizing: border-box; }
+.agent-prompt-inspector-grid { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px 10px; margin: 0; font-size: var(--text-md); }
+.agent-prompt-inspector-grid > dt { color: var(--text-secondary); }
+.agent-prompt-inspector-grid > dd { margin: 0; min-width: 0; }
+.agent-prompt-inspector-when { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.agent-prompt-inspector-when-text { flex: 1 1 auto; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.agent-prompt-inspector-agent { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.agent-prompt-inspector-agent .dropdown { min-width: 0; max-width: 100%; }
+.agent-prompt-inspector-links { display: flex; flex-direction: column; gap: 4px; }
+.agent-prompt-inspector-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+.agent-prompt-inspector-delete { margin-left: auto; }
 
 /* The drafts column: timeless cards, and the drop zone that takes a card OUT
    of time (unschedule, collect again). */
@@ -4356,16 +4391,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-draft-viewport { flex: 1; min-height: 0; overflow: auto; }
 .agent-prompt-draft-canvas { position: relative; min-width: 100%; background-image: radial-gradient(var(--border-color) 1px, transparent 1px); background-size: 16px 16px; }
 .agent-prompt-draft-position { position: absolute; width: 168px; }
-.agent-prompt-draft-position:has(.is-selected), .agent-prompt-draft-position:has(.is-editing) { z-index: 4; }
-.agent-prompt-draft-position > .agent-prompt-card.is-editing { width: 460px; }
-/* The same for a card edited on the timeline: it grows past its lane item,
-   whose inline width (and so the lane packing) stays as it is. */
-.agent-prompt-timeline-item:has(> .agent-prompt-card.is-editing) { z-index: 5; overflow: visible; }
-.agent-prompt-timeline-item > .agent-prompt-card.is-editing { width: 460px; }
-/* Near the right edge the body (`overflow-x: hidden`) would clip it, so there
-   it grows leftward instead: PromptTimeline sets the shift that keeps its
-   460px inside the body (TIMELINE_EDIT_WIDTH). */
-.agent-prompt-timeline-item.is-edit-flip > .agent-prompt-card.is-editing { margin-left: var(--edit-shift, 0px); }
+.agent-prompt-draft-position:has(.is-selected) { z-index: 4; }
 /* The composer a double click on an empty spot opens, where it was opened. */
 .agent-prompt-draft-composer { display: flex; flex-direction: column; gap: 6px; width: min(460px, 100%); padding: var(--space-2); border: 1px solid var(--accent); border-radius: var(--radius); background: var(--bg-panel); color: var(--text-primary); }
 .agent-prompt-draft-position.agent-prompt-draft-composer { width: 460px; z-index: 5; }
@@ -4529,10 +4555,6 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-tag.is-auto,
 .agent-prompts-tag.is-auto { border: 1px solid currentColor; background: transparent; }
 .agent-prompt-card-fact { color: var(--text-muted); font-size: var(--text-sm); }
-.agent-prompt-card-expanded { display: flex; flex-direction: column; gap: 6px; padding-top: 5px; border-top: 1px solid var(--border-color); cursor: var(--cur-default, default); }
-.agent-prompt-card-expanded textarea,
-.agent-prompt-card-expanded input,
-.agent-prompt-card-expanded select { width: 100%; box-sizing: border-box; }
 .agent-prompt-card-full { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); }
 .agent-prompt-card-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .agent-prompt-session,

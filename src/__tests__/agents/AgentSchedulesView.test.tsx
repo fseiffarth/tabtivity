@@ -215,8 +215,10 @@ describe("AgentSchedulesView prompt chart", () => {
     await act(async () => { render(<PromptChartTab scope="p" />); });
     const card = await screen.findByTestId("prompt-chart-card-draft");
     fireEvent.doubleClick(within(card).getByText("Run the tests"));
-    const field = within(card).getByLabelText("Write a prompt to keep for later…");
-    expect(card.querySelector(".md-prompt")).toBeTruthy();
+    const inspector = screen.getByTestId("prompt-chart-inspector");
+    const field = within(inspector).getByLabelText("Write a prompt to keep for later…");
+    expect(inspector.querySelector(".md-prompt")).toBeTruthy();
+    expect(card.querySelector(".md-prompt")).toBeNull();
     fireEvent.change(field, { target: { value: "Run the unit tests" } });
     await act(async () => { fireEvent.keyDown(field, { key: "Enter", ctrlKey: true }); });
     const call = vi.mocked(invoke).mock.calls.find(([name]) => name === "agent_prompt_upsert");

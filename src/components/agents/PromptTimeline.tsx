@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { formatTime, weekdayLabel } from "../../lib/calendar/calendarTime";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
@@ -60,8 +60,6 @@ const BODY_PADDING = 8;
 const NOW_BAND_WIDTH = 22;
 /** The queue's caption above its first card. */
 const QUEUE_LABEL_HEIGHT = 16;
-/** A card's width while it is edited on the timeline (the CSS `is-editing` rule). */
-export const TIMELINE_EDIT_WIDTH = 460;
 
 function hhmm(at: Date): string {
   return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
@@ -175,9 +173,6 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
   const dropNow = drag?.kind === "card" && (drag.zone.kind === "now" || (drag.zone.kind === "past" && !dropBlocked));
   // Inside one day, the date is the range label's to say.
   const dropDate = (at: Date) => formatTimelineInstant(at, lang, use24h, win.view !== "day" && win.view !== "hour");
-  /** How far left a card edited at `x` must grow to keep its editor inside
-   *  the body, which clips sideways; 0 where it fits as it is. */
-  const editShift = (x: number) => Math.max(-x, Math.min(0, width - x - TIMELINE_EDIT_WIDTH));
 
   return (
     <div className={`agent-prompt-timeline is-${win.view}`} data-testid="prompt-timeline" ref={rootRef}>
@@ -242,8 +237,8 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
             : packed.items.map((item) => (
               <div
                 key={item.key}
-                className={`agent-prompt-timeline-item${lifting(item.key) ? " is-lifting" : ""}${editShift(item.x) < 0 ? " is-edit-flip" : ""}`}
-                style={{ left: item.x, top: itemTop(item), width: item.width, ...(editShift(item.x) < 0 ? { "--edit-shift": `${editShift(item.x)}px` } as CSSProperties : {}) }}
+                className={`agent-prompt-timeline-item${lifting(item.key) ? " is-lifting" : ""}`}
+                style={{ left: item.x, top: itemTop(item), width: item.width }}
                 data-lane-top={laneTop(item)}
                 data-item-key={item.key}
               >

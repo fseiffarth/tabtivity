@@ -58,6 +58,7 @@ import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useDialogs } from "../common/PromptDialogs";
 import { AgentScheduleDialog } from "./AgentScheduleDialog";
 import { PromptCard } from "./PromptCard";
+import { PromptInspector } from "./PromptInspector";
 import { PromptSessionCard } from "./PromptSessionCard";
 import { PromptChartFilterBar } from "./PromptChartFilterBar";
 import { PromptChartCommandBar } from "./PromptChartCommandBar";
@@ -196,6 +197,10 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const [draftsCollapsed, setDraftsCollapsed] = useState(readDraftsCollapsed);
   const [draftsWidth, setDraftsWidth] = useState(readDraftsWidth);
   const [selected, setSelected] = useState<string | null>(null);
+  /** The card whose prompt is open in the inspector's editor. */
+  const [editId, setEditId] = useState<string | null>(null);
+  /** Bumped when a keyboard open should move focus into the inspector. */
+  const [focusToken, setFocusToken] = useState(0);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [linkKind, setLinkKind] = useState<"related" | "after">("after");
   const [dialog, setDialog] = useState<{ tab: TabEntry; message?: string; promptId?: string } | null>(null);
@@ -575,6 +580,27 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   };
 
   const cardById = (id: string) => cards.find((card) => card.id === id);
+  const closeInspectorRef = useRef<() => void>(() => {});
+  /** Selecting another card closes the inspector's editor. */
+  const select = (id: string) => {
+    setSelected(id);
+    setEditId((current) => (current === id ? current : null));
+  };
+  const selectedCard = selected ? cardById(selected) : undefined;
+  const selectedSession = useMemo(() => {
+    const key = selectedCard ? sessionGroupKey(selectedCard) : null;
+    if (!key) return undefined;
+    const members = timeCards.filter((card) => sessionGroupKey(card) === key).sort((a, b) => (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0));
+    return members.length > 1 ? members : undefined;
+  }, [selectedCard, timeCards]);
+  const closeInspector = () => {
+    const id = selected;
+    setSelected(null);
+    setEditId(null);
+    // Closing it returns the reader to the card they came from.
+    if (id) requestAnimationFrame(() => cardNodes.current.get(id)?.focus());
+  };
+  closeInspectorRef.current = closeInspector;
   const ensureLinkEndpoint = async (card: PromptChartCard) => {
     if (card.prompt || card.history) return;
     await upsertPrompt(scope, { id: card.id, message: card.message, tags: card.tags });
@@ -582,7 +608,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const beginLink = async (card: PromptChartCard) => {
     await ensureLinkEndpoint(card);
     setLinkFrom(card.id);
-    setSelected(card.id);
+    select(card.id);
   };
   const targetOf = (card?: PromptChartCard) =>
     card?.targetId ?? (card ? strandById.get(card.strandId)?.scheduleTargetId : undefined);
@@ -669,9 +695,11 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   }, [multi, timeCards]);
 
   // Escape backs out of one thing at a time: link mode first, then the
-  // selection. A key some editor already handled (its own Escape cancels the
-  // edit) or one typed into a field or a dialog is not the chart's.
-  const hasEscapable = !!linkFrom || multi.size > 0;
+  // multi-selection, then the selected card. A key some editor already handled
+  // (its own Escape cancels the edit) or one typed into a field or a dialog is
+  // not the chart's.
+  const hasSelection = !!selectedCard;
+  const hasEscapable = !!linkFrom || multi.size > 0 || hasSelection;
   useEffect(() => {
     if (!active || !hasEscapable) return;
     const onKey = (event: KeyboardEvent) => {
@@ -679,11 +707,12 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
       const origin = event.target as Element | null;
       if (typeof origin?.closest === "function" && origin.closest("input, textarea, [contenteditable], [role=dialog], .context-menu")) return;
       if (linkFrom) setLinkFrom(null);
-      else setMulti((keys) => (keys.size ? new Set() : keys));
+      else if (multi.size > 0) setMulti(new Set());
+      else closeInspectorRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, hasEscapable, linkFrom]);
+  }, [active, hasEscapable, linkFrom, multi.size]);
 
   const { drag, onCardPointerDown, onLiftPointerDown, onMarqueePointerDown, onPortPointerDown } = usePromptChartDrag({
     win,
@@ -821,7 +850,6 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   /** A session's sent prompts as one card, drawn under the newest of them. */
   const renderSession = (latest: PromptChartCard, session: SessionSpan) => {
     if (!session.cards.some((card) => visible(card))) return null;
-    const strand = strandById.get(latest.strandId);
     const ids = session.cards.map((card) => card.id);
     const itemKey = sessionGroupKey(latest) ?? latest.key;
     const armedElsewhere = !!linkFrom && !ids.includes(linkFrom);
@@ -846,13 +874,11 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         onPortPointerDown={onPortPointerDown(latest)}
         onSelect={() => {
           if (armedElsewhere) void attempt(() => linkTo(latest));
-          setSelected(latest.id);
+          select(latest.id);
           clearMulti();
         }}
+        onOpen={() => setFocusToken((value) => value + 1)}
         onLink={() => linkOrBegin(latest, armedElsewhere)}
-        onCollect={(card) => attempt(() => collect(card))}
-        onDelete={(card) => attempt(() => confirmRemove(card))}
-        onGoToTab={strand?.tabKey ? () => jumpToTab(scope, strand.tabKey!) : undefined}
       />
     );
   };
@@ -860,7 +886,6 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const renderCard = (card: PromptChartCard, occurrence?: string, session?: SessionSpan, drawnAt?: Date) => {
     if (session) return renderSession(card, session);
     if (!visible(card, occurrence, drawnAt)) return null;
-    const strand = strandById.get(card.strandId);
     const itemKey = occurrence ? `${card.key}@${occurrence}` : card.key;
     // On a lane: selectable, and liftable. The strip and the queue are neither.
     const onLane = !stripIds.has(card.id) && card.state !== "queued";
@@ -878,7 +903,6 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         card={card}
         occurrence={occurrence}
         drawnAt={drawnAt}
-        retimeEarlierDisabled={!!card.at && tooSoonForEarlier(card.at.getTime() - RETIME_STEP_MS, now.getTime())}
         matched={matches(card, occurrence, drawnAt)}
         selected={selected === card.id}
         multiSelected={onLane && multi.has(itemKey)}
@@ -900,28 +924,14 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         onPortPointerDown={onPortPointerDown(card)}
         onSelect={() => {
           if (armedElsewhere) void attempt(() => linkTo(card));
-          setSelected(card.id);
+          select(card.id);
           clearMulti();
         }}
+        onOpen={() => setFocusToken((value) => value + 1)}
+        onEdit={() => { select(card.id); setEditId(card.id); }}
         onAgent={(targetId) => attempt(() => setAgent(card, targetId))}
-        // The editor stays open with its text when the save fails.
-        onSave={(message, tags) => {
-          setError("");
-          return save(card, message, tags).catch((cause) => { setError(formatError(cause)); throw cause; });
-        }}
         onDelete={() => attempt(() => confirmRemove(card))}
-        onSend={() => pickTab(card, "send")}
-        onSchedule={() => pickTab(card, "schedule")}
-        onUnschedule={() => attempt(() => unschedule(card))}
-        onCollect={() => attempt(() => collect(card))}
-        onRetime={(minutes) => attempt(() => nudge(card, minutes))}
-        onQueueMove={(step) => attempt(() => reorderQueue(card, step))}
         onLink={() => linkOrBegin(card, armedElsewhere)}
-        onUnlink={(linkId) => attempt(() => removeLink(scope, linkId))}
-        links={links}
-        linkLabel={linkLabel}
-        onEditLink={openEdgeEditor}
-        onGoToTab={strand?.tabKey ? () => jumpToTab(scope, strand.tabKey!) : undefined}
       />
     );
   };
@@ -1055,7 +1065,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
           editLabel={t("promptChart.editLink")}
         />
         <div
-          className="agent-prompt-chart-columns"
+          className={`agent-prompt-chart-columns${selectedCard ? " has-inspector" : ""}`}
           style={{ "--drafts-width": `${draftsWidth}px` } as CSSProperties}
         >
           <div
@@ -1146,6 +1156,47 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
             resets={usageResets}
             onBodyPointerDown={onMarqueePointerDown}
           />
+          {selectedCard && (() => {
+            const strand = strandById.get(selectedCard.strandId);
+            return (
+              <PromptInspector
+                key={selectedCard.id}
+                projectId={scope}
+                card={selectedCard}
+                session={selectedSession}
+                editing={editId === selectedCard.id}
+                onEditing={(editing) => setEditId(editing ? selectedCard.id : null)}
+                focusToken={focusToken}
+                retimeEarlierDisabled={!!selectedCard.at && tooSoonForEarlier(selectedCard.at.getTime() - RETIME_STEP_MS, now.getTime())}
+                targets={targetsFor(selectedCard)}
+                targetBlocked={selectedCard.state === "draft" && selectedCard.targetId && occupiedIds.has(selectedCard.targetId) ? tabOf(selectedCard.targetId)?.label : undefined}
+                targetLabel={selectedCard.state === "sent" ? selectedCard.history?.tab_label : undefined}
+                newTabLabel={newTabLabel}
+                links={links}
+                linkLabel={linkLabel}
+                onAgent={(targetId) => attempt(() => setAgent(selectedCard, targetId))}
+                // The editor stays open with its text when the save fails.
+                onSave={(message, tags) => {
+                  setError("");
+                  return save(selectedCard, message, tags).catch((cause) => { setError(formatError(cause)); throw cause; });
+                }}
+                onDelete={() => attempt(() => confirmRemove(selectedCard))}
+                onSend={() => pickTab(selectedCard, "send")}
+                onSchedule={() => pickTab(selectedCard, "schedule")}
+                onUnschedule={() => attempt(() => unschedule(selectedCard))}
+                onCollect={() => attempt(() => collect(selectedCard))}
+                onRetime={(minutes) => attempt(() => nudge(selectedCard, minutes))}
+                onQueueMove={(step) => attempt(() => reorderQueue(selectedCard, step))}
+                onLink={() => linkOrBegin(selectedCard, !!linkFrom && linkFrom !== selectedCard.id)}
+                onUnlink={(linkId) => attempt(() => removeLink(scope, linkId))}
+                onEditLink={openEdgeEditor}
+                onGoToTab={strand?.tabKey ? () => jumpToTab(scope, strand.tabKey!) : undefined}
+                onCollectCard={(card) => attempt(() => collect(card))}
+                onDeleteCard={(card) => attempt(() => confirmRemove(card))}
+                onClose={closeInspector}
+              />
+            );
+          })()}
         </div>
       </div>
       {(() => {

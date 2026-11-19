@@ -17,8 +17,9 @@ const draft = {
   prompt: { id: "d", message: "Plain draft", created_at: "x", updated_at: "x" },
 } as unknown as PromptChartCard;
 
-function renderCard(onSelect = vi.fn()) {
+function renderCard() {
   const noop = vi.fn(async () => {});
+  const handlers = { onSelect: vi.fn(), onOpen: vi.fn(), onEdit: vi.fn(), onLink: vi.fn() };
   render(
     <PromptCard
       card={draft}
@@ -29,53 +30,47 @@ function renderCard(onSelect = vi.fn()) {
       linkOver={false}
       color="var(--accent)"
       targets={[{ id: "t", label: "Claude" }]}
-      onSelect={onSelect}
       onAgent={noop}
-      onSave={noop}
       onDelete={noop}
-      onSend={vi.fn()}
-      onSchedule={vi.fn()}
-      onUnschedule={noop}
-      onCollect={noop}
-      onRetime={noop}
-      onQueueMove={noop}
-      onLink={vi.fn()}
-      onUnlink={noop}
-      links={[]}
-      linkLabel={(id) => id}
+      {...handlers}
     />,
   );
-  return { article: screen.getByTestId("prompt-chart-card-draft"), onSelect };
+  return { article: screen.getByTestId("prompt-chart-card-draft"), ...handlers };
 }
 
 describe("PromptCard keyboard route", () => {
-  it("is focusable and opens and closes with Enter and Space", () => {
-    const { article, onSelect } = renderCard();
+  it("is focusable and selects with Enter and Space, asking for the inspector's focus", () => {
+    const { article, onSelect, onOpen } = renderCard();
     expect(article.getAttribute("tabindex")).toBe("0");
     expect(article.getAttribute("role")).toBe("button");
-    expect(article.getAttribute("aria-expanded")).toBe("false");
     fireEvent.keyDown(article, { key: "Enter" });
-    expect(article.getAttribute("aria-expanded")).toBe("true");
-    expect(within(article).getByRole("button", { name: "Link" })).toBeTruthy();
     expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(article, { key: " " });
-    expect(article.getAttribute("aria-expanded")).toBe("false");
+    expect(onSelect).toHaveBeenCalledTimes(2);
+    expect(onOpen).toHaveBeenCalledTimes(2);
     // Any other key is not the card's.
     fireEvent.keyDown(article, { key: "a" });
-    expect(article.getAttribute("aria-expanded")).toBe("false");
+    expect(onSelect).toHaveBeenCalledTimes(2);
   });
 
-  it("leaves keys aimed at the card's own button or editor to them", () => {
+  it("nothing opens inside the card: a click only selects", () => {
     const { article, onSelect } = renderCard();
-    fireEvent.keyDown(within(article).getByRole("button", { name: "Drag to link with another card" }), { key: "Enter" });
-    expect(article.getAttribute("aria-expanded")).toBe("false");
-    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(article);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(article.querySelector(".agent-prompt-card-expanded")).toBeNull();
+    expect(within(article).queryByRole("button", { name: "Send" })).toBeNull();
+    expect(within(article).queryByRole("textbox")).toBeNull();
+  });
 
+  it("leaves keys aimed at the card's own button to it, and a double click asks for the editor", () => {
+    const { article, onSelect, onEdit } = renderCard();
+    fireEvent.keyDown(within(article).getByRole("button", { name: "Drag to link with another card" }), { key: "Enter" });
+    expect(onSelect).not.toHaveBeenCalled();
     fireEvent.doubleClick(article);
-    const editor = within(article).getByRole("textbox", { name: "Write a prompt to keep for later…" });
-    fireEvent.keyDown(editor, { key: "Enter" });
-    fireEvent.keyDown(editor, { key: " " });
-    expect(article.getAttribute("aria-expanded")).toBe("true");
-    expect(within(article).getByRole("textbox", { name: "Write a prompt to keep for later…" })).toBe(editor);
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    // A double click on a control stays that control's.
+    fireEvent.doubleClick(within(article).getByRole("button", { name: "Delete draft" }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
   });
 });
