@@ -454,7 +454,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
             : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
           {session.remembered && <small className="terminal-reader-question-more">{t("terminal.reader.modelRemembered")} <UntestedTag id="agents.modelRows.remembered" /></small>}
-          {modelPicking && tab.cmd && <ReaderLaunchDefaults cmd={tab.cmd} />}
+          {modelPicking && tab.cmd && <ReaderLaunchDefaults key={tab.cmd} cmd={tab.cmd} onSaved={close} />}
         </div>
       )}
       {effortOpen && (
@@ -487,7 +487,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           </div>
           {effortFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.effortFailed")}</small>}
           <small className="terminal-reader-question-more">{t("terminal.reader.effortNote")}</small>
-          {tab.cmd && <ReaderLaunchDefaults cmd={tab.cmd} />}
+          {tab.cmd && <ReaderLaunchDefaults key={tab.cmd} cmd={tab.cmd} onSaved={closeEffort} />}
         </div>
       )}
       {worktreesOpen && (
