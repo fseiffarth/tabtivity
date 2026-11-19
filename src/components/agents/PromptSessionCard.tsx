@@ -37,6 +37,8 @@ interface Props {
   bar?: { anchor: "left" | "right"; width: number };
   /** The newest prompt's turn is running, or waiting for an answer. */
   live?: PromptLiveState;
+  /** The newest prompt's place in a sequence, when it belongs to one. */
+  step?: { n: number; of: number };
   now?: Date;
 }
 
@@ -65,6 +67,7 @@ export function PromptSessionCard({
   onLink,
   bar,
   live,
+  step,
   now,
 }: Props) {
   const t = useT();
@@ -121,6 +124,7 @@ export function PromptSessionCard({
         <span className="agent-prompt-card-message">{latest.message}</span>
       </div>
       <small className="agent-prompt-card-fact">{sentFactLine(cards, t, live && now ? { state: live, now } : undefined)}</small>
+      {step && <small className="agent-prompt-card-fact agent-prompt-card-step" data-testid="prompt-card-step">{t("promptChart.seq.stepOf", step)}</small>}
       <PromptAgentPick card={latest} targets={[]} targetLabel={latest.history?.tab_label || undefined} onAgent={async () => {}} />
       <div className="agent-prompt-session-ticks" aria-hidden="true">
         {cards.map((card, index) => (

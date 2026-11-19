@@ -75,6 +75,16 @@ import { usePromptChartUsage } from "./usePromptChartUsage";
 import { usePromptLiveState } from "./usePromptLiveState";
 import { PromptDraftBoard, type DraftBoardHandle } from "./PromptDraftBoard";
 import { PromptComposer, type ComposeSubmit } from "./PromptComposer";
+import { PromptSequenceInspector } from "./PromptSequenceGroup";
+import {
+  nextPendingStep,
+  promptSequences,
+  resumeSendsAtOnce,
+  sequencePlaces,
+  skipPlan,
+  stopEdge,
+  type PromptSequence,
+} from "../../lib/agents/prompt/sequences";
 import { draftSequence } from "../../lib/agents/prompt/drafts";
 import { AGENT_ITEMS, EMPTY_CUSTOM_AGENTS } from "../../lib/tabs/newTabItems";
 import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
@@ -206,6 +216,8 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const [draftsCollapsed, setDraftsCollapsed] = useState(readDraftsCollapsed);
   const [draftsWidth, setDraftsWidth] = useState(readDraftsWidth);
   const [selected, setSelected] = useState<string | null>(null);
+  /** The sequence open in the inspector (its first member's id), instead of a card. */
+  const [selectedSeq, setSelectedSeq] = useState<string | null>(null);
   /** The card whose prompt is open in the inspector's editor. */
   const [editId, setEditId] = useState<string | null>(null);
   /** Bumped when a keyboard open should move focus into the inspector. */
@@ -349,6 +361,10 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   // running ones' bars grow with `now`.
   const live = usePromptLiveState(scope, cards, strands, active);
   const runningIds = useMemo(() => new Set([...live].filter(([, state]) => state === "running").map(([id]) => id)), [live]);
+  // Sequences are read off the edges, never stored: each is an `after` chain of
+  // two or more prompts, and each member knows its place in it.
+  const sequences = useMemo(() => promptSequences(cards, links, live), [cards, links, live]);
+  const places = useMemo(() => sequencePlaces(sequences), [sequences]);
   // Tabs already holding a live rule: not offered to a draft or to another
   // rule, since two rules on one tab fire in no set order. A further prompt
   // reaches such a tab by an `after` link from the rule it holds.
@@ -619,9 +635,16 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   /** Selecting another card closes the inspector's editor. */
   const select = (id: string) => {
     setSelected(id);
+    setSelectedSeq(null);
     setEditId((current) => (current === id ? current : null));
   };
   const selectedCard = selected ? cardById(selected) : undefined;
+  const selectedSequence = selectedSeq ? sequences.find((sequence) => sequence.id === selectedSeq) : undefined;
+  const selectSequence = (id: string) => {
+    setSelected(null);
+    setEditId(null);
+    setSelectedSeq(id);
+  };
   const selectedSession = useMemo(() => {
     const key = selectedCard ? sessionGroupKey(selectedCard) : null;
     if (!key) return undefined;
@@ -631,6 +654,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const closeInspector = () => {
     const id = selected;
     setSelected(null);
+    setSelectedSeq(null);
     setEditId(null);
     // Closing it returns the reader to the card they came from.
     if (id) requestAnimationFrame(() => cardNodes.current.get(id)?.focus());
@@ -744,6 +768,37 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     });
   };
 
+  /** Pause holds the next step back (a flag on the edge into it); Resume clears
+   *  it, and when the step before it had already finished — so the host has no
+   *  turn left to react to — sends the held step itself, with the edge's commands. */
+  const togglePause = (sequence: PromptSequence) => attempt(async () => {
+    const held = sequence.steps.find((step) => step.status === "paused");
+    if (held?.edge) {
+      const edge = held.edge;
+      await upsertLink(scope, { ...edge, paused: undefined });
+      if (held.card.prompt && resumeSendsAtOnce(sequence, held, live)) {
+        const tab = tabOf(edgeTarget(edge));
+        if (!tab) throw new Error(t("promptChart.tabGone"));
+        await sendCollectedPrompt(scope, target(tab), held.card.prompt, edge.preface?.length ? edge.preface : undefined);
+      }
+      return;
+    }
+    const edge = nextPendingStep(sequence)?.edge;
+    if (edge) await upsertLink(scope, { ...edge, paused: true });
+  });
+  /** Skip the next step: its neighbours are linked to each other, and it is a
+   *  loose draft again. Stop: the edge into it goes, the rest stays linked. */
+  const skipStep = (sequence: PromptSequence) => attempt(async () => {
+    const plan = skipPlan(sequence, crypto.randomUUID());
+    if (!plan) return;
+    for (const id of plan.remove) await removeLink(scope, id);
+    if (plan.add) await upsertLink(scope, plan.add);
+  });
+  const stopSequence = (sequence: PromptSequence) => attempt(async () => {
+    const edge = stopEdge(sequence);
+    if (edge) await removeLink(scope, edge.id);
+  });
+
   const applyDrop = async (card: PromptChartCard, drop: PromptTimelineDrop) => {
     if (drop.type === "send") {
       const tab = tabOf(drop.targetId);
@@ -789,7 +844,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   // multi-selection, then the selected card. A key some editor already handled
   // (its own Escape cancels the edit) or one typed into a field or a dialog is
   // not the chart's.
-  const hasSelection = !!selectedCard;
+  const hasSelection = !!selectedCard || !!selectedSequence;
   const hasEscapable = !!linkFrom || !!afterFor || multi.size > 0 || hasSelection;
   useEffect(() => {
     if (!active || !hasEscapable) return;
@@ -810,9 +865,9 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   // into view so the click is not answered off-screen.
   useEffect(() => {
     const root = rootRef.current;
-    if (!selected || !root || root.clientWidth >= PROMPT_CHART_STACK_WIDTH) return;
+    if ((!selected && !selectedSeq) || !root || root.clientWidth >= PROMPT_CHART_STACK_WIDTH) return;
     root.querySelector(".agent-prompt-inspector")?.scrollIntoView?.({ block: "nearest" });
-  }, [selected]);
+  }, [selected, selectedSeq]);
 
   const { drag, onCardPointerDown, onLiftPointerDown, onMarqueePointerDown, onPortPointerDown } = usePromptChartDrag({
     win,
@@ -972,6 +1027,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         }}
         onPointerDown={onLiftPointerDown(liftKeysFor(itemKey))}
         live={live.get(latest.id)}
+        step={places.get(latest.id)}
         now={now}
         onPortPointerDown={onPortPointerDown(latest)}
         onSelect={() => {
@@ -1008,6 +1064,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
         drawnAt={drawnAt}
         matched={matches(card, occurrence, drawnAt)}
         live={live.get(card.id)}
+        step={occurrence ? undefined : places.get(card.id)}
         now={now}
         selected={selected === card.id}
         multiSelected={onLane && multi.has(itemKey)}
@@ -1184,7 +1241,7 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
           editLabel={t("promptChart.editLink")}
         />
         <div
-          className={`agent-prompt-chart-columns${selectedCard ? " has-inspector" : ""}`}
+          className={`agent-prompt-chart-columns${selectedCard || selectedSequence ? " has-inspector" : ""}`}
           style={{ "--drafts-width": `${draftsWidth}px` } as CSSProperties}
         >
           <div
@@ -1221,6 +1278,12 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
                 cards={stripCards}
                 drag={drag}
                 renderCard={renderCard}
+                sequences={sequences}
+                activeSequence={selectedSeq}
+                selectedId={selected}
+                onOpenSequence={selectSequence}
+                onPickStep={(card) => select(card.id)}
+                onPauseToggle={(sequence) => void togglePause(sequence)}
                 onLayout={refreshLinks}
                 onCreate={async (message, tags) => {
                   const id = crypto.randomUUID();
@@ -1277,6 +1340,20 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
             onBodyPointerDown={onMarqueePointerDown}
             onUnfold={() => setUnfolded((days) => new Set(days).add(baseWin.anchor))}
           />
+          {selectedSequence && !selectedCard && (
+            <PromptSequenceInspector
+              key={selectedSequence.id}
+              sequence={selectedSequence}
+              live={live}
+              now={now}
+              onPickStep={(step) => select(step.card.id)}
+              onPauseToggle={() => void togglePause(selectedSequence)}
+              onSkip={() => void skipStep(selectedSequence)}
+              onStop={() => void stopSequence(selectedSequence)}
+              onEditLink={openEdgeEditor}
+              onClose={closeInspector}
+            />
+          )}
           {selectedCard && (() => {
             const strand = strandById.get(selectedCard.strandId);
             return (

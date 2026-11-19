@@ -80,6 +80,8 @@ interface Props {
   showDate?: boolean;
   /** The turn this sent card started is running, or waiting for an answer. */
   live?: PromptLiveState;
+  /** Its place in a sequence, when it belongs to one. */
+  step?: { n: number; of: number };
   /** The chart's clock, for a running turn's length so far. */
   now?: Date;
 }
@@ -146,6 +148,7 @@ export function PromptCard({
   bar,
   showDate = true,
   live,
+  step,
   now,
 }: Props) {
   const t = useT();
@@ -157,7 +160,7 @@ export function PromptCard({
   /** The face's first line: the minute it is at, or why it has none. */
   const time = (() => {
     if (card.state === "draft") return t("promptChart.noTime");
-    if (card.state === "chained") return card.chainStopped ? t("promptChart.chainClosed") : t("promptChart.noTime");
+    if (card.state === "chained") return card.chainStopped ? t("promptChart.chainClosed") : step ? t("promptChart.seq.stepNumber", step) : t("promptChart.noTime");
     if (card.state === "queued") return t("promptChart.waiting");
     if (card.state === "sent") return ended ? `${when(card.at)}–${when(ended, false)}` : when(card.at);
     if (occurrence) return `↻ ${when(localWallClock(occurrence)) || occurrence.replace("T", " ")}`;
@@ -232,6 +235,7 @@ export function PromptCard({
         )}
       </div>
       {fact && <small className="agent-prompt-card-fact">{fact}</small>}
+      {step && card.state !== "chained" && !occurrence && <small className="agent-prompt-card-fact agent-prompt-card-step" data-testid="prompt-card-step">{t("promptChart.seq.stepOf", step)}</small>}
       {projectId && card.targetId && card.schedule?.origin && <AgentScheduleProposal projectId={projectId} targetId={card.targetId} schedule={card.schedule} />}
       {(card.history?.schedule_origin || card.history?.phone_device) && <div className="agent-schedule-attribution">
         {card.history.schedule_origin && <span className="agent-schedule-pill" title={card.history.schedule_origin.session}>{t("scheduleMcp.authored")}</span>}

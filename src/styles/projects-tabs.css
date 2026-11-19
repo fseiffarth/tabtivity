@@ -4393,6 +4393,44 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-inspector-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
 .agent-prompt-inspector-delete { margin-left: auto; }
 
+/* A sequence: one group in the Drafts List, an outline on the Free canvas, and
+   its own view in the inspector. The accent marks only the selected one. */
+.agent-prompt-sequence { display: flex; flex-direction: column; gap: 6px; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-elevated, var(--bg-panel)) 70%, transparent); }
+.agent-prompt-sequence-steps { display: flex; flex-direction: column; gap: 6px; }
+.agent-prompt-sequence-steps > .agent-prompt-card { width: auto; }
+.agent-prompt-sequence-head { display: flex; align-items: center; gap: 6px; min-height: 26px; }
+.agent-prompt-sequence-head.is-selected .agent-prompt-sequence-title strong { color: var(--accent); }
+.agent-prompt-sequence-title { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 0; border: none; background: transparent; color: var(--text-primary); font-size: var(--text-md); text-align: left; cursor: var(--cur-pointer, pointer); }
+.agent-prompt-sequence-title > span { color: var(--text-muted); font-size: var(--text-sm); }
+.agent-prompt-sequence-head.is-paused .agent-prompt-sequence-title > span,
+.agent-prompt-sequence-head.is-stopped .agent-prompt-sequence-title > span { color: var(--warning); }
+.agent-prompt-sequence-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 3px var(--space-2); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-panel); color: var(--text-secondary); font-size: var(--text-sm); text-align: left; cursor: var(--cur-pointer, pointer); }
+.agent-prompt-sequence-row.is-selected { border-color: var(--accent); }
+.agent-prompt-sequence-row > small { flex: none; color: var(--text-muted); }
+.agent-prompt-sequence-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-prompt-sequence-num { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: var(--radius-full); background: var(--bg-hover); color: var(--text-secondary); font-size: var(--text-sm); font-weight: 600; }
+.agent-prompt-sequence-outline { position: absolute; box-sizing: border-box; border: 1px dashed var(--border-color); border-radius: var(--radius); pointer-events: none; }
+.agent-prompt-sequence-outline > .agent-prompt-sequence-head { position: absolute; left: 6px; right: 6px; bottom: 4px; pointer-events: auto; }
+.agent-prompt-seq-progress { display: flex; flex-direction: column; gap: 4px; }
+.agent-prompt-seq-segments { display: flex; gap: 3px; }
+.agent-prompt-seq-segments > span { flex: 1; height: 6px; border-radius: var(--radius-full); background: var(--bg-hover); }
+.agent-prompt-seq-segments > .is-done { background: var(--success); }
+.agent-prompt-seq-segments > .is-running { background: var(--accent); }
+.agent-prompt-seq-segments > .is-paused,
+.agent-prompt-seq-segments > .is-stopped { background: var(--warning); }
+.agent-prompt-seq-progress > small { color: var(--text-muted); font-size: var(--text-sm); }
+.agent-prompt-seq-actions { margin-top: 0; padding-top: 0; border-top: none; }
+.agent-prompt-seq-actions svg { width: 14px; height: 14px; }
+.agent-prompt-seq-steps { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agent-prompt-seq-step { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 6px var(--space-2); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-panel); color: var(--text-primary); text-align: left; cursor: var(--cur-pointer, pointer); }
+.agent-prompt-seq-step.is-running { border-color: var(--accent); }
+.agent-prompt-seq-step-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.agent-prompt-seq-step-message { font-size: var(--text-md); overflow-wrap: anywhere; }
+.agent-prompt-seq-step small { color: var(--text-muted); font-size: var(--text-sm); }
+.agent-prompt-seq-between { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px var(--space-2) 4px; }
+.agent-prompt-seq-between > small { color: var(--text-muted); font-size: var(--text-sm); }
+.agent-prompt-seq-note { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+
 /* The drafts column: timeless cards, and the drop zone that takes a card OUT
    of time (unschedule, collect again). */
 .agent-prompt-drafts-strip { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); }

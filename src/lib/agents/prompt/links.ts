@@ -103,7 +103,8 @@ export function nextAfter(
   const strandById = new Map(strands.map((strand) => [strand.scheduleTargetId, strand]));
   return links.flatMap((link) => {
     const sourceMatches = link.from === deliveredId || deliveredId.startsWith(`${link.from}@`);
-    if (link.kind !== "after" || !sourceMatches) return [];
+    // A paused edge holds its target back: the source finishing queues nothing.
+    if (link.kind !== "after" || !sourceMatches || link.paused) return [];
     const prompt = byId.get(link.to);
     if (!prompt) return [];
     const strand = strandById.get(link.target ?? fallbackTarget ?? "");
