@@ -99,7 +99,7 @@ import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
-import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { commandArgsInline, commandLabel, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordedRun, recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
@@ -586,7 +586,7 @@ const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, a
     const inline = commandArgsInline(turn.command.args);
     return <>
       <div className="terminal-reader-command" role="separator" data-prompt={turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}>
-        <span>{inline && turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}</span>
+        <span>{commandLabel(turn.command)}</span>
       </div>
       {/* A `/design @inbox-picture` prompt's picture shows as in any prompt. */}
       {!inline && <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"}>

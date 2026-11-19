@@ -1034,6 +1034,22 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
     clean_model_name(model)
 }
 
+/// The model a `/model` confirmation names, as Claude shows it (`Fable 5.2`,
+/// `Opus 5 (1M context)`): the words after `Set model to ` / `Kept model as `,
+/// without the backticks, colours and the `and saved as …` tail. The chat's
+/// `/model` divider shows it; [`claude_model_switch`] folds it into a tag.
+pub(crate) fn claude_model_switch_label(value: &serde_json::Value) -> Option<String> {
+    let content = claude_command_content(value)?;
+    let body = content.trim_start().strip_prefix("<local-command-stdout>")?;
+    let rest = body
+        .strip_prefix("Set model to ")
+        .or_else(|| body.strip_prefix("Kept model as "))?;
+    let name = rest.split(" and saved").next()?.split("</").next()?;
+    let name = crate::services::agent_usage::strip_ansi(name).replace('`', "");
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!name.is_empty() && name.chars().count() <= 64).then_some(name)
+}
+
 /// The model a `/model` in the session switched to, from the confirmation
 /// Claude writes as a user record the moment the picker is answered
 /// (`<local-command-stdout>Set model to `Fable 5.1` and saved as …`). Without
@@ -1044,13 +1060,7 @@ pub(crate) fn model_in_record(line: &str, kind: TranscriptKind) -> Option<String
 /// `claude-opus-4-1-…` gets); a name that folds to nothing useful (`Default`)
 /// yields `None` and the scan falls back to the last answer.
 fn claude_model_switch(value: &serde_json::Value) -> Option<String> {
-    let content = claude_command_content(value)?;
-    let body = content.trim_start().strip_prefix("<local-command-stdout>")?;
-    let rest = body
-        .strip_prefix("Set model to ")
-        .or_else(|| body.strip_prefix("Kept model as "))?;
-    let name = rest.split(" and saved").next()?.split("</").next()?;
-    let name = crate::services::agent_usage::strip_ansi(name).replace('`', "");
+    let name = claude_model_switch_label(value)?;
     // Drop annotations: `Opus 5 (1M context) (default)` is the Opus 5 model.
     let mut plain = String::new();
     let mut depth = 0usize;

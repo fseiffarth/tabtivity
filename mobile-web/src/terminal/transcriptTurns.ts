@@ -59,6 +59,9 @@ export interface TranscriptTurn {
 export interface SlashCommand {
   name: string;
   args: string;
+  /** What it left set, as the CLI confirmed it (`/model` → `Fable 5.2`):
+   * the picker the bare command opens is where the choice was made. */
+  setting?: string;
 }
 
 /** A prompt that is a slash command (`/clear`, `/model opus`, `/goal …`,
@@ -76,6 +79,13 @@ export function slashCommand(text: string): SlashCommand | null {
 export function pinnedPromptText(text: string): string {
   const command = slashCommand(text);
   return command ? (command.args ? `${command.name} ${command.args}` : command.name) : text;
+}
+
+/** The words on a command's divider: its name, a one-word argument beside
+ * it (`commandArgsInline`), and what it left set (`/model → Fable 5.2`). */
+export function commandLabel(command: SlashCommand): string {
+  const typed = commandArgsInline(command.args) && command.args ? `${command.name} ${command.args}` : command.name;
+  return command.setting ? `${typed} → ${command.setting}` : typed;
 }
 
 /** Whether a command's arguments ride on the divider beside its name: a
@@ -120,11 +130,15 @@ function buildTurns(entries: readonly TranscriptEntry[]): TranscriptTurn[] {
       cut: entry.cut === true,
       index,
       ...((entry.pending !== undefined ? entry.sentAt : entry.at) ? { stamp: entry.pending !== undefined ? entry.sentAt : entry.at } : {}),
-      command: entry.kind === "prompt" ? slashCommand(entry.text) : null,
+      command: entry.kind === "prompt" ? withSetting(slashCommand(entry.text), entry.setting) : null,
       ...(entry.kind === "agent" ? { subagent: entry.subagent, role: entry.role, ...(entry.finished ? { finished: true } : {}), ...(entry.running ? { running: true } : {}), ...(entry.background ? { background: true } : {}), ...(entry.workflow ? { workflow: true } : {}), ...(entry.worktree ? { worktree: entry.worktree } : {}) } : {}),
       ...(entry.kind === "answer" && entry.plan === true ? { plan: true } : {}),
       ...(entry.kind === "answer" && entry.questions?.length ? { questions: entry.questions, ...(entry.asking ? { asking: true } : {}) } : {}),
       ...(entry.pending !== undefined ? { pending: entry.pending, failed: entry.failed === true, retrying: entry.retrying === true, ...(entry.held ? { held: true } : {}), ...(entry.queued ? { queued: true } : {}) } : {}),
     }];
   });
+}
+
+function withSetting(command: SlashCommand | null, setting: string | undefined): SlashCommand | null {
+  return command && setting ? { ...command, setting } : command;
 }

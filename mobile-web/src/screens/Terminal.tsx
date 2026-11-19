@@ -104,7 +104,7 @@ import { useTapOutside } from "../tapOutside";
 import { fileKey, useViewableNamed } from "../terminal/chatFiles";
 import { linkPathsInHtml } from "../../../src/lib/terminal/pathCandidates";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
-import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
+import { commandArgsInline, commandLabel, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { waitingQuestion } from "../terminal/askedQuestion";
 import { useAskedCard } from "./terminal/useAskedCard";
 import { isPermissionDialog, permissionSubject, permissionSubjectLabel } from "../terminal/permissionSubject";
@@ -277,7 +277,7 @@ function CommandDivider({ command, label, press, inbox, links }: {
   const withFiles = !!inbox && !!links && inboxLeaves(command.args).length > 0;
   return <>
     <div className="readable-command" role="separator" aria-label={label} data-prompt={command.args ? `${command.name} ${command.args}` : command.name} {...press}>
-      <span className="readable-command-text">{inline && command.args ? `${command.name} ${command.args}` : command.name}</span>
+      <span className="readable-command-text">{commandLabel(command)}</span>
     </div>
     {!inline && <div className={withFiles ? "readable-turn user command-args with-files" : "readable-turn user command-args"} role="group" aria-label={label} {...press}>
       {withFiles && links ? <PromptBody text={command.args} links={links} inbox={inbox} /> : <p className="transcript-text">{command.args}</p>}

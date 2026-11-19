@@ -182,6 +182,13 @@ pub struct TranscriptEntry {
     /// phone's API turns it into a worktree name and drops it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// On a slash-command `prompt`: what the command left set, as the CLI's
+    /// own confirmation names it — Claude's `/model` picker answered with
+    /// `Fable 5.2`, `/effort` with `high`. The command is typed bare and the
+    /// choice is made in a picker, so without it the chat's divider could not
+    /// say what was chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setting: Option<String>,
 }
 
 /// One question the agent asked, as answered.
@@ -1819,6 +1826,14 @@ fn parse_entries(
                         }
                     }
                 }
+                Record::CommandSetting { command, value } => {
+                    // Only onto that command, recorded just before it.
+                    if let Some(prompt) = entries.last_mut().filter(|entry| {
+                        entry.kind == "prompt" && entry.text.split_whitespace().next() == Some(command)
+                    }) {
+                        prompt.setting = Some(value);
+                    }
+                }
                 Record::Shell { call, mut shell } => {
                     shell.at = at.clone();
                     commands.insert(call.clone(), shell.clone());
@@ -2173,6 +2188,9 @@ enum Record {
     /// The words typed after a command Claude refused as unknown, recorded
     /// apart from it ([`claude_unknown_command`]): they join that prompt.
     CommandArgs(String),
+    /// What the slash command `command` (`/model`) just recorded left set
+    /// ([`claude_command_setting`]): it joins that command's prompt.
+    CommandSetting { command: &'static str, value: String },
     /// A plan put up for approval: an answer, marked as the plan.
     Plan(String),
     /// A subagent spawned by tool call `call`, sent to do `task`.
@@ -2256,13 +2274,17 @@ fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
         Some("user") => claude_interrupt(value)
             .map(|text| Record::Turn("interrupted", text))
             .or_else(|| agent_session::claude_prompt_in_record(value).map(|text| Record::Turn("prompt", text)))
+            .or_else(|| claude_command_setting(value))
             .into_iter()
             .collect(),
         // A slash command typed at the prompt, as current releases record it,
         // or one Claude refused as unknown.
         Some("system") if !sidechain => match agent_session::claude_local_command(value) {
             Some(text) => vec![Record::Turn("prompt", text)],
-            None => claude_unknown_command(value),
+            None => match claude_command_setting(value) {
+                Some(setting) => vec![setting],
+                None => claude_unknown_command(value),
+            },
         },
         // A prompt typed while Claude was working lives only here.
         Some("attachment") if !sidechain => agent_session::claude_queued_prompt(value)
@@ -2306,6 +2328,17 @@ fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
         }
         _ => Vec::new(),
     }
+}
+
+/// The confirmation Claude writes when a `/model` or `/effort` is answered
+/// (`<local-command-stdout>Set model to `Fable 5.2``), as the setting it
+/// names. Older releases write it as a `user` record, current ones as a
+/// `local_command` system record.
+fn claude_command_setting(value: &Value) -> Option<Record> {
+    if let Some(model) = agent_session::claude_model_switch_label(value) {
+        return Some(Record::CommandSetting { command: "/model", value: model });
+    }
+    claude_effort_switch(value).map(|level| Record::CommandSetting { command: "/effort", value: level })
 }
 
 /// Claude can write a subagent's final report as the input to this tool

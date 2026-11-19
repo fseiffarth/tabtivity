@@ -581,6 +581,43 @@ fn a_slash_command_recorded_as_a_local_command_is_a_prompt() {
 }
 
 #[test]
+fn a_model_or_effort_picker_s_choice_rides_on_its_command() {
+    // `/model` is typed bare and answered in a picker: the chat's divider
+    // read only `/model`, never the model chosen (2026-11-19). Shapes as
+    // Claude 2.1.327 writes them; an older release's `user` record too.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let command = |name: &str| format!(
+        "{{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<command-name>/{name}</command-name>\\n  <command-message>{name}</command-message>\\n  <command-args></command-args>\"}}\n"
+    );
+    let stdout = |body: &str| format!(
+        "{{\"type\":\"system\",\"subtype\":\"local_command\",\"content\":\"<local-command-stdout>{body}</local-command-stdout>\"}}\n"
+    );
+    std::fs::write(
+        &path,
+        [
+            command("model"),
+            stdout("Set model to `Fable 5.2` and saved as your default for new sessions"),
+            command("effort"),
+            stdout("Set effort level to high (this session only): deeper reasoning"),
+            command("model"),
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Kept model as `Opus 5.5`</local-command-stdout>\"}}\n".to_string(),
+            // A confirmation with no `/model` just before it joins nothing.
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"fix it\"}}\n".to_string(),
+            stdout("Set model to `Sonnet 5.5`"),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    let settings: Vec<(&str, Option<&str>)> = read.entries.iter().map(|e| (e.text.as_str(), e.setting.as_deref())).collect();
+    assert_eq!(
+        settings,
+        vec![("/model", Some("Fable 5.2")), ("/effort", Some("high")), ("/model", Some("Opus 5.5")), ("fix it", None)]
+    );
+}
+
+#[test]
 fn a_command_claude_refused_as_unknown_is_its_prompt_and_claude_s_warning() {
     // Claude 2.1.323 records a mistyped command only as two warnings: the
     // Chat view's bubble for `/simplity …` stayed "Sending…" (2026-11-14).
