@@ -9,8 +9,10 @@
 //!    credential headers, `Bearer`/`Basic` credentials, `name=value` and
 //!    `--flag value` pairs whose name says secret, well-known token prefixes,
 //!    private-key blocks and long mixed-case random runs;
-//! 3. every other absolute or `~/` path keeps only its leaf (`…/config`), since
-//!    host paths never cross the browser API.
+//! 3. every other absolute or `~/` path and `file://` address keeps only its
+//!    leaf (`…/config`), since host paths never cross the browser API. A path
+//!    is found by what it is, wherever it starts (after `2>`, `<`, `@`, `;`, a
+//!    glued `-I`, …); a quoted one is cut as one path, spaces included.
 //!
 //! A heuristic, not a guarantee: the paired phone could already read the same
 //! text off the Terminal view. Pure + tested.
@@ -339,54 +341,208 @@ pub fn mask_url(url: &str) -> String {
     hide_secrets(&format!("{scheme}://{host}"))
 }
 
-/// An absolute (`/a/b`, not `//host`) or home (`~/a`) path, starting the line
-/// or after whitespace, a quote, `=`, `:`, `(` or `,`.
-static PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(^|[\s'"=:(,])(~?/[^/\s'"`;|&<>(),][^\s'"`;|&<>(),]*)"#).expect("path"));
-
-/// A Windows absolute path, after the same boundaries as [`PATH`]: a drive
-/// path (`C:\a`, `C:/a`), a UNC one (`\\server\share`) or anything verbatim
-/// (`\\?\…`).
-static WINDOWS_PATH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(^|[\s'"=:(,])((?:\\\\\?\\|[A-Za-z]:[\\/]|\\\\[^\\/\s'"`;|&<>(),?]+\\)[^\s'"`;|&<>(),]*)"#)
-        .expect("windows path")
-});
+/// Which paths one scan of pass 3 looks for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A drive path (`C:\a`, `C:/a`), a UNC one (`\\server\share`) or anything
+    /// verbatim (`\\?\…`).
+    Windows,
+    /// An absolute (`/a/b`, not `//host`), home (`~/a`) or `file://` path.
+    Posix,
+}
 
 /// Pass 3: such a path keeps only its last component, after `…/` (`~/…/` for
-/// a home path). A path of one component (`/tmp`, `~/x`) names nothing private
-/// and stays. A Windows path the same, after `…\`: a drive path of one
-/// component (`C:\Users`) stays; a UNC path shows no more than what follows
-/// its server and share, since those name a host.
+/// a home path, `file://…/` for a file address). A path of one component
+/// (`/tmp`, `~/x`) names nothing private and stays. A Windows path the same,
+/// after `…\`: a drive path of one component (`C:\Users`) stays; a UNC path
+/// shows no more than what follows its server and share, since those name a
+/// host.
+///
+/// A path is found by what it is, wherever it starts: after a redirection
+/// (`2>/a/b`, `</a/b`), `@`, `;`, `{`, a backtick or a glued short flag
+/// (`-I/a/b`, and `/I` for a Windows tool) as much as after a space. It is
+/// not one when it follows a character a path is made of (`src/a/b`,
+/// `https://host/a/b`). A quoted string that is one path is cut as one, so a
+/// space in a folder name lets nothing through; any other quoted string is
+/// scanned like the rest of the line. Windows paths go first, so the POSIX
+/// scan does not take `/IC:\…` for a path of its own.
 fn leaf_only_paths(command: &str) -> String {
-    let command = WINDOWS_PATH.replace_all(command, |caps: &Captures| {
-        let path = &caps[2];
-        let sep = if path.contains('\\') { '\\' } else { '/' };
-        let plain = without_verbatim(path).unwrap_or_else(|| path.to_string());
-        let unc = plain.starts_with(r"\\");
-        let body = if unc { &plain[2..] } else { plain.get(2..).unwrap_or_default() };
-        let parts: Vec<&str> = body.split(['\\', '/']).filter(|part| !part.is_empty()).collect();
-        let shown = if unc { 2 } else { 1 };
-        if !unc && parts.len() <= shown && plain == path {
-            return caps[0].to_string();
+    let windows = scan_paths(command, Kind::Windows);
+    scan_paths(&windows, Kind::Posix)
+}
+
+fn scan_paths(text: &str, kind: Kind) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while let Some(ch) = text[at..].chars().next() {
+        let rest = &text[at..];
+        if matches!(ch, '\'' | '"') {
+            if let Some(len) = rest[1..].find(ch) {
+                let inner = &rest[1..1 + len];
+                out.push(ch);
+                if is_one_path(inner, kind) {
+                    out.push_str(&leaf_of_path(inner, kind));
+                } else {
+                    out.push_str(&scan_paths(inner, kind));
+                }
+                out.push(ch);
+                at += len + 2;
+                continue;
+            }
         }
-        let trail = if parts.len() > shown && path.ends_with(['\\', '/']) { sep.to_string() } else { String::new() };
-        match parts.last().filter(|_| parts.len() > shown) {
-            Some(leaf) => format!("{}…{sep}{leaf}{trail}", &caps[1]),
-            None => format!("{}…", &caps[1]),
+        if may_start_path(&text[..at], kind) {
+            if let Some(len) = path_len(rest, kind) {
+                out.push_str(&leaf_of_path(&rest[..len], kind));
+                at += len;
+                continue;
+            }
         }
-    });
-    PATH.replace_all(&command, |caps: &Captures| {
-        let path = &caps[2];
-        let body = path.trim_start_matches('~').trim_matches('/');
-        if !body.contains('/') {
-            return caps[0].to_string();
+        out.push(ch);
+        at += ch.len_utf8();
+    }
+    out
+}
+
+/// A character a path or a word is made of: a path never starts right after
+/// one (`src/a/b`, `https://host/a`, `$HOME/a`, `a*/b`).
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '.' | '_' | '-' | '~' | '+' | '%' | '/' | '\\' | '*' | '?' | ']' | '$')
+}
+
+/// Whether a path may start right after `before`: at the line start, after a
+/// character no word is made of, or after a glued short flag (`-I`, and for
+/// Windows tools `/I`) that itself starts a word.
+fn may_start_path(before: &str, kind: Kind) -> bool {
+    let mut back = before.chars().rev();
+    let Some(prev) = back.next() else { return true };
+    if !is_word_char(prev) {
+        return true;
+    }
+    let flag = |c: char| c == '-' || (kind == Kind::Windows && c == '/');
+    prev.is_ascii_alphabetic() && back.next().is_some_and(flag) && back.next().is_none_or(|c| !is_word_char(c))
+}
+
+/// What ends an unquoted path.
+fn ends_path(ch: char, kind: Kind) -> bool {
+    ch.is_whitespace()
+        || matches!(ch, '\'' | '"' | '`' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | ',')
+        || (kind == Kind::Posix && matches!(ch, '{' | '}'))
+}
+
+/// Byte length of the run that continues a path, from the start of `body`.
+/// A POSIX `\ ` (an escaped space) does not end it.
+fn body_len(body: &str, kind: Kind) -> usize {
+    let mut chars = body.char_indices().peekable();
+    while let Some((at, ch)) = chars.next() {
+        if kind == Kind::Posix && ch == '\\' && chars.peek().is_some_and(|&(_, next)| next == ' ') {
+            chars.next();
+            continue;
         }
-        let leaf = body.rsplit('/').next().unwrap_or_default();
-        let slash = if path.ends_with('/') { "/" } else { "" };
-        let home = if path.starts_with('~') { "~/" } else { "" };
-        format!("{}{home}…/{leaf}{slash}", &caps[1])
-    })
-    .into_owned()
+        if ends_path(ch, kind) {
+            return at;
+        }
+    }
+    body.len()
+}
+
+/// Byte length of the path of `kind` that starts `text`, if one does.
+fn path_len(text: &str, kind: Kind) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let head = match kind {
+        Kind::Windows => {
+            if text.starts_with(r"\\?\") {
+                4
+            } else if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/') {
+                3
+            } else if let Some(unc) = text.strip_prefix(r"\\") {
+                // A server name, then `\`.
+                let server = unc.find(|c: char| c == '\\' || c == '/' || c == '?' || ends_path(c, kind)).filter(|&n| n > 0)?;
+                if !unc[server..].starts_with('\\') {
+                    return None;
+                }
+                2 + server + 1
+            } else {
+                return None;
+            }
+        }
+        Kind::Posix => {
+            if is_file_address(text) {
+                7
+            } else {
+                let slash = usize::from(text.starts_with("~/"));
+                if !text[slash..].starts_with('/') {
+                    return None;
+                }
+                // `/` alone, `//host` and `/ ` start no path.
+                let next = text[slash + 1..].chars().next()?;
+                if next == '/' || ends_path(next, kind) {
+                    return None;
+                }
+                slash + 1
+            }
+        }
+    };
+    let len = head + body_len(&text[head..], kind);
+    (kind == Kind::Windows || len > head).then_some(len)
+}
+
+/// A quoted string that is one path and nothing else: it starts as one, and
+/// no shell operator or later word that starts a flag or another path follows.
+fn is_one_path(inner: &str, kind: Kind) -> bool {
+    path_len(inner, kind).is_some()
+        && !inner.contains([';', '|', '&', '<', '>', '`'])
+        && !inner.split_whitespace().skip(1).any(|word| {
+            word.starts_with(['-', '/', '\\', '~']) || path_len(word, Kind::Windows).is_some() || path_len(word, Kind::Posix).is_some()
+        })
+}
+
+/// `path` (one that [`path_len`] found) cut to its leaf.
+fn leaf_of_path(path: &str, kind: Kind) -> String {
+    match kind {
+        Kind::Windows => windows_leaf(path),
+        Kind::Posix => posix_leaf(path),
+    }
+}
+
+fn windows_leaf(path: &str) -> String {
+    let sep = if path.contains('\\') { '\\' } else { '/' };
+    let plain = without_verbatim(path).unwrap_or_else(|| path.to_string());
+    let unc = plain.starts_with(r"\\");
+    let body = if unc { &plain[2..] } else { plain.get(2..).unwrap_or_default() };
+    let parts: Vec<&str> = body.split(['\\', '/']).filter(|part| !part.is_empty()).collect();
+    let shown = if unc { 2 } else { 1 };
+    if !unc && parts.len() <= shown && plain == path {
+        return path.to_string();
+    }
+    let trail = if parts.len() > shown && path.ends_with(['\\', '/']) { sep.to_string() } else { String::new() };
+    match parts.last().filter(|_| parts.len() > shown) {
+        Some(leaf) => format!("…{sep}{leaf}{trail}"),
+        None => "…".to_string(),
+    }
+}
+
+/// `text` starts with `file://`, in any case.
+fn is_file_address(text: &str) -> bool {
+    text.get(..7).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
+}
+
+fn posix_leaf(path: &str) -> String {
+    let slash = if path.ends_with('/') { "/" } else { "" };
+    if is_file_address(path) {
+        // Its host, if any, is a component like the rest.
+        let parts: Vec<&str> = path[7..].split(['/', '\\']).filter(|part| !part.is_empty()).collect();
+        return match parts.last().filter(|_| parts.len() > 1) {
+            Some(leaf) => format!("{}…/{leaf}{slash}", &path[..7]),
+            None => path.to_string(),
+        };
+    }
+    let body = path.trim_start_matches('~').trim_matches('/');
+    if !body.contains('/') {
+        return path.to_string();
+    }
+    let leaf = body.rsplit('/').next().unwrap_or_default();
+    let home = if path.starts_with('~') { "~/" } else { "" };
+    format!("{home}…/{leaf}{slash}")
 }
 
 #[cfg(test)]
