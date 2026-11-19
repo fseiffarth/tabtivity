@@ -495,6 +495,173 @@ fn a_leading_folder_that_became_a_link_is_never_written_through() {
     assert_eq!(read(&fx.folder, "keep.txt").as_deref(), Some("keep"));
 }
 
+/// Run `body` with a process in the folder that, after the restore has checked
+/// its paths and before it writes, moves the folder `dir` aside and puts a link
+/// to `outside` in its place (threat model gap 115).
+#[cfg(unix)]
+fn with_folder_swapped_after_the_check<T>(folder: &Path, dir: &str, outside: &Path, body: impl FnOnce() -> T) -> T {
+    let (folder, dir, outside) = (folder.to_path_buf(), dir.to_string(), outside.to_path_buf());
+    super::restore::BEFORE_WRITES.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            std::fs::rename(folder.join(&dir), folder.join(format!("{dir}.real"))).unwrap();
+            std::os::unix::fs::symlink(&outside, folder.join(&dir)).unwrap();
+        }))
+    });
+    let out = body();
+    super::restore::BEFORE_WRITES.with(|hook| *hook.borrow_mut() = None);
+    out
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_swapped_for_a_link_after_the_check_is_never_written_through() {
+    let fx = fixture();
+    put(&fx.folder, "d/a.txt", "checkpoint a");
+    put(&fx.folder, "d/zz_target", "checkpoint target");
+    put(&fx.folder, "keep.txt", "keep");
+    let ckpt = snap(&fx, Kind::Pre, "t1");
+    put(&fx.folder, "d/a.txt", "edited a");
+    std::fs::remove_file(fx.folder.join("d").join("zz_target")).unwrap();
+    put(&fx.folder, "keep.txt", "changed");
+    let outside = fx.folder.parent().unwrap().join("outside");
+    put(&outside, "zz_target", "outside's own");
+
+    let st = store(&fx);
+    let done = with_folder_swapped_after_the_check(&fx.folder, "d", &outside, || restore(&st, &ckpt, &who("t1"), None).unwrap());
+    assert_eq!(read(&outside, "zz_target").as_deref(), Some("outside's own"), "overwritten through the link");
+    let mut there: Vec<_> = std::fs::read_dir(&outside).unwrap().map(|e| e.unwrap().file_name()).collect();
+    there.sort();
+    assert_eq!(there, ["zz_target"], "written through the link");
+    for path in ["d/a.txt", "d/zz_target"] {
+        assert!(done.failed.iter().any(|f| f.path == path && f.error.contains("link")), "{path}: {:?}", done.failed);
+    }
+    // The rest went on.
+    assert_eq!(read(&fx.folder, "keep.txt").as_deref(), Some("keep"));
+    assert_eq!(done.restored, 1, "{:?}", done.failed);
+    assert_eq!(read(&fx.folder.join("d.real"), "a.txt").as_deref(), Some("edited a"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_swapped_for_a_link_after_the_check_is_never_removed_through() {
+    let fx = fixture();
+    put(&fx.folder, "d/a.txt", "checkpoint a");
+    put(&fx.folder, "keep.txt", "keep");
+    let ckpt = snap(&fx, Kind::Pre, "t1");
+    put(&fx.folder, "d/added.txt", "added since");
+    put(&fx.folder, "keep.txt", "changed");
+    let outside = fx.folder.parent().unwrap().join("outside");
+    put(&outside, "added.txt", "outside's own");
+
+    let st = store(&fx);
+    let done = with_folder_swapped_after_the_check(&fx.folder, "d", &outside, || restore(&st, &ckpt, &who("t1"), None).unwrap());
+    assert_eq!(read(&outside, "added.txt").as_deref(), Some("outside's own"), "removed through the link");
+    assert!(
+        done.failed.iter().any(|f| f.path == "d/added.txt" && f.error.contains("link")),
+        "{:?}",
+        done.failed
+    );
+    assert_eq!(done.removed, 0);
+    assert_eq!(read(&fx.folder, "keep.txt").as_deref(), Some("keep"));
+    assert_eq!(read(&fx.folder.join("d.real"), "added.txt").as_deref(), Some("added since"));
+}
+
+// A file the `pre-restore` snapshot left out (here: the new-bytes budget) has
+// no copy to undo to, so the restore neither overwrites nor removes it.
+#[test]
+fn a_file_the_undo_snapshot_left_out_is_not_overwritten() {
+    let fx = fixture();
+    put(&fx.folder, "big.txt", "checkpoint");
+    put(&fx.folder, "keep.txt", "keep");
+    let ckpt = snap(&fx, Kind::Pre, "t1");
+    // Gone, snapshotted, and back as a file new to the store, larger than the
+    // budget the undo snapshot gets.
+    std::fs::remove_file(fx.folder.join("big.txt")).unwrap();
+    snap(&fx, Kind::Post, "t1");
+    put(&fx.folder, "big.txt", &"x".repeat(4096));
+    put(&fx.folder, "keep.txt", "changed");
+
+    let st = store(&fx);
+    let limits = Limits { max_file: 1 << 20, budget: 1024 };
+    let done = super::restore::restore_with(&st, &ckpt, &who("t1"), None, limits).unwrap();
+    assert_eq!(read(&fx.folder, "big.txt").map(|t| t.len()), Some(4096), "overwritten with no undo copy");
+    assert!(
+        done.failed.iter().any(|f| f.path == "big.txt" && f.error.contains("no undo copy")),
+        "{:?}",
+        done.failed
+    );
+    assert_eq!(read(&fx.folder, "keep.txt").as_deref(), Some("keep"));
+    let undo = st.row(&done.undo_id).unwrap();
+    assert!(undo.partial && undo.skipped.iter().any(|s| s.path == "big.txt" && s.reason == "budget"), "{undo:?}");
+}
+
+// A changed file git cannot read keeps its last staged copy in the index, so
+// the undo snapshot does not hold what is on disk: it is left as it is.
+#[cfg(unix)]
+#[test]
+fn a_file_the_undo_snapshot_could_not_read_is_not_overwritten() {
+    use std::os::unix::fs::PermissionsExt;
+    // SAFETY: a plain query of the process's own id.
+    if unsafe { libc::geteuid() } == 0 {
+        return; // root reads a 000 file
+    }
+    let fx = fixture();
+    put(&fx.folder, "a.txt", "one");
+    put(&fx.folder, "keep.txt", "keep");
+    let ckpt = snap(&fx, Kind::Pre, "t1");
+    put(&fx.folder, "a.txt", "two");
+    snap(&fx, Kind::Post, "t1");
+    put(&fx.folder, "a.txt", "three, unreadable");
+    std::fs::set_permissions(fx.folder.join("a.txt"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    put(&fx.folder, "keep.txt", "changed");
+
+    let st = store(&fx);
+    let done = restore(&st, &ckpt, &who("t1"), None).unwrap();
+    std::fs::set_permissions(fx.folder.join("a.txt"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(read(&fx.folder, "a.txt").as_deref(), Some("three, unreadable"));
+    assert!(done.failed.iter().any(|f| f.path == "a.txt" && f.error.contains("no undo copy")), "{:?}", done.failed);
+    assert_eq!(read(&fx.folder, "keep.txt").as_deref(), Some("keep"));
+}
+
+// A checkpointed link comes back as a link (never followed), an executable
+// file with its executable bits, and the staging folder is gone afterwards.
+#[cfg(unix)]
+#[test]
+fn a_restore_puts_back_links_as_links_and_keeps_the_executable_bit() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = fixture();
+    let outside = fx.folder.parent().unwrap().join("outside");
+    put(&outside, "target.txt", "outside's own");
+    std::os::unix::fs::symlink(outside.join("target.txt"), fx.folder.join("link")).unwrap();
+    put(&fx.folder, "run.sh", "#!/bin/sh\n");
+    std::fs::set_permissions(fx.folder.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let ckpt = snap(&fx, Kind::Pre, "t1");
+    std::fs::remove_file(fx.folder.join("link")).unwrap();
+    put(&fx.folder, "link", "a file now");
+    std::fs::remove_file(fx.folder.join("run.sh")).unwrap();
+
+    let st = store(&fx);
+    let done = restore(&st, &ckpt, &who("t1"), None).unwrap();
+    assert!(done.failed.is_empty(), "{:?}", done.failed);
+    assert_eq!(done.restored, 2);
+    let link = std::fs::symlink_metadata(fx.folder.join("link")).unwrap();
+    assert!(link.file_type().is_symlink());
+    assert_eq!(std::fs::read_link(fx.folder.join("link")).unwrap(), outside.join("target.txt"));
+    assert_eq!(read(&outside, "target.txt").as_deref(), Some("outside's own"));
+    let mode = std::fs::metadata(fx.folder.join("run.sh")).unwrap().permissions().mode();
+    assert_ne!(mode & 0o100, 0, "{mode:o}");
+    let left: Vec<_> = std::fs::read_dir(&st.dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".restore-"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+    // Nothing stray beside the restored files either.
+    let mut names: Vec<_> = std::fs::read_dir(&fx.folder).unwrap().map(|e| e.unwrap().file_name()).collect();
+    names.sort();
+    assert_eq!(names, ["link", "run.sh"]);
+}
+
 // A file that outgrew the cap drops out of the store's index, so it reads as
 // "deleted since"; the `pre-restore` snapshot does not hold it either, so a
 // restore must leave it as it is.
