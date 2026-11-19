@@ -4272,54 +4272,88 @@ html:not(.show-untested-tags) .untested-tag {
 .cli-overview-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
 .cli-overview-bar.high > span { background: var(--warning); }
 
-/* Prompt chart: one horizontal time axis, drafts on a strip above it. The
-   card treatment follows `.todo-card` (solid surface plus a static shadow
-   whose opacity changes); nothing here animates a box-shadow. */
-.agent-prompt-chart-section { min-height: 0; }
+/* Prompt chart: a command bar, then three columns — the drafts, one time axis
+   that fills the tab, and (while a card is selected) its inspector. The card
+   treatment follows `.todo-card` (solid surface plus a static shadow whose
+   opacity changes); nothing here animates a box-shadow. */
+.agent-prompt-chart-section { flex: 1; min-height: 0; }
 /* The chart's own tab (`agents/PromptChartTab`): the section fills the pane and
    scrolls as one, with the side panel's 6px gutter widened to a tab's. */
 .prompt-chart-tab { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: var(--space-2) var(--space-3); }
 .prompt-chart-tab .settings-section-title { margin-top: 0; padding-top: 0; border-top: none; display: flex; align-items: center; gap: 8px; }
-.agent-prompt-chart-toolbar,
-.agent-prompt-chart-facets,
 .agent-prompt-chart-views,
-.agent-prompt-chart-nav,
-.agent-prompt-link-kind { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
-.agent-prompt-chart-facets > input { flex: 1 1 180px; min-width: 100px; }
-.agent-prompt-chart-facets .dropdown { min-width: 92px; }
-/* The drafts strip and the timeline each filter on their own. */
-.agent-prompt-chart-filter,
-/* The timeline's head wears the drafts strip's box, so the two areas read as
-   siblings; its Hide/Show chip sits where the strip's hint does. */
-.agent-prompt-chart-timeline-bar { display: flex; flex-direction: column; gap: 5px; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); }
-.agent-prompt-chart-timeline-bar > header .agent-composer-chip { margin-left: auto; }
-.agent-prompt-drafts-strip > .agent-prompt-chart-filter { padding: 6px 3px 0; }
-.agent-prompt-chart-range { font-size: var(--text-sm); margin-left: 4px; }
-.agent-prompt-link-kind > span { color: var(--text-muted); font-size: var(--text-sm); }
-/* The toolbar's "New agent tab" picks: two compact dropdowns beside their label. */
-.agent-prompt-new-tab .dropdown { min-width: 92px; }
-.agent-prompt-chart { position: relative; display: flex; flex-direction: column; gap: 8px; min-height: 360px; }
-/* Timeline hidden: the chart is the drafts alone, no reserved axis height. */
-.agent-prompt-chart.is-drafts-only { min-height: 0; }
+.agent-prompt-chart-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.agent-prompt-chart-range { font-size: var(--text-md); }
 
-/* The drafts strip: timeless cards in a wrapping row, and the drop zone that
-   takes a card OUT of time (unschedule, collect again). */
-.agent-prompt-drafts-strip { position: relative; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); }
+/* The command bar: one row (wrapping on a narrow tab) for everything that
+   steers the whole chart. */
+.agent-prompt-command-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 6px var(--space-2); border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-panel); }
+.agent-prompt-command-bar > .settings-section-title { margin: 0; padding: 0; border: none; }
+.agent-prompt-search { flex: 1 1 200px; max-width: 360px; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 var(--space-2); border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--control-bg); color: var(--text-muted); }
+.agent-prompt-search > svg { flex: none; width: 14px; height: 14px; }
+.agent-prompt-search > input { flex: 1; min-width: 0; padding: 0; border: none; outline: none; background: transparent; color: var(--text-primary); font-size: var(--text-md); }
+.agent-prompt-bar-spacer { flex: 1 1 0; }
+.agent-prompt-bar-btn { display: inline-flex; align-items: center; gap: 6px; }
+.agent-prompt-bar-btn.is-icon,
+.agent-prompt-drafts-strip > header .is-icon { justify-content: center; width: 26px; padding: 0; }
+.agent-prompt-bar-btn.is-active { color: var(--accent); border-color: var(--accent); }
+.agent-prompt-bar-btn svg { width: 14px; height: 14px; }
+/* A two-way switch (List | Free): one box, the pressed half in the accent wash. */
+.agent-prompt-seg { display: inline-flex; border: 1px solid var(--border-color); border-radius: var(--radius-sm); overflow: hidden; }
+.agent-prompt-seg > button { height: 22px; padding: 0 var(--space-2); border: none; background: transparent; color: var(--text-secondary); font-size: var(--text-sm); cursor: var(--cur-pointer, pointer); }
+.agent-prompt-seg > button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+/* The popovers under the command bar's buttons (frame: `ContextMenuPortal`). */
+.agent-prompt-popover { max-width: min(440px, calc(100vw - 16px)); padding: var(--space-2) var(--space-3); color: var(--text-primary); }
+.agent-prompt-filter-popover { width: 360px; }
+.agent-prompt-filter-popover .agent-prompt-chart-filter { display: flex; flex-direction: column; gap: var(--space-2); }
+.agent-prompt-filter-facet { display: flex; flex-direction: column; gap: 3px; }
+.agent-prompt-filter-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border-subtle); }
+.agent-prompt-options-popover { width: 340px; }
+.agent-prompt-options { display: flex; flex-direction: column; gap: var(--space-2); }
+.agent-prompt-options-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.agent-prompt-options-row > span { min-width: 84px; color: var(--text-muted); font-size: var(--text-sm); }
+.agent-prompt-options-row .dropdown { min-width: 110px; }
+.agent-prompt-help-popover { width: 420px; }
+.agent-prompt-help-group { display: flex; flex-direction: column; gap: 4px; padding: var(--space-1) 0; }
+.agent-prompt-help-group + .agent-prompt-help-group { border-top: 1px solid var(--border-subtle); }
+.agent-prompt-help-group h4 { margin: 0; }
+.agent-prompt-help-group dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 4px 12px; margin: 0; font-size: var(--text-md); }
+.agent-prompt-help-group dl > div { display: contents; }
+.agent-prompt-help-group dt { font-weight: 600; }
+.agent-prompt-help-group dd { margin: 0; color: var(--text-secondary); }
+.agent-prompt-help-group p { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+
+/* Three columns. The container is the chart, not the window: the tab can sit
+   in a split, and the columns stack below 900px of ITS width. */
+.agent-prompt-chart { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
+.agent-prompt-chart-columns { flex: 1; display: grid; grid-template-columns: var(--drafts-width, 288px) minmax(0, 1fr); gap: var(--space-2); min-height: 480px; }
+.agent-prompt-chart-columns:has(> .agent-prompt-drafts-strip.is-collapsed) { grid-template-columns: 36px minmax(0, 1fr); }
+@container (max-width: 899px) {
+  .agent-prompt-chart-columns,
+  .agent-prompt-chart-columns:has(> .agent-prompt-drafts-strip.is-collapsed) { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .agent-prompt-drafts-strip:not(.is-collapsed) { max-height: 50vh; }
+  .agent-prompt-drafts-resize { display: none; }
+  .agent-prompt-timeline { min-height: 420px; }
+}
+
+/* The drafts column: timeless cards, and the drop zone that takes a card OUT
+   of time (unschedule, collect again). */
+.agent-prompt-drafts-strip { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); }
 .agent-prompt-drafts-strip.is-drop-over { border-color: var(--accent); background: var(--accent-soft); }
-.agent-prompt-drafts-strip > header,
-.agent-prompt-chart-timeline-bar > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 3px 6px; border-bottom: 1px solid var(--border-color); }
-.agent-prompt-drafts-strip > header span,
-.agent-prompt-chart-timeline-bar > header span,
-.agent-prompt-drafts-strip > header small { color: var(--text-muted); font-size: var(--text-sm); }
-.agent-prompt-drafts-strip > header small { margin-left: auto; }
-.agent-prompt-drafts-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding-top: var(--space-2); min-height: 40px; }
-.agent-prompt-drafts-row > .agent-prompt-card { width: 168px; }
-/* Editing needs the Markdown toolbar's width, not a strip card's. */
-.agent-prompt-drafts-row > .agent-prompt-card.is-editing { width: min(460px, 100%); }
-.agent-prompt-draft-layout-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: var(--space-2) 3px var(--space-1); }
-.agent-prompt-draft-layout-bar small, .agent-prompt-completion-hint { color: var(--text-muted); font-size: var(--text-sm); }
-.agent-prompt-completion-hint { display: block; padding: 0 3px 6px; }
-.agent-prompt-draft-viewport { overflow: auto; max-height: 55vh; min-height: 220px; }
+.agent-prompt-drafts-strip > header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 3px 6px; border-bottom: 1px solid var(--border-color); }
+.agent-prompt-drafts-strip > header span { color: var(--text-muted); font-size: var(--text-sm); }
+.agent-prompt-drafts-strip.is-collapsed { align-items: center; padding: 6px 2px; }
+.agent-prompt-drafts-strip.is-collapsed > header { flex-direction: column; flex-wrap: nowrap; border-bottom: none; }
+.agent-prompt-drafts-strip.is-collapsed > header strong { writing-mode: vertical-rl; }
+/* The handle on the column's right edge: a thin strip over the gap, the line
+   itself drawn in the accent only while hovered or focused. */
+.agent-prompt-drafts-resize { position: absolute; top: 0; right: -6px; bottom: 0; z-index: 5; width: 8px; cursor: var(--cur-ew-resize, ew-resize); touch-action: none; }
+.agent-prompt-drafts-resize:hover,
+.agent-prompt-drafts-resize:focus-visible { background: linear-gradient(to right, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px); outline: none; }
+/* List layout: one card per row, as wide as the column. */
+.agent-prompt-drafts-row { display: flex; flex-direction: column; gap: 8px; padding-top: var(--space-2); min-height: 40px; }
+.agent-prompt-drafts-row > .agent-prompt-card { width: auto; }
+.agent-prompt-draft-viewport { flex: 1; min-height: 0; overflow: auto; }
 .agent-prompt-draft-canvas { position: relative; min-width: 100%; background-image: radial-gradient(var(--border-color) 1px, transparent 1px); background-size: 16px 16px; }
 .agent-prompt-draft-position { position: absolute; width: 168px; }
 .agent-prompt-draft-position:has(.is-selected), .agent-prompt-draft-position:has(.is-editing) { z-index: 4; }
@@ -4339,7 +4373,7 @@ html:not(.show-untested-tags) .untested-tag {
 /* The axis and the lanes. `overflow: clip`, not `hidden`: a hidden box is a
    scroll container, and the sticky axis would stick to it instead of to the
    tab that actually scrolls. */
-.agent-prompt-timeline { position: relative; display: flex; flex-direction: column; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); overflow: clip; }
+.agent-prompt-timeline { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); overflow: clip; }
 /* Sticky, and above every card layer: scrolling the tab keeps the clock and
    the NOW label in view over the lanes. */
 .agent-prompt-timeline-axis { position: sticky; top: 0; z-index: 7; height: 18px; border-bottom: 1px solid var(--border-color); background: var(--bg-panel); overflow: clip; }
@@ -4347,12 +4381,15 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-timeline-tick.is-major { color: var(--text-secondary); border-left-color: var(--text-muted); }
 /* The body is sized for its lanes and its queue; whatever outgrows that (an
    expanded card) scrolls within it rather than being clipped away. */
-.agent-prompt-timeline-body { position: relative; overflow-x: hidden; overflow-y: auto; touch-action: pan-y; user-select: none; }
+.agent-prompt-timeline-body { position: relative; height: 100%; overflow-x: hidden; overflow-y: auto; touch-action: pan-y; user-select: none; }
+/* Holds the body as tall as its lanes and its queue: the lifted and queued cards
+   are absolute, so something has to say how far the body scrolls. */
+.agent-prompt-timeline-sizer { position: absolute; top: 0; left: 0; width: 1px; pointer-events: none; }
 /* The time layers sit beside the body at its box, not inside its scroll: a
    `top: 0; bottom: 0` child of a scroller spans only the first screenful.
    Neither layer sets a z-index, so their children still stack against the
    cards — the grid below them, the now line above. */
-.agent-prompt-timeline-stage { position: relative; }
+.agent-prompt-timeline-stage { position: relative; flex: 1 1 0; min-height: 320px; }
 .agent-prompt-timeline-underlay,
 .agent-prompt-timeline-overlay { position: absolute; inset: 0; overflow: clip; pointer-events: none; }
 .agent-prompt-timeline-line { position: absolute; top: 0; bottom: 0; border-left: 1px dotted var(--border-color); pointer-events: none; }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import {
@@ -39,7 +39,6 @@ import { localOccurrenceKey, localWallClock } from "../../lib/agents/agentSchedu
 import { tagCounts } from "../../lib/agents/prompt/tags";
 import { formatLongDate, monthName, toDateStr, todayStr } from "../../lib/calendar/calendarTime";
 import { useI18nStore, useT } from "../../lib/i18n";
-import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import {
   queuePromptForTab,
@@ -56,13 +55,14 @@ import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { resolveProjectDirectory } from "../../types";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
-import { Dropdown } from "../common/Dropdown";
 import { useDialogs } from "../common/PromptDialogs";
-import { UntestedTag } from "../common/UntestedTag";
 import { AgentScheduleDialog } from "./AgentScheduleDialog";
 import { PromptCard } from "./PromptCard";
 import { PromptSessionCard } from "./PromptSessionCard";
 import { PromptChartFilterBar } from "./PromptChartFilterBar";
+import { PromptChartCommandBar } from "./PromptChartCommandBar";
+import { PromptChartHelp } from "./PromptChartHelp";
+import { PromptChartOptions } from "./PromptChartOptions";
 import { PromptChartLinks } from "./PromptChartLinks";
 import { PromptLinkEditor } from "./PromptLinkEditor";
 import { PromptTimeline } from "./PromptTimeline";
@@ -72,14 +72,14 @@ import { PromptDraftBoard, type DraftBoardHandle } from "./PromptDraftBoard";
 import { draftSequence } from "../../lib/agents/prompt/drafts";
 import { AGENT_ITEMS, EMPTY_CUSTOM_AGENTS } from "../../lib/tabs/newTabItems";
 import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
-import { ArrowLeftIcon, ArrowRightIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, PlusIcon } from "../common/icons/Icon";
+import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { storageKey } from "../../lib/brand";
 
 const EMPTY_PROMPTS: ProjectAgentPrompt[] = [];
 const EMPTY_HISTORY: SentAgentPrompt[] = [];
 const EMPTY_LINKS: ReturnType<typeof useAgentPromptsStore.getState>["linksByProject"][string] = [];
 const EMPTY_FILTER: PromptChartFilter = { text: "", tag: "", agent: "", result: "" };
-const VIEWS: TimelineView[] = ["hour", "day", "week", "month"];
 /** The backend's refusals of an After link (`apply_link_upsert`), mapped to
  *  the same sentences the frontend's own check shows. */
 const LINK_CYCLE_ERROR = "prompt_link_cycle";
@@ -95,13 +95,27 @@ const RETIME_STEP_MS = 5 * 60_000;
  *  members would have landed at or before now — it never meant to send. */
 const pastRefusalKey = (zoneKind?: TimelineZone["kind"]) =>
   zoneKind === "time" ? "promptChart.groupLandsPast" as const : "promptChart.groupPastRefused" as const;
-/** Whether the timeline is shown: a reader's convenience, remembered per
- *  window like the Agents view's sort. The filters are not — a filter that
- *  survives a relaunch is how a card goes missing. */
-const TIMELINE_STORAGE_KEY = storageKey("promptChart.timeline");
+/** The Drafts column's two reader's conveniences, remembered per window like
+ *  the Agents view's sort: whether it is collapsed, and how wide it is. The
+ *  filters are not — a filter that survives a relaunch is how a card goes
+ *  missing. */
+const DRAFTS_STORAGE_KEY = storageKey("promptChart.drafts");
+const DRAFTS_WIDTH_KEY = storageKey("promptChart.draftsWidth");
+export const DRAFTS_MIN_WIDTH = 240;
+export const DRAFTS_MAX_WIDTH = 720;
+const DRAFTS_DEFAULT_WIDTH = 288;
+/** What an arrow key on the column's resize handle moves it by. */
+const DRAFTS_KEY_STEP = 16;
 
-function readShowTimeline(): boolean {
-  try { return localStorage.getItem(TIMELINE_STORAGE_KEY) !== "hidden"; } catch { return true; }
+function readDraftsCollapsed(): boolean {
+  try { return localStorage.getItem(DRAFTS_STORAGE_KEY) === "collapsed"; } catch { return false; }
+}
+
+function readDraftsWidth(): number {
+  try {
+    const stored = Number(localStorage.getItem(DRAFTS_WIDTH_KEY));
+    return Number.isFinite(stored) && stored > 0 ? Math.max(DRAFTS_MIN_WIDTH, Math.min(DRAFTS_MAX_WIDTH, stored)) : DRAFTS_DEFAULT_WIDTH;
+  } catch { return DRAFTS_DEFAULT_WIDTH; }
 }
 
 function isStripCard(card: PromptChartCard): boolean {
@@ -174,12 +188,13 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const [now, setNow] = useState(() => new Date());
   const [view, setView] = useState<TimelineView>("day");
   const [anchor, setAnchor] = useState(() => todayStr());
-  const [draftFilter, setDraftFilter] = useState<PromptChartFilter>(EMPTY_FILTER);
-  const [draftHide, setDraftHide] = useState(false);
-  const [chartFilter, setChartFilter] = useState<PromptChartFilter>(EMPTY_FILTER);
-  const [chartHide, setChartHide] = useState(false);
+  // One filter for the whole chart: the drafts column and the timeline answer
+  // the same question. The "When" facet applies to the timeline's cards only.
+  const [filter, setFilter] = useState<PromptChartFilter>(EMPTY_FILTER);
+  const [hide, setHide] = useState(false);
   const [when, setWhen] = useState<PromptChartWindow>("any");
-  const [showTimeline, setShowTimeline] = useState(readShowTimeline);
+  const [draftsCollapsed, setDraftsCollapsed] = useState(readDraftsCollapsed);
+  const [draftsWidth, setDraftsWidth] = useState(readDraftsWidth);
   const [selected, setSelected] = useState<string | null>(null);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [linkKind, setLinkKind] = useState<"related" | "after">("after");
@@ -320,30 +335,30 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
   const stripCards = useMemo(() => cards.filter(isStripCard), [cards]);
   const stripIds = useMemo(() => new Set(stripCards.map((card) => card.id)), [stripCards]);
   const timeCards = useMemo(() => cards.filter((card) => !stripIds.has(card.id)), [cards, stripIds]);
-  const draftMatched = useMemo(() => new Set(stripCards.filter((card) => promptChartCardMatches(card, draftFilter)).map((card) => card.key)), [draftFilter, stripCards]);
-  // The timeline's text/tag/agent/outcome match, by key; the "When" window is
-  // asked per drawn instant, since a recurring rule's occurrences share a key.
-  const chartMatched = useMemo(() => new Set(timeCards.filter((card) => promptChartCardMatches(card, chartFilter)).map((card) => card.key)), [chartFilter, timeCards]);
-  const draftTagCounts = useMemo(() => tagCounts(stripCards.map((card) => ({ tags: [...card.tags, ...card.autoTags] }))), [stripCards]);
-  const chartTagCounts = useMemo(() => tagCounts(timeCards.map((card) => ({ tags: [...card.tags, ...card.autoTags] }))), [timeCards]);
-  const draftAgents = useMemo(() => agentsOf(stripCards), [stripCards]);
-  const chartAgents = useMemo(() => agentsOf(timeCards), [timeCards]);
+  // The text/tag/agent/outcome match, by key, for strip and timeline cards
+  // alike; the "When" window is asked of timeline cards only, and per drawn
+  // instant, since a recurring rule's occurrences share a key.
+  const matched = useMemo(() => new Set(cards.filter((card) => promptChartCardMatches(card, filter)).map((card) => card.key)), [cards, filter]);
+  const allTagCounts = useMemo(() => tagCounts(cards.map((card) => ({ tags: [...card.tags, ...card.autoTags] }))), [cards]);
+  const allAgents = useMemo(() => agentsOf(cards), [cards]);
   const tabAgents = useMemo(() => tabs.map((tab) => tab.cmd), [tabs]);
-  const usageResets = usePromptChartUsage(tabAgents, active && showTimeline, now, win.start, win.end, chartFilter.agent);
-  /** Whether a card passes its part's filter. On the timeline the When window
-   *  is asked of the instant the card is DRAWN at: a recurring rule's first
+  const usageResets = usePromptChartUsage(tabAgents, active, now, win.start, win.end, filter.agent);
+  /** Whether a card passes the filter. On the timeline the When window is
+   *  asked of the instant the card is DRAWN at: a recurring rule's first
    *  occurrence in a future window is not its `at` (the next one from now). */
   const matches = (card: PromptChartCard, occurrence?: string, drawnAt?: Date): boolean => {
-    if (stripIds.has(card.id)) return draftMatched.has(card.key);
+    if (stripIds.has(card.id)) return matched.has(card.key);
     const at = occurrence ? localWallClock(occurrence) : drawnAt ?? card.at ?? null;
-    return chartMatched.has(card.key) && promptChartInWindow(card, at, when, now);
+    return matched.has(card.key) && promptChartInWindow(card, at, when, now);
   };
   const visible = (card: PromptChartCard, occurrence?: string, drawnAt?: Date) =>
-    !(stripIds.has(card.id) ? draftHide : chartHide) || matches(card, occurrence, drawnAt);
+    !hide || matches(card, occurrence, drawnAt);
   const sessionMatched = useMemo(
-    () => new Set(timeCards.filter((card) => chartMatched.has(card.key) && promptChartInWindow(card, card.at, when, now)).map((card) => card.key)),
-    [chartMatched, now, timeCards, when],
+    () => new Set(timeCards.filter((card) => matched.has(card.key) && promptChartInWindow(card, card.at, when, now)).map((card) => card.key)),
+    [matched, now, timeCards, when],
   );
+  const shownCount = stripCards.filter((card) => matched.has(card.key)).length + sessionMatched.size;
+  const filterCount = [filter.text, filter.tag, filter.agent, filter.result, when !== "any" ? when : ""].filter(Boolean).length;
   const targetIds = useMemo(() => tabs.map((tab) => tab.scheduleTargetId!), [tabs]);
   const targets = useMemo(() => tabs.map((tab) => ({
     id: tab.scheduleTargetId!,
@@ -924,10 +939,41 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
     setView(next);
   };
 
-  const toggleTimeline = () => setShowTimeline((shown) => {
-    try { localStorage.setItem(TIMELINE_STORAGE_KEY, shown ? "hidden" : "shown"); } catch { /* the choice lasts the session */ }
-    return !shown;
+  const toggleDrafts = () => setDraftsCollapsed((collapsed) => {
+    try { localStorage.setItem(DRAFTS_STORAGE_KEY, collapsed ? "expanded" : "collapsed"); } catch { /* the choice lasts the session */ }
+    return !collapsed;
   });
+  const clampDraftsWidth = (width: number) => Math.max(DRAFTS_MIN_WIDTH, Math.min(DRAFTS_MAX_WIDTH, Math.round(width)));
+  const storeDraftsWidth = (width: number) => {
+    try { localStorage.setItem(DRAFTS_WIDTH_KEY, String(width)); } catch { /* the width lasts the session */ }
+  };
+  /** The handle on the column's right edge. A drag follows the pointer; the
+   *  release is bound at the press like the chart's other gestures. */
+  const resizeDrafts = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = draftsWidth;
+    const pointerId = event.pointerId;
+    const captureEl = document.documentElement;
+    let width = startWidth;
+    if (dragPlatform.needsPointerCapture) {
+      try { captureEl.setPointerCapture(pointerId); } catch { /* an optimisation */ }
+    }
+    const onMove = (pointer: PointerEvent) => {
+      width = clampDraftsWidth(startWidth + pointer.clientX - startX);
+      setDraftsWidth(width);
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", onMove);
+      if (dragPlatform.needsPointerCapture) {
+        try { captureEl.releasePointerCapture(pointerId); } catch { /* already released */ }
+      }
+      storeDraftsWidth(width);
+    };
+    window.addEventListener("pointermove", onMove);
+    bindDragRelease({ onCommit: finish, onAbort: finish });
+  };
   const rangeLabel = view === "hour"
     ? `${formatLongDate(anchor.slice(0, 10), lang)} · ${formatTimelineInstant(win.start, lang, use24h, false)} – ${formatTimelineInstant(win.end, lang, use24h, false)}`
     : view === "day"
@@ -937,47 +983,66 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
       : `${monthName(lang, win.start.getMonth() + 1)} ${win.start.getFullYear()}`;
   const viewLifted = Object.keys(lifts[view] ?? {}).length > 0;
 
+  const filterPanel = (
+    <PromptChartFilterBar
+      testId="prompt-chart-filter"
+      filter={filter}
+      onChange={setFilter}
+      agents={allAgents}
+      tags={allTagCounts}
+      hideOthers={hide}
+      onHideOthers={() => setHide((value) => !value)}
+      window={when}
+      onWindow={setWhen}
+      shown={shownCount}
+      total={cards.length}
+      onClear={() => { setFilter(EMPTY_FILTER); setWhen("any"); }}
+    />
+  );
+
   return (
     <section className="agent-prompts-section agent-prompt-chart-section">
-      <h3 className="settings-section-title">{t("promptChart.heading")} <UntestedTag id="promptChart.heading" /></h3>
-      <div className="agent-prompt-chart-toolbar">
-        {/* One composer: the board's own, opened in place. */}
-        <button className="settings-btn sm primary" type="button" aria-label={t("promptChart.newDraft")} title={t("promptChart.newDraft")} onClick={() => draftBoard.current?.compose()}>＋</button>
-        <div className="agent-prompt-link-kind" role="group" aria-label={t("promptChart.linkKind")}>
-          <span>{t("promptChart.linkKind")}</span>
-          <button type="button" className={`agent-composer-chip${linkKind === "after" ? " active" : ""}`} aria-pressed={linkKind === "after"} onClick={() => setLinkKind("after")}>{t("promptChart.after")}</button>
-          <button type="button" className={`agent-composer-chip${linkKind === "related" ? " active" : ""}`} aria-pressed={linkKind === "related"} onClick={() => setLinkKind("related")}>{t("promptChart.related")}</button>
-          {linkFrom && <><span>{t("promptChart.pickLink")}</span><button type="button" className="agent-composer-chip" onClick={() => setLinkFrom(null)}>{t("common.cancel")}</button></>}
-        </div>
-        <div className="agent-prompt-link-kind agent-prompt-new-tab" role="group" aria-label={t("promptChart.newTabDefaults")} title={t("promptChart.newTabDefaultsTitle")}>
-          <span>{t("promptChart.newTabDefaults")}</span>
-          <Dropdown
-            title={t("promptChart.newTabAgent")}
-            value={newTabAgent}
-            options={newTabAgentOptions}
-            onChange={(value) => void attempt(() => updateSettings({ prompt_chart_agent: value, prompt_chart_model: "" }))}
-          />
-          {newTabModels.length > 0 && (
-            <Dropdown
-              title={t("agentPrompts.modelTitle")}
-              value={newTabModel}
-              placeholder={t("promptChart.newTabModelDefault")}
-              options={[
-                { value: "", label: t("promptChart.newTabModelDefault") },
-                ...newTabModels.map((name) => ({ value: name, label: name })),
-              ]}
-              onChange={(value) => void attempt(() => updateSettings({ prompt_chart_model: value }))}
+      <PromptChartCommandBar
+        text={filter.text}
+        onText={(text) => setFilter((value) => ({ ...value, text }))}
+        filterCount={filterCount}
+        filterPanel={filterPanel}
+        view={view}
+        onView={pickView}
+        onPrev={() => setAnchor((value) => shiftAnchor(view, value, -1))}
+        onToday={() => setAnchor(view === "hour" ? hourAnchor(new Date()) : todayStr())}
+        onNext={() => setAnchor((value) => shiftAnchor(view, value, 1))}
+        rangeLabel={rangeLabel}
+        selectedCount={multi.size}
+        onClearSelection={clearMulti}
+        viewLifted={viewLifted}
+        // Lifts are view state: putting them back writes nothing.
+        onResetLifts={() => setLifts((all) => ({ ...all, [view]: {} }))}
+        linkArmed={!!linkFrom}
+        onCancelLink={() => setLinkFrom(null)}
+        trailing={(
+          <>
+            <PromptChartOptions
+              linkKind={linkKind}
+              onLinkKind={setLinkKind}
+              agent={newTabAgent}
+              agentOptions={newTabAgentOptions}
+              onAgent={(value) => void attempt(() => updateSettings({ prompt_chart_agent: value, prompt_chart_model: "" }))}
+              model={newTabModel}
+              models={newTabModels}
+              onModel={(value) => void attempt(() => updateSettings({ prompt_chart_model: value }))}
             />
-          )}
-        </div>
-      </div>
+            <PromptChartHelp />
+          </>
+        )}
+      />
       {error && (
         <div className="project-dialog-error agent-prompt-chart-error" role="alert" data-testid="prompt-chart-error">
           <span>{error}</span>
           <button type="button" className="settings-btn sm" onClick={() => setError("")}>{t("promptChart.dismissError")}</button>
         </div>
       )}
-      <div className={`agent-prompt-chart${showTimeline ? "" : " is-drafts-only"}`} ref={rootRef}>
+      <div className="agent-prompt-chart" ref={rootRef}>
         <PromptChartLinks
           rootRef={rootRef}
           cardNodes={cardNodes}
@@ -990,131 +1055,98 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
           editLabel={t("promptChart.editLink")}
         />
         <div
-          className={`agent-prompt-drafts-strip${drag?.kind === "card" && drag.zone.kind === "strip" ? " is-drop-over" : ""}`}
-          ref={stripRef}
-          data-testid="prompt-chart-strip"
+          className="agent-prompt-chart-columns"
+          style={{ "--drafts-width": `${draftsWidth}px` } as CSSProperties}
         >
-          <header><strong>{t("promptChart.drafts")}</strong><span>{stripCards.length}</span>{showTimeline && <small>{t("promptChart.dropHint")}</small>}</header>
-          <PromptChartFilterBar
-            testId="prompt-chart-draft-filter"
-            filter={draftFilter}
-            onChange={setDraftFilter}
-            placeholder={t("promptChart.draftSearch")}
-            agents={draftAgents}
-            tags={draftTagCounts}
-            hideOthers={draftHide}
-            onHideOthers={() => setDraftHide((value) => !value)}
-            shown={draftMatched.size}
-            total={stripCards.length}
-            onClear={() => setDraftFilter(EMPTY_FILTER)}
-          />
-          <PromptDraftBoard
-            key={scope}
-            ref={draftBoard}
-            scope={scope}
-            cards={stripCards}
-            drag={drag}
-            renderCard={renderCard}
-            onLayout={refreshLinks}
-            onCreate={async (message, tags) => {
-              const id = crypto.randomUUID();
-              setError("");
-              try {
-                await upsertPrompt(scope, { id, message, tags });
-              } catch (cause) {
-                setError(formatError(cause));
-                throw cause;
-              }
-              return id;
-            }}
-          />
-        </div>
-        {/* The timeline's own head, the drafts strip's twin: name, count and
-            the one place it is hidden or shown from. It stays when the axis
-            is hidden, or there would be nothing to bring it back with. */}
-        <div className="agent-prompt-chart-timeline-bar" data-testid="prompt-chart-timeline-bar">
-          <header>
-            <strong>{t("promptChart.timeline")}</strong>
-            <span>{timeCards.length}</span>
-            <button
-              className={`agent-composer-chip${showTimeline ? "" : " active"}`}
-              type="button"
-              aria-pressed={!showTimeline}
-              title={t("promptChart.timelineTitle")}
-              onClick={toggleTimeline}
-            >
-              {showTimeline ? t("promptChart.hideTimeline") : t("promptChart.showTimeline")}
-            </button>
-          </header>
-          {showTimeline && (
-            <>
-              <div className="agent-prompt-chart-toolbar">
-                <div className="agent-prompt-chart-views" role="group" aria-label={t("promptChart.zoom")} title={t("promptChart.zoomHint")}>
-                  {VIEWS.map((item) => (
-                    <button key={item} type="button" className={`agent-composer-chip${view === item ? " active" : ""}`} aria-pressed={view === item} onClick={() => pickView(item)}>
-                      {t(`promptChart.view.${item}` as "promptChart.view.day")}
-                    </button>
-                  ))}
-                </div>
-                <div className="agent-prompt-chart-nav">
-                  <button className="settings-btn sm" type="button" aria-label={t("promptChart.prev")} title={t("promptChart.prev")} onClick={() => setAnchor((value) => shiftAnchor(view, value, -1))}><ArrowLeftIcon /></button>
-                  <button className="settings-btn sm" type="button" onClick={() => setAnchor(view === "hour" ? hourAnchor(new Date()) : todayStr())}>{t("promptChart.today")}</button>
-                  <button className="settings-btn sm" type="button" aria-label={t("promptChart.next")} title={t("promptChart.next")} onClick={() => setAnchor((value) => shiftAnchor(view, value, 1))}><ArrowRightIcon /></button>
-                  <strong className="agent-prompt-chart-range" data-testid="prompt-chart-range">{rangeLabel}</strong>
-                </div>
-                {/* Lifts are view state: putting them back writes nothing. */}
-                {viewLifted && (
-                  <button type="button" className="agent-composer-chip" onClick={() => setLifts((all) => ({ ...all, [view]: {} }))}>{t("promptChart.resetPositions")}</button>
-                )}
-                {multi.size > 0
-                  ? (
-                    <span className="agent-prompt-chart-selection" data-testid="prompt-chart-selection">
-                      {t("promptChart.selectedCount", { count: multi.size })}
-                      <button type="button" className="agent-composer-chip" onClick={clearMulti}>{t("promptChart.clearSelection")}</button>
-                    </span>
-                  )
-                  : <small className="agent-prompt-chart-select-hint">{t("promptChart.selectHint", { modifier: modifierLabel() })}</small>}
-              </div>
-              <PromptChartFilterBar
-                testId="prompt-chart-timeline-filter"
-                filter={chartFilter}
-                onChange={setChartFilter}
-                placeholder={t("promptChart.timelineSearch")}
-                agents={chartAgents}
-                tags={chartTagCounts}
-                hideOthers={chartHide}
-                onHideOthers={() => setChartHide((value) => !value)}
-                results
-                window={when}
-                onWindow={setWhen}
-                shown={sessionMatched.size}
-                total={timeCards.length}
-                onClear={() => { setChartFilter(EMPTY_FILTER); setWhen("any"); }}
+          <div
+            className={`agent-prompt-drafts-strip${draftsCollapsed ? " is-collapsed" : ""}${drag?.kind === "card" && drag.zone.kind === "strip" ? " is-drop-over" : ""}`}
+            ref={stripRef}
+            data-testid="prompt-chart-strip"
+          >
+            <header>
+              <strong>{t("promptChart.drafts")}</strong>
+              <span>{stripCards.length}</span>
+              {!draftsCollapsed && (
+                <>
+                  <button className="settings-btn sm is-icon" type="button" aria-label={t("promptChart.newDraft")} title={t("promptChart.newDraft")} onClick={() => draftBoard.current?.compose()}><PlusIcon /></button>
+                  <div className="agent-prompt-bar-spacer" />
+                  <div className="agent-prompt-seg" role="group" aria-label={t("promptChart.draftLayout")}>
+                    <button type="button" aria-label={t("promptChart.listLayout")} aria-pressed={!boardFree} onClick={() => draftBoard.current?.setFree(false)}>{t("promptChart.layoutList")}</button>
+                    <button type="button" aria-label={t("promptChart.freeLayout")} aria-pressed={boardFree} onClick={() => draftBoard.current?.setFree(true)}>{t("promptChart.layoutFree")}</button>
+                  </div>
+                </>
+              )}
+              <button
+                className="settings-btn sm is-icon agent-prompt-drafts-collapse"
+                type="button"
+                aria-expanded={!draftsCollapsed}
+                aria-label={draftsCollapsed ? t("promptChart.expandDrafts") : t("promptChart.collapseDrafts")}
+                title={draftsCollapsed ? t("promptChart.expandDrafts") : t("promptChart.collapseDrafts")}
+                onClick={toggleDrafts}
+              >{draftsCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}</button>
+            </header>
+            {!draftsCollapsed && (
+              <PromptDraftBoard
+                key={scope}
+                ref={draftBoard}
+                scope={scope}
+                cards={stripCards}
+                drag={drag}
+                renderCard={renderCard}
+                onLayout={refreshLinks}
+                onCreate={async (message, tags) => {
+                  const id = crypto.randomUUID();
+                  setError("");
+                  try {
+                    await upsertPrompt(scope, { id, message, tags });
+                  } catch (cause) {
+                    setError(formatError(cause));
+                    throw cause;
+                  }
+                  return id;
+                }}
               />
-            </>
-          )}
+            )}
+            {!draftsCollapsed && (
+              <div
+                className="agent-prompt-drafts-resize"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t("promptChart.resizeDrafts")}
+                aria-valuemin={DRAFTS_MIN_WIDTH}
+                aria-valuemax={DRAFTS_MAX_WIDTH}
+                aria-valuenow={draftsWidth}
+                tabIndex={0}
+                data-testid="prompt-chart-drafts-resize"
+                onPointerDown={resizeDrafts}
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                  event.preventDefault();
+                  const width = clampDraftsWidth(draftsWidth + (event.key === "ArrowRight" ? DRAFTS_KEY_STEP : -DRAFTS_KEY_STEP));
+                  setDraftsWidth(width);
+                  storeDraftsWidth(width);
+                }}
+              />
+            )}
+          </div>
+          <PromptTimeline
+            win={win}
+            cards={cards}
+            now={now}
+            drag={drag}
+            bodyRef={bodyRef}
+            nowBandRef={nowBandRef}
+            renderCard={renderCard}
+            onRefine={(date) => { setAnchor(date); setView("day"); }}
+            dropLabel={dropBadge?.label ?? null}
+            dropBlocked={dropBadge?.blocked}
+            emptyHint={tabs.length === 0 && timeCards.length === 0 ? t("promptChart.timelineEmpty") : undefined}
+            onZoom={zoom}
+            lifts={lifts[view]}
+            resets={usageResets}
+            onBodyPointerDown={onMarqueePointerDown}
+          />
         </div>
-        {showTimeline && (
-          <>
-            <PromptTimeline
-              win={win}
-              cards={cards}
-              now={now}
-              drag={drag}
-              bodyRef={bodyRef}
-              nowBandRef={nowBandRef}
-              renderCard={renderCard}
-              onRefine={(date) => { setAnchor(date); setView("day"); }}
-              dropLabel={dropBadge?.label ?? null}
-              dropBlocked={dropBadge?.blocked}
-              emptyHint={tabs.length === 0 && timeCards.length === 0 ? t("promptChart.timelineEmpty") : undefined}
-              onZoom={zoom}
-              lifts={lifts[view]}
-              resets={usageResets}
-              onBodyPointerDown={onMarqueePointerDown}
-            />
-          </>
-        )}
       </div>
       {(() => {
         const link = edgeMenu && links.find((item) => item.id === edgeMenu.id);

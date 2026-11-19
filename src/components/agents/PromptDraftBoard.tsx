@@ -12,6 +12,9 @@ export interface DraftBoardHandle {
   place: (id: string, x: number, y: number) => boolean;
   /** Whether cards can be moved at all: in row layout `place` refuses. */
   free: boolean;
+  /** The List | Free switch, which the Drafts column's header draws. Free
+   *  starts from where the list shows each card now. */
+  setFree: (free: boolean) => void;
   /** Open the board's own composer — at the next free spot on the canvas, or
    *  at the row's end — the one composer the chart's ＋ opens too. */
   compose: () => void;
@@ -83,6 +86,7 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
       return true;
     },
     free: layout.free,
+    setFree: (free) => setLayout((value) => value.free === free ? value : { free, positions: Object.fromEntries(cards.map((card, index) => [card.id, pointOf(card.id, index)])) }),
     compose: () => setComposer(layout.free ? freeSpot() : { x: 0, y: 0 }),
   }));
   useEffect(() => {
@@ -159,16 +163,7 @@ export const PromptDraftBoard = forwardRef<DraftBoardHandle, {
     </div>
   );
   return <>
-    <div className="agent-prompt-draft-layout-bar">
-      <button type="button" className={`agent-composer-chip${layout.free ? " active" : ""}`} aria-pressed={layout.free}
-        onClick={() => setLayout((value) => ({ free: !value.free, positions: Object.fromEntries(cards.map((card, index) => [card.id, pointOf(card.id, index)])) }))}>
-        {t("promptChart.freeLayout")}
-      </button>
-      {/* "Move cards freely" is true only in free layout; the row does not move them. */}
-      <small>{layout.free ? `${t("promptChart.draftFreeHint")} ` : ""}{t("promptChart.draftLayoutHint")} {t("promptChart.draftCreateHint")}</small>
-    </div>
-    <small className="agent-prompt-completion-hint">{t("promptChart.completionHint")}</small>
-    <div ref={viewport} className={layout.free ? "agent-prompt-draft-viewport" : undefined}>
+    <div ref={viewport} className="agent-prompt-draft-viewport">
       <div ref={canvas} data-testid="prompt-draft-board" className={layout.free ? "agent-prompt-draft-canvas" : "agent-prompt-drafts-row"}
         onDoubleClick={openComposer}
         style={layout.free ? {

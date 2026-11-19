@@ -212,12 +212,12 @@ export function PromptTimeline({ win, cards, now, drag, bodyRef, nowBandRef, ren
           className="agent-prompt-timeline-body"
           ref={bodyRef}
           data-testid="prompt-timeline-body"
-          style={{ height: bodyHeight }}
           // Only a press on the lanes themselves: a card's press is its own.
           onPointerDown={win.view === "month" || !onBodyPointerDown ? undefined : (event) => {
             if (event.target === event.currentTarget) onBodyPointerDown(event);
           }}
         >
+          <div className="agent-prompt-timeline-sizer" style={{ height: bodyHeight }} aria-hidden="true" />
           {emptyHint && <div className="file-tree-empty" data-testid="prompt-timeline-empty">{emptyHint}</div>}
           {win.view === "month"
             ? clusters.map((cluster) => (
