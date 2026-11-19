@@ -353,6 +353,19 @@ fn a_build_engine_run_confines_luatex_writes() {
     }
     fs::remove_file(&abs).unwrap();
     let _ = fs::remove_file(root.join("parent.txt"));
+    // The second control: an engine that applies no kpathsea mode to Lua's
+    // `io.open` (LuaHBTeX 1.16 / TeX Live 2023, Ubuntu 24.04's) writes even
+    // under `p`, so nothing an environment variable says can confine it there
+    // and this test has no code of ours to judge. Not `skip_or_fail`: the tool
+    // is present; the engine is too old to carry the guard (gap 36).
+    let mut cmd = crate::paths::command_no_window("lualatex");
+    cmd.args(&args).current_dir(&doc).env("openout_any", "p");
+    let _ = cmd.output();
+    if abs.exists() {
+        eprintln!("this lualatex ignores openout_any=p for io.open (older than TeX Live 2025?): skipped");
+        return;
+    }
+    let _ = fs::remove_file(root.join("parent.txt"));
     // The same run through `run_in_within_env`: its own `openout_any=p`
     // replaces any inherited value (`Command::env`), as it would a user's.
     let run = run_in_within_env(&doc, "lualatex", &args, RUN_TIMEOUT, &[]).expect("engine ran");
