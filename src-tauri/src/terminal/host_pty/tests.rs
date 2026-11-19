@@ -153,7 +153,10 @@ async fn kill_detaches_and_the_session_runs_on() {
 }
 
 async fn eventually_attached(c: &mut Client<tokio::io::DuplexStream>, want: usize) {
-    for _ in 0..500 {
+    // A deadline, not a count: a loaded CI runner (the whole suite in
+    // parallel) took longer than 500 polls of 5 ms.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
         if c.list().await.unwrap().iter().any(|s| s.name == "kept" && s.attached == want) {
             return;
         }

@@ -1194,6 +1194,10 @@
   overflow-y: auto;
 }
 
+.git-branch-status {
+  flex-basis: 100%;
+  font-size: 0.85em;
+}
 .git-action-error {
   width: 100%;
   color: var(--danger);
@@ -1424,6 +1428,9 @@
 }
 
 .git-change-add { color: var(--success); }
+.git-change-preview { padding: var(--space-2); }
+.git-change-preview pre { overflow: auto; }
+.git-action-receipt { flex-basis: 100%; overflow-wrap: anywhere; color: var(--text-secondary); }
 .git-change-del { color: var(--danger); }
 .git-change-zero,
 .git-change-stat--bin { color: var(--text-muted); }

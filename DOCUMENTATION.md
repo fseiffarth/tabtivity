@@ -652,7 +652,11 @@ access lists. Phases 0–2 of `docs/phone_multi_desktop_plan.md` are built (also
 host on an explicit Serve port names its session cookie after the port, so two
 hosts on one machine keep separate sign-ins), and so is a minimal Phase 3: the
 phone's switcher shell with one framed desktop (`mobile-web/src/shell/`,
-`docs/phone_multi_desktop_handoff.md`). None of it has run on a real phone yet.
+`docs/phone_multi_desktop_handoff.md`). A framed page guards its own input
+against clickjacking by the computer framing it (`shell/frameGuard.ts`): taps
+and keys pass only once IntersectionObserver v2 has reported it visible for
+500 ms; a browser without that report (iOS Safari, Firefox) fails closed with a
+card that opens the computer on its own. None of it has run on a real phone yet.
 
 ### Hosted server: signing in with your organisation's account
 
@@ -1090,6 +1094,7 @@ returns true. The panel uses backend commands from `commands/ollama.rs`:
 | `load_ollama_model` | Loads a model into memory (`device`: `gpu` / `cpu`, default auto) with `keep_alive = -1` and waits; emits `ollama-load-progress` (`loading` → `success`/`error`). |
 | `load_installed_ollama_model` | The phone's load: only a name `/api/tags` lists (exact or `:latest`, never a prefix or a cloud model), Ollama picks the device, answers at once with the listed name and loads on a detached thread with the same events; refusals are bare codes (`ollama_not_running`, `model_not_installed`, `model_not_local`). |
 | `stop_ollama_model` | Unloads a model from memory with `keep_alive = 0`. |
+| `ollama_context_plan` | What the context-window setting can do here: `OLLAMA_CONTEXT_LENGTH` in the app's environment (it wins), the automatic window a spawned server gets, and whether a systemd unit runs Ollama (the setting never reaches it). |
 | `restart_ollama_server` | Stops the local Ollama server, whoever started it, and starts it again (`systemctl restart` for the system service). Refuses a server on another machine with `ollama_remote`. |
 | `delete_ollama_model` | Deletes a local model through `/api/delete`. |
 | `prepare_local_agent` | Writes an isolated per-model Vibe config and returns `VIBE_HOME` plus alias. |

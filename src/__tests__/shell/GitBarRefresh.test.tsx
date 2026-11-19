@@ -189,6 +189,42 @@ describe("git bar refresh", () => {
     expect(gitButton().className).toContain("toolbar-btn--flagged");
   });
 
+  it("publishes a new branch with no comparison ref through its chosen remote", async () => {
+    settingsState.settings = { side_panel_view: "git" };
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "git_status") {
+        return Promise.resolve({
+          staged: 0, unstaged: 0, untracked: 0, has_remote: true, is_repo: true,
+          branch_exchange: {
+            state: "branch", branch: "feature/one", head: "test-head", checkout: PROJECT_DIR,
+            upstream: null, ahead: null, behind: null,
+            destinations: [
+              { remote: "fork", branch: "feature/one", action: "publish", ahead: 0, behind: 0 },
+              { remote: "original", branch: "feature/one", action: "publish", ahead: 0, behind: 0 },
+            ],
+          },
+        });
+      }
+      if (cmd === "git_push") return Promise.resolve("published");
+      return base(cmd, args);
+    });
+    render(<SidePanel open />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /Choose push destination/ }));
+    await user.click(await screen.findByRole("option", { name: /Publish branch to fork\/feature\/one/ }));
+    expect(mockInvoke).toHaveBeenCalledWith("git_push", {
+      projectDir: PROJECT_DIR,
+      projectId: "proj-1",
+      branchAction: {
+        kind: "publish", branch: "feature/one", checkout: PROJECT_DIR,
+        head: "test-head", remote: "fork", remote_branch: "feature/one",
+      },
+    });
+    expect(await screen.findByText("Pushed to fork/feature/one.")).toBeTruthy();
+    expect(calls("git_unpushed_commits")).toBe(0);
+  });
+
   it("follows a burst of events in the Git view with one full reading a second", async () => {
     settingsState.settings = { side_panel_view: "git" };
     render(<SidePanel open={true} />);

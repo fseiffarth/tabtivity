@@ -9,6 +9,9 @@ pub mod agent_api_keys;
 // Claude rotates that file by rename.
 pub mod agent_auth;
 pub mod agent_bin;
+// "Continue with another CLI": a tab's conversation, notes and working tree written as
+// one HANDOFF.md in the scope's agent home for the next CLI to read.
+pub mod agent_cli_handoff;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
 pub mod agent_changes;
@@ -42,6 +45,9 @@ pub mod agent_registry;
 // An agent tab's conversation taken along to another worktree (the Reader's
 // branch chip).
 pub mod agent_relocate;
+// Whether a respawn would resume an agent tab's own conversation: the stop
+// sweep's check before it ends an idle tab (docs/agent_tab_stop_plan.md).
+pub mod agent_resume_pinned;
 pub mod agent_session;
 pub mod agent_shim;
 pub mod agent_sqlite;

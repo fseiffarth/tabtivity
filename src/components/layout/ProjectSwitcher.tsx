@@ -129,6 +129,7 @@ export function ProjectSwitcher({
           switchToastAction: {
             text,
             label: t("projectSwitcher.undoRemove"),
+            untested: "projectSwitcher.undoRemove",
             run: () =>
               void useBoxesStore
                 .getState()

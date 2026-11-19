@@ -1647,6 +1647,14 @@
   flex-shrink: 0;
 }
 
+/* Copy Ollama's key under a gated Hugging Face card; the result note wraps. */
+.ollama-key-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
 .ollama-catalog-desc {
   font-size: var(--text-md);
   color: var(--text-secondary);

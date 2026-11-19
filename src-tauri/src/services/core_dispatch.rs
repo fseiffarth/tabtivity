@@ -408,6 +408,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("git_add_all", "worktree", WorktreeOf("projectDir")),
     ("git_branches", "worktree", WorktreeOf("projectDir")),
     ("git_change_stats", "worktree", WorktreeOf("projectDir")),
+    ("git_add_path", "worktree", WorktreeOf("projectDir")),
+    ("git_diff_file", "worktree", WorktreeOf("projectDir")),
     ("git_checkout", "worktree", WorktreeOf("projectDir")),
     ("git_commit", "worktree", WorktreeOf("projectDir")),
     ("git_commit_message", "worktree", WorktreeOf("projectDir")),
@@ -464,6 +466,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("dir_size_breakdown", "relPath", BodyConfined),
     ("extract_archive", "relPath", BodyConfined),
     ("git_add_path", "relPath", BodyConfined),
+    ("git_change_stats", "relPath", BodyConfined),
     ("git_blame", "relPath", BodyConfined),
     ("git_diff_file", "relPath", BodyConfined),
     ("git_file_at_rev", "relPath", BodyConfined),
@@ -567,9 +570,17 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("agent_tab_artifact", "target", NotAPath),
     ("agent_tab_chats", "tabDir", NotAPath),
     ("agent_tab_resume_chat", "tabDir", NotAPath),
+    // The stop sweep's resume check: the same store keys as the Resume menu.
+    ("agent_tab_resume_pinned", "cwd", NotAPath),
     ("claude_folder_trusted", "cwd", NotAPath),
     ("agent_tab_changes", "localModel", NotAPath),
     ("agent_tab_transcript", "localModel", NotAPath),
+    // `tabDir` is more than the reader's key here: the body runs `git status` in it and writes
+    // the names it lists into the agent home, so it is held like any folder. The target CLI's
+    // binary is checked against the registry and never put into a path.
+    ("agent_cli_handoff_prepare", "tabDir", UserPathOpt),
+    ("agent_cli_handoff_prepare", "localModel", NotAPath),
+    ("agent_cli_handoff_prepare", "target", NotAPath),
     ("claude_folder_trusted", "localOnly", NotAPath),
     ("copilot_set_project_policy", "localOnly", NotAPath),
     ("set_remote_mirror_dir", "keepLocalCopy", NotAPath), // a bool: the E8 reverse conversion
@@ -984,6 +995,21 @@ mod tests {
         let mut args = serde_json::json!({ "path": inside_path("w"), "repoDir": "  " });
         confine_for_user(Role::User, "watch_dir", &mut args).unwrap();
         assert!(args["repoDir"].is_null(), "{args}");
+    }
+
+    /// The CLI hand-off runs `git status` in the tab's folder and writes what it
+    /// lists into the agent home: a user cannot point it outside their roots.
+    #[test]
+    fn a_users_cli_handoff_folder_is_held_to_their_roots() {
+        let call = serde_json::json!({ "agent": "claude", "sessionId": "s", "target": "codex", "previewOnly": true });
+        assert_held("agent_cli_handoff_prepare", call.clone(), "tabDir");
+        let mut inside = call.clone();
+        inside["tabDir"] = Value::String(inside_path("proj"));
+        confine_for_user(Role::User, "agent_cli_handoff_prepare", &mut inside).unwrap();
+        let mut empty = call;
+        empty["tabDir"] = Value::String(String::new());
+        confine_for_user(Role::User, "agent_cli_handoff_prepare", &mut empty).unwrap();
+        assert!(empty["tabDir"].is_null(), "{empty}");
     }
 
     #[test]

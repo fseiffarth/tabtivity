@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { joinedSelectionText, rowJoin, type LineLike } from "../../lib/terminal/terminalSelection";
 import { findSignInDone, findSignInRequest, findWrappedUrls, isSignInUrl } from "../../lib/terminal/terminalUrls";
+import { APP_LINK_SCHEME } from "../../lib/navigation/appLinks";
 
 const COLS = 100;
 
@@ -35,6 +36,18 @@ const AGY_ROWS = [
 const at = (rows: LineLike[]) => (y: number) => rows[y];
 
 describe("findWrappedUrls", () => {
+  it("detects bare internal navigation on one row without treating it as sign-in", () => {
+    const url = `${APP_LINK_SCHEME}settings/git/access-token`;
+    const rows = [row(`See ${url}.`)];
+    expect(findWrappedUrls(at(rows), COLS, 0, 0)).toEqual([
+      { url, start: { x: 4, y: 0 }, end: { x: 4 + url.length, y: 0 } },
+    ]);
+    expect(findSignInRequest(at(rows), COLS, 0, 0)).toBeNull();
+  });
+
+  it("does not link malformed internal targets", () => {
+    expect(findWrappedUrls(at([row(`${APP_LINK_SCHEME}settings/git?token=secret`)]), COLS, 0, 0)).toEqual([]);
+  });
   it("follows a sign-in URL across the rows an agent CLI hard-wrapped it onto", () => {
     const urls = findWrappedUrls(at(AGY_ROWS), COLS, 0, AGY_ROWS.length - 1);
     expect(urls).toHaveLength(1);

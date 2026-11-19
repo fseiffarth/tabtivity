@@ -41,8 +41,12 @@ case ${1-} in
     exit 0 ;;
   PreInvocation) turn=working ;;
   # NO_TOOL_CALL, ERROR (a failed model call), MAX_INVOCATIONS, …: the turn
-  # is over. A cancelled turn fires none (the window reads the Esc).
-  Stop) turn=done ;;
+  # is over. A cancelled turn fires none (the window reads the Esc). Not
+  # while a subagent or background task still runs (fullyIdle false, which
+  # 1.5.11 fires again): the Stop after that work ends is the turn's end.
+  Stop)
+    if printf '%s' "$payload" | grep -q '"fullyIdle"[[:space:]]*:[[:space:]]*false'; then exit 0; fi
+    turn=done ;;
   *) exit 0 ;;
 esac
 mkdir -p "$dir" 2>/dev/null || exit 0

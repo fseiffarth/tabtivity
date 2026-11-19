@@ -884,7 +884,10 @@ pub fn cleanup_tab(state: &Path, tab: &str) {
 pub fn on_tab_gone(state: &Path, tab: &str) {
     // Every tab teardown lands here, MCP or not, and some callers are async
     // commands: a tab that held no token and left no view has no lock to wait for.
-    let held = root_mcp::revoke_tab(tab);
+    // Memory only: the tmux session may outlive its PTY, and the reattach
+    // record keeps its row for a later reattach (`root_mcp_reattach`).
+    let held = root_mcp::release_tab(tab);
+    root_mcp::forget_stale(tab);
     if held || sandbox(state, tab).parent().is_some_and(Path::exists) {
         cleanup_tab(state, tab);
     }

@@ -1,12 +1,14 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
-import { dirname } from "../../lib/paths";
+import { basename, dirname } from "../../lib/paths";
 import { formatBytes } from "../../lib/formatBytes";
 import { openErrorText } from "../../lib/openExternal";
 import { useWindowsStore } from "../../stores/windows";
 import { internalViewerFor, type FileEntry, type InternalViewer } from "../../lib/viewers/fileUtils";
 import { FileViewerPane } from "../embed/FileViewerPane";
+import { TexPdfHostContext, type TexPdfHost } from "../embed/fileViewer/texPdfHost";
+import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { registerReaderInside, useSteeringInside } from "../../lib/agents/readerSteering";
@@ -44,6 +46,15 @@ export const READER_FILE_GROUPS = [
  *  the order the view draws and steering walks. */
 export function groupReaderFiles(files: readonly ReaderFile[]): ReaderFile[] {
   return READER_FILE_GROUPS.flatMap(([from]) => files.filter((file) => file.from === from));
+}
+
+/** The list's entry for `path`, or one made from the path alone (a PDF a
+ *  build just wrote, a source the conversation never named). */
+function entryFor(files: readonly ReaderFile[], path: string): FileEntry {
+  const known = files.find((file) => file.entry.path === path)?.entry;
+  if (known) return known;
+  const name = basename(path);
+  return { name, path, is_dir: false, size: 0, extension: /\.[^./\\]+$/u.exec(name)?.[0].toLowerCase() ?? null, mime: null };
 }
 
 const NO_LINKS: readonly ChatLink[] = [];
@@ -117,6 +128,27 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
   const viewerRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef({ files, rows, cursor, disabled, onPick, onOpenTab, onOpenLink });
   liveRef.current = { files, rows, cursor, disabled, onPick, onOpenTab, onOpenLink };
+  // TeX ⇄ PDF in this one pane (`texPdfHost`): a build, a forward search or
+  // Open PDF shows the PDF here, a reverse click or an error row the source at
+  // its line. A file no viewer here shows answers false, so it opens as a tab.
+  const texPdfHost = useMemo<TexPdfHost>(() => {
+    const show = (path: string) => {
+      const now = liveRef.current;
+      const entry = entryFor(now.files, path);
+      if (!internalViewerFor(entry, now.disabled)) return false;
+      now.onPick(entry);
+      return true;
+    };
+    return {
+      showPdf: show,
+      showSource(input, line, column) {
+        if (!show(input)) return false;
+        // Waits in the store for the editor this pick mounts (or the one shown).
+        useEditorJumpStore.getState().applyJump(input, line, column);
+        return true;
+      },
+    };
+  }, []);
 
   useEffect(() => {
     if (!steerId || !visible) return;
@@ -173,6 +205,7 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
       <header className="terminal-changes-head">
         <strong>{t("terminal.readerFiles.title")}</strong>
         <UntestedTag id="terminal.reader.files" />
+        {(viewer === "tex" || viewer === "pdf") &&<UntestedTag id="terminal.reader.texPdf" />}
         {picked && <small className="terminal-changes-path" title={picked.path}>{picked.name}</small>}
         {picked && viewer && (
           <button type="button" className="terminal-changes-close terminal-files-open"
@@ -249,8 +282,10 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
           {!picked ? (
             <div className="terminal-reader-empty">{t(files.length ? "terminal.readerFiles.pick" : linkRows.length ? "terminal.readerFiles.onlyLinks" : "terminal.readerFiles.empty")}</div>
           ) : viewer ? (
-            <FileViewerPane key={picked.path} viewer={viewer} path={picked.path} projectId={projectId} visible={visible}
-              tabKey={tabKey ? `${tabKey}#${picked.path}` : undefined} />
+            <TexPdfHostContext.Provider value={texPdfHost}>
+              <FileViewerPane key={picked.path} viewer={viewer} path={picked.path} projectId={projectId} visible={visible}
+                tabKey={tabKey ? `${tabKey}#${picked.path}` : undefined} />
+            </TexPdfHostContext.Provider>
           ) : (
             <ViewlessFile key={picked.path} entry={picked} projectId={projectId} />
           )}

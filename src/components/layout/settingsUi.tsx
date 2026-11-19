@@ -1,4 +1,6 @@
 import { Dropdown } from "../common/Dropdown";
+import { invoke } from "@tauri-apps/api/core";
+import { UntestedTag } from "../common/UntestedTag";
 import { useId, useState, type ChangeEventHandler, type ReactNode } from "react";
 import { Toggle } from "../common/Toggle";
 import { useT } from "../../lib/i18n";
@@ -275,6 +277,7 @@ export interface SettingsNavGroup {
  *  stay apart. */
 export interface SettingsSearchResult extends SettingsNavEntry {
   trail: string;
+  url?: string;
 }
 
 /** Persistent category navigation: a search box, then the groups, each entry
@@ -293,11 +296,13 @@ export function SettingsNavigation({ value, groups, results, onChange, query, on
   onQuery: (query: string) => void;
 }) {
   const t = useT();
+  const [copyState, setCopyState] = useState<"copied" | "failed" | null>(null);
   const flat = results ?? groups.flatMap((group) => group.entries);
   const options = results
     ? results.map((r) => ({ value: r.value, label: `${r.label} · ${r.trail}` }))
     : flat;
   return <nav className="settings-navigation" aria-label={t("settings.categories")}>
+    {copyState && <span role="status">{t(copyState === "copied" ? "appLink.copied" : "appLink.copyFailed")}</span>}
     <input
       type="text"
       className="settings-navigation-search"
@@ -323,11 +328,14 @@ export function SettingsNavigation({ value, groups, results, onChange, query, on
     <div className="settings-navigation-links">
       {results ? (
         results.length > 0 && <div className="settings-navigation-group" role="group" aria-label={t("settings.searchResults")}>
-          {results.map((result) => <button key={result.value} type="button" className="settings-btn"
+          {results.map((result) => <div key={result.value}><button type="button" className="settings-btn"
             onClick={() => onChange(result.value)}>
             {result.label}
             <span className="settings-navigation-hit">{result.trail}</span>
-          </button>)}
+          </button>{result.url && <button type="button" className="settings-btn sm"
+            onClick={() => { void invoke("copy_text_to_clipboard", { text: result.url }).then(() => setCopyState("copied"), () => setCopyState("failed")); }}>
+            {t("appLink.copy")} <UntestedTag id="navigation.internalLinks" />
+          </button>}</div>)}
         </div>
       ) : groups.map((group) => <div key={group.label} className="settings-navigation-group" role="group" aria-label={group.label}>
         <div className="settings-navigation-group-title">{group.label}</div>

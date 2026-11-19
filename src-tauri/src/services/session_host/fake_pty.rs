@@ -257,6 +257,7 @@ pub fn spawn_req(name: &str, remain_on_exit: bool) -> Request {
         remain_on_exit,
         size_policy: SizePolicy::Latest,
         create_only: false,
+        mcp_mark: None,
     }
 }
 

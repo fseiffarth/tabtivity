@@ -62,8 +62,12 @@ also type such a name into the pull field, for example
   quantization split into several files (`-00001-of-00003`) is not offered:
   Hugging Face does not serve it to Ollama.
 - A **gated** repo needs its terms accepted on Hugging Face and Ollama's public
-  key added to your account (Settings → SSH keys): `~/.ollama/id_ed25519.pub`,
-  or `/usr/share/ollama/.ollama/id_ed25519.pub` for the system service.
+  key added to your account (Settings → SSH keys). **Copy Ollama's key** on the
+  gated card puts it on the clipboard: `~/.ollama/id_ed25519.pub`, or
+  `/usr/share/ollama/.ollama/id_ed25519.pub` for the system service. No Hugging
+  Face token or login is entered in the app: Ollama signs the pull with that key.
+  Pull a gated repo as `huggingface.co/<user>/<repo>:<quant>` (the browse list
+  does this for you); `hf.co/…` is refused even with access granted.
 - Once downloaded, a Hugging Face model works like any other: load it, open a
   Local Model tab with it, check it for updates.
 
@@ -148,6 +152,13 @@ calling; the Models & agents menu tags models without it "no tools".
   `qwen2.5-coder`).
 - **"Running on CPU — load onto GPU"**: click it; if the model still lands on
   the CPU, it may not fit into VRAM — choose a smaller size.
+- **The agent forgets what you said, or writes tool calls as text**
+  (`<google_search>…`): the model's context window is too small, and Ollama
+  cuts the prompt without an error. Open **Manage models**: **Context window**
+  shows what each loaded model has. Pick a size (at least 16,384 tokens) and
+  press **Restart Ollama**, then open a new agent tab. It applies to the
+  server Tabtivity starts; `OLLAMA_CONTEXT_LENGTH` set in your environment, or
+  on a system service, wins.
 - **Integrated GPU ignored**: some Ollama versions need `OLLAMA_IGPU_ENABLE=1`
   in the server's environment; the Models & agents menu offers the fix.
 - **Server won't start**: run `ollama serve` in a terminal to see its error.

@@ -1813,7 +1813,8 @@ fn windows_script_command(script_path: &str, args: Option<&str>) -> Command {
 /// as `$0`, never inside the `-c` string, so a path with quotes cannot break it.
 #[cfg(not(target_os = "windows"))]
 fn unix_script_command(script_path: &str, args: Option<&str>) -> Command {
-    let mut cmd = Command::new("bash");
+    // Resolved here, not left to the child: the caller sets its `PATH`.
+    let mut cmd = crate::paths::command_no_window("bash");
     match args.map(str::trim).filter(|a| !a.is_empty()) {
         Some(extra) => {
             cmd.arg("-c")
@@ -4243,7 +4244,9 @@ mod tests {
     #[test]
     fn unix_script_command_runs_bare_without_args() {
         let cmd = unix_script_command("/p/run.sh", Some("   "));
-        assert_eq!(cmd.get_program().to_string_lossy(), "bash");
+        // Resolved, not the bare name (`augment_command_path` sets the PATH).
+        assert!(std::path::Path::new(cmd.get_program()).is_absolute(), "{:?}", cmd.get_program());
+        assert_eq!(std::path::Path::new(cmd.get_program()).file_stem(), Some(std::ffi::OsStr::new("bash")));
         let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(args, vec!["/p/run.sh"]);
     }

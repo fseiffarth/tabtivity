@@ -66,6 +66,7 @@ import { connectionStillOpen, openConnectionInRoot } from "../lib/remote/remoteC
 import { loginDedupeKey, sshLogin, vpnLogin } from "../lib/remote/loginTarget";
 import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../lib/projects/scaffold";
 import type { SavedPasswordState } from "../lib/projects/useSavedCredential";
+import type { UntestedId } from "../lib/untested";
 import { localSessionsAvailableNow, mayOwnWindowsLocalSession } from "../lib/terminal/localSessions";
 import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
@@ -1096,8 +1097,9 @@ interface ProjectsStore {
   switchToast: string | null;
   /** One action offered on the toast that says `text` ("Undo" after a ✕ took a
    *  project out of a box). Bound to the toast's own text, so a later toast
-   *  set by anyone else never inherits the button. */
-  switchToastAction: { text: string; label: string; run: () => void } | null;
+   *  set by anyone else never inherits the button. `untested` names the
+   *  button's `UntestedTag`, if it has one. */
+  switchToastAction: { text: string; label: string; run: () => void; untested?: UntestedId } | null;
   /** A transient one-off action notice (e.g. "VPN connected · proj", a scaffold
    *  repair summary). Kept separate from `switchToast` so a project switch
    *  doesn't clobber it (and vice-versa). */
@@ -1389,12 +1391,25 @@ const backgroundRestored = new Set<string>();
  * its pool comes up, exactly as it does on a switch today.
  */
 export async function restoreActiveProjectScopes(): Promise<void> {
-  for (const project of useProjectsStore.getState().projects) {
-    if (project.status !== "active") continue;
-    if (backgroundRestored.has(project.id)) continue;
-    backgroundRestored.add(project.id);
-    await restoreProjectScope(project).catch(() => {});
+  try {
+    for (const project of useProjectsStore.getState().projects) {
+      if (project.status !== "active") continue;
+      if (backgroundRestored.has(project.id)) continue;
+      backgroundRestored.add(project.id);
+      await restoreProjectScope(project).catch(() => {});
+    }
+  } finally {
+    activeScopesRestored = true;
   }
+}
+
+let activeScopesRestored = false;
+
+/** Whether the launch's pass over the active projects
+ *  ({@link restoreActiveProjectScopes}) has finished: the stop sweep's restore
+ *  wake ranks every restored agent tab at once, so it waits for this. */
+export function activeProjectScopesRestored(): boolean {
+  return activeScopesRestored;
 }
 
 /** §9.5: the ONE "patch one project entry in local state" helper behind every

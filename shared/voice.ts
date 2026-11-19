@@ -135,6 +135,8 @@ export function spokenText(markdown: string, codeLabel: string): string {
   return markdown
     .replace(/\r\n?/g, "\n")
     .replace(/^[ \t]*(```|~~~)[^\n]*\n[\s\S]*?(?:^[ \t]*\1[^\n]*$|(?![\s\S]))/gm, `\n${codeLabel}.\n`)
+    // The wrapper Codex puts around a Plan-mode plan.
+    .replace(/^[ \t]*<\/?proposed_plan>[ \t]*$/gim, "")
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/<?https?:\/\/\S+>?/g, " ")

@@ -1,6 +1,6 @@
 import { HOW_TO_START_STEPS, focusModeTip } from "../../lib/shortcuts/hints";
 import { useModalFocus } from "../../hooks/useModalFocus";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -14,6 +14,15 @@ import { RootMcpSecurity } from "./RootMcpSecurity";
 import { CopilotCompletionCard } from "./CopilotCompletionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { SLEEP_TABS_CHOICES_MIN, SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
+import {
+  STOP_AGENT_TABS_CAP_CHOICES,
+  STOP_AGENT_TABS_CAP_DEFAULT,
+  STOP_AGENT_TABS_IDLE_CHOICES_MIN,
+  STOP_AGENT_TABS_IDLE_DEFAULT_MIN,
+  STOP_AGENT_TABS_MIN_FREE_CHOICES_MB,
+  STOP_AGENT_TABS_MIN_FREE_DEFAULT_MB,
+  stopSettingMenu,
+} from "../../lib/agents/agentTabStop";
 import { AGENT_SCROLLBACK_ROWS, SHELL_SCROLLBACK_CHOICES, shellScrollbackRows } from "../../lib/terminal/scrollback";
 import { experimentalEnabled } from "../../lib/experimental";
 import { isDetachedWindow } from "../../stores/detachedContext";
@@ -26,7 +35,6 @@ import { ThemeCustomizerDialog } from "./ThemeCustomizer";
 import type {
   ArchivedProject,
   CalendarViewKind,
-  GitProvider,
   KeyboardChord,
   ProjectEntry,
   Theme,
@@ -79,6 +87,7 @@ import { VoiceSettings } from "./VoiceSettings";
 import { CheckpointsSettings } from "./CheckpointsSettings";
 import { voiceInputOffered } from "../../lib/voice/desktopVoice";
 import { PasswordInput } from "../common/PasswordInput";
+import { MAX_GIT_HOSTS, hostProvider, saveGitHosts, useGitHosts, type GitHostEdit, type GitHostEntry } from "../../lib/gitHosts";
 import { useT, LANGUAGES, type Language, type TranslationKey } from "../../lib/i18n";
 import { revealSetting, searchTerms } from "./settingsSearch";
 import {
@@ -666,80 +675,176 @@ function ShortcutsSettings({ onBack, onClose }: SubPanelProps) {
 }
 
 /**
- * Git hosting profile + access token, broken out of the main settings panel
- * into its own sub-menu. Manages its own draft state (mirroring the saved
- * settings) and persists on blur / Enter, same as it did inline.
+ * Git hosting: one profile URL and one default access token per hosting
+ * service (`lib/gitHosts`), first = default. Each token is offered only to its
+ * own host; a project can still override it from its pill menu (Git
+ * hosting…). Tokens go straight to the keyring and never come back here: a row
+ * only knows whether one is stored. Saves on blur / Enter, like every field
+ * here.
  */
+type GitHostRow = { key: number; profileUrl: string; token: string; hasToken: boolean; clearToken: boolean };
+
+let gitHostRowKey = 0;
+const blankGitHostRow = (): GitHostRow => ({ key: ++gitHostRowKey, profileUrl: "", token: "", hasToken: false, clearToken: false });
+
+/** The backend's list as rows, keeping each matching row's key and token
+ *  draft (a save can land while the next field is being typed in) and any
+ *  blank row still being filled in. */
+function mergeGitHostRows(prev: GitHostRow[] | null, hosts: GitHostEntry[]): GitHostRow[] {
+  const pool = [...(prev ?? [])];
+  const rows = hosts.map((h) => {
+    const at = pool.findIndex((r) => r.profileUrl.trim() === h.profile_url);
+    const old = at >= 0 ? pool.splice(at, 1)[0] : undefined;
+    return {
+      key: old?.key ?? ++gitHostRowKey,
+      profileUrl: old?.profileUrl ?? h.profile_url,
+      token: old?.token ?? "",
+      hasToken: h.has_token,
+      clearToken: false,
+    };
+  });
+  const merged = [...rows, ...pool.filter((r) => !r.profileUrl.trim())];
+  return merged.length > 0 ? merged : [blankGitHostRow()];
+}
+
 function GitHostingSettings({ onBack, onClose }: SubPanelProps) {
   const t = useT();
-  const { settings, updateSettings } = useSettingsStore();
-  const [gitProfileUrl, setGitProfileUrl] = useState(settings?.git_profile_url ?? "");
-  const [gitToken, setGitToken] = useState(settings?.git_token ?? "");
+  const hosts = useGitHosts();
+  const [rows, setRows] = useState<GitHostRow[] | null>(null);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
+  // Seed (and re-seed after any save, here or in another window) from the
+  // backend's list.
   useEffect(() => {
-    setGitProfileUrl(settings?.git_profile_url ?? "");
-    setGitToken(settings?.git_token ?? "");
-  }, [settings?.git_profile_url, settings?.git_token]);
+    if (hosts === null) return;
+    setRows((prev) => mergeGitHostRows(prev, hosts));
+  }, [hosts]);
 
-  const saveGitProfileUrl = () => {
-    void updateSettings({ git_profile_url: gitProfileUrl.trim() });
+  const patchRow = (key: number, patch: Partial<GitHostRow>) =>
+    setRows((prev) => (prev ?? []).map((r) => (r.key === key ? { ...r, ...patch } : r)));
+
+  const save = async (next: GitHostRow[]) => {
+    const edits: GitHostEdit[] = next
+      .filter((r) => r.profileUrl.trim())
+      .map((r) => ({
+        profileUrl: r.profileUrl.trim(),
+        token: r.token.trim() || undefined,
+        clearToken: r.clearToken && !r.token.trim(),
+      }));
+    // The token drafts this save sends, cleared once it lands (a draft typed
+    // meanwhile differs and stays).
+    const sent = new Map(next.filter((r) => r.token.trim()).map((r) => [r.key, r.token]));
+    setSaving(true);
+    setError("");
+    try {
+      await saveGitHosts(edits);
+      setRows((prev) => (prev ?? []).map((r) => (sent.get(r.key) === r.token ? { ...r, token: "" } : r)));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const saveGitToken = () => {
-    void updateSettings({ git_token: gitToken.trim() });
+  // Save only when something would change: a blur on an untouched row is free.
+  const commit = () => {
+    if (!rows || hosts === null) return;
+    const listed = rows.filter((r) => r.profileUrl.trim());
+    const changed =
+      listed.length !== hosts.length ||
+      listed.some((r, i) => r.profileUrl.trim() !== hosts[i]?.profile_url || r.token.trim() || r.clearToken);
+    if (changed) void save(rows);
   };
 
-  // Which provider the token hint and permission guide describe. Derived live
-  // from the profile URL being typed (the only provider signal a global,
-  // project-less setting has), defaulting to GitHub as everywhere else.
-  const provider: GitProvider = gitProfileUrl.toLowerCase().includes("gitlab")
-    ? "gitlab"
-    : "github";
+  const removeRow = (key: number) => {
+    const next = (rows ?? []).filter((r) => r.key !== key);
+    setRows(next);
+    void save(next);
+  };
+
+  const removeToken = (key: number) => {
+    const next = (rows ?? []).map((r) => (r.key === key ? { ...r, token: "", clearToken: true } : r));
+    setRows(next);
+    void save(next);
+  };
+
+  const addRow = () => setRows((prev) => [...(prev ?? []), blankGitHostRow()]);
+
+  const onEnter = (e: ReactKeyboardEvent) => {
+    if (e.key === "Enter") commit();
+  };
 
   return (
     <>
       <SettingsHeader title={t("nav.git.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
-      <p className="settings-help">{t("git.help")}</p>
-      <SettingsCard>
-      <label className="settings-field">
-        {t("git.profileUrl")}
-        <input
-          value={gitProfileUrl}
-          placeholder={t("git.profileUrlPlaceholder")}
-          onChange={(e) => setGitProfileUrl(e.target.value)}
-          onBlur={saveGitProfileUrl}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") saveGitProfileUrl();
-          }}
-        />
-      </label>
-      <label className="settings-field">
-        {t("git.accessToken")}
-        <PasswordInput
-          value={gitToken}
-          placeholder={t("git.tokenPlaceholder")}
-          onChange={(e) => setGitToken(e.target.value)}
-          onBlur={saveGitToken}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") saveGitToken();
-          }}
-        />
-      </label>
-      <span className="ssh-optional-hint">
-        {t("pill.getTokenHint")}{" "}
-        <button
-          type="button"
-          className="inline-link-btn"
-          onClick={() =>
-            void invoke("open_external_url", { url: tokenPageUrl(provider, gitProfileUrl) })
-          }
-        >
-          {t("pill.getTokenCta", { provider: providerName(provider) })}
+      <p className="settings-help">
+        {t("git.help")} <UntestedTag id="git.help" />
+      </p>
+      {error && <ErrorNote className="project-dialog-error" error={error} />}
+      {rows === null ? (
+        <p className="settings-help">{t("common.loading")}</p>
+      ) : (
+        rows.map((row, i) => {
+          const provider = hostProvider(row.profileUrl);
+          return (
+            <SettingsCard key={row.key}>
+              <label className="settings-field">
+                {i === 0 ? t("git.profileUrlDefault") : t("git.profileUrl")}
+                <input
+                  value={row.profileUrl}
+                  placeholder={t("git.profileUrlPlaceholder")}
+                  onChange={(e) => patchRow(row.key, { profileUrl: e.target.value })}
+                  onBlur={commit}
+                  onKeyDown={onEnter}
+                />
+              </label>
+              <label className="settings-field">
+                {t("git.accessToken")}
+                <PasswordInput
+                  value={row.token}
+                  placeholder={row.hasToken ? t("git.tokenStored") : t("git.tokenPlaceholder")}
+                  onChange={(e) => patchRow(row.key, { token: e.target.value, clearToken: false })}
+                  onBlur={commit}
+                  onKeyDown={onEnter}
+                />
+              </label>
+              <span className="ssh-optional-hint">
+                {t("pill.getTokenHint")}{" "}
+                <button
+                  type="button"
+                  className="inline-link-btn"
+                  onClick={() =>
+                    void invoke("open_external_url", { url: tokenPageUrl(provider, row.profileUrl) })
+                  }
+                >
+                  {t("pill.getTokenCta", { provider: providerName(provider) })}
+                </button>
+              </span>
+              <div className="settings-card-row">
+                {row.hasToken && (
+                  <button type="button" className="settings-btn sm" disabled={saving} onClick={() => removeToken(row.key)}>
+                    {t("git.removeToken")}
+                  </button>
+                )}
+                {(rows.length > 1 || row.profileUrl.trim()) && (
+                  <button type="button" className="settings-btn sm" disabled={saving} onClick={() => removeRow(row.key)}>
+                    {t("git.removeHost")}
+                  </button>
+                )}
+              </div>
+            </SettingsCard>
+          );
+        })
+      )}
+      {rows !== null && rows.length < MAX_GIT_HOSTS && (
+        <button type="button" className="settings-btn sm" disabled={saving} onClick={addRow}>
+          {t("git.addHost")}
         </button>
-      </span>
-      </SettingsCard>
-      <GitTokenScopes provider={provider} />
+      )}
+      <p className="settings-help">{t("git.projectOverrideHint")}</p>
+      <GitTokenScopes provider={hostProvider(rows?.[0]?.profileUrl ?? "")} />
       </div>
     </>
   );
@@ -1146,6 +1251,14 @@ export function SettingsDialog({
   initialReveal?: { path: string[]; open?: boolean };
 }) {
   const { settings, setTheme, setLanguage, updateSettings } = useSettingsStore();
+  // The stop-agent-tab rows show the value the sweep applies, an off-list one included.
+  const stopCapMenu = stopSettingMenu(settings?.stop_agent_tabs_cap, STOP_AGENT_TABS_CAP_DEFAULT, STOP_AGENT_TABS_CAP_CHOICES);
+  const stopIdleMenu = stopSettingMenu(settings?.stop_agent_tabs_idle_min, STOP_AGENT_TABS_IDLE_DEFAULT_MIN, STOP_AGENT_TABS_IDLE_CHOICES_MIN);
+  const stopMemoryMenu = stopSettingMenu(
+    settings?.stop_agent_tabs_min_free_mb,
+    STOP_AGENT_TABS_MIN_FREE_DEFAULT_MB,
+    STOP_AGENT_TABS_MIN_FREE_CHOICES_MB,
+  );
   const [panel, changePanel] = useState<SettingsPanelKind>(initialPanel);
   const [section, changeSection] = useState<MainSection>(sectionOfAnchor(initialAnchor));
   const [query, setQuery] = useState("");
@@ -1221,10 +1334,15 @@ export function SettingsDialog({
     initialReveal ? { ...initialReveal, n: 0 } : null,
   );
   useEffect(() => {
+    changePanel(initialPanel);
+    if (initialAnchor) changeSection(sectionOfAnchor(initialAnchor));
+    setReveal((previous) => initialReveal ? { ...initialReveal, n: (previous?.n ?? 0) + 1 } : null);
+  }, [initialPanel, initialAnchor, initialReveal]);
+  useEffect(() => {
     const root = modalRef.current?.querySelector<HTMLElement>(".settings-panel-content");
     if (!reveal || !root) return;
     return revealSetting(root, reveal.path, reveal.open);
-  }, [reveal, modalRef]);
+  }, [reveal, panel, section, modalRef]);
 
   // Voice exists only where the microphone is this machine's (not a browser
   // client). The assistant's page is always there: it holds its own switch.
@@ -2027,6 +2145,73 @@ export function SettingsDialog({
                     ...SLEEP_TABS_CHOICES_MIN.map((n) => ({
                       value: String(n),
                       label: t("settings.sleepTabsMinutes", { n }),
+                    })),
+                  ]}
+                />
+              }
+            />
+
+            {/* Stopping idle agent tabs (docs/agent_tab_stop_plan.md): read by
+                `AgentTabStopHost` through `lib/agents/agentTabStop`'s readers;
+                unset means the default, 0 switches a trigger off. */}
+            <SettingRow
+              label={
+                <>
+                  {t("settings.stopAgentTabsCap")} <UntestedTag id="settings.stopAgentTabs" />
+                </>
+              }
+              help={t("settings.stopAgentTabsCapHelp")}
+              control={
+                <Dropdown
+                  value={String(stopCapMenu.value)}
+                  onChange={(v) => void updateSettings({ stop_agent_tabs_cap: Number(v) })}
+                  options={[
+                    { value: "0", label: t("settings.stopAgentTabsOff") },
+                    ...stopCapMenu.choices.map((n) => ({
+                      value: String(n),
+                      label: t("settings.stopAgentTabsCapCount", { n }),
+                    })),
+                  ]}
+                />
+              }
+            />
+            <SettingRow
+              label={
+                <>
+                  {t("settings.stopAgentTabsIdle")} <UntestedTag id="settings.stopAgentTabs" />
+                </>
+              }
+              help={t("settings.stopAgentTabsIdleHelp")}
+              control={
+                <Dropdown
+                  value={String(stopIdleMenu.value)}
+                  onChange={(v) => void updateSettings({ stop_agent_tabs_idle_min: Number(v) })}
+                  options={[
+                    { value: "0", label: t("settings.stopAgentTabsOff") },
+                    ...stopIdleMenu.choices.map((n) => ({
+                      value: String(n),
+                      label: n < 60 ? t("settings.sleepTabsMinutes", { n }) : t("settings.stopAgentTabsHours", { n: Math.round((n / 60) * 10) / 10 }),
+                    })),
+                  ]}
+                />
+              }
+            />
+            <SettingRow
+              label={
+                <>
+                  {t("settings.stopAgentTabsMemory")} <UntestedTag id="settings.stopAgentTabs" />
+                </>
+              }
+              help={t("settings.stopAgentTabsMemoryHelp")}
+              control={
+                <Dropdown
+                  value={String(stopMemoryMenu.value)}
+                  onChange={(v) => void updateSettings({ stop_agent_tabs_min_free_mb: Number(v) })}
+                  options={[
+                    { value: "0", label: t("settings.stopAgentTabsOff") },
+                    ...stopMemoryMenu.choices.map((n) => ({
+                      value: String(n),
+                      label: t("settings.stopAgentTabsGiB", { n: Math.round((n / 1024) * 10) / 10 }),
                     })),
                   ]}
                 />

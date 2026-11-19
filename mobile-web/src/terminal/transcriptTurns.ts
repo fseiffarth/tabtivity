@@ -103,13 +103,17 @@ export function transcriptTurns(entries: readonly TranscriptEntry[]): readonly T
 
 function buildTurns(entries: readonly TranscriptEntry[]): TranscriptTurn[] {
   const seen = new Map<string, number>();
-  return entries.map((entry, index) => {
+  return entries.flatMap((entry, index): TranscriptTurn[] => {
+    // The question the agent is blocked on is the live card's (`askedQuestion`):
+    // a bubble of it beside the card would show it twice. Once answered the
+    // record loses the mark and is the ordinary card.
+    if (entry.blocking === true) return [];
     // A record without a time falls back to its position; two records that
     // share one stay apart by a count.
     const base = entry.at ? `${entry.kind}:${entry.at}` : `${entry.kind}#${index}`;
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
-    return {
+    return [{
       key: count === 0 ? base : `${base}~${count}`,
       kind: entry.kind,
       text: entry.text,
@@ -121,6 +125,6 @@ function buildTurns(entries: readonly TranscriptEntry[]): TranscriptTurn[] {
       ...(entry.kind === "answer" && entry.plan === true ? { plan: true } : {}),
       ...(entry.kind === "answer" && entry.questions?.length ? { questions: entry.questions, ...(entry.asking ? { asking: true } : {}) } : {}),
       ...(entry.pending !== undefined ? { pending: entry.pending, failed: entry.failed === true, retrying: entry.retrying === true, ...(entry.held ? { held: true } : {}), ...(entry.queued ? { queued: true } : {}) } : {}),
-    };
+    }];
   });
 }

@@ -57,6 +57,10 @@ function stubBackend(overrides: Record<string, unknown> = {}) {
         return Promise.resolve(CREATED);
       case "publish_project":
         return Promise.resolve("https://github.com/someone/pytest-ci-cd");
+      // A saved github.com host token is what the dialog treats as "GitHub is
+      // connected"; without it submit is blocked on the connect notice.
+      case "get_git_hosts":
+        return Promise.resolve([{ profile_url: "https://github.com/someone", origin: "https://github.com", has_token: true }]);
       default:
         return Promise.resolve(null);
     }
@@ -88,11 +92,7 @@ async function fillAndSubmit() {
 describe("new project with git hosting", () => {
   beforeEach(() => {
     invoke.mockReset();
-    // A saved global token is what the dialog treats as "GitHub/GitLab is
-    // connected"; without it submit is blocked on the connect notice.
-    useSettingsStore.setState({
-      settings: { git_token: "ghp_test", git_profile_url: "" },
-    } as never);
+    useSettingsStore.setState({ settings: {} } as never);
     useProjectsStore.setState({ projects: [], activeId: null, loaded: true });
   });
 

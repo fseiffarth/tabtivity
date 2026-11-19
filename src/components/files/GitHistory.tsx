@@ -12,7 +12,7 @@ import { useDialogs } from "../common/PromptDialogs";
 import { useTabsStore } from "../../stores/tabs";
 import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
+import { GitMergeBar, GitPullPanel, type FetchReceipt, type MergeState } from "./GitPullPanel";
 import { BranchIcon, CloseIcon, LockIcon, RefreshIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
@@ -146,6 +146,7 @@ interface Props {
   pullRequest?: number;
   onWorktreeChanged?: (selection: GitWorktreeSelection | null) => void;
   actionsBusy?: boolean;
+  selectionBusy?: boolean;
   connected?: boolean;
 }
 
@@ -403,7 +404,7 @@ export function GitHistory(props: Props) {
   return <GitHistoryView key={props.projectDir} {...props} />;
 }
 
-function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, authProjectId, onChanged, pullRequest, onWorktreeChanged, actionsBusy = false, connected = true }: Props) {
+function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, authProjectId, onChanged, pullRequest, onWorktreeChanged, actionsBusy = false, selectionBusy = actionsBusy, connected = true }: Props) {
   const t = useT();
   // Every destructive git question below is asked in the panel's own dialog —
   // the native `confirm()` these used arrives themeless, titled with the page
@@ -411,6 +412,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
   // to one unreadable line.
   const { promptText, confirmAction, dialogs } = useDialogs();
   const [commits, setCommits] = useState<GitCommit[]>([]);
+  const [historyRevision, setHistoryRevision] = useState(0);
   /** A full page came back, so there is probably at least one more to fetch. */
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -447,6 +449,15 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
   const [pullTarget, setPullTarget] = useState<{ branch: string | null } | null>(null);
   const [mergeState, setMergeState] = useState<MergeState | null>(null);
   const [fetching, setFetching] = useState(false);
+  const fetchReceipts = useRef(new Map<string, Map<string, FetchReceipt>>());
+  const fetchKey = JSON.stringify([projectDir, worktreeSelection?.site, worktreeSelection?.path]);
+  const lastFetches = useCallback(() => fetchReceipts.current.get(fetchKey)?.values() ?? [], [fetchKey]);
+  const onFetched = useCallback((receipt: FetchReceipt) => {
+    if (!receipt?.checkout) return;
+    const saved = fetchReceipts.current.get(fetchKey) ?? new Map<string, FetchReceipt>();
+    saved.set(JSON.stringify([receipt.checkout, receipt.upstream_ref, receipt.remote]), receipt);
+    fetchReceipts.current.set(fetchKey, saved);
+  }, [fetchKey]);
   /**
    * Which side's worktrees these are (#23 I2). For a remote project `projectDir`
    * is the **local mirror** while the repo of record is on the host, so resolving
@@ -507,7 +518,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
   }, [projectDir, remote, setSelectedWorktree, worktreeSelection]);
 
   const selectWorktree = (wt: Worktree) => {
-    if (!selectionSupported || loading || fetching || actionsBusy || !connected || wt.is_prunable || wt.is_bare) return;
+    if (!selectionSupported || loading || fetching || selectionBusy || !connected || wt.is_prunable || wt.is_bare) return;
     setWorktreeSelection(wtSite === "host" && wt.is_current ? null : { path: wt.path, site: wtSite });
   };
 
@@ -539,6 +550,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
     if (log.status === "fulfilled") {
       const list = log.value ?? [];
       setCommits(list);
+      setHistoryRevision((n) => n + 1);
       setHasMore(list.length >= want);
       setAutoPage(true);
     }
@@ -614,7 +626,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
       live = false;
       clearTimeout(timer);
     };
-  }, [query, projectDir, commits, gitArgs, connected]);
+  }, [query, projectDir, historyRevision, gitArgs, connected]);
 
   const loadMore = useCallback(async () => {
     if (!projectDir || !connected || loadingMoreRef.current) return;
@@ -933,7 +945,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
     setFetching(true);
     setError(null);
     try {
-      await invokeTrusted("git_fetch", { projectDir, ...gitArgs, projectId: authProjectId ?? null });
+      onFetched(await invokeTrusted<FetchReceipt>("git_fetch", { projectDir, ...gitArgs, projectId: authProjectId ?? null }));
       await load();
       onChanged?.();
     } catch (e) {
@@ -1186,16 +1198,23 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
       </div>
 
       {mergeState?.merging && (
-        <GitMergeBar projectDir={projectDir} worktree={worktreeSelection} state={mergeState} canOpenFiles={!remote || (wtSite === "mirror" && !!worktreeSelection?.path)} onChanged={afterPull} />
+        <GitMergeBar
+          projectDir={projectDir}
+          worktree={worktreeSelection ?? (mergeState.mirror ? { site: "mirror", path: mergeState.path ?? "" } : null)}
+          state={mergeState}
+          canOpenFiles={!remote || !!mergeState.mirror || (wtSite === "mirror" && !!worktreeSelection?.path)}
+          onChanged={afterPull}
+        />
       )}
-      {pullTarget && !mergeState?.merging && (
+      {connected && pullTarget && !mergeState?.merging && (
         <GitPullPanel
           key={`${projectDir}:${worktreeSelection?.path ?? ""}:${wtSite}:${pullTarget.branch ?? ""}`}
           projectDir={projectDir}
           worktree={worktreeSelection}
           projectId={authProjectId ?? null}
           branch={pullTarget.branch}
-          canOpenFiles={!remote || (wtSite === "mirror" && !!worktreeSelection?.path)}
+          lastFetches={lastFetches}
+          onFetched={onFetched}
           onClose={() => setPullTarget(null)}
           onDone={afterPull}
         />
@@ -1370,7 +1389,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
               key={b.name}
               className={`git-branch-pill${b.is_current ? " current" : ""}${occupied ? " occupied" : ""}`}
               onClick={() => occupied ? selectWorktree(occupied) : !b.is_current && checkout(b.name)}
-              disabled={loading || fetching || actionsBusy || !connected || b.is_current || !!occupied?.is_prunable || !!occupied?.is_bare || (!!occupied && !selectionSupported)}
+              disabled={loading || fetching || (occupied ? selectionBusy : actionsBusy) || !connected || b.is_current || !!occupied?.is_prunable || !!occupied?.is_bare || (!!occupied && !selectionSupported)}
               title={occupied
                 ? t("gitHistory.openBranchWorktree", { name: b.name, worktree: basename(occupied.path) })
                 : t(b.is_current ? "gitHistory.onBranchTitle" : "gitHistory.checkoutBranchTitle", { name: b.name })}
@@ -1450,7 +1469,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                 setWtSite(site);
                 setWorktreeSelection(site === "mirror" ? { path: "", site } : null);
               }}
-              disabled={!selectionSupported || loading || fetching || actionsBusy || !connected}
+              disabled={!selectionSupported || loading || fetching || selectionBusy || !connected}
               options={[
                 { value: "host", label: t("gitHistory.worktreeSiteHost") },
                 { value: "mirror", label: t("gitHistory.worktreeSiteMirror") },
@@ -1530,7 +1549,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                   <button
                     className="git-worktree-select"
                     onClick={() => selectWorktree(wt)}
-                    disabled={!selectionSupported || loading || fetching || actionsBusy || !connected || wt.is_prunable || wt.is_bare}
+                    disabled={!selectionSupported || loading || fetching || selectionBusy || !connected || wt.is_prunable || wt.is_bare}
                     aria-pressed={wt.path === selectedWorktree?.path}
                     aria-label={t("gitHistory.selectWorktree", { name: basename(wt.path) })}
                   >

@@ -3,6 +3,7 @@ import type { PyMainVerdict } from "../lib/terminal/pythonMainCache";
 import type { AgentCron } from "../lib/agents/agentCron";
 import type { CursorPack } from "../lib/theme/cursorPacks";
 import type { TranslationKey } from "../lib/i18n";
+import type { TrustRequest } from "../lib/execTrust";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../lib/brand";
 
 export interface GlobalAppEntry {
@@ -208,6 +209,10 @@ export interface Settings {
      * agents-only); read by the sidecar per catalog load and repeated by the
      * desktop bridge. */
     shell_tabs?: boolean;
+    /** A paired phone may list and attach this desktop's clipboard image and
+     * newest screenshots, downloads and pictures (+ → Desktop). Unset is off;
+     * read by the sidecar per request and repeated by the window's commands. */
+    desktop_images?: boolean;
     /** A paired phone may list the Ollama models installed here and load or
      * unload them (never download or delete). Unset is on; an explicit false
      * closes the routes. Read by the sidecar per request and repeated by the
@@ -272,8 +277,11 @@ export interface Settings {
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */
   printer_network_defaults?: Record<string, { printer: string; label: string }>;
+  /** The default (first) host of Settings → Git Hosting, kept for older
+   *  builds; the list itself is `git_hosts`, edited through `lib/gitHosts`.
+   *  Tokens never reach the renderer. */
   git_profile_url?: string;
-  git_token?: string;
+  git_hosts?: string[];
   color_scheme?: string;
   /** UI language for Tabtivity's interface. Unset/unknown falls back to English.
    *  Applied live via `lib/i18n` (`applyLanguage`); the backend round-trips it. */
@@ -622,6 +630,9 @@ export interface Settings {
    *  starts itself; a systemd-managed one is pointed at the same folder by the
    *  Settings panel's one-click drop-in (`ollama_models_dir_plan`). */
   ollama_models_path?: string | null;
+  /** Context window (tokens) for a server Tabtivity starts, as
+   *  `OLLAMA_CONTEXT_LENGTH`; `null` = automatic. Restart Ollama applies it. */
+  ollama_context_length?: number | null;
   /** Per-task local-model assignments (🧠 menu role chips). Maps a task key —
    *  `"autocomplete"`, `"autocomplete_prose"`, `"tabs"` or `"mail"` —
    *  to the model name that should serve it (`autocomplete_prose` covers plain
@@ -901,6 +912,17 @@ export interface Settings {
    *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
    *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
   sleep_tabs_after_min?: number;
+  /** Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the most agent
+   *  tabs with a running process before the least recently used are stopped
+   *  (kept, resumed when shown). Unset → 30; `0` → off. Read through
+   *  `stopAgentTabsCap` (`lib/agents/agentTabStop`). */
+  stop_agent_tabs_cap?: number;
+  /** Minutes an agent tab may sit unused before it is stopped. Unset → 120;
+   *  `0` → off. Read through `stopAgentTabsIdleMs`. */
+  stop_agent_tabs_idle_min?: number;
+  /** Free memory (MiB) under which least recently used agent tabs are
+   *  stopped. Unset → 4096; `0` → off. Read through `stopAgentTabsMinFreeBytes`. */
+  stop_agent_tabs_min_free_mb?: number;
   /** Lines of history a shell terminal keeps (`docs/done/tab_cost_plan.md` step
    *  2): every `TerminalView` whose kind is not `agent`/`local_agent`. Unset or
    *  invalid → 2,000; clamped to [100, 50,000]. Agent tabs keep a fixed 5,000.
@@ -1401,6 +1423,9 @@ export interface GitPushProposal {
   preflight_output: string;
   /** The user closed the finished card (`git_push_mcp_clear`). */
   cleared: boolean;
+  /** A pending push whose pre-push hook would run on this computer and is not
+   *  approved: the hooks to review (`exec_trust`). Approving re-runs the push. */
+  hooks_trust?: TrustRequest | null;
   state: { branch: string | null; head: string | null; remote: string | null; upstream: string | null; url: string | null; remote_sha: string | null; ahead: number; behind: number };
 }
 

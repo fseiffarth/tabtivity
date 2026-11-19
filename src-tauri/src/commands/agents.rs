@@ -1106,6 +1106,9 @@ pub struct AgentUsageReport {
     /// True when this answer came from the short-lived cache rather than from a
     /// fresh run, so a reader can tell a stale figure from a live one.
     pub cached: bool,
+    /// Unix milliseconds of the successful read, preserved across cache hits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_at: Option<u64>,
 }
 
 impl AgentUsageReport {
@@ -1118,7 +1121,16 @@ impl AgentUsageReport {
             error: Some(error),
             code: Some(code.to_string()),
             cached: false,
+            read_at: None,
         }
+    }
+
+    fn failed_read(agent: &str, label: &str, code: &str, error: String) -> Self {
+        let mut report = Self::refused(agent, label, true, code, error);
+        report.raw = crate::services::agent_usage::last_reading(agent);
+        report.cached = report.raw.is_some();
+        report.read_at = crate::services::agent_usage::read_at(agent);
+        report
     }
 }
 
@@ -1543,6 +1555,58 @@ pub async fn agent_tab_changes(
     .unwrap_or_else(|_| AgentChanges::unavailable("read_failed"))
 }
 
+/// "Continue with another CLI": the tab's conversation, its cockpit notes and
+/// its working tree written as `HANDOFF.md` in the scope's agent home
+/// (`services::agent_cli_handoff`), answered as the path the next agent opens
+/// (`~/handoff/cli-<id>/HANDOFF.md`) beside what is in it. The tab is named by
+/// the identity `agent_tab_transcript` takes, plus `tab_id` (the saved tab's
+/// stable id, for its notes); `target` is the binary of the CLI to continue
+/// with, checked against the registry. `preview_only` writes nothing and
+/// answers the counts alone. An `Err` is a short code: `unknown_target`,
+/// `unsupported` (a remote host's tab, an unreadable CLI), `no_session`,
+/// `no_transcript`, `read_failed`, or the text of a failed write.
+#[cfg_attr(feature = "desktop", tauri::command)]
+#[allow(clippy::too_many_arguments)]
+pub async fn agent_cli_handoff_prepare(
+    agent: String,
+    project_id: Option<String>,
+    tab_dir: Option<String>,
+    since: Option<i64>,
+    session_id: String,
+    local_model: Option<bool>,
+    remote_host: Option<String>,
+    tab_id: Option<String>,
+    target: String,
+    preview_only: bool,
+) -> Result<crate::services::agent_cli_handoff::Prepared, String> {
+    app_core::rt::try_blocking("agent", move || {
+        agent_cli_handoff_prepare_blocking(crate::services::agent_cli_handoff::Request {
+            agent,
+            project_id,
+            tab_dir,
+            since,
+            session_id,
+            local_model: local_model == Some(true),
+            remote_host,
+            tab_id,
+            target,
+            preview_only,
+        })
+    })
+    .await
+}
+
+fn agent_cli_handoff_prepare_blocking(
+    request: crate::services::agent_cli_handoff::Request,
+) -> Result<crate::services::agent_cli_handoff::Prepared, String> {
+    let suffix = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0)
+        & 0xffff) as u16;
+    crate::services::agent_cli_handoff::prepare(&crate::storage::state_dir(), &request, chrono::Utc::now(), suffix)
+}
+
 /// How to take back the tab's last `/clear` (`services::agent_session::undo_clear_plan`):
 /// Claude types `/resume <id>` of the conversation it ended; Codex has its
 /// record pointed back at that conversation and is relaunched onto it. `None`
@@ -1560,6 +1624,22 @@ pub async fn agent_tab_undo_clear(
     .await
     .ok()
     .flatten()
+}
+
+/// Whether the local agent tab launched as `agent` with key `session_id` in
+/// `cwd` would, respawned now, resume the conversation it is in
+/// (`services::agent_resume_pinned`): the window's stop sweep stops an idle tab
+/// only then. Reads the CLI's stores under a short wait; no answer is `false`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_resume_pinned(agent: String, project_id: Option<String>, session_id: String, cwd: String) -> bool {
+    app_core::rt::spawn_blocking(move || {
+        crate::services::agent_sqlite::bounded(std::time::Duration::from_secs(3), move || {
+            crate::services::agent_resume_pinned::resume_pinned(&agent, project_id.as_deref(), &session_id, &cwd)
+        })
+        .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// The earlier conversations of the folder the tab launched as `agent` with
@@ -1660,7 +1740,7 @@ pub async fn agent_tab_move_host(
     .await
 }
 
-/// Read `agent`'s own usage panel by running its CLI's print mode once.
+/// Read account usage through the CLI: Claude print mode or Codex account RPC.
 ///
 /// Free in every sense that matters: the run is client-side (Claude's envelope
 /// comes back with `num_turns: 0` and zero tokens), it needs no tab, no PTY and
@@ -1683,6 +1763,7 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
             format!("{} has no usage readout that can be read without a tab", spec.label),
         );
     };
+    let _read = usage::read_lock(spec.id).await;
     // A refresh still consults the cache, at a much shorter window: it means
     // "ask the CLI again", not "spawn one process per tap".
     let window = if refresh.unwrap_or(false) {
@@ -1699,9 +1780,12 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
             error: None,
             code: None,
             cached: true,
+            read_at: usage::read_at(spec.id),
         };
     }
-    usage::forget(spec.id);
+    if let Some(error) = usage::recent_failure(spec.id) {
+        return AgentUsageReport::failed_read(spec.id, spec.label, "cli_error", error);
+    }
     let Some(path) = resolve_spec_path(spec) else {
         return AgentUsageReport::refused(
             spec.id,
@@ -1737,6 +1821,22 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
         // Its own process group, for the reason the warm-up spawn gives: a
         // Ctrl+C in Tabtivity's launcher shell must not be what reaches this first.
         cmd.process_group(0);
+    }
+    if spec.id == "codex" {
+        return match usage::read_codex_limits(&mut cmd).await {
+            Ok(raw) => {
+                usage::remember(spec.id, &raw);
+                AgentUsageReport {
+                    agent: spec.id.to_string(), label: spec.label.to_string(), supported: true,
+                    raw: Some(raw), error: None, code: None, cached: false,
+                    read_at: usage::read_at(spec.id),
+                }
+            }
+            Err(error) => {
+                usage::remember_failure(spec.id, &error);
+                AgentUsageReport::failed_read(spec.id, spec.label, "cli_error", error)
+            }
+        };
     }
     let output = match tokio::time::timeout(usage::USAGE_TIMEOUT, async {
         cmd.spawn()
@@ -1777,9 +1877,10 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
                 error: None,
                 code: None,
                 cached: false,
+                read_at: usage::read_at(spec.id),
             }
         }
-        Err(error) => AgentUsageReport::refused(spec.id, spec.label, true, "cli_error", error),
+        Err(error) => AgentUsageReport::failed_read(spec.id, spec.label, "cli_error", error),
     }
 }
 

@@ -49,6 +49,15 @@ theme, accent, colours and corners) to **Load** later.
   you have not looked at. They reload where you left off; terminals and agents
   keep running, and tabs with unsaved work, a running build or playing media
   stay loaded.
+- **Stop agent tabs beyond**, **Stop agent tabs unused for** and **Stop agent
+  tabs while free memory is under** end the process of an idle agent tab
+  (default: more than 30 running, 2 hours unused, under 4 GiB free) while
+  keeping the tab. Its label dims with a pause mark; showing it resumes its
+  conversation, and so does a scheduled prompt or opening it on the phone.
+  Tabs at work, asking a question or on screen are never stopped, nor tabs of
+  CLIs that cannot resume their own conversation. After a restart only the
+  most recently used come back running, up to the first limit. Set any of the
+  three to Off.
 - **Shell scrollback** sets how many lines each shell keeps (agent tabs keep a
   fixed amount).
 - **What open tabs hold** estimates each tab's memory, largest first; **Show**

@@ -179,6 +179,8 @@ describe("the pure path through subagents", () => {
     expect(workingModelName("claude-haiku-4-5-20251001")).toBe("Haiku");
     expect(workingModelName("claude-opus-4-1-20250805")).toBe("Opus");
     expect(workingModelName("gpt-5-codex")).toBe("gpt-5-codex");
+    // Antigravity's store id, by the word its footer's model starts with.
+    expect(workingModelName("gemini-3.8-flash-high")).toBe("Gemini");
   });
 
   it("says a subagent's elapsed time and tokens as a spinner does", () => {

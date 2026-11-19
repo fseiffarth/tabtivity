@@ -61,9 +61,14 @@ runs project code holds the token:
    (`HookBoundary::TrustedHost`, 2442g) runs the hook on the host, through
    Git for Windows' `sh.exe` (`git_hardened::hook_command`), token removed as
    everywhere, and only while `exec_trust` holds the user's approval of the
-   repo's hooks — the git bar's own gate. An unapproved or changed hook is
-   `fence_unavailable` with "push once from the git bar, then ask again"; it
-   never runs. This gives the agent nothing it lacks (it can run the hook
+   repo's hooks — the git bar's own gate. An unapproved or changed hook
+   never runs: the request waits `pending` on a "Review hooks…" card
+   (`Proposal::hooks_trust`, the gate's `TrustRequest`) that opens the shared
+   hook dialog; approving records it (`exec_trust_approve`) and `decide`
+   re-runs the request from its plan (`retry_after_hooks`), which may stage
+   an ordinary push card next. It used to refuse with "push once from the
+   git bar", which left the user hunting for a prompt that agent pushes
+   never raised. This gives the agent nothing it lacks (it can run the hook
    itself), and keeps the rule that the app runs no project code the user
    has not approved. A repo without a hook pushes on every platform. The scope used to come from the fence registry
    (`fenced_scope_of_tab`), which a stale `pty_kill` could clear after a
@@ -76,7 +81,8 @@ runs project code holds the token:
 2. **Transport, host, hooks off.** `push_transport_command`:
    `hardened_git_command_in` (pins `core.hooksPath=`, so
    `reference-transaction` is off too) with the scoped inline credential
-   helper for `token_origins(project)`, `GIT_TERMINAL_PROMPT=0`, `--no-verify`,
+   helpers of the project's `GitAuth` (`git_hosting`: the project's own token
+   for `token_origins(project)`, else each host default for its own host), `GIT_TERMINAL_PROMPT=0`, `--no-verify`,
    the URL positional and the one refspec `<sha>:refs/heads/B` — the SHA the
    plan validated (Apply) or the approved card showed (Propose), never the
    branch by name: `.git` refs stay writable in the fence, so the agent could
@@ -121,7 +127,7 @@ passed positionally so `pushurl` plays no part; because a repo-scope
 `url.*.insteadOf` / `pushInsteadOf` would still rewrite a positional URL, its
 presence refuses (`url_rewritten`). The first push to a URL stages for the
 user's confirmation whatever the level, and pressing Push records it as
-`confirmed_url`; a changed URL asks again. An https URL without a stored token
+`confirmed_url`; a changed URL asks again. An https URL whose host has no stored token
 is `auth_failed` up front.
 
 ## Levels, budget, proposals
@@ -166,7 +172,7 @@ tab — the schedule lane types *prompts*, and a push outcome must not become on
 The audit ring keeps the session, tool and category; never the note or output.
 
 Output hygiene: last 8 KB, invisible controls stripped
-(`root_mcp_mail::strip_invisible`), the effective token, `ghp_`/`github_pat_`/
+(`root_mcp_mail::strip_invisible`), every token of the call's `GitAuth`, `ghp_`/`github_pat_`/
 `glpat-`-shaped tokens and URL userinfo replaced by `[redacted]`. <!-- privacy-check: ok — names token prefixes, holds none -->
 
 ## Wiring

@@ -7,9 +7,11 @@
 # A user prompt holding
 #   STUB:CALL <tool> <json>                  makes the model call that tool, then answer "stub answer done";
 #   STUB:SEQ <tool> <json> ;; <tool> <json>  calls them one per turn step;
-#   STUB:FAIL <status>                       answers that HTTP status with an error body.
+#   STUB:FAIL <status> [<type>]              answers that HTTP status with an error body (of that type).
 # A Responses tool inside a namespace is named `<namespace>.<tool>`.
-# Every request is logged: offered tools, last prompt, tool results.
+# Every request is logged: offered tools, last prompt, tool results; a chat
+# completion also its `model` and every `STUBMARK-<WORD>` it carries (what an
+# instructions file or a hook put in front of the model).
 import json,os,sys,re,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
@@ -50,7 +52,8 @@ class H(BaseHTTPRequestHandler):
         prompt=text_of(users[-1]) if users else ''
         after=[m for m in msgs[msgs.index(users[-1])+1:]] if users else []
         ntool=sum(1 for m in after if m.get('role')=='tool')
-        rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':last.get('role'),'tool_results':[text_of(m)[:700] for m in after if m.get('role')=='tool']}
+        rec={'path':self.path,'model':d.get('model'),'tools':tools,'prompt':prompt[-300:],'last_role':last.get('role'),'tool_results':[text_of(m)[:700] for m in after if m.get('role')=='tool'],
+             'marks':sorted(set(re.findall(r'STUBMARK-[A-Z]+',body.decode('utf-8','replace'))))}
         log.write(json.dumps(rec)+'\n')
         if self.fail(prompt): return
         seq=[]
@@ -75,10 +78,12 @@ class H(BaseHTTPRequestHandler):
     def fail(self,prompt):
         """`STUB:FAIL <status>` in the prompt: answer that HTTP status with an
         error body instead of a turn (a model call that fails). 400 is not
-        retried by the CLIs; 429/500 usually are."""
-        m=re.search(r'STUB:FAIL (\d{3})',prompt)
+        retried by the CLIs; 429/500 usually are. An optional second word is
+        the error's `type` (`STUB:FAIL 429 usage_limit_reached`: Codex's
+        usage-limit stop, which it does not retry)."""
+        m=re.search(r'STUB:FAIL (\d{3})(?: ([a-z_]+))?',prompt)
         if not m: return False
-        self._json({'error':{'message':'stub failure','type':'invalid_request_error','code':'stub_fail'}},int(m.group(1)))
+        self._json({'error':{'message':'stub failure','type':m.group(2) or 'invalid_request_error','code':m.group(2) or 'stub_fail'}},int(m.group(1)))
         return True
     def responses_api(self,d):
         """The Responses API (`/v1/responses`, streamed), for CLIs that speak

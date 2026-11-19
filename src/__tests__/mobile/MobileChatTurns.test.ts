@@ -330,6 +330,46 @@ describe(`${BRAND.display} Mobile chat turns`, () => {
     ]);
   });
 
+  it("reads Claude Code 2.1.327's Submit page, which no longer asks `Ready to submit your answers?`", () => {
+    // 2.1.327 draws the answers straight over the options (verify-cli
+    // turn/tui_ask key06-Enter): read as the question they were joined into
+    // one paragraph and the heading was left as the page's only context.
+    const tail = [
+      { key: "tabs", text: "←  ☒ Colours  ☒ Layout  ✔ Submit  →", spans: [
+        { text: "←  ☒ Colours  ☒ Layout  " },
+        { text: "✔ Submit", background: "#555" },
+        { text: "  →" },
+      ] },
+      ...lines(
+        "",
+        "Review your answers",
+        "",
+        " ● Which colours should the probe use?",
+        "   → Red",
+        " ● Which layout should the probe draw?",
+        "   → Grid",
+        "",
+        "❯ 1. Submit answers",
+        "  2. Cancel",
+        "",
+        "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+      ),
+    ];
+    const question = readSelectPrompt(tail, "Claude");
+    expect(question?.options.map((option) => option.label)).toEqual(["Submit answers", "Cancel"]);
+    const parts = questionParts(tail, question!);
+    expect(parts.tabs).toEqual([{ label: "Colours", answered: true }, { label: "Layout", answered: true }]);
+    expect(parts.tabSubmit).toBe(true);
+    expect(parts.tabFocus).toBe(2);
+    expect(parts.ask.map((row) => row.text)).toEqual(["Review your answers"]);
+    expect(parts.context.map((row) => row.text)).toEqual([
+      " ● Which colours should the probe use?",
+      "   → Red",
+      " ● Which layout should the probe draw?",
+      "   → Grid",
+    ]);
+  });
+
   it("never reads the empty box's own placeholder as a prompt", () => {
     expect(isPromptEcho({ text: "> Try \"fix the failing test\"" })).toBe(false);
     expect(isPromptEcho({ text: "› Type your message or @path/to/file" })).toBe(false);

@@ -86,6 +86,11 @@ pub struct Features {
     pub sandbox: Option<Sandbox>,
     /// Tabtivity's servers this tab holds a live token for.
     pub app_mcp: Vec<String>,
+    /// The tab reattached an agent started by a listener that is gone
+    /// (`root_mcp::tab_stale`): its Tabtivity tools do not answer, whatever
+    /// the lanes below say. Left out of the answer when unset.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub app_mcp_stale: bool,
     /// The servers the user configured for this CLI in the tab's home and
     /// left on for this folder.
     pub own_mcp: Vec<String>,
@@ -99,10 +104,11 @@ pub struct Features {
 pub fn features(tab: &str) -> Option<Features> {
     let spawn = spawns().lock_ok().get(tab).cloned();
     let app_mcp: Vec<String> = crate::services::root_mcp::servers_of_tab(tab).into_iter().map(str::to_string).collect();
-    if spawn.is_none() && app_mcp.is_empty() {
+    let app_mcp_stale = crate::services::root_mcp::tab_stale(tab);
+    if spawn.is_none() && app_mcp.is_empty() && !app_mcp_stale {
         return None;
     }
-    let mut out = Features { app_mcp, ..Default::default() };
+    let mut out = Features { app_mcp, app_mcp_stale, ..Default::default() };
     if let Some(spawn) = spawn {
         if let Some(home) = spawn.home.as_deref() {
             let (on, off) = own_mcp_servers(&spawn.cli, home, &spawn.cwd);
@@ -357,5 +363,23 @@ mod tests {
             (OPENAI_BASE_ENV.to_string(), "https://api.example.invalid/v1".to_string()),
         ]);
         assert_eq!(api_keys_in(&env), vec!["anthropic"]);
+    }
+
+    /// A stale tab (a reattached agent that lost its Tabtivity tools) lists no
+    /// servers, is flagged, and is known even with no spawn record; a card
+    /// with nothing to say stays absent.
+    #[test]
+    fn a_stale_tab_reports_no_app_servers_and_the_flag() {
+        use crate::services::root_mcp as mcp;
+        let tab = "features:stale-1";
+        assert!(features(tab).is_none());
+        mcp::set_tab_stale(tab, true);
+        let got = features(tab).expect("a stale tab has a card");
+        assert!(got.app_mcp.is_empty() && got.app_mcp_stale);
+        let json = serde_json::to_value(&got).unwrap();
+        assert_eq!(json["appMcpStale"], true);
+        mcp::forget_stale(tab);
+        assert!(features(tab).is_none());
+        assert!(serde_json::to_value(Features::default()).unwrap().get("appMcpStale").is_none(), "left out when unset");
     }
 }

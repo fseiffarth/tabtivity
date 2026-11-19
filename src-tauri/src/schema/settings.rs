@@ -106,6 +106,13 @@ pub struct AppMobileHostSettings {
     /// bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_tabs: Option<bool>,
+    /// May a paired phone list and attach the desktop's clipboard image and
+    /// newest screenshots, downloads and pictures (composer + → From the
+    /// desktop)? Default off (threat model gap 65). Read by the sidecar per
+    /// request (`mobile_control::discovery::desktop_images_open`) and repeated
+    /// by the window's commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_images: Option<bool>,
     /// May a paired phone list the desktop's Ollama models and load/unload them
     /// (never download or delete)? Unset is **on**; `false` closes the routes.
     /// Read by the sidecar per request
@@ -223,8 +230,17 @@ pub struct Settings {
     pub debug: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_profile_url: Option<String>,
+    /// An old build's single access token, in plain text. Read only to move it
+    /// into the keyring (`git_hosting::migrate_legacy_token`); never written,
+    /// never sent to the renderer (`commands::settings`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_token: Option<String>,
+    /// Settings → Git Hosting: the hosts the user has an account on, as
+    /// profile URLs, first = default. Each host's token is in the keyring
+    /// (`git_hosting::host_scope`). `None` = written before the list existed:
+    /// `git_profile_url` alone stands for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_hosts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_scheme: Option<String>,
     /// UI language for Tabtivity's interface (`en`/`de`/`es`/`fr`/`it`). Frontend
@@ -313,9 +329,10 @@ pub struct Settings {
     pub root_mcp: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_mcp: Option<bool>,
-    /// Agent-requested pushes (`services::git_push_mcp`, `/mcp/git`). Absent
-    /// means off: no local project-agent spawn is wired, and the endpoint
-    /// refuses tabs that already hold a token.
+    /// Agent-requested pushes (`services::git_push_mcp`, `/mcp/git`).
+    /// **Absent means on** (`git_push_mcp::enabled_in`); a stored `false`
+    /// wires no new local project-agent spawn, and the endpoint refuses tabs
+    /// that already hold a token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_push_mcp: Option<bool>,
     /// The read-only help server (`services::help_mcp`) handed to every local
@@ -417,10 +434,10 @@ pub struct Settings {
     /// across a relaunch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_alerts_muted: Option<Vec<String>>,
-    /// Mail: the experimental gate for the embedded mail client
-    /// (`src/lib/experimental.ts` — unset is off, so a flag still moving is
-    /// invisible until someone ticks it; see [`Settings::experimental`] for the
-    /// one exception, a profile not yet marked `experimental_explicit`).
+    /// Mail: the experimental gate for the embedded mail client. One of the
+    /// experiments a profile gets without asking (`ON_BY_DEFAULT` in
+    /// `src/lib/experimental.ts`, [`Settings::mail_client()`]): unset is
+    /// on, and only an explicit `false` turns it off.
     ///
     /// It is the ONE mail switch, and it gates the whole feature: the header's
     /// ✉ button and the overlay behind it, which is the entire client since the
@@ -519,6 +536,13 @@ pub struct Settings {
     /// resumable download in the custom dir is still found.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_models_path: Option<String>,
+    /// The context window (tokens) a server **Tabtivity starts itself** gets, as
+    /// `OLLAMA_CONTEXT_LENGTH`. `None` is automatic (`commands::ollama::
+    /// spawned_context_length`). Like `ollama_models_path` it never reaches a
+    /// server someone else started, nor wins over the variable the user set in
+    /// the environment; Restart Ollama is what applies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_context_length: Option<u32>,
     /// Preserved for Python rollback; not used by the Tauri app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ollama_model: Option<String>,
@@ -787,7 +811,9 @@ pub struct Settings {
     /// every viewer read goes through, so nothing in the backend reads this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub md_graph: Option<bool>,
-    /// EXPERIMENTAL, default OFF. Project-wide per-file remarks in REMARKS.md.
+    /// EXPERIMENTAL, default ON (`ON_BY_DEFAULT` in `src/lib/experimental.ts`:
+    /// unset is on, an explicit `false` turns it off). Project-wide per-file
+    /// remarks in REMARKS.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_remarks: Option<bool>,
     /// EXPERIMENTAL, default OFF. The Chat's hands-free loop
@@ -803,7 +829,9 @@ pub struct Settings {
     /// the Settings card sets in the same click.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_checkpoints: Option<bool>,
-    /// EXPERIMENTAL, default OFF. The chat assistant (`docs/assistant_plan.md`,
+    /// EXPERIMENTAL, default ON (`ON_BY_DEFAULT` in `src/lib/experimental.ts`:
+    /// unset is on, an explicit `false` turns it off). The chat assistant
+    /// (`docs/assistant_plan.md`,
     /// `services::assistant`): chats in a scope of its own that reach the web
     /// and nothing else. Read via [`Settings::assistant_enabled`]; the
     /// commands, the spawn and the web lane refuse while it is off.
@@ -1030,6 +1058,22 @@ pub struct Settings {
     /// frontend type declares it and it round-trips as written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_tabs_after_min: Option<u32>,
+    /// Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the most agent
+    /// tabs with a running process before the least recently used are stopped
+    /// (kept as a tab, resumed when shown). Absent → 30, `0` → off. Read
+    /// entirely on the frontend (`src/lib/agents/agentTabStop.ts`); a named
+    /// field so it round-trips as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_agent_tabs_cap: Option<u32>,
+    /// Minutes an agent tab may sit unused before it is stopped. Absent → 120,
+    /// `0` → off. Frontend-read, as `stop_agent_tabs_cap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_agent_tabs_idle_min: Option<u32>,
+    /// Free memory (MiB) under which the least recently used agent tabs are
+    /// stopped. Absent → 4096, `0` → off. Frontend-read, as
+    /// `stop_agent_tabs_cap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_agent_tabs_min_free_mb: Option<u32>,
     /// Lines of history a shell terminal keeps (tab cost plan step 2): every
     /// terminal but agent tabs, which keep a fixed 5,000. Absent → 2,000;
     /// clamped to [100, 50,000]. Read entirely on the frontend
@@ -1857,6 +1901,26 @@ mod tests {
             let back: Settings =
                 serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
             assert_eq!(back.sleep_tabs_after_min, Some(n));
+        }
+    }
+
+    /// The three stop-agent-tab settings are absent by default (the frontend
+    /// reads its defaults), real fields rather than `extra` passengers, and an
+    /// explicit `0` (off) and a chosen value survive a round trip.
+    #[test]
+    fn stop_agent_tabs_settings_default_absent_and_round_trip() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(!raw.contains("stop_agent_tabs"), "default settings must omit stop_agent_tabs_*: {raw}");
+        for n in [0u32, 30] {
+            let s: Settings = serde_json::from_str(&format!(
+                r#"{{"stop_agent_tabs_cap":{n},"stop_agent_tabs_idle_min":{n},"stop_agent_tabs_min_free_mb":{n}}}"#
+            ))
+            .expect("parse");
+            assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+            let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
+            assert_eq!(back.stop_agent_tabs_cap, Some(n));
+            assert_eq!(back.stop_agent_tabs_idle_min, Some(n));
+            assert_eq!(back.stop_agent_tabs_min_free_mb, Some(n));
         }
     }
 

@@ -750,3 +750,70 @@ describe("the desktop Reader's live screen", () => {
     expect(sameReaderLive(busy, later)).toBe(false);
   });
 });
+
+describe("output above Claude Code's input box is not a dialog", () => {
+  // Claude Code takes its input box off the screen while a dialog is up, so a
+  // box on screen means the rows above it are output, whatever they look like.
+  const BOX = [
+    `${"─".repeat(60)} my-project ─`,
+    "❯ ",
+    "─".repeat(76),
+    "  ? for shortcuts",
+  ];
+  const answer = (list: string[]) => [
+    "❯ which container should I use?",
+    "",
+    "⏺ Three options, in the order I would try them:",
+    "",
+    ...list,
+    "",
+    "  The first is the simplest.",
+    "",
+    ...BOX,
+  ];
+
+  it("reads a `>`-led numbered list in an answer as output", () => {
+    const rows = answer(["  > 1. Use a map", "    2. Use a vec", "    3. Use a set"]);
+    const live = readReaderLive(plainBuffer(rows), "Claude", 76);
+    expect(live.question).toBeNull();
+    expect(live.ask).toEqual([]);
+    expect(live.stray).toBe(false);
+  });
+
+  it("reads other highlight marks in an answer as output too", () => {
+    for (const mark of ["→", "❯", "›", "▸"]) {
+      const rows = answer([`  ${mark} 1. Use a map`, "    2. Use a vec"]);
+      expect(readReaderLive(plainBuffer(rows), "Claude", 76).question, mark).toBeNull();
+    }
+  });
+
+  it("reads an answer's list whose last row sits right on the box", () => {
+    const rows = ["❯ pick one", "⏺ Options:", "  > 1. Use a map", "    2. Use a vec", ...BOX];
+    expect(readReaderLive(plainBuffer(rows), "claude", 76).question).toBeNull();
+  });
+
+  it("still reads the same rows as a dialog once no box is on screen", () => {
+    const rows = ["❯ which container should I use?", "", "⏺ Which one?", "", "  ❯ 1. Use a map", "    2. Use a vec", "    3. Use a set", "", "  Enter to select · ↑/↓ to navigate · Esc to cancel"];
+    const live = readReaderLive(plainBuffer(rows), "Claude", 76);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["Use a map", "Use a vec", "Use a set"]);
+    expect(live.question?.current).toBe(0);
+  });
+
+  it("keeps reading a permission dialog whose footer is followed by the session's rule", () => {
+    // Not an input box: a labelled rule alone, as Claude Code 2.1.314 draws it.
+    const rows = [...PERMISSION, `${"─".repeat(60)} my-project ─`];
+    expect(readReaderLive(plainBuffer(rows), "Claude", 76).question?.options).toHaveLength(3);
+  });
+
+  it("leaves other CLIs' boxes alone: Codex's `›` dialog still reads", () => {
+    const rows = [
+      "  Allow Codex to run `ls`?",
+      "",
+      "› 1. Yes, proceed (y)",
+      "  2. No, and tell Codex what to do differently (esc)",
+      "",
+      "  Press enter to confirm or esc to cancel",
+    ];
+    expect(readReaderLive(plainBuffer(rows), "Codex", 76).question?.options).toHaveLength(2);
+  });
+});

@@ -22,6 +22,7 @@ import { getDetachedWindowContext, type DetachedWindowContext } from "./detached
 import { usePopoutViewStore } from "./popoutView";
 import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { currentTabCommand } from "../lib/brandMigration";
+import { noteRestoredStopped, restoresStopped } from "../lib/agents/agentTabStopMarks";
 import { ASSISTANT_SCOPE, readAssistantLaunch } from "../lib/assistant";
 import { readCockpitMeta, sameCockpitMeta } from "../lib/cockpit/agentNotes";
 import type {
@@ -377,6 +378,8 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     assistant: t.assistant,
     signIn: t.signIn || undefined,
     cloud: t.cloud || undefined,
+    lastUsedAt: t.lastUsedAt,
+    customAgent: t.customAgent || undefined,
   };
 }
 
@@ -601,7 +604,18 @@ interface TabsStore {
   // `patch` changes the tab's label and Tabby launch on the way (a chat's model
   // switch, `switchAssistantModel`), its folder (an agent moved to another
   // worktree, `switchAgentWorktree`) or its machine (`switchTabLocation`).
-  relaunchTabInScope: (scope: string, key: string, args: string[], patch?: Partial<Pick<TabEntry, "label" | "assistant" | "cwd" | "location">>) => void;
+  relaunchTabInScope: (
+    scope: string,
+    key: string,
+    args: string[],
+    patch?: Partial<Pick<TabEntry, "label" | "assistant" | "cwd" | "location" | "stopped" | "initialInput">>,
+  ) => void;
+  /** Mark an agent tab stopped (its pane unmounts and kills the PTY) or not,
+   *  without respawning anything: the wake goes through `relaunchTabInScope`
+   *  (`stores/agents/agentTabStop`). A no-op when it already is. */
+  setTabStopped: (scope: string, key: string, on: boolean) => void;
+  /** Move a tab's persisted last-use mark (`TabEntry.lastUsedAt`). */
+  setTabLastUsedAt: (scope: string, key: string, at: number) => void;
   // Swap the built-in viewer an embed tab renders its file with, in place — same
   // tab, same key, same position in the layout. `viewer` is persisted, so a tab
   // saved under a viewer choice the app has since revised comes back under the
@@ -2075,6 +2089,26 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       // doesn't churn the tabs array / wake the saveLayout debounce.
       if (!changed) return {};
       return writeScope(s, owner, nextTabs, layout, focusedGroupId);
+    });
+  },
+
+  setTabStopped: (scope, key, on) => {
+    set((s) => {
+      const { tabs, layout, focusedGroupId } = scopeState(s, scope);
+      const tab = tabs.find((t) => t.key === key);
+      if (!tab || !!tab.stopped === on) return {};
+      // `undefined` when off: the flag is absent on every tab never stopped.
+      const nextTabs = tabs.map((t) => (t.key === key ? { ...t, stopped: on || undefined } : t));
+      return writeScope(s, scope, nextTabs, layout, focusedGroupId);
+    });
+  },
+
+  setTabLastUsedAt: (scope, key, at) => {
+    set((s) => {
+      const { tabs, layout, focusedGroupId } = scopeState(s, scope);
+      if (!tabs.some((t) => t.key === key && t.lastUsedAt !== at)) return {};
+      const nextTabs = tabs.map((t) => (t.key === key ? { ...t, lastUsedAt: at } : t));
+      return writeScope(s, scope, nextTabs, layout, focusedGroupId);
     });
   },
 
@@ -3857,11 +3891,19 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // double as PTY ids, so always mint a fresh one on restore.
     const keyMap = new Map<string, string>();
     const scope = targetScope ?? get().scope;
+    // Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): with the cap
+    // on, every agent tab that may ever be stopped comes back stopped, so
+    // nothing spawns for it; the shown ones wake at once (`PaneSlot`), and the
+    // stop sweep's restore wake starts the most recently used up to the cap.
+    const restoredStopped: string[] = [];
     const tabs: TabEntry[] = layout.map((t) => {
       const entry = restoreSavedTab(t, { defaultCwd, scope, agentRoots });
       keyMap.set(t.key, entry.key);
-      return entry;
+      if (!restoresStopped(scope, entry)) return entry;
+      restoredStopped.push(entry.key);
+      return { ...entry, stopped: true };
     });
+    noteRestoredStopped(scope, restoredStopped);
 
     // Build the layout tree. With `groups` provided, rebuild from the saved
     // tree; otherwise (legacy) put all tabs in a single root group. Groups tagged

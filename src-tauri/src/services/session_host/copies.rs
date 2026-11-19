@@ -242,8 +242,10 @@ mod tests {
             cwd: Some(format!("/{name}")),
             argv: vec!["x".into()],
             dead: false,
+            mcp_mark: Some("nonce:grant:1".into()),
         };
         let bytes = sessions_json(&[info("b", 2), info("a", 1)]);
+        assert!(!String::from_utf8_lossy(&bytes).contains("grant"), "the MCP stamp never lands on disk");
         let back: Vec<SavedSession> = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             back,

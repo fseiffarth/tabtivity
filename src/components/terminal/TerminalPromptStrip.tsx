@@ -11,6 +11,7 @@ import { useMarkupLinksStore } from "../../stores/viewers/markupLinks";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { TerminalReaderChats } from "./TerminalReaderChats";
+import { ReaderScheduleButton } from "./ReaderScheduleButton";
 import { chatsOffered } from "../../lib/agents/agentChats";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
@@ -277,6 +278,9 @@ export function TerminalPromptStrip({
         )}
         {reader && chatsOffered(scope, tab) && (
           <TerminalReaderChats ptyId={ptyId} scope={scope} tab={tab} cwd={reader.cwd} onReturnFocus={onReturnFocus} />
+        )}
+        {topBar && reader && tab && (tab.kind === "agent" || tab.kind === "local_agent") && (
+          <ReaderScheduleButton scope={scope} tab={tab} />
         )}
         {topBar && <>
           <span className="reader-topbar-navigation" ref={navigationSlot} />

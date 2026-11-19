@@ -171,6 +171,11 @@ export function Project({ id, back, splitList, terminal }: {
   const [creating, setCreating] = useState(false);
   const [activating, setActivating] = useState(false);
   const [error, setError] = useState("");
+  /** A tab tapped while the host has no session backend (Windows with its
+   *  session host off): instead of a terminal that only says the session
+   *  ended, the screen says how to turn the host on. Kept apart from `error`,
+   *  which every poll clears. */
+  const [turnOnAsked, setTurnOnAsked] = useState(false);
   /** The agent tab whose scheduled prompts are open. Lives on this screen so a
    * schedule can be set without attaching to the session at all. */
   const [scheduleTab, setScheduleTab] = useState<{ tab: TabRow; initialMessage?: string } | null>(null);
@@ -797,7 +802,14 @@ export function Project({ id, back, splitList, terminal }: {
     closing={closingId !== null}
     moreOpen={moreTab?.id === tab.id}
     scheduleOpen={scheduleTab?.tab.id === tab.id}
-    onOpen={() => (!tab.available && terminalsOffered && tab.kind === "agent" && !tab.on_host ? void startTab(tab) : openTab(tab))}
+    onOpen={() => {
+      // Nothing to attach to and no backend to start it in: say how to turn
+      // one on rather than open a terminal that reports the session gone. A
+      // live session (one the host still holds) opens as usual.
+      if (!tab.available && !terminalsOffered && !tab.on_host) setTurnOnAsked(true);
+      else if (!tab.available && terminalsOffered && tab.kind === "agent" && !tab.on_host) void startTab(tab);
+      else openTab(tab);
+    }}
     onModel={() => terminal(tab, { pickModel: true })}
     onMore={() => setMoreTab(tab)}
     onSchedule={() => setScheduleTab({ tab })}
@@ -928,6 +940,7 @@ export function Project({ id, back, splitList, terminal }: {
       ].flatMap((key) => key ? [t(key)] : []).join(" ")} {(remoteOnly ? isUntested("mobile.project.remoteOnly") : isUntested("mobile-every-project-type")) && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
       {hostNote && <button onClick={() => dropHostNote(noteHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
     </p>}
+    {turnOnAsked && !terminalsOffered && <p className="error">{t("mobile.project.terminalsTurnOn")}</p>}
     {error && <p className="error">{error}</p>}
     {!detail && !error && <ListSkeleton label={t("mobile.project.loading")} rows={2} />}
     {/* The chrome's glyphs, drawn from the desktop's icon set. */}

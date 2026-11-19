@@ -133,10 +133,11 @@ import { usePageTransfer } from "./usePageTransfer";
  *  a compile that long is not a compile, it is a window that died mid-build. */
 const PDF_COMPILE_HOLD_MAX_MS = 10 * 60_000;
 
-/** How long a SyncTeX forward-search highlight stays up: its fade's length, as
- *  the reverse-search click marker's is, so reduced motion (no fade) still
- *  clears it. */
-export const SYNC_HIGHLIGHT_MS = 2200;
+/** How long a SyncTeX forward-search highlight stays up: its fade's length
+ *  (`file-viewer-pdf-sync-fade` in viewers.css), so a mark whose animation is
+ *  off or paused (reduced motion, fast mode, a blurred window) is still taken
+ *  down. Long enough to find the spot after the page scrolled to it. */
+export const SYNC_HIGHLIGHT_MS = 3200;
 
 /**
  * How many pages the viewer asks the pdf.js worker about at once, for the two
@@ -708,9 +709,9 @@ function PdfCanvas({
   const reveal = usePdfSyncStore((s) => s.byPath[path] ?? null);
   const consumeReveal = usePdfSyncStore((s) => s.consume);
   const [highlight, setHighlight] = useState<PdfHighlight | null>(null);
-  // The highlight is a flash, gone with its fade (1.6 s) — but under reduced
-  // motion the fade is off and the box would stay for good. Dropped after the
-  // click marker's 2.2 s either way, so "briefly" holds for both. The clock runs
+  // The highlight is a flash, gone with its fade — but under reduced motion the
+  // fade is off and the box would stay for good, so it is dropped after
+  // `SYNC_HIGHLIGHT_MS` either way. The clock runs
   // only while the pane is on screen: a reveal into a hidden pane is still there
   // to see (and scroll to) when it is shown.
   useEffect(() => {

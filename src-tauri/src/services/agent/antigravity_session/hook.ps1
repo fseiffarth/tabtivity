@@ -20,7 +20,11 @@ switch ([string]$args[0]) {
     exit 0
   }
   'PreInvocation' { $turn = 'working' }
-  'Stop' { $turn = 'done' }
+  'Stop' {
+    # Paused for a subagent or background task: the Stop after it ends is the turn's.
+    if ($call.PSObject.Properties['fullyIdle'] -and $call.fullyIdle -eq $false) { exit 0 }
+    $turn = 'done'
+  }
   default { exit 0 }
 }
 try {

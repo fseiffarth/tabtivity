@@ -33,6 +33,7 @@ import { noteInputFrom } from "../agents/inputFrom";
 import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel } from "../../stores/agents/agentModels";
 import { noteTypedClear } from "../../stores/agents/agentClearUndo";
+import { wakeStoppedForInput } from "../../stores/agents/agentTabStop";
 import type { TabEntry } from "../../stores/tabs";
 import type { SteeringBaseLevel } from "../../stores/keyboardSteering";
 import { steeringTabsActive } from "./steeringScope";
@@ -80,6 +81,7 @@ export async function clearAgentTab(scope: string, tab: TabEntry): Promise<boole
   const busy = !!useActivityStore.getState().busyByTab[ptyId];
   if (agentFamily(agentTabLabel(tab)) === "codex" && busy) return false;
   try {
+    await wakeStoppedForInput(tab.scheduleTargetId);
     await submitScheduledAgentCommand(tab.scheduleTargetId, NEW_CONVERSATION_COMMAND);
   } catch {
     return false;
@@ -149,6 +151,8 @@ export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<v
   // A picker up in the CLI would take the words as its own keys, and the
   // agent never see them: refuse at once rather than wait for it to go.
   if (sessionPickerOpen(target)) throw new SessionPickerOpenError();
+  // A stopped tab (`agentTabStop`) has no pane to type into until it wakes.
+  await wakeStoppedForInput(target);
   const deadline = Date.now() + START_WAIT_MS;
   for (;;) {
     const input = scheduledAgentInput(target);

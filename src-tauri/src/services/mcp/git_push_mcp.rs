@@ -28,7 +28,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::services::root_mcp::{Caller, Session};
-use crate::services::git_hardened::{hardened_git_command_in, push_transport_command, resolve_pre_push_hook, scoped_token_config};
+use crate::services::git_hardened::{hardened_git_command_in, push_transport_command, resolve_pre_push_hook};
+use crate::services::git_hosting::GitAuth;
 
 pub const SERVER_NAME: &str = crate::brand::MCP_GIT_SERVER;
 /// Emitted whenever a proposal is created or changes state.
@@ -235,9 +236,15 @@ impl Category {
 /// A failed step: the category, one sentence, and what ran (already capped
 /// and redacted by the time it is stored).
 #[derive(Clone, Debug)]
-pub struct Failure { pub category: Category, pub message: String, pub output: String }
+pub struct Failure {
+    pub category: Category, pub message: String, pub output: String,
+    /// The `exec_trust` request of a host preflight whose hooks the user has
+    /// not approved: the push is staged as a "review the hooks" card instead
+    /// of failing ([`run_request`]).
+    pub trust: Option<Value>,
+}
 impl Failure {
-    pub(crate) fn new(category: Category, message: impl Into<String>) -> Self { Failure { category, message: message.into(), output: String::new() } }
+    pub(crate) fn new(category: Category, message: impl Into<String>) -> Self { Failure { category, message: message.into(), output: String::new(), trust: None } }
     pub(crate) fn with_output(mut self, output: String) -> Self { self.output = output; self }
 }
 
@@ -258,9 +265,9 @@ pub struct RepoState {
 // ── Output hygiene ──────────────────────────────────────────────────────────
 
 /// The last 8 KB, invisible controls stripped, credentials replaced.
-pub fn clean_output(raw: &str, secret: Option<&str>) -> String {
+pub fn clean_output(raw: &str, secrets: &[&str]) -> String {
     let stripped = crate::services::root_mcp_mail::strip_invisible(raw);
-    let redacted = redact(&stripped, secret);
+    let redacted = redact(&stripped, secrets);
     tail(&redacted, OUTPUT_CAP)
 }
 
@@ -269,13 +276,13 @@ pub(crate) fn tail(s: &str, cap: usize) -> String {
     format!("…{}", &s[s.ceil_char_boundary(s.len() - cap)..])
 }
 
-/// Replace anything that looks like a token: the effective secret itself,
+/// Replace anything that looks like a token: the tokens in play themselves,
 /// GitHub and GitLab token shapes, and the userinfo of any URL.
-pub fn redact(text: &str, secret: Option<&str>) -> String {
-    let mut out = match secret.filter(|s| s.len() >= 8) {
-        Some(secret) => text.replace(secret, "[redacted]"),
-        None => text.to_string(),
-    };
+pub fn redact(text: &str, secrets: &[&str]) -> String {
+    let mut out = text.to_string();
+    for secret in secrets.iter().filter(|s| s.len() >= 8) {
+        out = out.replace(*secret, "[redacted]");
+    }
     const PREFIXES: &[&str] = &["github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "glpat-"]; // privacy-check: ok — token prefixes the redactor looks for, no token
     let mut result = String::with_capacity(out.len());
     let chars: Vec<char> = out.chars().collect();
@@ -576,8 +583,8 @@ struct RemoteView { sha: Option<String>, default_branch: Option<String> }
 
 /// One `ls-remote --symref` for the branch and the remote's `HEAD`, with the
 /// scoped token. The remote's own answer beats any local guess.
-fn ls_remote(dir: &Path, url: &str, branch: &str, token: Option<&str>, origins: &[String]) -> Result<RemoteView, Failure> {
-    let stdout = ls_remote_raw(dir, url, &["HEAD".to_string(), format!("refs/heads/{branch}")], token, origins)?;
+fn ls_remote(dir: &Path, url: &str, branch: &str, auth: &GitAuth) -> Result<RemoteView, Failure> {
+    let stdout = ls_remote_raw(dir, url, &["HEAD".to_string(), format!("refs/heads/{branch}")], auth)?;
     let mut view = RemoteView { sha: None, default_branch: None };
     let want = format!("refs/heads/{branch}");
     for line in stdout.lines() {
@@ -594,19 +601,18 @@ fn ls_remote(dir: &Path, url: &str, branch: &str, token: Option<&str>, origins: 
 
 /// `git ls-remote --symref` for exactly `refs`, with the scoped token; its
 /// stdout, or the classified failure. Shared with `services::git_release`.
-pub(crate) fn ls_remote_raw(dir: &Path, url: &str, refs: &[String], token: Option<&str>, origins: &[String]) -> Result<String, Failure> {
-    ls_remote_raw_within(dir, url, refs, token, origins, REMOTE_TIMEOUT)
+pub(crate) fn ls_remote_raw(dir: &Path, url: &str, refs: &[String], auth: &GitAuth) -> Result<String, Failure> {
+    ls_remote_raw_within(dir, url, refs, auth, REMOTE_TIMEOUT)
 }
 
 /// [`ls_remote_raw`] stopped after `timeout` (the card refresh asks for far
 /// less than a push's two minutes).
-pub(crate) fn ls_remote_raw_within(dir: &Path, url: &str, refs: &[String], token: Option<&str>, origins: &[String], timeout: Duration) -> Result<String, Failure> {
-    let mut args: Vec<String> = Vec::new();
-    if token.is_some() { args.extend(scoped_token_config(origins, "x-access-token")); }
+pub(crate) fn ls_remote_raw_within(dir: &Path, url: &str, refs: &[String], auth: &GitAuth, timeout: Duration) -> Result<String, Failure> {
+    let mut args = auth.git_args("x-access-token");
     args.extend(["ls-remote", "--symref", "--", url].map(str::to_string));
     args.extend(refs.iter().cloned());
     let mut cmd = hardened_git_command_in(dir, &args);
-    if let Some(tok) = token { cmd.env(crate::app_env!("GIT_TOKEN"), tok); }
+    auth.apply_env(&mut cmd);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     let ran = match crate::services::git_bounded::run(&mut cmd, lane_opts(None, timeout)) {
         Ok(ran) => ran,
@@ -622,7 +628,7 @@ pub(crate) fn ls_remote_raw_within(dir: &Path, url: &str, refs: &[String], token
             Category::Network => "The remote could not be reached; try again later.",
             _ => "The remote could not be queried.",
         };
-        return Err(Failure::new(category, message).with_output(clean_output(&format!("{stdout}{stderr}"), token)));
+        return Err(Failure::new(category, message).with_output(clean_output(&format!("{stdout}{stderr}"), &auth.secrets())));
     }
     Ok(stdout)
 }
@@ -678,7 +684,7 @@ fn changed_files(dir: &Path, base: &str, head: &str) -> (Vec<String>, usize) {
 
 /// Everything decided before any project code runs. `requested` is the
 /// agent's `branch` argument, which must name the checked-out branch.
-fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Option<&str>, origins: &[String]) -> Result<Plan, Failure> {
+fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, auth: &GitAuth) -> Result<Plan, Failure> {
     let branch = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]).ok().filter(|b| !b.is_empty())
         .ok_or_else(|| Failure::new(Category::NotCheckedOut, "HEAD is detached; check out the branch to push first."))?;
     if let Some(wanted) = requested {
@@ -701,11 +707,11 @@ fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Opti
     }
     let url = git(dir, &["config", "--get", &format!("remote.{remote}.url")]).ok().filter(|s| !s.is_empty())
         .ok_or_else(|| Failure::new(Category::NoUpstream, format!("remote '{remote}' has no URL.")))?;
-    if url.starts_with("http") && token.is_none() {
-        return Err(Failure::new(Category::AuthFailed, "No access token is stored for this project. Ask the user to add one in Settings → Git Hosting."));
+    if url.starts_with("http") && auth.token_for_url(&url).is_none() {
+        return Err(Failure::new(Category::AuthFailed, "No access token is stored for this remote's host. Ask the user to add one in Settings → Git Hosting (or for this project in its Git hosting… menu)."));
     }
     let head = git(dir, &["rev-parse", "--verify", &format!("refs/heads/{branch}^{{commit}}")]).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
-    let view = ls_remote(dir, &url, &branch, token, origins)?;
+    let view = ls_remote(dir, &url, &branch, auth)?;
     let remote_sha = view.sha.ok_or_else(|| Failure::new(Category::RemoteBranchMissing, format!("'{branch}' does not exist on the remote yet; the user can publish it once with the git bar.")))?;
     if remote_sha == head {
         return Err(Failure::new(Category::NothingToPush, format!("'{branch}' is already up to date with the remote.")));
@@ -776,8 +782,10 @@ fn preflight_command(
         HookBoundary::Fence(scope) => crate::services::agent_fence::one_shot_command(scope, &hook.to_string_lossy(), &args, dir)
             .map_err(|e| Failure::new(Category::FenceUnavailable, format!("The tab is fenced but the fence cannot run the pre-push hook: {e}")))?,
         HookBoundary::TrustedHost => {
-            if trust(dir).is_err() {
-                return Err(Failure::new(Category::FenceUnavailable, "This repo's hooks have not been approved to run, or changed since they were, so the pre-push hook did not run and nothing was pushed. Ask the user to push once from the git bar, which asks to approve them, then ask again."));
+            if let Err(e) = trust(dir) {
+                let mut failure = Failure::new(Category::FenceUnavailable, "This repo's hooks have not been approved to run, or changed since they were, so the pre-push hook did not run and nothing was pushed. Ask the user to push once from the git bar, which asks to approve them, then ask again.");
+                failure.trust = e.strip_prefix(crate::services::exec_trust::TRUST_REQUIRED_PREFIX).and_then(|json| serde_json::from_str(json).ok());
+                return Err(failure);
             }
             let mut cmd = crate::services::git_hardened::hook_command(hook);
             cmd.args(&args).current_dir(dir);
@@ -794,7 +802,7 @@ fn preflight_command(
         }
     };
     // Every lane's token (`root_mcp::LANE_TOKEN_ENVS`), not a hand-kept subset.
-    for var in crate::services::root_mcp::LANE_TOKEN_ENVS.iter().copied().chain([crate::app_env!("GIT_TOKEN"), "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"]) {
+    for var in crate::services::root_mcp::LANE_TOKEN_ENVS.iter().copied().chain(crate::services::git_hosting::GIT_TOKEN_ENVS).chain(["GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"]) {
         cmd.env_remove(var);
     }
     cmd.env(crate::app_env!("PUSH_PREFLIGHT"), "1");
@@ -840,7 +848,7 @@ fn preflight_with(
         };
         let (stdout, stderr) = lane_text(&ran.output);
         outputs.push(join_streams(&stdout, &stderr));
-        let output = clean_output(&outputs.join("\n"), None);
+        let output = clean_output(&outputs.join("\n"), &[]);
         if !ran.output.status.success() {
             return Err(Failure::new(Category::PreflightFailed, format!("The pre-push hook exited with status {}; nothing was pushed. Fix what its output reports and ask again.", ran.output.status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into()))).with_output(output));
         }
@@ -874,12 +882,12 @@ pub(crate) fn join_streams(stdout: &str, stderr: &str) -> String {
 
 // ── Transport ───────────────────────────────────────────────────────────────
 
-fn transport(dir: &Path, plan: &Plan, token: Option<&str>, origins: &[String]) -> Result<String, Failure> {
+fn transport(dir: &Path, plan: &Plan, auth: &GitAuth) -> Result<String, Failure> {
     // The plan's SHA, not the branch name: what was validated (Apply) or
     // shown on the approved card (Propose) is what leaves, wherever the
     // branch points by now.
     let refspec = refspec(&plan.head, &plan.branch).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
-    let mut cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
+    let mut cmd = push_transport_command(dir, &plan.url, &refspec, auth);
     before_transport();
     let ran = match crate::services::git_bounded::run(&mut cmd, lane_opts(None, TRANSPORT_TIMEOUT)) {
         Ok(ran) => ran,
@@ -887,7 +895,7 @@ fn transport(dir: &Path, plan: &Plan, token: Option<&str>, origins: &[String]) -
         Err(e) => return Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
     };
     let (stdout, stderr) = lane_text(&ran.output);
-    let output = clean_output(&join_streams(&stdout, &stderr), token);
+    let output = clean_output(&join_streams(&stdout, &stderr), &auth.secrets());
     if ran.output.status.success() {
         return Ok(output);
     }
@@ -984,6 +992,11 @@ pub struct Proposal {
     pub preflight_output: String,
     /// The user closed the finished card; `git_push_status` still reports it.
     pub cleared: bool,
+    /// A pending push whose pre-push hook would run on the host but is not
+    /// approved (or changed since): the `exec_trust` request the card shows.
+    /// The card approves it through `exec_trust_approve`, then [`decide`]
+    /// runs the request again from the start ([`retry_after_hooks`]).
+    pub hooks_trust: Option<Value>,
 }
 
 fn proposals() -> &'static Mutex<Vec<Proposal>> {
@@ -1033,7 +1046,7 @@ fn new_proposal(session: &Session, project: &str, dir: &Path, note: String) -> P
         kind: Kind::Push, tag: None, repo: None, branch: None, remote: None, url: None, head: None, remote_sha: None, commits: Vec::new(), diffstat: String::new(), files: Vec::new(), files_total: 0, note,
         needs_url_confirm: false, to_default: false, created_at: chrono::Local::now().to_rfc3339(), created: Instant::now(), status: Status::Running,
         dismissed_by: None, category: None, message: String::new(), output: String::new(), state: RepoState::default(), preflight_output: String::new(),
-        cleared: false,
+        cleared: false, hooks_trust: None,
     }
 }
 
@@ -1139,9 +1152,9 @@ pub fn settle_pushed_elsewhere(project: Option<&str>, tab: Option<&str>) -> bool
     for card in cards {
         if started.elapsed() >= SETTLE_BUDGET { break; }
         if validate_branch(&card.branch).is_err() || validate_sha(&card.head).is_err() || !settle_due(&card.id) { continue; }
-        let (token, origins) = creds(&card.project);
+        let auth = creds(&card.project);
         let want = format!("refs/heads/{}", card.branch);
-        let Ok(listing) = ls_remote_raw_within(&card.dir, &card.url, std::slice::from_ref(&want), token.as_deref(), &origins, SETTLE_TIMEOUT) else { continue };
+        let Ok(listing) = ls_remote_raw_within(&card.dir, &card.url, std::slice::from_ref(&want), &auth, SETTLE_TIMEOUT) else { continue };
         let Some(tip) = listing.lines().find_map(|line| line.split_once('\t').filter(|(sha, name)| *name == want && validate_sha(sha).is_ok()).map(|(sha, _)| sha.to_string())) else { continue };
         let on_remote = tip == card.head || lane_git_command(&card.dir, &["merge-base", "--is-ancestor", card.head.as_str(), tip.as_str()]).bounded_output().is_ok_and(|o| o.status.success());
         if !on_remote { continue; }
@@ -1309,13 +1322,13 @@ fn window_required(dir: &Path) -> Value {
     json!({"status":"refused","category":Category::WindowRequired,"message":concat!("This tab was started by ", crate::app_name!(), " Mobile while no window was open, and that background service never uses the stored git token, so it cannot push or tag from here. Ask the user to restart this tab from the ", crate::app_name!(), " window (its pushes then go through the window's approval card), or to push from the git bar."),"output":"","state":local_state(dir)})
 }
 
-pub(crate) fn creds(project: &str) -> (Option<String>, Vec<String>) {
+/// The project's tokens, each for its own origin; none in the keyring-free
+/// process.
+pub(crate) fn creds(project: &str) -> GitAuth {
     if keyring_free() {
-        return (None, crate::services::git_hosting::token_origins(Some(project), None));
+        return GitAuth::none();
     }
-    let token = crate::services::git_hosting::effective_git_creds(project).1;
-    let origins = crate::services::git_hosting::token_origins(Some(project), None);
-    (token, origins)
+    crate::services::git_hosting::project_auth(project)
 }
 
 /// Whether a planned push waits for the user's click: always below apply,
@@ -1331,8 +1344,8 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
     let lock = project_lock(&p.project);
     let _guard = lock.lock_ok();
     let policy = match policy(&p.project) { Ok(policy) => policy, Err(e) => { fail(&id, Failure::new(Category::LevelOff, e)); return; } };
-    let (token, origins) = creds(&p.project);
-    let plan = match plan(&p.dir, &policy, requested.as_deref(), token.as_deref(), &origins) {
+    let auth = creds(&p.project);
+    let plan = match plan(&p.dir, &policy, requested.as_deref(), &auth) {
         Ok(plan) => plan,
         Err(failure) => { fail(&id, failure); return; }
     };
@@ -1340,6 +1353,7 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
     let planned_head = plan.head.clone();
     let (plan, preflight_output) = match preflight(&p.dir, HookBoundary::of(p.fence_scope.as_deref(), p.unfenced_host), plan) {
         Ok(done) => done,
+        Err(Failure { trust: Some(trust), .. }) => { stage_hooks_review(&id, trust); return; }
         Err(failure) => { fail(&id, failure); return; }
     };
     // The hook may have committed (a version bump): the workflows of the commit
@@ -1366,7 +1380,45 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
     if staged { supersede_older(&id); }
     changed();
     if staged { return; }
-    push_now(&id, &plan, token.as_deref(), &origins);
+    push_now(&id, &plan, &auth);
+}
+
+/// The pre-push hook would run on the host and the user has not approved it
+/// (2442g): rather than a refusal that sends the user hunting for the git
+/// bar, the push waits on a card that shows the hooks. Nothing ran yet.
+fn stage_hooks_review(id: &str, trust: Value) {
+    update(id, |p| {
+        p.status = Status::Pending;
+        p.hooks_trust = Some(trust);
+        p.message = "This repo's pre-push hook runs on the user's computer and they have not approved it yet (or it changed since). A card asks them to review it; once they approve, the push request runs again by itself. Nothing was pushed yet; poll git_push_status for the outcome.".into();
+    });
+    supersede_older(id);
+    changed();
+}
+
+/// The user approved the hooks a [`stage_hooks_review`] card showed (the
+/// card records that through `exec_trust_approve` first): the request runs
+/// again from its plan, as if just asked. Still unapproved (they changed in
+/// between) stages a fresh review; a branch that now needs a push card
+/// stages that one.
+fn retry_after_hooks(id: &str, p: &Proposal) -> Result<Proposal, String> {
+    let level = policy(&p.project).map(|policy| policy.level()).unwrap_or(Level::Propose);
+    if level == Level::Off {
+        return fail(id, Failure::new(Category::LevelOff, "Agent pushes were turned off for this project meanwhile.")).ok_or("proposal not found".into());
+    }
+    let claimed = update_from(id, Status::Pending, |p| {
+        p.status = Status::Running;
+        p.hooks_trust = None;
+        p.message.clear();
+    })
+    .ok_or(NOT_PENDING)?;
+    changed();
+    let (worker_id, requested) = (id.to_string(), p.branch.clone());
+    let spawned = std::thread::Builder::new().name("git-push-mcp".into()).spawn(move || run_request(worker_id, level, requested));
+    if let Err(e) = spawned {
+        return fail(id, Failure::new(Category::Busy, format!("The push could not be started again: {e}"))).ok_or("proposal not found".into());
+    }
+    Ok(claimed)
 }
 
 /// A pre-push hook that committed moved the pushed commit: whether its branch
@@ -1378,9 +1430,9 @@ fn refresh_to_default(dir: &Path, planned_head: &str, mut plan: Plan) -> Plan {
     plan
 }
 
-fn push_now(id: &str, plan: &Plan, token: Option<&str>, origins: &[String]) {
+fn push_now(id: &str, plan: &Plan, auth: &GitAuth) {
     let Some(p) = get(id) else { return };
-    match transport(&p.dir, plan, token, origins) {
+    match transport(&p.dir, plan, auth) {
         Ok(output) => {
             update(id, |p| {
                 p.status = Status::Pushed;
@@ -1411,6 +1463,7 @@ pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
         changed();
         return Ok(out);
     }
+    if p.kind == Kind::Push && p.hooks_trust.is_some() { return retry_after_hooks(id, &p); }
     after_pending_check();
     let lock = project_lock(&p.project);
     let _guard = lock.lock_ok();
@@ -1453,10 +1506,10 @@ fn decide_push(id: &str, p: Proposal) -> Result<Proposal, String> {
     if current != head {
         return fail(id, Failure::new(Category::StaleApproval, "The branch moved after the proposal was made; ask the agent to request the push again.")).ok_or("proposal not found".into());
     }
-    let (token, origins) = creds(&p.project);
+    let auth = creds(&p.project);
     // The remote may have moved too: still fine while the approved SHA
     // fast-forwards it, otherwise the same answer the agent gets.
-    let view = match ls_remote(&p.dir, &url, &branch, token.as_deref(), &origins) {
+    let view = match ls_remote(&p.dir, &url, &branch, &auth) {
         Ok(view) => view,
         Err(failure) => return fail(id, failure).ok_or("proposal not found".into()),
     };
@@ -1468,7 +1521,7 @@ fn decide_push(id: &str, p: Proposal) -> Result<Proposal, String> {
     }
     update(id, |p| p.needs_url_confirm = false);
     let plan = Plan { branch, remote, url, head, remote_sha: live_remote, to_default: p.to_default, default_branch: view.default_branch, commits: p.commits.clone(), diffstat: p.diffstat.clone(), needs_url_confirm: false };
-    push_now(id, &plan, token.as_deref(), &origins);
+    push_now(id, &plan, &auth);
     get(id).ok_or("proposal not found".into())
 }
 
@@ -1513,7 +1566,7 @@ fn run_release(id: String, requested: Option<String>) {
     let Some(p) = get(&id) else { return };
     let lock = project_lock(&p.project);
     let _guard = lock.lock_ok();
-    let (token, origins) = creds(&p.project);
+    let auth = creds(&p.project);
     let tag = match requested {
         Some(tag) => tag,
         None => match git(&p.dir, &["rev-parse", "--verify", "HEAD^{commit}"]) {
@@ -1521,7 +1574,7 @@ fn run_release(id: String, requested: Option<String>) {
             Err(e) => { fail(&id, Failure::new(Category::NotCheckedOut, e)); return; }
         },
     };
-    let plan = match crate::services::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins, &release_ci_gate(&p.project)) {
+    let plan = match crate::services::git_release::plan(&p.dir, &tag, true, &auth, &release_ci_gate(&p.project)) {
         Ok(plan) => plan,
         Err(failure) => { update(&id, |p| p.tag = Some(tag.clone())); fail(&id, release_failure(&p, failure)); return; }
     };
@@ -1546,8 +1599,8 @@ fn run_release(id: String, requested: Option<String>) {
 /// the tag object it verified, so a local tag moved meanwhile is not sent).
 fn decide_release(p: Proposal) -> Result<Proposal, String> {
     let (Some(tag), Some(head)) = (p.tag.clone(), p.head.clone()) else { return Err("incomplete proposal".into()) };
-    let (token, origins) = creds(&p.project);
-    let plan = match crate::services::git_release::plan(&p.dir, &tag, true, token.as_deref(), &origins, &release_ci_gate(&p.project)) {
+    let auth = creds(&p.project);
+    let plan = match crate::services::git_release::plan(&p.dir, &tag, true, &auth, &release_ci_gate(&p.project)) {
         Ok(plan) => plan,
         Err(failure) => return fail(&p.id, release_failure(&p, failure)).ok_or("proposal not found".into()),
     };
@@ -1555,7 +1608,7 @@ fn decide_release(p: Proposal) -> Result<Proposal, String> {
         return fail(&p.id, Failure::new(Category::StaleApproval, "The branch moved after the release was proposed; ask the agent to request it again.")).ok_or("proposal not found".into());
     }
     // `decide` claimed the card (`Running`) under the project lock already.
-    match crate::services::git_release::release(&p.dir, &plan, &plan.tag, token.as_deref(), &origins) {
+    match crate::services::git_release::release(&p.dir, &plan, &plan.tag, &auth) {
         Ok(output) => {
             update(&p.id, |p| {
                 p.status = Status::Pushed;
@@ -1710,7 +1763,7 @@ fn proposal_view(p: &Proposal) -> Value {
         "id": p.id, "kind": p.kind, "tag": p.tag, "repo": p.repo, "status": p.status, "category": p.category, "message": p.message, "output": p.output, "state": p.state,
         "branch": p.branch, "remote": p.remote, "url": p.url, "head": p.head, "remoteSha": p.remote_sha,
         "commits": p.commits, "diffstat": p.diffstat, "files": p.files, "filesTotal": p.files_total, "note": p.note, "needsUrlConfirm": p.needs_url_confirm, "toDefault": p.to_default, "dismissedBy": p.dismissed_by,
-        "createdAt": p.created_at, "preflightOutput": p.preflight_output,
+        "createdAt": p.created_at, "preflightOutput": p.preflight_output, "hooksReview": p.hooks_trust.is_some(),
     })
 }
 
@@ -2034,7 +2087,7 @@ mod tests {
     fn transport_argv_is_hookless_scoped_and_explicit() {
         let dir = tempfile::tempdir().unwrap();
         let spec = refspec("0123456789abcdef0123456789abcdef01234567", "develop").unwrap();
-        let cmd = push_transport_command(dir.path(), "https://github.com/o/r.git", &spec, Some("zzsecretzz"), &["https://github.com".into()]);
+        let cmd = push_transport_command(dir.path(), "https://github.com/o/r.git", &spec, &GitAuth::single("zzsecretzz", &["https://github.com".into()]));
         let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         let joined = args.join(" ");
         assert!(args.windows(2).any(|w| w == ["-c", "core.hooksPath="]), "{joined}");
@@ -2054,14 +2107,14 @@ mod tests {
     #[test]
     fn output_is_capped_stripped_and_redacted() {
         let long = "x".repeat(OUTPUT_CAP + 100);
-        let capped = clean_output(&long, None);
+        let capped = clean_output(&long, &[]);
         assert!(capped.starts_with('…') && capped.chars().count() == OUTPUT_CAP + 1);
-        assert_eq!(redact("token ghp_abcdefghijklmnop123 and github_pat_11AAAA_bbbb end", None), "token [redacted] and [redacted] end"); // privacy-check: ok — fake test token
-        assert_eq!(redact("glpat-xxxxxxxxxxxxxxxxxxxx\n", None), "[redacted]\n"); // privacy-check: ok — fake test token
-        assert_eq!(redact("remote: https://x-access-token:ghp_secretsecret@github.com/o/r.git", None), "remote: https://[redacted]@github.com/o/r.git"); // privacy-check: ok — fake test token
-        assert_eq!(redact("https://github.com/o/r.git ok", None), "https://github.com/o/r.git ok");
-        assert_eq!(redact("the effective one is s3cr3tvalue here", Some("s3cr3tvalue")), "the effective one is [redacted] here");
-        assert_eq!(clean_output("a\u{200b}b\x1b[31mc", None), "ab[31mc");
+        assert_eq!(redact("token ghp_abcdefghijklmnop123 and github_pat_11AAAA_bbbb end", &[]), "token [redacted] and [redacted] end"); // privacy-check: ok — fake test token
+        assert_eq!(redact("glpat-xxxxxxxxxxxxxxxxxxxx\n", &[]), "[redacted]\n"); // privacy-check: ok — fake test token
+        assert_eq!(redact("remote: https://x-access-token:ghp_secretsecret@github.com/o/r.git", &[]), "remote: https://[redacted]@github.com/o/r.git"); // privacy-check: ok — fake test token
+        assert_eq!(redact("https://github.com/o/r.git ok", &[]), "https://github.com/o/r.git ok");
+        assert_eq!(redact("the effective one is s3cr3tvalue here", &["s3cr3tvalue"]), "the effective one is [redacted] here");
+        assert_eq!(clean_output("a\u{200b}b\x1b[31mc", &[]), "ab[31mc");
     }
 
     #[test]
@@ -2145,6 +2198,28 @@ mod tests {
         assert_eq!(Category::from_str("window_required"), Some(Category::WindowRequired));
         serve_without_keyring_on_this_thread(false);
         for _ in 0..6 { assert!(admit(&s, &call("git_push", json!({}))).is_ok(), "the refusals cost no budget"); }
+    }
+
+    /// 2442g: an unapproved host hook waits on a review card rather than
+    /// failing; approving it claims the card and runs the request again.
+    #[test]
+    fn unapproved_hooks_stage_a_review_card_that_reruns_the_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = session("tab:hooks-review", dir.path());
+        let id = test_proposal(&s, dir.path());
+        stage_hooks_review(&id, json!({"kind":"git_hooks","fingerprint":"f"}));
+        let staged = get(&id).unwrap();
+        assert_eq!(staged.status, Status::Pending);
+        assert!(staged.hooks_trust.is_some());
+        assert_eq!(proposal_view(&staged)["hooksReview"], true);
+        let claimed = decide(&id, true).unwrap();
+        assert_eq!(claimed.status, Status::Running, "approving reruns the request");
+        assert!(claimed.hooks_trust.is_none());
+        assert!(decide(&id, true).is_err(), "the card was claimed once");
+        // Dismissing one closes it like any card.
+        let id = test_proposal(&s, dir.path());
+        stage_hooks_review(&id, json!({}));
+        assert_eq!(decide(&id, false).unwrap().status, Status::Dismissed);
     }
 
     #[test]
@@ -2236,11 +2311,11 @@ mod tests {
         let (_root, _remote, work) = pair();
         let policy = propose_policy();
         // Up to date.
-        assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::NothingToPush);
+        assert_eq!(plan(&work, &policy, None, &GitAuth::none()).unwrap_err().category, Category::NothingToPush);
         let head = commit(&work, "b.txt");
         // Another branch than the checked-out one.
-        assert_eq!(plan(&work, &policy, Some("main"), None, &[]).unwrap_err().category, Category::NotCheckedOut);
-        let p = plan(&work, &policy, Some("develop"), None, &[]).unwrap();
+        assert_eq!(plan(&work, &policy, Some("main"), &GitAuth::none()).unwrap_err().category, Category::NotCheckedOut);
+        let p = plan(&work, &policy, Some("develop"), &GitAuth::none()).unwrap();
         assert_eq!((p.branch.as_str(), p.head.as_str(), p.commits.len()), ("develop", head.as_str(), 1));
         assert!(p.needs_url_confirm);
         assert_eq!(p.default_branch.as_deref(), Some("main"));
@@ -2248,28 +2323,28 @@ mod tests {
         // The remote's default branch is planned, marked for the user's click.
         sh(&work, &["checkout", "-q", "main"]);
         commit(&work, "c.txt");
-        let mut to_main = plan(&work, &policy, None, None, &[]).unwrap();
+        let mut to_main = plan(&work, &policy, None, &GitAuth::none()).unwrap();
         assert!(to_main.to_default && to_main.branch == "main");
         to_main.needs_url_confirm = false;
         assert!(must_stage(Level::Apply, &to_main), "even apply waits for the click on the default branch");
         assert!(!must_stage(Level::Apply, &Plan { to_default: false, ..to_main.clone() }));
         // Unless the project lists it.
         let main_listed = ProjectPolicy { protected: vec!["main".into()], ..propose_policy() };
-        assert_eq!(plan(&work, &main_listed, None, None, &[]).unwrap_err().category, Category::BranchProtected);
+        assert_eq!(plan(&work, &main_listed, None, &GitAuth::none()).unwrap_err().category, Category::BranchProtected);
         sh(&work, &["checkout", "-q", "develop"]);
         // A listed branch neither.
         let listed = ProjectPolicy { protected: vec!["develop".into()], ..propose_policy() };
-        assert_eq!(plan(&work, &listed, None, None, &[]).unwrap_err().category, Category::BranchProtected);
+        assert_eq!(plan(&work, &listed, None, &GitAuth::none()).unwrap_err().category, Category::BranchProtected);
         // No upstream, missing remote branch.
         sh(&work, &["checkout", "-q", "-b", "topic"]);
-        assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::NoUpstream);
+        assert_eq!(plan(&work, &policy, None, &GitAuth::none()).unwrap_err().category, Category::NoUpstream);
         sh(&work, &["config", "branch.topic.remote", "origin"]);
         sh(&work, &["config", "branch.topic.merge", "refs/heads/topic"]);
-        assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::RemoteBranchMissing);
+        assert_eq!(plan(&work, &policy, None, &GitAuth::none()).unwrap_err().category, Category::RemoteBranchMissing);
         sh(&work, &["checkout", "-q", "develop"]);
         // A repo-scope insteadOf cannot pin the destination.
         sh(&work, &["config", "url.https://evil.invalid/.insteadOf", "file://"]);
-        assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::UrlRewritten);
+        assert_eq!(plan(&work, &policy, None, &GitAuth::none()).unwrap_err().category, Category::UrlRewritten);
         sh(&work, &["config", "--unset", "url.https://evil.invalid/.insteadOf"]);
         // #2349: a config read git refuses (a FIFO it would block on) is not
         // "no rewrite" — unknown fails closed.
@@ -2290,10 +2365,10 @@ mod tests {
         sh(&other, &["config", "user.name", "t"]); sh(&other, &["config", "user.email", "t@example.invalid"]);
         commit(&other, "d.txt");
         sh(&other, &["push", "-q", "origin", "develop"]);
-        assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::Diverged);
+        assert_eq!(plan(&work, &policy, None, &GitAuth::none()).unwrap_err().category, Category::Diverged);
         // Detached.
         sh(&work, &["checkout", "-q", "--detach"]);
-        assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::NotCheckedOut);
+        assert_eq!(plan(&work, &policy, None, &GitAuth::none()).unwrap_err().category, Category::NotCheckedOut);
     }
 
     #[test]
@@ -2303,15 +2378,15 @@ mod tests {
         let head = commit(&work, "b.txt");
         sh(&work, &["config", "remote.origin.pushurl", "file:///nonexistent/elsewhere.git"]);
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
-        let p = plan(&work, &policy, None, None, &[]).unwrap();
+        let p = plan(&work, &policy, None, &GitAuth::none()).unwrap();
         assert!(!p.needs_url_confirm);
-        let output = transport(&work, &p, None, &[]).unwrap();
+        let output = transport(&work, &p, &GitAuth::none()).unwrap();
         assert!(output.contains("refs/heads/develop"), "{output}");
         assert_eq!(sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]), head);
         // Now the remote is ahead of the branch: fast-forward only, no retry.
         sh(&work, &["reset", "-q", "--hard", "HEAD~1"]);
         commit(&work, "e.txt");
-        assert_eq!(plan(&work, &policy, None, None, &[]).unwrap_err().category, Category::Diverged);
+        assert_eq!(plan(&work, &policy, None, &GitAuth::none()).unwrap_err().category, Category::Diverged);
     }
 
     #[cfg(unix)]
@@ -2331,7 +2406,7 @@ mod tests {
         sh(&work, &["config", "core.hooksPath", ".githooks"]);
         assert_eq!(resolve_pre_push_hook(&work).unwrap(), hook);
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
-        let before = plan(&work, &policy, None, None, &[]).unwrap();
+        let before = plan(&work, &policy, None, &GitAuth::none()).unwrap();
         std::env::set_var(crate::app_env!("GIT_TOKEN"), "leak-me-not");
         let (after, output) = preflight(&work, HookBoundary::Host, before.clone()).unwrap();
         std::env::remove_var(crate::app_env!("GIT_TOKEN"));
@@ -2352,14 +2427,14 @@ mod tests {
         // A hook that adds a commit on every run is refused, not chased.
         std::fs::remove_file(&seen_file).unwrap();
         std::env::set_var("HOOK_ALWAYS", "1");
-        let failure = preflight(&work, HookBoundary::Host, plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        let failure = preflight(&work, HookBoundary::Host, plan(&work, &policy, None, &GitAuth::none()).unwrap()).unwrap_err();
         std::env::remove_var("HOOK_ALWAYS");
         assert_eq!(failure.category, Category::PreflightFailed);
         assert!(failure.message.contains("again"), "{}", failure.message);
         assert_eq!(std::fs::read_to_string(&seen_file).unwrap().lines().filter(|l| l.starts_with("refs/heads/")).count(), 2, "run twice, never a third time");
         // Exit 1 refuses with the output.
         std::env::set_var("HOOK_EXIT", "1");
-        let failure = preflight(&work, HookBoundary::Host, plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        let failure = preflight(&work, HookBoundary::Host, plan(&work, &policy, None, &GitAuth::none()).unwrap()).unwrap_err();
         std::env::remove_var("HOOK_EXIT");
         assert_eq!(failure.category, Category::PreflightFailed);
         assert!(failure.output.contains("hook says hi"));
@@ -2382,7 +2457,7 @@ mod tests {
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
         sh(&work, &["config", "core.hooksPath", ".githooks"]);
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
-        let before = plan(&work, &policy, None, None, &[]).unwrap();
+        let before = plan(&work, &policy, None, &GitAuth::none()).unwrap();
         let (_, output) = preflight(&work, HookBoundary::Host, before).map_err(|f| f.message).expect("a passing hook lets the push go on");
         assert!(output.trim_end().ends_with("hook-passed"), "{}", tail(&output, 200));
         assert!(output.len() <= OUTPUT_CAP + 8, "kept {} bytes", output.len());
@@ -2417,12 +2492,12 @@ mod tests {
         let id = test_proposal(&s, &work);
         let p = get(&id).unwrap();
         assert_eq!(p.fence_scope, None);
-        let failure = preflight(&work, HookBoundary::of(p.fence_scope.as_deref(), p.unfenced_host), plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        let failure = preflight(&work, HookBoundary::of(p.fence_scope.as_deref(), p.unfenced_host), plan(&work, &policy, None, &GitAuth::none()).unwrap()).unwrap_err();
         assert_eq!(failure.category, Category::FenceUnavailable, "{}", failure.message);
         assert!(!marker.exists(), "the hook ran with no fence scope recorded");
         // A scope the fence cannot build (an unknown one, or no fence on this
         // platform) refuses as well, never falling back to the host.
-        let failure = preflight(&work, HookBoundary::Fence("gp-no-such-scope"), plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        let failure = preflight(&work, HookBoundary::Fence("gp-no-such-scope"), plan(&work, &policy, None, &GitAuth::none()).unwrap()).unwrap_err();
         assert_eq!(failure.category, Category::FenceUnavailable, "{}", failure.message);
         assert!(!marker.exists());
         proposals().lock().unwrap().retain(|p| p.id != id);
@@ -2447,13 +2522,19 @@ mod tests {
         sh(&work, &["config", "core.hooksPath", ".githooks"]);
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
         let refuse = |_: &Path| Err::<(), String>("not approved".into());
-        let failure = preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, None, &[]).unwrap(), &refuse).unwrap_err();
+        let failure = preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, &GitAuth::none()).unwrap(), &refuse).unwrap_err();
         assert_eq!(failure.category, Category::FenceUnavailable, "{}", failure.message);
         assert!(failure.message.contains("git bar"), "{}", failure.message);
+        assert!(failure.trust.is_none(), "no trust request to show, so no review card");
+        assert!(!marker.exists(), "an unapproved hook ran on the host");
+        // The gate's own refusal carries what to show: the push becomes a review card.
+        let ask = |_: &Path| Err::<(), String>(format!("{}{}", crate::services::exec_trust::TRUST_REQUIRED_PREFIX, json!({"kind":"git_hooks","fingerprint":"f"})));
+        let failure = preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, &GitAuth::none()).unwrap(), &ask).unwrap_err();
+        assert_eq!(failure.trust.as_ref().and_then(|t| t["fingerprint"].as_str()), Some("f"));
         assert!(!marker.exists(), "an unapproved hook ran on the host");
         let approve = |_: &Path| Ok::<(), String>(());
         std::env::set_var(crate::app_env!("GIT_TOKEN"), "leak-me-not");
-        let ran = preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, None, &[]).unwrap(), &approve);
+        let ran = preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, &GitAuth::none()).unwrap(), &approve);
         std::env::remove_var(crate::app_env!("GIT_TOKEN"));
         ran.map_err(|f| f.message).expect("an approved hook lets the push go on");
         assert_eq!(std::fs::read_to_string(&marker).unwrap(), "tok=unset");
@@ -2792,23 +2873,23 @@ mod tests {
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
         sh(&work, &["checkout", "-q", "main"]);
         commit(&work, "c.txt");
-        let to_main = plan(&work, &policy, None, None, &[]).unwrap();
+        let to_main = plan(&work, &policy, None, &GitAuth::none()).unwrap();
         assert_eq!(to_main.default_branch.as_deref(), Some("develop"));
         assert!(to_main.to_default && must_stage(Level::Apply, &to_main), "main, though the remote's default is develop");
         // A topic branch named by a workflow trigger, and one that is not.
         sh(&work, &["checkout", "-q", "-b", "staging"]);
         sh(&work, &["push", "-q", "-u", "origin", "staging"]);
         let head = commit_files(&work, &[(".github/workflows/rel.yml", "on:\n  push:\n    branches: [staging]\n")]);
-        let planned = plan(&work, &policy, None, None, &[]).unwrap();
+        let planned = plan(&work, &policy, None, &GitAuth::none()).unwrap();
         assert!(planned.to_default && must_stage(Level::Apply, &planned), "staging deploys on push");
         sh(&work, &["checkout", "-q", "develop"]);
         commit(&work, "d.txt");
-        let other = plan(&work, &policy, None, None, &[]).unwrap();
+        let other = plan(&work, &policy, None, &GitAuth::none()).unwrap();
         assert!(other.to_default, "develop is the remote's default here");
         sh(&work, &["checkout", "-q", "-b", "topic", "main"]);
         sh(&work, &["push", "-q", "-u", "origin", "topic"]);
         commit(&work, "e.txt");
-        let topic = plan(&work, &policy, None, None, &[]).unwrap();
+        let topic = plan(&work, &policy, None, &GitAuth::none()).unwrap();
         assert!(!topic.to_default && !must_stage(Level::Apply, &topic), "an unnamed branch still goes at Apply");
         // A hook that committed moves the pushed commit: its workflows decide again.
         let moved = refresh_to_default(&work, &head, Plan { branch: "staging".into(), head: head.clone(), ..topic.clone() });
@@ -2912,10 +2993,10 @@ mod tests {
         // not wherever the branch points by then.
         let validated = commit(&work, "c.txt");
         let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
-        let p = super::plan(&work, &policy, None, None, &[]).unwrap();
+        let p = super::plan(&work, &policy, None, &GitAuth::none()).unwrap();
         assert_eq!(p.head, validated);
         let later = commit(&work, "later.txt");
-        transport(&work, &p, None, &[]).unwrap();
+        transport(&work, &p, &GitAuth::none()).unwrap();
         assert_eq!(sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]), validated);
         assert!(!has(&later));
     }
@@ -2931,7 +3012,7 @@ mod tests {
         // hidden commit, while pack-objects would still send it.
         sh(&work, &["replace", "--graft", &tip, &base]);
         assert_eq!(sh(&work, &["log", "--format=%H", &format!("{base}..{tip}")]), tip);
-        let p = super::plan(&work, &propose_policy(), None, None, &[]).unwrap();
+        let p = super::plan(&work, &propose_policy(), None, &GitAuth::none()).unwrap();
         assert_eq!(p.commits.len(), 2, "the card lists the hidden commit: {:?}", p.commits);
         assert!(p.commits.iter().any(|c| c.ends_with("hidden.txt")), "{:?}", p.commits);
         sh(&work, &["replace", "-d", &tip]);
@@ -2943,10 +3024,10 @@ mod tests {
         sh(&work, &["reset", "-q", "--hard", &base]);
         let ours = commit(&work, "ours.txt");
         sh(&work, &["replace", "--graft", &ours, &theirs]);
-        assert_eq!(super::plan(&work, &propose_policy(), None, None, &[]).unwrap_err().category, Category::Diverged);
+        assert_eq!(super::plan(&work, &propose_policy(), None, &GitAuth::none()).unwrap_err().category, Category::Diverged);
         let forced = Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: ours,
             remote_sha: theirs.clone(), to_default: false, default_branch: Some("main".into()), commits: vec![], diffstat: String::new(), needs_url_confirm: false };
-        assert!(transport(&work, &forced, None, &[]).is_err(), "the transport refuses the non-fast-forward too");
+        assert!(transport(&work, &forced, &GitAuth::none()).is_err(), "the transport refuses the non-fast-forward too");
         assert_eq!(sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]), theirs);
     }
 

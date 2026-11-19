@@ -60,7 +60,13 @@ macro_rules! send_hint {
 }
 
 /// What every CLI is told: Claude and Codex through their session hook.
-pub const HINT: &str = send_hint!();
+macro_rules! links_hint {
+    () => {
+        concat!("In answers, link to app settings with Markdown, for example [Git access token](", crate::app_slug!(), "://settings/git/access-token) or [Mobile setup](", crate::app_slug!(), "://settings/mobile). Settings search offers Copy link for exact controls; use the help tools to read the settings-links topic for the complete destination catalog. Use only known setting, project and tab identifiers, never invent them or include secrets in links. Links navigate only when clicked.")
+    };
+}
+
+pub const HINT: &str = concat!(send_hint!(), " ", links_hint!());
 
 /// The `<slug>-mcp` line: Tabtivity's MCP tools for a CLI the lanes could not
 /// name them to at launch (`agent_registry::McpWiring::None`).
@@ -77,7 +83,7 @@ macro_rules! tools_hint {
 
 /// What the CLIs past Claude and Codex are told, by hook or instructions
 /// file: the send line and the `<slug>-mcp` line.
-pub const HOOK_HINT: &str = concat!(send_hint!(), " ", tools_hint!());
+pub const HOOK_HINT: &str = concat!(send_hint!(), " ", tools_hint!(), " ", links_hint!());
 
 /// The send skill's folder and `name`, which is also Claude's slash command.
 pub const SKILL_NAME: &str = concat!(crate::app_slug!(), "-send");

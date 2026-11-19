@@ -2,6 +2,7 @@
  *  opens the source line that produced it, and every outcome is worded. */
 import { useCallback, useEffect, useState } from "react";
 import { jumpToSource } from "../fileViewer/sourceJump";
+import { useTexPdfHost } from "../fileViewer/texPdfHost";
 import { canRecompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
 import {
   synctexEdit,
@@ -37,6 +38,7 @@ export function usePdfReverseSearch({
   /** The reader's scroller, which carries `data-sync-armed`. */
   scrollRef: React.RefObject<HTMLDivElement>;
 }) {
+  const host = useTexPdfHost();
   // True when a `.synctex(.gz)` sits beside the PDF, enabling reverse search.
   const [syncable, setSyncable] = useState(false);
   // The `.tex` that built this PDF by its name (`texSourceCandidates`), or null:
@@ -148,6 +150,9 @@ export function usePdfReverseSearch({
     async (page: number, x: number, y: number) => {
       setSyncNotice(null);
       const jump = async (input: string, line: number) => {
+        // A one-pane host (the agent tab's Data view) shows the source in this
+        // PDF's place instead of a tab.
+        if (host?.showSource(input, line, 0)) return;
         const root = await resolveTexRoot(input).catch(() => input);
         jumpToSource(input, line, 0, root);
       };
@@ -179,7 +184,7 @@ export function usePdfReverseSearch({
       const canRecompile = await canRecompileTexSource(source).catch(() => false);
       setSyncNotice({ kind, opened, source, sources: status?.newer_sources ?? [], canRecompile });
     },
-    [path, scope, remoteSource, syncable, texSource, findTexSource],
+    [path, scope, remoteSource, syncable, texSource, findTexSource, host],
   );
 
   return { syncNotice, setSyncNotice, onSyncClick };

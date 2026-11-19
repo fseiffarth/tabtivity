@@ -1614,6 +1614,13 @@ pub fn run() {
             // inside each one to the current names, off the main thread.
             // Returns at once while the name is unchanged.
             services::brand_migration::project::sweep_at_launch();
+            // An older build's plaintext git token → the keyring, off the main
+            // thread (a keyring prompt may block). Kept in place on failure.
+            std::thread::spawn(|| {
+                if let Err(e) = services::git_hosting::migrate_legacy_token() {
+                    eprintln!("git hosting: the old access token stays in settings.json for now: {e}");
+                }
+            });
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
             commands::root_mcp::start(core.clone());
@@ -2356,6 +2363,8 @@ pub fn run() {
             commands::git_fork::provider_cli_available,
             commands::git_hosting::get_project_git_hosting,
             commands::git_hosting::set_project_git_hosting,
+            commands::git_hosting::get_git_hosts,
+            commands::git_hosting::set_git_hosts,
             // Timer flush + activity
             commands::timer::timer_flush_app,
             commands::timer::timer_flush_project,
@@ -2478,6 +2487,7 @@ pub fn run() {
             commands::terminal::local_tmux_rename,
             commands::terminal::local_tmux_screen,
             commands::terminal::local_tmux_pane_dead,
+            commands::terminal::local_tmux_app_sessions,
             commands::terminal::project_cpu_percent,
             // External apps / window tracking
             commands::apps::launch_app,
@@ -2725,15 +2735,18 @@ pub fn run() {
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
             commands::agents::agent_tab_artifact,
+            commands::agents::agent_cli_handoff_prepare,
             commands::agents::agent_tab_changes,
             commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,
+            commands::agents::agent_tab_resume_pinned,
             commands::agents::agent_tab_chats,
             commands::agents::agent_tab_resume_chat,
             commands::agents::agent_tab_move_session,
             commands::agents::agent_tab_move_host,
             commands::ollama::ollama_status,
             commands::ollama::ollama_gpu_status,
+            commands::ollama::ollama_context_plan,
             commands::ollama::ollama_models_dir_plan,
             commands::ollama::ollama_registry_details,
             commands::ollama::list_ollama_models_detailed,
@@ -2752,6 +2765,7 @@ pub fn run() {
             commands::ollama::ollama_version_status,
             commands::ollama::search_ollama_registry,
             commands::ollama::search_huggingface_models,
+            commands::ollama::ollama_public_key,
             // Local code/text autocomplete (opt-in, local-only)
             commands::ollama::complete_text,
             commands::ollama::prepare_text_completion,

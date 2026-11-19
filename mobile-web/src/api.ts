@@ -262,6 +262,10 @@ export interface ProjectDetail {
   create?: CreateVerdict;
   /** The phone may open shell tabs (`shell_tabs` on the desktop); absent is off. */
   shells?: boolean;
+  /** The phone may list and attach the desktop's pictures (`desktop_images` on
+   * the desktop, default off). Absent (an older desktop) keeps the ＋ sheet's
+   * Desktop tile. */
+  desktop_images?: boolean;
   /** How the host's tabs reach the phone: `tmux`, `native` (Windows with its
    * experimental session host on), or `unsupported` on a host with neither
    * (Windows with the host off), where nothing can be opened, scheduled or
@@ -1014,7 +1018,7 @@ export function deleteSchedule(tabId: string, scheduleId: string): Promise<Sched
 /** What one agent CLI answered when asked about its own quota. `raw` is the
  * panel as the CLI printed it — the sheet's Terminal half shows exactly that,
  * and `shared/usageReport.ts` is the only thing that parses it. */
-export interface AgentUsagePanel { label: string; supported: boolean; raw?: string; error?: string; cached: boolean }
+export interface AgentUsagePanel { label: string; supported: boolean; raw?: string; error?: string; cached: boolean; readAt?: number }
 /** Today's counters for the tab's project, at the grain the desktop records
  * them: `prompts` is this agent's, the other three are the project's — every
  * agent tab in it — which is what the sheet's wording says. */
@@ -1048,11 +1052,21 @@ export async function getAgentStatus(tabId: string, refresh = false): Promise<Ag
 }
 
 /** A question the agent asked, as answered: its rows, the ones the answer
- * took marked, and the answer itself — absent when it was turned down. */
+ * took marked, and the answer itself — absent when it was turned down. A
+ * `blocking` entry's questions are still waiting, with no answer. */
 export interface AskedQuestion {
   header?: string;
   question: string;
-  options?: { label: string; description?: string; chosen?: boolean }[];
+  /** Several rows may be ticked (Claude's `multiSelect`); absent when not. */
+  multiSelect?: boolean;
+  options?: {
+    label: string;
+    description?: string;
+    /** The sample shown beside the row, line breaks kept (bounded by the
+     * desktop). Preformatted text, never markdown. */
+    preview?: string;
+    chosen?: boolean;
+  }[];
   answer?: string;
 }
 
@@ -1073,12 +1087,18 @@ export interface TranscriptEntry {
    * `ExitPlanMode`), set apart from its ordinary answers. */
   plan?: boolean;
   /** On an `answer`: the questions the agent asked (Claude's
-   * `AskUserQuestion`), with the answers they got — sent once answered, so
-   * the one still waiting is the live screen's. `text` says the same plainly. */
+   * `AskUserQuestion`), with the answers they got. One still waiting is the
+   * last entry, marked `blocking`. `text` says the same plainly. */
   questions?: AskedQuestion[];
   /** On an `answer` with `questions`: still waiting for the reply — Codex's
    * async question, written when asked while the agent works on. */
   asking?: boolean;
+  /** On an `answer` with `questions`: the agent is blocked on this question
+   * on its own screen (Claude's `AskUserQuestion` call with no result yet).
+   * The live card shows it, so the chat must leave the entry out; it is the
+   * ordinary answered (or declined) card once the mark is gone. Not `asking`
+   * (Codex's queue). */
+  blocking?: boolean;
   /** On an `agent`: it has not reported back yet (Claude's spawn call has
    * no result in the transcript). */
   running?: boolean;
@@ -1148,12 +1168,28 @@ export interface SessionTranscript {
    * without a result, and background ones still running. The phone's API
    * masks each `command` and `description` (`services::mobile_control::shell_mask`). */
   shells?: RunningShell[];
+  /** The other tool calls (not `Bash`: those are `shells`) the agent has made
+   * since the last prompt that have no result yet, oldest first — a permission
+   * dialog's subject while the agent waits on a decision. The phone's API
+   * masks each `subject` (a path project-relative or its leaf, a URL its host
+   * only, anything else dropped). */
+  waitingTools?: WaitingTool[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
   contextCard?: string;
   /** Desktop Reader only: the read named a watch id and the backend armed
    * it, so a change will be announced (`lib/agents/transcriptWatch`). */
   watched?: boolean;
+}
+
+/** A tool call with no result yet (`SessionTranscript.waitingTools`). */
+export interface WaitingTool {
+  /** The tool: `Edit`, `Write`, `WebFetch`, … */
+  name: string;
+  /** What it works on: a file path (`Edit`, `Write`, `MultiEdit`,
+   * `NotebookEdit`) or a URL (`WebFetch`); absent for any other tool. */
+  subject?: string;
+  at?: string;
 }
 
 /** A shell command the agent started and is waiting on. The phone's API

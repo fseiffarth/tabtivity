@@ -58,6 +58,7 @@ import { PrintRequestsHost } from "../printing/PrintRequests";
 import { AgentContinueHost } from "./AgentContinueHost";
 import { AgentCronHost } from "./AgentCronHost";
 import { AgentScheduleHost } from "./AgentScheduleHost";
+import { AgentTabStopHost } from "./AgentTabStopHost";
 import { TabMessagesHost } from "./TabMessagesHost";
 import { TimerLeaseHost } from "./TimerLeaseHost";
 import { WorkspacePatchHost } from "./WorkspacePatchHost";
@@ -1300,7 +1301,7 @@ export function AppShell() {
               }}
             >
               {switchToastAction.label}
-              <UntestedTag id="projectSwitcher.undoRemove" />
+              {switchToastAction.untested && <UntestedTag id={switchToastAction.untested} />}
             </button>
           )}
         </div>
@@ -1542,6 +1543,7 @@ export function AppShell() {
           <AgentContinueHost />
           <AgentCronHost />
           <AgentScheduleHost />
+          <AgentTabStopHost />
           <TabMessagesHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root

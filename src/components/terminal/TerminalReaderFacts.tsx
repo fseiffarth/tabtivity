@@ -31,7 +31,7 @@ import { currentMode, modeChoices, modeFixed, modeOffered, shiftTabKey } from ".
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
-import { limitMeters, parseUsageReport, type LimitMeters } from "../../../shared/usageReport";
+import { limitMeters, parseUsageReport, resolveResetAt, type LimitMeters } from "../../../shared/usageReport";
 import { STATUS_AGENTS, TerminalReaderStatus, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS, TerminalReaderContext } from "./TerminalReaderContext";
 import { usePoll, type PollRun } from "../../lib/usePoll";
@@ -143,7 +143,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       const next = limitMeters(parseUsageReport(report.raw));
       if (!next.session && !next.week) return;
       setLimits(next);
-      setReadAt(Date.now());
+      setReadAt(report.readAt ?? Date.now());
     });
   }, [tab.cmd]);
   // While the Reader shows, with the window in front (`usePoll`).
@@ -365,6 +365,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const readTime = fromPanel ? new Date(readAt) : clock;
   const limitFact = (meter: LimitMeters["session"], key: "mobile.facts.session" | "mobile.facts.week") => {
     if (!meter) return null;
+    const resetAt = meter.resets ? resolveResetAt(meter.resets, readTime) : null;
+    if (resetAt && resetAt.getTime() <= clock.getTime()) return null;
     const left = meter.resets ? resetCountdown(meter.resets, clock, readTime) : "";
     const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
     const percentText = t(key, { percent: Math.round(remaining) });
@@ -375,13 +377,15 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         onClick={toggleLimitBars}
         aria-pressed={limitBars}
         aria-label={limitBars ? percentText : undefined}
-        title={[meter.resets ? resetText(meter.resets, clock, readTime) : "", t("mobile.facts.limitToggle")].filter(Boolean).join("\n")}
+        title={[meter.resets ? resetText(meter.resets, clock, readTime) : "", t("mobile.facts.limitToggle"), readAt < now - 180_000 ? t("agents.usage.readAge", { minutes: Math.floor((now - readAt) / 60_000) }) : ""].filter(Boolean).join("\n")}
       >
         {limitBars ? <>
           {t(key === "mobile.facts.session" ? "mobile.facts.sessionLabel" : "mobile.facts.weekLabel")}
           <span className="terminal-reader-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span>
         </> : percentText}
         {left && <> · {t("mobile.facts.resetIn", { time: left })}</>}
+        {fromPanel && readAt < now - 180_000 && <small> · {t("agents.usage.readAge", { minutes: Math.floor((now - readAt) / 60_000) })}</small>}
+        {fromPanel && codex && <UntestedTag id="agents.codex.accountLimits" />}
       </button>
     );
   };

@@ -342,6 +342,12 @@ export function noteBackgroundWork(ptyId: string, at = Date.now()): void {
   scheduleRecompute();
 }
 
+/** When work the tab's session left running (a subagent, a background shell)
+ *  was last seen alive, if ever: the stop sweep leaves such a tab running. */
+export function lastBackgroundWorkAt(ptyId: string): number | undefined {
+  return backgroundAtByPty[ptyId];
+}
+
 /** Whether a `working` after a Stop is the agent woken by the work it left
  *  running (a subagent or background shell finished) rather than a new prompt:
  *  that work was seen alive after the Stop, and nobody typed since. */

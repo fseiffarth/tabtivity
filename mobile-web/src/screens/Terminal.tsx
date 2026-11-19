@@ -70,6 +70,7 @@ import { liveModelPick } from "../terminal/modelRows";
 import { type TerminalControl } from "../terminal/protocol";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { readPromptSuggestion } from "../terminal/promptSuggestion";
+import { readLiveQuestion } from "../terminal/liveDialog";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
 import { sessionLimits } from "../terminal/sessionUsage";
@@ -78,9 +79,7 @@ import { BackNest } from "../backStack";
 import {
   freeTextRow,
   readCodexHooksPage,
-  readReviewStep,
   readSelectPrompt,
-  readStrayDialog,
   pressHintShown,
   dialogFooterShown,
   selectKeys,
@@ -106,6 +105,9 @@ import { fileKey, useViewableNamed } from "../terminal/chatFiles";
 import { linkPathsInHtml } from "../../../src/lib/terminal/pathCandidates";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
+import { waitingQuestion } from "../terminal/askedQuestion";
+import { useAskedCard } from "./terminal/useAskedCard";
+import { isPermissionDialog, permissionSubject, permissionSubjectLabel } from "../terminal/permissionSubject";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, pendingPrompt, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
@@ -117,7 +119,7 @@ import { formatBytes } from "../../../src/lib/formatBytes";
 import { resetCountdown, resetText, StatusSheet } from "./StatusSheet";
 import { SignInSheet } from "./SignInSheet";
 import { hasSignInTab, readCloudLink, readCloudSession, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, type SignIn, type SignInPage } from "../terminal/signIn";
-import { type LimitMeters } from "../../../shared/usageReport";
+import { resolveResetAt, type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
 import { ChatChanges } from "../components/ChatChanges";
 import { AnswerAlbum, type AnswerFiles } from "../components/AnswerFiles";
@@ -184,6 +186,7 @@ const UPLOAD_FAILURES: Record<string, TranslationKey> = {
   no_clipboard_image: "mobile.inbox.failed.clipboardGone",
   project_ineligible: "mobile.projectInbox.notShared",
   desktop_unavailable: "mobile.inbox.failed.desktopDown",
+  desktop_images_off: "mobile.inbox.failed.desktopImagesOff",
 };
 
 /** Why the desktop could not say what it has to attach. */
@@ -193,6 +196,8 @@ const DESKTOP_LIST_FAILURES: Record<string, TranslationKey> = {
   project_ineligible: "mobile.desktopImages.failed.notShared",
   timeout: "mobile.desktopImages.failed.timeout",
   offline: "mobile.desktopImages.failed.offline",
+  // "Desktop pictures on the phone" is off on the desktop (gap 65).
+  desktop_images_off: "mobile.desktopImages.failed.off",
 };
 
 /** "Screenshots · 3 min ago · 1.2 MB", or "Clipboard · 1920×1080". */
@@ -575,11 +580,15 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
         label: option.label,
         ...(prompt.review ? { title: t("terminal.reader.questionSubmitStep") } : {}),
         description: option.description,
+        ...(option.preview ? { preview: option.preview } : {}),
+        // A multi-select question read through the transcript's entry: the
+        // boxes the screen shows ticked.
+        ...(prompt.multiSelect && option.ticked !== undefined ? { box: true, checked: option.ticked } : {}),
         current: option.index === prompt.current,
         freeText: freeTextRow(option),
         pending: sent === option.number,
       }))}
-      disabled={sent !== undefined}
+      disabled={sent !== undefined || prompt.readOnly === true}
       sendingLabel={sendingLabel}
       onPick={(row) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onPick(option); }}
       onType={(row, text) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onType(option, text); }}
@@ -587,6 +596,8 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
       attach={attach}
     />
     {prompt.options.some((option) => option.keys) && isUntested("mobile.question.codexHooksPage") && <em>{t("mobile.focus.untested")}</em>}
+    {prompt.readOnly && <small className="question-waiting" role="status">{t("terminal.reader.questionWaiting")}{isUntested("mobile.question.waiting") && <em> · {t("mobile.focus.untested")}</em>}</small>}
+    {prompt.source === "entry" && !prompt.readOnly && (prompt.multiSelect || prompt.options.some((option) => option.preview)) && isUntested("mobile.question.preview") && <em>{t("mobile.focus.untested")}</em>}
   </>;
 }
 
@@ -1063,9 +1074,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   };
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   const [limitsReadAt, setLimitsReadAt] = useState(() => Date.now());
-  const rememberLimits = useCallback((next: LimitMeters) => {
+  const rememberLimits = useCallback((next: LimitMeters, readAt?: number) => {
     setLimits(next);
-    setLimitsReadAt(Date.now());
+    setLimitsReadAt(readAt ?? Date.now());
   }, []);
   /** The composer's **+**: a phone file into the project inbox, an image
    * already on the desktop, or an `@`. */
@@ -1208,6 +1219,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [filesLabel, setFilesLabel] = useState<string | null>(null);
   /** Which sides the drawer's library has (`detail.files`, `detail.host_files`). */
   const [filesSides, setFilesSides] = useState<{ here: boolean; host: boolean; hostLabel?: string }>({ here: true, host: false });
+  /** The desktop's "Desktop pictures on the phone" switch is off
+   * (`detail.desktop_images === false`): the ＋ sheet drops its Desktop tile.
+   * Unknown or an older desktop keeps it, and the routes' own refusal says why. */
+  const [desktopImagesOff, setDesktopImagesOff] = useState(false);
   /** The files drawer, the project screen's own, opened here by a right→left
    * swipe over the output. */
   /** The tablet tier (`useTier`): a tablet's header carries the model and the
@@ -1527,10 +1542,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }, [tab.id, movable, statusBranch, linkedBranch, linkedLabel, connected]);
   // The mode walk reads the status between two presses, outside React's render.
   useEffect(() => { statusRef.current = status; }, [status]);
-  /** Codex draws neither its context nor its limits on screen and has no
-   * usage panel the desktop can run, but writes both into its rollout: the
-   * stored session's figures fill in what the screen and the panel leave out,
-   * so its facts row reads like Claude's. */
+  /** Saved conversation usage fills gaps while an account read is pending or
+   * unavailable. Context remains specific to this conversation. */
   // The cleared conversation's figures are not the new chat's.
   const storedUsage = sinceClear ? undefined : transcript?.usage;
   /** The prompt the oldest turn answers, left behind "Show earlier turns",
@@ -1540,19 +1553,24 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const cutPromptTime = cutPromptMoment ? chatTime(cutPromptMoment) : undefined;
   const contextLeft = status?.context ?? (storedUsage?.contextLeft != null ? `${storedUsage.contextLeft}%` : undefined);
   const limitTime = new Date(limitsNow);
-  const shownLimits = limits.session || limits.week ? limits : sessionLimits(storedUsage, limitTime);
-  const readTime = limits.session || limits.week ? new Date(limitsReadAt) : limitTime;
+  const fromPanel = !!(limits.session || limits.week);
+  const shownLimits = fromPanel ? limits : sessionLimits(storedUsage, limitTime);
+  const readTime = fromPanel ? new Date(limitsReadAt) : limitTime;
   const sessionReset = shownLimits.session?.resets ? resetCountdown(shownLimits.session.resets, limitTime, readTime) : "";
   const weekReset = shownLimits.week?.resets ? resetCountdown(shownLimits.week.resets, limitTime, readTime) : "";
   // A tap on either limit flips both between the percentage and a bar of
   // what is left; the phone keeps the choice.
   const limitFact = (meter: LimitMeters["session"], reset: string, key: "mobile.facts.session" | "mobile.facts.week", label: "mobile.facts.sessionLabel" | "mobile.facts.weekLabel") => {
     if (!meter) return null;
+    const resetAt = meter.resets ? resolveResetAt(meter.resets, readTime) : null;
+    if (resetAt && resetAt.getTime() <= limitTime.getTime()) return null;
     const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
     const percentText = t(key, { percent: Math.round(remaining) });
-    return <button type="button" className={`fact-limit${meter.percent >= 90 ? " high" : ""}`} onClick={toggleLimitBars} aria-pressed={limitBars} aria-label={limitBars ? percentText : undefined} title={meter.resets ? resetText(meter.resets, limitTime, readTime) : undefined}>
+    return <button type="button" className={`fact-limit${meter.percent >= 90 ? " high" : ""}`} onClick={toggleLimitBars} aria-pressed={limitBars} aria-label={limitBars ? percentText : undefined} title={[meter.resets ? resetText(meter.resets, limitTime, readTime) : "", fromPanel && limitsReadAt < limitsNow - 180_000 ? t("agents.usage.readAge", { minutes: Math.floor((limitsNow - limitsReadAt) / 60_000) }) : ""].filter(Boolean).join("\n")}>
       {limitBars ? <>{t(label)}<span className="fact-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span></> : percentText}
       {reset && <> · {t("mobile.facts.resetIn", { time: reset })}</>}
+      {fromPanel && limitsReadAt < limitsNow - 180_000 && <small> · {t("agents.usage.readAge", { minutes: Math.floor((limitsNow - limitsReadAt) / 60_000) })}</small>}
+      {fromPanel && /codex/i.test(agentLabel) && isUntested("agents.codex.accountLimits") && <em className="untested">{t("mobile.newTab.untested")}</em>}
     </button>;
   };
   const {
@@ -2012,6 +2030,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           setFilesLabel(detail.files || detail.host_files ? detail.project.label : null);
           setFilesSides({ here: !!detail.files, host: !!detail.host_files, hostLabel: detail.host_label });
           setProjectName(detail.project?.label ?? null);
+          setDesktopImagesOff(detail.desktop_images === false);
         })
         .catch(() => {});
     };
@@ -2074,17 +2093,23 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * phone it is answered by tapping a row, so what is kept is the dialog
    * itself — its rows, and where on the tail they start — not just that there
    * is one. */
-  const liveQuestion = useMemo(
-    () => (liveTail.length > 0
-      ? readCodexHooksPage(liveTail, agentLabel) ?? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel)
-        // No input box and no busy row: a first run's own screen (Claude
-        // Code's theme picker, a `Press Enter to continue`).
-        ?? ((pressHintShown(liveScreen) || inputFrameStart(liveScreen, agentLabel) >= liveScreen.length) && !agentWork(liveScreen)
-          ? readStrayDialog(liveTail, paneColumns.current)
-          : null)
-      : null),
+  const screenQuestion = useMemo(
+    () => readLiveQuestion(liveTail, liveScreen, agentLabel, paneColumns.current),
     [liveTail, liveScreen, agentLabel],
   );
+  /** The question Claude is blocked on, from the stored session
+   * (`askedQuestion`): its words and previews over the screen's rows, or —
+   * while the dialog is not drawn yet — a read-only card of its own. The phone
+   * has no live lamp (`tab.agent_status` is the tab list's snapshot from when
+   * this screen opened), so the entry alone stands only while the screen shows
+   * no input box, or a busy row over one (`entryCardAllowed`); an idle session
+   * with a leftover record shows nothing. */
+  const waitingAsk = useMemo(
+    () => (sessionFocus && tab.kind === "agent" ? waitingQuestion(sessionEntries) : null),
+    [sessionFocus, tab.kind, sessionEntries],
+  );
+  const askedCard = useAskedCard({ waitingAsk, screenQuestion, liveTail, liveScreen, agentLabel });
+  const liveQuestion = askedCard?.question ?? screenQuestion;
   /** Claude Code's prompt suggestion, dimmed in its own empty box
    * (`promptSuggestion.ts`). It is put into the field in either view — never
    * sent, and only once per suggestion — so the reader edits it or sends it as
@@ -2195,8 +2220,19 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     questionContextShown, questionSignature, questionHeld, questionSent, sentSignature, answerQuestion,
     stepQuestion, answerQuestionText,
   } = useLiveQuestion({
-    clearPending, deliver, agentLabel, liveTail, liveQuestion,
+    clearPending, deliver, agentLabel, liveTail, liveQuestion, askedCard,
   });
+  /** The call a permission dialog on the live screen waits on: the stored
+   * session's call without a result — its command, path or URL as the desktop
+   * masked it for this phone. The dialog on screen is the sign that the agent
+   * asks (a running, approved `Bash` call has no result either), since the
+   * phone has no live lamp. */
+  const permission = useMemo(
+    () => (agentKey === "claude" && liveQuestion && isPermissionDialog(liveQuestion, questionTabs.length)
+      ? permissionSubject(transcript, [...questionAsk.map((line) => line.text), ...questionContext.map((line) => line.text), ...liveQuestion.options.map((option) => option.label)])
+      : null),
+    [agentKey, liveQuestion, questionTabs.length, transcript, questionAsk, questionContext],
+  );
   const asyncAsk = useAsyncAsk({ deliver, liveTail, liveQuestion, answerQuestion });
   /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */
   const queueSteer = useRef({ shown: false, send: () => {}, pull: () => {} });
@@ -2368,7 +2404,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * session's model by the one fallback (`transcriptModelTag`); else the
    * tab's published tag. */
   const modelChip = shownScreenModel
-    ?? (storedModelId ? transcriptModelTag(storedModelId, /^claude$/iu.test(agentLabel)) : undefined)
+    ?? (storedModelId ? transcriptModelTag(storedModelId, /^claude$/iu.test(agentLabel) ? "claude" : isAntigravityTab(agentLabel) ? "antigravity" : undefined) : undefined)
     ?? tab.agent_model
     ?? t("terminal.reader.model");
   const shownStep = modelPreview ?? listedStep ?? (answered && picker ? answered : null);
@@ -2494,9 +2530,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     { key: "project", tone: "project", label: t("mobile.add.project"), hint: t("mobile.add.projectHint"),
       icon: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8" /></svg> },
   ];
-  const attachTiles = tab.on_host ? allAttachTiles.filter((tile) => tile.key === "project")
-    : bare ? allAttachTiles.filter((tile) => tile.key !== "project").map((tile) => tile.untested ? tile : { ...tile, untested: "mobile.tabby.attach" })
-    : allAttachTiles;
+  const shownAttachTiles = desktopImagesOff ? allAttachTiles.filter((tile) => tile.key !== "desktop") : allAttachTiles;
+  const attachTiles = tab.on_host ? shownAttachTiles.filter((tile) => tile.key === "project")
+    : bare ? shownAttachTiles.filter((tile) => tile.key !== "project").map((tile) => tile.untested ? tile : { ...tile, untested: "mobile.tabby.attach" })
+    : shownAttachTiles;
   const desktopOptions: SheetOption[] = (desktopImages ?? []).map((image) => ({
     key: image.id,
     label: image.name,
@@ -2822,6 +2859,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                         something a phone can do — and the question above them
                         is that list's heading. */}
                     {questionContextShown && <ReadableTurns lines={questionContext} chat={chat} agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />}
+                    {permission && <p className="question-subject">
+                      <small>{t(permissionSubjectLabel(permission.kind), { tool: permission.tool })}{isUntested("mobile.question.permissionSubject") && <em> · {t("mobile.focus.untested")}</em>}</small>
+                      {/* The call as the desktop masked it: plain text, never markup. */}
+                      {permission.subject && <code>{permission.subject}</code>}
+                    </p>}
                     <QuestionList prompt={liveQuestion} tabs={questionTabs} tabFocus={questionTabFocus} tabSubmit={questionTabSubmit} question={questionAsk} sent={sentSignature === questionSignature ? questionSent?.number : undefined} sendingLabel={t("mobile.transcript.answering")} onPick={answerQuestion} onType={answerQuestionText} onStep={stepQuestion} attach={tab.on_host ? undefined : attachToAnswer} />
                   </div>}
                   {unreadQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")} data-testid="question-unread">

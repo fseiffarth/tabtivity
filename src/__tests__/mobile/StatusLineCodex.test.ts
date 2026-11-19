@@ -13,7 +13,7 @@ describe(`${BRAND.display} Codex footer status`, () => {
       "› Ask Codex to do anything",
       "  nemotron-3.5-bolt:e4b default · ~/work",
       "  ← for agents · ? for shortcuts                                           ⚠ 1 warning · f2 to view",
-    ), "Codex")).toEqual({ model: "nemotron-3.5-bolt:e4b", effort: "default", path: "~/work" });
+    ), "Codex")).toEqual({ model: "nemotron-3.5-bolt:e4b", path: "~/work" });
   });
 
   it("reads a hosted model, with its effort, in Plan mode at 100 and 60 columns", () => {
@@ -38,7 +38,7 @@ describe(`${BRAND.display} Codex footer status`, () => {
       "› Ask Codex to do anything",
       "  GPT-6.1-Sol default · ~/work",
       "  ← for agents · ? for shortcuts                                                    ⚠ 2 warnings · f2 to view",
-    ), "Codex")).toEqual({ model: "GPT-6.1-Sol", effort: "default", path: "~/work" });
+    ), "Codex")).toEqual({ model: "GPT-6.1-Sol", path: "~/work" });
   });
 
   it("reads the remaining context and an xhigh effort of a configured status line", () => {
@@ -61,7 +61,7 @@ describe(`${BRAND.display} Codex footer status`, () => {
       "› Ask Codex to do anything",
       "  nemotron-3.5-bolt:e4b default · /home/dev/project/deeply/nested/…",
       "  ← for agents · ? for shortcuts                                           ⚠ 1 warning · f2 to view",
-    ), "Codex")).toEqual({ model: "nemotron-3.5-bolt:e4b", effort: "default" });
+    ), "Codex")).toEqual({ model: "nemotron-3.5-bolt:e4b" });
     expect(sessionStatus(lines(
       "› Ask Codex to do anything",
       "  nemotron-3.5-bolt:e4b medium · /home/dev/project/… Plan mode",
@@ -99,7 +99,7 @@ describe(`${BRAND.display} Codex footer status`, () => {
       "  nemotron-3.5-bolt:e4b default · ~/work",
       "  ← for agents · ? for shortcuts                                           ⚠ 1 warning · f2 to view",
     );
-    expect(sessionStatus(rows, "Codex")).toEqual({ model: "nemotron-3.5-bolt:e4b", effort: "default", path: "~/work" });
+    expect(sessionStatus(rows, "Codex")).toEqual({ model: "nemotron-3.5-bolt:e4b", path: "~/work" });
     expect(inputFrameStart(rows, "Codex")).toBe(2); // the blank row over the box belongs to the frame
   });
 });

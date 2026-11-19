@@ -2971,7 +2971,8 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   --web-link-icon-out: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 4h6v6'/%3E%3Cpath d='M20 4l-9 9'/%3E%3Cpath d='M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5'/%3E%3C/svg%3E");
   --web-link-icon-globe: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18'/%3E%3Cpath d='M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z'/%3E%3C/svg%3E");
 }
-.markdown-body.terminal-reader-md .web-link {
+.markdown-body.terminal-reader-md .web-link,
+.markdown-body.terminal-reader-md .md-link[data-app-link] {
   color: var(--accent);
   text-decoration: underline;
   text-decoration-color: var(--accent);
@@ -2981,7 +2982,8 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   overflow-wrap: anywhere;
   cursor: var(--cur-pointer, pointer);
 }
-.markdown-body.terminal-reader-md .web-link:hover {
+.markdown-body.terminal-reader-md .web-link:hover,
+.markdown-body.terminal-reader-md .md-link[data-app-link]:hover {
   text-decoration-thickness: 2.5px;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
@@ -4002,6 +4004,8 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
 .reader-topbar .terminal-reader-subagent-index { position: relative; padding: 0; border: none; background: none; }
 .reader-topbar .terminal-reader-subagent-list { position: absolute; top: calc(100% + 6px); left: 0; width: min(420px, 80vw); margin: 0; padding: 6px; color: var(--text-primary); background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--radius); z-index: 2; }
+.reader-schedule { display: inline-flex; align-items: center; gap: 5px; }
+.reader-schedule-count { min-width: 16px; padding: 0 5px; font-size: var(--text-sm); line-height: 16px; text-align: center; color: var(--text-on-accent, #fff); background: var(--accent); border-radius: 8px; }
 .reader-toolbar-error { max-width: 260px; color: var(--danger); font-size: var(--text-sm); }
 .terminal-reader[hidden] { display: none; }
 /* Clear and Commit act on the conversation, not the draft: they stand apart
@@ -4588,6 +4592,53 @@ button.terminal-reader-option:hover:not(:disabled) {
 .terminal-reader-question-more {
   font-size: var(--text-sm);
   color: var(--text-muted);
+}
+/* The sample an agent put beside an answer (a question's `preview`): plain
+   preformatted text, bounded, never rendered as markup. */
+.terminal-reader-option-preview {
+  display: block;
+  max-height: 12em;
+  margin-top: 4px;
+  padding: 6px var(--space-2);
+  overflow: auto;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm, 4px);
+}
+.terminal-reader-option-box {
+  display: inline-flex;
+  margin-right: 6px;
+  vertical-align: -2px;
+  color: var(--accent);
+}
+.terminal-reader-option-box svg { width: 14px; height: 14px; }
+/* What a permission dialog waits on (`permissionSubject`): the call named in
+   full, plain text, bounded. */
+.terminal-reader-question-subject {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+.terminal-reader-question-subject small {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.terminal-reader-question-subject code {
+  display: block;
+  max-height: 8em;
+  padding: 4px var(--space-2);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm, 4px);
 }
 .terminal-reader-working {
   align-self: flex-start;

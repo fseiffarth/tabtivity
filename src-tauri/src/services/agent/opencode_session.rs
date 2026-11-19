@@ -403,6 +403,15 @@ pub fn resolve(opts: PtyOptions) -> PtyOptions {
     )
 }
 
+/// Whether a respawn of the cloud tab `uid` resumes its own session: its
+/// plugin recorded one and the store still has it — [`resolve`]'s `own`.
+/// Without one the respawn starts fresh or continues the folder's newest
+/// session (`agent_resume_pinned`).
+pub fn resume_pinned(project_id: Option<&str>, uid: &str) -> bool {
+    let (_, db) = home_and_store(project_id, false);
+    recorded_session(project_id, uid).is_some_and(|id| opencode_store::resumable_session(&db, &id))
+}
+
 /// The agent home a tab's OpenCode runs in, and the store that home keeps: a
 /// local-model tab's are apart from the scope's.
 fn home_and_store(project_id: Option<&str>, local_model: bool) -> (PathBuf, PathBuf) {
@@ -540,6 +549,7 @@ mod tests {
             host_session: false,
             api_key: None,
             mux_wrapped: false,
+            mcp_mark: None,
         };
         o.env.insert(crate::app_env!("TAB_UID").to_string(), UID.to_string());
         o

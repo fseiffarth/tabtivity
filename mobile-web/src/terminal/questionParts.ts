@@ -63,6 +63,9 @@ function withoutScrollbar(line: ReadableLine): ReadableLine {
  * between its tab row and its answers. */
 const REVIEW_HEADING_LINES = 2;
 
+/** One answer on that page: ` ● Which scope?` (over `   → Fix only`). */
+const REVIEW_ANSWER = /^\s*● /u;
+
 /**
  * The tab row over Claude Code's Submit page, read upwards from `context`:
  *
@@ -130,6 +133,10 @@ export function questionParts(tail: readonly ReadableLine[], question: SelectPro
       tabs = readQuestionTabs(row.text);
       context = withoutEdgeBlanks(tail.slice(above + 1, question.question));
       review = true;
+      // Claude Code 2.1.327 dropped `Ready to submit your answers?`: the
+      // answers sit right over the options and were read as the question,
+      // joined into one paragraph. The heading asks; the answers stay a list.
+      if (REVIEW_ANSWER.test(ask[0]?.text ?? "")) [ask, context] = [context, ask];
     }
   }
   if (!tabs) {

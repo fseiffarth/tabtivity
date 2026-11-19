@@ -296,6 +296,9 @@ export function useEditableFile(path: string, enabled = true) {
     saver.update(draft, baseline, loaded && enabled, autosave);
   }, [saver, draft, baseline, loaded, enabled, autosave]);
   const save = useCallback(() => saver.flush(), [saver]);
+  /** Save, then whether the buffer is clean: false when the write failed
+   *  (`saveError` says why), so a caller about to drop the editor keeps it. */
+  const saveClean = useCallback(() => saver.flush().then(() => !saver.dirty), [saver]);
 
   // #43 diff-aware reload: on an external write, re-read into a clean buffer
   // silently, or flag a banner if the buffer is dirty. `useDiskReloadPoll` only
@@ -345,7 +348,7 @@ export function useEditableFile(path: string, enabled = true) {
   const keepMine = useCallback(() => setExternalChange(false), []);
 
   return {
-    content, error, draft, setDraft, loaded, isDirty, saving, saveError, save,
+    content, error, draft, setDraft, loaded, isDirty, saving, saveError, save, saveClean,
     undo, redo, canUndo, canRedo,
     externalChange, reloadFromDisk, keepMine,
     /** The text last read from or written to disk — what a build sees. */

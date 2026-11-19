@@ -1492,6 +1492,21 @@ pub fn shells_open(state_dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a paired phone may list and attach the desktop's pictures — the
+/// clipboard image and the newest screenshots, downloads and pictures
+/// (composer **+ → From the desktop**). Off unless
+/// `tabtivity_mobile_host.desktop_images` is set: those folders are the
+/// user's, not a project's, and a lost phone should not reach them by default
+/// (threat model gap 65). Read per request, like `files::files_open`, so
+/// turning it off closes both routes at once. Unreadable settings refuse.
+pub fn desktop_images_open(state_dir: &Path) -> bool {
+    fs::read(state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|settings| settings.get(crate::brand::MOBILE_HOST_KEY)?.get("desktop_images")?.as_bool())
+        .unwrap_or(false)
+}
+
 impl Catalog {
     #[cfg(test)]
     pub fn load(state_dir: &Path, host_key: &[u8]) -> Result<Self, String> {

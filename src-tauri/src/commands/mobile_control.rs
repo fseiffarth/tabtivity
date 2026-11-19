@@ -128,9 +128,21 @@ pub(crate) fn clipboard_png() -> Result<Vec<u8>, String> {
     }
 }
 
-/// Everything the phone may attach from this desktop, clipboard first.
+/// Whether "Desktop pictures on the phone" is on. The sidecar refuses both
+/// routes while it is off; the window repeats the check, as it does for
+/// shells, so a request already in flight when it was turned off finds
+/// nothing.
+fn desktop_images_switch_on() -> bool {
+    crate::services::mobile_control::discovery::desktop_images_open(&storage::state_dir())
+}
+
+/// Everything the phone may attach from this desktop, clipboard first; nothing
+/// while the switch is off.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_desktop_images() -> Vec<DesktopImage> {
+    if !desktop_images_switch_on() {
+        return Vec::new();
+    }
     let folders = desktop_image_folders();
     let (clipboard, files) = tokio::join!(clipboard_image_entry(), async {
         app_core::rt::spawn_blocking(move || {
@@ -155,6 +167,9 @@ pub async fn mobile_attach_desktop_image(
     chat_uid: Option<String>,
     image_id: String,
 ) -> Result<MobileInboxAttachment, String> {
+    if !desktop_images_switch_on() {
+        return Err("desktop_images_off".into());
+    }
     if !desktop_images::valid_id(&image_id) {
         return Err("image_not_found".into());
     }

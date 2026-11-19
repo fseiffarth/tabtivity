@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use app_core::{Caller, ClientId, CoreCtx};
 
 pub mod host_pty;
+pub(crate) mod pty_child;
 mod replay_trim;
 use replay_trim::{trim_replay, ScreenState, REPLAY_TRIM_FLOOR};
 
@@ -1185,6 +1186,15 @@ pub struct PtyOptions {
     /// check go by, instead of guessing from `cmd == "tmux"`.
     #[serde(skip)]
     pub mux_wrapped: bool,
+    /// The MCP stamp a **newly created** local session gets
+    /// (`root_mcp_mark::Mark::render`, tmux user option
+    /// `root_mcp_mark::OPTION`): set by `launch_prep::prepare` only when its
+    /// listing found no such session, and by nothing else — never read from a
+    /// payload (`serde(skip)`), so a renderer cannot stamp a session. An
+    /// attach never carries one: the session keeps the stamp it was created
+    /// with.
+    #[serde(skip)]
+    pub mcp_mark: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2189,6 +2199,7 @@ pub fn join_tab(
         tmux_attach: None,
         host_bound_uid: None,
         mux_wrapped: false,
+        mcp_mark: None,
     };
     let mut cmd = build_command(&attach);
     if !std::path::Path::new(&attach.cwd).is_dir() {
@@ -2298,9 +2309,7 @@ fn open_native(cmd: CommandBuilder, cols: u16, rows: u16) -> Result<Opened, Stri
         })
         .map_err(|e| format!("openpty: {e}"))?;
 
-    let child = pair
-        .slave
-        .spawn_command(cmd)
+    let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd)
         .map_err(|e| format!("spawn: {e}"))?;
 
     let reader = pair
@@ -3789,6 +3798,7 @@ mod tests {
             project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
             local_model: false, schedule_target_id: None, host_session: false, api_key: None,
             mux_wrapped: false,
+            mcp_mark: None,
         };
         codex_bind::reserve_resume(&mut opts).expect("the respawn claims its session").keep();
         let claim = codex_bind::resume_seq(id);
@@ -3853,7 +3863,7 @@ mod tests {
         let mut cmd = CommandBuilder::new("sh");
         cmd.arg("-c");
         cmd.arg("sleep 300; true");
-        let child = pair.slave.spawn_command(cmd).expect("spawn sh");
+        let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd).expect("spawn sh");
         let leader = child.process_id().expect("leader pid");
         let writer = pair.master.take_writer().expect("take writer");
         let master = pair.master;
@@ -3923,7 +3933,7 @@ mod tests {
             let mut cmd = CommandBuilder::new("sh");
             cmd.arg("-c");
             cmd.arg("sleep 300; true");
-            let child = pair.slave.spawn_command(cmd).expect("spawn sh");
+            let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd).expect("spawn sh");
             leaders.push(child.process_id().expect("leader pid"));
             let writer = pair.master.take_writer().expect("take writer");
             registry.lock().unwrap().insert(
@@ -4641,6 +4651,7 @@ mod client_tests {
             tmux_attach: None,
             host_bound_uid: None,
             mux_wrapped: false,
+            mcp_mark: None,
         }
     }
 
@@ -4706,6 +4717,7 @@ mod client_tests {
             tmux_attach: None,
             host_bound_uid: None,
             mux_wrapped: false,
+            mcp_mark: None,
         };
         let registry: Arc<Mutex<PtyRegistry>> = Arc::default();
         let ctx = ctx_as(Caller::Local(ClientId::main()), RecordingEvents::new());
@@ -4797,6 +4809,7 @@ mod client_tests {
             host_bound_uid: None,
             // What `SessionMux::wrap` marks; the argv is this test's own server.
             mux_wrapped: true,
+            mcp_mark: None,
         };
         let attach_argv = |s: &str| -> Vec<String> {
             ["-L", &socket, "-f", "/dev/null", "attach-session", "-t", &format!("={s}")]

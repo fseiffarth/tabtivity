@@ -18,6 +18,7 @@
 
 import { highlight, type Lang } from "./highlight";
 import { escapeHtml } from "../textSafety";
+import { APP_LINK_SCHEME, parseAppLink } from "../navigation/appLinks";
 
 /** An href as the URL parser will read it: leading and trailing C0 controls
  *  and spaces dropped, ASCII tab, LF and CR removed anywhere (WHATWG URL). A
@@ -307,6 +308,10 @@ function renderInline(raw: string, spans?: InlineSpans): string {
     if (url.includes(NUL)) return m;
     const href = safeHref(url);
     const inner = renderInline(label, store);
+    if (parseAppLink(url)) {
+      const idx = links.push(`<span class="md-link" data-app-link="${escapeHtml(url)}">${inner}</span>`) - 1;
+      return mark("L", idx);
+    }
     // #49: a link to a local file (relative/absolute path or file: scheme) gets a
     // `file-link` class so it reads as clickable, matching the editor's dotted
     // underline. Remote/anchor links keep the plain style.
@@ -329,13 +334,18 @@ function renderInline(raw: string, spans?: InlineSpans): string {
   // A NUL counts as a boundary on both sides: it is only ever a placeholder
   // delimiter, and the URL class must stop at one so a bare URL sitting directly
   // against an earlier link's marker doesn't swallow it into its own href.
-  text = text.replace(/(^|[\s(\u0000])((?:https?:\/\/|www\.)[^\s<\u0000]+)/g, (m, pre: string, rawUrl: string) => {
+  const bareUrl = new RegExp(`(^|[\\s(\\u0000])((?:https?:\\/\\/|www\\.|${APP_LINK_SCHEME})[^\\s<\\u0000]+)`, "g");
+  text = text.replace(bareUrl, (m, pre: string, rawUrl: string) => {
     let url = rawUrl;
     let trail = "";
     const tm = url.match(/[.,;:!?)\]}]+$/);
     if (tm) {
       trail = url.slice(url.length - tm[0].length);
       url = url.slice(0, url.length - tm[0].length);
+    }
+    if (parseAppLink(url)) {
+      const idx = links.push(`<span class="md-link" data-app-link="${escapeHtml(url)}">${escapeHtml(url)}</span>`) - 1;
+      return `${pre}${mark("L", idx)}${trail}`;
     }
     const href = safeHref(url.startsWith("www.") ? `https://${url}` : url);
     if (!href) return m;

@@ -2799,11 +2799,13 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
         cmd.env(IGPU_ENABLE_VAR, "1");
     }
 
-    // The same entitlement, for the context window: see
-    // [`spawned_context_length`]. A value the user set is left alone.
+    // The same entitlement, for the context window: the user's choice, else
+    // [`spawned_context_length`]. A value set in the environment is left alone.
     if std::env::var_os(CONTEXT_LENGTH_VAR).is_none() {
-        let vram = crate::gpustat::snapshot().iter().map(|g| g.vram_total).max().unwrap_or(0);
-        if let Some(n) = spawned_context_length(vram) {
+        if let Some(n) = configured_context(
+            crate::services::ollama_client::configured_context_length(),
+            max_vram_total(),
+        ) {
             cmd.env(CONTEXT_LENGTH_VAR, n.to_string());
         }
     }
@@ -2908,6 +2910,50 @@ const CONTEXT_LENGTH_VAR: &str = "OLLAMA_CONTEXT_LENGTH";
 fn spawned_context_length(vram_total: u64) -> Option<u32> {
     const OLLAMA_LARGER_DEFAULT_VRAM: u64 = 24 * 1024 * 1024 * 1024;
     (vram_total < OLLAMA_LARGER_DEFAULT_VRAM).then_some(32_768)
+}
+
+/// The smallest and largest context window a setting may ask for. Below the
+/// floor no agent prompt fits; a value outside the range is treated as unset
+/// rather than clamped, since it was never chosen in the UI.
+const CONTEXT_LENGTH_RANGE: std::ops::RangeInclusive<u32> = 2_048..=1_048_576;
+
+/// The context window a server Tabtivity spawns gets, from the user's setting
+/// or else automatically. Pure + tested.
+fn configured_context(setting: Option<u32>, vram_total: u64) -> Option<u32> {
+    setting
+        .filter(|n| CONTEXT_LENGTH_RANGE.contains(n))
+        .or_else(|| spawned_context_length(vram_total))
+}
+
+/// The largest GPU's VRAM, 0 without one.
+fn max_vram_total() -> u64 {
+    crate::gpustat::snapshot().iter().map(|g| g.vram_total).max().unwrap_or(0)
+}
+
+/// What the context field on the Local models page needs to say truthfully.
+#[derive(serde::Serialize, Clone, Default)]
+pub struct OllamaContextPlan {
+    /// `OLLAMA_CONTEXT_LENGTH` as this process sees it, which every server it
+    /// starts inherits and the setting never overrides.
+    pub env: Option<String>,
+    /// What the automatic choice gives a spawned server; `None` keeps Ollama's
+    /// own default (a GPU with 24 GiB or more already defaults higher).
+    pub auto: Option<u32>,
+    /// A systemd unit runs the server, keeping its own environment.
+    pub systemd: bool,
+}
+
+/// The facts behind the context setting. On demand (a page opening), never a
+/// poll: it may spawn `systemctl`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn ollama_context_plan() -> OllamaContextPlan {
+    app_core::rt::spawn_blocking(|| OllamaContextPlan {
+        env: std::env::var(CONTEXT_LENGTH_VAR).ok().filter(|v| !v.trim().is_empty()),
+        auto: spawned_context_length(max_vram_total()),
+        systemd: ollama_under_systemd(),
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Whether an already-resolved `host:port` points at this machine. Takes the
@@ -4437,6 +4483,14 @@ pub async fn search_huggingface_models(
     cursor: Option<String>,
 ) -> Result<hf::HfSearchPage, String> {
     hf::search_huggingface_models_in(query, sort, cursor).await
+}
+
+/// Ollama's public key, for a gated Hugging Face repo ([`hf::OllamaPublicKey`]).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn ollama_public_key() -> hf::OllamaPublicKey {
+    app_core::rt::spawn_blocking(hf::ollama_public_key_blocking)
+        .await
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

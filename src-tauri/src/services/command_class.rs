@@ -50,6 +50,8 @@
 //!   store) are `Admin`. Completion, chat and local-model tabs stay `Core`;
 //!   because Ollama auto-loads whatever a request names, P2 limits those
 //!   requests to the admin-allowed model list server-side (plan §3.3).
+//!   `ollama_public_key` is `Admin` too: the shared server's key only matters
+//!   to whoever pulls a gated Hugging Face repo through it.
 //! - **`list_recent_downloads` is `Client`**: Recent Downloads are always the
 //!   device the user sits at, never the server's folders.
 //! - **`pty_drop_files` is `Client`**: it reads the absolute paths an OS file
@@ -262,9 +264,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_tab_model", Core),
     ("agent_tab_recent_prompts", Core),
     ("agent_tab_transcript", Core),
+    ("agent_cli_handoff_prepare", Core),
     ("agent_tab_artifact", Core),
     ("agent_transcript_unwatch", Core),
     ("agent_tab_undo_clear", Core),
+    ("agent_tab_resume_pinned", Core),
     ("agent_tab_chats", Core),
     ("agent_tab_resume_chat", Core),
     ("agent_tab_move_session", Core),
@@ -532,7 +536,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("git_fork_clone", Core),
     ("provider_cli_available", Core),
     // commands/git_hosting.rs
+    ("get_git_hosts", Core),
     ("get_project_git_hosting", Core),
+    ("set_git_hosts", Core),
     ("set_project_git_hosting", Core),
     // commands/git_peer.rs
     ("git_peer_backups", Core),
@@ -740,10 +746,12 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("load_ollama_model", Admin),
     ("load_installed_ollama_model", Admin),
     ("ollama_check_updates", Core),
+    ("ollama_context_plan", Core),
     ("ollama_gpu_status", Core),
     ("ollama_install_strategy", Core),
     ("ollama_is_installed", Core),
     ("ollama_models_dir_plan", Core),
+    ("ollama_public_key", Admin),
     ("ollama_registry_details", Core),
     ("ollama_server_kind", Core),
     ("ollama_status", Core),
@@ -1039,6 +1047,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("local_tmux_kill", Core),
     ("local_tmux_kill_app_sessions", Core),
     ("local_tmux_pane_dead", Core),
+    ("local_tmux_app_sessions", Core),
     ("local_tmux_rename", Core),
     ("local_tmux_screen", Core),
     ("project_cpu_percent", Core),

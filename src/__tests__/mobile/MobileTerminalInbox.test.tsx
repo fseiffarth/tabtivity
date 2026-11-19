@@ -406,6 +406,33 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     expect(composer().value).toBe("");
   });
 
+  it("drops the Desktop tile while the desktop's pictures switch is off, and names the switch on a refusal", async () => {
+    let offered: boolean | undefined = false;
+    const fetchMock = vi.fn((url: string) => url === "/api/v1/projects/p1"
+      ? Promise.resolve(jsonResponse(200, { project: { id: "p1", label: "Aurora" }, tabs: [], desktop_images: offered }))
+      : Promise.resolve(jsonResponse(403, { error: "desktop_images_off" })));
+    vi.stubGlobal("fetch", routeOutbox(fetchMock));
+    const tiles = () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add to the message" }));
+      const sheet = screen.getByRole("dialog", { name: "Add to the message" });
+      const keys = Array.from(sheet.querySelectorAll(".attach-tile")).map((tile) => tile.className.replace("attach-tile attach-tile-", ""));
+      return keys;
+    };
+    const { unmount } = render(<Terminal tab={TAB} project="p1" back={() => {}} />);
+    await settle(0);
+    expect(tiles()).not.toContain("desktop");
+    unmount();
+
+    // An older desktop sends no field: the tile stays, and a refusal says why.
+    offered = undefined;
+    render(<Terminal tab={TAB} project="p1" back={() => {}} />);
+    await settle(0);
+    expect(tiles()).toContain("desktop");
+    fireEvent.click(screen.getByRole("button", { name: /^Desktop/ }));
+    await settle(0);
+    expect(screen.getByRole("dialog", { name: "From the desktop" }).textContent).toContain("Desktop pictures on the phone");
+  });
+
   it("lets a composer sheet read the live screen while it is up", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});

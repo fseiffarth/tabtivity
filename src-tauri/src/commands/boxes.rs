@@ -878,15 +878,8 @@ pub fn set_box_mobile_access(
         None
     };
     if enabled {
-        let settings: crate::schema::Settings =
-            storage::read_json(&storage::settings_path()).unwrap_or_default();
-        if !settings.persist_local_sessions() {
-            return Err("Enable persistent local terminal sessions before Mobile access".into());
-        }
         // The phone attaches to the box's local sessions (`SessionMux`).
-        if !crate::services::session_mux::mux().available() {
-            return Err("Mobile access requires tmux on this machine".into());
-        }
+        crate::commands::projects::mobile_access_prerequisites()?;
         ensure_box_folder(box_id.clone())?;
     }
     let written = update_box(&box_id, |target| {

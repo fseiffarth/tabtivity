@@ -169,17 +169,21 @@ const OPENCODE: ModeFamily = {
   ],
 };
 
-/** Google Antigravity: the Shift+Tab cycle is default → accept-edits → plan →
- * default (legacy backtab, probed on 1.5.9), and its footer prefixes the model
- * with the mode's word (`plan · Gemini 3.1 Pro · low`) in the two non-default
- * modes. Default is `silent`: it draws no word. So do `--mode auto` and
- * `--dangerously-skip-permissions`, which are therefore read as default too.
- * Both modes are `labelled` — "plan" is every other family's word. */
+/** Google Antigravity: its footer prefixes the model with the mode's word
+ * (`plan · Gemini 3.1 Pro · low`), and Shift+Tab (legacy backtab) cycles. Two
+ * cycles are known. Under an API key (the verify runs, 1.5.9) it is default →
+ * accept-edits → plan → default, and default is `silent`: it draws no word, nor
+ * do `--mode auto` and `--dangerously-skip-permissions`, read as default too. A
+ * signed-in account (1.5.9, 2026-11-18, the user's own session) makes Auto the
+ * default ("Auto is now the default agent mode") and draws it — `auto · Gemini
+ * 3.8 Flash · high` — on a cycle of accept-edits → auto → plan. Every mode is
+ * `labelled` — "plan" and "auto" are other families' words too. */
 const ANTIGRAVITY: ModeFamily = {
   agent: /antigravity/iu,
   choices: [
     { value: "default", label: "mobile.mode.default", description: "mobile.mode.defaultHint", silent: true },
     { value: "accept-edits", label: "mobile.mode.acceptEdits", description: "mobile.mode.acceptEditsHint", aliases: ["accept edits"], labelled: true },
+    { value: "auto", label: "mobile.mode.auto", description: "mobile.mode.autoHint", labelled: true },
     { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", labelled: true },
   ],
 };

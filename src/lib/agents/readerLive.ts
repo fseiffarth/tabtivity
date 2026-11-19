@@ -2,6 +2,7 @@ import { agentWork, type WorkFacts } from "../../../mobile-web/src/terminal/agen
 import { isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
+import { boxHidesDialog } from "../../../mobile-web/src/terminal/liveDialog";
 import {
   answerRowKeys,
   freeTextRow,
@@ -115,7 +116,9 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // No input box and no busy row: the CLI has put a screen of its own in its
   // place — a first run's theme picker or notes — read without a footer.
   const noFrame = frameStart >= lines.length;
-  const question = hooksPage ?? (tail.length > 0
+  // Claude Code hides its input box while a dialog is up: with one on screen
+  // the rows above it are output, however a list in them is marked.
+  const question = hooksPage ?? (tail.length > 0 && !boxHidesDialog(agentLabel, !noFrame)
     ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
       ?? (noFrame && !agentWork(lines) ? readStrayDialog(tail, columns) : null)
     : null);

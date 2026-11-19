@@ -44,10 +44,25 @@ export interface SelectOption {
   keys?: string[];
   /** OpenCode opens an editor before a custom answer can be typed. */
   input?: "opencode";
+  /** The sample the agent put beside this answer (Claude's `preview`), from
+   * the transcript's waiting entry (`askedQuestion`). Preformatted text, never
+   * markdown or HTML. */
+  preview?: string;
+  /** On a multi-select question read through the waiting entry: whether the
+   * screen shows this answer's box ticked. */
+  ticked?: boolean;
 }
 
 export interface SelectPrompt {
-  source?: "opencode";
+  /** Where the content comes from when not the screen's own rows: OpenCode's
+   * question dialog, or the transcript's waiting entry laid over the screen's
+   * reading (`entry`, `askedQuestion`). */
+  source?: "opencode" | "entry";
+  /** Several rows may be ticked (the entry says so). */
+  multiSelect?: true;
+  /** The card is drawn from the waiting entry before the screen shows the
+   * dialog: nothing can be sent from it, `options` carry no screen rows. */
+  readOnly?: true;
   /** Navigation read from a CLI whose headers have no status glyphs. */
   navigation?: { tabs: QuestionTab[]; focus: number | null; submit: boolean; keys: QuestionStepKeys };
   options: SelectOption[];
@@ -119,6 +134,11 @@ const EDGE = /^[↑↓]$/u;
 /** Claude Code's note under a windowed dialog: `… +2 models`. The line right
  * under the run, and nothing but the count and one word. */
 const HIDDEN_ROWS = /^\s*(?:…|\.\.\.)\s*\+(\d{1,2})\s+\p{L}+$/u;
+/** Claude Code 2.1.326's windowed dialog marks each hidden side with a row of
+ * its own instead (`↑ 2 more` over the slice, `↓ 1 more` under it), no longer
+ * an arrow in a row's number slot or a `… +N` note. The `↓` row counts the
+ * rows below, as the note did; the `↑` row is the window's top edge. */
+const MORE_ROWS = /^\s*([↑↓])\s+(\d{1,3})\s+more$/u;
 const RADIO_AGENT = /gemini|qwen/iu;
 /** GitHub Copilot CLI (1.0.106 to 1.0.112) draws a row whose label wraps with
  * no hanging indent: the row and its next line both start under the `1.` of
@@ -546,9 +566,25 @@ export function readSelectPrompt(
   /** The run a single blank row just ended, and how many blanks followed it. */
   let gapped: Run | undefined;
   let gap = 0;
+  /** The index of the row right under a `↑ N more` row (`MORE_ROWS`): a run
+   * starting there is a windowed slice. */
+  let edgeAt: number | undefined;
 
   for (let index = first; index < lines.length; index += 1) {
     const text = lines[index].text;
+    const moreRow = MORE_ROWS.exec(text);
+    if (moreRow) {
+      if (moreRow[1] === "↑") {
+        edgeAt = index + 1;
+      } else if (run) {
+        run.hidden = Number(moreRow[2]);
+        run.edge = true;
+      }
+      gapped = undefined;
+      run = undefined;
+      continue;
+    }
+    const underEdge = edgeAt === index;
     // A run is contiguous. A blank row or any other text ends it, so a numbered
     // list elsewhere on screen can never be glued onto the dialog's own rows —
     // save Codex's sign-in menu (0.164.0), which puts one blank row between
@@ -578,10 +614,10 @@ export function readSelectPrompt(
       // Only the top of a windowed slice starts a run with one, and that row
       // always carries the window's `↑`: a highlight never sits on the top
       // row while rows lie above it.
-      if (run ? column === run.numberColumn : expander.marker === "↑") {
+      if (run ? column === run.numberColumn : expander.marker === "↑" || underEdge) {
         if (!run) {
           // Its number is the next row's, less half.
-          run = { start: index, options: [], marked: [], labelColumn: column, numberColumn: column, column, edge: false };
+          run = { start: underEdge ? index - 1 : index, options: [], marked: [], labelColumn: column, numberColumn: column, column, edge: underEdge };
           runs.push(run);
         }
         const above = [...run.options].reverse().find(numberedRow);
@@ -634,7 +670,7 @@ export function readSelectPrompt(
     if (!continues || !run) {
       // A run starts at 1 — or wherever a windowed dialog's slice starts,
       // which the final check holds to the window's own marks.
-      run = { start: index, options: [], marked: [], labelColumn: row.labelColumn, numberColumn: row.numberColumn, column: row.descriptionColumn, edge: false };
+      run = { start: underEdge ? index - 1 : index, options: [], marked: [], labelColumn: row.labelColumn, numberColumn: row.numberColumn, column: row.descriptionColumn, edge: underEdge };
       runs.push(run);
     }
     if (row.marked) run.marked.push(run.options.length);

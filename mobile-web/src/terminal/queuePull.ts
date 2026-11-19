@@ -68,8 +68,13 @@ const RULE = /^\s*─{3,}/u;
 /** Codex 0.166.0: the heading over what Tab queued, its input box's `›` row
  * (a braille blank may stand for the space, `readableScreen`), and the key its
  * hint names: `shift+←` under tmux, `alt+↑` or `⌥ + ↑` elsewhere. */
-const CODEX_QUEUED = /^• Queued follow-up inputs\s*$/u;
-const CODEX_BOX = /^›(?:[\s\u2800-\u28ff]|$)/u;
+const CODEX_QUEUED = /^\s*• Queued follow-up inputs\s*$/u;
+const CODEX_BOX = /^›(?:[\s\u2800]|$)/u;
+/** Codex paints single-dot braille sparkles over otherwise blank cells,
+ * including the input marker and blank rows delimiting the box. Keep the
+ * same normalization as readableScreen, which the live Chat already uses. */
+const CODEX_SPARKLE = /[\u2801\u2802\u2804\u2808\u2810\u2820\u2840\u2880]/gu;
+const codexRow = (row: string) => row.replace(CODEX_SPARKLE, " ");
 const CODEX_EDIT = /(shift|alt|⌥)\s*\+\s*[←↑]\s+edit last queued message/u;
 const SHIFT_LEFT = "\u001b[1;2D";
 const ALT_UP = "\u001b[1;3A";
@@ -89,7 +94,8 @@ const ESCAPE = "\u001b";
  * moves to the background instead of being killed, a streaming answer stops
  * unmarked, and a turn not yet answering keeps its prompt — where Esc hands
  * it back into the box, unsent. Claude draws `ctrl+x ctrl+s to send now`
- * under a queued message. */
+ * under a queued message (`⎿  Queued · ctrl+x ctrl+s to send now` since
+ * 2.1.326; the keys are unchanged). */
 const CLAUDE_SEND_NOW = "\u0018\u0013";
 /** Most prompts a walk takes: `MAX_PENDING`. */
 const MAX_QUEUED = 50;
@@ -127,7 +133,7 @@ export function inputBoxLines(rows: readonly string[]): string[] | null {
 /** The screen says messages wait in `family`'s queue: on Claude the empty
  * box, where ↑ would take them back. */
 export function queuedHintShown(rows: readonly string[], family: QueueFamily = "claude"): boolean {
-  if (family === "codex") return rows.some((row) => CODEX_QUEUED.test(row));
+  if (family === "codex") return rows.some((row) => CODEX_QUEUED.test(codexRow(row)));
   if (family === "opencode") return rows.slice(-6).some((row) => OPENCODE_PENDING.test(row));
   const box = inputBoxLines(rows);
   return !!box && QUEUED_HINT.test(box[0]);
@@ -136,11 +142,12 @@ export function queuedHintShown(rows: readonly string[], family: QueueFamily = "
 /** The lines in Codex's input box — its last `›` row and the rows under it up
  * to the blank one closing it — or null when none is on the screen. */
 export function codexBoxLines(rows: readonly string[]): string[] | null {
-  for (let index = rows.length - 1; index >= Math.max(0, rows.length - 40); index -= 1) {
-    if (!CODEX_BOX.test(rows[index])) continue;
-    const lines = [rows[index].replace(/^›[\s\u2800-\u28ff]?/u, "")];
-    for (let next = index + 1; next < rows.length && rows[next].trim(); next += 1) {
-      lines.push(rows[next].replace(/^ {2}/u, ""));
+  const plain = rows.map(codexRow);
+  for (let index = plain.length - 1; index >= 0; index -= 1) {
+    if (!CODEX_BOX.test(plain[index])) continue;
+    const lines = [plain[index].replace(/^›[\s\u2800]?/u, "")];
+    for (let next = index + 1; next < plain.length && plain[next].trim(); next += 1) {
+      lines.push(plain[next].replace(/^ {2}/u, ""));
     }
     return lines.map((line) => line.trimEnd());
   }
@@ -150,7 +157,7 @@ export function codexBoxLines(rows: readonly string[]): string[] | null {
 /** The key Codex's hint names for taking back the last queued message. */
 function codexEditKey(rows: readonly string[]): string | null {
   for (const row of rows) {
-    const named = CODEX_EDIT.exec(row);
+    const named = CODEX_EDIT.exec(codexRow(row));
     if (named) return named[1] === "shift" ? SHIFT_LEFT : ALT_UP;
   }
   return null;

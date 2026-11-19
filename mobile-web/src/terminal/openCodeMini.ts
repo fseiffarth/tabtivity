@@ -601,8 +601,11 @@ const PICKER_TITLE_OVER = /^(.*?\S\s{2,})(Select [a-z][\w ]{0,30}?)(?:\s+\d+(?:\
  * a tall pane; the cap only bounds a misread. */
 const MAX_PICKER_ROWS = 40;
 /** Blank rows the dialog may leave inside its own list — one between provider
- * groups, and `readableScreen` collapses any run to one. A second in a row is
- * the end of the overlay. */
+ * groups. A second in a row is the end of the overlay. `readableScreen` folds
+ * a run of blanks into one line, so the gap is also measured in screen rows
+ * (`screenRow`): a short list (the variant step) ends two blank rows above
+ * the composer, and folded, the composer's prompt, model row and status bar
+ * read as one more group of rows. */
 const MAX_LIST_GAP = 1;
 /** The dialog's own key hints, under the rows (`Connect provider ctrl+a
  * Favorite ctrl+f`). No model is named after a key. */
@@ -654,7 +657,14 @@ export interface OpenCodePickerPage {
   start: number;
 }
 
-type PickerLine = { text: string; edge?: number; spans?: readonly ReadableSpan[] };
+type PickerLine = { text: string; edge?: number; spans?: readonly ReadableSpan[]; key?: string };
+
+/** The buffer row a `readableScreen` line was read from (its `key`), when it
+ * says so. */
+function screenRow(line: PickerLine): number | undefined {
+  const row = line.key ? /^r(\d+)$/u.exec(line.key) : null;
+  return row ? Number(row[1]) : undefined;
+}
 
 /** The span drawn at screen `column` of `line`, if the line kept its styles. */
 function spanAt(line: PickerLine, column: number): ReadableSpan | undefined {
@@ -708,6 +718,8 @@ export function readOpenCodePickerPage(lines: readonly PickerLine[]): OpenCodePi
   skipBlank();
   const rows: OpenCodePickerRow[] = [];
   let gap = 0;
+  /** The screen row of the last row read into the list. */
+  let lastRow: number | undefined;
   for (; index < lines.length && rows.length < MAX_PICKER_ROWS; index += 1) {
     const text = screenText(lines[index]);
     const row = cell(text);
@@ -719,6 +731,9 @@ export function readOpenCodePickerPage(lines: readonly PickerLine[]): OpenCodePi
       if (gap > MAX_LIST_GAP || rows.length === 0) break;
       continue;
     }
+    const at = screenRow(lines[index]);
+    if (lastRow !== undefined && at !== undefined && at - lastRow - 1 > MAX_LIST_GAP) break;
+    lastRow = at;
     if (PICKER_FOOTER.test(row)) break;
     const columns = row.split(COLUMN_SPLIT);
     const label = columns[0].trim();

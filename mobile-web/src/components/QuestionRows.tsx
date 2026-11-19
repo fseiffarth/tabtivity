@@ -16,6 +16,9 @@ export type QuestionRow = {
   /** Shown in place of the label (the review step's Submit), the tag kept. */
   title?: string;
   description?: string;
+  /** The sample the agent put beside the answer: plain preformatted text,
+   * bounded by the caller, never markdown or HTML. */
+  preview?: string;
   /** The row the dialog highlights — the one Enter would take. */
   current?: boolean;
   /** A row the reader picked; `undefined` where rows are not picked but
@@ -104,6 +107,7 @@ export function QuestionRows({ rows, disabled, sendingLabel, onPick, onType, typ
             {row.title ?? (recommended ? row.label.slice(0, recommended.index) : row.label)}{recommended && <em className="question-recommended">{recommended[1]}</em>}
           </strong>
           {row.description && <small>{row.description}</small>}
+          {row.preview && <code className="question-preview">{row.preview}</code>}
         </span>
         {row.pending && <span className="sheet-pending" role="status">{sendingLabel}</span>}
       </button>

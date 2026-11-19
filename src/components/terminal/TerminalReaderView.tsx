@@ -31,6 +31,10 @@ import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry"
 import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
+import { withWaitingEntry } from "../../lib/agents/liveCardGate";
+import { dialogSeenFor, entryStands, waitingQuestion } from "../../../mobile-web/src/terminal/askedQuestion";
+import { isPermissionDialog, permissionSubject, permissionSubjectLabel, type PermissionSubject } from "../../../mobile-web/src/terminal/permissionSubject";
+import { CheckboxIcon, SquareIcon } from "../common/icons/Icon";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
@@ -71,6 +75,7 @@ import { NAMES } from "../../lib/brand";
 import { internalViewerFor, type FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { ARTIFACT_ATTR, answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
+import { parseAppLink } from "../../lib/navigation/appLinks";
 import { ReaderArtifactDialog } from "./ReaderArtifactDialog";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
@@ -214,10 +219,12 @@ function walkQuestionOptions(event: KeyboardEvent<HTMLElement>) {
  * opens a field under it instead: its answer is words, sent as the phone's
  * are (`answerTextKeys`). Files pasted into that field go to the tab
  * folder's inbox and in as `@` references, as the composer takes them. */
-function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, onStep }: {
+function LiveQuestion({ ptyId, live, subject, answered, failure, busy, onAnswer, onType, onStep }: {
   /** The agent's pane: where a file pasted into the typed answer is stored. */
   ptyId: string;
   live: ReaderLive;
+  /** What a permission dialog waits on, from the stored session. */
+  subject: PermissionSubject | null;
   /** A row was clicked and the session has not redrawn yet. */
   answered: boolean;
   /** The last answer's keys never reached the session, and why. */
@@ -274,6 +281,15 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
       <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /> <UntestedTag id="terminal.reader.trustPath" /></small>
       {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
+      {question.readOnly && <UntestedTag id="terminal.reader.questionWaiting" />}
+      {subject && (
+        <p className="terminal-reader-question-subject">
+          <small>{t(permissionSubjectLabel(subject.kind), { tool: subject.tool })} <UntestedTag id="terminal.reader.permissionSubject" /></small>
+          {/* The call as the session recorded it: plain text, never markup. */}
+          {subject.subject && <code>{subject.subject}</code>}
+        </p>
+      )}
+      {question.source === "entry" && !question.readOnly && (question.multiSelect || question.options.some((option) => option.preview)) && <UntestedTag id="terminal.reader.questionPreview" />}
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
       {live.tabs.length > 0 && !stepped && (
         <div className="terminal-reader-question-tabs">
@@ -329,22 +345,28 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
           const label = question.review ? t("terminal.reader.questionSubmitStep") : option.label;
           const freeText = !question.review && freeTextRow(option);
           const open = freeText && typing === option.index;
+          const box = question.multiSelect === true && option.ticked !== undefined;
           return (
             <Fragment key={`${option.index}:${option.label}`}>
               <button
                 type="button"
                 className={option.index === question.current ? "terminal-reader-option current" : "terminal-reader-option"}
                 aria-expanded={freeText ? open : undefined}
-                disabled={busy}
+                aria-pressed={box ? option.ticked : undefined}
+                disabled={busy || question.readOnly === true}
                 onClick={() => (freeText ? setTyping(open ? null : option.index) : onAnswer(option.index))}
               >
                 <span className="terminal-reader-option-number">{option.number !== UNNUMBERED && option.number}</span>
                 <span className="terminal-reader-option-label">
                   <span>
+                    {box && <span className="terminal-reader-option-box" aria-hidden="true">{option.ticked ? <CheckboxIcon /> : <SquareIcon />}</span>}
                     {recommended ? option.label.slice(0, recommended.index) : label}
                     {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
                   </span>
                   {option.description && <small>{option.description}</small>}
+                  {/* The agent's sample, as it wrote it: plain text with its
+                      line breaks, never markdown or HTML. */}
+                  {option.preview && <code className="terminal-reader-option-preview">{option.preview}</code>}
                 </span>
               </button>
               {open && (
@@ -385,6 +407,7 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
       </div>
       {question.options.some((option) => option.keys) && <UntestedTag id="terminal.reader.codexHooksPage" />}
       {!!question.hidden && <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small>}
+      {question.readOnly && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.questionWaiting")}</small>}
       {answered && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
       {pasteError && typing !== null && <small className="terminal-reader-question-more" role="alert">{t(pasteError)}</small>}
       {failure && <small className="terminal-reader-question-more" role="alert">{t(failure === "aiOff" ? "terminal.reader.answerAiOff" : "terminal.reader.answerFailed")}</small>}
@@ -802,12 +825,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setSteerOpen(level);
     return true;
   };
-  // Only a composer on show that takes text answers the key; else the prompt
-  // box over the window does.
-  const steerable = visible && !inputBlocked;
+  // A composer on show answers the key, also while its CLI is starting or asks
+  // something (shown by the key it takes text; Enter keeps it then, saying
+  // why). Only a pane without one gets the prompt box over the window.
   useEffect(
-    () => steerable ? registerReaderComposer(ptyId, (level, lead) => openForSteering.current(level, lead)) : undefined,
-    [ptyId, steerable],
+    () => visible ? registerReaderComposer(ptyId, (level, lead) => openForSteering.current(level, lead)) : undefined,
+    [ptyId, visible],
   );
   // Shown with the keyboard, caret at the end of the text.
   useLayoutEffect(() => {
@@ -826,13 +849,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     check(useKeyboardSteeringStore.getState().handedTo);
     return useKeyboardSteeringStore.subscribe((state) => check(state.handedTo));
   }, [steerOpen]);
-  // A dialog came up, or the Chat went out of view: steering takes it from here.
+  // The Chat went out of view: steering takes it from here.
   useEffect(() => {
-    if (steerOpen === null || steerable) return;
+    if (steerOpen === null || visible) return;
     setSteerOpen(null);
     const steeringState = useKeyboardSteeringStore.getState();
     if (steeringState.handedTo === "prompt") steeringState.enter(steerOpen);
-  }, [steerOpen, steerable]);
+  }, [steerOpen, visible]);
   // A press outside the composer and its chips: the pointer has taken over,
   // nothing waits to come back (the composer stays, as without steering).
   useEffect(() => {
@@ -904,10 +927,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     });
   };
 
-  /** The pane's screen and keyboard, for the walks that read Claude's own. */
+  /** The whole pane, for queue and subagent walks: Codex can draw its
+   * queue heading above the last 40 rows in a tall terminal. */
   const paneRows = () => {
     const term = terminalFor(ptyId);
-    return term ? bufferRows(term.buffer.active) : [];
+    return term ? bufferRows(term.buffer.active, term.rows) : [];
   };
   const paneKey = (key: string) => {
     noteUserInput(ptyId);
@@ -996,7 +1020,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     // The ref, not the state: a spoken send calls this in the same tick the
     // dictated words went into the draft.
     const text = draftRef.current.trim();
-    if (!current || !text || sending || inputBlocked) return;
+    if (!current || !text || sending) return;
+    // Only a box the Prompt key showed takes text while the session cannot take
+    // it: the text stays, and the user sends it again once it can.
+    if (inputBlocked) {
+      setSendError(t(questionOpen ? "terminal.reader.answerQuestionFirst" : "terminal.reader.notStarted"));
+      return;
+    }
     // Any send stops the voice reading the last answer.
     voiceLoop.stopReading();
     // A Tabby chat has no facts row to open the panel in: the CLI answers.
@@ -1309,7 +1339,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <textarea
           ref={composerRef}
           value={draft}
-          disabled={inputBlocked}
+          disabled={inputBlocked && steerOpen === null}
           rows={3}
           spellCheck={false}
           placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
@@ -1327,7 +1357,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <button
           type="button"
           className="terminal-reader-send"
-          disabled={!draft.trim() || sending || inputBlocked}
+          disabled={!draft.trim() || sending || (inputBlocked && steerOpen === null)}
           onClick={() => void send()}
           aria-label={t("terminal.reader.send")}
           title={t("terminal.reader.send")}
@@ -1498,7 +1528,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const chatId = browsed?.chat.id;
   const regionRef = useRef<HTMLDivElement>(null);
 
-  const [live, setLive] = useState<ReaderLive>(NO_LIVE);
+  const [screenLive, setLive] = useState<ReaderLive>(NO_LIVE);
   /** When a read last saw the agent at work: a sent prompt waits from then. */
   const workingSeenAt = useRef(0);
   const [answered, setAnswered] = useState("");
@@ -1522,6 +1552,25 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * Prompt key shows it again with the keyboard (`registerReaderComposer`). */
   const steering = useKeyboardSteeringStore((state) => state.active || state.handedTo !== null);
   const agentLabel = tab ? agentTabLabel(tab) : "";
+  /** The tab's lamp says it asks (its hooks, else the screen). */
+  const lampAsking = useActivityStore((state) => state.attentionByTab[ptyId] === "decision");
+  /** The question Claude is blocked on, from the stored session: its words and
+   * previews, laid over the screen's rows (or standing alone, read-only, while
+   * the dialog is not drawn yet and the lamp says it asks) — `withWaitingEntry`.
+   * The earlier chat browsed in place of the session has none. */
+  const waitingAsk = useMemo(
+    () => (transcript?.available && !browsed && agentFamily(agentLabel) === "claude" ? waitingQuestion(transcript.entries) : null),
+    [transcript, browsed, agentLabel],
+  );
+  /** The entry a dialog was last on screen for: once answered, the lamp can
+   * still say decision for a moment and the stored session still holds the
+   * call as waiting, so a spent entry never stands alone again
+   * (`entryStands`, the phone's rule too). */
+  const dialogSeen = useRef<string | null>(null);
+  const live = useMemo(() => {
+    dialogSeen.current = dialogSeenFor(dialogSeen.current, waitingAsk, !!screenLive.question);
+    return withWaitingEntry(screenLive, waitingAsk, lampAsking && (!waitingAsk || entryStands(dialogSeen.current, waitingAsk)));
+  }, [screenLive, lampAsking, waitingAsk]);
   const use24h = useUse24h();
   const modelTag = useAgentTabModelTag(scope, tab);
   /** The working row's name for the agent, as the phone's says it: the model
@@ -1574,7 +1623,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const paneDriver = useCallback((): QueuePullDriver => ({
     rows: () => {
       const term = terminalFor(ptyId);
-      return term ? bufferRows(term.buffer.active) : [];
+      return term ? bufferRows(term.buffer.active, term.rows) : [];
     },
     key: (key) => typeIntoPane([key]).then(() => true, () => false),
   }), [ptyId, typeIntoPane]);
@@ -1701,7 +1750,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const answer = (index: number) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
-    if (!question || !option || answered || held) return;
+    if (!question || question.readOnly || !option || answered || held) return;
     const keys = answerKeys(question, option);
     if (keys.length === 0) return;
     setAnswered(live.signature);
@@ -1714,7 +1763,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const answerText = (index: number, text: string) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
-    if (!question || !option || answered || held) return;
+    if (!question || question.readOnly || !option || answered || held) return;
     const keys = answerTextKeys(question, option, text);
     if (keys.length === 0) return;
     setAnswered(live.signature);
@@ -1725,7 +1774,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
-    if (!live.question || keys.length === 0 || answered || held) return;
+    if (!live.question || live.question.readOnly || keys.length === 0 || answered || held) return;
     setAnswered(live.signature);
     setAnswerFailure(null);
     setAnsweredBy("step");
@@ -1733,6 +1782,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   };
   const stop = pressEscape;
   const shownLive = picking ? NO_LIVE : live;
+  /** The call a permission dialog on screen waits on, named in full from the
+   * stored session — only while the lamp says the agent asks: a running,
+   * approved `Bash` call has no result either. */
+  const permission = lampAsking && agentFamily(agentLabel) === "claude" && isPermissionDialog(shownLive.question, shownLive.tabs.length) ? permissionSubject(transcript, [...shownLive.ask, ...shownLive.context, ...shownLive.question!.options.map((option) => option.label)]) : null;
   /** The terminal has shown something the chat cannot draw for `STRAY_MS`:
    * the chat says so and offers the way to it. Not while a picker the facts
    * row opened or an answer is on screen — the Reader put those there. */
@@ -1822,6 +1875,13 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // A web link (`dressWebLink`) never opens straight away: `onOpenUrl` asks
   // first, naming the address, as a link the terminal printed does.
   const openWebAt = (target: EventTarget | null): boolean => {
+    const app = onOpenUrl && target instanceof Element ? target.closest<HTMLElement>(".md-link[data-app-link]") : null;
+    const appUrl = app?.getAttribute("data-app-link");
+    if (appUrl && parseAppLink(appUrl)) {
+      setPathHover(null);
+      onOpenUrl?.(appUrl);
+      return true;
+    }
     const el = onOpenUrl && target instanceof Element ? target.closest<HTMLElement>(".web-link[data-href]") : null;
     const url = el ? chatLinkUrl(el.getAttribute("data-href")) : null;
     if (!url) return false;
@@ -2734,9 +2794,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           <LiveQuestion
             ptyId={ptyId}
             live={browsed ? NO_LIVE : shownLive}
+            subject={browsed ? null : permission}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             failure={answerFailure}
-            busy={held}
+            busy={held || !!shownLive.question?.readOnly}
             onAnswer={answer}
             onType={answerText}
             onStep={step}

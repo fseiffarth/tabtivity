@@ -232,6 +232,113 @@ fn hide_secrets(command: &str) -> String {
         .into_owned()
 }
 
+/// A file path (an `Edit`/`Write` permission dialog's subject) as the phone
+/// may see it: the tab's own `folders` made project-relative, secret-shaped
+/// text hidden, and a path still absolute (or `~/…`) cut to its leaf after
+/// `…/`. The whole string is one path, so a space inside a folder name does
+/// not let the rest of the folders through as [`mask_command`] would. A
+/// relative path the agent wrote stays as it is; a path of one component
+/// (`/tmp`, `~/x`, `C:\Users`) names nothing private and stays.
+pub fn mask_path(path: &str, folders: &[&str]) -> String {
+    let path: String = path.chars().filter(|&c| !is_invisible(c)).collect();
+    let relative = relative_to_folders(path.trim(), folders);
+    let hidden = hide_secrets(&relative);
+    let home = hidden == "~" || hidden.starts_with("~/");
+    let plain = without_verbatim(&hidden).unwrap_or_else(|| hidden.clone());
+    let unc = plain.starts_with(r"\\");
+    let drive = !unc && is_windows_absolute(&plain);
+    if !(home || unc || drive || hidden.starts_with('/')) {
+        // Relative as written, and nothing else: a `..` (it climbs out of the
+        // folder that was just taken off), a scheme or drive colon, a rooted
+        // `\`, a `~user` or a second path after a space are not.
+        return if is_plain_relative(&hidden) { hidden } else { leaf_of(&hidden) };
+    }
+    let body = if drive {
+        &plain[2..]
+    } else if home {
+        &plain[1..]
+    } else {
+        plain.as_str()
+    };
+    let parts: Vec<&str> = body.split(['\\', '/']).filter(|part| !part.is_empty()).collect();
+    // A UNC path shows no more than what follows its server and share.
+    let shown = if unc { 2 } else { 1 };
+    let sep = if plain.contains('\\') { '\\' } else { '/' };
+    let prefix = if home { "~/" } else { "" };
+    match parts.last().filter(|_| parts.len() > shown) {
+        Some(leaf) => format!("{prefix}…{sep}{leaf}"),
+        None if unc => "…".to_string(),
+        None => hidden,
+    }
+}
+
+/// Characters that show nothing or reorder what is shown (bidi controls,
+/// zero-width and joiner marks, tags, controls): `evil\u{202E}txt.exe` reads
+/// `evilexe.txt`.
+fn is_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{AD}' | '\u{61C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}' | '\u{E0000}'..='\u{E007F}')
+}
+
+/// A relative path that stays inside the folder it is relative to and names
+/// no other: no `..` component, no `:`, no leading `\` or `~`, and no later
+/// word that starts an absolute path.
+fn is_plain_relative(path: &str) -> bool {
+    !path.starts_with(['\\', '~'])
+        && !path.contains(':')
+        && !path.split(['/', '\\']).any(|part| part == "..")
+        && !path.split_whitespace().skip(1).any(|word| word.starts_with(['/', '\\', '~']))
+}
+
+/// Only the last component of `path`, after `…/` (`…\` when it is written
+/// with backslashes): what is left of a path that is no plain relative one.
+fn leaf_of(path: &str) -> String {
+    let sep = if path.contains('\\') && !path.contains('/') { '\\' } else { '/' };
+    match path.split(['/', '\\']).rfind(|part| !part.is_empty() && *part != "..") {
+        Some(leaf) => format!("…{sep}{leaf}"),
+        None => "…".to_string(),
+    }
+}
+
+/// A URL (a `WebFetch` permission dialog's subject) as the phone may see it:
+/// its scheme and host and nothing else — no user info, port, path, query or
+/// fragment, all of which can hold what the host must not show. Empty for
+/// anything that is no `scheme://host` (a `data:` or `file:` URL, a host with
+/// a character no host name has): the phone then shows the tool's name alone.
+pub fn mask_url(url: &str) -> String {
+    let url = url.trim();
+    let Some((scheme, rest)) = url.split_once("://") else { return String::new() };
+    let scheme_ok = scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && scheme.len() <= 16
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'));
+    if !scheme_ok {
+        return String::new();
+    }
+    // The authority ends at the first `/`, `?`, `#` or `\`; user info is
+    // everything before its last `@`.
+    let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or_default();
+    let host_port = authority.rsplit('@').next().unwrap_or_default();
+    let host = match host_port.strip_prefix('[') {
+        Some(v6) => match v6.split_once(']') {
+            Some((address, _)) if !address.is_empty() && address.chars().all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.')) => {
+                format!("[{address}]")
+            }
+            _ => return String::new(),
+        },
+        None => {
+            let name = host_port.split(':').next().unwrap_or_default();
+            // ASCII only: another script's look-alike letters read as a host
+            // the user knows (`раураl.com`), and the phone cannot tell.
+            if name.is_empty() || name.len() > 253 || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) {
+                return String::new();
+            }
+            name.to_string()
+        }
+    };
+    // A host label can itself be a random run (a token in a sub-domain).
+    hide_secrets(&format!("{scheme}://{host}"))
+}
+
 /// An absolute (`/a/b`, not `//host`) or home (`~/a`) path, starting the line
 /// or after whitespace, a quote, `=`, `:`, `(` or `,`.
 static PATH: LazyLock<Regex> =

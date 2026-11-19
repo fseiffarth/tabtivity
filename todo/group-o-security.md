@@ -1554,7 +1554,8 @@ with synthetic inputs; nothing was run live.
     `Binary files … differ` regex on uncapped lines (gap 111), and no cap on
     the number of file rows and index entries (gap 112). Linear parse of the
     binary line, a length guard before `parseMeta`, capped or virtualised
-    file rows.
+    file rows. **Gap 111 fixed 2026-11-17** (linear `binaryFilesPaths`, and
+    `unquotePath` no longer quadratic); gap 112 still open.
     - [ ] 🤖 Automated test
 2439. **Agent print request: bound the cost of a hostile PDF.** No page
     limit, flate-expansion bound or `copies × sheets` ceiling before Review

@@ -60,7 +60,7 @@ import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
-import { useActivityStore } from "../../stores/activity";
+import { noteAgentTurn, useActivityStore } from "../../stores/activity";
 import { NEW_TAB_SHORTCUT_EVENT } from "../../lib/shortcuts/newTabChord";
 import { afterStatusJump, jumpBackTarget } from "../../lib/shortcuts/statusJump";
 import { STEERING_KEYS, steeringKeysFor, type SteeringLegendState } from "../../lib/shortcuts/shortcuts";
@@ -237,6 +237,18 @@ describe("steering digits on a tab that asks", () => {
     press({ key: " ", shiftKey: true });
     press({ key: "1" });
     expect(h.typed).toEqual([[`p:${tab.key}`, ["1"]]]);
+    expect(newTabs).toEqual([]);
+  });
+
+  it("a hook-driven Claude tab whose lamp is not asking still answers a dialog its screen shows (a picker the user opened)", () => {
+    const tab = agentTab("a");
+    h.screens.set(`p:${tab.key}`, { question: permission, signature: "resume-picker" });
+    // Its hooks have spoken (a turn is running), and none announced a decision.
+    noteAgentTurn(`p:${tab.key}`, "working");
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "1" });
+    expect(h.typed.length).toBe(1);
     expect(newTabs).toEqual([]);
   });
 
