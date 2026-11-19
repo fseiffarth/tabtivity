@@ -422,7 +422,14 @@ computer** page, next to the logins, and copies nothing until you say so;
 when it starts, merged into the settings files the CLI writes itself, so a
 model you picked in one project stays picked there. Agents cannot change
 the global config; what an agent changes in its own project's home stays in
-that project and is reset where it overlaps the global config. There is no off switch; if `bwrap` is missing the agent does
+that project and is reset where it overlaps the global config. Two switches on
+a CLI's card in Manage CLIs (under *More* → *Options*) each edit one key of it:
+Codex's **auto-review approvals**, and OpenCode's **keep prompt caches warm**
+(OpenCode 2.3+). With the second on, OpenCode sends small keep-alive requests
+for up to 30 minutes after your last message, just before the model's prompt
+cache would expire, so a turn after a pause reads the conversation from cache
+instead of writing it again. Each keep-alive is a real, billed request, so it
+pays off when you come back within the half hour. There is no off switch; if `bwrap` is missing the agent does
 not start, and Tabtivity offers `sudo apt install bubblewrap` in a terminal tab.
 
 Typing a CLI's name (`claude`, `cursor-agent`, …) into a shell tab runs it in

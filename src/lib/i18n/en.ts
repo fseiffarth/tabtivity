@@ -2534,6 +2534,8 @@ export const enSource = {
   "settings.agentGlobalImported": "Imported {files} files and {configs} config files. New agent tabs pick them up.",
   "settings.codexAutoReview": "Codex: auto-review approvals",
   "settings.codexAutoReviewHelp": "Codex hands requests it would ask you about (commands outside its sandbox, network access, edits outside the project) to a reviewer agent that approves or refuses them. Without it, every command asks inside {app}'s sandbox on Linux. Each review is an extra model call.",
+  "settings.opencodeWarming": "OpenCode: keep prompt caches warm",
+  "settings.opencodeWarmingHelp": "After your last message OpenCode sends small keep-alive requests for up to 30 minutes, just before the model's prompt cache would expire, so the next turn reads the conversation from cache instead of writing it again. Each keep-alive is a real request (a cache read of the whole conversation), so it pays off when you come back within the half hour and costs a little when you don't. It stops after a cache miss and skips subagents; local models are kept warm too. Needs OpenCode 2.3 or later; open OpenCode tabs pick it up when they start again.",
   "settings.agentLogins": "Agent logins",
   "settings.agentLoginsHelp": "One login per CLI, shared by every {app} agent: sign in once in any tab. Import copies this computer's existing login (never config). CLIs that keep their login elsewhere (Mistral Vibe, Aider, mini-swe-agent, Cline) are not listed and sign in per project.",
   "settings.agentLoginSignedIn": "signed in",

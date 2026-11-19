@@ -45,6 +45,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["agent_global_import", "off"],
   ["agent_global_open", "client"],
   ["agent_global_set_codex_auto_review", "core"],
+  ["agent_global_set_opencode_warming", "core"],
   ["agent_global_status", "core"],
   ["agent_import_offer", "off"],
   ["agent_import_offer_answer", "off"],

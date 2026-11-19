@@ -2720,6 +2720,7 @@ pub fn run() {
             commands::agents::agent_import_offer,
             commands::agents::agent_import_offer_answer,
             commands::agents::agent_global_set_codex_auto_review,
+            commands::agents::agent_global_set_opencode_warming,
             commands::agents::agent_global_open,
             commands::agents::agent_usage,
             commands::agents::agent_overview,

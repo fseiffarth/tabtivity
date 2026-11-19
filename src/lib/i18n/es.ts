@@ -11488,6 +11488,8 @@ export const dict: Dict = {
   "settings.agentGlobalImported": "Importados {files} archivos y {configs} archivos de configuración. Las nuevas pestañas de agente los usarán.",
   "settings.codexAutoReview": "Codex: revisión automática de aprobaciones",
   "settings.codexAutoReviewHelp": "Codex pasa las solicitudes por las que te preguntaría (comandos fuera de su sandbox, acceso a red, ediciones fuera del proyecto) a un agente revisor que las aprueba o rechaza. Sin esto, en Linux cada comando pregunta dentro del sandbox de {app}. Cada revisión es una llamada extra al modelo.",
+  "settings.opencodeWarming": "OpenCode: mantener calientes las cachés de prompt",
+  "settings.opencodeWarmingHelp": "Tras tu último mensaje, OpenCode envía durante hasta 30 minutos pequeñas peticiones de mantenimiento justo antes de que caduque la caché de prompt del modelo, para que el siguiente turno lea la conversación de la caché en lugar de escribirla de nuevo. Cada mantenimiento es una petición real (una lectura de caché de toda la conversación): compensa si vuelves en la media hora y cuesta un poco si no. Se detiene tras un fallo de caché y omite los subagentes; los modelos locales también se mantienen. Requiere OpenCode 2.3 o posterior; las pestañas de OpenCode abiertas lo toman al volver a iniciarse.",
   "settings.agentLoginSignedIn": "sesión iniciada",
   "settings.agentLoginSignedInAs": "sesión iniciada como {account}",
   "settings.agentLoginNotSignedIn": "sin sesión — inicia sesión una vez en cualquier pestaña o importa",

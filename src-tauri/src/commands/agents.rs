@@ -2391,6 +2391,15 @@ pub async fn agent_global_set_codex_auto_review(enabled: bool) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
+/// The Manage CLIs switch for OpenCode's cache warming in the Tabtivity-wide
+/// layer; every OpenCode tab picks it up at its next start.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_global_set_opencode_warming(enabled: bool) -> Result<(), String> {
+    app_core::rt::blocking("agent", move || crate::services::agent_global::set_opencode_warming(enabled))
+        .await?
+        .map_err(|e| e.to_string())
+}
+
 /// Open the Tabtivity-wide layer's folder in the file manager, creating it first.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_global_open() -> Result<(), String> {

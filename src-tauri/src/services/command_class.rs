@@ -221,6 +221,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_global_import", Off(OffReason::LocalCliFiles)),
     ("agent_global_open", Client),
     ("agent_global_set_codex_auto_review", Core),
+    ("agent_global_set_opencode_warming", Core),
     ("agent_global_status", Core),
     ("agent_import_offer", Off(OffReason::LocalCliFiles)),
     ("agent_import_offer_answer", Off(OffReason::LocalCliFiles)),

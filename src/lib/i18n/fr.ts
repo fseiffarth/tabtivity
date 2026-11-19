@@ -11490,6 +11490,8 @@ export const dict: Dict = {
   "settings.agentGlobalImported": "{files} fichiers et {configs} fichiers de configuration importés. Les nouveaux onglets d'agent les reprennent.",
   "settings.codexAutoReview": "Codex : revue automatique des autorisations",
   "settings.codexAutoReviewHelp": "Codex confie les demandes pour lesquelles il vous solliciterait (commandes hors de son bac à sable, accès réseau, modifications hors du projet) à un agent relecteur qui les accepte ou les refuse. Sans cela, sous Linux, chaque commande demande dans le bac à sable de {app}. Chaque relecture est un appel de modèle supplémentaire.",
+  "settings.opencodeWarming": "OpenCode : garder les caches de prompt au chaud",
+  "settings.opencodeWarmingHelp": "Après votre dernier message, OpenCode envoie pendant 30 minutes au plus de petites requêtes de maintien juste avant l'expiration du cache de prompt du modèle, pour que le tour suivant lise la conversation depuis le cache au lieu de la réécrire. Chaque maintien est une vraie requête (une lecture en cache de toute la conversation) : cela paie si vous revenez dans la demi-heure et coûte un peu sinon. Il s'arrête après un échec de cache et ignore les sous-agents ; les modèles locaux sont aussi maintenus. Nécessite OpenCode 2.3 ou plus récent ; les onglets OpenCode ouverts le prennent à leur prochain démarrage.",
   "settings.agentLoginSignedIn": "connecté",
   "settings.agentLoginSignedInAs": "connecté en tant que {account}",
   "settings.agentLoginNotSignedIn": "non connecté — connectez-vous une fois dans un onglet, ou importez",

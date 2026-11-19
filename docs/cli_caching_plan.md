@@ -1,6 +1,6 @@
 # Agent CLI prompt caching — plan
 
-Status 2026-11-19: research done (below); phases 1a–1e implemented, not live-verified.
+Status 2026-11-19: research done (below); phases 1a–1e and 2 implemented, not live-verified.
 
 ## What the research found
 
@@ -62,8 +62,15 @@ Facts worth keeping:
      (`usage.cache_creation.ephemeral_{5m,1h}_input_tokens`).
    - Antigravity later: undocumented protobuf in `gen_metadata`; tie to a
      version and fail soft.
-2. **OpenCode warming opt-in**: a Manage CLIs switch that adds `warming`
-   (30 min) to the inline config; optional `cache.ttl`. Untested-tagged.
+2. **OpenCode warming opt-in** (done): a switch on the OpenCode card in
+   Manage CLIs writes top-level `warming: true` into the Tabtivity-wide
+   layer's `.config/opencode/opencode.json`, now a merged file, so it is the
+   user's own config in every home. Not the inline config: that is built on
+   several paths (API keys, MCP lanes, local models). Schema read from the
+   2.3.2 binary: `warming: boolean | { prompt?, interval?: "auto" | duration,
+   duration? }`, defaults 90 % of `cache.ttl` (4 min without one) and 30 min;
+   a model's `settings.cache.warming` overrides it. `cache.ttl` stays the
+   user's. Local models are warmed too (every 4 min).
 3. **Cold-resume warning**: before restoring/resuming a tab idle past its
    CLI's TTL (Claude main 1 h, Codex 30 min, Copilot `cacheExpiresAt`), say the
    first turn re-writes the whole context; offer a fresh session.

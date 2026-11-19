@@ -11494,6 +11494,8 @@ export const dict: Dict = {
   "settings.agentGlobalImported": "{files} Dateien und {configs} Konfigurationsdateien importiert. Neue Agenten-Tabs übernehmen sie.",
   "settings.codexAutoReview": "Codex: Freigaben automatisch prüfen",
   "settings.codexAutoReviewHelp": "Codex gibt Anfragen, bei denen es dich fragen würde (Befehle außerhalb seiner Sandbox, Netzwerkzugriff, Änderungen außerhalb des Projekts), an einen Prüf-Agenten, der sie erlaubt oder ablehnt. Ohne das fragt unter Linux in der Sandbox von {app} jeder Befehl nach. Jede Prüfung ist ein zusätzlicher Modellaufruf.",
+  "settings.opencodeWarming": "OpenCode: Prompt-Caches warm halten",
+  "settings.opencodeWarmingHelp": "Nach deiner letzten Nachricht sendet OpenCode bis zu 30 Minuten lang kleine Keep-alive-Anfragen, kurz bevor der Prompt-Cache des Modells abläuft, damit der nächste Zug das Gespräch aus dem Cache liest, statt es neu zu schreiben. Jedes Keep-alive ist eine echte Anfrage (ein Cache-Lesen des ganzen Gesprächs): Es lohnt sich, wenn du innerhalb der halben Stunde zurückkommst, und kostet etwas, wenn nicht. Es endet nach einem Cache-Fehlgriff und lässt Subagenten aus; lokale Modelle werden ebenfalls warm gehalten. Braucht OpenCode 2.3 oder neuer; offene OpenCode-Tabs übernehmen es beim nächsten Start.",
   "settings.agentLoginSignedIn": "angemeldet",
   "settings.agentLoginSignedInAs": "angemeldet als {account}",
   "settings.agentLoginNotSignedIn": "nicht angemeldet – einmal in irgendeinem Tab anmelden oder importieren",
