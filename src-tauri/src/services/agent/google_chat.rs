@@ -283,7 +283,11 @@ fn agy_folder(store: &AgyStore, directory: &str) -> Option<Vec<String>> {
 /// A conversation's database, `None` when it has none (a summary row of a
 /// conversation never begun).
 fn agy_conversation(store: &AgyStore, id: &str) -> Option<(HomeFile, Connection)> {
-    let file = store.conversations.file(&format!("{id}.db"))?;
+    agy_conversation_in(&store.conversations, id)
+}
+
+fn agy_conversation_in(conversations: &HomeDir, id: &str) -> Option<(HomeFile, Connection)> {
+    let file = conversations.file(&format!("{id}.db"))?;
     let conn = database(&file)?;
     Some((file, conn))
 }
@@ -419,10 +423,15 @@ fn tab_choice_in(store: &AgyStore, ids: &[String], notes: &Path, project_id: Opt
 /// The conversation `id`'s prompts and answers; `went_by` is what else the
 /// read went by, part of its version.
 fn agy_read(store: &AgyStore, id: &str, went_by: &str, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
-    let (file, conn) = agy_conversation(store, id)?;
+    agy_read_in(&store.conversations, id, went_by, version, limit)
+}
+
+/// [`agy_read`] over a folder of conversation databases.
+fn agy_read_in(conversations: &HomeDir, id: &str, went_by: &str, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+    let (file, conn) = agy_conversation_in(conversations, id)?;
     let mut current = format!("agy:{id}:{}:{}:{limit}", stamp(&file)?, key(went_by));
     // SQLite can keep new turns only in the WAL until a checkpoint.
-    if let Some(wal) = store.conversations.file(&format!("{id}.db-wal")).and_then(|file| stamp(&file)) {
+    if let Some(wal) = conversations.file(&format!("{id}.db-wal")).and_then(|file| stamp(&file)) {
         current.push_str(&format!(":{wal}"));
     }
     let mut read = empty(current, version);
@@ -440,6 +449,31 @@ fn agy_read(store: &AgyStore, id: &str, went_by: &str, version: Option<&str>, li
     read.entries.reverse();
     read.model = agy_model(&conn);
     Some(finish(read, limit))
+}
+
+/// The folder `dir` of local copies of a remote host's conversation
+/// databases (`<id>.db` and its `-wal`, no `-shm`), opened for reading.
+fn copy_folder(dir: &Path) -> Option<HomeDir> {
+    // As in [`agy_store`]: SQLite's NOFOLLOW refuses a link at any component.
+    #[cfg(unix)]
+    let dir = &std::fs::canonicalize(dir).ok()?;
+    HomeDir::open_existing(dir, "")
+}
+
+/// The conversation `id`'s chat, read from the copy of a remote host's
+/// database that `services::remote::remote_transcript` keeps in `dir`: the
+/// `<id>.db` and `<id>.db-wal` it copied (SQLite rebuilds the wal-index from
+/// the WAL itself). Which conversation is the tab's was decided there.
+pub(crate) fn antigravity_copy(dir: &Path, id: &str, version: Option<&str>, limit: usize) -> AgentTranscript {
+    copy_folder(dir)
+        .and_then(|conversations| agy_read_in(&conversations, id, "host", version, limit))
+        .unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
+}
+
+/// When the copied conversation `id` of `dir` began (epoch ms): its first prompt.
+pub(crate) fn antigravity_copy_started(dir: &Path, id: &str) -> Option<i64> {
+    let (_, conn) = agy_conversation_in(&copy_folder(dir)?, id)?;
+    agy_started(&conn)
 }
 
 /// A user input's (14) or planner response's (15) text.

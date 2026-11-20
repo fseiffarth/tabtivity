@@ -304,6 +304,15 @@ pub fn chat(home: &Path, directory: &str, id: &str, version: Option<&str>, limit
         .unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
 }
 
+/// The chat of session `id`, read from the copy of a remote host's
+/// `session.jsonl` that `services::remote::remote_transcript` keeps in `dir`.
+/// Which session is the tab's was decided there.
+pub(crate) fn copy_transcript(dir: &Path, id: &str, version: Option<&str>, limit: usize) -> AgentTranscript {
+    HomeDir::open_existing(dir, "")
+        .and_then(|dir| read(&Session { id: id.to_string(), dir }, "host", version, limit))
+        .unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
+}
+
 /// Whether `id` is one of the sessions Muse began in `directory`.
 pub fn folder_chat(home: &Path, directory: &str, id: &str) -> bool {
     is_uuid_shaped(id) && folder_session(home, directory, id).is_some()

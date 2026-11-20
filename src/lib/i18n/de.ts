@@ -6187,6 +6187,7 @@ export const dict: Dict = {
   "terminal.reader.answerAiOff": "⏻ KI ist aus, daher wurde diese Antwort nicht gesendet. Schalte KI in der Seitenleiste ein und wähle erneut.",
   "terminal.reader.answerFailed": "Die Antwort hat die Sitzung nicht erreicht (sie wurde evtl. getrennt). Versuche es erneut oder nutze die Terminal-Ansicht.",
   "terminal.reader.unreadable": "Die gespeicherte Unterhaltung konnte nicht gelesen werden.",
+  "terminal.reader.syncing": "Die Unterhaltung wird vom Host kopiert…",
   "terminal.reader.empty": "Noch keine Beiträge — die Unterhaltung erscheint hier, sobald der Agent geantwortet hat.",
   "terminal.reader.earlier": "Frühere Beiträge zeigen",
   "terminal.reader.cut": "Hier gekürzt — der volle Text steht im Terminal und in der Sitzung.",

@@ -6161,6 +6161,7 @@ export const dict: Dict = {
   "terminal.reader.answerAiOff": "⏻ L'IA è disattivata, quindi questa risposta non è stata inviata. Attiva l'IA nel pannello laterale e scegli di nuovo.",
   "terminal.reader.answerFailed": "La risposta non ha raggiunto la sessione (potrebbe essersi disconnessa). Riprova o usa la vista Terminale.",
   "terminal.reader.unreadable": "Impossibile leggere la conversazione salvata.",
+  "terminal.reader.syncing": "Copia della conversazione dall'host in corso…",
   "terminal.reader.empty": "Ancora nessun turno — la conversazione appare qui appena l'agente ha risposto.",
   "terminal.reader.earlier": "Mostra i turni precedenti",
   "terminal.reader.cut": "Tagliato qui — il testo completo è nel terminale e nella sessione.",

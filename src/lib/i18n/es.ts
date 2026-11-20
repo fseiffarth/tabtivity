@@ -6161,6 +6161,7 @@ export const dict: Dict = {
   "terminal.reader.answerAiOff": "⏻ La IA está desactivada, así que esta respuesta no se envió. Activa la IA en el panel lateral y elige de nuevo.",
   "terminal.reader.answerFailed": "La respuesta no llegó a la sesión (puede que se haya desconectado). Inténtalo de nuevo o usa la vista Terminal.",
   "terminal.reader.unreadable": "No se pudo leer la conversación guardada.",
+  "terminal.reader.syncing": "Copiando la conversación desde el host…",
   "terminal.reader.empty": "Aún no hay turnos — la conversación aparece aquí en cuanto el agente haya respondido.",
   "terminal.reader.earlier": "Mostrar turnos anteriores",
   "terminal.reader.cut": "Cortado aquí — el texto completo está en el terminal y en la sesión.",

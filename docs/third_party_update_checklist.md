@@ -1171,7 +1171,23 @@ tab and resume/fork remain tagged for live verification.
   version is ≥ `CODEX_NO_DAEMON_SINCE` = 0.156.0, the release that brought
   both the daemon and the flag (0.155.x exits on it; unknown version → no
   flag, as with Claude's `--name`). Containers, remote hosts and
-  `ollama launch codex` run their own Codex and get no flag.
+  `ollama launch codex` run their own Codex and get no flag. A remote host's
+  TUI instead gets `-c features.daemon_auto_start=false`
+  (`launch_prep::keep_remote_codex_in_process`): its version is unknown, an
+  unknown feature key is ignored (0.170.0 starts with one), the flag is not.
+- **Remote-host Chat, 0.171.0 (2026-11-20; offline: `codex/rollout_fd.py`)**:
+  `services::remote_transcript::codex` names a host tab's thread by the
+  `codex` process (`/proc/<pid>/comm`) whose environment carries `TAB_UID`
+  and the `…/sessions/YYYY/MM/DD/rollout-<stamp>-<thread id>.jsonl` files it
+  holds open. Checked: the rollout appears with the first turn (none while
+  idle) and stays open while the TUI runs; after `/new` (which first asks
+  "Where should the new conversation run?") the old one stays open beside the
+  new one, so the one written last is the thread on screen; in-process
+  (`--no-daemon` or the `-c` above) each TUI holds only its own tab's
+  rollouts; with the daemon, the first tab's `app-server --listen unix://`
+  (its child, its environment) holds every tab's — the reason for the `-c`.
+  Re-run the probe when the rollout path, `comm`, or `daemon_auto_start`'s
+  name could have changed.
 - **0.157.0 (2026-09-25) was checked from the binary's strings, not live** —
   launching a Codex TUI from an agent tab was refused, so all four
   `VERIFIED` rows moved to 0.157.0 on this evidence: `--help` still lists

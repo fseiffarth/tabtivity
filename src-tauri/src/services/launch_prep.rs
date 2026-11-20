@@ -897,6 +897,28 @@ impl PreparedLaunch {
     }
 }
 
+/// The config override that keeps a remote host's Codex TUI in-process.
+const CODEX_NO_DAEMON_OVERRIDE: &str = "features.daemon_auto_start=false";
+
+/// Keep a Codex TUI on a remote host in-process, as `--no-daemon` keeps a
+/// local one. Otherwise the first tab's TUI starts a shared `app-server` that
+/// holds every later tab's thread with the first tab's environment, and the
+/// remote Chat (`services::remote_transcript::codex`) would show one tab's
+/// conversation in another (Codex 0.171.0, `scripts/verify-cli/codex/rollout_fd.py`).
+/// A `-c` override rather than the flag: the host's Codex version is not
+/// known here, and a build too old for the flag exits on it, while an unknown
+/// feature key is ignored (0.170.0 checked).
+fn keep_remote_codex_in_process(opts: &mut crate::terminal::PtyOptions) {
+    if opts.cmd != "codex" || !crate::services::agent_versions::codex_runs_tui(&opts.args) {
+        return;
+    }
+    if opts.args.iter().any(|a| a == "--no-daemon" || a.contains("daemon_auto_start")) {
+        return;
+    }
+    // Appended, where `--no-daemon` goes for a local tab: after `resume <id>` too.
+    opts.args.extend(["-c".to_string(), CODEX_NO_DAEMON_OVERRIDE.to_string()]);
+}
+
 /// Assemble a tab's launch from its `PtyOptions`. `session_name` is Claude's
 /// `--name` (the window's `TerminalView` supplies it; the sidecar has none).
 /// `pool` is the window's remote pool, which a remote project's ssh wrap
@@ -1562,6 +1584,7 @@ pub async fn prepare(
         // environment channel; the host uses it only without its own login.
         if crate::services::ssh_exec::remote_target_of(&opts).is_some() {
             crate::services::claude_token::inject_remote(&mut opts);
+            keep_remote_codex_in_process(&mut opts);
         }
         ssh_wrapped = crate::services::ssh_exec::remote_target_of(&opts).is_some();
         crate::services::ssh_exec::wrap_pty_options(&mut opts)?;
@@ -2214,6 +2237,27 @@ fn reattaches_session(project: Option<&str>, host: Option<&str>, session: &str, 
 
 #[cfg(test)]
 mod tests {
+    /// A remote Codex TUI is kept in-process by a config override (which an
+    /// older host build ignores), once; a subcommand and other CLIs are left
+    /// alone, and a launch that already opts out is not touched again.
+    #[test]
+    fn a_remote_codex_tui_is_kept_in_process() {
+        let run = |cmd: &str, args: &[&str]| {
+            let mut opts: PtyOptions = serde_json::from_value(serde_json::json!({
+                "id": "p:a", "cmd": cmd, "args": args, "cwd": "", "cols": 80, "rows": 24 }))
+            .unwrap();
+            super::keep_remote_codex_in_process(&mut opts);
+            opts.args
+        };
+        let off = ["-c", super::CODEX_NO_DAEMON_OVERRIDE];
+        assert_eq!(run("codex", &[]), off);
+        assert_eq!(run("codex", &["resume", "t1"]), ["resume", "t1", off[0], off[1]]);
+        assert_eq!(run("codex", &["login"]), ["login"], "a subcommand has no daemon to opt out of");
+        assert_eq!(run("codex", &["--no-daemon"]), ["--no-daemon"]);
+        assert_eq!(run("codex", &off), off, "never twice");
+        assert_eq!(run("claude", &[]), Vec::<String>::new());
+    }
+
     /// The facts the Windows session host route is decided on, read off a
     /// resolved launch: a project agent with a session name goes, the root
     /// scope, the Host session and an ssh/container launch do not, and the

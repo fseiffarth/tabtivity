@@ -6163,6 +6163,7 @@ export const dict: Dict = {
   "terminal.reader.answerAiOff": "⏻ L'IA est désactivée, cette réponse n'a donc pas été envoyée. Active l'IA dans le panneau latéral et choisis à nouveau.",
   "terminal.reader.answerFailed": "La réponse n'a pas atteint la session (elle s'est peut-être déconnectée). Réessaie ou utilise la vue Terminal.",
   "terminal.reader.unreadable": "La conversation enregistrée n'a pas pu être lue.",
+  "terminal.reader.syncing": "Copie de la conversation depuis l'hôte…",
   "terminal.reader.empty": "Aucun échange pour l'instant — la conversation s'affiche ici dès que l'agent a répondu.",
   "terminal.reader.earlier": "Afficher les échanges précédents",
   "terminal.reader.cut": "Coupé ici — le texte complet est dans le terminal et la session.",

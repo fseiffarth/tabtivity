@@ -6358,6 +6358,7 @@ export const enSource = {
   "terminal.reader.noSession": "This tab has no session id yet — the conversation shows once the agent has started it.",
   "terminal.reader.missing": "The stored conversation was not found yet.",
   "terminal.reader.unreadable": "The stored conversation could not be read.",
+  "terminal.reader.syncing": "Copying the conversation from the host…",
   "terminal.reader.empty": "No turns yet — the conversation shows here once the agent has answered.",
   "terminal.reader.earlier": "Show earlier turns",
   "terminal.reader.cut": "Cut here — the full text is in the terminal and the session.",
