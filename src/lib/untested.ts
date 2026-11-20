@@ -875,7 +875,7 @@ export const UNTESTED = {
   "mobile.headless.schedules": { area: "mobile", what: "Schedule sheet · With the Tabtivity window closed a tab's schedules are listed off agent_tasks.json and created/edited/deleted there under the file lock (H3); the sidecar's own scheduler fires them", tested: "2026-10-02" },
   "mobile.headless.prompts": { area: "mobile", what: "Prompts sheet · With the Tabtivity window closed the collected prompts are listed off agent_prompts.json and created/edited/deleted/sent-now there (a send is a one-time rule at the current minute the sidecar fires, the prompt retired to the history) (H3)", tested: "2026-10-02" },
   "mobile.mail.accountPicker": { area: "mobile", what: "Mail · With more than one account, a dropdown picks whose folders are listed (inbox first, unread inbox count per account), remembered on this phone; inside a folder, account and folder dropdowns switch without going back" },
-  "mobile.mail.dateGroups": { area: "mobile", what: "Phone Mail · folder pages group messages by local day under Today, Yesterday, recent weekdays or older dates" },
+  "mobile.mail.dateGroups": { area: "mobile", what: "Phone Mail · folder pages group messages by local day for the past week and by month and year for older mail" },
   "mobile.mailActions": { area: "mobile", what: "MobileSettings · Mark read and star from the phone" },
   "mobile.mailRead": { area: "mobile", what: "MobileSettings · Read mail on the phone" },
   "mobile.mailReply": { area: "mobile", what: "MobileSettings · Reply from the phone" },

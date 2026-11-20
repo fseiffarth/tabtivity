@@ -21,7 +21,7 @@ import { installFocusSwipe } from "../terminal/focusSwipe";
 import { chatDayKey, chatDayLabel, chatMoment } from "../terminal/chatTimes";
 import { isUntested } from "../../../src/lib/untested";
 import { formatBytes } from "../../../src/lib/formatBytes";
-import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
+import { dateLocale, useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { HintQueue, type HintKey } from "../components/HintMessage";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
 import { ScreenHead } from "../components/ScreenHead";
@@ -55,14 +55,22 @@ function listTime(value: string, lang: Language, today: string) {
     : date.toLocaleDateString(lang, { day: "numeric", month: "short" });
 }
 
-function groupMessagesByDay(messages: MobileMailHeader[]) {
-  const groups = new Map<string, { day: Date | null; messages: MobileMailHeader[] }>();
+function groupMessagesByDate(messages: MobileMailHeader[], now: Date, t: Translate) {
+  const weekAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+  const dayLabels = { today: t("mobile.mail.today"), yesterday: t("mobile.mail.yesterday") };
+  const groups = new Map<string, { label: string; messages: MobileMailHeader[] }>();
   for (const item of messages) {
     const day = chatMoment(item.date);
-    const key = day ? chatDayKey(day) : "";
+    const byMonth = day !== null && day < weekAgo;
+    const key = day ? (byMonth ? `${day.getFullYear()}-${day.getMonth() + 1}` : chatDayKey(day)) : "";
     const group = groups.get(key);
     if (group) group.messages.push(item);
-    else groups.set(key, { day, messages: [item] });
+    else {
+      const label = day
+        ? (byMonth ? day.toLocaleDateString(dateLocale(), { month: "long", year: "numeric" }) : chatDayLabel(day, now, dayLabels))
+        : t("mobile.mail.unknownDate");
+      groups.set(key, { label, messages: [item] });
+    }
   }
   return Array.from(groups);
 }
@@ -357,10 +365,9 @@ export function Mail() {
   const emptyFolders = ordered.filter((item) => item.total === 0 && item.kind !== "inbox");
   const shownFolders = ordered.filter((item) => !emptyFolders.includes(item));
 
-  const messageDays = folder && !message ? groupMessagesByDay(folder.messages) : [];
   const now = new Date();
+  const messageGroups = folder && !message ? groupMessagesByDate(folder.messages, now, t) : [];
   const today = chatDayKey(now);
-  const dayLabels = { today: t("mobile.mail.today"), yesterday: t("mobile.mail.yesterday") };
 
   const actions = <>
     {message && writes.actions && <>
@@ -433,8 +440,8 @@ export function Mail() {
         {replyBytes(reply) > MAX_REPLY_BYTES && <p className="mail-mobile-warning">{t("mobile.mail.replyTooLong")}</p>}
       </section>}
     </article> : folder ? <>
-      {messageDays.map(([key, { day, messages }]) => <section key={key}>
-        <h2 className="tool-section-head">{day ? chatDayLabel(day, now, dayLabels) : t("mobile.mail.unknownDate")}</h2>
+      {messageGroups.map(([key, { label, messages }]) => <section key={key}>
+        <h2 className="tool-section-head">{label}</h2>
         <div className="tool-group">
           {messages.map((item) => <button className={`tool-row mail-mobile-row${item.seen ? "" : " unread"}${item.flagged ? " flagged" : ""}${item.answered ? " answered" : ""}`} key={item.id} onClick={() => void loadMessage(item)} disabled={busy}>
             <i className="mail-mobile-dot" aria-hidden="true" />

@@ -132,20 +132,27 @@ describe("phone mail folder still being fetched", () => {
 });
 
 describe("phone mail date groups", () => {
-  it("groups messages across local midnight and labels recent and older days", async () => {
-    vi.setSystemTime(new Date(2026, 0, 8, 0, 5));
-    const recent = new Date(2026, 0, 6, 12);
-    const older = new Date(2025, 11, 31, 12);
+  it("groups recent mail by local day and older mail by month and year", async () => {
+    vi.setSystemTime(new Date(2026, 0, 12, 0, 5));
+    const recent = new Date(2026, 0, 10, 12);
+    const weekAgo = new Date(2026, 0, 5);
+    const older = new Date(2026, 0, 4, 23, 59);
+    const lastYear = new Date(2025, 11, 31, 12);
+    const twoYearsAgo = new Date(2024, 11, 31, 12);
     const header = (id: string, subject: string, date: string) => ({
       id, subject, date, sender: { address: "a@b.test" }, seen: true, has_attachments: false, preview: "",
     });
     const messages = [
-      header("m1", "After midnight", new Date(2026, 0, 8, 0, 4).toISOString()),
-      header("m2", "Before midnight", new Date(2026, 0, 7, 23, 59).toISOString()),
-      header("m3", "Yesterday morning", new Date(2026, 0, 7, 9).toISOString()),
+      header("m1", "After midnight", new Date(2026, 0, 12, 0, 4).toISOString()),
+      header("m2", "Before midnight", new Date(2026, 0, 11, 23, 59).toISOString()),
+      header("m3", "Yesterday morning", new Date(2026, 0, 11, 9).toISOString()),
       header("m4", "Earlier this week", recent.toISOString()),
-      header("m5", "Last year", older.toISOString()),
-      header("m6", "Missing timestamp", ""),
+      header("m5", "A week ago", weekAgo.toISOString()),
+      header("m6", "More than a week ago", older.toISOString()),
+      header("m7", "Same month", new Date(2026, 0, 2, 12).toISOString()),
+      header("m8", "Last year", lastYear.toISOString()),
+      header("m9", "Two years ago", twoYearsAgo.toISOString()),
+      header("m10", "Missing timestamp", ""),
     ];
     vi.mocked(api).mockImplementation(async (path: string) => ({
       mail: path === "/api/v1/mail"
@@ -162,10 +169,22 @@ describe("phone mail date groups", () => {
       "Today",
       "Yesterday",
       recent.toLocaleDateString("en", { weekday: "long" }),
-      older.toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric" }),
+      weekAgo.toLocaleDateString("en", { weekday: "short", day: "numeric", month: "short" }),
+      older.toLocaleDateString("en", { month: "long", year: "numeric" }),
+      lastYear.toLocaleDateString("en", { month: "long", year: "numeric" }),
+      twoYearsAgo.toLocaleDateString("en", { month: "long", year: "numeric" }),
       "Unknown date",
     ]);
     const subjects = sections.map((section) => Array.from(section.querySelectorAll("button b"), (subject) => subject.textContent));
-    expect(subjects).toEqual([["After midnight"], ["Before midnight", "Yesterday morning"], ["Earlier this week"], ["Last year"], ["Missing timestamp"]]);
+    expect(subjects).toEqual([
+      ["After midnight"],
+      ["Before midnight", "Yesterday morning"],
+      ["Earlier this week"],
+      ["A week ago"],
+      ["More than a week ago", "Same month"],
+      ["Last year"],
+      ["Two years ago"],
+      ["Missing timestamp"],
+    ]);
   });
 });
