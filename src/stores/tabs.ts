@@ -100,6 +100,7 @@ import {
   withHiddenDocked,
 } from "./tabs/savedLayout";
 import { followSharedOrder, inSharedOrder, persistOrder, sameKeys } from "./tabs/sharedOrder";
+import { forgetTabVisit, lastVisitedOf, noteTabVisit, repickActive } from "./tabs/visitOrder";
 import {
   duplicateSpec,
   normalizeTodoId,
@@ -1079,6 +1080,12 @@ function forgetClosedTab(scope: string, key: string): void {
   forgetPty(ptyId);
   forgetPromptTrail(ptyId);
   forgetTypedLine(ptyId);
+  forgetTabVisit(scope, key);
+}
+
+/** `removeKeyFromTree`'s repick through the scope's visit order. */
+function pickVisited(scope: string) {
+  return (tabKeys: string[], removedIndex: number) => repickActive(scope, tabKeys, removedIndex);
 }
 
 /** Persist a scope's tabs+layout+focus into the per-scope maps, mirroring the
@@ -1114,12 +1121,16 @@ function writeScope(
     groups.length = 0;
   }
   const byId = new Map(groups.map((g) => [g.id, g] as const));
-  // If the focused group vanished (collapsed away), refocus the first group.
+  // If the focused group vanished (collapsed away), refocus the group of the
+  // most recently visited tab left, else the first group.
   let focus = focusedGroupId;
   if (!focus || !byId.has(focus)) {
-    focus = groups[0]?.id ?? null;
+    const recent = lastVisitedOf(scope, groups.flatMap((g) => g.tabKeys));
+    focus = (recent ? groups.find((g) => g.tabKeys.includes(recent))?.id : undefined) ?? groups[0]?.id ?? null;
   }
   const activeKey = focus ? (byId.get(focus)?.activeKey ?? null) : null;
+  // Every write that leaves a tab shown counts as a visit to it.
+  if (activeKey) noteTabVisit(scope, activeKey);
   const isCurrent = s.scope === scope;
   // If the fullscreened group collapsed away (e.g. its subwindow was closed),
   // exit fullscreen so CenterPanel doesn't try to render a vanished group.
@@ -1854,9 +1865,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const next = mapGroup(layout, found.group.id, (g) => {
         const tabKeys = g.tabKeys.filter((k) => k !== key);
         const activeKey =
-          g.activeKey === key
-            ? (tabKeys[Math.min(found.index, tabKeys.length - 1)] ?? null)
-            : g.activeKey;
+          g.activeKey === key ? repickActive(s.scope, tabKeys, found.index) : g.activeKey;
         const keepEmpty = tabKeys.length === 0 && keepEmptiedSubwindow();
         return { ...g, tabKeys, activeKey, ...(keepEmpty ? { keepEmpty } : {}) };
       });
@@ -1904,13 +1913,13 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         s,
         scope,
         nextTabs,
-        layout ? removeKeyFromTree(layout, key, keepEmptiedSubwindow()) : null,
+        layout ? removeKeyFromTree(layout, key, keepEmptiedSubwindow(), pickVisited(scope)) : null,
         s.focusedGroupByScope[scope] ?? null,
       );
       if (!detached) return base;
       // The popout keeps its window while tabs remain in it; emptied, its
       // record goes and the OS window is closed below.
-      const remaining = removeKeyFromTree(detached.subtree, key);
+      const remaining = removeKeyFromTree(detached.subtree, key, false, pickVisited(scope));
       const entries = (s.detachedGroupsByScope[scope] ?? []).flatMap((entry) =>
         entry.id !== detached.id
           ? [entry]
@@ -2293,7 +2302,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       let next: LayoutNode = mapGroup(layout, source.group.id, (g) => {
         const tabKeys = g.tabKeys.filter((k) => k !== key);
         const activeKey =
-          g.activeKey === key ? (tabKeys[0] ?? null) : g.activeKey;
+          g.activeKey === key ? repickActive(scope, tabKeys, source.index) : g.activeKey;
         return { ...g, tabKeys, activeKey };
       });
       next = mapGroup(next, targetGroupId, (g) => {
@@ -2387,7 +2396,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const removed = mapGroup(layout, source.group.id, (g) => {
         const tabKeys = g.tabKeys.filter((k) => k !== key);
         const activeKey =
-          g.activeKey === key ? (tabKeys[0] ?? null) : g.activeKey;
+          g.activeKey === key ? repickActive(scope, tabKeys, source.index) : g.activeKey;
         return { ...g, tabKeys, activeKey };
       });
       // Collapse so an emptied source group disappears before we inject.
@@ -2630,9 +2639,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         ? mapGroup(layout, found.group.id, (g) => {
             const tabKeys = g.tabKeys.filter((k) => k !== key);
             const activeKey =
-              g.activeKey === key
-                ? (tabKeys[Math.min(found.index, tabKeys.length - 1)] ?? null)
-                : g.activeKey;
+              g.activeKey === key ? repickActive(scope, tabKeys, found.index) : g.activeKey;
             return { ...g, tabKeys, activeKey };
           })
         : null;
@@ -2942,7 +2949,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         ? entries.filter((d) => d.id !== detachedGroupId)
         : entries.map((d) => {
             if (d.id !== detachedGroupId) return d;
-            const sub = removeKeyFromTree(d.subtree, tabKey);
+            const sub = removeKeyFromTree(d.subtree, tabKey, false, pickVisited(scope));
             return sub ? { ...d, subtree: sub } : d;
           });
 
@@ -3044,7 +3051,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     if (!src || !orderedTabKeys(src.subtree).includes(tabKey)) return null;
     // A lone-tab popout dragged whole is already its own window — re-detaching it
     // would empty the source and churn for nothing, so refuse that case.
-    const remaining = removeKeyFromTree(src.subtree, tabKey);
+    const remaining = removeKeyFromTree(src.subtree, tabKey, false, pickVisited(scope));
     if (!remaining || orderedTabKeys(remaining).length === 0) return null;
 
     const groupId = nextGroupId();
@@ -3142,9 +3149,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           ? mapGroup(layout, found.group.id, (g) => {
               const tabKeys = g.tabKeys.filter((k) => k !== tabKey);
               const activeKey =
-                g.activeKey === tabKey
-                  ? (tabKeys[Math.min(found.index, tabKeys.length - 1)] ?? null)
-                  : g.activeKey;
+                g.activeKey === tabKey ? repickActive(scope, tabKeys, found.index) : g.activeKey;
               return { ...g, tabKeys, activeKey };
             })
           : layout;
@@ -3190,7 +3195,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           return { ...d, subtree: placeKeyInTree(d.subtree, tabKey, target) };
         }
         if (d.id === fromGroupId) {
-          const sub = removeKeyFromTree(d.subtree, tabKey);
+          const sub = removeKeyFromTree(d.subtree, tabKey, false, pickVisited(scope));
           return sub ? { ...d, subtree: sub } : d;
         }
         return d;
@@ -3229,6 +3234,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           const g = findGroupOfTab(sub, edit.key);
           if (g) {
             nextSub = mapGroup(sub, g.group.id, (grp) => ({ ...grp, activeKey: edit.key }));
+            noteTabVisit(scope, edit.key);
           }
           break;
         }
@@ -3301,7 +3307,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           // must not delete a payload another node now references.
           if (!findGroupOfTab(sub, edit.key)) break;
           closedKey = edit.key;
-          nextSub = removeKeyFromTree(sub, edit.key);
+          nextSub = removeKeyFromTree(sub, edit.key, false, pickVisited(scope));
           // Drop the closed tab's payload: the main window's flat pane layer
           // unmounts its spawning pane, which kills the PTY.
           if (nextTabs) nextTabs = nextTabs.filter((t) => t.key !== edit.key);
