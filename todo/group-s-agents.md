@@ -344,6 +344,24 @@
   never write a live, attacker-controlled SQLite path from the host. A bridge
   running inside the existing fence via the public credential API needs a
   separate design.
+- [ ] OpenCode 2 ignores the inline `provider.ollama.whitelist` (2026-11-20,
+  2.3.2): its config migration drops `whitelist`/`blacklist`, and its built-in
+  Ollama discovery (`/api/tags` + `/api/show`) lists every installed model, so
+  `local_drivers::opencode_ollama_config` no longer limits the picker to the
+  loaded ones. A config model's `limit.context` does still win (that is how
+  the context % follows Ollama's window). Find 2.x's way to hide models.
+- [ ] 🖐️ OpenCode 2 context % follows Ollama: open a local OpenCode tab on a
+  model Ollama runs below its trained window (32 768, the context setting) and
+  send a prompt: the sidebar/status % is measured against that window, not the
+  trained one (262 144 for `qwen3-coder`).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 - [ ] OpenCode 2 structured model/form APIs: evaluate replacing picker scrolling
   and question screen scraping with authenticated, per-tab server data. Keep
   browser payloads opaque and preserve the CLI's own permission choices.
