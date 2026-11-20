@@ -269,14 +269,31 @@ export function needsQuoting(value: string, flow = false): boolean {
   return false;
 }
 
+/** What a plain (unquoted) scalar reads as, in one place: the number and bool
+ *  shapes below are what `parsesAsNonString` quotes against AND what the views
+ *  colour by, so the two can never disagree about what `8080` or `no` is. */
+const NUMBER_RE = /^-?(\d+|\d*\.\d+)([eE][+-]?\d+)?$/;
+const RADIX_RE = /^0[xob][0-9a-fA-F_]+$/;
+const BOOL_RE = /^(true|false|yes|no|on|off)$/i;
+
+export type YamlTone = "string" | "number" | "boolean" | "null";
+
+/** The tone of a plain token, by its (trimmed) text alone — a scalar the file
+ *  holds is toned by {@link scalarType}, which also knows its quoting. */
+export function plainTone(v: string): YamlTone {
+  if (v === "" || v === "null" || v === "~") return "null";
+  if (NUMBER_RE.test(v) || RADIX_RE.test(v)) return "number";
+  if (BOOL_RE.test(v)) return "boolean";
+  return "string";
+}
+
 /** True when a plain (unquoted) `value` would be read back as a non-string —
- *  a number, a bool, a null. Quoting is what makes "no" the string "no". */
-export function parsesAsNonString(value: string): boolean {
+ *  a number, a bool, a null. Quoting is what makes "no" the string "no". Wider
+ *  than {@link plainTone} on null (any case), since a reader may fold `NULL`. */
+function parsesAsNonString(value: string): boolean {
   const v = value.trim();
   if (v === "") return false;
-  if (/^-?(\d+|\d*\.\d+)([eE][+-]?\d+)?$/.test(v)) return true;
-  if (/^0[xob][0-9a-fA-F_]+$/.test(v)) return true;
-  return /^(true|false|yes|no|on|off|null|~)$/i.test(v);
+  return NUMBER_RE.test(v) || RADIX_RE.test(v) || BOOL_RE.test(v) || /^(null|~)$/i.test(v);
 }
 
 /** True when `v` is a bare JSON literal — the only things JSON leaves unquoted. */
@@ -361,6 +378,25 @@ export function literalFor(
       if (strict) return encodeDouble(value);
       return needsQuoting(value, flow) || parsesAsNonString(value) ? encodeDouble(value) : value;
   }
+}
+
+/** Whether what is written INSIDE `parent` sits in flow context: the parent is a
+ *  flow collection itself, or a block one nested in a flow one. Not the same
+ *  question as `node.inFlow`, which is about where the node's OWN token sits — a
+ *  top-level `key: [a, b]` is written in block context, its items in flow. */
+export function writesFlow(parent: YamlNode): boolean {
+  return parent.inFlow || isFlow(parent);
+}
+
+/** {@link literalFor} for a new child of `parent`: the dialect and the flow
+ *  context are the document's and the parent's to know, not each caller's. */
+export function childLiteral(
+  doc: YamlDoc,
+  parent: YamlNode,
+  type: YamlValueType,
+  value: string,
+): string {
+  return literalFor(type, value, doc.strict, writesFlow(parent));
 }
 
 function decodeDouble(raw: string): string {
@@ -1568,6 +1604,14 @@ export function deleteNode(text: string, node: YamlNode): string {
   return splice(text, from, to, "");
 }
 
+/** The entry a "copy the last item" action would duplicate: a list's last member,
+ *  when it can be duplicated on its own (not one sharing a dash line). */
+export function lastDuplicable(container: YamlNode): YamlNode | null {
+  if (container.kind !== "seq") return null;
+  const last = container.children[container.children.length - 1];
+  return last?.deletable ? last : null;
+}
+
 /**
  * Insert a copy of `node` right after it, as a new sibling — what "copy last
  * item" does when growing a list. A BLOCK node's own lines (its nested block and
@@ -1977,17 +2021,8 @@ export function setComment(text: string, doc: YamlDoc, node: YamlNode, next: str
 }
 
 /** A scalar's type, for the tree's value styling. Display only. */
-export function scalarType(node: YamlNode): "string" | "number" | "boolean" | "null" {
+export function scalarType(node: YamlNode): YamlTone {
   if (node.style === "double" || node.style === "single" || node.style === "block") return "string";
-  const v = node.raw.trim();
-  if (node.style === "empty" || v === "null" || v === "~") return "null";
-  if (/^-?(\d+|\d*\.\d+)([eE][+-]?\d+)?$/.test(v) || /^0[xob][0-9a-fA-F_]+$/.test(v)) return "number";
-  if (/^(true|false|yes|no|on|off)$/i.test(v)) return "boolean";
-  return "string";
-}
-
-/** Flatten a document's nodes, parents before children (used by tests). */
-export function walkYaml(node: YamlNode, visit: (n: YamlNode) => void): void {
-  visit(node);
-  for (const c of node.children) walkYaml(c, visit);
+  if (node.style === "empty") return "null";
+  return plainTone(node.raw.trim());
 }
