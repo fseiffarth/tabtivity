@@ -373,6 +373,9 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
       {view === "active" && <NeedsYou onTabs={setActivityTabs} alerts={alerts} onAlerts={setAlerts} seen={seen} open={openAgentTab} todo={todo} mail={mail} showAgents={() => choose("agents")} />}
       {view === "active" && <div className="projects-row">
         <h1>{t("mobile.home.projectsTitle")}{tier !== "phone" && isUntested("mobile.tablet") && <span className="untested">{t("mobile.newTab.untested")}</span>}</h1>
+        {/* The header's 🔍 again, where the list is: a reader scrolled past
+            the header reaches the search without scrolling back up. */}
+        <button className="home-layout-button" aria-label={t("mobile.home.searchAll")} title={t("mobile.home.searchAll")} onClick={() => choose("search")}><SearchIcon size="22px" />{isUntested("mobile.home.projectsSearch") && <span className="untested">{t("mobile.newTab.untested")}</span>}</button>
         {layoutButton}
         <button
           className="primary new-tab"
