@@ -5686,6 +5686,17 @@ select.file-viewer-run-args-input {
   forced-color-adjust: none;
   transform-origin: 0 0;
   caret-color: CanvasText;
+  /* pdf.js measures every run's width with canvas text metrics and stretches the
+     span to it (`--scale-x`); an inherited spacing would widen the span past the
+     glyphs it is meant to cover. */
+  letter-spacing: normal;
+  word-spacing: normal;
+  color-scheme: only light;
+  /* Selectable itself, as pdf.js's layer is (it inherits the page's default): with
+     the app root's `user-select: none` only the spans were, so a drag begun in the
+     leading between two lines — no span there — started no selection at all. */
+  -webkit-user-select: text;
+  user-select: text;
   /* Over the canvas, under every overlay: it is the page's own words. */
   z-index: 1;
 }
@@ -5738,9 +5749,28 @@ select.file-viewer-run-args-input {
   --rotate: 0deg;
   transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 }
-.file-viewer-pdf-text-layer span.markedContent {
+/* pdf.js 5+ wraps tagged content (`/MC` runs, which tagged-PDF LaTeX writes) in
+   these; they must not be boxes of their own, or the spans inside measure their
+   percentage positions against a zero-height span instead of the page. */
+.file-viewer-pdf-text-layer .markedContent {
+  display: contents;
+}
+/* The block after the spans that a selection lands on when the pointer is over a
+   gap (`textSelection.ts`). At rest it sits below the page and is nothing; while a
+   selection is being made it covers the layer, under the spans, so a drag through
+   the space between two words or lines no longer snaps the selection to the top or
+   bottom of the page. */
+.file-viewer-pdf-text-layer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: var(--cur-default, default);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.file-viewer-pdf-text-layer.selecting .endOfContent {
   top: 0;
-  height: 0;
 }
 /* A figure's alt text is not text on the page; it must not join a selection. */
 .file-viewer-pdf-text-layer span[role="img"] {

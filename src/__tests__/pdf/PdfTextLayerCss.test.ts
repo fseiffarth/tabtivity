@@ -47,6 +47,14 @@ describe("PDF text layer CSS", () => {
     );
   });
 
+  it("has the endOfContent block that catches a drag over a gap", () => {
+    const rest = bodiesFor(".file-viewer-pdf-text-layer .endOfContent");
+    expect(rest).toMatch(/position:\s*absolute/);
+    expect(rest).toMatch(/(^|[^-])user-select:\s*none/);
+    expect(bodiesFor(".file-viewer-pdf-text-layer.selecting .endOfContent")).toMatch(/top:\s*0/);
+    expect(bodiesFor(".file-viewer-pdf-text-layer .markedContent")).toMatch(/display:\s*contents/);
+  });
+
   it("hands the layer the zoom under the name pdf.js reads", () => {
     const src: string = readFileSync("src/components/embed/pdf/PdfTextLayer.tsx", "utf8");
     expect(src).toContain('"--total-scale-factor": scale');

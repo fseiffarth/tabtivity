@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { readViewerSelection, type ViewerSelection } from "./selection";
+import { normalizeCopiedText } from "./textSelection";
 import type { ViewerPos } from "../fileViewer/viewerState";
 
 /**
@@ -105,7 +106,8 @@ export function usePdfTextSelection({
       const now = host ? readViewerSelection(host, scaleRef.current) : null;
       if (!now || now.text === lastCopied.current) return;
       lastCopied.current = now.text;
-      navigator.clipboard?.writeText(now.text).catch(() => {});
+      // Folded as Ctrl+C folds it (`ﬁ` → `fi`), so the two copies agree.
+      navigator.clipboard?.writeText(normalizeCopiedText(now.text)).catch(() => {});
       setCopiedNonce((n) => n + 1);
     };
     window.addEventListener("mouseup", settle);
