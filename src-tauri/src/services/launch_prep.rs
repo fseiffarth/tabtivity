@@ -659,8 +659,8 @@ pub struct PreparedLaunch {
     /// The tab's process still runs mid-turn (a reattach): the state its
     /// hooks last wrote, `working` or `decision` (`agent_turn::LeftTurn::live`).
     pub live_turn: Option<crate::services::agent_turn::TurnState>,
-    /// The local folder the tab works in, `None` for a remote tab.
-    pub drop_dir: Option<String>,
+    /// Destination bound to this spawn before its working directory is rewritten.
+    pub drop_dir: Option<crate::terminal::DropTarget>,
     /// The key the window names the tab's checkpoints by
     /// (`checkpoints::bind`), `None` when it has none. Only the window gets
     /// it; it is never in the agent's environment.
@@ -1512,14 +1512,7 @@ pub async fn prepare(
     // environment into an argv, and once more before the spawn for what the
     // wrappers add. A no-op while the prefix is unchanged.
     crate::brand::PAIR.export_both(&mut opts.env);
-    // Where a file dropped onto the tab lands (`commands::terminal::pty_drop_files`):
-    // the folder the process works in, read before a wrapper rewrites `cwd`. A
-    // container mounts the project at the same path; a remote tab has none, as a
-    // path on this disk means nothing on the far host.
-    let drop_dir = (opts.local_only
-        || opts.sandbox
-        || crate::services::ssh_exec::remote_target_of(&opts).is_none())
-    .then(|| opts.cwd.clone());
+    let mut drop_dir = crate::terminal::DropTarget::Local(opts.cwd.clone().into());
     // Which boundary actually wrapped the spawn: the fence match below lets a
     // local agent's "container" / "remote host" decision through only when
     // its wrap really ran (screen 2026-11-12 H1).
@@ -1586,8 +1579,10 @@ pub async fn prepare(
             crate::services::claude_token::inject_remote(&mut opts);
             keep_remote_codex_in_process(&mut opts);
         }
-        ssh_wrapped = crate::services::ssh_exec::remote_target_of(&opts).is_some();
-        crate::services::ssh_exec::wrap_pty_options(&mut opts)?;
+        if let Some(spec) = crate::services::ssh_exec::wrap_pty_options(&mut opts)? {
+            ssh_wrapped = true;
+            drop_dir = crate::terminal::DropTarget::Remote(Box::new(spec));
+        }
     }
 
     // The tab's session name (the Remote Control title too), set at launch with
@@ -1895,7 +1890,7 @@ pub async fn prepare(
         fence_view,
         spawned_tab_id,
         generation,
-        drop_dir,
+        drop_dir: Some(drop_dir),
         ai,
         host_attach_only,
         mcp_stale,

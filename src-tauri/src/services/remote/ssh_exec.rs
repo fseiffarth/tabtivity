@@ -1731,9 +1731,9 @@ pub fn remote_target_of(opts: &PtyOptions) -> Option<crate::services::remote::Re
 /// On success, `opts.cmd` becomes `"ssh"`, `opts.args` the ssh argv, and
 /// `opts.cwd` a stable local directory (the ssh client's local cwd is
 /// irrelevant). Validation/connection failures surface as `Err`.
-pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<(), String> {
+pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<Option<RemoteSpec>, String> {
     let Some(target) = remote_target_of(opts) else {
-        return Ok(());
+        return Ok(None);
     };
 
     // Remote working dir is the project root on the host. There is no local
@@ -1788,7 +1788,7 @@ pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<(), String> {
         opts.env.insert(crate::services::claude_token::REMOTE_ENV.into(), token);
     }
     opts.cwd = storage::root_work_dir().to_string_lossy().into_owned();
-    Ok(())
+    Ok(Some(target.spec))
 }
 
 #[cfg(test)]

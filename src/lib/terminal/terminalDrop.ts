@@ -9,8 +9,8 @@ import { parseDroppedFiles, type DroppedFile } from "../files/droppedFiles";
  * tab gets each file copied into its folder's inbox — the drop box the phone's
  * files land in, the one place a fenced or containerized agent can read — and
  * types `@<reference>`, as the phone's composer does; a local shell gets the
- * path itself, quoted, as a native terminal would type it. A remote tab is
- * refused: the program there cannot see this disk.
+ * path itself, quoted, as a native terminal would type it. A remote tab gets the path of
+ * a private temporary copy on its SSH host.
  *
  * With the Reader open, the text goes into its composer instead of the
  * terminal (`onReaderInsert`), so a drop lands where the user is typing.
