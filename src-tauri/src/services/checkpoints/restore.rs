@@ -6,26 +6,37 @@
 //! `pre-restore` snapshot first (the **Undo restore** target), then for the
 //! paths the diff reports:
 //!
-//! - modified / deleted / type-changed since: `git checkout <commit> --
-//!   :(literal)<path>…`, in chunks;
-//! - added since: removed.
+//! - modified / deleted / type-changed since: the checkpoint's copies are
+//!   checked out by the store's git into a fresh private staging folder under
+//!   the store (never into the folder), then installed one by one through
+//!   directory handles ([`super::install`]);
+//! - added since: removed, through the held parent's handle.
 //!
 //! The renderer's path strings are only ever *filters* on the paths git
-//! reported, never handed to git or the file system as they came. Before
-//! anything is written, every path is checked ([`plain_path`]): no `..`, no
-//! `.git`, no leading folder that is a link (a folder swapped for a link in
-//! the meantime is refused, never written through). git's own checkout
-//! refuses a leading link too; this is the second check, and the one that
-//! also covers the removals. A swap between the check and the write remains a
-//! race with another process in the same folder (the restore refuses while
-//! this tab's agent works, and the dialog warns about other tabs').
+//! reported, never handed to git or the file system as they came. Every path
+//! is checked first ([`plain_path`]: no `..`, no `.git`, no leading link).
+//! That check is not what keeps a write inside the folder: a process in the
+//! agent's fence can swap a folder for a link right after it (threat model
+//! gap 115). The install is: it opens each leading folder without following
+//! a link at the moment it writes, so a swapped one fails that path ("is a
+//! link") and nothing is written or removed through it. (Windows has no
+//! fence; there the check is repeated just before each write.)
+//!
+//! Nothing security-relevant rests on the "agent is idle" gate in
+//! `checkpoints::restore`: it reads the agent's own hook record and only
+//! spares work in progress.
+//!
+//! A path whose current copy the `pre-restore` snapshot does not hold (left
+//! out for the budget, unreadable, changed since it was staged) is neither
+//! overwritten nor removed: it fails with [`NO_UNDO`].
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use serde::Serialize;
 
-use super::snapshot::{snapshot_locked, special, stage, Who, MAX_FILE_BYTES};
+use super::install::{Entry, Target};
+use super::snapshot::{snapshot_locked_with, special, split_z, stage, Limits, Who, MAX_FILE_BYTES};
 use super::store::{new_id, rel_path, shown, spec_arg, GitPath, Kind, Row, Store};
 
 /// The most stdout read of a listing.
@@ -36,8 +47,6 @@ pub const FILE_DIFF_BYTES: u64 = 256 * 1024;
 pub const EAGER_DIFFS: usize = 200;
 /// ...and at most this much diff text in all.
 pub const EAGER_DIFF_BYTES: usize = 3 * 1024 * 1024;
-/// Argument bytes per `checkout` chunk (Windows allows 32 KiB a command line).
-const CHUNK_BYTES: usize = 12 * 1024;
 /// Other tabs' (pre, post) turns looked at for "changed by another tab".
 const OTHER_TURNS: usize = 60;
 
@@ -274,9 +283,102 @@ pub fn plain_path(folder: &Path, rel: impl AsRef<[u8]>) -> Result<(), String> {
     Ok(())
 }
 
+/// Why a path is left as it is when the `pre-restore` snapshot holds no copy
+/// of what is there now (hardening H1).
+pub const NO_UNDO: &str = "not in the undo snapshot (too large for its budget, unreadable or changed since): there would be no undo copy";
+
+/// The staging folders under the store: `<store>/<STAGING_PREFIX>…`.
+const STAGING_PREFIX: &str = ".restore-";
+
+/// The paths whose copy in the store's index (just staged: the undo
+/// snapshot's tree) is not what is on disk now: a file git could not read,
+/// or one changed since it was staged.
+fn unsaved(store: &Store) -> Result<HashSet<GitPath>, String> {
+    let out = store.run_ok(&["diff-files", "--name-only", "-z", "--ignore-submodules=all"], None, LIST_CAP)?;
+    Ok(split_z(&out).into_iter().collect())
+}
+
+/// A fresh private folder under the store for the checkpoint's copies (the
+/// state dir: no fence reaches it). Removed when dropped, so on every way out;
+/// one a crash left behind is swept here, under the store's lock.
+fn staging(store: &Store) -> Result<tempfile::TempDir, String> {
+    if let Ok(entries) = std::fs::read_dir(&store.dir) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(STAGING_PREFIX) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    tempfile::Builder::new()
+        .prefix(STAGING_PREFIX)
+        .tempdir_in(&store.dir)
+        .map_err(|e| format!("checkpoint staging folder: {e}"))
+}
+
+/// Check `paths` of `commit` out into `tree` (under `staging`, with an index
+/// of its own there), never into the folder.
+fn check_out(store: &Store, commit: &str, paths: &[(char, GitPath)], staging: &Path, tree: &Path) -> Result<(), String> {
+    std::fs::create_dir(tree).map_err(|e| format!("checkpoint staging folder: {e}"))?;
+    let mut specs = Vec::new();
+    for (_, path) in paths {
+        specs.extend_from_slice(b":(literal)");
+        specs.extend_from_slice(path);
+        specs.push(0);
+    }
+    let cmd = store.git_in(tree, &staging.join("index"), &["checkout", commit, "--pathspec-from-file=-", "--pathspec-file-nul"]);
+    match store.exec(cmd, Some(specs), 1 << 20, None) {
+        Ok((out, _)) if out.status.success() => Ok(()),
+        Ok((out, _)) => Err(format!("git checkout: {}", String::from_utf8_lossy(&out.stderr).trim())),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// What `rel` is in the staging tree.
+fn staged_entry(tree: &Path, rel: &[u8]) -> Result<Entry, String> {
+    let from = tree.join(rel_path(rel));
+    let meta = std::fs::symlink_metadata(&from).map_err(|_| "not in the checkpoint".to_string())?;
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(&from).map_err(|e| e.to_string())?;
+        return Ok(Entry::Link { target });
+    }
+    if !meta.is_file() {
+        return Err("not a file in the checkpoint".into());
+    }
+    #[cfg(unix)]
+    let exec = {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    };
+    #[cfg(not(unix))]
+    let exec = false;
+    Ok(Entry::File { from, exec })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Run between the path checks and the first write (the tests' stand-in
+    /// for a process in the folder that swaps a folder for a link then).
+    pub(super) static BEFORE_WRITES: std::cell::RefCell<Option<Box<dyn FnMut()>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn before_writes() {
+    #[cfg(test)]
+    BEFORE_WRITES.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().as_mut() {
+            hook();
+        }
+    });
+}
+
 /// Put the files back that differ from checkpoint `row`. `paths`: only these
-/// (`None` = every differing file). The caller has checked the agent is idle.
+/// (`None` = every differing file). The caller's idle check is a courtesy;
+/// the writes stay inside the folder without it.
 pub fn restore(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>) -> Result<Restored, String> {
+    restore_with(store, row, who, paths, Limits::default())
+}
+
+/// [`restore`] whose `pre-restore` snapshot runs under `limits` (the tests').
+pub(super) fn restore_with(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>, limits: Limits) -> Result<Restored, String> {
     if !row.has_snapshot() {
         return Err("that checkpoint has no snapshot".into());
     }
@@ -285,8 +387,9 @@ pub fn restore(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>) ->
     store.ensure(who.project_id.as_deref())?;
     // The way back first: this stages the folder too, so the diff below is
     // against exactly what the undo would restore.
-    let undo = snapshot_locked(store, Kind::PreRestore, who, None)?;
+    let undo = snapshot_locked_with(store, Kind::PreRestore, who, None, limits)?;
     let status = name_status(store, &row.tree)?;
+    let unsaved = unsaved(store)?;
     let wanted: Option<HashSet<&str>> = paths.map(|p| p.iter().map(String::as_str).collect());
     let mut result = Restored { undo_id: undo.id.clone(), ..Restored::default() };
 
@@ -300,65 +403,51 @@ pub fn restore(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>) ->
             result.failed.push(Failure { path: shown(&path), error });
             continue;
         }
+        if unsaved.contains(&path) {
+            result.failed.push(Failure { path: shown(&path), error: NO_UNDO.into() });
+            continue;
+        }
         if code == 'A' {
             remove.push(path);
         } else {
-            checkout.push(path);
+            checkout.push((code, path));
         }
     }
 
+    // The checkpoint's copies, out of every agent's reach first.
+    let staging = staging(store)?;
+    let tree = staging.path().join("tree");
+    let staged = if checkout.is_empty() { Ok(()) } else { check_out(store, &row.commit, &checkout, staging.path(), &tree) };
+
+    before_writes();
+    let target = Target::open(&store.folder)?;
     for raw in remove {
-        let target = store.folder.join(rel_path(&raw));
-        let path = shown(&raw);
-        match std::fs::symlink_metadata(&target) {
-            Ok(meta) if meta.is_dir() => result.failed.push(Failure { path, error: "is now a folder".into() }),
-            Ok(_) => match std::fs::remove_file(&target) {
-                Ok(()) => result.removed += 1,
-                Err(e) => result.failed.push(Failure { path, error: e.to_string() }),
-            },
-            // Gone already: nothing to take away.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => result.removed += 1,
-            Err(e) => result.failed.push(Failure { path, error: e.to_string() }),
+        match target.remove(&raw) {
+            // Gone already counts: nothing to take away.
+            Ok(()) => result.removed += 1,
+            Err(error) => result.failed.push(Failure { path: shown(&raw), error }),
         }
     }
 
     // A file the checkpoint had where a folder is now: the folder's added
     // files were just removed, so an empty one can go.
-    for path in &checkout {
-        let target = store.folder.join(rel_path(path));
-        if std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_dir()) {
-            let _ = std::fs::remove_dir(&target);
-        }
+    for (_, path) in &checkout {
+        target.clear_folder(path);
     }
 
-    let mut chunk: Vec<GitPath> = Vec::new();
-    let mut bytes = 0;
-    let mut batches: Vec<Vec<GitPath>> = Vec::new();
-    for path in checkout {
-        let len = ":(literal)".len() + path.len();
-        if bytes + len > CHUNK_BYTES && !chunk.is_empty() {
-            batches.push(std::mem::take(&mut chunk));
-            bytes = 0;
+    for (code, path) in checkout {
+        // "Deleted since": whatever is at the name now was left out of the
+        // undo snapshot or came after it, so it is never replaced.
+        let done = staged
+            .clone()
+            .and_then(|()| staged_entry(&tree, &path))
+            .and_then(|entry| target.install(&path, &entry, code == 'D'));
+        match done {
+            Ok(()) => result.restored += 1,
+            Err(error) => result.failed.push(Failure { path: shown(&path), error }),
         }
-        bytes += len + 1;
-        chunk.push(path);
     }
-    if !chunk.is_empty() {
-        batches.push(chunk);
-    }
-    for batch in batches {
-        let mut cmd = store.git(&["checkout", &row.commit, "--"]);
-        cmd.args(batch.iter().map(|path| spec_arg(":(literal)", path)));
-        let error = match store.exec(cmd, None, 1 << 20, None) {
-            Ok((out, _)) if out.status.success() => {
-                result.restored += batch.len();
-                continue;
-            }
-            Ok((out, _)) => String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            Err(error) => error.to_string(),
-        };
-        result.failed.extend(batch.iter().map(|path| Failure { path: shown(path), error: error.clone() }));
-    }
+    drop(staging);
 
     let at = crate::clock::now_ms();
     store.append(&Row {

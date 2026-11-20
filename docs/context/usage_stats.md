@@ -30,12 +30,33 @@ its remainder does not count again. The recap groups outcomes by mode/model.
 These are local counters only: no document text, paths or reference contents.
 
 **Agent tokens are derived, not counted** (`services::token_stats`,
-`usage_token_stats`, plan in `docs/done/token_stats_plan.md`). Claude and Codex
-already write per-message usage into each Eldrun agent home, so the recap's
-Tokens section reads those records (fresh in, cache write, cache read, output;
-a Codex SQLite `total` with no split when a thread has no rollout) as
+`usage_token_stats`, plan in `docs/done/token_stats_plan.md`, caching follow-ups in
+`docs/cli_caching_plan.md`). Claude, Codex, OpenCode, Gemini CLI and Copilot
+CLI already write per-message usage into each agent home, so the recap's Tokens section reads
+those records (fresh in, cache write, cache read, output; a Codex SQLite
+`total` with no split when a thread has no rollout) as
 `tokens.<kind>.<cli>.<model>` counters — the model is everything after the
-third `.`. The one stored state is a **rebuildable scan cache**,
+third `.` — and shows cache read ÷ all input as the cache-hit share. OpenCode
+has no transcript file: its finished assistant rows in `opencode.db` (V2
+`session_message`, V1 `message`) are read through `agent_sqlite` with a
+`(time_created, id)` mark per table, rows younger than a minute left for the
+next scan (two writers can commit out of stamp order), and still-streaming
+messages re-read by id until they finish; reasoning counts as output. Copilot
+CLI logs each model call once in `.copilot/session-store.db`
+`assistant_usage_events` (an `AUTOINCREMENT` id is the cursor; its
+`input_tokens` include the cache read and write, taken back out). Gemini CLI
+re-appends a whole message record whenever it changes, anywhere later in the
+session file, so a changed `.gemini/tmp/*/chats` file is folded whole — each
+message id once, its last tokens — and replaces what it counted before;
+`input` includes `cached` (taken out), tool-use prompt tokens are fresh,
+thoughts are output, and a legacy `.json` with a `.jsonl` beside it (migrated
+on resume) is dropped, not retired. Beside the split (never added to it)
+Claude also files details: cache writes by lifetime (`tokens.cache_w5m` /
+`cache_w1h`, from `usage.cache_creation`) and the subagents' part of each
+split kind (`tokens.sub_*`, from transcripts under `subagents/`); the recap
+shows them as a line under the row. A Claude cursor from before the details
+(`detail` false) is re-read from the start once, so a period's shares are not
+diluted by older undetailed counts; `retired` history keeps no details. The one stored state is a **rebuildable scan cache**,
 `<state_dir>/token_stats.json`: a cursor per source file plus what that file
 contributed, version-gated (another version is discarded and rebuilt). Claude
 deletes old transcripts, so a vanished file's contribution moves to `retired`

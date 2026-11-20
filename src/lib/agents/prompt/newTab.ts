@@ -37,14 +37,14 @@ export function agentItemFor(cmd: string, customAgents: readonly CustomAgent[] =
  * (see `lib/agents/agentPrefaces`).
  */
 export function newAgentTabForDraft(input: {
-  agent: string;
+  agent: string | StaticMenuItem;
   model?: string;
   customAgents?: readonly CustomAgent[];
   cwd: string;
   projectName: string;
   t: (key: TranslationKey) => string;
 }): { tab: Omit<TabEntry, "key"> & { scheduleTargetId: string }; preface: string[] } {
-  const item = agentItemFor(input.agent, input.customAgents);
+  const item = typeof input.agent === "string" ? agentItemFor(input.agent, input.customAgents) : input.agent;
   const spec = buildStaticTabSpec(item, input.cwd, input.projectName, input.t);
   return {
     tab: { ...spec, scheduleTargetId: crypto.randomUUID() },

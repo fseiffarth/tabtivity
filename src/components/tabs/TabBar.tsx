@@ -27,7 +27,6 @@ import { useTabLandStore } from "../../stores/drag/tabLand";
 import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
-import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
 import { tabDisplayLabel, tabTaskName } from "../../lib/agents/autoTabName";
 import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { useRemoteAgentMachines } from "./useRemoteAgentMachines";
@@ -114,6 +113,7 @@ import { CliHandoffMenuItem } from "../agents/CliHandoffMenuItem";
 import { useTabSchedule } from "../../lib/agents/useTabSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
 import { useHoverAnchorGuard } from "../../lib/useHoverAnchorGuard";
+import { openPalette, openTabSearch } from "../../lib/shortcuts/paletteEvent";
 import { ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
@@ -737,11 +737,17 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     el.scrollBy({ left: dir * Math.max(120, el.clientWidth * 0.7), behavior: "smooth" });
   }, []);
 
-  // A clicked tab cut off at either edge of the strip scrolls fully into view —
-  // just far enough, and not at all when it already shows whole.
+  // Reveal a tab cut off at either edge of the strip.
   const revealTab = useCallback((tabEl: HTMLElement) => {
     const el = stripRef.current;
     if (!el || !el.contains(tabEl)) return;
+    if (tabEl === el.lastElementChild) {
+      // Go straight to the end so observeStripResize can keep it pinned.
+      // A smooth scroll can stop short when the left chevron appears mid-scroll
+      // and takes space from the viewport.
+      el.scrollLeft = el.scrollWidth;
+      return;
+    }
     const strip = el.getBoundingClientRect();
     const r = tabEl.getBoundingClientRect();
     const delta =
@@ -874,12 +880,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     void worktreePicker.specFor(item).then((spec) => {
       if (!spec) return;
       focusGroup(groupId);
-      const launch = location ? { ...spec, location } : spec;
-      // An agent of this very launch that has not been asked anything yet is
-      // taken over instead of opening a second blank one.
-      const empty = findEmptyAgentTab(scope, useTabsStore.getState().tabs, launch);
-      if (empty) setActive(empty.key);
-      else addTab(launch, place);
+      addTab(location ? { ...spec, location } : spec, place);
     });
   }
 
@@ -2089,7 +2090,19 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   disabled: false,
                   shortcut: "commandPalette",
                   onPick: () => {
-                    window.dispatchEvent(new Event("app:open-palette"));
+                    openPalette();
+                    setMenuPos(null);
+                  },
+                }, {
+                  key: "search-tabs",
+                  label: t("palette.menuRowTabs"),
+                  dot: <SearchIcon />,
+                  color: "var(--text-secondary)",
+                  disabled: false,
+                  shortcut: "searchTabs",
+                  untested: "palette.tabSearch",
+                  onPick: () => {
+                    openTabSearch();
                     setMenuPos(null);
                   },
                 }, {

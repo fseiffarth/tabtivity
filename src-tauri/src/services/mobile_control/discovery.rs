@@ -1167,18 +1167,22 @@ fn resumable(tab: &SavedTab) -> bool {
 /// still recognise it. The command itself never crosses the browser API; an
 /// agent the registry does not list keeps its tab label, as before.
 fn agent_label_of(tab: &SavedTab) -> String {
+    agent_label_for(&tab.cmd, &tab.label, tab.local_launch.as_ref())
+}
+
+/// [`agent_label_of`] over the fields it reads, for a tab record that is not
+/// a layout row (the archive's rows, `host::archived_tab_rows`).
+pub(super) fn agent_label_for(cmd: &str, label: &str, local_launch: Option<&Value>) -> String {
     // A local-model tab's `cmd` may be `ollama` (`ollama launch claude …`);
     // the agent is the driver's CLI, and the phone reads it as that one.
-    let bin = tab
-        .local_launch
-        .as_ref()
+    let bin = local_launch
         .and_then(|launch| launch.get("driver"))
         .and_then(Value::as_str)
         .and_then(crate::services::local_drivers::local_driver_bin)
-        .unwrap_or(&tab.cmd);
+        .unwrap_or(cmd);
     crate::services::agent_registry::agent_label_for_bin(bin)
         .map(str::to_string)
-        .unwrap_or_else(|| tab.label.chars().take(120).collect())
+        .unwrap_or_else(|| label.chars().take(120).collect())
 }
 
 /// The command a tab's transcript is read as: its own, except that a

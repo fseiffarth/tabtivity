@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
@@ -13,6 +13,7 @@ interface AgentGlobalLayer {
   dir: string;
   files: number;
   codexAutoReview: boolean;
+  opencodeWarming: boolean;
 }
 
 /** The Tabtivity-wide agent config: the instructions, skills, hooks and MCP
@@ -71,30 +72,39 @@ function AgentGlobalRow() {
   );
 }
 
-/** Codex auto-review (`approvals_reviewer` in the Tabtivity-wide layer's Codex
- *  config). On the Codex card, not under the fence settings: it is what makes
- *  fenced Codex usable, so it sits where a Codex user looks. */
-export function CodexAutoReviewToggle() {
-  const t = useT();
+/** One switch over a single key of the Tabtivity-wide layer's config for one
+ *  CLI: the user's own config reaching every home, not a mode Tabtivity picks.
+ *  Sits on that CLI's card, where its user looks. */
+function LayerSwitch({
+  read,
+  command,
+  label,
+  help,
+}: {
+  read: (l: AgentGlobalLayer) => boolean;
+  command: string;
+  label: ReactNode;
+  help: string;
+}) {
   const [on, setOn] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const refresh = () => {
     invoke<AgentGlobalLayer>("agent_global_status")
-      .then((l) => setOn(l.codexAutoReview))
+      .then((l) => setOn(read(l)))
       .catch(() => setOn(null));
   };
   useEffect(refresh, []);
   return (
     <div className="agents-option">
       <ToggleRow
-        label={<>{t("settings.codexAutoReview")} <UntestedTag id="settings.codexAutoReview" /></>}
+        label={label}
         checked={on ?? false}
         disabled={busy || on === null}
         onChange={(e) => {
           setNote(null);
           setBusy(true);
-          invoke("agent_global_set_codex_auto_review", { enabled: e.target.checked })
+          invoke(command, { enabled: e.target.checked })
             .catch((err: unknown) => setNote(String(err)))
             .finally(() => {
               setBusy(false);
@@ -102,9 +112,38 @@ export function CodexAutoReviewToggle() {
             });
         }}
       />
-      <p className="settings-help">{t("settings.codexAutoReviewHelp")}</p>
+      <p className="settings-help">{help}</p>
       {note && <p className="settings-help">{note}</p>}
     </div>
+  );
+}
+
+/** Codex auto-review (`approvals_reviewer` in the layer's Codex config). On
+ *  the Codex card, not under the fence settings: it is what makes fenced
+ *  Codex usable. */
+export function CodexAutoReviewToggle() {
+  const t = useT();
+  return (
+    <LayerSwitch
+      read={(l) => l.codexAutoReview}
+      command="agent_global_set_codex_auto_review"
+      label={<>{t("settings.codexAutoReview")} <UntestedTag id="settings.codexAutoReview" /></>}
+      help={t("settings.codexAutoReviewHelp")}
+    />
+  );
+}
+
+/** OpenCode cache warming (top-level `warming` in the layer's OpenCode
+ *  config, `docs/cli_caching_plan.md` phase 2). */
+export function OpenCodeWarmingToggle() {
+  const t = useT();
+  return (
+    <LayerSwitch
+      read={(l) => l.opencodeWarming}
+      command="agent_global_set_opencode_warming"
+      label={<>{t("settings.opencodeWarming")} <UntestedTag id="settings.opencodeWarming" /></>}
+      help={t("settings.opencodeWarmingHelp")}
+    />
   );
 }
 

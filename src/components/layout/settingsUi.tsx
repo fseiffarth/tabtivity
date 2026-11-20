@@ -4,7 +4,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useId, useState, type ChangeEventHandler, type ReactNode } from "react";
 import { Toggle } from "../common/Toggle";
 import { useT } from "../../lib/i18n";
-import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
+import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CloseIcon, LinkIcon } from "../common/icons/Icon";
 
 /**
  * The settings design system, in components.
@@ -296,13 +296,14 @@ export function SettingsNavigation({ value, groups, results, onChange, query, on
   onQuery: (query: string) => void;
 }) {
   const t = useT();
-  const [copyState, setCopyState] = useState<"copied" | "failed" | null>(null);
+  /** The result whose link was last copied, and how that went. */
+  const [copyState, setCopyState] = useState<{ value: string; state: "copied" | "failed" } | null>(null);
   const flat = results ?? groups.flatMap((group) => group.entries);
   const options = results
     ? results.map((r) => ({ value: r.value, label: `${r.label} · ${r.trail}` }))
     : flat;
   return <nav className="settings-navigation" aria-label={t("settings.categories")}>
-    {copyState && <span role="status">{t(copyState === "copied" ? "appLink.copied" : "appLink.copyFailed")}</span>}
+    <span role="status" className="settings-navigation-copy-status">{copyState ? t(copyState.state === "copied" ? "appLink.copied" : "appLink.copyFailed") : ""}</span>
     <input
       type="text"
       className="settings-navigation-search"
@@ -328,14 +329,20 @@ export function SettingsNavigation({ value, groups, results, onChange, query, on
     <div className="settings-navigation-links">
       {results ? (
         results.length > 0 && <div className="settings-navigation-group" role="group" aria-label={t("settings.searchResults")}>
-          {results.map((result) => <div key={result.value}><button type="button" className="settings-btn"
-            onClick={() => onChange(result.value)}>
-            {result.label}
-            <span className="settings-navigation-hit">{result.trail}</span>
-          </button>{result.url && <button type="button" className="settings-btn sm"
-            onClick={() => { void invoke("copy_text_to_clipboard", { text: result.url }).then(() => setCopyState("copied"), () => setCopyState("failed")); }}>
-            {t("appLink.copy")} <UntestedTag id="navigation.internalLinks" />
-          </button>}</div>)}
+          {results.map((result) => {
+            const copied = copyState?.value === result.value ? copyState.state : null;
+            const copyLabel = t(copied === "copied" ? "appLink.copied" : copied === "failed" ? "appLink.copyFailed" : "appLink.copy");
+            return <div key={result.value} className="settings-navigation-result"><button type="button" className="settings-btn"
+              onClick={() => onChange(result.value)}>
+              {result.label}
+              <span className="settings-navigation-hit">{result.trail}</span>
+            </button>{result.url && <button type="button" className="settings-btn icon settings-navigation-copy"
+              aria-label={copyLabel} title={copyLabel}
+              onClick={() => { const url = result.url; void invoke("copy_text_to_clipboard", { text: url }).then(() => setCopyState({ value: result.value, state: "copied" }), () => setCopyState({ value: result.value, state: "failed" })); }}>
+              {copied === "copied" ? <CheckIcon /> : <LinkIcon />}
+              <UntestedTag id="navigation.internalLinks" />
+            </button>}</div>;
+          })}
         </div>
       ) : groups.map((group) => <div key={group.label} className="settings-navigation-group" role="group" aria-label={group.label}>
         <div className="settings-navigation-group-title">{group.label}</div>

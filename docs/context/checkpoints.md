@@ -94,15 +94,39 @@ credential the caller's say-so. A server client that joins another client's
 tab gets no key. The folder is the
 one `launch_prep` bound the tab to, found among the fence roots (`projects.json`
 / `boxes.json`), never from the renderer. A file list from the renderer is only
-a filter on what git's diff reports. Before any write each path is checked
-(`restore::plain_path`: no `..`, no `.git`, no leading link). A swap between
-check and write remains a race with another process in the same folder; the
-restore refuses while this tab's agent works and the dialog confirms for other
-tabs'. A tab whose hooks have never reported a turn (Codex before its hooks are
+a filter on what git's diff reports. Each path is first checked
+(`restore::plain_path`: no `..`, no `.git`, no leading link).
+
+The restore never writes into the folder by path (threat model gap 115). A
+process in the folder's fence can swap a subfolder for a link at any moment,
+and git caches "this leading folder is real" after its first file, so a
+`git checkout` into the folder could land files outside the fence. Instead
+the checkpoint's files are checked out by the store's git into a fresh
+private staging folder under the store (`<store>/.restore-*`, removed on
+every way out, a crash's leftover swept by the next restore), then installed
+through directory handles (`checkpoints::install`): the bound folder is
+opened by a no-follow walk from `/`, every leading component
+`O_DIRECTORY | O_NOFOLLOW` (made through the held handle when missing), the
+file copied to an exclusive temporary in its folder and `renameat` into place
+on that handle, a link made with `symlinkat` (never followed), executable
+bits kept; an added-since file is taken away by `unlinkat` on its held parent.
+A leading component that is a link or not a folder at that moment fails that
+one path ("is a link"); the rest go on. Windows has no fence, so its arm stays
+path-based with `plain_path` checked again right before each write.
+
+The "agent is idle" checks are a courtesy against clobbering work in
+progress, not a security boundary: they read the agent's own hook record,
+which the agent can write. The restore refuses while this tab's agent works
+and the dialog confirms for other tabs'. A tab whose hooks have never reported a turn (Codex before its hooks are
 trusted, a CLI without hooks, a tab not prompted yet; the previous run's record
 counts) can't be told working or not (`turn_unknown`): its own restore needs a
 tick saying so (`confirmUnknown`), and such a tab elsewhere in the folder
 needs the other-tabs tick (`restore_refusal`). A restore takes a `pre-restore` snapshot first: that is Undo restore.
+A path whose current copy that snapshot does not hold is neither overwritten
+nor removed; it is reported failed ("there would be no undo copy"): a file at
+a "deleted since" path that the snapshot left out (new-bytes budget,
+unreadable), or a file `git diff-files` finds differing from the just-staged
+index (git could not read it, or it changed since).
 A file that is now over the snapshot cap (or not an ordinary file) is dropped
 from the store's index, so git would call the checkpoint's copy "deleted since";
 `restore::left_alone` keeps it out of the list and of the restore, since the

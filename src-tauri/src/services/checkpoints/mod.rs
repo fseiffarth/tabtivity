@@ -7,12 +7,16 @@
 //!   mounted into a fence (the fence masks the whole state dir).
 //! - [`snapshot`]: tracked + untracked files, not the ignored ones.
 //! - [`restore`]: the diff since a checkpoint and the restore, with its own undo.
+//! - [`install`]: a restore's writes and removals in the folder, through
+//!   directory handles that follow no link (a folder swapped for a link fails
+//!   that path; nothing lands outside the folder).
 //! - this module: the tab → folder bindings, the triggers (`agent_turn`'s
 //!   transitions), the per-folder serial worker, retention and the settings.
 //!
 //! AppHandle-free. Every snapshot runs on a worker thread, never under
 //! `agent_turn`'s locks.
 
+pub mod install;
 pub mod restore;
 pub mod snapshot;
 pub mod store;
@@ -494,7 +498,10 @@ pub fn restore_refusal(own: Option<TurnState>, own_unknown: bool, others_working
 }
 
 /// Put the tab's folder back to checkpoint `id` (`paths`: only those; `None`
-/// = every differing file). See [`restore_refusal`] for when it is refused.
+/// = every differing file). See [`restore_refusal`] for when it is refused:
+/// that gate reads the agents' own hook records, which they can write, so it
+/// only spares work in progress. Keeping the writes inside the folder is
+/// [`restore::restore`]'s own job, gate or not.
 pub fn restore(key: &str, id: &str, paths: Option<&[String]>, confirm_others: bool, confirm_unknown: bool) -> Result<Restored, String> {
     ready()?;
     let (uid, bound, store, row) = store_row(key, id)?;

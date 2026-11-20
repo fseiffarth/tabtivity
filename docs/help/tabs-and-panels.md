@@ -1,7 +1,7 @@
 ---
 id: tabs-and-panels
 title: Tabs, panes and panels
-keywords: [tab, pane, split, subwindow, detach, popout, file panel, file tree, viewer, root console, header, menu, restore]
+keywords: [tab, tab search, find tab, pane, split, subwindow, detach, popout, file panel, file tree, viewer, root console, header, menu, restore]
 related: [files-and-viewers, root-console, keyboard, scheduled-prompts, project-desktop]
 ---
 
@@ -21,12 +21,6 @@ related: [files-and-viewers, root-console, keyboard, scheduled-prompts, project-
    - **Workspace** — Calendar, Printing, the Skills library, and a Browser tab
      when that experimental feature is on.
 3. The new tab opens focused in that pane.
-
-Starting an agent while a tab of the same agent in the same project has not been
-asked anything yet focuses that empty tab instead of opening a second blank one.
-This covers the + menu, the Ctrl+1–9 chords, Start Here, the prompt chart's
-"New tab" and the phone's ＋. A tab restored from a previous run, or one running
-another folder, machine, model or login, is never taken over.
 
 Only agents whose CLI is installed are listed. Install missing ones from
 Settings → Agents → Manage CLIs (see `agent-clis`).
@@ -72,6 +66,18 @@ Settings → Agents → Manage CLIs (see `agent-clis`).
   to go to it). Right-click again to open or unlink the card.
 
 Your layout is saved automatically per project.
+
+## Find a tab
+
+Press **Ctrl+Shift+A** (also from a focused terminal), or pick `+` →
+**Search tabs…**, to search every project's tabs at once. The project on
+screen comes first. Type part of a tab's name, or its project's name, to narrow
+the list; ↑/↓ and Enter jump to the tab, switching project when needed.
+Ctrl+Enter opens it beside the focused subwindow instead. In a popped-out
+window the search covers that window's tabs.
+
+The search is the command palette (Ctrl+K) narrowed to tabs: typing `@` at the
+start of the palette does the same. Rebind the chord in Settings → Keyboard.
 
 ## What comes back after a restart
 

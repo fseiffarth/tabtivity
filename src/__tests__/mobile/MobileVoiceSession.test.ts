@@ -74,6 +74,23 @@ describe(`${BRAND.display} Mobile dictation session`, () => {
     expect(speech.starts).toBe(1);
   });
 
+  it.each(["listening", "backoff"])("releases the mic when hidden during %s", phase => {
+    const { handlers, speech } = session();
+    if (phase === "backoff") speech.onend?.();
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(handlers.onError).toHaveBeenCalledWith("mobile.voice.errInterrupted");
+      expect(handlers.onEnd).toHaveBeenCalledTimes(1);
+      expect(handlers.onLevel).toHaveBeenLastCalledWith(null);
+      expect(speech.onresult).toBeNull();
+      vi.advanceTimersByTime(5000);
+      expect(speech.starts).toBe(1);
+    } finally {
+      hidden.mockRestore();
+    }
+  });
+
   it("does not restart past an error no restart can fix", () => {
     const { handlers, speech } = session();
     speech.fail("not-allowed");

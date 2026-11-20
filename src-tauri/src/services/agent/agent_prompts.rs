@@ -516,6 +516,7 @@ fn link_session_roll(
         kind: kind.to_string(),
         target: None,
         preface,
+        paused: false,
     };
     let _ = apply_link_upsert(file, project_id, link);
 }
@@ -657,6 +658,9 @@ fn validate_link(input: PromptLinkInput) -> Result<PromptLink, String> {
     }
     // The same rules a schedule's preface obeys, since this one becomes one.
     let preface = agent_tasks::validate_preface(input.preface)?;
+    // Pause holds back a delivery, and only an `after` edge has one: on a
+    // `related` edge the flag means nothing and is dropped, like its commands.
+    let paused = input.paused && input.kind == "after";
     Ok(PromptLink {
         id: input.id,
         from: input.from,
@@ -664,6 +668,7 @@ fn validate_link(input: PromptLinkInput) -> Result<PromptLink, String> {
         kind: input.kind,
         target: input.target,
         preface,
+        paused,
     })
 }
 
@@ -1125,6 +1130,7 @@ mod tests {
             kind: kind.into(),
             target: Some("target-1".into()),
             preface: Vec::new(),
+            paused: false,
         }
     }
 
@@ -1256,6 +1262,46 @@ mod tests {
         assert!(validate_link(with("after", &["clear"])).is_err());
         let many: Vec<&str> = vec!["/clear"; agent_tasks::MAX_PREFACE_COMMANDS + 1];
         assert!(validate_link(with("after", &many)).is_err());
+    }
+
+    #[test]
+    fn a_paused_flag_is_kept_on_an_after_edge_only_and_round_trips() {
+        let paused = |kind: &str| PromptLinkInput { paused: true, ..link("l", "a", "b", kind) };
+        let stored = validate_link(paused("after")).unwrap();
+        assert!(stored.paused);
+        let json = serde_json::to_string(&stored).unwrap();
+        assert!(json.contains("\"paused\":true"));
+        assert_eq!(serde_json::from_str::<PromptLink>(&json).unwrap(), stored);
+        // On a related edge the flag means nothing and is dropped.
+        assert!(!validate_link(paused("related")).unwrap().paused);
+        // Not paused: the key is never written, so an older build reads the edge as before.
+        let plain = validate_link(link("l", "a", "b", "after")).unwrap();
+        assert!(!plain.paused);
+        assert!(!serde_json::to_string(&plain).unwrap().contains("paused"));
+    }
+
+    #[test]
+    fn a_link_file_written_before_the_flag_loads_unpaused() {
+        let old = r#"{"id":"l","from":"a","to":"b","kind":"after","target":"t1","preface":["/clear"]}"#;
+        let link: PromptLink = serde_json::from_str(old).unwrap();
+        assert!(!link.paused);
+        assert_eq!(serde_json::to_string(&link).unwrap(), old);
+        // The input the frontend sends for an ordinary link carries no such key.
+        let input: PromptLinkInput = serde_json::from_str(r#"{"id":"l","from":"a","to":"b","kind":"after"}"#).unwrap();
+        assert!(!input.paused);
+    }
+
+    #[test]
+    fn re_saving_an_edge_without_the_flag_resumes_it() {
+        let mut file = AgentPromptsFile::default();
+        for id in ["a", "b"] {
+            apply_upsert(&mut file, "p", input(id, id), "t1").unwrap();
+        }
+        let held = PromptLinkInput { paused: true, ..link("ab", "a", "b", "after") };
+        let links = apply_link_upsert(&mut file, "p", validate_link(held).unwrap()).unwrap();
+        assert!(links[0].paused);
+        let links = apply_link_upsert(&mut file, "p", validate_link(link("ab", "a", "b", "after")).unwrap()).unwrap();
+        assert!(!links[0].paused);
     }
 
     #[test]

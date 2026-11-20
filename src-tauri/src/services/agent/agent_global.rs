@@ -70,6 +70,9 @@ const MERGED: &[(&str, Format)] = &[
     (".cursor/hooks.json", Format::Json),
     (".factory/hooks.json", Format::Json),
     (".vibe/hooks.toml", Format::Toml),
+    // Tabtivity adds its instructions file here per home; the layer's keys
+    // (the Manage CLIs cache-warming switch) merge beside them.
+    (".config/opencode/opencode.json", Format::Json),
 ];
 
 pub fn global_dir_in(state_dir: &Path) -> PathBuf {
@@ -182,7 +185,9 @@ pub fn apply_to_home(state_dir: &Path, home: &Path) -> io::Result<()> {
         let _ = dst.set_exec_bits(exec_bits(&src));
         placed.push(rel.clone());
     }
-    for rel in previous.files.iter().filter(|r| !files.contains(r)) {
+    // A path that became merged (a layer copy placed before it was) is the
+    // home's own config now: the merge below takes it, it is never removed.
+    for rel in previous.files.iter().filter(|r| !files.contains(r) && !MERGED.iter().any(|(m, _)| m == r)) {
         if let Some(dst) = HomeFile::open_existing(home, rel) {
             if dst.exists() {
                 let _ = dst.remove();
@@ -964,6 +969,8 @@ pub struct LayerStatus {
     pub files: usize,
     /// Whether the layer's Codex config routes approvals to auto-review.
     pub codex_auto_review: bool,
+    /// Whether the layer's OpenCode config keeps idle sessions' caches warm.
+    pub opencode_warming: bool,
 }
 
 pub fn status() -> LayerStatus {
@@ -971,6 +978,7 @@ pub fn status() -> LayerStatus {
     LayerStatus {
         files: layer_files(&dir).len(),
         codex_auto_review: codex_auto_review_in(&dir),
+        opencode_warming: opencode_warming_in(&dir),
         dir: dir.to_string_lossy().into_owned(),
     }
 }
@@ -1025,6 +1033,74 @@ pub fn set_codex_auto_review_in(state_dir: &Path, on: bool) -> io::Result<()> {
 
 pub fn set_codex_auto_review(on: bool) -> io::Result<()> {
     set_codex_auto_review_in(&storage::state_dir(), on)
+}
+
+/// OpenCode's top-level `warming` (2.3+): after a session's last request it
+/// sends small keep-alive requests at ~90 % of the model's cache TTL for up to
+/// 30 minutes, so the prompt cache is still there when the user comes back;
+/// it stops after a cache miss and skips subagents. Each keep-alive is a real
+/// request (a cache read of the whole context). Off by default in OpenCode;
+/// the Manage CLIs switch writes it into the layer, so it is the user's own
+/// OpenCode config in every home (`docs/cli_caching_plan.md` phase 2).
+const OPENCODE_CONFIG: &str = ".config/opencode/opencode.json";
+const OPENCODE_WARMING: &str = "warming";
+
+/// On when `warming` is `true` or a settings object (OpenCode's two "on" forms).
+fn opencode_warming_in(layer: &Path) -> bool {
+    std::fs::read_to_string(layer.join(OPENCODE_CONFIG))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|doc| doc.get(OPENCODE_WARMING).cloned())
+        .is_some_and(|v| v == Value::Bool(true) || v.is_object())
+}
+
+/// Switch OpenCode's cache warming on or off in the layer under `state_dir`,
+/// editing only that one key. On keeps settings the user wrote themselves
+/// (an object); off removes the key. A config that is not a JSON object is
+/// refused rather than rewritten.
+pub fn set_opencode_warming_in(state_dir: &Path, on: bool) -> io::Result<()> {
+    let layer = global_dir_in(state_dir);
+    let path = layer.join(OPENCODE_CONFIG);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let mut doc: Value = if text.trim().is_empty() {
+        Value::Object(Default::default())
+    } else {
+        serde_json::from_str(&text).map_err(|e| io::Error::other(format!("{}: {e}", path.display())))?
+    };
+    let Some(map) = doc.as_object_mut() else {
+        return Err(io::Error::other(format!("{}: not a JSON object", path.display())));
+    };
+    let was = map.get(OPENCODE_WARMING).cloned();
+    if on {
+        if !was.as_ref().is_some_and(Value::is_object) {
+            map.insert(OPENCODE_WARMING.to_string(), Value::Bool(true));
+        }
+    } else {
+        map.remove(OPENCODE_WARMING);
+    }
+    if map.get(OPENCODE_WARMING) == was.as_ref() {
+        return Ok(());
+    }
+    if map.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        };
+    }
+    crate::services::agent_home::create_private_dir(&layer)?;
+    crate::services::agent_home::create_private_dir(&layer.join(".config"))?;
+    crate::services::agent_home::create_private_dir(&layer.join(".config/opencode"))?;
+    let mut out = serde_json::to_string_pretty(&doc).map_err(io::Error::other)?;
+    out.push('\n');
+    std::fs::write(&path, out)
+}
+
+pub fn set_opencode_warming(on: bool) -> io::Result<()> {
+    set_opencode_warming_in(&storage::state_dir(), on)
 }
 
 /// Create the layer's directory (for "Open folder") and return it.
@@ -1310,6 +1386,69 @@ mod tests {
         write(&layer_file, "not = [toml");
         assert!(set_codex_auto_review_in(&state, true).is_err());
         assert_eq!(std::fs::read_to_string(&layer_file).unwrap(), "not = [toml");
+    }
+
+    #[test]
+    fn the_opencode_warming_switch_edits_one_key_and_reaches_every_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        let layer = global_dir_in(&state);
+        let rel = Path::new(".config").join("opencode").join("opencode.json");
+        let layer_file = layer.join(&rel);
+        let home_file = home.join(&rel);
+        // The home's own config: Tabtivity's instructions and the user's model.
+        write(&home_file, r#"{"model": "anthropic/claude-sonnet-5", "instructions": ["hint.md"]}"#);
+        assert!(!opencode_warming_in(&layer));
+        set_opencode_warming_in(&state, true).unwrap();
+        assert!(opencode_warming_in(&layer));
+        apply_to_home(&state, &home).unwrap();
+        let merged = read_json(&home_file).unwrap();
+        assert_eq!(merged["warming"], json!(true));
+        assert_eq!(merged["model"], "anthropic/claude-sonnet-5");
+        assert_eq!(merged["instructions"], json!(["hint.md"]));
+        // Off removes the file it created and takes the key back out of the home.
+        set_opencode_warming_in(&state, false).unwrap();
+        assert!(!layer_file.exists());
+        apply_to_home(&state, &home).unwrap();
+        assert_eq!(
+            read_json(&home_file).unwrap(),
+            json!({"model": "anthropic/claude-sonnet-5", "instructions": ["hint.md"]})
+        );
+        // The user's own warming settings count as on and survive switching on.
+        let own = r#"{"warming": {"duration": "10 minutes"}, "share": "disabled"}"#;
+        write(&layer_file, own);
+        assert!(opencode_warming_in(&layer));
+        set_opencode_warming_in(&state, true).unwrap();
+        assert_eq!(std::fs::read_to_string(&layer_file).unwrap(), own);
+        set_opencode_warming_in(&state, false).unwrap();
+        assert_eq!(read_json(&layer_file).unwrap(), json!({"share": "disabled"}));
+        // `false` is off.
+        write(&layer_file, r#"{"warming": false}"#);
+        assert!(!opencode_warming_in(&layer));
+        // A broken config is refused, not overwritten.
+        write(&layer_file, "{ not json");
+        assert!(set_opencode_warming_in(&state, true).is_err());
+        assert_eq!(std::fs::read_to_string(&layer_file).unwrap(), "{ not json");
+        write(&layer_file, "[1]");
+        assert!(set_opencode_warming_in(&state, true).is_err());
+    }
+
+    #[test]
+    fn a_layer_copy_that_became_merged_is_never_removed_from_the_home() {
+        // An earlier build copied a layer `opencode.json` whole and recorded
+        // it under `files`; now it is merged, and the sweep of files no longer
+        // copied must not delete the home's config.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        let rel = Path::new(".config").join("opencode").join("opencode.json");
+        write(&global_dir_in(&state).join(&rel), r#"{"warming": true}"#);
+        write(&home.join(&rel), r#"{"warming": true, "instructions": ["hint.md"]}"#);
+        let manifest = Manifest { files: vec![".config/opencode/opencode.json".into()], merged: BTreeMap::new() };
+        write(&home.join(MANIFEST), &serde_json::to_string(&manifest).unwrap());
+        apply_to_home(&state, &home).unwrap();
+        assert_eq!(read_json(&home.join(&rel)).unwrap(), json!({"warming": true, "instructions": ["hint.md"]}));
     }
 
     #[test]

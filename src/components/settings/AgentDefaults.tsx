@@ -18,7 +18,7 @@ async function latestLaunchDefaults(): Promise<Settings["agent_launch_defaults"]
 
 /** Each installed CLI owns its defaults. Blank means the CLI decides.
  * `compact` (the Chat view's model and effort lists) leaves the help out. */
-export function AgentDefaults({ agent, compact = false }: { agent: AgentInfo; compact?: boolean }) {
+export function AgentDefaults({ agent, compact = false, onSaved }: { agent: AgentInfo; compact?: boolean; onSaved?: () => void }) {
   const t = useT();
   const saved = useSettingsStore((s) => s.settings?.agent_launch_defaults?.[agent.bin]);
   const knownModels = useSettingsStore((s) => s.settings?.agent_models);
@@ -54,9 +54,11 @@ export function AgentDefaults({ agent, compact = false }: { agent: AgentInfo; co
       setDraft(null);
     } catch (err) {
       setError(String(err));
+      return;
     } finally {
       setSaving(false);
     }
+    if (!reset) onSaved?.();
   };
   if (!cap) return <p className="settings-help">{t("agents.defaultsBackend")}</p>;
   return (

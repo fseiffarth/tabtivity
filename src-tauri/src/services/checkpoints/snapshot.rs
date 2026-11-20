@@ -102,7 +102,13 @@ pub fn snapshot(root: &Path, folder: &Path, kind: Kind, who: &Who, prompt_at: Op
 /// [`snapshot`] with the store already locked and ensured (a restore takes its
 /// `pre-restore` snapshot inside its own lock).
 pub fn snapshot_locked(store: &Store, kind: Kind, who: &Who, prompt_at: Option<u64>) -> Result<Row, String> {
-    let staged = stage(store, if kind == Kind::Pre { prompt_at } else { None })?;
+    snapshot_locked_with(store, kind, who, prompt_at, Limits::default())
+}
+
+/// [`snapshot_locked`] under other size limits (the tests'; production keeps
+/// the constants).
+pub fn snapshot_locked_with(store: &Store, kind: Kind, who: &Who, prompt_at: Option<u64>, limits: Limits) -> Result<Row, String> {
+    let staged = stage_with(store, if kind == Kind::Pre { prompt_at } else { None }, limits)?;
     let at = crate::clock::now_ms();
     let id = new_id(at);
     let reuse = store.rows().into_iter().rev().find(Row::has_snapshot).filter(|prev| prev.tree == staged.tree);

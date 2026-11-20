@@ -20,6 +20,7 @@ import { GitPushProposals } from "./GitPushMcp";
 import { isPromptTargetTab } from "./promptTarget";
 import { ArrowUpRightIcon, ClockIcon, PencilIcon, RefreshIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
+import { UntestedTag } from "../common/UntestedTag";
 import { storageKey } from "../../lib/brand";
 
 interface Props { scope: string; active: boolean }
@@ -210,6 +211,10 @@ export function AgentSchedulesView({ scope, active }: Props) {
     if (!tab.autoContinue || !tab.scheduleTargetId) return null;
     const status = continueByTarget[continueKey(scope, tab.scheduleTargetId)];
     if (!status) return t("agentContinue.reading");
+    if (status.phase === "armed" && status.source === "screen" && status.armedAt !== undefined) {
+      const relative = relativeToNow(new Date(status.armedAt), now, lang);
+      return status.resets ? t("agentContinue.armedNotice", { relative, resets: status.resets }) : t("agentContinue.armedNoticeRetry", { relative });
+    }
     if (status.phase === "armed") return status.armedAt === undefined ? t("agentContinue.reading") : t("agentContinue.armed", { relative: relativeToNow(new Date(status.armedAt), now, lang), window: status.window ?? "", resets: status.resets ?? "" });
     if (status.phase === "sending") return t("agentContinue.sending");
     if (status.phase === "unsupported") return t("agentContinue.unsupported");
@@ -277,7 +282,7 @@ export function AgentSchedulesView({ scope, active }: Props) {
             <small className="agent-prompts-tab-when" data-testid="agent-tab-times">{timesLabel(tab, state)}</small>
             {promptByTab[`${scope}:${tab.key}`] && <small className="agent-prompts-tab-when agent-prompts-last-prompt" data-testid="agent-last-prompt" title={`${t("agentPrompts.lastPromptTitle")}\n\n${promptByTab[`${scope}:${tab.key}`]}`}>{t("agentPrompts.lastPrompt", { prompt: promptByTab[`${scope}:${tab.key}`] })}</small>}
             <small className="agent-prompts-tab-when">{summary.total === 0 ? t("agentPrompts.noSchedules") : summary.next ? `${summary.enabled} · ${t("agentPrompts.nextRun", { relative: relativeToNow(summary.next, now, lang) })}` : queued.length ? `${summary.enabled} · ${t("agentPrompts.queuedCount", { count: queued.length })}` : `${summary.enabled} · ${t("agentSchedule.noNext")}`}</small>
-            {continueLabel(tab) && <small className="agent-prompts-tab-when" data-testid="agent-continue-status"><RefreshIcon /> {continueLabel(tab)}</small>}
+            {continueLabel(tab) && <small className="agent-prompts-tab-when" data-testid="agent-continue-status"><RefreshIcon /> {continueLabel(tab)}{tab.scheduleTargetId && continueByTarget[continueKey(scope, tab.scheduleTargetId)]?.source === "screen" && <> <UntestedTag id="agentContinue.screenNotice" /></>}</small>}
             {open && <AgentTabComposer scope={scope} tab={tab} offered={prefaceCommandsFor(tab.cmd, settings?.agent_preface_commands)} models={agentModelsFor(tab.cmd, settings?.agent_models)} />}
           </div>
           <div className="agent-prompts-tab-actions">

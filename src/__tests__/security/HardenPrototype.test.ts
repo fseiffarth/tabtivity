@@ -56,7 +56,15 @@ describe("hardenPrototype (#159)", () => {
   it("stores nothing when the setter is reached with a primitive receiver", () => {
     const proto = hardenedProto();
     const setter = Object.getOwnPropertyDescriptor(proto, "toString")?.set;
-    expect(() => setter?.call("a", () => "x")).not.toThrow();
+    expect(setter).toBeTypeOf("function");
+    const store = setter as (this: unknown, next: unknown) => void;
+    for (const receiver of ["a", 1, true, null, undefined]) {
+      // Reaching `defineProperty` on a primitive would throw a TypeError.
+      expect(() => store.call(receiver, () => "x"), String(receiver)).not.toThrow();
+    }
+    // Nothing was stored on the prototype either: its own getter still answers.
+    expect((proto.toString as () => string)()).toBe("[base]");
+    expect(Object.getOwnPropertyDescriptor(proto, "toString")?.set).toBe(setter);
   });
 
   it("is idempotent", () => {

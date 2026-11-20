@@ -339,6 +339,15 @@ open Claude tab, and new Claude tabs open the same way, while Codex and
 OpenCode tabs keep their own choice. Agents without a chat view keep their
 terminal.
 
+**Cache cold.** The provider keeps a conversation's prompt cache only for a
+while after each answer: Claude for 1 hour on a subscription (5 minutes on an
+API key), Codex for 30 minutes. A Claude or Codex tab left idle longer shows
+a **Cache cold** chip in its Chat view's facts row with the conversation's
+size: your next message writes all of it to the cache again, which costs more
+than a warm turn. To start over instead, type `/clear` (Claude) or `/new`
+(Codex). The chip goes away once you send the next message. A resumed Claude
+conversation shows Claude's own estimate in dollars instead.
+
 **Diffs** lists the files the conversation changed, newest first. Click the **+**
 in the gutter of a diff line (Shift+click another line of the same hunk for a
 range) to write the agent a note; **Add to draft** in the header puts all your
@@ -358,6 +367,16 @@ Web links the conversation names (the ones you can click in the chat, including
 ones you pasted) are listed under the files, with the address's host and path,
 who wrote it and when. Clicking one asks first, naming the exact address, and
 only opens your browser once you confirm; Tabtivity never loads the page itself.
+
+**Prompts** (beside Resume) lists the prompts you sent in the tab. At its
+bottom, **Export session…** saves the whole conversation (your prompts, the
+agent's answers and plans, its subagents) as a Markdown file, **Export as
+chat…** saves it as a web page that looks like the Chat (bubbles, dates and
+times; it opens in any browser and prints to PDF), and **Export my
+prompts…** saves only your prompts, oldest first. You pick where in a save
+dialog. An agent without a chat view offers only **Export my prompts…**,
+from the prompts the panel lists. A very long session is exported from its
+last 1000 entries, and the file says so.
 
 ## Switch all AI off
 
@@ -412,7 +431,14 @@ computer** page, next to the logins, and copies nothing until you say so;
 when it starts, merged into the settings files the CLI writes itself, so a
 model you picked in one project stays picked there. Agents cannot change
 the global config; what an agent changes in its own project's home stays in
-that project and is reset where it overlaps the global config. There is no off switch; if `bwrap` is missing the agent does
+that project and is reset where it overlaps the global config. Two switches on
+a CLI's card in Manage CLIs (under *More* → *Options*) each edit one key of it:
+Codex's **auto-review approvals**, and OpenCode's **keep prompt caches warm**
+(OpenCode 2.3+). With the second on, OpenCode sends small keep-alive requests
+for up to 30 minutes after your last message, just before the model's prompt
+cache would expire, so a turn after a pause reads the conversation from cache
+instead of writing it again. Each keep-alive is a real, billed request, so it
+pays off when you come back within the half hour. There is no off switch; if `bwrap` is missing the agent does
 not start, and Tabtivity offers `sudo apt install bubblewrap` in a terminal tab.
 
 Typing a CLI's name (`claude`, `cursor-agent`, …) into a shell tab runs it in

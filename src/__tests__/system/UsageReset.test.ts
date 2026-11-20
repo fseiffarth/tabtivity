@@ -118,6 +118,20 @@ describe("nextUsageReset", () => {
     expect(reset?.at).toEqual(new Date(Date.UTC(2026, 8, 15, 20, 30)));
   });
 
+  it("places the panel the backend builds from Codex's account limits (year and UTC named)", () => {
+    // `agent_usage::codex_panel` output — the shape auto-continue arms a Codex tab off.
+    const panel = [
+      "Current session: 100% used · resets Nov 18, 2026, 12:00pm (UTC)",
+      "Current week: 41.5% used · resets Nov 22, 2026, 3:05am (UTC)",
+    ].join("\n");
+    const reset = nextUsageReset(parseUsageReport(panel), new Date(Date.UTC(2026, 10, 18, 9, 0)));
+    expect(reset?.label).toBe("Current session");
+    expect(reset?.at).toEqual(new Date(Date.UTC(2026, 10, 18, 12, 0)));
+    const week = nextUsageReset(parseUsageReport(panel), new Date(Date.UTC(2026, 10, 18, 13, 0)));
+    expect(week?.label).toBe("Current week");
+    expect(week?.at).toEqual(new Date(Date.UTC(2026, 10, 22, 3, 5)));
+  });
+
   it("answers null when nothing in the panel can be placed in time", () => {
     expect(nextUsageReset(parseUsageReport("Current session: 71% used"), TUE_1400)).toBeNull();
     expect(nextUsageReset(parseUsageReport("nothing to see here"), TUE_1400)).toBeNull();

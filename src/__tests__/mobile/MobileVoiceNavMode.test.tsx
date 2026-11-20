@@ -666,8 +666,8 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     localStorage.setItem(storageKey("mobile.focusReadAloud"), "1");
     await start();
     const first = mic();
-    // Sent with "go on": the hands-free wait for this turn begins.
-    await hear("fix the login go on");
+    // Sent with "go Tabby": the hands-free wait for this turn begins.
+    await hear("fix the login go Tabby");
     expect(box().value).toBe("");
     await hear(`${T} navigate`);
     // The answer lands (the next transcript poll) while the mode is open.
@@ -688,7 +688,7 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
   it("reads the held answer once navigation ends", async () => {
     localStorage.setItem(storageKey("mobile.focusReadAloud"), "1");
     await start();
-    await hear("fix the login go on");
+    await hear("fix the login go Tabby");
     await hear(`${T} navigate`);
     host.transcript = {
       available: true, version: "2:1", truncated: false,

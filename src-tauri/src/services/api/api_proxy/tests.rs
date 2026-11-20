@@ -613,15 +613,21 @@ async fn idle_sockets_are_dropped_but_a_stream_in_flight_is_not() {
     // A head trickled byte by byte does not reset the bound: the whole
     // trickle would take 3.6 bounds, and the socket closes well before.
     let mut trickle = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-    let started = Instant::now();
-    for b in b"GET /anthropic/v1/models HTTP/1.1\r\n" {
+    let head = b"GET /anthropic/v1/models HTTP/1.1\r\n";
+    let mut sent = 0;
+    for b in head {
         if trickle.write_all(&[*b]).await.is_err() {
             break;
         }
+        sent += 1;
         tokio::time::sleep(idle / 10).await;
     }
     assert!(closes_within(&mut trickle, Duration::from_secs(5)).await);
-    assert!(started.elapsed() < idle * 3, "took {:?}", started.elapsed());
+    // Counted in bytes, not wall time: a slow runner stretches the sleeps (so
+    // fewer bytes fit before the bound), never the other way. The bound cuts
+    // in after about ten of the 36 bytes; three quarters is "well before the
+    // whole trickle".
+    assert!(sent < head.len() * 3 / 4, "the proxy let all but {} of {} bytes through", head.len() - sent, head.len());
 
     // A kept-alive socket after its answer.
     let mut kept = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();

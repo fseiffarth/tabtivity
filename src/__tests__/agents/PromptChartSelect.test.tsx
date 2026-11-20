@@ -26,6 +26,9 @@ function domRect(rect: { left: number; top: number; width: number; height: numbe
 
 /** A 1000px-wide day in client space, as `PromptChart.test.tsx` lays it out. */
 function layout() {
+  // A plain 24-hour day: open the folded night first.
+  const fold = screen.queryByTestId("prompt-timeline-fold");
+  if (fold) fireEvent.click(fold);
   vi.spyOn(screen.getByTestId("prompt-chart-strip"), "getBoundingClientRect").mockReturnValue(domRect({ left: 0, top: 0, width: 1000, height: 60 }));
   vi.spyOn(screen.getByTestId("prompt-timeline-body"), "getBoundingClientRect").mockReturnValue(domRect({ left: 0, top: 100, width: 1000, height: 300 }));
   vi.spyOn(screen.getByTestId("prompt-timeline-now-band"), "getBoundingClientRect").mockReturnValue(domRect({ left: 491, top: 100, width: 20, height: 300 }));
@@ -213,5 +216,31 @@ describe("PromptChart timeline selection", () => {
     await act(async () => { fireEvent.pointerUp(window, { pointerId: 1, clientX: 900, clientY: 380 }); });
     expect(screen.queryByTestId("prompt-chart-selection")).toBeNull();
     expect(calls("agent_schedule_upsert")).toHaveLength(0);
+  });
+
+  it("draws the carry ghost and the rubber band outside the chart, which is a size container", async () => {
+    // `container-type` gives the chart layout containment, and so makes it the
+    // containing block of any `position: fixed` child: the ghost and the band
+    // are placed in client coordinates and would be drawn offset by the chart's
+    // own origin. They are portaled to the body.
+    await act(async () => { render(<PromptChart scope="p" active tabs={[tab]} />); });
+    layout();
+    const chart = document.querySelector(".agent-prompt-chart")!;
+    fireEvent.pointerDown(cardOf("Early task"), { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 10, clientY: 20 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 750, clientY: 180 });
+    const ghost = document.querySelector(".agent-prompt-timeline-ghost")!;
+    expect(ghost).toBeTruthy();
+    expect(chart.contains(ghost)).toBe(false);
+    expect(ghost.parentElement).toBe(document.body);
+    await act(async () => { fireEvent.pointerUp(window, { pointerId: 1, clientX: 750, clientY: 180 }); });
+    expect(document.querySelector(".agent-prompt-timeline-ghost")).toBeNull();
+
+    fireEvent.pointerDown(screen.getByTestId("prompt-timeline-body"), { button: 0, pointerId: 1, clientX: 500, clientY: 105 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 480, clientY: 130 });
+    const band = screen.getByTestId("prompt-timeline-marquee");
+    expect(chart.contains(band)).toBe(false);
+    expect(band.parentElement).toBe(document.body);
+    await act(async () => { fireEvent.pointerUp(window, { pointerId: 1, clientX: 480, clientY: 130 }); });
   });
 });

@@ -9,7 +9,7 @@
  *    page, not the geometry kept from the old one;
  *  - a reveal into a hidden pane waits: its clock does not run and it scrolls
  *    once the pane is shown;
- *  - a PDF read from the remote host asks SyncTeX nothing and says why;
+ *  - a remote PDF searches the host map while connected and explains a disconnect;
  *  - a PDF with no map still opens the `.tex` that built it, at its top.
  *
  * The viewport below is pdf.js's own transform written out; the conversions it
@@ -119,6 +119,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { PdfView, SYNC_HIGHLIGHT_MS } from "../../components/embed/pdf/PdfViewer";
+import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { FileScopeContext, FileSourceContext, PaneVisibleContext, type FileSource } from "../../lib/files/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
@@ -151,6 +152,7 @@ async function shown(source: FileSource = "none") {
 }
 
 beforeEach(() => {
+  useRemoteStatusStore.setState({ byProject: {} });
   io.rotate = 0;
   io.scrolls = [];
   io.laidOut = true;
@@ -306,10 +308,22 @@ describe("SyncTeX on the PDF side", () => {
     await act(async () => {
       fireEvent.click(document.querySelector(".file-viewer-pdf-page-wrap")!, { ctrlKey: true, clientX: 50, clientY: 50 });
     });
-    // …which still opens the `.tex` beside it, at its top.
-    await screen.findByText(/isn't available for a file read from the remote host, so paper\.tex opened at its top/i);
+    // The disconnected click must not probe for a sibling source.
+    await screen.findByText(/connect to the host to jump/i);
     expect(io.invoke).not.toHaveBeenCalledWith("synctex_edit", expect.anything());
     expect(io.invoke).not.toHaveBeenCalledWith("synctex_status", expect.anything());
+  });
+
+  it("probes and searches a connected host map", async () => {
+    useRemoteStatusStore.getState().setSsh("p1", "connected");
+    const base = io.invoke.getMockImplementation()!;
+    io.invoke.mockImplementation(async (cmd: string, ...args: unknown[]) =>
+      cmd === "synctex_status" ? { has_map: true, newer_sources: [], pdf_newer_than_map: false } : base(cmd, ...args));
+    await shown("remote");
+    await act(async () => {
+      fireEvent.click(document.querySelector(".file-viewer-pdf-page-wrap")!, { ctrlKey: true, clientX: 50, clientY: 50 });
+    });
+    expect(io.invoke).toHaveBeenCalledWith("synctex_edit", expect.objectContaining({ pdf: PATH, projectId: "p1" }));
   });
 
   describe("a PDF with no SyncTeX map", () => {

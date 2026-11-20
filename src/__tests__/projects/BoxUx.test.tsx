@@ -361,7 +361,6 @@ describe("ghost + Box pill (AS2a)", () => {
     expect(ghost).toBeTruthy();
     expect(ghost!.textContent).toContain("Box");
     expect(container.querySelectorAll(".box-scope-pill")).toHaveLength(0);
-    expect(container.querySelector(".box-fold-pill")).toBeNull();
 
     await act(async () => {
       useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });

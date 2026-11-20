@@ -1,62 +1,102 @@
 import { PROMPT_CHART_WINDOWS, type PromptChartFilter, type PromptChartWindow } from "../../lib/agents/prompt/chart";
 import { useT } from "../../lib/i18n";
-import { Dropdown } from "../common/Dropdown";
 
 interface Props {
   filter: PromptChartFilter;
   onChange: (next: PromptChartFilter) => void;
-  placeholder: string;
   agents: string[];
   tags: { tag: string; count: number }[];
   hideOthers: boolean;
   onHideOthers: () => void;
-  /** The timeline's facets; the drafts strip has no outcome and no instant. */
-  results?: boolean;
-  window?: PromptChartWindow;
-  onWindow?: (next: PromptChartWindow) => void;
-  /** How many of this part's cards the facets let through, and of how many:
-   *  shown with a Clear while any facet is set, since a dimmed card and a
-   *  hidden one both read as "nothing here". */
-  shown?: number;
-  total?: number;
-  /** Reset this bar's facets — view state, never the other bar's. */
-  onClear?: () => void;
+  /** The "When" facet: it narrows the timeline's cards only (a draft has no instant). */
+  window: PromptChartWindow;
+  onWindow: (next: PromptChartWindow) => void;
+  /** How many cards the facets let through, and of how many: a dimmed card and
+   *  a hidden one both read as "nothing here". */
+  shown: number;
+  total: number;
+  /** Reset every facet — view state, never written anywhere. */
+  onClear: () => void;
   testId: string;
 }
 
-/**
- * One filter over one part of the chart. The drafts strip and the timeline
- * each carry their own, because they answer different questions — "which
- * prompt do I send next" is not "what went to Codex this morning" — and a
- * search typed to find a draft must not blank the axis, or the other way.
- */
-export function PromptChartFilterBar({ filter, onChange, placeholder, agents, tags, hideOthers, onHideOthers, results, window, onWindow, shown, total, onClear, testId }: Props) {
-  const t = useT();
-  const filtering = !!(filter.text || filter.tag || filter.agent || filter.result || (window && window !== "any"));
+const RESULTS = ["delivered", "queued", "missed", "failed"] as const;
+
+/** One row of mutually exclusive chips (a facet); the first chip clears it. */
+function FacetRow({ label, options, value, onPick }: {
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  onPick: (value: string) => void;
+}) {
   return (
-    <div className="agent-prompt-chart-filter" data-testid={testId}>
-      <div className="agent-prompt-chart-facets">
-        <input type="search" value={filter.text} placeholder={placeholder} aria-label={placeholder} onChange={(event) => onChange({ ...filter, text: event.target.value })} />
-        {agents.length > 0 && <Dropdown value={filter.agent} title={t("agentPrompts.filterAgent")} options={[{ value: "", label: t("agentPrompts.filterAgentAll") }, ...agents.map((agent) => ({ value: agent, label: agent }))]} onChange={(agent) => onChange({ ...filter, agent })} />}
-        {results && <Dropdown value={filter.result} title={t("agentPrompts.filterResult")} options={[{ value: "", label: t("agentPrompts.filterResultAll") }, ...["delivered", "queued", "missed", "failed"].map((result) => ({ value: result, label: t(`promptChart.result.${result}` as "promptChart.result.delivered") }))]} onChange={(result) => onChange({ ...filter, result })} />}
-        {window && onWindow && <Dropdown value={window} title={t("promptChart.window")} options={PROMPT_CHART_WINDOWS.map((value) => ({ value, label: t(`promptChart.window.${value}` as "promptChart.window.any") }))} onChange={(value) => onWindow(value as PromptChartWindow)} />}
-        <button className={`agent-composer-chip${hideOthers ? " active" : ""}`} type="button" aria-pressed={hideOthers} onClick={onHideOthers}>{t("promptChart.hideOthers")}</button>
-        {filtering && shown !== undefined && total !== undefined && (
-          <span className="agent-prompt-chart-selection" data-testid={`${testId}-count`}>
-            {t("promptChart.filterCount", { shown, total })}
-            {onClear && <button type="button" className="agent-composer-chip" onClick={onClear}>{t("promptChart.clearFilter")}</button>}
-          </span>
-        )}
+    <div className="agent-prompt-filter-facet" role="group" aria-label={label}>
+      <div className="context-menu-group-label">{label}</div>
+      <div className="agent-prompts-tags">
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`agent-composer-chip${value === option.value ? " active" : ""}`}
+            aria-pressed={value === option.value}
+            onClick={() => onPick(option.value)}
+          >{option.label}</button>
+        ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The body of the command bar's Filters popover: the facets of the ONE filter
+ * the whole chart reads. The drafts column and the timeline used to carry a
+ * filter each; a search typed to find a draft that also dims the axis is the
+ * price of reading the chart as one thing. Text lives in the bar itself.
+ */
+export function PromptChartFilterBar({ filter, onChange, agents, tags, hideOthers, onHideOthers, window, onWindow, shown, total, onClear, testId }: Props) {
+  const t = useT();
+  const filtering = !!(filter.text || filter.tag || filter.agent || filter.result || window !== "any");
+  return (
+    <div className="agent-prompt-chart-filter menu-form" data-testid={testId}>
+      {agents.length > 0 && (
+        <FacetRow
+          label={t("agentPrompts.filterAgent")}
+          value={filter.agent}
+          options={[{ value: "", label: t("agentPrompts.filterAgentAll") }, ...agents.map((agent) => ({ value: agent, label: agent }))]}
+          onPick={(agent) => onChange({ ...filter, agent })}
+        />
+      )}
+      <FacetRow
+        label={t("agentPrompts.filterResult")}
+        value={filter.result}
+        options={[{ value: "", label: t("agentPrompts.filterResultAll") }, ...RESULTS.map((result) => ({ value: result, label: t(`promptChart.result.${result}` as "promptChart.result.delivered") }))]}
+        onPick={(result) => onChange({ ...filter, result })}
+      />
+      <FacetRow
+        label={t("promptChart.window")}
+        value={window}
+        options={PROMPT_CHART_WINDOWS.map((value) => ({ value, label: t(`promptChart.window.${value}` as "promptChart.window.any") }))}
+        onPick={(value) => onWindow(value as PromptChartWindow)}
+      />
       {tags.length > 0 && (
-        <div className="agent-prompts-tags">
-          {tags.map(({ tag, count }) => (
-            <button key={tag} type="button" className={`agent-composer-chip agent-prompts-tag${filter.tag === tag ? " active" : ""}${tag.includes(":") ? " is-auto" : ""}`} onClick={() => onChange({ ...filter, tag: filter.tag === tag ? "" : tag })}>
-              #{tag}<span>{count}</span>
-            </button>
-          ))}
+        <div className="agent-prompt-filter-facet">
+          <div className="context-menu-group-label">{t("agentPrompts.filterTag")}</div>
+          <div className="agent-prompts-tags">
+            {tags.map(({ tag, count }) => (
+              <button key={tag} type="button" className={`agent-composer-chip agent-prompts-tag${filter.tag === tag ? " active" : ""}${tag.includes(":") ? " is-auto" : ""}`} aria-pressed={filter.tag === tag} onClick={() => onChange({ ...filter, tag: filter.tag === tag ? "" : tag })}>
+                #{tag}<span>{count}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
+      <div className="agent-prompt-filter-foot">
+        <button className={`agent-composer-chip${hideOthers ? " active" : ""}`} type="button" aria-pressed={hideOthers} onClick={onHideOthers}>{t("promptChart.hideOthers")}</button>
+        <span className="agent-prompt-chart-selection" data-testid={`${testId}-count`}>
+          {t("promptChart.filterCount", { shown, total })}
+          {filtering && <button type="button" className="agent-composer-chip" onClick={onClear}>{t("promptChart.clearFilter")}</button>}
+        </span>
+      </div>
     </div>
   );
 }

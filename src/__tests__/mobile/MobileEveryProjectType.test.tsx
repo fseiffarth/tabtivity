@@ -10,7 +10,7 @@
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -298,5 +298,51 @@ describe("Mobile bridge — remote, container and VM projects", () => {
     // Container and VM projects start nothing at all, so reopen nothing either.
     expect(await ask({ type: "reopen_tab", request_id: "r2", project_id: "ctr" }))
       .toMatchObject({ status: "error", code: "not_attachable" });
+  });
+
+  it("restores from the archive only what the phone could have created there, and looks before it takes", async () => {
+    const entry = (id: string, kind: TabEntry["kind"], over: Partial<TabEntry> = {}) => {
+      const { tmuxSession: _tmux, scheduleTargetId: _target, ...tab } = tabOf(id, kind, over);
+      return { id, archivedAt: 1, tab };
+    };
+    const archive: Record<string, unknown[]> = {
+      rem: [
+        entry("a-host", "agent", { location: "remote" }),
+        entry("a-shell", "shell"),
+        entry("a-pdf", "embed" as TabEntry["kind"]),
+        entry("a-local", "agent"),
+      ],
+      ctr: [entry("a-ctr", "agent")],
+    };
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation((command: string, args?: InvokeArgs) => {
+      const scope =(args as { projectId?: string } | undefined)?.projectId ?? "";
+      if (command === "tab_archive_list") return Promise.resolve(archive[scope] ?? []);
+      if (command === "tab_archive_take") {
+        const id = (args as { id: string }).id;
+        return Promise.resolve((archive[scope] ?? []).find((e) => (e as { id: string }).id === id) ?? null);
+      }
+      return base(command, args);
+    });
+    const activateProject = vi.mocked(useProjectsStore.getState().activateProject);
+    const restore = (projectId: string, archiveId: string) =>
+      ask({ type: "restore_archived_tab", request_id: `ra-${archiveId}`, project_id: projectId, archive_id: archiveId });
+    const took = () => vi.mocked(invoke).mock.calls.some(([c]) => c === "tab_archive_take");
+    // A host-side agent of a remote project, a shell where the phone may
+    // start agents only, a viewer, anything of a container project: refused
+    // before the entry is taken and before the window switches project.
+    for (const [projectId, archiveId] of [["rem", "a-host"], ["rem", "a-shell"], ["rem", "a-pdf"], ["ctr", "a-ctr"]]) {
+      expect(await restore(projectId, archiveId), archiveId).toMatchObject({ status: "error", code: "not_attachable" });
+      expect(took(), archiveId).toBe(false);
+    }
+    expect(activateProject).not.toHaveBeenCalled();
+    // An entry the archive no longer holds is gone, with no switch either.
+    expect(await restore("rem", "a-gone")).toMatchObject({ status: "error", code: "nothing_to_restore" });
+    expect(took()).toBe(false);
+    expect(activateProject).not.toHaveBeenCalled();
+    // A local agent of the remote project is one the phone could start: taken.
+    expect(await restore("rem", "a-local")).toMatchObject({ status: "created" });
+    expect(took()).toBe(true);
+    expect(activateProject).toHaveBeenCalledWith("rem");
   });
 });

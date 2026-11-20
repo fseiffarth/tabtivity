@@ -1751,14 +1751,11 @@ mod tests {
         for origin in [FetchOrigin::Agent, FetchOrigin::Document, FetchOrigin::Client] {
             assert!(!honours_proxy_env(origin), "{origin:?}");
         }
-        let before = std::env::var_os("HTTPS_PROXY");
-        std::env::set_var("HTTPS_PROXY", "http://proxy.invalid:3128");
+        // No env var is set here (process env is shared with parallel tests):
+        // a default reqwest client always holds the system-proxy matcher, which
+        // is what lists under `proxies`, while `.no_proxy()` drops it.
         let held = |origin| format!("{:?}", reader_client(None, origin).unwrap()).contains("proxies");
         let held_by = [FetchOrigin::User, FetchOrigin::Agent, FetchOrigin::Document, FetchOrigin::Client].map(held);
-        match before {
-            Some(v) => std::env::set_var("HTTPS_PROXY", v),
-            None => std::env::remove_var("HTTPS_PROXY"),
-        }
         assert_eq!(held_by, [true, false, false, false], "user, agent, document, client");
     }
 

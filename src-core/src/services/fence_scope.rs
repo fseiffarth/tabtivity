@@ -49,14 +49,20 @@ pub fn abi() -> i64 {
     }
 }
 
-/// Enter a domain that scopes abstract Unix sockets, for this thread and all it
-/// execs. Plain syscalls only, so it is also safe between fork and exec.
-pub fn restrict_self() -> std::io::Result<()> {
-    let attr = RulesetAttr {
+/// The ruleset `restrict_self` asks for: the abstract-socket scope and nothing
+/// else — no filesystem or network access is handled, so both stay open.
+const fn ruleset_attr() -> RulesetAttr {
+    RulesetAttr {
         handled_access_fs: 0,
         handled_access_net: 0,
         scoped: SCOPE_ABSTRACT_UNIX_SOCKET,
-    };
+    }
+}
+
+/// Enter a domain that scopes abstract Unix sockets, for this thread and all it
+/// execs. Plain syscalls only, so it is also safe between fork and exec.
+pub fn restrict_self() -> std::io::Result<()> {
+    let attr = ruleset_attr();
     // SAFETY: `attr` outlives the call; `fd` is ours and closed on every path.
     unsafe {
         let fd = libc::syscall(
@@ -195,6 +201,26 @@ mod tests {
         }
         let status = cmd.status().expect("the scoped child was refused outside, reached inside and exec'd");
         assert_eq!(status.code(), Some(7));
+    }
+
+    /// What the syscall reads, pinned where no kernel is needed (the test above
+    /// skips below Landlock ABI 6, as CI's runners may be): the kernel's UAPI
+    /// layout of `landlock_ruleset_attr` (three u64, `scoped` last), the
+    /// `LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET` bit and the ABI that introduced it.
+    /// A drifted constant would scope nothing, or a different resource.
+    #[test]
+    fn the_ruleset_asks_the_kernel_for_the_abstract_socket_scope_alone() {
+        assert_eq!(std::mem::size_of::<RulesetAttr>(), 24);
+        assert_eq!(std::mem::offset_of!(RulesetAttr, handled_access_fs), 0);
+        assert_eq!(std::mem::offset_of!(RulesetAttr, handled_access_net), 8);
+        assert_eq!(std::mem::offset_of!(RulesetAttr, scoped), 16);
+        assert_eq!(SCOPE_ABSTRACT_UNIX_SOCKET, 1 << 0);
+        assert_eq!(SCOPE_ABI, 6);
+        assert_eq!(CREATE_RULESET_VERSION, 1 << 0);
+        let attr = ruleset_attr();
+        assert_eq!(attr.handled_access_fs, 0, "the fs must stay unhandled");
+        assert_eq!(attr.handled_access_net, 0, "the network must stay unhandled");
+        assert_eq!(attr.scoped, SCOPE_ABSTRACT_UNIX_SOCKET, "only the abstract-socket scope");
     }
 
     #[test]

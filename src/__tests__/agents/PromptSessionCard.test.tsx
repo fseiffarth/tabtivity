@@ -20,8 +20,7 @@ function sent(id: string, at: Date): PromptChartCard {
   } as unknown as PromptChartCard;
 }
 
-function renderSession(cards: PromptChartCard[]) {
-  const noop = vi.fn(async () => {});
+function renderSession(cards: PromptChartCard[], handlers: { onSelect?: () => void; onOpen?: () => void } = {}) {
   render(
     <PromptSessionCard
       cards={cards}
@@ -31,10 +30,9 @@ function renderSession(cards: PromptChartCard[]) {
       linking={false}
       linkOver={false}
       color="var(--accent)"
-      onSelect={vi.fn()}
+      onSelect={handlers.onSelect ?? vi.fn()}
+      onOpen={handlers.onOpen}
       onLink={vi.fn()}
-      onCollect={noop}
-      onDelete={noop}
     />,
   );
   return screen.getByTestId("prompt-chart-session");
@@ -43,23 +41,27 @@ function renderSession(cards: PromptChartCard[]) {
 describe("PromptSessionCard span", () => {
   it("writes the dates when the session runs past midnight", () => {
     const card = renderSession([sent("a", new Date(2026, 8, 4, 23, 10)), sent("b", new Date(2026, 8, 5, 1, 40))]);
-    const fact = card.querySelector(".agent-prompt-card-fact")!.textContent ?? "";
-    expect(fact).toContain("4 Sep");
-    expect(fact).toContain("5 Sep");
+    const time = card.querySelector(".agent-prompt-card-time")!.textContent ?? "";
+    expect(time).toContain("4 Sep");
+    expect(time).toContain("5 Sep");
   });
 
   it("leaves the dates off a span inside one day", () => {
     const card = renderSession([sent("a", new Date(2026, 8, 4, 9, 10)), sent("b", new Date(2026, 8, 4, 11, 40))]);
-    const fact = card.querySelector(".agent-prompt-card-fact")!.textContent ?? "";
-    expect(fact).not.toContain("Sep");
-    expect(fact).toContain("2 prompts");
+    const time = card.querySelector(".agent-prompt-card-time")!.textContent ?? "";
+    expect(time).not.toContain("Sep");
+    expect(card.querySelector(".agent-prompt-card-fact")!.textContent).toContain("2 prompts");
   });
 
-  it("opens from the keyboard like a prompt card", () => {
-    const card = renderSession([sent("a", new Date(2026, 8, 4, 9, 10)), sent("b", new Date(2026, 8, 4, 11, 40))]);
+  it("selects from the keyboard like a prompt card, and lists nothing inside itself", () => {
+    const onSelect = vi.fn();
+    const onOpen = vi.fn();
+    const card = renderSession([sent("a", new Date(2026, 8, 4, 9, 10)), sent("b", new Date(2026, 8, 4, 11, 40))], { onSelect, onOpen });
     expect(card.getAttribute("tabindex")).toBe("0");
     fireEvent.keyDown(card, { key: "Enter" });
-    expect(card.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getAllByTestId("prompt-chart-session-row")).toHaveLength(2);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    // The session's prompts are the inspector's list, not an expanded body.
+    expect(screen.queryAllByTestId("prompt-chart-session-row")).toHaveLength(0);
   });
 });

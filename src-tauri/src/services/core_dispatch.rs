@@ -280,6 +280,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("list_dir_all", "path", Picker),
     ("list_dirs", "path", Picker),
     // ── Absolute local paths ────────────────────────────────────────────
+    ("agent_session_export_write", "path", UserPath),
     ("calendar_read_ics", "path", UserPath),
     ("calendar_write_ics", "path", UserPath),
     ("compile_tex", "path", UserPath),

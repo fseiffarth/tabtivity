@@ -29,6 +29,16 @@ npm, so it needs Node.js first.
 2. Choose **Login with Google** and approve in the browser, or use a Gemini
    API key. If no browser opens, copy the printed link into your browser.
 
+**Which to pick.** Signed in with Google, Gemini CLI uses no prompt cache:
+Google's Code Assist API behind that sign-in has none, so the usage recap's
+Tokens section shows nothing from cache for Gemini. That sign-in's quota counts
+requests, not tokens. On a Gemini API key, Google caches repeated context by
+itself and bills it at the lower cached rate, which matters when you pay per
+token. To use a key: save it under Settings → Manage CLIs → Accounts & keys →
+**API keys**, set Gemini to run on it, then pick *Use Gemini API key* in
+Gemini's `/auth`. Gemini's `/stats` shows the cached tokens. The Gemini card in
+Manage CLIs says the same under *More* → *Options*.
+
 ## First use
 
 - The tab starts in the project folder. Gemini reads the project's `AGENTS.md`

@@ -224,6 +224,11 @@ pub struct PromptLink {
     /// Only an `after` edge has a delivery to put them behind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preface: Vec<String>,
+    /// An `after` edge held back by Pause: its source finishing queues nothing
+    /// until the flag is cleared. Additive — a file written before it loads as
+    /// not paused, and a `false` is never written. Only an `after` edge keeps it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +242,10 @@ pub struct PromptLinkInput {
     pub target: Option<String>,
     #[serde(default)]
     pub preface: Vec<String>,
+    /// The frontend sends it only when true: an older backend, which denies
+    /// unknown fields, must still accept an ordinary link.
+    #[serde(default)]
+    pub paused: bool,
 }
 
 fn agent_prompts_version() -> u8 {

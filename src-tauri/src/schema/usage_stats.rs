@@ -109,6 +109,15 @@ pub mod metric {
     pub const TOKENS_OUT: &str = "tokens.out";
     /// A total with no split — only Codex's SQLite fallback reports one.
     pub const TOKENS_TOTAL: &str = "tokens.total";
+    /// Details of the split above, never added to it: the cache writes kept
+    /// 5 minutes and 1 hour (together `TOKENS_CACHE_W`, for a CLI that says
+    /// which), and the part of each split kind its subagents used.
+    pub const TOKENS_CACHE_W5M: &str = "tokens.cache_w5m";
+    pub const TOKENS_CACHE_W1H: &str = "tokens.cache_w1h";
+    pub const TOKENS_SUB_IN: &str = "tokens.sub_in";
+    pub const TOKENS_SUB_CACHE_W: &str = "tokens.sub_cache_w";
+    pub const TOKENS_SUB_CACHE_R: &str = "tokens.sub_cache_r";
+    pub const TOKENS_SUB_OUT: &str = "tokens.sub_out";
 
     /// Compose a dotted key from a prefix and an open-ended segment, e.g.
     /// `sub(AGENT_PROMPT, "claude")` → `"agent.prompt.claude"`.

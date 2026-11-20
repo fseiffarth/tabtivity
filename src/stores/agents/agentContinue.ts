@@ -29,6 +29,10 @@ export interface ContinueStatus {
   phase: ContinuePhase;
   /** Epoch ms the continue is due at — the rollover plus the settling minute. */
   armedAt?: number;
+  /** Where the armed time came from: the CLI's usage panel, or — for a CLI
+   *  with none, or one that could not be read — a limit notice at the bottom
+   *  of the tab's own screen. */
+  source?: "panel" | "screen";
   /** The meter the rollover was read off ("Current session"). */
   window?: string;
   /** The rollover in the CLI's own words ("6:20pm"), kept so the view can show

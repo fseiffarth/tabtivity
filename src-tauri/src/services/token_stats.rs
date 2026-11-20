@@ -1,9 +1,10 @@
 //! Agent token counts per CLI, model and scope — the `tokens.*` keys of the
-//! usage recap (`docs/done/token_stats_plan.md`).
+//! usage recap (`docs/done/token_stats_plan.md`, `docs/cli_caching_plan.md`).
 //!
 //! **Derived from the CLIs' own records, never counted live.** Every local
 //! agent tab's `$HOME` is an Tabtivity-owned agent home (`services::agent_home`),
-//! and Claude and Codex already write per-message usage there. Reading it at
+//! and Claude, Codex and OpenCode already write per-message usage there
+//! (OpenCode as rows of its `opencode.db`, read through `agent_sqlite`). Reading it at
 //! the source, like the recap's time, network and git numbers, means a crashed
 //! tab, a `/clear` or a resume can never make the counts drift.
 //!
@@ -38,8 +39,9 @@ use serde_json::Value;
 use crate::schema::usage_stats::{metric, Counters, UsageStats};
 use crate::services::agent_home;
 use crate::services::agent_session::clean_model_name;
+use crate::services::agent_sqlite;
 use crate::services::codex_store;
-use crate::services::home_io::{HomeDir, HomeFile};
+use crate::services::home_io::{HomeDir, HomeFile, Meta};
 use crate::storage;
 
 /// File name of the scan cache inside the state dir.
@@ -53,7 +55,10 @@ const CACHE_VERSION: u32 = 1;
 /// "none used".
 pub const CLAUDE: &str = "claude";
 pub const CODEX: &str = "codex";
-pub const SOURCES: [&str; 2] = [CLAUDE, CODEX];
+pub const OPENCODE: &str = "opencode";
+pub const GEMINI: &str = "gemini";
+pub const COPILOT: &str = "copilot";
+pub const SOURCES: [&str; 5] = [CLAUDE, CODEX, OPENCODE, GEMINI, COPILOT];
 
 /// The model a record names when it names none we can use.
 const UNKNOWN_MODEL: &str = "unknown";
@@ -67,6 +72,19 @@ const SPLIT: [&str; 4] = [
     metric::TOKENS_CACHE_W,
     metric::TOKENS_CACHE_R,
     metric::TOKENS_OUT,
+];
+
+/// The cache writes by lifetime, `[5 min, 1 h]` — a detail of
+/// `TOKENS_CACHE_W` for the CLIs that report it (Claude).
+const LIFETIME: [&str; 2] = [metric::TOKENS_CACHE_W5M, metric::TOKENS_CACHE_W1H];
+
+/// What subagents used, in [`SPLIT`] order — a detail of the split, filed as
+/// well as (not instead of) the split kinds.
+const SUB: [&str; 4] = [
+    metric::TOKENS_SUB_IN,
+    metric::TOKENS_SUB_CACHE_W,
+    metric::TOKENS_SUB_CACHE_R,
+    metric::TOKENS_SUB_OUT,
 ];
 
 /// One message never legitimately carries more than this per field; a bigger
@@ -136,7 +154,10 @@ pub fn parse_token_key(key: &str) -> Option<(&str, &str, &str)> {
         return None;
     }
     let prefix = &key[..ns.len() + 1 + kind.len()];
-    let known = SPLIT.contains(&prefix) || prefix == metric::TOKENS_TOTAL;
+    let known = SPLIT.contains(&prefix)
+        || LIFETIME.contains(&prefix)
+        || SUB.contains(&prefix)
+        || prefix == metric::TOKENS_TOTAL;
     known.then_some((prefix, cli, model))
 }
 
@@ -152,6 +173,12 @@ enum Kind {
     /// One Codex thread counted from `threads.tokens_used` because it has no
     /// rollout.
     CodexDb,
+    /// One message table of a home's OpenCode store.
+    OpenCode,
+    /// A Gemini CLI session file, folded whole whenever it changes.
+    Gemini,
+    /// The usage table of a home's Copilot CLI store.
+    Copilot,
 }
 
 /// A Claude message already counted, kept so its repeat lines add nothing.
@@ -162,6 +189,9 @@ struct Recent {
     model: String,
     /// What has been counted for it so far, in [`SPLIT`] order.
     n: [u64; 4],
+    /// Its cache writes counted so far by lifetime, in [`LIFETIME`] order.
+    #[serde(default)]
+    w: [u64; 2],
 }
 
 /// How far one source has been read, and what it contributed.
@@ -196,6 +226,18 @@ struct Cursor {
     /// Codex SQLite fallback: the `tokens_used` already counted.
     #[serde(default)]
     counted: u64,
+    /// OpenCode: `(time_created, id)` of the last row read, in the order the
+    /// table is read. Copilot: `(id, "")`.
+    #[serde(default)]
+    mark: Option<(i64, String)>,
+    /// OpenCode: messages still streaming when read (`id` → `time_created`),
+    /// looked up again by id until they finish.
+    #[serde(default)]
+    pending: BTreeMap<String, i64>,
+    /// Claude: the contribution carries the cache-lifetime and subagent
+    /// details. A cursor from before them is read again from the start once.
+    #[serde(default)]
+    detail: bool,
     /// This source's share of the buckets, filed under `scope`.
     #[serde(default)]
     contribution: UsageStats,
@@ -215,6 +257,9 @@ impl Cursor {
             model: None,
             meta_model: None,
             counted: 0,
+            mark: None,
+            pending: BTreeMap::new(),
+            detail: true,
             contribution: UsageStats::default(),
         }
     }
@@ -367,7 +412,7 @@ fn dedupe_key(id: Option<&str>, request: Option<&str>) -> Option<String> {
 /// `output_tokens` can still grow across those lines (the first is written
 /// mid-stream — 1 in 30 duplicates on live transcripts), so each field counts
 /// the largest value seen for the message, not the first and not the sum.
-fn claude_line(cursor: &mut Cursor, cutoff_ms: Option<i64>, now_ms: i64, line: &[u8]) {
+fn claude_line(cursor: &mut Cursor, cutoff_ms: Option<i64>, now_ms: i64, sub: bool, line: &[u8]) {
     if !contains(line, b"\"usage\"") {
         return;
     }
@@ -395,29 +440,55 @@ fn claude_line(cursor: &mut Cursor, cutoff_ms: Option<i64>, now_ms: i64, line: &
         count(usage.get("cache_read_input_tokens")),
         count(usage.get("output_tokens")),
     ];
+    let lifetimes = usage.get("cache_creation");
+    let w = [
+        count(lifetimes.and_then(|c| c.get("ephemeral_5m_input_tokens"))),
+        count(lifetimes.and_then(|c| c.get("ephemeral_1h_input_tokens"))),
+    ];
     let key = dedupe_key(message.id.as_deref(), record.request_id.as_deref());
     if let Some(seen) = key
         .as_ref()
         .and_then(|key| cursor.recent.iter_mut().find(|r| &r.key == key))
     {
-        for ((prefix, new), old) in SPLIT.iter().zip(n).zip(seen.n.iter_mut()) {
-            if new > *old {
-                let delta = new - *old;
-                *old = new;
-                let k = token_key(prefix, CLAUDE, &seen.model);
-                cursor.contribution.add(&cursor.scope, &seen.hour, &k, delta);
-            }
+        let grow = |new: u64, old: &mut u64| {
+            let delta = new.saturating_sub(*old);
+            *old = (*old).max(new);
+            delta
+        };
+        let mut dn = [0; 4];
+        for ((d, new), old) in dn.iter_mut().zip(n).zip(seen.n.iter_mut()) {
+            *d = grow(new, old);
         }
+        let mut dw = [0; 2];
+        for ((d, new), old) in dw.iter_mut().zip(w).zip(seen.w.iter_mut()) {
+            *d = grow(new, old);
+        }
+        let (hour, model) = (seen.hour.clone(), seen.model.clone());
+        claude_add(cursor, &hour, &model, dn, dw, sub);
         return;
     }
     let model = model_or_unknown(raw_model);
-    for (prefix, value) in SPLIT.iter().zip(n) {
-        cursor.add(&hour, prefix, CLAUDE, &model, value);
-    }
+    claude_add(cursor, &hour, &model, n, w, sub);
     if let Some(key) = key {
-        cursor.recent.push_back(Recent { key, hour, model, n });
+        cursor.recent.push_back(Recent { key, hour, model, n, w });
         while cursor.recent.len() > DEDUPE_WINDOW {
             cursor.recent.pop_front();
+        }
+    }
+}
+
+/// File one Claude message's counts: the split, its cache writes by lifetime,
+/// and — from a subagent's transcript — the split again as the subagents' part.
+fn claude_add(cursor: &mut Cursor, hour: &str, model: &str, n: [u64; 4], w: [u64; 2], sub: bool) {
+    for (prefix, value) in SPLIT.iter().zip(n) {
+        cursor.add(hour, prefix, CLAUDE, model, value);
+    }
+    for (prefix, value) in LIFETIME.iter().zip(w) {
+        cursor.add(hour, prefix, CLAUDE, model, value);
+    }
+    if sub {
+        for (prefix, value) in SUB.iter().zip(n) {
+            cursor.add(hour, prefix, CLAUDE, model, value);
         }
     }
 }
@@ -783,6 +854,394 @@ fn codex_db_threads(db: &Path) -> Option<Vec<DbThread>> {
     )
 }
 
+// ── OpenCode ───────────────────────────────────────────────────────────────
+
+/// OpenCode's store below its home, as `opencode_store` reads it.
+const OPENCODE_DB: &str = ".local/share/opencode/opencode.db";
+/// Rows per query, and the most read per table in one scan (past it the scan
+/// is partial and the next one carries on from the mark).
+const OPENCODE_BATCH: i64 = 5_000;
+const MAX_OPENCODE_ROWS: i64 = 50_000;
+/// At most this many unfinished messages are remembered per table; one past
+/// it is dropped (never counted, never counted twice).
+const MAX_PENDING: usize = 256;
+/// An unfinished message this old is given up on: a turn OpenCode never
+/// closed.
+const PENDING_MAX_AGE_MS: i64 = 7 * 86_400_000;
+/// Rows younger than this are left for a later scan. OpenCode stamps a row as
+/// it inserts it, but two OpenCodes writing one store can commit a few seconds
+/// out of stamp order; a mark that ran ahead of a row not yet committed would
+/// skip it for good.
+const OPENCODE_SETTLE_MS: i64 = 60_000;
+
+/// One OpenCode message table. Both formats keep the same `tokens` object
+/// (`input` without the cache, `output` without `reasoning`) on an assistant
+/// message, finished once `time.completed` is set.
+struct OpenCodeTable {
+    /// Cache-key suffix.
+    tag: &'static str,
+    table: &'static str,
+    /// SQL that is true for an assistant message.
+    assistant: &'static str,
+    /// JSON path of the model id in `data`.
+    model: &'static str,
+}
+
+const OPENCODE_TABLES: [OpenCodeTable; 2] = [
+    // OpenCode 2: the kind is a column.
+    OpenCodeTable {
+        tag: "v2",
+        table: "session_message",
+        assistant: "type = 'assistant'",
+        model: "$.model.id",
+    },
+    // OpenCode 1: the role is inside `data`.
+    OpenCodeTable {
+        tag: "v1",
+        table: "message",
+        assistant: "json_valid(data) AND json_extract(data, '$.role') = 'assistant'",
+        model: "$.modelID",
+    },
+];
+
+fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
+    conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(()))
+        .is_ok()
+}
+
+/// The columns [`OpenCodeRow`] reads, from the assistant rows of `table` that
+/// match `filter`. Rows whose id or stamp has another SQL type, or an id longer
+/// than a cache key may be, are never returned; malformed JSON reads as null.
+fn opencode_sql(table: &OpenCodeTable, filter: &str) -> String {
+    let field = |path: &str| format!("CASE WHEN json_valid(data) THEN json_extract(data, '{path}') END");
+    format!(
+        "SELECT id, time_created, {}, {}, {}, {}, {}, {}, {} FROM {} \
+         WHERE {} AND typeof(id) = 'text' AND length(id) <= {MAX_KEY_CHARS} \
+         AND typeof(time_created) = 'integer' AND {filter}",
+        field("$.time.completed"),
+        field(table.model),
+        field("$.tokens.input"),
+        field("$.tokens.output"),
+        field("$.tokens.reasoning"),
+        field("$.tokens.cache.read"),
+        field("$.tokens.cache.write"),
+        table.table,
+        table.assistant,
+    )
+}
+
+/// One assistant message as the store has it now.
+struct OpenCodeRow {
+    id: String,
+    created: i64,
+    finished: bool,
+    model: Option<String>,
+    /// In [`SPLIT`] order; reasoning is billed as output and counted there.
+    n: [u64; 4],
+}
+
+fn opencode_row(row: &rusqlite::Row) -> rusqlite::Result<OpenCodeRow> {
+    use rusqlite::types::Value as Sql;
+    let value = |i: usize| row.get::<_, Sql>(i);
+    let int = |v: Sql| match v {
+        Sql::Integer(n) => u64::try_from(n).ok().filter(|n| *n <= MAX_PER_MESSAGE).unwrap_or(0),
+        _ => 0,
+    };
+    let id = match value(0)? {
+        Sql::Text(id) => id,
+        _ => String::new(),
+    };
+    let created = match value(1)? {
+        Sql::Integer(n) => n,
+        _ => 0,
+    };
+    let finished = matches!(value(2)?, Sql::Integer(_) | Sql::Real(_));
+    let model = match value(3)? {
+        Sql::Text(model) => Some(model),
+        _ => None,
+    };
+    let (input, output, reasoning) = (int(value(4)?), int(value(5)?), int(value(6)?));
+    let (read, write) = (int(value(7)?), int(value(8)?));
+    Ok(OpenCodeRow {
+        id,
+        created,
+        finished,
+        model,
+        n: [input, write, read, output.saturating_add(reasoning)],
+    })
+}
+
+/// Count `row` if it finished; `false` when it is still streaming.
+fn opencode_count(cursor: &mut Cursor, row: &OpenCodeRow, now_ms: i64) -> bool {
+    if !row.finished {
+        return false;
+    }
+    if let Some((hour, _)) = stamp_ms(row.created, now_ms) {
+        let model = model_or_unknown(row.model.as_deref());
+        for (prefix, n) in SPLIT.iter().zip(row.n) {
+            cursor.add(&hour, prefix, OPENCODE, &model, n);
+        }
+    }
+    true
+}
+
+/// Remember an unfinished message, within the bounds.
+fn opencode_pend(cursor: &mut Cursor, id: String, created: i64, now_ms: i64) {
+    if now_ms.saturating_sub(created) < PENDING_MAX_AGE_MS && cursor.pending.len() < MAX_PENDING {
+        cursor.pending.insert(id, created);
+    }
+}
+
+/// Bring one table's cursor up to date: first the messages that were still
+/// streaming, then every row past the mark in `(time_created, id)` order, up
+/// to [`OPENCODE_SETTLE_MS`] ago. A row stamped in the future is left for
+/// later rather than moving the mark beyond every real one. Returns whether
+/// the table was read to its end.
+fn opencode_table(conn: &rusqlite::Connection, table: &OpenCodeTable, cursor: &mut Cursor, now_ms: i64) -> bool {
+    let pending = std::mem::take(&mut cursor.pending);
+    if !pending.is_empty() {
+        let Ok(mut stmt) = conn.prepare(&opencode_sql(table, "id = ?1")) else {
+            cursor.pending = pending;
+            return false;
+        };
+        for (id, created) in pending {
+            match stmt.query_row([&id], opencode_row) {
+                Ok(row) => {
+                    if !opencode_count(cursor, &row, now_ms) {
+                        opencode_pend(cursor, id, created, now_ms);
+                    }
+                }
+                // Deleted with its session: nothing more to count.
+                Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                Err(_) => opencode_pend(cursor, id, created, now_ms),
+            }
+        }
+    }
+    let sql = opencode_sql(
+        table,
+        "(time_created > ?1 OR (time_created = ?1 AND id > ?2)) AND time_created <= ?3 \
+         ORDER BY time_created, id LIMIT ?4",
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else { return false };
+    let horizon = now_ms.saturating_sub(OPENCODE_SETTLE_MS);
+    let mut read = 0;
+    loop {
+        let (after, after_id) = cursor.mark.clone().unwrap_or((i64::MIN, String::new()));
+        let rows = stmt
+            .query_map(rusqlite::params![after, after_id, horizon, OPENCODE_BATCH], opencode_row)
+            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>());
+        // Interrupted (the deadline) or unreadable: the mark stays put.
+        let Ok(rows) = rows else { return false };
+        let got = rows.len() as i64;
+        for row in rows {
+            if !opencode_count(cursor, &row, now_ms) {
+                opencode_pend(cursor, row.id.clone(), row.created, now_ms);
+            }
+            cursor.mark = Some((row.created, row.id));
+        }
+        read += got;
+        if got < OPENCODE_BATCH {
+            return true;
+        }
+        if read >= MAX_OPENCODE_ROWS {
+            return false;
+        }
+    }
+}
+
+// ── Copilot CLI ────────────────────────────────────────────────────────────
+
+/// Copilot CLI's store below its home, and the table that logs every model
+/// call with its tokens.
+const COPILOT_DB: &str = ".copilot/session-store.db";
+const COPILOT_TABLE: &str = "assistant_usage_events";
+
+/// Count the usage rows past the mark. A row is written once, when its call
+/// is done, under an `AUTOINCREMENT` id, so the id alone is the cursor.
+/// `input_tokens` includes the cache read and write (as the call's billing
+/// detail splits it); `output_tokens` includes reasoning. Returns whether the
+/// table was read to its end.
+fn copilot_table(conn: &rusqlite::Connection, cursor: &mut Cursor, now_ms: i64) -> bool {
+    use rusqlite::types::Value as Sql;
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT id, created_at, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens \
+         FROM assistant_usage_events WHERE id > ?1 ORDER BY id LIMIT ?2",
+    ) else {
+        return false;
+    };
+    let mut read = 0;
+    loop {
+        let after = cursor.mark.as_ref().map_or(0, |(id, _)| *id);
+        let rows = stmt
+            .query_map(rusqlite::params![after, OPENCODE_BATCH], |row| {
+                let value = |i: usize| row.get::<_, Sql>(i);
+                let int = |v: Sql| match v {
+                    Sql::Integer(n) => u64::try_from(n).ok().filter(|n| *n <= MAX_PER_MESSAGE).unwrap_or(0),
+                    _ => 0,
+                };
+                let text = |v: Sql| match v {
+                    Sql::Text(t) => Some(t),
+                    _ => None,
+                };
+                let id = match value(0)? {
+                    Sql::Integer(n) => n,
+                    _ => after,
+                };
+                Ok((
+                    id,
+                    text(value(1)?),
+                    text(value(2)?),
+                    [int(value(3)?), int(value(4)?), int(value(5)?), int(value(6)?)],
+                ))
+            })
+            .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>());
+        let Ok(rows) = rows else { return false };
+        let got = rows.len() as i64;
+        for (id, at, model, [input, output, read_n, write]) in rows {
+            if id <= after {
+                continue;
+            }
+            cursor.mark = Some((id, String::new()));
+            let Some((hour, _)) = at.as_deref().and_then(|t| stamp(t, now_ms)) else { continue };
+            let model = model_or_unknown(model.as_deref());
+            let fresh = input.saturating_sub(read_n).saturating_sub(write);
+            for (prefix, value) in SPLIT.iter().zip([fresh, write, read_n, output]) {
+                cursor.add(&hour, prefix, COPILOT, &model, value);
+            }
+        }
+        read += got;
+        if got < OPENCODE_BATCH {
+            return true;
+        }
+        if read >= MAX_OPENCODE_ROWS {
+            return false;
+        }
+    }
+}
+
+// ── Gemini CLI ─────────────────────────────────────────────────────────────
+
+/// Gemini CLI's per-project folders below its home; each has a `chats`
+/// folder of session files, and subagents a folder per parent session in it.
+const GEMINI_TMP: &str = ".gemini/tmp";
+/// A session file larger than this is not read.
+const GEMINI_MAX_FILE: u64 = 64 << 20;
+
+/// `<home>/.gemini/tmp/<project>/chats/<session>.jsonl`, the subagents'
+/// `chats/<parent>/<id>.jsonl`, and legacy `chats/<session>.json` files that
+/// have no `.jsonl` beside them, home-relative. Gemini migrates a legacy file
+/// on resume by appending its whole content to `<name>.jsonl` and leaves the
+/// `.json` behind: those are returned apart, as superseded, so what they
+/// counted is dropped rather than retired and counted again.
+fn list_gemini(home: &Path, lister: &mut Lister) -> (Vec<String>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut superseded = Vec::new();
+    let Some(tmp) = HomeDir::open_existing(home, GEMINI_TMP) else {
+        return (out, superseded);
+    };
+    for project in tmp.names().into_iter().filter(|n| plain_name(n)) {
+        let chats_rel = format!("{GEMINI_TMP}/{project}/chats");
+        let Some(chats) = HomeDir::open_existing(home, &chats_rel) else { continue };
+        let names: HashSet<String> = chats.names().into_iter().filter(|n| plain_name(n)).collect();
+        let mut sorted: Vec<&String> = names.iter().collect();
+        sorted.sort();
+        for name in sorted {
+            if name.ends_with(".json") && names.contains(&format!("{name}l")) {
+                superseded.push(format!("{chats_rel}/{name}"));
+                continue;
+            }
+            if name.ends_with(".jsonl") || name.ends_with(".json") {
+                if !lister.admit() {
+                    return (out, superseded);
+                }
+                out.push(format!("{chats_rel}/{name}"));
+                continue;
+            }
+            let sub_rel = format!("{chats_rel}/{name}");
+            let Some(sub) = HomeDir::open_existing(home, &sub_rel) else { continue };
+            for agent in sub.names().into_iter().filter(|n| plain_name(n) && n.ends_with(".jsonl")) {
+                if !lister.admit() {
+                    return (out, superseded);
+                }
+                out.push(format!("{sub_rel}/{agent}"));
+            }
+        }
+    }
+    (out, superseded)
+}
+
+/// One Gemini message's tokens in [`SPLIT`] order. `input` is the prompt with
+/// its cached part included; tool-use prompt tokens are fresh input too, and
+/// thoughts are billed as output. Implicit caching has no write.
+fn gemini_tokens(tokens: &Value) -> Option<[u64; 4]> {
+    let fields = tokens.as_object()?;
+    let field = |name: &str| count(fields.get(name));
+    let input = field("input");
+    let cached = field("cached").min(input);
+    Some([
+        (input - cached).saturating_add(field("tool")),
+        0,
+        cached,
+        field("output").saturating_add(field("thoughts")),
+    ])
+}
+
+/// What one session file counts: message id → `(hour, model, tokens)`.
+type GeminiMessages = HashMap<String, (String, String, [u64; 4])>;
+
+/// Fold one message record into `out` when it is a model turn with tokens.
+fn gemini_message(message: &Value, now_ms: i64, out: &mut GeminiMessages) {
+    if message.get("type").and_then(Value::as_str) != Some("gemini") {
+        return;
+    }
+    let Some(id) = message.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let Some(n) = message.get("tokens").and_then(gemini_tokens) else { return };
+    let Some((hour, _)) = message.get("timestamp").and_then(Value::as_str).and_then(|t| stamp(t, now_ms)) else {
+        return;
+    };
+    let model = model_or_unknown(message.get("model").and_then(Value::as_str));
+    out.insert(id.chars().take(MAX_KEY_CHARS).collect(), (hour, model, n));
+}
+
+/// Every counted message of a session file: a legacy JSON object's
+/// `messages`, or the records of a JSONL file (message lines, and the
+/// `messages` a metadata line carries). A rewind or removal does not take a
+/// message back out — its tokens were spent. `None` when the file could not
+/// be read.
+fn gemini_messages(handle: std::fs::File, legacy: bool, len: u64, max_line: usize, now_ms: i64) -> Option<GeminiMessages> {
+    let mut out = GeminiMessages::new();
+    let mut fold = |value: &Value| {
+        let messages = value.get("$set").unwrap_or(value).get("messages").and_then(Value::as_array);
+        for message in messages.into_iter().flatten() {
+            gemini_message(message, now_ms, &mut out);
+        }
+        if value.get("id").is_some() {
+            gemini_message(value, now_ms, &mut out);
+        }
+    };
+    if legacy {
+        let mut text = Vec::new();
+        handle.take(len).read_to_end(&mut text).ok()?;
+        fold(&serde_json::from_slice::<Value>(&text).ok()?);
+    } else {
+        let mut reader = BufReader::new(handle);
+        let mut pos = LinePos { offset: 0, skipping: false };
+        let mut budget = Budget { bytes: len, files: 1 };
+        let mut buf = Vec::new();
+        read_lines(&mut reader, &mut pos, max_line, &mut budget, &mut buf, |line| {
+            if !contains(line, b"\"tokens\"") {
+                return;
+            }
+            if let Ok(value) = serde_json::from_slice::<Value>(line) {
+                fold(&value);
+            }
+        });
+    }
+    Some(out)
+}
+
 // ── The scan ───────────────────────────────────────────────────────────────
 
 /// One home, as the scan sees it.
@@ -822,6 +1281,16 @@ impl Scan<'_> {
             self.file(ctx, &rel, Kind::Codex);
         }
         self.codex_fallback(ctx);
+        self.opencode(ctx);
+        self.copilot(ctx);
+        let (gemini, superseded) = list_gemini(&ctx.dir, &mut self.lister);
+        for rel in superseded {
+            // Its `.jsonl` holds every message it did: counted there.
+            self.cache.files.remove(&format!("{}/{rel}", ctx.name));
+        }
+        for rel in gemini {
+            self.gemini_file(ctx, &rel);
+        }
     }
 
     /// Read what is new in one source file.
@@ -843,7 +1312,9 @@ impl Scan<'_> {
         cursor.adopt_scope(&ctx.scope);
         let replaced = cursor.kind != kind
             || (cursor.ino.is_some() && meta.ino.is_some() && cursor.ino != meta.ino)
-            || meta.len < cursor.offset;
+            || meta.len < cursor.offset
+            // Counted before the lifetime and subagent details existed.
+            || (kind == Kind::Claude && !cursor.detail);
         if replaced {
             // Shorter, or another file under the old name: drop what it
             // contributed and read it again from the start.
@@ -868,9 +1339,11 @@ impl Scan<'_> {
             skipping: cursor.skipping,
         };
         let (max_line, now_ms) = (self.limits.max_line, self.now_ms);
+        // `<slug>/<session>/subagents/agent-<id>.jsonl` (see `list_claude`).
+        let sub = rel.contains("/subagents/");
         let exhausted = match kind {
             Kind::Claude => read_lines(&mut reader, &mut pos, max_line, &mut self.budget, &mut self.buf, |line| {
-                claude_line(cursor, ctx.claude_cutoff_ms, now_ms, line)
+                claude_line(cursor, ctx.claude_cutoff_ms, now_ms, sub, line)
             }),
             Kind::Codex => {
                 // The thread store is opened only when a rollout names no
@@ -889,7 +1362,7 @@ impl Scan<'_> {
                     codex_line(cursor, now_ms, line, &mut db_model)
                 })
             }
-            Kind::CodexDb => false,
+            Kind::CodexDb | Kind::OpenCode | Kind::Gemini | Kind::Copilot => false,
         };
         cursor.offset = pos.offset;
         cursor.skipping = pos.skipping;
@@ -909,14 +1382,7 @@ impl Scan<'_> {
         let Some(rows) = rows else {
             if ctx.codex_db.is_some() {
                 // Locked or reshaped for now: keep what was counted.
-                let kept: Vec<String> = self
-                    .cache
-                    .files
-                    .range(prefix.clone()..)
-                    .take_while(|(key, _)| key.starts_with(&prefix))
-                    .map(|(key, _)| key.clone())
-                    .collect();
-                self.seen.extend(kept);
+                self.keep_seen(&prefix);
             }
             return;
         };
@@ -948,6 +1414,148 @@ impl Scan<'_> {
                 cursor.add(&hour, metric::TOKENS_TOTAL, CODEX, &model, delta);
             }
         }
+    }
+
+    /// The assistant messages of the home's OpenCode store that finished since
+    /// the last scan, one cursor per message table.
+    fn opencode(&mut self, ctx: &HomeCtx) {
+        let tables: Vec<&str> = OPENCODE_TABLES.iter().map(|t| t.table).collect();
+        let Some((conn, meta)) = self.open_store(ctx, OPENCODE_DB, &tables) else { return };
+        let now_ms = self.now_ms;
+        for table in &OPENCODE_TABLES {
+            if !table_exists(&conn, table.table) {
+                continue;
+            }
+            let cursor = self.store_cursor(ctx, OPENCODE_DB, table.tag, Kind::OpenCode, &meta);
+            if !opencode_table(&conn, table, cursor, now_ms) {
+                self.partial = true;
+            }
+        }
+    }
+
+    /// The model calls the home's Copilot CLI logged since the last scan.
+    fn copilot(&mut self, ctx: &HomeCtx) {
+        let Some((conn, meta)) = self.open_store(ctx, COPILOT_DB, &[COPILOT_TABLE]) else { return };
+        if !table_exists(&conn, COPILOT_TABLE) {
+            return;
+        }
+        let now_ms = self.now_ms;
+        let cursor = self.store_cursor(ctx, COPILOT_DB, "usage", Kind::Copilot, &meta);
+        if !copilot_table(&conn, cursor, now_ms) {
+            self.partial = true;
+        }
+    }
+
+    /// A SQLite store an agent keeps at `rel` in the home, opened read-only
+    /// through `agent_sqlite`, with its file's metadata. `None` when there is
+    /// nothing to read now: a store that is gone lets its cursors retire, one
+    /// that is locked or unreadable keeps them.
+    fn open_store(&mut self, ctx: &HomeCtx, rel: &str, tables: &[&str]) -> Option<(rusqlite::Connection, Meta)> {
+        let prefix = format!("{}/{rel}#", ctx.name);
+        // SQLite's NOFOLLOW refuses a link anywhere in the path it is handed,
+        // so the home — Tabtivity's own, where a link in its prefix (macOS's
+        // `/var` → `/private/var` temp dir) is not the agent's doing — is
+        // resolved first, as `HomeFile::open_below` does; below it, a link is
+        // still refused component by component.
+        #[cfg(unix)]
+        let home = std::fs::canonicalize(&ctx.dir).ok()?;
+        #[cfg(not(unix))]
+        let home = ctx.dir.clone();
+        let file = HomeFile::open_existing(&home, rel)?;
+        let meta = match file.lstat() {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(_) => {
+                self.keep_seen(&prefix);
+                return None;
+            }
+        };
+        // Never through a link, not even to a store inside the home.
+        if meta.is_symlink || !meta.is_file {
+            return None;
+        }
+        match agent_sqlite::open_read(&file, agent_sqlite::Limits::STORE, tables) {
+            Some(conn) => Some((conn, meta)),
+            None => {
+                self.keep_seen(&prefix);
+                None
+            }
+        }
+    }
+
+    /// The cursor of one table (`tag`) of the store at `rel`, marked seen,
+    /// filed under the home's scope, and started over when the store file was
+    /// replaced.
+    fn store_cursor(&mut self, ctx: &HomeCtx, rel: &str, tag: &str, kind: Kind, meta: &Meta) -> &mut Cursor {
+        let key = format!("{}/{rel}#{tag}", ctx.name);
+        self.seen.insert(key.clone());
+        let cursor = self.cache.files.entry(key).or_insert_with(|| Cursor::new(kind, &ctx.scope));
+        cursor.adopt_scope(&ctx.scope);
+        let replaced = cursor.kind != kind || (cursor.ino.is_some() && meta.ino.is_some() && cursor.ino != meta.ino);
+        if replaced {
+            *cursor = Cursor::new(kind, &ctx.scope);
+        }
+        cursor.ino = meta.ino;
+        cursor
+    }
+
+    /// Re-read one Gemini session file whenever it changed and put what it
+    /// holds in place of what it contributed before. Gemini appends a message
+    /// again in full whenever it changes (its tool calls finish, its tokens
+    /// arrive), possibly far down the file, so the file is folded as a whole:
+    /// each message id counted once, with the tokens of its last record that
+    /// has any. A file only partly readable in this scan's budget is left as
+    /// it was for the next one.
+    fn gemini_file(&mut self, ctx: &HomeCtx, rel: &str) {
+        let key = format!("{}/{rel}", ctx.name);
+        self.seen.insert(key.clone());
+        let Some(file) = HomeFile::open_existing(&ctx.dir, rel) else { return };
+        let Some(meta) = file.metadata() else { return };
+        if meta.is_symlink || !meta.is_file || meta.len > GEMINI_MAX_FILE {
+            return;
+        }
+        let cursor = self
+            .cache
+            .files
+            .entry(key)
+            .or_insert_with(|| Cursor::new(Kind::Gemini, &ctx.scope));
+        cursor.adopt_scope(&ctx.scope);
+        let replaced = cursor.kind != Kind::Gemini || (cursor.ino.is_some() && meta.ino.is_some() && cursor.ino != meta.ino);
+        if !replaced && meta.len == cursor.len {
+            return;
+        }
+        if self.budget.files == 0 || self.budget.bytes < meta.len {
+            self.partial = true;
+            return;
+        }
+        let Some(handle) = file.open_read() else { return };
+        self.budget.files -= 1;
+        self.budget.spend(usize::try_from(meta.len).unwrap_or(usize::MAX));
+        let legacy = rel.ends_with(".json");
+        let Some(messages) = gemini_messages(handle, legacy, meta.len, self.limits.max_line, self.now_ms) else {
+            return;
+        };
+        let mut fresh = Cursor::new(Kind::Gemini, &ctx.scope);
+        for (hour, model, n) in messages.into_values() {
+            for (prefix, value) in SPLIT.iter().zip(n) {
+                fresh.add(&hour, prefix, GEMINI, &model, value);
+            }
+        }
+        fresh.ino = meta.ino;
+        fresh.len = meta.len;
+        *cursor = fresh;
+    }
+
+    /// Count every cached source under `prefix` as still there.
+    fn keep_seen(&mut self, prefix: &str) {
+        let kept: Vec<String> = self
+            .cache
+            .files
+            .range(prefix.to_string()..)
+            .take_while(|(key, _)| key.starts_with(prefix))
+            .map(|(key, _)| key.clone())
+            .collect();
+        self.seen.extend(kept);
     }
 
     /// Move the contribution of every source that is gone into `retired`.
@@ -1697,5 +2305,348 @@ mod tests {
         let stats = run(tmp.path());
         assert_eq!(total(&stats, storage::ASSISTANT_SCOPE, &ck(metric::TOKENS_OUT, OPUS)), 14);
         assert_eq!(total(&stats, storage::ROOT_SCOPE, &ck(metric::TOKENS_OUT, OPUS)), 0);
+    }
+
+    // ── OpenCode ──
+
+    fn ok(prefix: &str, model: &str) -> String {
+        token_key(prefix, OPENCODE, model)
+    }
+
+    fn ms(ts: &str) -> i64 {
+        chrono::DateTime::parse_from_rfc3339(ts).unwrap().timestamp_millis()
+    }
+
+    /// The scope's OpenCode store with both message tables, as OpenCode 2
+    /// leaves a store it migrated from 1.
+    fn oc_store(state: &Path, scope: &str) -> rusqlite::Connection {
+        let db = agent_home::scope_home_in(state, scope).join(OPENCODE_DB);
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, \
+             type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, \
+             time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, \
+             time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// `[input, output, reasoning, cache read, cache write]`.
+    fn oc_tokens(n: [u64; 5]) -> serde_json::Value {
+        json!({"input": n[0], "output": n[1], "reasoning": n[2], "cache": {"read": n[3], "write": n[4]}})
+    }
+
+    fn oc_v2(conn: &rusqlite::Connection, id: &str, kind: &str, at: i64, done: bool, model: &str, n: [u64; 5]) {
+        let completed = if done { json!(at + 500) } else { json!(null) };
+        let data = json!({"model": {"id": model, "providerID": "anthropic"}, "tokens": oc_tokens(n),
+                          "time": {"created": at, "completed": completed}, "content": []});
+        conn.execute(
+            "INSERT OR REPLACE INTO session_message VALUES (?1, 's1', ?2, 1, ?3, ?3, ?4)",
+            rusqlite::params![id, kind, at, data.to_string()],
+        )
+        .unwrap();
+    }
+
+    fn oc_v1(conn: &rusqlite::Connection, id: &str, data: &str, at: i64) {
+        conn.execute(
+            "INSERT OR REPLACE INTO message VALUES (?1, 's0', ?2, ?2, ?3)",
+            rusqlite::params![id, at, data],
+        )
+        .unwrap();
+    }
+
+    const SONNET: &str = "claude-sonnet-5";
+
+    #[test]
+    fn opencode_is_a_source() {
+        assert!(SOURCES.contains(&OPENCODE));
+    }
+
+    #[test]
+    fn opencode_counts_finished_messages_with_reasoning_as_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = oc_store(tmp.path(), "p1");
+        oc_v2(&conn, "m1", "assistant", ms(T1), true, SONNET, [10, 20, 5, 1000, 300]);
+        oc_v2(&conn, "u1", "user", ms(T1), true, SONNET, [999, 999, 999, 999, 999]);
+        oc_v1(
+            &conn,
+            "old1",
+            &json!({"role": "assistant", "modelID": "gpt-6-sol", "tokens": oc_tokens([1, 2, 0, 40, 0]),
+                    "time": {"created": ms(T1), "completed": ms(T1) + 9}})
+            .to_string(),
+            ms(T1),
+        );
+        // Malformed or non-assistant V1 rows are stepped over, not fatal.
+        oc_v1(&conn, "bad", "{not json", ms(T1));
+        oc_v1(&conn, "user", &json!({"role": "user", "tokens": oc_tokens([5; 5])}).to_string(), ms(T1));
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_IN, SONNET)), 10);
+        assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_OUT, SONNET)), 25);
+        assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_CACHE_R, SONNET)), 1000);
+        assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_CACHE_W, SONNET)), 300);
+        assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_CACHE_R, "gpt-6-sol")), 40);
+        assert_eq!(stats.stats.hourly_for("p1")["2026-09-30T10"][&ok(metric::TOKENS_IN, SONNET)], 10);
+        assert!(!stats.partial);
+    }
+
+    #[test]
+    fn opencode_reads_new_rows_once_and_streaming_ones_when_they_finish() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = oc_store(tmp.path(), "p1");
+        oc_v2(&conn, "m1", "assistant", ms(T1), true, SONNET, [1, 10, 0, 0, 0]);
+        oc_v2(&conn, "m2", "assistant", ms(T1) + 1, false, SONNET, [0, 3, 0, 0, 0]);
+        assert_eq!(total(&run(tmp.path()), "p1", &ok(metric::TOKENS_OUT, SONNET)), 10);
+        // m2 finishes with its final count; a later row and one sharing m2's
+        // stamp (after it by id) arrive.
+        oc_v2(&conn, "m2", "assistant", ms(T1) + 1, true, SONNET, [0, 7, 0, 0, 0]);
+        oc_v2(&conn, "m3", "assistant", ms(T2), true, SONNET, [0, 100, 0, 0, 0]);
+        oc_v2(&conn, "m2b", "assistant", ms(T1) + 1, true, SONNET, [0, 1000, 0, 0, 0]);
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_OUT, SONNET)), 1117);
+        // Nothing new: nothing added.
+        assert_eq!(total(&run(tmp.path()), "p1", &ok(metric::TOKENS_OUT, SONNET)), 1117);
+    }
+
+    #[test]
+    fn opencode_row_from_the_future_does_not_hide_later_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = oc_store(tmp.path(), "p1");
+        oc_v2(&conn, "future", "assistant", now() + 10 * 86_400_000, true, SONNET, [0, 50, 0, 0, 0]);
+        oc_v2(&conn, "m1", "assistant", ms(T1), true, SONNET, [0, 10, 0, 0, 0]);
+        assert_eq!(total(&run(tmp.path()), "p1", &ok(metric::TOKENS_OUT, SONNET)), 10);
+        oc_v2(&conn, "m2", "assistant", ms(T2), true, SONNET, [0, 5, 0, 0, 0]);
+        assert_eq!(total(&run(tmp.path()), "p1", &ok(metric::TOKENS_OUT, SONNET)), 15);
+    }
+
+    #[test]
+    fn opencode_rows_are_read_once_settled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = oc_store(tmp.path(), "p1");
+        oc_v2(&conn, "m1", "assistant", now() - 1000, true, SONNET, [0, 10, 0, 0, 0]);
+        let at = |t: i64| scan_with(tmp.path(), &scopes(), Limits::default(), t);
+        assert_eq!(total(&at(now()), "p1", &ok(metric::TOKENS_OUT, SONNET)), 0);
+        assert_eq!(total(&at(now() + OPENCODE_SETTLE_MS), "p1", &ok(metric::TOKENS_OUT, SONNET)), 10);
+    }
+
+    #[test]
+    fn opencode_history_outlives_its_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = oc_store(tmp.path(), "p1");
+        oc_v2(&conn, "m1", "assistant", ms(T1), true, SONNET, [0, 10, 0, 0, 0]);
+        assert_eq!(total(&run(tmp.path()), "p1", &ok(metric::TOKENS_OUT, SONNET)), 10);
+        drop(conn);
+        std::fs::remove_file(agent_home::scope_home_in(tmp.path(), "p1").join(OPENCODE_DB)).unwrap();
+        assert_eq!(total(&run(tmp.path()), "p1", &ok(metric::TOKENS_OUT, SONNET)), 10);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opencode_store_behind_a_link_is_not_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        let conn = oc_store(&elsewhere, "p1");
+        oc_v2(&conn, "m1", "assistant", ms(T1), true, SONNET, [0, 10, 0, 0, 0]);
+        let link = agent_home::scope_home_in(tmp.path(), "p1").join(OPENCODE_DB);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(agent_home::scope_home_in(&elsewhere, "p1").join(OPENCODE_DB), &link).unwrap();
+        assert_eq!(total(&run(tmp.path()), "p1", &ok(metric::TOKENS_OUT, SONNET)), 0);
+    }
+
+    // ── Gemini CLI ──
+
+    fn gk(prefix: &str, model: &str) -> String {
+        token_key(prefix, GEMINI, model)
+    }
+
+    const FLASH: &str = "gemini-3.8-flash";
+
+    fn gemini_path(state: &Path, scope: &str, rel: &str) -> PathBuf {
+        agent_home::scope_home_in(state, scope).join(".gemini/tmp/proj/chats").join(rel)
+    }
+
+    /// `[input, cached, tool, output, thoughts]`.
+    fn gemini_msg(id: &str, ts: &str, n: Option<[u64; 5]>) -> serde_json::Value {
+        let mut message = json!({"id": id, "type": "gemini", "timestamp": ts, "model": FLASH, "content": "hi"});
+        if let Some(n) = n {
+            message["tokens"] = json!({"input": n[0], "cached": n[1], "tool": n[2], "output": n[3], "thoughts": n[4],
+                                       "total": n[0] + n[2] + n[3] + n[4]});
+        }
+        message
+    }
+
+    fn line(value: serde_json::Value) -> String {
+        format!("{value}\n")
+    }
+
+    #[test]
+    fn gemini_counts_each_message_once_at_its_last_tokens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = gemini_path(tmp.path(), "p1", "session-2026-09-30T10-15-abcd1234.jsonl");
+        write(
+            &path,
+            &[
+                line(json!({"sessionId": "abcd1234", "projectHash": "h", "startTime": T1})),
+                line(json!({"id": "u1", "type": "user", "timestamp": T1, "content": "go",
+                            "tokens": {"input": 999}})),
+                line(gemini_msg("g1", T1, None)),
+                line(gemini_msg("g1", T1, Some([1000, 800, 5, 20, 10]))),
+                // Rewritten when its tool calls finish: the same message.
+                line(gemini_msg("g1", T1, Some([1000, 800, 5, 20, 10]))),
+                line(json!({"$rewindTo": "g1"})),
+                line(gemini_msg("g2", T2, Some([2000, 1500, 0, 30, 0]))),
+            ],
+        );
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &gk(metric::TOKENS_IN, FLASH)), 205 + 500);
+        assert_eq!(total(&stats, "p1", &gk(metric::TOKENS_CACHE_R, FLASH)), 2300);
+        assert_eq!(total(&stats, "p1", &gk(metric::TOKENS_CACHE_W, FLASH)), 0);
+        assert_eq!(total(&stats, "p1", &gk(metric::TOKENS_OUT, FLASH)), 60);
+        assert_eq!(stats.stats.hourly_for("p1")["2026-09-30T11"][&gk(metric::TOKENS_OUT, FLASH)], 30);
+        // A new message: the file is folded again, nothing counted twice.
+        append(&path, &[line(gemini_msg("g3", T2, Some([10, 0, 0, 1, 0])))]);
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &gk(metric::TOKENS_OUT, FLASH)), 61);
+        assert_eq!(total(&stats, "p1", &gk(metric::TOKENS_CACHE_R, FLASH)), 2300);
+    }
+
+    #[test]
+    fn gemini_legacy_json_counts_unless_migrated_and_subagents_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = json!({"sessionId": "s", "messages": [gemini_msg("a", T1, Some([100, 0, 0, 7, 0]))]});
+        std::fs::create_dir_all(gemini_path(tmp.path(), "p1", "")).unwrap();
+        std::fs::write(gemini_path(tmp.path(), "p1", "session-old.json"), legacy.to_string()).unwrap();
+        assert_eq!(total(&run(tmp.path()), "p1", &gk(metric::TOKENS_OUT, FLASH)), 7);
+
+        // Resumed: Gemini appends the old conversation to `<name>.jsonl`.
+        write(
+            &gemini_path(tmp.path(), "p1", "session-old.jsonl"),
+            &[line(json!({"$set": {"sessionId": "s", "messages": [gemini_msg("a", T1, Some([100, 0, 0, 7, 0]))]}}))],
+        );
+        write(
+            &gemini_path(tmp.path(), "p1", "abcd1234/sub-1.jsonl"),
+            &[line(gemini_msg("x", T1, Some([50, 0, 0, 3, 0])))],
+        );
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &gk(metric::TOKENS_OUT, FLASH)), 10);
+        assert_eq!(total(&stats, "p1", &gk(metric::TOKENS_IN, FLASH)), 150);
+    }
+
+    #[test]
+    fn gemini_and_copilot_are_sources() {
+        assert!(SOURCES.contains(&GEMINI) && SOURCES.contains(&COPILOT));
+    }
+
+    // ── Copilot CLI ──
+
+    fn copilot_store(state: &Path, scope: &str) -> rusqlite::Connection {
+        let db = agent_home::scope_home_in(state, scope).join(COPILOT_DB);
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS assistant_usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, \
+             session_id TEXT NOT NULL, turn_index INTEGER, model TEXT NOT NULL, input_tokens INTEGER, \
+             output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER, \
+             reasoning_tokens INTEGER, created_at TEXT)",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// `[input (cache included), output, cache read, cache write]`.
+    fn copilot_row(conn: &rusqlite::Connection, model: &str, ts: &str, n: [i64; 4]) {
+        conn.execute(
+            "INSERT INTO assistant_usage_events (session_id, turn_index, model, input_tokens, output_tokens, \
+             cache_read_tokens, cache_write_tokens, reasoning_tokens, created_at) \
+             VALUES ('s', 0, ?1, ?2, ?3, ?4, ?5, 0, ?6)",
+            rusqlite::params![model, n[0], n[1], n[2], n[3], ts],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn copilot_counts_each_call_once_with_the_cache_taken_out_of_input() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = copilot_store(tmp.path(), "p1");
+        let model = "gpt-5.6-terra";
+        let key = |prefix: &str| token_key(prefix, COPILOT, model);
+        copilot_row(&conn, model, T1, [17790, 71, 0, 17787]);
+        copilot_row(&conn, model, T1, [17939, 16, 17787, 149]);
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &key(metric::TOKENS_IN)), 6);
+        assert_eq!(total(&stats, "p1", &key(metric::TOKENS_CACHE_W)), 17936);
+        assert_eq!(total(&stats, "p1", &key(metric::TOKENS_CACHE_R)), 17787);
+        assert_eq!(total(&stats, "p1", &key(metric::TOKENS_OUT)), 87);
+        copilot_row(&conn, model, T2, [100, 4, 0, 0]);
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &key(metric::TOKENS_OUT)), 91);
+        assert_eq!(total(&stats, "p1", &key(metric::TOKENS_IN)), 106);
+    }
+
+    // ── Claude details ──
+
+    /// A Claude line whose cache writes say their lifetime, `[5 min, 1 h]`.
+    fn claude_w(id: &str, req: &str, ts: &str, n: [u64; 4], w: [u64; 2]) -> String {
+        let mut record: serde_json::Value = serde_json::from_str(claude(id, req, OPUS, ts, n).trim()).unwrap();
+        record["message"]["usage"]["cache_creation"] =
+            json!({"ephemeral_5m_input_tokens": w[0], "ephemeral_1h_input_tokens": w[1]});
+        format!("{record}\n")
+    }
+
+    #[test]
+    fn claude_files_cache_lifetimes_and_the_subagents_part() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &claude_path(tmp.path(), "p1", "s.jsonl"),
+            &[
+                claude_w("m1", "r1", T1, [2, 300, 1000, 5], [0, 100]),
+                // The same message again with its writes complete.
+                claude_w("m1", "r1", T1, [2, 300, 1000, 9], [0, 300]),
+            ],
+        );
+        write(
+            &claude_path(tmp.path(), "p1", "s/subagents/agent-a1.jsonl"),
+            &[claude_w("m2", "r2", T1, [1, 50, 400, 7], [50, 0])],
+        );
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_CACHE_W, OPUS)), 350);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_CACHE_W1H, OPUS)), 300);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_CACHE_W5M, OPUS)), 50);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_OUT, OPUS)), 16);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_SUB_IN, OPUS)), 1);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_SUB_CACHE_W, OPUS)), 50);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_SUB_CACHE_R, OPUS)), 400);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_SUB_OUT, OPUS)), 7);
+    }
+
+    #[test]
+    fn claude_cursor_from_before_the_details_is_read_again_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&claude_path(tmp.path(), "p1", "s.jsonl"), &[claude_w("m1", "r1", T1, [2, 300, 0, 5], [0, 300])]);
+        run(tmp.path());
+        // Make the cache look like an older build's: no `detail`, no details.
+        let path = tmp.path().join(CACHE_FILE);
+        let mut cache: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for cursor in cache["files"].as_object_mut().unwrap().values_mut() {
+            cursor.as_object_mut().unwrap().remove("detail");
+            let text = cursor["contribution"].to_string().replace("tokens.cache_w1h", "tokens.cache_w1h_gone");
+            cursor["contribution"] = serde_json::from_str(&text).unwrap();
+        }
+        std::fs::write(&path, cache.to_string()).unwrap();
+        let stats = run(tmp.path());
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_CACHE_W, OPUS)), 300);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_CACHE_W1H, OPUS)), 300);
+        assert_eq!(total(&stats, "p1", &ck(metric::TOKENS_OUT, OPUS)), 5);
+        // Read once: the next scan adds nothing.
+        assert_eq!(total(&run(tmp.path()), "p1", &ck(metric::TOKENS_OUT, OPUS)), 5);
+    }
+
+    #[test]
+    fn detail_keys_parse() {
+        let key = ck(metric::TOKENS_SUB_CACHE_R, "claude-opus-4.5");
+        assert_eq!(parse_token_key(&key), Some((metric::TOKENS_SUB_CACHE_R, CLAUDE, "claude-opus-4.5")));
+        assert!(parse_token_key(&ck(metric::TOKENS_CACHE_W5M, OPUS)).is_some());
     }
 }

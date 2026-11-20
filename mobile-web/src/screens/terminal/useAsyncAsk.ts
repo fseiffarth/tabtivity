@@ -11,7 +11,7 @@ import { type SelectOption, type SelectPrompt } from "../../terminal/selectPromp
 import { MODEL_PICKER_WAIT } from "./terminalShared";
 
 /** shift+← — Codex opens the oldest queued question. */
-const OPEN_QUEUED_QUESTION = "\u001b[1;2D";
+export const OPEN_QUEUED_QUESTION = "\u001b[1;2D";
 
 /** The row a tap answers with, while Codex's picker is coming up. */
 export type AsyncAskSending = { key: string; question: number; row: number; asked: string };

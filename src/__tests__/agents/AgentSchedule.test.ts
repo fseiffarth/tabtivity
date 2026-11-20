@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   latestScheduleOccurrence,
   localWallClock,
@@ -10,6 +10,26 @@ import {
   upcomingSchedules,
   type ScheduledAgentPrompt,
 } from "../../lib/agents/agentSchedule";
+
+// The DST case needs Europe/Berlin. The zone is set for this file only (vitest
+// forks a process per file and Node re-reads `TZ` on assignment), the same way
+// `AgentPromptTimelineDst.test.ts` does it. Windows does not honour a runtime
+// `TZ` everywhere, so there, and only there, the DST case is skipped.
+const { process } = globalThis as unknown as {
+  process: { env: Record<string, string | undefined>; platform: string };
+};
+const previousZone = process.env.TZ;
+process.env.TZ = "Europe/Berlin";
+const zoneApplied = new Date(2026, 2, 29, 12).getTimezoneOffset() === -120;
+const unsupported = !zoneApplied && process.platform === "win32";
+if (unsupported) {
+  console.warn("AgentSchedule: this platform ignores a runtime TZ, so the Europe/Berlin DST case is skipped");
+}
+
+afterAll(() => {
+  if (previousZone === undefined) delete process.env.TZ;
+  else process.env.TZ = previousZone;
+});
 
 function prompt(rule: ScheduledAgentPrompt["rule"], last?: ScheduledAgentPrompt["last"]): ScheduledAgentPrompt {
   return { id: "schedule-1", enabled: true, message: "Continue", rule, last };
@@ -53,13 +73,16 @@ describe("per-tab agent schedules", () => {
     expect(scheduleVerdict(schedule, new Date(2026, 8, 1, 9, 30)).kind).toBe("none");
   });
 
-  it("rejects calendar-normalized wall-clock values, including DST gaps where present", () => {
+  it("rejects a calendar-normalized wall-clock value", () => {
     expect(localWallClock("2026-02-30T10:00")).toBeNull();
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (zone === "Europe/Berlin") {
-      expect(localWallClock("2026-03-29T02:30")).toBeNull();
-      expect(localWallClock("2026-10-25T02:30")).not.toBeNull();
-    }
+  });
+
+  it.skipIf(unsupported)("rejects a wall-clock time inside the spring-forward gap, keeps the repeated hour (Europe/Berlin)", () => {
+    // Canary: the zone really applied, so the gap below exists.
+    expect(new Date(2026, 2, 28, 12).getTimezoneOffset()).toBe(-60);
+    expect(new Date(2026, 2, 29, 12).getTimezoneOffset()).toBe(-120);
+    expect(localWallClock("2026-03-29T02:30")).toBeNull();
+    expect(localWallClock("2026-10-25T02:30")).not.toBeNull();
   });
 });
 

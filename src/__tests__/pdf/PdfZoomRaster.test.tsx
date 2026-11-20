@@ -234,16 +234,26 @@ describe("Ctrl+wheel zoom", () => {
 
   it("re-arms the commit on every tick, so a slow gesture still renders once", async () => {
     await mounted();
-    for (let i = 0; i < 3; i++) {
-      act(() => tick());
-      await sleep(PDF_ZOOM_COMMIT_MS / 2);
+    // Fake clock from here on (the commit timer is only armed by the ticks),
+    // so the half-window gaps are exact rather than racing real sleeps.
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 3; i++) {
+        act(() => tick());
+        await act(() => vi.advanceTimersByTimeAsync(PDF_ZOOM_COMMIT_MS / 2));
+      }
+      // Each gap was shorter than the window, so no commit has fired yet.
+      expect(io.renders).toBe(2);
+      expect(scaleWrites).toEqual([]);
+      await act(() => vi.advanceTimersByTimeAsync(PDF_ZOOM_COMMIT_MS * 2));
+      expect(io.renders).toBe(4);
+      await act(() => vi.advanceTimersByTimeAsync(PDF_ZOOM_COMMIT_MS));
+      expect(io.renders).toBe(4);
+      expect(scaleWrites).toHaveLength(1);
+      expect(scaleWrites[0]).toBeCloseTo(1.2 * 1.2 ** 3, 6);
+    } finally {
+      vi.useRealTimers();
     }
-    expect(io.renders).toBe(2);
-    await waitFor(() => expect(io.renders).toBe(4), { timeout: PDF_ZOOM_COMMIT_MS * 10 });
-    await sleep(PDF_ZOOM_COMMIT_MS);
-    expect(io.renders).toBe(4);
-    expect(scaleWrites).toHaveLength(1);
-    expect(scaleWrites[0]).toBeCloseTo(1.2 * 1.2 ** 3, 6);
   });
 
   it("lands where the preview showed: the point under the cursor, on ITS page, stays put", async () => {

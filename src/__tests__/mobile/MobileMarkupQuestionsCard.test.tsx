@@ -165,13 +165,9 @@ describe("sealed frame · findText", () => {
       { type: "found", id: 3, page: 1, rects: [{ ...rect, x: Number.NaN }] },
       { type: "found", id: 3, page: 1, rects: [{ ...rect, x: "10" }] },
       { type: "found", id: 3, page: 1, rects: Array.from({ length: MAX_FOUND_RECTS + 1 }, () => rect) },
-      { type: "found", id: 3, page: 1, rects: [rect], html: "<b>" },
-    ]) {
-      const accepted = acceptFrameMessage(from(bad), frame, 3);
-      // An extra key is dropped, never passed on.
-      if (accepted) expect(Object.keys(accepted).sort()).toEqual(["id", "page", "rects", "type"]);
-      else expect(accepted).toBeNull();
-    }
+    ]) expect(acceptFrameMessage(from(bad), frame, 3)).toBeNull();
+    // An extra key is accepted but dropped, never passed on.
+    expect(acceptFrameMessage(from({ type: "found", id: 3, page: 1, rects: [rect], html: "<b>" }), frame, 3)).toEqual({ type: "found", id: 3, page: 1, rects: [rect] });
   });
 });
 

@@ -152,7 +152,7 @@ describe("the hands-free send guard", () => {
 
   it("goes quiet on reset", () => {
     const s = setup();
-    s.hear("deploy it go on");
+    s.hear("deploy it go Tabby");
     s.guard.reset();
     s.advance(10_000);
     expect(s.log).toEqual([]);

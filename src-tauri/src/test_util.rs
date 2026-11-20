@@ -30,6 +30,22 @@ pub(crate) fn wait_until(within: Duration, mut cond: impl FnMut() -> bool) -> bo
     }
 }
 
+/// A test that needs an external tool skips on a box without it, but fails
+/// where the tool is promised: the Linux CI job sets `CI_REQUIRE_TOOLS` to a
+/// comma list of tool keys (`tex,tmux,isoinfo,python3`), and a skip of a
+/// listed key panics instead. Call it at the point of the would-be `return`,
+/// then return: `test_util::skip_or_fail("tmux", "no tmux"); return;`.
+pub(crate) fn skip_or_fail(tool: &str, why: &str) {
+    if tool_required(std::env::var("CI_REQUIRE_TOOLS").ok().as_deref(), tool) {
+        panic!("CI_REQUIRE_TOOLS names {tool}, so this test may not skip: {why}");
+    }
+    eprintln!("{why}: skipped");
+}
+
+fn tool_required(list: Option<&str>, tool: &str) -> bool {
+    list.is_some_and(|list| list.split(',').any(|key| key.trim() == tool))
+}
+
 /// A fresh temp dir and a path to it through a symlink, as macOS's temp dir
 /// always is: hand the test the link and see the code cope with the real path
 /// coming back. Where symlinks cannot be made (Windows without the
@@ -111,6 +127,15 @@ mod tests {
         }));
         assert_eq!(calls, 3);
         assert!(!wait_until(Duration::from_millis(20), || false));
+    }
+
+    #[test]
+    fn only_a_listed_tool_may_not_skip() {
+        assert!(tool_required(Some("tex, tmux"), "tmux"));
+        assert!(tool_required(Some("tex,tmux"), "tex"));
+        assert!(!tool_required(Some("tex,tmux"), "isoinfo"));
+        assert!(!tool_required(Some(""), "tex"));
+        assert!(!tool_required(None, "tex"));
     }
 
     #[test]

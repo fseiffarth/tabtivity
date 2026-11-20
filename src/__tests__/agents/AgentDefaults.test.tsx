@@ -85,13 +85,15 @@ describe("per-CLI startup defaults", () => {
 
   it("reports a failed save and keeps the draft for retry", async () => {
     const update = store();
+    const onSaved = vi.fn();
     update.mockRejectedValueOnce(new Error("disk unavailable"));
-    render(<AgentDefaults agent={agent} />);
+    render(<AgentDefaults agent={agent} onSaved={onSaved} />);
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "my-model" } });
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
     expect((await screen.findByRole("alert")).textContent).toContain("disk unavailable");
     expect(screen.getByRole<HTMLInputElement>("textbox").value).toBe("my-model");
     expect(useSettingsStore.getState().settings?.agent_launch_defaults).toEqual({});
+    expect(onSaved).not.toHaveBeenCalled();
   });
 
   it("does not save option-like model IDs", async () => {
@@ -145,23 +147,26 @@ describe("launch defaults under the Chat view's model list", () => {
   const goose: AgentInfo = { ...agent, id: "goose", bin: "goose", label: "Goose", launch_defaults: { model: false, efforts: [] } };
   const list = () => vi.mocked(invoke).mockImplementation(async (cmd: string) => (cmd === "list_agents" ? [agent, goose] : undefined) as never);
 
-  it("shows this CLI's saved default and saves from the fold without the help text", async () => {
+  it("shows this CLI's saved default and asks the picker to close after saving", async () => {
     list();
     const update = store({ codex: { model: "old", effort: "high" } });
-    render(<ReaderLaunchDefaults cmd="/usr/local/bin/codex.exe" />);
+    const onSaved = vi.fn(() => useSettingsStore.getState().settings?.agent_launch_defaults?.codex);
+    render(<ReaderLaunchDefaults cmd="/usr/local/bin/codex.exe" onSaved={onSaved} />);
     const toggle = await screen.findByRole("button", { name: /Default for new tabs: old · high/ });
     fireEvent.click(toggle);
     expect(screen.queryByText(/Applies to new sessions in every project/)).toBeNull();
     fireEvent.change(screen.getByRole("textbox", { name: "Custom model ID or alias" }), { target: { value: "new" } });
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith({ agent_launch_defaults: { codex: { model: "new", effort: "high" } } }));
+    await waitFor(() => expect(onSaved).toHaveReturnedWith({ model: "new", effort: "high" }));
     expect(await screen.findByRole("button", { name: /Default for new tabs: new · high/ })).toBeTruthy();
   });
 
   it("names the CLI default when nothing is saved, and stays away for a CLI with no startup option", async () => {
     list();
     store();
-    render(<><div data-testid="goose"><ReaderLaunchDefaults cmd="goose" /></div><ReaderLaunchDefaults cmd="codex" /></>);
+    const onSaved = vi.fn();
+    render(<><div data-testid="goose"><ReaderLaunchDefaults cmd="goose" onSaved={onSaved} /></div><ReaderLaunchDefaults cmd="codex" onSaved={onSaved} /></>);
     // Codex's row proves the shared list has come in; Goose's has nothing.
     expect(await screen.findByRole("button", { name: /Default for new tabs: CLI default/ })).toBeTruthy();
     expect(screen.getByTestId("goose").textContent).toBe("");

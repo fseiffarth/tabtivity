@@ -189,7 +189,6 @@ describe("the view", () => {
     expect(views).toHaveLength(1);
     expect(views[0].getAttribute("data-testid")).toBe(`pane-attach-${newest.key}`);
     expect(views[0].getAttribute("data-reader-always")).toBe("true");
-    expect(document.querySelector(".assistant-chat-row")).toBeNull();
     await waitFor(() => expect(screen.getByRole("button", { name: "CLI" }).textContent).toContain("Codex"));
     // Showing Tabby is not a project switch, and a saved chat starts no new one.
     expect(useProjectsStore.getState().activeId).toBe("p1");

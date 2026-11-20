@@ -14,9 +14,11 @@ const ENCODER = new TextEncoder();
  * `stillAsking` reads the pane's live screen (`dialogOnScreen`): given by a
  * caller whose pane is on screen, it keeps the tab's question mark while a
  * dialog stays up after the answer (the next of several questions).
+ * `canWrite` lets a caller recheck the target before each paced press.
  */
-export async function typePaneKeys(ptyId: string, keys: string[], stillAsking?: () => boolean | null): Promise<void> {
+export async function typePaneKeys(ptyId: string, keys: string[], stillAsking?: () => boolean | null, canWrite?: (key: string) => boolean): Promise<void> {
   for (let index = 0; index < keys.length; index += 1) {
+    if (canWrite && !canWrite(keys[index])) throw new Error("The terminal picker changed before the answer was sent");
     const bytes = ENCODER.encode(keys[index]);
     noteUserInput(ptyId, isInterruptInput(keys[index]), { navigate: isDialogNavigationInput(keys[index]), stillAsking });
     noteInputFrom(ptyId, "desktop");

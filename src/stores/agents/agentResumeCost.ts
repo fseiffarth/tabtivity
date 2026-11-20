@@ -46,6 +46,31 @@ export const useAgentResumeCostStore = create<AgentResumeCostStore>((set, get) =
   },
 }));
 
+/** A tab's prompt cache that has run out while it sat idle. */
+export interface ColdCache {
+  secondsIdle: number;
+  ttlSecs: number;
+  contextTokens: number;
+}
+
+/**
+ * Whether the prompt cache the session's newest answer left (its transcript's
+ * `usage.cache`) has expired at `nowMs` — the case Claude's resume figures do
+ * not cover: an open tab left idle past its cache's lifetime, and Codex. The
+ * time comes from the transcript, so a resumed session counts from its last
+ * answer, not from the resume. `null` while the cache still lives or the
+ * transcript does not say.
+ */
+export function coldPromptCache(
+  cache: { lastAtMs: number; ttlSecs: number; contextTokens: number } | undefined,
+  nowMs: number,
+): ColdCache | null {
+  if (!cache || !(cache.ttlSecs > 0) || !(cache.contextTokens > 0)) return null;
+  const secondsIdle = Math.floor((nowMs - cache.lastAtMs) / 1000);
+  if (!(secondsIdle > cache.ttlSecs)) return null;
+  return { secondsIdle, ttlSecs: cache.ttlSecs, contextTokens: cache.contextTokens };
+}
+
 /** `$0.42`, `$12` — the dollar sign and separators of the user's locale. */
 export function formatCacheWriteUsd(usd: number): string {
   return new Intl.NumberFormat(undefined, {

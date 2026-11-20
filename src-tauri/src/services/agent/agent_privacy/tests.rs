@@ -530,6 +530,16 @@ fn body_of<'a>(text: &'a str, signature: &str) -> &'a str {
     &rest[..end]
 }
 
+/// A test-only source file, judged on its path below the scanned root (never
+/// the absolute path, which can sit under a directory with "tests" in its name):
+/// a `tests` directory, or a file named `tests.rs` / `*_tests.rs`.
+fn is_test_source(path: &Path, root: &Path) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let in_tests_dir = rel.parent().is_some_and(|p| p.components().any(|c| c.as_os_str() == "tests"));
+    let stem = rel.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    in_tests_dir || stem == "tests" || stem.ends_with("_tests")
+}
+
 #[test]
 fn every_agent_spawn_site_passes_the_gate() {
     // The one assembly every window and phone spawn runs: the gate is called
@@ -553,13 +563,16 @@ fn every_agent_spawn_site_passes_the_gate() {
     // No other file builds a fence around an agent: a new caller must be added
     // here, deliberately, and reach the gate through the wrapper.
     let mut callers = Vec::new();
-    let mut stack = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned = 0usize;
+    let mut stack = vec![src_root.clone()];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).unwrap().flatten() {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().is_some_and(|e| e == "rs") && !path.to_string_lossy().contains("tests") {
+            } else if path.extension().is_some_and(|e| e == "rs") && !is_test_source(&path, &src_root) {
+                scanned += 1;
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
                 if text.contains("wrap_pty_options_bwrap(") || text.contains("wrap_pty_options_sandbox_exec(") {
                     callers.push(path.file_name().unwrap().to_string_lossy().into_owned());
@@ -567,6 +580,7 @@ fn every_agent_spawn_site_passes_the_gate() {
             }
         }
     }
+    assert!(scanned > 100, "the scan found only {scanned} source files");
     callers.sort();
     assert_eq!(
         callers,

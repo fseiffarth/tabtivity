@@ -189,7 +189,14 @@ fn sh_word(s: &str) -> String {
 /// from the real home's profile (so nvm/pyenv still resolve), and before the
 /// install probe:
 ///
-/// - `HOME` becomes `home` (created if missing; a failure aborts the tab);
+/// - `HOME` becomes `home`, kept private to the login: created if missing
+///   under `umask 077` (in a subshell, so the agent's own umask stays), then
+///   refused unless it is a folder, not a link, and owned by the login (in a
+///   folder others can write, another account could have made it first and
+///   planted hooks or a binary first on `PATH`), then set to mode 700, which
+///   also tightens a home an older build left open. Any failure aborts the
+///   tab. Only the home itself is checked: the agent folder above it is the
+///   user's choice;
 /// - the `XDG_*` bases an environment may pin to the real home are dropped, so
 ///   they cannot pull a CLI back there;
 /// - `.ssh`, `.gitconfig` and `.config/git` of the real home are *linked* in
@@ -205,7 +212,10 @@ pub fn home_prelude(home: &str) -> String {
     let path: String = LAUNCHER_DIRS.iter().map(|d| format!("\"$HOME/{d}\":")).collect();
     format!(
         "__real_home=\"$HOME\"; export HOME={home}; \
-         mkdir -p \"$HOME\" 2>/dev/null || {{ echo '{SLUG}: cannot create the agent folder' \"$HOME\" >&2; exit 1; }}; \
+         if [ -L \"$HOME\" ]; then echo '{SLUG}: the agent folder is a link, not a folder of this login - remove it or choose another agent folder:' \"$HOME\" >&2; exit 1; fi; \
+         (umask 077; mkdir -p \"$HOME\") 2>/dev/null || {{ echo '{SLUG}: cannot create the agent folder' \"$HOME\" >&2; exit 1; }}; \
+         if [ ! -d \"$HOME\" ] || [ -L \"$HOME\" ] || [ ! -O \"$HOME\" ]; then echo '{SLUG}: the agent folder is a link or belongs to another account - remove it or choose another agent folder:' \"$HOME\" >&2; exit 1; fi; \
+         chmod 700 \"$HOME\" 2>/dev/null || {{ echo '{SLUG}: cannot make the agent folder private' \"$HOME\" >&2; exit 1; }}; \
          unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME; \
          for __l in .ssh .gitconfig .config/git; do \
          if [ -e \"$__real_home/$__l\" ] && [ ! -e \"$HOME/$__l\" ] && [ ! -L \"$HOME/$__l\" ]; then \
@@ -252,6 +262,94 @@ mod tests {
         assert!(p.ends_with("\"$PATH\""));
         assert!(p.contains("export PATH=\"$HOME/.local/bin\":"));
         assert!(!p.contains('\n'));
+    }
+
+    /// Threat model gap 122: the home is made private to the login, in a
+    /// subshell so the agent's own umask stays, and refused unless it is a
+    /// folder of this login - before anything is linked into it.
+    #[test]
+    fn the_home_prelude_makes_the_home_private_or_refuses_it() {
+        let p = home_prelude("/scratch/me/h");
+        let create = p.find("(umask 077; mkdir -p \"$HOME\")").expect("created under umask 077 in a subshell");
+        let owned = p.find("[ ! -O \"$HOME\" ]").expect("ownership is checked");
+        let private = p.find("chmod 700 \"$HOME\"").expect("the home is made private");
+        let first_link = p.find("ln -s").expect("links");
+        assert!(create < owned && owned < private && private < first_link, "{p}");
+        assert!(p.contains("[ -L \"$HOME\" ]") && p.contains("[ ! -d \"$HOME\" ]"));
+        // The refusals stop the tab, as a failed mkdir does.
+        assert!(p.matches("exit 1;").count() >= 4, "{p}");
+        assert!(!p.contains("\numask") && !p.contains("; umask"), "the agent's umask must not change: {p}");
+    }
+
+    /// The prelude as `sh` runs it, with `real_home` as the login's home: the
+    /// umask before, then the umask after and `ok` if the prelude let it on.
+    #[cfg(unix)]
+    fn run_prelude(real_home: &std::path::Path, home: &std::path::Path) -> (bool, String) {
+        let script = format!("umask 022; umask; {}; umask; echo ok", home_prelude(home.to_str().unwrap()));
+        let out = std::process::Command::new("sh").arg("-c").arg(script).env("HOME", real_home).output().unwrap();
+        (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    #[cfg(unix)]
+    fn mode(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_home_is_created_private_and_the_agents_umask_stays() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join(".gitconfig"), "[user]\n").unwrap();
+        let home = std::path::PathBuf::from(agent_home_in(tmp.path().join("agents").to_str().unwrap()));
+        let (ok, out) = run_prelude(&real, &home);
+        assert!(ok, "{out}");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "{out}");
+        assert_eq!(lines[0], lines[1], "the prelude changed the agent's umask");
+        assert_eq!(lines[2], "ok");
+        assert_eq!(mode(&home), 0o700);
+        assert!(std::fs::symlink_metadata(home.join(".gitconfig")).unwrap().file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_home_an_older_build_left_open_is_made_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = std::path::PathBuf::from(agent_home_in(tmp.path().to_str().unwrap()));
+        std::fs::create_dir(&home).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (ok, out) = run_prelude(tmp.path(), &home);
+        assert!(ok && out.ends_with("ok\n"), "{out}");
+        assert_eq!(mode(&home), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_home_that_is_a_link_is_refused_and_nothing_lands_behind_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join(".gitconfig"), "[user]\n").unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir(&agents).unwrap();
+        let home = std::path::PathBuf::from(agent_home_in(agents.to_str().unwrap()));
+        std::os::unix::fs::symlink(&elsewhere, &home).unwrap();
+        let (ok, out) = run_prelude(&real, &home);
+        assert!(!ok && !out.contains("ok"), "{out}");
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0, "something was created behind the link");
+        // A link to a folder that does not exist yet is not created either.
+        let missing = tmp.path().join("missing");
+        std::fs::remove_file(&home).unwrap();
+        std::os::unix::fs::symlink(&missing, &home).unwrap();
+        let (ok, out) = run_prelude(&real, &home);
+        assert!(!ok && !out.contains("ok"), "{out}");
+        assert!(!missing.exists(), "the link's target was created");
     }
 
     #[test]

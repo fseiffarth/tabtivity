@@ -295,13 +295,20 @@ struct VadEventPayload {
 struct TextEvent<'a> {
     session: u64,
     segment: u64,
-    /// Empty in a final: the segment was dropped (a phantom, or no speech).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<FinalOutcome>,
     text: &'a str,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+enum FinalOutcome { Transcribed, Filtered, Failed, Incomplete }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StateEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    discarded: Option<bool>,
     session: u64,
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -357,6 +364,7 @@ fn worker<F: TranscriberFactory>(
     cancel: Arc<AtomicBool>,
     jobs: Receiver<Job>,
     done: Sender<Done>,
+    shutdown: Arc<AtomicBool>,
 ) {
     let mut transcriber = match factory.load(&config, cancel.clone()) {
         Ok(t) => {
@@ -372,6 +380,7 @@ fn worker<F: TranscriberFactory>(
         match job {
             Job::Final { segment, audio, echo } => {
                 cancel.store(false, Ordering::SeqCst);
+                if shutdown.load(Ordering::SeqCst) { break }
                 let outcome = if !echo && transcriber.confirm_speech(&audio) {
                     transcriber.transcribe(&audio, false)
                 } else {
@@ -383,6 +392,7 @@ fn worker<F: TranscriberFactory>(
             }
             // A final queued behind this partial already cancelled it. Still
             // answered, or the session would wait for it for ever.
+            Job::Partial { .. } if shutdown.load(Ordering::SeqCst) => break,
             Job::Partial { segment, .. } if cancel.load(Ordering::SeqCst) => {
                 if done.send(Done::Partial { segment, prefix: None, outcome: Err(VoiceError::ModelFailed) }).is_err() {
                     return;
@@ -411,7 +421,7 @@ struct Listener {
     device: Option<VoiceDevice>,
     segment: u64,
     /// Finals queued and not yet answered.
-    pending_finals: usize,
+    pending_finals: Vec<u64>,
     partial_running: bool,
     partial_started: Instant,
     /// No partial before this, and none while one runs.
@@ -441,7 +451,7 @@ impl Listener {
 
     fn state(&self, state: &'static str, reason: Option<VoiceError>) {
         let device = self.device.clone();
-        self.ctx.emit(EV_STATE, StateEvent { session: self.config.session, state, reason, device });
+        self.ctx.emit(EV_STATE, StateEvent { session: self.config.session, state, reason, device, discarded: (state == "stopped" && self.control.aborted()).then_some(true) });
     }
 
     fn queue_final(&mut self, audio: Vec<f32>) {
@@ -455,8 +465,16 @@ impl Listener {
             taken.saturating_sub(silence) < BARGE_IN_MIN_MS * RATE as usize / 1000
         });
         if self.jobs.send(Job::Final { segment: self.segment, audio, echo }).is_ok() {
-            self.pending_finals += 1;
+            self.pending_finals.push(self.segment);
+        } else {
+            self.failed(self.segment, VoiceError::ModelFailed);
         }
+    }
+
+    fn failed(&self, segment: u64, code: VoiceError) {
+        let session = self.config.session;
+        self.to_owner(EV_ERROR, ErrorEvent { session, code });
+        self.to_owner(EV_FINAL, TextEvent { session, segment, text: "", outcome: Some(FinalOutcome::Failed) });
     }
 
     /// Warns once when the mic has delivered only silence for a while, and
@@ -606,23 +624,21 @@ impl Listener {
                 let tail = phantom::keep(&t.text, t.no_speech, prompt);
                 let text = join(&self.committed_text, tail.as_deref());
                 if !text.is_empty() {
-                    self.to_owner(EV_PARTIAL, TextEvent { session, segment, text: &text });
+                    self.to_owner(EV_PARTIAL, TextEvent { session, segment, text: &text, outcome: None });
                 }
             }
             Done::Final { segment, outcome } => {
-                self.pending_finals = self.pending_finals.saturating_sub(1);
-                let text = match outcome {
-                    Ok(t) => phantom::keep(&t.text, t.no_speech, self.config.prompt.as_deref()),
-                    Err(e) => {
-                        if !self.control.aborted() {
-                            self.to_owner(EV_ERROR, ErrorEvent { session, code: e });
-                        }
-                        None
+                let Some(index) = self.pending_finals.iter().position(|id| *id == segment) else { return };
+                self.pending_finals.remove(index);
+                if self.control.aborted() { return }
+                match outcome {
+                    Ok(t) => {
+                        let text = phantom::keep(&t.text, t.no_speech, self.config.prompt.as_deref());
+                        let outcome = if text.is_some() { FinalOutcome::Transcribed } else { FinalOutcome::Filtered };
+                        self.to_owner(EV_FINAL, TextEvent { session, segment, text: text.as_deref().unwrap_or(""), outcome: Some(outcome) });
                     }
-                };
-                // Always a final, empty when dropped: the renderer then knows
-                // the segment has settled.
-                self.to_owner(EV_FINAL, TextEvent { session, segment, text: text.as_deref().unwrap_or("") });
+                    Err(e) => self.failed(segment, e),
+                }
             }
         }
     }
@@ -660,8 +676,14 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
     ctx: CoreCtx,
     config: SessionConfig,
     control: Arc<Control>,
-    mut source: S,
+    source: S,
     factory: F,
+) {
+    run_with_drain_limit(ctx, config, control, source, factory, DRAIN_LIMIT);
+}
+
+fn run_with_drain_limit<S: AudioSource, F: TranscriberFactory>(
+    ctx: CoreCtx, config: SessionConfig, control: Arc<Control>, mut source: S, factory: F, drain_limit: Duration,
 ) {
     let session = config.session;
     // Headset mode opens the mute gate for as long as this session runs.
@@ -678,7 +700,7 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
         jobs: jobs_tx,
         device: None,
         segment: 0,
-        pending_finals: 0,
+        pending_finals: Vec::new(),
         partial_running: false,
         partial_started: Instant::now(),
         next_partial: Instant::now(),
@@ -698,15 +720,18 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
     // The abort switch reaches whisper through `cancel`, checked between its
     // encoder and decoder steps.
     let worker_cancel = cancel.clone();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let worker_shutdown = shutdown.clone();
     let spawned = std::thread::Builder::new()
         .name(format!("voice-stt-{session}"))
-        .spawn(move || worker(factory, config, worker_cancel, jobs_rx, done_tx));
+        .spawn(move || worker(factory, config, worker_cancel, jobs_rx, done_tx, worker_shutdown));
     if spawned.is_err() {
         listener.state("stopped", Some(VoiceError::ModelFailed));
         return;
     }
     let loaded = loop {
         if control.aborted() {
+            shutdown.store(true, Ordering::SeqCst);
             cancel.store(true, Ordering::SeqCst);
             listener.state("stopped", None);
             return;
@@ -741,7 +766,7 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
     }
 
     let mut reason = None;
-    while !control.stopped() {
+    'capture: while !control.stopped() {
         match frames_rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Frames::Audio { samples, after_gap }) => listener.audio(&samples, after_gap),
             Ok(Frames::Failed(e)) => {
@@ -755,33 +780,42 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
                 break;
             }
         }
-        while let Ok(done) = done_rx.try_recv() {
-            listener.done(done);
+        loop {
+            match done_rx.try_recv() {
+                Ok(done) => listener.done(done),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    reason = Some(VoiceError::ModelFailed);
+                    break 'capture;
+                }
+            }
         }
     }
     drop(source);
 
-    if control.aborted() {
-        cancel.store(true, Ordering::SeqCst);
-    } else {
+    if !control.aborted() {
         // What was said before the stop still goes into the draft.
         if !control.paused() {
             if let Some(audio) = listener.vad.flush() {
                 listener.queue_final(audio);
             }
         }
-        let deadline = Instant::now() + DRAIN_LIMIT;
-        while listener.pending_finals > 0 && !control.aborted() && Instant::now() < deadline {
+        let deadline = Instant::now() + drain_limit;
+        while !listener.pending_finals.is_empty() && !control.aborted() && Instant::now() < deadline {
             match done_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(done) => listener.done(done),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
         }
-        if control.aborted() {
-            cancel.store(true, Ordering::SeqCst);
+        if !control.aborted() {
+            for segment in std::mem::take(&mut listener.pending_finals) {
+                listener.to_owner(EV_FINAL, TextEvent { session, segment, text: "", outcome: Some(FinalOutcome::Incomplete) });
+            }
         }
     }
+    shutdown.store(true, Ordering::SeqCst);
+    cancel.store(true, Ordering::SeqCst);
     listener.state("stopped", reason);
 }
 
@@ -1014,7 +1048,7 @@ mod tests {
         assert_eq!(finals.len(), 1);
         assert_eq!(finals[0].client.as_ref().map(ClientId::as_str), Some("main"));
         let payload: serde_json::Value = serde_json::from_str(&finals[0].payload).unwrap();
-        assert_eq!(payload, serde_json::json!({ "session": 7, "segment": 1, "text": "words 1" }));
+        assert_eq!(payload, serde_json::json!({ "session": 7, "segment": 1, "text": "words 1", "outcome": "transcribed" }));
         let vad: Vec<serde_json::Value> =
             all.iter().filter(|e| e.event == EV_VAD).map(|e| serde_json::from_str(&e.payload).unwrap()).collect();
         assert_eq!(vad[0]["state"], "start");
@@ -1253,6 +1287,63 @@ mod tests {
         );
     }
 
+    struct ControlledFinals {
+        results: Receiver<Result<Transcript, VoiceError>>,
+    }
+
+    impl TranscriberFactory for ControlledFinals {
+        type T = Self;
+        fn load(self, _: &SessionConfig, _: Arc<AtomicBool>) -> Result<Self, VoiceError> {
+            Ok(self)
+        }
+    }
+
+    impl Transcriber for ControlledFinals {
+        fn transcribe(&mut self, _: &[f32], partial: bool) -> Result<Transcript, VoiceError> {
+            if partial { return Ok(Transcript { text: String::new(), no_speech: 1.0 }) }
+            self.results.recv().unwrap_or(Err(VoiceError::ModelFailed))
+        }
+    }
+
+    #[test]
+    fn stop_deadline_settles_only_outstanding_finals_before_stopped() {
+        let events = RecordingEvents::new();
+        let control = Arc::new(Control::default());
+        let (send, results) = mpsc::channel();
+        send.send(Ok(Transcript { text: "first".into(), no_speech: 0.0 })).unwrap();
+        let mut audio = speech();
+        audio.extend(speech());
+        let source = FakeSource { audio, gap_at: None, fail_start: None, pace: None };
+        let context = ctx(events.clone());
+        let worker_control = control.clone();
+        let thread = std::thread::spawn(move || run_with_drain_limit(context, config(11), worker_control,
+            source, ControlledFinals { results }, Duration::from_millis(20)));
+        wait_for(&events, EV_FINAL, 1);
+        wait_for(&events, EV_VAD, 4);
+        control.stop();
+        thread.join().unwrap();
+        drop(send);
+        let finals = events.payloads(EV_FINAL);
+        assert_eq!(finals.len(), 2);
+        assert_eq!(finals[0]["text"], "first");
+        assert_eq!(finals[1], serde_json::json!({"session": 11, "segment": 2, "text": "", "outcome": "incomplete"}));
+        assert_eq!(events.take().last().unwrap().event, EV_STATE);
+    }
+
+    #[test]
+    fn decoder_error_identifies_the_segment_and_reports_the_detail_once() {
+        let events = RecordingEvents::new();
+        let (send, results) = mpsc::channel();
+        send.send(Err(VoiceError::ModelFailed)).unwrap();
+        let source = FakeSource { audio: speech(), gap_at: None, fail_start: None, pace: None };
+        let (control, worker) = spawn(&events, config(11), source, ControlledFinals { results });
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        worker.join().unwrap();
+        assert_eq!(events.payloads(EV_ERROR).len(), 1);
+        assert_eq!(events.payloads(EV_FINAL)[0], serde_json::json!({"session": 11, "segment": 1, "text": "", "outcome": "failed"}));
+    }
+
     #[test]
     fn a_phantom_final_is_sent_empty() {
         let events = RecordingEvents::new();
@@ -1263,6 +1354,7 @@ mod tests {
         control.stop();
         thread.join().unwrap();
         assert_eq!(events.payloads(EV_FINAL)[0]["text"], "");
+        assert_eq!(events.payloads(EV_FINAL)[0]["outcome"], "filtered");
     }
 
     #[test]

@@ -182,6 +182,13 @@ pub struct TranscriptEntry {
     /// phone's API turns it into a worktree name and drops it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// On a slash-command `prompt`: what the command left set, as the CLI's
+    /// own confirmation names it — Claude's `/model` picker answered with
+    /// `Fable 5.2`, `/effort` with `high`. The command is typed bare and the
+    /// choice is made in a picker, so without it the chat's divider could not
+    /// say what was chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setting: Option<String>,
 }
 
 /// One question the agent asked, as answered.
@@ -410,6 +417,25 @@ pub struct TranscriptUsage {
     /// The weekly window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub week: Option<UsageWindow>,
+    /// The prompt cache as the session's newest answer left it (Claude,
+    /// Codex): the Reader's "cache cold" chip once it has run out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<PromptCache>,
+}
+
+/// When the session's newest answer came back, how long the provider keeps
+/// the prompt cache it wrote, and how many tokens that request carried — what
+/// the next message writes to the cache again once the time has run out.
+/// Claude says the lifetime per request (`usage.cache_creation`: 1 h for a
+/// subscription's main conversation, 5 min on an API key); Codex's is
+/// OpenAI's 30 minutes. See `docs/cli_caching_plan.md` phase 3.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptCache {
+    /// Epoch milliseconds of the newest answer.
+    pub last_at_ms: i64,
+    pub ttl_secs: u32,
+    pub context_tokens: u64,
 }
 
 /// One rate-limit window: how much of it is used, and when it rolls over.
@@ -1230,10 +1256,14 @@ fn read_transcript_in(
     }
     let (text, mut truncated) = agent_session::read_conversation_tail(&mut file, meta.len(), tail_bytes(limit))?;
     let lines: Vec<&str> = text.lines().collect();
-    let usage = match kind {
+    let mut usage = match kind {
         TranscriptKind::Codex => codex_usage(&lines),
         TranscriptKind::Claude | TranscriptKind::Copilot => None,
     };
+    // A subagent's own cache is not the one the user's next message meets.
+    if let Some(cache) = (!sidechain).then(|| newest_prompt_cache(&lines, kind)).flatten() {
+        usage.get_or_insert_with(Default::default).cache = Some(cache);
+    }
     let model = newest_model(&lines, kind);
     let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
@@ -1505,6 +1535,75 @@ fn newest_tokens(lines: &[&str], kind: TranscriptKind) -> Option<u64> {
             TranscriptKind::Copilot => crate::services::copilot_session::tokens_in_record(&value),
         }
     })
+}
+
+/// How long OpenAI keeps a prompt cache after the request that wrote it.
+const CODEX_CACHE_TTL_SECS: u32 = 30 * 60;
+const CLAUDE_CACHE_TTL_LONG_SECS: u32 = 60 * 60;
+const CLAUDE_CACHE_TTL_SHORT_SECS: u32 = 5 * 60;
+
+/// The record's own `timestamp` (RFC 3339), as epoch milliseconds.
+fn record_ms(value: &Value) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value.get("timestamp")?.as_str()?)
+        .ok()
+        .map(|at| at.timestamp_millis())
+}
+
+/// The [`PromptCache`] the newest answer in `lines` left. `None` for a CLI
+/// whose record does not say, or a Claude session none of whose requests in
+/// the tail says how long its cache writes live.
+fn newest_prompt_cache(lines: &[&str], kind: TranscriptKind) -> Option<PromptCache> {
+    match kind {
+        TranscriptKind::Claude => claude_prompt_cache(lines),
+        TranscriptKind::Codex => lines.iter().rev().filter(|line| line.contains("\"token_count\"")).find_map(|line| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            let payload = value
+                .get("payload")
+                .filter(|p| p.get("type").and_then(Value::as_str) == Some("token_count"))?;
+            let context_tokens = payload.pointer("/info/last_token_usage/total_tokens")?.as_u64().filter(|n| *n > 0)?;
+            Some(PromptCache { last_at_ms: record_ms(&value)?, ttl_secs: CODEX_CACHE_TTL_SECS, context_tokens })
+        }),
+        TranscriptKind::Copilot => None,
+    }
+}
+
+/// Claude's: the newest answer's time and tokens, and the lifetime of the
+/// newest cache write at or before it — an answer that only read the cache
+/// says nothing about how long it lives.
+fn claude_prompt_cache(lines: &[&str]) -> Option<PromptCache> {
+    let mut newest: Option<(i64, u64)> = None;
+    for line in lines.iter().rev().filter(|line| line.contains("\"usage\"")) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else { continue };
+        if value.get("type").and_then(Value::as_str) != Some("assistant")
+            || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        {
+            continue;
+        }
+        let Some(usage) = value.pointer("/message/usage") else { continue };
+        let count = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+        let total = count("input_tokens")
+            + count("cache_creation_input_tokens")
+            + count("cache_read_input_tokens")
+            + count("output_tokens");
+        // A synthetic record (an API error, an interrupt) reached no cache.
+        if total == 0 {
+            continue;
+        }
+        if newest.is_none() {
+            newest = Some((record_ms(&value)?, total));
+        }
+        let written = |name: &str| usage.pointer(&format!("/cache_creation/{name}")).and_then(Value::as_u64).unwrap_or(0);
+        let ttl_secs = if written("ephemeral_1h_input_tokens") > 0 {
+            CLAUDE_CACHE_TTL_LONG_SECS
+        } else if written("ephemeral_5m_input_tokens") > 0 {
+            CLAUDE_CACHE_TTL_SHORT_SECS
+        } else {
+            continue;
+        };
+        let (last_at_ms, context_tokens) = newest?;
+        return Some(PromptCache { last_at_ms, ttl_secs, context_tokens });
+    }
+    None
 }
 
 /// A subagent in a Claude session's folder: the agent id its file is named
@@ -1817,6 +1916,14 @@ fn parse_entries(
                             prompt.text = format!("{} {args}", prompt.text);
                             bound_entry(prompt, MAX_PROMPT_CHARS);
                         }
+                    }
+                }
+                Record::CommandSetting { command, value } => {
+                    // Only onto that command, recorded just before it.
+                    if let Some(prompt) = entries.last_mut().filter(|entry| {
+                        entry.kind == "prompt" && entry.text.split_whitespace().next() == Some(command)
+                    }) {
+                        prompt.setting = Some(value);
                     }
                 }
                 Record::Shell { call, mut shell } => {
@@ -2173,6 +2280,9 @@ enum Record {
     /// The words typed after a command Claude refused as unknown, recorded
     /// apart from it ([`claude_unknown_command`]): they join that prompt.
     CommandArgs(String),
+    /// What the slash command `command` (`/model`) just recorded left set
+    /// ([`claude_command_setting`]): it joins that command's prompt.
+    CommandSetting { command: &'static str, value: String },
     /// A plan put up for approval: an answer, marked as the plan.
     Plan(String),
     /// A subagent spawned by tool call `call`, sent to do `task`.
@@ -2256,13 +2366,17 @@ fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
         Some("user") => claude_interrupt(value)
             .map(|text| Record::Turn("interrupted", text))
             .or_else(|| agent_session::claude_prompt_in_record(value).map(|text| Record::Turn("prompt", text)))
+            .or_else(|| claude_command_setting(value))
             .into_iter()
             .collect(),
         // A slash command typed at the prompt, as current releases record it,
         // or one Claude refused as unknown.
         Some("system") if !sidechain => match agent_session::claude_local_command(value) {
             Some(text) => vec![Record::Turn("prompt", text)],
-            None => claude_unknown_command(value),
+            None => match claude_command_setting(value) {
+                Some(setting) => vec![setting],
+                None => claude_unknown_command(value),
+            },
         },
         // A prompt typed while Claude was working lives only here.
         Some("attachment") if !sidechain => agent_session::claude_queued_prompt(value)
@@ -2306,6 +2420,17 @@ fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
         }
         _ => Vec::new(),
     }
+}
+
+/// The confirmation Claude writes when a `/model` or `/effort` is answered
+/// (`<local-command-stdout>Set model to `Fable 5.2``), as the setting it
+/// names. Older releases write it as a `user` record, current ones as a
+/// `local_command` system record.
+fn claude_command_setting(value: &Value) -> Option<Record> {
+    if let Some(model) = agent_session::claude_model_switch_label(value) {
+        return Some(Record::CommandSetting { command: "/model", value: model });
+    }
+    claude_effort_switch(value).map(|level| Record::CommandSetting { command: "/effort", value: level })
 }
 
 /// Claude can write a subagent's final report as the input to this tool

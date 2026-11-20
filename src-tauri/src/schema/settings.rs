@@ -543,6 +543,14 @@ pub struct Settings {
     /// the environment; Restart Ollama is what applies it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_context_length: Option<u32>,
+    /// How long Ollama keeps a model loaded after its last request, as
+    /// `OLLAMA_KEEP_ALIVE` (`30m`, `1h`, `-1` = until unloaded). `None` keeps
+    /// Ollama's own 5 minutes. A server **Tabtivity starts itself** gets it at
+    /// start; a systemd service only through the drop-in Settings offers
+    /// (`commands::ollama::ollama_keep_alive_plan`). Agents reach Ollama through
+    /// its OpenAI-compatible API, which cannot ask for a keep-alive per request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_keep_alive: Option<String>,
     /// Preserved for Python rollback; not used by the Tauri app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ollama_model: Option<String>,

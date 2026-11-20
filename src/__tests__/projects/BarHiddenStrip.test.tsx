@@ -73,8 +73,10 @@ describe("hiding projects from All projects", () => {
   it("leaves out hidden projects and a hidden box's members, and counts them", async () => {
     const container = await renderSwitcher();
     expect(pillNames(container)).toEqual(["p2"]);
-    // No chip on the strip any more: the count is the dropdown's entry.
-    expect(container.querySelector(".bar-hidden-chip")).toBeNull();
+    // No chip on the strip: the count is the dropdown's entry, absent until
+    // the dropdown opens.
+    expect(container.querySelector(".bar-hidden-toggle")).toBeNull();
+    expect(document.querySelector(".bar-hidden-toggle")).toBeNull();
     const entry = await openDropdown(container);
     expect(entry!.textContent).toContain("3 hidden");
   });

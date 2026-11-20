@@ -16,6 +16,7 @@ import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { NO_LIVE, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
 import { isAiOffRefusal } from "../../lib/aiSwitch";
 import { forgetSentPrompts, onSentPrompt, useSentPrompts, type SentPrompt } from "../../lib/agents/sentPrompts";
+import { replaceDictated } from "../../lib/voice/provisionalDraft";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { DraftUndo, caretAfterSwap } from "../../lib/agents/draftUndo";
 import { actionMatches } from "../../lib/shortcuts/shortcuts";
@@ -89,6 +90,7 @@ import { useReaderVoice } from "./ReaderVoice";
 import { matchDraftEdit } from "../../lib/voice/voiceCommands";
 import { DraftVoiceHistory, type DraftEditNote } from "../../lib/voice/draftEdit";
 import { useReaderReadAloud } from "./ReaderReadAloud";
+import { useReaderAsyncAsk } from "./useReaderAsyncAsk";
 import { useAgentTurn } from "../../lib/voice/agentTurn";
 import { useExperimental } from "../../lib/experimental";
 import { useSettingsStore } from "../../stores/settings";
@@ -99,7 +101,7 @@ import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
-import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { commandArgsInline, commandLabel, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordedRun, recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
@@ -415,26 +417,34 @@ function LiveQuestion({ ptyId, live, subject, answered, failure, busy, onAnswer,
   );
 }
 
-/** A question the agent asked, kept in the chat once answered (the phone's
- * `AskedCard`): `LiveQuestion`'s card, its rows no longer buttons — the ones
- * the answer took ticked, an answer typed instead of picked as a row of its
- * own, and one turned down saying so. */
-function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion[]; time: ReactNode }) {
+/** The transcript's question card. Codex's pending questions can be answered
+ * here while it works. A recorded answer keeps the chosen rows ticked. */
+function AskedQuestions({ questions, time, asking, busy, sending, pick }: {
+  questions: readonly AskedQuestion[];
+  time: ReactNode;
+  asking?: boolean;
+  busy?: boolean;
+  sending?: boolean;
+  pick?: (question: AskedQuestion, row: number) => void;
+}) {
   const t = useT();
   return (
     <div className="terminal-reader-question asked" role="group" aria-label={t("mobile.transcript.asked")}>
-      <small className="terminal-reader-question-head">{t("mobile.transcript.asked")} <UntestedTag id="mobile.focus.askedCard" /></small>
+      <small className="terminal-reader-question-head">
+        {t("mobile.transcript.asked")}{" "}
+        {asking ? <UntestedTag id="terminal.reader.asyncAsk" /> : <UntestedTag id="mobile.focus.askedCard" />}
+      </small>
       {questions.map((asked, index) => {
         const typed = asked.answer !== undefined && !asked.options?.some((option) => option.chosen);
+        const pending = asking && asked.answer === undefined;
         return (
           <Fragment key={index}>
             {asked.header && <div className="terminal-reader-question-tabs"><span>{asked.header}</span></div>}
             <p className="terminal-reader-question-ask">{asked.question}</p>
-            <div className="terminal-reader-options">
+            <div className="terminal-reader-options" onKeyDown={pending && pick ? walkQuestionOptions : undefined}>
               {asked.options?.map((option, row) => {
                 const recommended = RECOMMENDED.exec(option.label);
-                return (
-                  <div key={row} className={option.chosen ? "terminal-reader-option chosen" : "terminal-reader-option"}>
+                const content = <>
                     <span className="terminal-reader-option-number">{option.chosen ? "✓" : row + 1}</span>
                     <span className="terminal-reader-option-label">
                       <span>
@@ -443,8 +453,10 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
                       </span>
                       {option.description && <small>{option.description}</small>}
                     </span>
-                  </div>
-                );
+                </>;
+                return pending && pick
+                  ? <button key={row} type="button" className="terminal-reader-option" disabled={busy} onClick={() => pick(asked, row)}>{content}</button>
+                  : <div key={row} className={option.chosen ? "terminal-reader-option chosen" : "terminal-reader-option"}>{content}</div>;
               })}
               {typed && (
                 <div className="terminal-reader-option chosen">
@@ -453,10 +465,11 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
                 </div>
               )}
             </div>
-            {asked.answer === undefined && <small className="terminal-reader-question-more">{t("mobile.transcript.notAnswered")}</small>}
+            {asked.answer === undefined && !sending && <small className="terminal-reader-question-more">{t(pending ? "mobile.transcript.asyncWaiting" : "mobile.transcript.notAnswered")}</small>}
           </Fragment>
         );
       })}
+      {sending && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
       {time}
     </div>
   );
@@ -539,7 +552,7 @@ type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflo
 
 /** Memoised: the Reader re-renders on every live-screen tick while an agent
  * streams, and a turn already drawn has nothing new to say then. */
-const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore }: {
+const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore, pickAsync, asyncBusy, asyncSending }: {
   /** A prompt bubble's "Restore files to before this" (`ReaderCheckpoints`). */
   restore?: ReactNode;
   action?: ReactNode;
@@ -550,6 +563,9 @@ const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, a
   agentLabel: string;
   use24h: boolean;
   onOpenAgent: (turn: SubagentPick) => void;
+  pickAsync?: ReturnType<typeof useReaderAsyncAsk>["pick"];
+  asyncBusy?: boolean;
+  asyncSending?: boolean;
 }) {
   const withFiles = useDrawsInbox(turn.text);
   const moment = chatMoment(turn.stamp);
@@ -586,7 +602,7 @@ const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, a
     const inline = commandArgsInline(turn.command.args);
     return <>
       <div className="terminal-reader-command" role="separator" data-prompt={turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}>
-        <span>{inline && turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}</span>
+        <span>{commandLabel(turn.command)}</span>
       </div>
       {/* A `/design @inbox-picture` prompt's picture shows as in any prompt. */}
       {!inline && <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"}>
@@ -603,7 +619,8 @@ const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, a
       </div>
     );
   }
-  if (turn.questions) return <AskedQuestions questions={turn.questions} time={time} />;
+  if (turn.questions) return <AskedQuestions questions={turn.questions} time={time} asking={turn.asking} busy={asyncBusy} sending={asyncSending}
+    pick={pickAsync && ((question, row) => { void pickAsync(turn.key, question, row); })} />;
   return (
     <div className={turn.plan ? "terminal-reader-turn agent plan" : "terminal-reader-turn agent"}>
       {turn.plan && <small className="terminal-reader-plan-head">{planLabel}</small>}
@@ -722,7 +739,6 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const t = useT();
   const assistantChat = scope === ASSISTANT_SCOPE;
   const [draft, setDraft] = useState(() => readerDraft(scope, tabKey));
-  useEffect(() => setReaderDraft(scope, tabKey, draft), [scope, tabKey, draft]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   /** Send was pressed while the agent asked something: typed into the pane,
@@ -746,7 +762,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
   /** Dictation writes the words of a segment still being said into the draft
    * (`useLiveDictation`); it keeps the caret where the user had it. */
-  const dictation = useLiveDictation({ draftRef, setDraft, boxRef: composerRef, language: editLanguage });
+  const dictation = useLiveDictation({ draftRef, setDraft, boxRef: composerRef, language: editLanguage,
+    record: (before, after) => undo.current.record(before, after, false),
+  });
+  const settledDraft = useRef(dictation.settledDraft);
+  settledDraft.current = dictation.settledDraft;
+  useEffect(() => setReaderDraft(scope, tabKey, settledDraft.current()), [scope, tabKey, draft]);
   const renderedRef = useRef(dictation.rendered);
   renderedRef.current = dictation.rendered;
   useLayoutEffect(() => {
@@ -754,7 +775,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const moved = caretAt.current !== null;
     if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
-    renderedRef.current(draft, moved);
+    renderedRef.current(moved);
   }, [draft]);
   // Three lines until the text needs more: the box grows with it (upward, the
   // composer stays on the pane's last row) up to its CSS max-height.
@@ -782,8 +803,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     [slashClosed, draft, cli, usedSlash],
   );
   const editDraft = (next: string, typing = false) => {
-    undo.current.record(draftRef.current, next, typing);
+    const before = dictation.settledDraft();
     draftRef.current = next;
+    undo.current.record(before, dictation.settledDraft(), typing);
     setDraft(next);
     setSendError("");
     setSlashAt(null);
@@ -955,17 +977,19 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   }, [editNote]);
   /** A dictated segment's final (`useReaderVoice`) joins the draft as typed
    * text would, undoable, in the place its provisional text held (else at the
-   * end); one that ends in the spoken send ("go on" / "los") sends the draft
+   * end); one that ends in the spoken send ("go Tabby" / "los") sends the draft
    * without those words. "Tabby scratch that", "Tabby replace X by Y",
    * "Tabby plan" … edit the draft instead. The provisional text of the segment
    * leaves the draft first, so none of that is ever left behind in it and the
    * undo history only sees the settled step. An empty `heard` only settles. */
   const dictated = (heard: string, segment: number) => {
-    const { at, taken } = dictation.settle(segment);
+    const { at, taken, removed } = dictation.settle(segment);
     const clean = sanitizeVoiceTranscript(heard);
     if (!clean) return;
     const edit = matchDraftEdit(clean, editLanguage);
+    const recovering = dictation.live.hasRecovery();
     if (edit) {
+      if (recovering) return;
       const outcome = voiceEdits.apply(edit, draftRef.current, (draft, command) => leadDraft(draft, command, prefixCommands));
       if (outcome.draft !== null) editDraft(outcome.draft);
       setEditNote(outcome.note);
@@ -974,24 +998,31 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     }
     // The user edited the provisional words into their own: not typed twice.
     if (taken) {
-      if (spokenSend(clean) !== null) void send();
+      if (!recovering && spokenSend(clean) !== null) void send();
       return;
     }
     const current = draftRef.current;
     const where = at === null ? current.length : Math.min(at, current.length);
     // Mid-draft the spoken send is judged on the dictated words alone.
+    const range = { start: where, end: where + removed };
     const appended = where === current.length;
-    const sendless = appended ? spokenSend(spliceSpaced(current, where, clean)) : spokenSend(clean);
+    const withWords = replaceDictated(current, range, clean);
+    const sendless = spokenSend(appended ? withWords : clean);
     const spoken = sendless !== null;
-    const next = appended ? sendless ?? spliceSpaced(current, where, clean)
-      : sendless === null ? spliceSpaced(current, where, clean)
-      : sendless ? spliceSpaced(current, where, sendless) : current;
-    if (!spoken) {
-      voiceEdits.piece(current, next, clean);
-      dictation.inserted(current, next, where);
+    const next = sendless === null ? withWords : appended ? sendless
+      : sendless ? replaceDictated(current, range, sendless) : current;
+    if (!spoken) voiceEdits.piece(current, next, clean);
+    if (next !== current) {
+      const before = dictation.settledDraft();
+      dictation.inserted(current, next, where, removed, segment);
+      draftRef.current = next;
+      undo.current.record(before, dictation.settledDraft(), false);
+      setDraft(next);
+      setSendError("");
+      setSlashAt(null);
+      setSlashClosed(false);
     }
-    if (next !== current) editDraft(next);
-    if (spoken) void send();
+    if (spoken && !recovering) void send();
   };
   const voice = useReaderVoice({
     tabKey,
@@ -1253,7 +1284,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   /** Undo (or redo) the composer's last change, the caret after it. */
   const swapDraft = (redo: boolean) => {
-    const next = redo ? undo.current.redo(draft) : undo.current.undo(draft);
+    const settled = dictation.settledDraft();
+    const next = redo ? undo.current.redo(settled) : undo.current.undo(settled);
     if (next === null) return;
     caretAt.current = caretAfterSwap(draft, next);
     historyAt.current = null;
@@ -1348,6 +1380,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           aria-label={subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}`
             : t("terminal.reader.placeholder")}
+          onPointerUp={e => dictation.capture(e.currentTarget)}
+          onKeyUp={e => dictation.capture(e.currentTarget)}
           onChange={(e) => editDraft(e.target.value, true)}
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
@@ -1740,6 +1774,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The dialog on screen takes no answer: one is on its way, or it has just
    * replaced the one answered. */
   const held = (!!answered && answered === live.signature) || (!!heldSignature && heldSignature === live.signature);
+  const canAnswerAsync = visible && shown && !changesOpen && !filesOpen && !browsed && !openStep
+    && !picking && agentFamily(agentLabel) === "codex";
+  const asyncAsk = useReaderAsyncAsk(ptyId, tab?.sessionId, canAnswerAsync);
 
   const answerFailed = (error: unknown) => {
     setAnswered("");
@@ -2749,7 +2786,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                     <span>{chatDayLabel(moment, now, dayLabels)}</span>
                   </div>
                 )}
-                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} restore={turn.kind === "prompt" ? checkpoints.restoreFor(turn.stamp) : undefined} action={
+                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent}
+                  pickAsync={turn.asking && canAnswerAsync ? asyncAsk.pick : undefined}
+                  asyncBusy={turn.asking && (!!asyncAsk.sending || !!answered || held)}
+                  asyncSending={turn.asking && asyncAsk.sending === turn.key}
+                  restore={turn.kind === "prompt" ? checkpoints.restoreFor(turn.stamp) : undefined} action={
                   !browsed && !openStep && canLogIn
                   && index === turns.length - 1 && turn.kind === "answer"
                   && readSignedOut(turn.text.split(/\r?\n/u).map((text) => ({ text }))) ? (
@@ -2797,7 +2838,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             subject={browsed ? null : permission}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             failure={answerFailure}
-            busy={held || !!shownLive.question?.readOnly}
+            busy={held || !!asyncAsk.sending || !!shownLive.question?.readOnly}
             onAnswer={answer}
             onType={answerText}
             onStep={step}
@@ -2914,6 +2955,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           </button>
         </div>
       ) : <ReaderComposer
+        key={JSON.stringify([scope, tabKey])}
         scope={scope}
         tabKey={tabKey}
         tabRef={tabRef}
@@ -2927,8 +2969,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         acceptInserts={visible && shown}
         onReveal={onShowChat}
         steering={steering}
-        questionOpen={!!shownLive.question}
-        inputBlocked={!!shownLive.question || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working)}
+        questionOpen={!!shownLive.question || !!asyncAsk.sending}
+        inputBlocked={!!shownLive.question || !!asyncAsk.sending || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working)}
         suggestion={shownLive.suggestion}
         chipSlot={actionSlot || scope === ASSISTANT_SCOPE ? null : chipSlot}
         actionSlot={actionSlot}

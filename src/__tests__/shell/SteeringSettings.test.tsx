@@ -119,11 +119,14 @@ function press(init: Partial<KeyboardEventInit> & { key: string }) {
   });
 }
 
+// Past `syncSoon`'s late 150 ms pass plus one 50 ms `placeCursorSoon` retry
+// (src/hooks/useSteering.ts), so a chain of retries has landed too.
+const SETTLE_MS = 200;
 /** Let the page re-render and the cursor's placement retry (every 50 ms
  *  while the surface mounts) land. */
 async function settle() {
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, SETTLE_MS));
   });
 }
 

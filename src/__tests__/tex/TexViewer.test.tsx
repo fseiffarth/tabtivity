@@ -733,7 +733,7 @@ describe("TexView", () => {
 
   // Also proves the pane publishes `FileSourceContext`: the TeX viewer reads the
   // side from it, not from a call of its own.
-  it("forward search on a PDF read from the remote host says so and asks SyncTeX nothing", async () => {
+  it.each([false, true])("routes host forward search by connection state (connected = %s)", async (connected) => {
     setupInvoke(true, ["pdflatex"], undefined, [{ page: 1, x: 10, y: 20, w: 100, h: 12 }]);
     const base = mockInvoke.getMockImplementation()!;
     mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
@@ -742,6 +742,8 @@ describe("TexView", () => {
       return base(cmd, args);
     });
     await renderTexView();
+    const { useRemoteStatusStore } = await import("../../stores/remote/remoteStatus");
+    act(() => useRemoteStatusStore.getState().setSsh("proj", connected ? "connected" : "off"));
     const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
     await waitFor(() => expect(textarea.value).toBe(TEX_SOURCE));
     const at = TEX_SOURCE.indexOf("Hi");
@@ -750,7 +752,11 @@ describe("TexView", () => {
       fireEvent.click(textarea, { ctrlKey: true });
     });
 
-    await screen.findByText(/isn't available for a file read from the remote host/i);
+    if (connected) {
+      await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("synctex_view", expect.objectContaining({ projectId: "proj" })));
+      return;
+    }
+    await screen.findByText(/connect to the host to jump/i);
     expect(mockInvoke).not.toHaveBeenCalledWith("synctex_view", expect.anything());
     expect(mockInvoke).not.toHaveBeenCalledWith("synctex_status", expect.anything());
   });

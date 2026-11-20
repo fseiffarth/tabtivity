@@ -139,6 +139,55 @@ describe("CommandPalette", () => {
   });
 });
 
+describe("CommandPalette tab search", () => {
+  const labels = () => rows().map((row) => row.querySelector(".command-palette-label")?.textContent);
+
+  it("narrows to tabs on @, the scope on screen first, past the usual six", async () => {
+    const many = Array.from({ length: 8 }, (_, i) => tab(`q${i}`, `job ${i}`));
+    useTabsStore.setState({ scope: "p2", tabs: [tab("t2", "deploy log")], tabsByScope: { p1: many, p2: [tab("t2", "deploy log")] } });
+    render(<CommandPalette />);
+    await openPalette({ filter: "@" });
+    expect(groups()).toEqual(["Tabs"]);
+    expect(labels()).toHaveLength(9);
+    expect(labels()[0]).toBe("deploy log");
+    expect((screen.getByRole("textbox") as HTMLInputElement).placeholder).toMatch(/tabs/i);
+  });
+
+  it("finds a tab by its project's name and jumps there", async () => {
+    useTabsStore.setState({ tabsByScope: { p1: [tab("t1", "build log")], p2: [tab("t2", "shell")] } });
+    render(<CommandPalette />);
+    await openPalette({ filter: "@beta" });
+    expect(labels()).toEqual(["shell"]);
+    expect(rows()[0].querySelector(".command-palette-detail")?.textContent).toBe("Beta");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(jumpToTab).toHaveBeenCalledWith("p2", "t2");
+  });
+
+  it("says so when no tab matches", async () => {
+    render(<CommandPalette />);
+    await openPalette({ filter: "@zzzz" });
+    expect(rows()).toHaveLength(0);
+    expect(screen.getByRole("status").textContent).toBe("No matching tabs");
+  });
+
+  it("opens on @ through its door", async () => {
+    const { openTabSearch } = await import("../../lib/shortcuts/paletteEvent");
+    render(<CommandPalette />);
+    await act(async () => openTabSearch());
+    expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("@");
+  });
+
+  it("in a popout narrows that window's tabs on @", async () => {
+    const activate = vi.fn();
+    const local = { tabs: [tab("t8", "notes"), tab("t9", "popout shell")], scope: "p1", activate };
+    render(<CommandPalette local={local} />);
+    await openPalette({ filter: "@pop" });
+    expect(labels()).toEqual(["popout shell"]);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(activate).toHaveBeenCalledWith("t9");
+  });
+});
+
 describe("CommandPalette boxes", () => {
   const box = (id: string, name: string, members: string[], position = 1) => ({ id, name, member_ids: members, position });
 

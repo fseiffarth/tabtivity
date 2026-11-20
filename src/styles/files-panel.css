@@ -793,6 +793,19 @@
   margin-left: 2px;
 }
 
+/* The hide-mode switch leads the right-hand group when shown: it takes the
+   row's right-push and the IDE / Mobile buttons sit beside it. On reads as
+   accent, not the Mobile switch's green "reachable". */
+.side-panel-solo-btn ~ .side-panel-mobile-btn {
+  margin-left: 2px;
+}
+
+.side-panel-mobile-btn.side-panel-solo-btn.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
 .side-panel-mobile-btn-icon {
   width: 13px;
   height: 13px;

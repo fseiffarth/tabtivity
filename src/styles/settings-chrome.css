@@ -22,9 +22,12 @@
    controls section), and a descendant selector would otherwise outrank that
    rule and box it back up. The header overlays (mail, calendar, to-do) carry
    the root console's ✓ Approvals pill and ⤢ fill button in that row too, and
-   those keep the console's own look. */
+   those keep the console's own look. A `.seg` in a title row (the stats
+   Day / Week / Month switch) keeps the segmented look: boxing its options
+   drew a border per option over the track's own. `:where` keeps the
+   exclusion at zero specificity, so overrides of this rule still win. */
 .settings-btn,
-.settings-title-row button:not(.dialog-close-btn, .root-overlay-rights, .subwindow-hide),
+.settings-title-row button:not(.dialog-close-btn, .root-overlay-rights, .subwindow-hide):not(:where(.seg > button)),
 .settings-link-row button:not(.dialog-close-btn),
 .global-app-settings-row button:not(.dialog-close-btn),
 .filetype-settings-row button:not(.dialog-close-btn),
@@ -47,7 +50,7 @@
 }
 
 .settings-btn:hover:not(:disabled),
-.settings-title-row button:not(.dialog-close-btn, .root-overlay-rights, .subwindow-hide):hover:not(:disabled),
+.settings-title-row button:not(.dialog-close-btn, .root-overlay-rights, .subwindow-hide):not(:where(.seg > button)):hover:not(:disabled),
 .settings-link-row button:not(.dialog-close-btn):hover:not(:disabled),
 .global-app-settings-row button:not(.dialog-close-btn):hover:not(:disabled),
 .filetype-settings-row button:not(.dialog-close-btn):hover:not(:disabled),
@@ -58,7 +61,7 @@
 }
 
 .settings-btn:disabled,
-.settings-title-row button:not(.dialog-close-btn, .root-overlay-rights, .subwindow-hide):disabled,
+.settings-title-row button:not(.dialog-close-btn, .root-overlay-rights, .subwindow-hide):not(:where(.seg > button)):disabled,
 .settings-link-row button:not(.dialog-close-btn):disabled,
 .global-app-settings-row button:not(.dialog-close-btn):disabled,
 .filetype-settings-row button:not(.dialog-close-btn):disabled,
