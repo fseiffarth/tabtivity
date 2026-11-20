@@ -6,6 +6,7 @@
 // project (the pill hides them there; the backend refuses anyway).
 
 import { useCallback, useEffect, useState } from "react";
+import { usePoll } from "../../lib/usePoll";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { BRAND } from "../../lib/brand";
@@ -31,8 +32,16 @@ export function unpairBlocked(p: UnpairPreview): boolean {
   return p.commitsNotOnHost > 0 || p.uncommitted > 0 || p.unpushedSyncEdits > 0 || p.localTabs > 0;
 }
 
+/** Whether lockstep is (still) carrying the mirror's history to the host: the
+ *  one blocker that clears without the user, e.g. right after Local →
+ *  Remote-only extended the project. The dialog re-checks on its own then. */
+export function awaitingLockstep(p: UnpairPreview): boolean {
+  return p.lockstepEnabled && p.commitsNotOnHost > 0;
+}
+
 /** Remote → Remote-only. `onDone` gets the outcome (the kept folder) once the
- *  conversion landed; the dialog has closed by then. */
+ *  conversion landed; the dialog has closed by then. Also the second half of
+ *  Local → Remote-only (`ExtendToRemoteDialog` with the local copy off). */
 export function StopLocalCopyDialog({
   project,
   onClose,
@@ -72,6 +81,18 @@ export function StopLocalCopyDialog({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const [rechecking, setRechecking] = useState(false);
+  const recheck = useCallback(async () => {
+    setRechecking(true);
+    await load();
+    setRechecking(false);
+  }, [load]);
+  // While lockstep is still pushing the history up, the count drops on its
+  // own: re-run the preview (a bounded host probe) until it does.
+  const polling = !!preview && awaitingLockstep(preview);
+  const pollPreview = useCallback(() => load().then(() => {}), [load]);
+  usePoll(pollPreview, 5000, { enabled: polling, immediate: false });
 
   const confirm = async () => {
     if (!preview) return;
@@ -124,6 +145,12 @@ export function StopLocalCopyDialog({
               <p className="settings-help">
                 <strong>{t("pill.stopLocalCopyBlocked")}</strong>
               </p>
+              {awaitingLockstep(shown) && <p className="settings-help">{t("pill.stopLocalCopyAwaitingLockstep")}</p>}
+              <p className="settings-help">
+                <button type="button" disabled={rechecking} onClick={() => void recheck()}>
+                  {t(rechecking ? "pill.stopLocalCopyRechecking" : "pill.stopLocalCopyRecheck")}
+                </button>
+              </p>
             </>
           )}
           <p className="settings-help">{t("pill.stopLocalCopyAfter")}</p>
@@ -134,6 +161,11 @@ export function StopLocalCopyDialog({
             </p>
           ) : (
             <p className="settings-help">{t("pill.stopLocalCopyNoFolder")}</p>
+          )}
+          {(shown.ignored ?? 0) > 0 && (
+            <p className="settings-help" data-testid="stop-local-copy-ignored">
+              {t("pill.stopLocalCopyIgnored", { count: shown.ignored ?? 0 })}
+            </p>
           )}
           {shown.stoppedWorkers.length > 0 && (
             <p className="settings-help">

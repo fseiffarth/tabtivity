@@ -137,6 +137,32 @@ describe("pill menu · keeping a local copy or not", () => {
     expect(row(KEEP)).toBeNull();
   });
 
+  it("names what git ignores, and re-checks on its own while lockstep copies the history", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let previews = 0;
+    stub({
+      remote_unpair_mirror_preview: () =>
+        preview({ commitsNotOnHost: ++previews < 3 ? 4 : 0, ignored: 2 }),
+    });
+    await openPillMenu(project({ remote: SSH }));
+    await click(row(STOP)!);
+    expect(screen.getByTestId("stop-local-copy-ignored").textContent).toMatch(/git ignores: 2\./);
+    expect(screen.getByText(/still copying the history to the host/)).toBeTruthy();
+    await click(dialogButton("Check again")!);
+    expect(previews).toBe(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5500);
+    });
+    expect(previews).toBe(3);
+    expect(dialogButton("Stop keeping a local copy")!.disabled).toBe(false);
+    expect(dialogButton("Check again")).toBeUndefined();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(11000);
+    });
+    expect(previews).toBe(3);
+    vi.useRealTimers();
+  });
+
   it("waits for a connected host", async () => {
     await openPillMenu(project({ remote: SSH }), false);
     expect((row(STOP) as HTMLButtonElement).disabled).toBe(true);

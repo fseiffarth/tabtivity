@@ -1714,6 +1714,9 @@ export interface UnpairPreview {
   mirrorIsRepo: boolean;
   commitsNotOnHost: number;
   uncommitted: number;
+  /** Git-ignored files/folders in the mirror (never on the host through
+   *  lockstep); `null` when git could not say. Absent from older backends. */
+  ignored?: number | null;
   unpushedSyncEdits: number;
   localTabs: number;
   stoppedWorkers: string[];
