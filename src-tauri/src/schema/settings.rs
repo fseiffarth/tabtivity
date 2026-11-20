@@ -574,7 +574,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_project_policies: Option<HashMap<String, CompletionProjectPolicy>>,
     /// The editor's automatic-trigger idle delay per completion provider, in
-    /// milliseconds. Frontend logic only (missing: 600 local, 200 Copilot);
+    /// milliseconds. Frontend logic only (missing: 200 for both);
     /// named here so it round-trips. Not a Copilot policy: changing it stops
     /// no server (`commands::settings::copilot_invalidated`).
     #[serde(default, deserialize_with = "lenient_autocomplete_delays", skip_serializing_if = "Option::is_none")]

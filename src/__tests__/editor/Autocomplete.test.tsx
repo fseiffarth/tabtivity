@@ -931,7 +931,7 @@ describe("autocomplete trigger (spending)", () => {
 
   it("a stored delay that is not a choice uses the default", async () => {
     autocompleteOn = true;
-    delays = { ollama: 250 };
+    delays = { ollama: 1000 };
     try {
       await renderTextView();
       const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
@@ -940,11 +940,10 @@ describe("autocomplete trigger (spending)", () => {
       await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "r" } }); });
       el.selectionStart = el.selectionEnd = SOURCE.length + 1;
       await act(async () => { await new Promise((r) => setTimeout(r, 350)); });
-      expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
-      await idle();
       expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(true);
     } finally { delays = undefined; }
-    expect(acDelayMs({ ollama: 250, copilot: 400 }, false)).toBe(600);
+    expect(acDelayMs({ ollama: 250, copilot: 400 }, false)).toBe(200);
+    expect(acDelayMs(undefined, false)).toBe(200);
     expect(acDelayMs({ copilot: 400 }, true)).toBe(400);
     expect(acDelayMs(undefined, true)).toBe(200);
   });
@@ -954,7 +953,7 @@ describe("autocomplete trigger (spending)", () => {
     delays = { copilot: 400 };
     try {
       await renderTextView();
-      await act(async () => { fireEvent.click(screen.getByText("600 ms")); });
+      await act(async () => { fireEvent.click(screen.getByText("200 ms")); });
       await act(async () => { fireEvent.click(screen.getByRole("option", { name: "100 ms" })); });
       expect(mockUpdateSettings).toHaveBeenCalledWith({ autocomplete_delay_ms: { copilot: 400, ollama: 100 } });
     } finally { delays = undefined; }

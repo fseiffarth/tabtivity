@@ -128,8 +128,7 @@ export function LinkOpenHint({
 
 // #45 automatic autocomplete: the idle time after the last keystroke before a
 // suggestion is requested is the user's choice per provider in the AI menu
-// (`autocomplete_delay_ms`); `acDelayMs` holds the defaults (600 ms local,
-// 200 ms Copilot, whose default trigger stays "on request").
+// (`autocomplete_delay_ms`); `acDelayMs` holds the default (200 ms for both).
 
 // Dictionary spell check (the Hunspell `spell_check` command): idle time after
 // the last keystroke before the draft is re-checked. A lookup, not a model call.

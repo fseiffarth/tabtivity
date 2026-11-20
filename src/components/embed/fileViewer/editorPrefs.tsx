@@ -70,10 +70,11 @@ export interface TabAiPrefs {
 
 /** The automatic trigger's idle delays the AI menu offers, in ms. */
 export const AC_DELAY_CHOICES = [100, 200, 400, 600, 1200] as const;
-/** The delay when none is stored (or a stored one is not a choice). A local
- *  model costs nothing but the machine, so it waits for a short pause; Copilot
- *  answers fast. */
-export const AC_DEFAULT_DELAY_MS = { ollama: 600, copilot: 200 } as const;
+/** The delay when none is stored (or a stored one is not a choice): 200 ms
+ *  for both. A small local model answers from Ollama's prompt cache in about
+ *  as long, and a request still running is cancelled by the next keystroke;
+ *  a slower, larger model is the user's pick of 600 or 1200. */
+export const AC_DEFAULT_DELAY_MS = { ollama: 200, copilot: 200 } as const;
 
 /** The idle delay for the provider serving a tab, from `autocomplete_delay_ms`. */
 export function acDelayMs(stored: Settings["autocomplete_delay_ms"], copilot: boolean): number {
