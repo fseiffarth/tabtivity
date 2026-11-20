@@ -15,17 +15,18 @@ port=int(sys.argv[1]); log=open(sys.argv[2],'a',buffering=1)
 def tools(req):
     return [d.get('name') for t in req.get('tools') or [] for d in t.get('functionDeclarations') or t.get('function_declarations') or []]
 def call(req):
-    """The tool call a `STUB:CALL` in the last user text asks for, unless a tool already answered."""
-    contents=req.get('contents') or []
-    if not contents: return None
-    last=contents[-1]
-    if any('functionResponse' in p or 'function_response' in p for p in last.get('parts') or []): return None
-    text=' '.join(p.get('text','') for p in last.get('parts') or [] if isinstance(p,dict))
-    m=re.search(r'STUB:CALL (\S+) (\{.*\})',text,re.S)
-    if not m: return None
-    try: args=json.loads(m.group(2))
-    except ValueError: return None
-    return {'name':m.group(1),'args':args}
+    """The tool call a `STUB:CALL` in the current user turn asks for, unless a tool already answered.
+    The turn is every content after the last model one: agy's `-p` puts a
+    `<SYSTEM_MESSAGE>` item after the prompt, so the prompt is not always last."""
+    for c in reversed(req.get('contents') or []):
+        if c.get('role')=='model': return None
+        parts=[p for p in c.get('parts') or [] if isinstance(p,dict)]
+        if any('functionResponse' in p or 'function_response' in p for p in parts): return None
+        m=re.search(r'STUB:CALL (\S+) (\{.*\})',' '.join(p.get('text','') for p in parts),re.S)
+        if not m: continue
+        try: return {'name':m.group(1),'args':json.loads(m.group(2))}
+        except ValueError: return None
+    return None
 def last_text(req):
     contents=req.get('contents') or []
     if not contents: return ''
