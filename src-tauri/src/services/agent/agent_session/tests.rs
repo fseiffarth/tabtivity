@@ -2242,6 +2242,81 @@ fn codex_hook_trust_counts_positions_and_leaves_other_hooks_alone() {
 }
 
 #[test]
+fn codex_hook_trust_writes_a_windows_path_key_codex_can_parse() {
+    // A basic-string key `"C:\Users\…"` reads `\U` as a unicode escape and
+    // Codex refuses the whole config ("too few unicode value digits").
+    let cmd = "/opt/hooks/session.sh";
+    let cfg = r"C:\Users\x\agent-homes\k\.codex\config.toml";
+    let src = registered_codex_config(cmd, "");
+    let out = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).unwrap();
+    assert!(
+        out.contains(&format!("[hooks.state.'{cfg}:session_start:0:0']\ntrusted_hash = \"{}\"\n", LIVE_HASHES[0].1)),
+        "{out}"
+    );
+    assert!(!out.contains("[hooks.state.\"C:"), "{out}");
+    assert_eq!(codex_hook_state_in(&out, cfg, cmd), CodexHookState::Enabled);
+    assert_eq!(trust_codex_hooks_in(&out, &[cfg.to_string()], cmd), None);
+}
+
+#[test]
+fn a_broken_windows_path_trust_key_is_repaired() {
+    let cmd = "/opt/hooks/session.sh";
+    let cfg = r"C:\Users\x\.codex\config.toml";
+    let broken = format!(
+        "{}\r\n[hooks.state.\"{cfg}:session_start:0:0\"]\r\ntrusted_hash = \"{}\"\r\n",
+        registered_codex_config(cmd, ""),
+        LIVE_HASHES[0].1
+    );
+    // Read as it was written, so the verdict still counts before the repair.
+    assert_eq!(codex_hook_state_in(&broken, cfg, cmd), CodexHookState::Enabled);
+
+    let fixed = repair_codex_state_headers(&broken).expect("a header to repair");
+    assert!(fixed.contains(&format!("\r\n[hooks.state.'{cfg}:session_start:0:0']\r\n")), "{fixed}");
+    assert_eq!(repair_codex_state_headers(&fixed), None);
+    assert_eq!(codex_hook_state_in(&fixed, cfg, cmd), CodexHookState::Enabled);
+    // Trust repairs it on the way, and registration on every spawn.
+    let trusted = trust_codex_hooks_in(&broken, &[cfg.to_string()], cmd).unwrap();
+    assert!(!trusted.contains("[hooks.state.\"C:"), "{trusted}");
+    assert!(!registered_codex_config(cmd, &broken).contains("[hooks.state.\"C:"));
+    // A valid escaped basic-string key is left alone and read unescaped.
+    let escaped = format!("[hooks.state.\"{}:x:0:0\"]\nenabled = true\n", cfg.replace('\\', "\\\\"));
+    assert_eq!(repair_codex_state_headers(&escaped), None);
+    assert_eq!(toml_state_table_key(escaped.lines().next().unwrap()).as_deref(), Some(&*format!("{cfg}:x:0:0")));
+}
+
+#[test]
+fn a_duplicate_trust_table_after_codex_s_literal_key_is_dropped() {
+    // Seen live on Windows: Codex wrote `'C:\…'` tables, an older build did
+    // not read them and appended `"C:\…"` copies — a parse error twice over.
+    let cmd = "/opt/hooks/session.sh";
+    let cfg = r"C:\Users\x\.codex\config.toml";
+    let hash = LIVE_HASHES[0].1;
+    let src = format!(
+        "{}[hooks.state]\n\n[hooks.state.'{cfg}:session_start:0:0']\ntrusted_hash = \"{hash}\"\n\n\
+         [tui]\nx = 1\n\n\n[hooks.state.\"{cfg}:session_start:0:0\"]\ntrusted_hash = \"{hash}\"\n",
+        registered_codex_config(cmd, ""),
+    );
+    let fixed = repair_codex_state_headers(&src).expect("a duplicate to drop");
+    assert_eq!(fixed.matches(":session_start:0:0").count(), 1, "{fixed}");
+    assert!(fixed.contains(&format!("[hooks.state.'{cfg}:session_start:0:0']\ntrusted_hash = \"{hash}\"\n\n[tui]\nx = 1\n")));
+    assert_eq!(codex_hook_state_in(&fixed, cfg, cmd), CodexHookState::Enabled);
+    // Trust now finds Codex's literal-key table and updates it in place.
+    let trusted = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).unwrap();
+    assert_eq!(trusted.matches(":session_start:0:0").count(), 1, "{trusted}");
+    assert_eq!(trust_codex_hooks_in(&trusted, &[cfg.to_string()], cmd), None);
+}
+
+#[test]
+fn toml_quoted_keys_round_trip() {
+    for key in ["/c/.codex/config.toml:stop:0:0", r"C:\Users\x:stop:0:0", r#"a"b"#, r"it's\a", "tab\there"] {
+        let header = format!("[hooks.state.{}]", toml_quoted_key(key));
+        assert_eq!(toml_state_table_key(&header).as_deref(), Some(key), "{header}");
+    }
+    assert_eq!(toml_quoted_key("/a/b"), "\"/a/b\"");
+    assert_eq!(toml_quoted_key(r"C:\a"), r"'C:\a'");
+}
+
+#[test]
 fn codex_hook_state_tolerates_a_config_path_spelled_differently() {
     // Codex builds the key from the path *it* resolved (symlinked CODEX_HOME,
     // macOS `/private` prefix …), so we fall back to matching our position.

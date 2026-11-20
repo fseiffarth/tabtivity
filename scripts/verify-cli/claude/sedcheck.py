@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import common  # noqa: E402
@@ -30,7 +31,7 @@ def unrust(s):
 
 def exprs():
     out = []
-    for var, raw in LINE.findall(open(SRC).read()):
+    for var, raw in LINE.findall(open(SRC, encoding="utf-8").read()):
         e = unrust(raw)
         m = re.search(r'"(\w+)"', e)
         if not m or "\\(" not in e:
@@ -51,6 +52,18 @@ def expected(d, key, quoted):
     return json.dumps(v)
 
 
+def sed(e, text):
+    # The expression goes in a script file: on Windows, a native Python's
+    # command line to MSYS sed mangles its quotes and brackets.
+    with tempfile.NamedTemporaryFile("w", suffix=".sed", delete=False, encoding="utf-8") as t:
+        t.write(e + "\n")
+    try:
+        r = subprocess.run(["sed", "-n", "-f", t.name], input=text.encode(), capture_output=True)
+        return r.stdout.decode().rstrip("\n")
+    finally:
+        os.unlink(t.name)
+
+
 checks = exprs()
 print(f"{len(checks)} extractions read from {os.path.relpath(SRC, common.ROOT)}")
 bad_total = 0
@@ -59,10 +72,10 @@ for label in sys.argv[1:]:
     files = sorted(glob.glob(f"{base}/hooks/dump/*.json") + glob.glob(f"{base}/prompt/dump/*.json"))
     bad = 0
     for f in files:
-        text = open(f).read()
+        text = open(f, encoding="utf-8").read()
         d = json.loads(text)
         for var, key, e, quoted in checks:
-            got = subprocess.run(["sed", "-n", e], input=text, capture_output=True, text=True).stdout.rstrip("\n")
+            got = sed(e, text)
             want = expected(d, key, quoted)
             if got != want:
                 bad += 1

@@ -1317,8 +1317,9 @@ pub async fn prepare(
         && std::env::var_os(OPENCODE_INLINE).is_none()
     {
         if let Some(requested) = crate::services::local_drivers::opencode_spawn_model(&opts.cmd, &opts.args) {
+            let v2 = crate::services::agent_registry::opencode_is_v2().await;
             if let Some(cfg) =
-                crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref())
+                crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref(), v2)
             {
                 let cfg = match opts.env.get(OPENCODE_INLINE) {
                     Some(lanes) => crate::services::root_mcp::merge_opencode_mcp(&cfg, lanes),
@@ -1341,7 +1342,8 @@ pub async fn prepare(
         .await?;
         let provider = match (plan.launch.cli, plan.launch.model.as_deref()) {
             (crate::services::assistant::AssistantCli::OpenCodeLocal, Some(model)) => {
-                Some(crate::services::local_drivers::opencode_assistant_provider(model))
+                let v2 = crate::services::agent_registry::opencode_is_v2().await;
+                Some(crate::services::local_drivers::opencode_assistant_provider(model, v2))
             }
             _ => None,
         };
@@ -1717,6 +1719,7 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
+                crate::services::agent_install::apply_unfenced_env(&opts.cmd, &mut opts.env);
                 opts.env.insert(crate::app_env!("HOST_SESSION").into(), "1".into());
                 mark_unfenced_agent(&mut opts.env);
                 // Last: it may put `agent_exec` in front of the CLI.
@@ -1740,6 +1743,7 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
+                crate::services::agent_install::apply_unfenced_env(&opts.cmd, &mut opts.env);
                 mark_unfenced_agent(&mut opts.env);
                 inject_api_keys(&mut opts, &scope_id)?;
             }

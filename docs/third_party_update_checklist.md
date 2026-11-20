@@ -722,6 +722,28 @@ Claude's `/fast` — different thing.
   prompt that just appeared now takes; most prompts ignore keys other than Esc
   for a moment after `fg`; `/status` lists broken agent, skill and hook files.
   Not exercised: a live tab, the phone, a real sign-in.
+- **2.1.329 (2026-11-20), partial, on Windows, beside 2.1.327** (both from the
+  agent install's `versions/`; no tmux) — `VERIFIED` stays 2.1.327.
+  `hooks.sh` 21 events with the same keys (`cmp.py`); the PowerShell hook's
+  12 regex reads 0 mismatches over 21 payloads each (`pscheck.py`, new: the
+  hook Windows runs); `sedcheck.py` differs only in `transcript_path`, the
+  same on both (JSON-escaped backslashes, POSIX hook only). `meta.py` the same
+  record types, user-record keys and folder encoding; `/usage` the same
+  envelope and panel text. `turn_hooks.py`'s ten `-p` cases fire the same
+  events with the same keys; `subagent` and `cwd` swap two events between
+  runs on both versions (a race; nothing reads `CwdChanged`). `--help` only
+  rewords `--name` and `--restricted`. In the binary, the mode labels, notification
+  types, `Do you want to proceed?`, the queue hint, `More models`, `Review
+  your answers` and the model ids count the same. Changelog items near what
+  Tabtivity reads, not exercised: the trust dialog now says where a folder's
+  hooks are declared; Esc at a permission prompt right after typing no longer
+  gets lost (2.1.328); choosing `Default` in `/model` keeps the saved model;
+  `Stop`'s `background_tasks` names a Monitor `monitor`, not `shell` (nothing
+  reads it: the `.bg` record comes from `PostToolUse`'s `backgroundTaskId`); resumed sessions no longer show
+  `Rejected`/`Declined` for cut-off edits and questions; short windows no
+  longer crop panels and questions at the prompt. Still owed on Linux:
+  `prompt.py`, `model.py`, `chat_send.py`, `send_now.py`, `esc_early.py`, the
+  `tui_` cases and the frame replay.
 
 **Verify**
 
@@ -733,7 +755,7 @@ grep -A4 SessionStart ~/.claude/settings.json
 stat -c '%i %a' ~/.claude/.credentials.json   # note the inode, then after a refresh: a new one
 cargo test --manifest-path src-tauri/Cargo.toml agent_auth
 cargo test --manifest-path src-tauri/Cargo.toml agent_session
-cargo test --manifest-path src-tauri/Cargo.toml agent_usage
+cargo test -p app-core agent_usage   # moved to app-core; in tabtivity it matches nothing
 ```
 
 `claude --version` in a tab names the tab's own CLI: `agents/install` first, an
@@ -1323,6 +1345,10 @@ Antigravity's newest release comes from the manifest its installer reads
 (`agent_install::SELF_UPDATE_ARGV`) outside the fence, because `install.sh` and
 `install.ps1` exit 0 at "already installed". Inside a fence the binary's folder
 is read-only, so neither `agy update` nor its background self-update can work.
+Outside one (Windows, a Host session) a read-only flag does not stop agy, so
+every agy spawn gets `AGY_CLI_DISABLE_AUTO_UPDATE=1` (named in the binary,
+not documented; re-check the name on each release:
+`grep -a AGY_CLI_DISABLE_AUTO_UPDATE <agy>`).
 
 Antigravity's per-tab resume depends on its user hooks
 (`services::antigravity_session`, since 2026-11-16, probed on 1.5.2–1.5.11). On
@@ -2378,6 +2404,36 @@ rest are the sign-in frames' PKCE challenge. `agy changelog` for 1.5.11:
 `/usage`, `/quota` and `/credits` are hidden under a `GEMINI_API_KEY` and exit
 2 under `-p`, Vim-mode undo, `agy plugin validate` taking a zip or URL, and
 Remote Control fixes. Not reached: a real sign-in, a real subagent's timing.
+1.5.13 on 2026-11-20, partial, on Windows, beside 1.5.11 (the agent install's
+copy, sha512 = the manifest's; 1.5.11 its `agy.exe.<n>.old`; no tmux) —
+`VERIFIED` stays 1.5.11. `--help` and every subcommand's help identical.
+`agy models` adds `gemini-4-neon-{high,xhigh,medium,low}` on top (25 ids);
+`antigravityModelLabel` already words `xhigh` (Hydrogen has it since 1.5.11).
+`-p`, `-c -p` and a forced tool call against the stub: one conversation of
+three turns, `store.py` the same turns, identical schemas, the stored model
+read on both. The app's `hook.ps1` (filled as `powershell_script_in`,
+registered as `hook_entry`) beside a dumper, with made-up tab variables, the
+same on both: `SessionStart` on the first `-p` only; each turn
+`PreInvocation`, `PostInvocation` and one `Stop` (`NO_TOOL_CALL`, `fullyIdle:
+true`), with `conversationId` and `lastUserInput`; the record names the
+conversation, `.turn` ends `done`, `STUBMARK-APP-HINT` reaches the model; tool
+commands get `ANTIGRAVITY_AGENT=1`. Self-update on Windows: a copy marked
+`attrib +r` still replaced itself with 1.5.13, in its first `--help` run and
+under `agy update` (exit 0); denying write with `icacls` stops it from
+running at all. `AGY_CLI_DISABLE_AUTO_UPDATE=1` (named in the binary) kept a
+plain copy's sha512 through every run. Windows has no fence, so an agy tab
+there could update itself behind Manage CLIs: every agy spawn now gets it
+(`agent_install::autoupdate_off`, and `apply_unfenced_env` for the unfenced
+Windows and Host-session spawns; not confirmed live). `agy changelog`: Gemini 4 Neon in `/model` and `--model`
+(1.5.12 API key, 1.5.13 ADC), an altscreen-only scroll line above the prompt,
+headings drawn without `##`, `AI: Out of credits` gone from the status line
+under an API key, `--remote-control`/`--remote-agent` exit 2 under an API
+key, Ctrl/Alt shortcuts following the keyboard layout. Still owed on Linux:
+`main.py`, `queued.py`, `signin.py`, `second.py` frames (the footer, and
+`/model` with four new rows on top: whether the default or `(current)` row
+moves), `hooks.py events`/`tabs` (a subagent's `fullyIdle: false` `Stop`,
+`/clear`, `--conversation`, a nested `agy -p`), a real plan's link, a real
+sign-in.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
