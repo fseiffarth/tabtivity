@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
-import { commandArgsInline, commandLabel, slashCommand, transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { commandArgsInline, commandLabel, commandRuns, slashCommand, transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { BRAND } from "../../lib/brand";
 
 const prompt = (text: string, at?: string): TranscriptEntry => ({ kind: "prompt", text, at });
@@ -93,6 +93,25 @@ describe("slashCommand", () => {
     expect(commandLabel(model.command!)).toBe("/model → Fable 5.2");
     expect(commandLabel(typed.command!)).toBe("/model opus → Opus 5.5");
     expect(commandLabel(plain.command!)).toBe("/clear");
+  });
+  it("folds commands sent one after another onto one rule", () => {
+    const turns = transcriptTurns([
+      { kind: "prompt", text: "/model", setting: "Fable 5.2", at: "1" },
+      { kind: "prompt", text: "/effort high", setting: "high", at: "2" },
+      { kind: "prompt", text: "/plan write up a plan", at: "3" },
+      { kind: "prompt", text: "/clear", at: "4" },
+      { kind: "answer", text: "ok", at: "5" },
+      { kind: "prompt", text: "/compact", at: "6" },
+    ]);
+    const runs = commandRuns(turns);
+    expect([...runs.folded]).toEqual([0, 1]);
+    expect(runs.lead.get(2)).toBe("/model → Fable 5.2 · /effort high → high");
+    // A command with words under its rule ends the run: /clear stands alone.
+    expect(runs.lead.has(3)).toBe(false);
+    expect(runs.lead.has(5)).toBe(false);
+    // A day chip between two commands keeps them apart.
+    expect(commandRuns(turns, new Set([1])).folded.has(0)).toBe(false);
+    expect([...commandRuns(turns, new Set([1])).folded]).toEqual([1]);
   });
   it("marks only prompts as commands", () => {
     const turns = transcriptTurns([

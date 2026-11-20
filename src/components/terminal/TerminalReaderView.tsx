@@ -101,7 +101,7 @@ import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
-import { commandArgsInline, commandLabel, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { COMMAND_SEPARATOR, commandArgsInline, commandLabel, commandRuns, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordedRun, recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
@@ -552,7 +552,9 @@ type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflo
 
 /** Memoised: the Reader re-renders on every live-screen tick while an agent
  * streams, and a turn already drawn has nothing new to say then. */
-const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore, pickAsync, asyncBusy, asyncSending }: {
+const Turn = memo(function Turn({ turn, lead, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore, pickAsync, asyncBusy, asyncSending }: {
+  /** On a command: the commands sent just before it, drawn on its rule (`commandRuns`). */
+  lead?: string;
   /** A prompt bubble's "Restore files to before this" (`ReaderCheckpoints`). */
   restore?: ReactNode;
   action?: ReactNode;
@@ -602,7 +604,7 @@ const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, a
     const inline = commandArgsInline(turn.command.args);
     return <>
       <div className="terminal-reader-command" role="separator" data-prompt={turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}>
-        <span>{commandLabel(turn.command)}</span>
+        <span>{lead ? `${lead}${COMMAND_SEPARATOR}${commandLabel(turn.command)}` : commandLabel(turn.command)}</span>
       </div>
       {/* A `/design @inbox-picture` prompt's picture shows as in any prompt. */}
       {!inline && <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"}>
@@ -2185,6 +2187,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     enabled: visible, openEntry: openInboxEntry, settle: settleInbox,
   });
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
+  // Slash commands sent one after another share one rule.
+  const runs = useMemo(() => commandRuns(turns, openers), [turns, openers]);
 
   // Voice (docs/desktop_voice_plan.md step 4): read-aloud speaks the session's
   // working row as a turn begins and its new answer once the turn ends; hands-free (experimental) loops the mic
@@ -2786,7 +2790,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                     <span>{chatDayLabel(moment, now, dayLabels)}</span>
                   </div>
                 )}
-                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent}
+                {!runs.folded.has(index) && <Turn turn={turn} lead={runs.lead.get(index)} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent}
                   pickAsync={turn.asking && canAnswerAsync ? asyncAsk.pick : undefined}
                   asyncBusy={turn.asking && (!!asyncAsk.sending || !!answered || held)}
                   asyncSending={turn.asking && asyncAsk.sending === turn.key}
@@ -2798,7 +2802,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                       {t("mobile.signIn.open")} <UntestedTag id="terminal.reader.loginExpired" />
                     </button>
                   ) : undefined
-                } />
+                } />}
               </Fragment>
             );
           })}
