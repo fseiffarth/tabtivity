@@ -744,6 +744,22 @@ Claude's `/fast` — different thing.
   longer crop panels and questions at the prompt. Still owed on Linux:
   `prompt.py`, `model.py`, `chat_send.py`, `send_now.py`, `esc_early.py`, the
   `tui_` cases and the frame replay.
+- **2.1.329 (2026-11-20), the Linux half, beside 2.1.327 and 2.1.328** —
+  `VERIFIED` moves to 2.1.329. `hooks.sh` 19 events with the same keys
+  (`cmp.py`), `sedcheck.py` 0 mismatches over 23 payloads, `meta.py` and the
+  `/usage` envelope keys the same. `turn_hooks.py` (all 23 cases, offline) the
+  same events and keys; `subagent` swaps `PostToolUse` around the subagent's
+  events, the race the Windows run saw. Frame replay (`prompt.py` at 120, 60,
+  42 and 72 columns, `model.py` plain and `expand`, every `tui_` case): 165
+  frames read the same as 2.1.328 and the rest differ only in raw text or in
+  the model's one-line summary of the command; `~/.claude/settings.json`
+  unchanged after the `/model` walks. `chat_send.py` all five submitted word
+  for word. `send_now.py` with the chord: `early` and `tool` read as on
+  2.1.327; `typed` and `stream`, which lost the second prompt on 2.1.326 and
+  2.1.327 (a probe weakness), now send it and answer it (the Bash moved to the
+  background, the stream cut short). `esc_early.py queued`: the queue goes
+  first and the held prompt comes back into the box unsent, as on 2.1.318.
+  Not exercised: a live tab, the phone, a real sign-in.
 
 **Verify**
 
@@ -847,6 +863,27 @@ tab and resume/fork remain tagged for live verification.
   `UserPromptSubmit` with it as the prompt; a skip records nothing; the turn's
   end drops a waiting one. Read by the hook's `.ask` record, `agent_transcript`
   and the phone's `useAsyncAsk`.
+- **0.171.0 (2026-11-20), outside Tabtivity, beside 0.170.0** — both from the
+  agent install's `releases/`; release notes read (no 0.170.x between).
+  `--help` identical except `exec`'s new `--remote <ADDR>` and
+  `--remote-auth-token-env` (Tabtivity passes neither). `screens.sh`: trust,
+  idle, both `/model` steps, Esc back and Shift+Tab's `Plan mode` at 100 and
+  60 columns read the same; the catalog rows are unchanged (GPT-6.2-Sol and
+  -Astra already led on 0.170.0), and the TUI workspace now on by default
+  draws nothing new on these screens (`← for agents` in the footer was there
+  on 0.170.0). `writer_lock.py`: the same lock screen and release.
+  `turn_hooks.py`: the same events and keys in every phase, the approval
+  dialog and its lamp read the same; `added` showed "Hooks need review" at
+  start this time and ran the trusted hooks, the new one inert (0.170.0's
+  capture was the run under load). `async_question.py` asks, opens, answers,
+  skips and drops as on 0.170.0; its frames read the same.
+  `codex_parses_the_local_catalog` passes. Changelog items near what
+  Tabtivity reads, not exercised: drafts, queued follow-ups and interrupted
+  input stay with their thread across a switch or resume; late completion
+  events no longer cancel a newer turn's approval; scrolling no longer
+  inserts stray characters; `/rc` and `/remote`; MCP status lines under
+  `/statusline`. Hooks against a real model, an approval in a window and the
+  phone were not exercised.
 - **0.170.0 (2026-11-18), outside Tabtivity, beside 0.169.0** — both from the
   agent install's `releases/`; release notes read (no 0.169.x between).
   `--help` of the top level, `exec`, `resume`, `fork`, `mcp`, `login` and
@@ -1609,6 +1646,23 @@ install home as before, which puts launcher and binary in
 fenced Muse gets `MUSE_NO_AUTO_UPDATE=1` (`agent_install::autoupdate_off`):
 its launcher would otherwise start a ~470 MB download into a read-only
 folder. Not verified: the Update click itself, a real model, sign-in.
+
+**1.4.24** (2026-11-19/20, the channel's version, beside 1.4.23; the binary is
+the one Manage CLIs installed, `muse-bin-1.4.24-R9131.1`, byte-identical to the
+probe copy; outside Tabtivity, scratch homes): `--version` keeps its shape;
+`exec --help` adds `--list-models`; `resume`, `auth` and `login` help are
+unchanged. The launcher is now version 4: it
+passes sign-in secrets to `curl` through `--config` instead of argv and keeps
+the device-code exchange out of temp files; `MUSE_NO_AUTO_UPDATE=1`, `MUSE_CHANNEL`
+and the login file (`$XDG_CONFIG_HOME` or `~/.config/muse/auth.json`) are
+unchanged, and the binary still names `TBH_CREDENTIAL_BACKEND`. `resume.py`
+passes all 14 checks. `turns.py events` and `shared` name the same events with
+the same fields; the background subagents now come as one `SubagentStart`
+after `Stop` (nothing reads them). The echo frames (trust, idle, a reply, the
+`/` menu, `/model`, 60 columns) read the same through the readers, the `⟩`
+menu included. `reads_a_real_muse_store` reads the 1.4.24 store (prompt,
+answer, five chats). The public changelog still stops at 1.4.18. Not
+verified: a real model, sign-in, the Update click.
 Copilot's row started at 1.0.89 (2026-09-30, from the npm package, not live): `-p`,
 `--continue`, `session-state` under `COPILOT_HOME`/home, and `authTokens` /
 `storeTokenPlaintext` in the runtime it unpacks into `~/.cache/copilot/pkg/`.
@@ -2450,6 +2504,19 @@ key, Ctrl/Alt shortcuts following the keyboard layout. Still owed on Linux:
 moves), `hooks.py events`/`tabs` (a subagent's `fullyIdle: false` `Stop`,
 `/clear`, `--conversation`, a nested `agy -p`), a real plan's link, a real
 sign-in.
+The Linux half, the same day, beside 1.5.11 (the install's copy, read-only;
+its sha512 unchanged after every run) — `VERIFIED` moves to 1.5.13.
+`main.py` (80 and 42 columns), `second.py`, `queued.py` (44, 56), `signin.py`
+(42×24, 80×24) and `hooks.py events|turns|tabs|format` print the same as on
+1.5.11 apart from ids. The stub's default model is now Gemini 4 Carbon (was
+Hydrogen), and the footer reads it. `/model` gains Gemini 4 Neon on top
+(`1-6 of 8 items`): the readers take the rows as drawn, the `>` row stays
+current, the hidden count follows, and each model's effort stops come from its
+own gauge (Neon and Hydrogen have `xhigh`, Carbon stops at `high`). The sign-in
+pages differ only in the PKCE challenge and state. A subagent's early `Stop`
+(`fullyIdle: false`) did not fire this run; 1.5.11 drew it in one of two runs,
+so it is a race, and `hook.sh` skips it either way. Not reached: a real plan's
+link, a real sign-in.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row

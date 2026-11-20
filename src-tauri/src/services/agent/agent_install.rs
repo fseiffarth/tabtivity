@@ -313,7 +313,7 @@ fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
         // tmpfs in the fence: "restart to update" then restarted on the old
         // version, every time.
         "copilot" => &[("COPILOT_AUTO_UPDATE", "false")],
-        // Its launcher (version 3, 1.4.15–1.4.23) forks a background download of
+        // Its launcher (version 3, 1.4.15–1.4.23; version 4, 1.4.24) forks a background download of
         // the whole ~470 MB binary once its interval has passed, beside itself
         // in a folder the fence keeps read-only. Manage CLIs' Update is the way.
         "muse" => &[("MUSE_NO_AUTO_UPDATE", "1")],
