@@ -1452,7 +1452,16 @@ impl Scan<'_> {
     /// that is locked or unreadable keeps them.
     fn open_store(&mut self, ctx: &HomeCtx, rel: &str, tables: &[&str]) -> Option<(rusqlite::Connection, Meta)> {
         let prefix = format!("{}/{rel}#", ctx.name);
-        let file = HomeFile::open_existing(&ctx.dir, rel)?;
+        // SQLite's NOFOLLOW refuses a link anywhere in the path it is handed,
+        // so the home — Tabtivity's own, where a link in its prefix (macOS's
+        // `/var` → `/private/var` temp dir) is not the agent's doing — is
+        // resolved first, as `HomeFile::open_below` does; below it, a link is
+        // still refused component by component.
+        #[cfg(unix)]
+        let home = std::fs::canonicalize(&ctx.dir).ok()?;
+        #[cfg(not(unix))]
+        let home = ctx.dir.clone();
+        let file = HomeFile::open_existing(&home, rel)?;
         let meta = match file.lstat() {
             Ok(meta) => meta,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,

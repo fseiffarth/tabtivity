@@ -17,18 +17,31 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import common  # noqa: E402
 
 projects = os.path.expanduser("~/.claude/projects")
+if os.name == "nt":
+    # A transcript path under an agent home passes Windows' 260-character
+    # limit, where exists() and open() fail without the long-path prefix.
+    projects = "\\\\?\\" + os.path.abspath(projects)
+
+
+def transcript(sid):
+    for d in os.listdir(projects):
+        if f"{sid}.jsonl" in os.listdir(os.path.join(projects, d)):
+            return d, os.path.join(projects, d, f"{sid}.jsonl")
+    return None, None
+
+
 for label in sys.argv[1:]:
     v = os.path.join(common.OUT, "claude", label, "hooks")
     print("==", label)
     ids = {n: open(f"{v}/id.{n}").read().strip() for n in ("default", "plan")}
     for name, sid in ids.items():
-        p = glob.glob(f"{projects}/*/{sid}.jsonl")
+        folder, p = transcript(sid)
         if not p:
             print(name, "NO TRANSCRIPT for", sid)
             continue
-        recs = [json.loads(line) for line in open(p[0])]
+        recs = [json.loads(line) for line in open(p, encoding="utf-8")]
         print(name, len(recs), sorted(collections.Counter(r.get("type") for r in recs).items(), key=str))
-        print("  folder", "encoded ok" if p[0].split("/")[-2].endswith("-work") else p[0])
+        print("  folder", "encoded ok" if folder.endswith("-work") else folder)
     for f in sorted(glob.glob(f"{v}/dump/*.json")):
         d = json.load(open(f))
         print("  ", (d.get("hook_event_name"), d.get("source") or d.get("reason") or "",

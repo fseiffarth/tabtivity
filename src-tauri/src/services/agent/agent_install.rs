@@ -317,9 +317,18 @@ fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
         // the whole ~470 MB binary once its interval has passed, beside itself
         // in a folder the fence keeps read-only. Manage CLIs' Update is the way.
         "muse" => &[("MUSE_NO_AUTO_UPDATE", "1")],
+        // Named in the binary (1.5.11, 1.5.13; no documentation). Without it a
+        // Windows copy marked read-only still replaced itself with the newest
+        // release on its first run (2026-11-20).
+        "agy" => &[("AGY_CLI_DISABLE_AUTO_UPDATE", "1")],
         _ => &[],
     }
 }
+
+/// The CLIs whose auto-update switch an unfenced spawn gets too (Windows,
+/// the root console's Host session), where nothing keeps the install
+/// read-only: agy replaces its own binary there, behind Manage CLIs' back.
+const UNFENCED_AUTOUPDATE_OFF: &[&str] = &["agy"];
 
 /// The auto-update switch of a CLI that has one only as an argument, by
 /// command basename: the flag, and the oldest build it was read in, which also
@@ -368,11 +377,23 @@ pub fn apply_fence_args(cmd: &str, exe: Option<&Path>, args: &mut Vec<String>) {
 /// and the user's own shell next). Updates go through Manage CLIs. A value
 /// the user set wins.
 pub fn apply_fence_env(cmd: &str, env: &mut std::collections::HashMap<String, String>) {
-    let bin = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
-    let bin = bin.strip_suffix(".exe").unwrap_or(bin);
-    for (k, v) in autoupdate_off(bin) {
+    for (k, v) in autoupdate_off(command_stem(cmd)) {
         env.entry((*k).to_string()).or_insert_with(|| (*v).to_string());
     }
+}
+
+/// [`apply_fence_env`] for an unfenced spawn: only the CLIs in
+/// [`UNFENCED_AUTOUPDATE_OFF`]. A value the user set wins.
+pub fn apply_unfenced_env(cmd: &str, env: &mut std::collections::HashMap<String, String>) {
+    if UNFENCED_AUTOUPDATE_OFF.contains(&command_stem(cmd)) {
+        apply_fence_env(cmd, env);
+    }
+}
+
+/// A command's basename without `.exe`.
+fn command_stem(cmd: &str) -> &str {
+    let bin = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
+    bin.strip_suffix(".exe").unwrap_or(bin)
 }
 
 /// Startup: adopt what an older Tabtivity kept for the Claude login — the
@@ -602,6 +623,24 @@ mod tests {
         let mut env = std::collections::HashMap::new();
         apply_fence_env("codex", &mut env);
         assert!(env.is_empty());
+        let mut env = std::collections::HashMap::new();
+        apply_fence_env("/s/agents/install/AppData/Local/agy/bin/agy.exe", &mut env);
+        assert_eq!(env.get("AGY_CLI_DISABLE_AUTO_UPDATE").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn an_unfenced_spawn_switches_off_only_agys_updater() {
+        let mut env = std::collections::HashMap::new();
+        apply_unfenced_env(r"C:\s\agents\install\AppData\Local\agy\bin\agy.exe", &mut env);
+        assert_eq!(env.get("AGY_CLI_DISABLE_AUTO_UPDATE").map(String::as_str), Some("1"));
+        let mut env = std::collections::HashMap::from([("AGY_CLI_DISABLE_AUTO_UPDATE".to_string(), "0".to_string())]);
+        apply_unfenced_env("agy", &mut env);
+        assert_eq!(env.get("AGY_CLI_DISABLE_AUTO_UPDATE").map(String::as_str), Some("0"));
+        for cmd in ["claude.exe", "opencode", "copilot", "muse", "codex"] {
+            let mut env = std::collections::HashMap::new();
+            apply_unfenced_env(cmd, &mut env);
+            assert!(env.is_empty(), "{cmd}");
+        }
     }
 
     #[test]

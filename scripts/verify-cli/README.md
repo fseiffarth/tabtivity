@@ -6,7 +6,10 @@ wraps) against what the app assumes of it. What to check per CLI is
 binary for those checks without a window: a private tmux server
 (`tmux -L`), a scratch HOME, the tab-identity variables unset, stub model
 servers on loopback. The user's own install, config and live tabs are never
-touched. Linux only.
+touched. Linux, apart from the headless tools below, which also run on
+Windows under Git Bash (no tmux there): `flags.sh`, `claude/hooks.sh`,
+`cmp.py`, `meta.py`, `sedcheck.py`, `pscheck.py` and `turn_hooks.py`'s
+cases without `tui_` (set `PYTHONUTF8=1`).
 
 Outputs and baselines go to `tmp/verify-cli/<cli>/<label>/` (gitignored;
 `VERIFY_OUT` overrides). `<label>` is the version under test. Run the old
@@ -21,7 +24,8 @@ and the new version through the same probe, then compare the two labels.
 | `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is); a Responses tool inside a namespace is `<namespace>.<tool>` (Codex's `multi_agent_v1.spawn_agent`; the GPT-6 family's `functions` namespace is plain names). It logs every request (offered tools, tool results; a chat completion also its `model` and every `STUBMARK-<WORD>` it carries), so you can force calls no real model would make. |
 | `hookdump.py <log> <event>` | A hook command that appends its event, pid, environment names (and the tab, Copilot and hook-depth values) and stdin payload to a JSONL log. Register it for every event to see which fire, with what. |
 | `stub_anthropic.py <port> <log>` | Anthropic Messages API (`ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`), streaming or not. `STUB:CALL`/`STUB:SEQ` as above (only in a request that offers tools), `STUB:ERR <status> <type>` answers that API error. Lets Claude run with no login and no paid turn. |
-| `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
+| `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` anywhere in the current user turn (agy's `-p`
+adds a system message after the prompt) makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
 | `parsers/frames.probe.ts` | Replays every frame of two labels through the app's own readers (Reader live view, model pickers, decision lamp, cold-resume dialog, Antigravity picker/effort, phone sign-in) and lists the frames and fields that read differently. See below. |
 
 Replay two labels:
@@ -49,7 +53,9 @@ gives its usage.
   where a long option wraps. `cmp.py <old> <new>` compares
   hook events and keys. `sedcheck.py <label>…` runs the session hook's own
   `sed` extractions, read live from `agent_session.rs`, against each
-  payload. `meta.py <label>…` lists the transcript record types and
+  payload; on Windows its `transcript_path` reads differ by design, and
+  `pscheck.py <label>…` checks the hook that runs there instead (the
+  PowerShell twin's `[regex]::Match` reads). `meta.py <label>…` lists the transcript record types and
   permission modes. `esc_early.py <label> <bin> [queued|alone|pull]` holds a
   turn unanswered with a sleeping hook and presses Esc (or ↑) on it, for
   where the prompt goes. `send_now.py <label> <bin>
@@ -98,7 +104,9 @@ gives its usage.
   resume flags and `agy models`. `second.py` checks two windows on one
   conversation. `signin.py <label> <bin> <cols> <rows>` reaches the sign-in
   link at a width. Copy `<bin>` into a directory you made read-only first:
-  agy updates itself in place. `store.py <label> [<label>…]` reads `main.py`'s
+  agy updates itself in place. On Windows a read-only flag does not stop
+  it: run every probe with `AGY_CLI_DISABLE_AUTO_UPDATE=1` and check the
+  copy's sha512 after. `store.py <label> [<label>…]` reads `main.py`'s
   home the way the phone Chat does (`google_chat`'s queries and protobuf
   fields) and prints the schema statements that differ between labels.
   `hooks.py events|turns|tabs|format <label> <bin> <port>` registers the

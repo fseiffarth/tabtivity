@@ -39,7 +39,7 @@ TAB_VARS = [p + v for p in (ENV_PREFIX, LEGACY_ENV_PREFIX) for v in ("TAB_UID", 
 
 def binary(path):
     """A binary named by path, made absolute: every probe runs it from a scratch work dir."""
-    return os.path.abspath(path) if os.sep in path else path
+    return os.path.abspath(path) if os.sep in path or "/" in path else path
 
 
 def out_dir(cli, label, *sub):
@@ -59,6 +59,9 @@ def scratch_env(home, extra=None):
         "TERM": "xterm-256color",
         "COLORTERM": "truecolor",
     }
+    if os.name == "nt":
+        # Windows CLIs take their home from USERPROFILE, not HOME.
+        env["USERPROFILE"] = home
     env.update(extra or {})
     return env
 

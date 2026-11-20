@@ -1675,6 +1675,18 @@ with two synthetic checks; nothing was run live and nothing is fixed.
       restart without systemd; whether the CLI hand-off can name a
       Host-session conversation with no project id; the read-side variant of
       gap 115 during the automatic snapshot.
+2452. **LuaTeX writes are not confined on TeX Live older than 2025.** A Build
+    sets `openout_any=p` (gap 36, #867), but LuaHBTeX 1.16 (TeX Live 2023,
+    Ubuntu 24.04's) applies no kpathsea mode to Lua's `io.open`: a document's
+    `\directlua` writes an absolute path or `../` even under `p`. Found by
+    CI on 2026-11-20; `a_build_engine_run_confines_luatex_writes` now skips
+    on such an engine. Options: refuse LuaLaTeX Builds (or ask) where a probe
+    shows `p` is ignored; `--safer` (makes `io.open` read-only, may break
+    luaotfload's font cache); or the agent fence around host TeX runs.
+    **Your call.** Which TeX Live first honours `p` for `io.open` is
+    unverified (confirmed on 2025, not on 2024).
+    - [ ] 🤖 Automated test — a Build on an engine that ignores `p` writes
+      nothing outside the document and output folders.
 
 ### Safe for everyone — non-expert users (2026-09-24)
 
