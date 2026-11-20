@@ -236,11 +236,19 @@ async fn pump<IO>(
     let (mut rd, mut wr) = attached.into_split();
     let reading = shared.clone();
     let mut reader = tokio::spawn(async move {
+        // The reader dropped while a handle lives is no end: its output is
+        // dropped and the stream runs on until every handle is gone (the
+        // writer half sees that). Ending here instead made the stream's life
+        // hang on whether output — the attach's own snapshot — came before
+        // or after the drop.
+        let mut out = Some(out);
         loop {
             match rd.next().await {
                 Ok(Some(StreamEvent::Output(bytes))) => {
-                    if out.send(bytes).await.is_err() {
-                        break;
+                    if let Some(tx) = &out {
+                        if tx.send(bytes).await.is_err() {
+                            out = None;
+                        }
                     }
                 }
                 // The repaint's bytes follow as output.
