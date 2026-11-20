@@ -220,6 +220,16 @@ loops against one mirror and one `sync.json`. Now:
 - **One user, role admin.** P2's user owns the box: every web session runs
   with `Role::Admin`, so admin commands (model pulls, CLI installs) are
   served. P3's gateway assigns roles per account; the gate already exists.
+- **A `client` reading the browser needs is a `core` twin, not a
+  reclassification** (2026-11-03, #2443). The bare sensors and the OS
+  clipboard stay the client's; where a feature asks about the *server*
+  — the machine the shared Ollama runs on (`models_host_load`, the Models &
+  agents meters and the intro's recommendation) — or files what the
+  *browser* holds (`pty_paste_image`: the page reads its own clipboard's
+  picture, the server files it into the tab's inbox like the window's
+  `pty_paste_clipboard_image`), a `core` command does it and the UI picks it
+  by `isServerClient()`. `pdf_clip_*` (a process-wide buffer now) and
+  `run_script_detached` (a `Ctx` now) are served as they are.
 - **`switch_project_runtime` is split, not reclassified.** It hides and shows
   OS windows (client) *and* runs the project's name migration, layout save,
   session load and event (backend). `switch_project_session` is the backend
@@ -295,7 +305,7 @@ own standalone workspace (Q12). As built:
 ## Not done (TODO group Z, #2341–#2346, and #2339)
 
 Popout windows (`?popout=`), browser shortcut alternatives for Ctrl+T/W/N,
-`pdf_clip_*`/`run_script_detached`, a stale-bundle notice, the CSP and
+a stale-bundle notice, the CSP and
 security review — and the root MCP lane in a desktop's sidecar (#2339:
 starting a second root listener would sweep a running window's review
 sandboxes). The sidecar's own listener serves the schedule, push and help

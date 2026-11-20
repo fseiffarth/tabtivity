@@ -248,6 +248,16 @@ fn chosen_cli(state_dir: &Path, cmd: &str) -> Option<&'static str> {
     chosen_in(state_dir).contains(cli).then_some(cli)
 }
 
+/// Whether `cli` can run on an administrator's key at all: one the keeper
+/// holds keys for ([`super::keys_wire::KEY_CLIS`]) and the proxy serves. Asked
+/// here too, not only by the keeper: Codex and OpenCode now take a user's own
+/// key through the proxy (`agent_api_keys::proxies`), but Codex never gets
+/// the administrator's (decided, #2361), and OpenCode's one grant would carry
+/// a single key to all three of its providers.
+fn admin_keyable(cli: &str) -> bool {
+    super::keys_wire::KEY_CLIS.contains(&cli) && crate::services::agent_api_keys::proxies(cli)
+}
+
 /// The CLI a local spawn of `cmd` (an agent tab, the Host session, the shell
 /// shim) runs on the administrator's key, ready for the API proxy to grant —
 /// `Ok(None)` for every other spawn and off a server. `Err` (the spawn fails,
@@ -266,8 +276,8 @@ pub fn admin_for_spawn(cmd: &str) -> Result<Option<&'static str>, String> {
 /// state (tests).
 pub fn admin_for_spawn_in(state_dir: &Path, socket: &Path, cmd: &str, proxy_running: bool) -> Result<Option<&'static str>, String> {
     let Some(cli) = chosen_cli(state_dir, cmd) else { return Ok(None) };
-    if !crate::services::agent_api_keys::proxies(cli) {
-        return Err(format!("{}: this CLI cannot run on an API key; switch back to your own login in Settings → Manage CLIs", label(cli)));
+    if !admin_keyable(cli) {
+        return Err(format!("{}: this CLI cannot run on the administrator's API key; switch back to your own login in Settings → Manage CLIs", label(cli)));
     }
     match offered_at(socket) {
         Ok(offers) if offers.iter().any(|o| o.cli == cli) => {}
@@ -370,8 +380,8 @@ pub fn choose(cli: &str, on: bool) -> Result<(), String> {
     if !super::is_server() {
         return Err("only a hosted server offers the administrator's API keys".into());
     }
-    if !crate::services::agent_api_keys::proxies(cli) {
-        return Err(format!("{}: this CLI cannot run on an API key", label(cli)));
+    if !admin_keyable(cli) {
+        return Err(format!("{}: this CLI cannot run on the administrator's API key", label(cli)));
     }
     if on && !offered().contains(cli) {
         return Err(format!("{}: the administrator offers you no API key for it", label(cli)));
@@ -502,7 +512,17 @@ pub(crate) mod tests {
         let error = admin_for_spawn_in(&state, &socket, "claude", false).unwrap_err();
         assert!(error.contains("agent tab") && error.contains("Manage CLIs"), "{error}");
         let error = admin_for_spawn_in(&state, &socket, "vibe", true).unwrap_err();
-        assert!(error.contains("cannot run on an API key"), "{error}");
+        assert!(error.contains("cannot run on the administrator's API key"), "{error}");
+        // Codex and OpenCode take a user's own key through the proxy, never
+        // the administrator's — even if a keeper (wrongly) offered one.
+        let socket = dir.path().join("auth2.sock");
+        fake_keeper(&socket, &["codex", "opencode"], Some(KEY));
+        for cli in ["codex", "opencode"] {
+            assert!(crate::services::agent_api_keys::proxies(cli), "{cli}");
+            set_choice_in(&state, cli, true).unwrap();
+            let error = admin_for_spawn_in(&state, &socket, cli, true).unwrap_err();
+            assert!(error.contains("cannot run on the administrator's API key"), "{cli}: {error}");
+        }
         // Switched back: the proxy stops forwarding at once.
         set_choice_in(&state, "claude", false).unwrap();
         assert!(for_proxy_in(&state, &socket, "claude").unwrap().is_none());

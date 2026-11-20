@@ -48,10 +48,14 @@ const TEST = /^(src|mobile-web|shared|scripts)\/.*\.(test|spec)\.[cm]?[jt]sx?$/;
 const NEVER_IMPORTED = /\.rs$|^Cargo\.lock$/;
 const DISK =
   /from ["'](node:)?(fs|child_process)(\/promises)?["']|require\(["'](node:)?(fs|child_process)|readFileSync|readdirSync|execFileSync|execSync|spawnSync|import\.meta\.glob/;
-// Most paths one `vitest related` call takes: Windows caps a command line at
-// 32k characters, and a change this wide is worth the whole suite anyway.
+// Most paths one `vitest related` call takes: on Windows `npx` is `npx.cmd`,
+// so the call goes through cmd.exe, which caps a command line at 8191
+// characters (not CreateProcess's 32k) — 299 paths of 11.6k characters failed
+// there with "The command line is too long". The rest of the call (vitest's
+// flags, the report path) needs about 1k. A change this wide is worth the
+// whole suite anyway.
 const MAX_FILES = 300;
-const MAX_CHARS = 20000;
+const MAX_CHARS = 7000;
 
 // The app's own version is the one line the pre-push bump rewrites.
 const unversioned = (path, text) => {

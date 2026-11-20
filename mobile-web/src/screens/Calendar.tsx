@@ -3,6 +3,7 @@ import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, MoreIcon, PlusIcon } from
 import { api, reloadIfApplied, wasApplied, type CalendarAction, type MobileCalendar, type MobileCalendarEvent, type MobileCalendarEventInput, type MobileCalendarInfo } from "../api";
 import { ConfirmSheet, type Confirm } from "../components/ConfirmSheet";
 import { describeFailure } from "../connection";
+import { isOnServer } from "../hostKind";
 import { NotificationsSheet } from "../components/NotificationsSheet";
 import { OptionSheet } from "../components/OptionSheet";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
@@ -99,7 +100,7 @@ export function Calendar() {
     <ScreenHead title={t("mobile.calendar.title")} onRefresh={() => void load()} refreshing={busy} untested={isUntested("mobile.design.calendar")} actions={<button className="home-head-button mobile-calendar-more" onClick={() => setMenu(true)} aria-label={t("mobile.calendar.more")} title={t("mobile.calendar.more")}><MoreIcon size="22px" /></button>} />
     {error && <p className="error">{error}</p>}
     <HintQueue hints={CALENDAR_TIPS} />
-    {data?.desktop_available === false && <p className="notice">{t("mobile.headless.owner")} {isUntested("mobile.headless.calendar") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {data?.desktop_available === false && <p className="notice">{t(isOnServer() ? "mobile.headless.ownerServer" : "mobile.headless.owner")} {(isOnServer() ? isUntested("mobile.server.noWindow") : isUntested("mobile.headless.calendar")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     <div className="mobile-calendar-actions"><div className="tool-segment mobile-calendar-views" role="group" aria-label={t("mobile.calendar.title")}>{VIEWS.map((v) => <button key={v} className={view === v ? "selected" : undefined} aria-pressed={view === v} disabled={busy} onClick={() => setView(v)}>{t(`mobile.calendar.${v}` as "mobile.calendar.day")}</button>)}</div><button className="mobile-calendar-today" disabled={busy} onClick={goToday}>{t("mobile.calendar.today")}</button>{isUntested("mobile.calendar.views") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>
     <div className="mobile-calendar-nav"><button className="home-head-button" onClick={() => step(-1)} disabled={busy} aria-label={t("mobile.calendar.previous")} title={t("mobile.calendar.previous")}><ChevronLeftIcon size="22px" /></button><strong>{navLabel}</strong><button className="home-head-button" onClick={() => step(1)} disabled={busy} aria-label={t("mobile.calendar.next")} title={t("mobile.calendar.next")}><ChevronRightIcon size="22px" /></button></div>
     {view === "month" && <>

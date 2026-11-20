@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDownIcon, CloseIcon } from "../glyphs";
 import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type HostMachineRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
+import { isOnServer } from "../hostKind";
 import { useT } from "../../../src/lib/i18n";
 import { cloudRowsOffered } from "../../../src/lib/projects/localModelsOnly";
 import { useBackLayer } from "../backStack";
@@ -142,8 +143,10 @@ export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, s
   /** Nothing can start: a remote-only project with no machine to start on. */
   const stuck = pinned && !onMachine;
   const linked = here ? options.worktrees.filter((row) => !row.main) : [];
-  /** The "Agents start in" field: only with a linked worktree to pick. */
-  const showWhere = linked.length > 0 && agents.length > 0 && !headless;
+  /** The "Agents start in" field: only with a linked worktree to pick. With
+   *  no window the host lists only the worktrees it can start an agent in
+   *  itself (a local project's), so the field stands then too. */
+  const showWhere = linked.length > 0 && agents.length > 0;
   const pickAgent = (agent: AgentRow, mode?: string) =>
     onPick("agent", agent, mode, onMachine ? { host: onMachine } : where ? { worktree: where } : undefined);
   const pickCloud = (agent: AgentRow, launch: CloudLaunchRow) => {
@@ -170,7 +173,7 @@ export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, s
         {machines.length > 0 && <MachinePicker machines={machines} value={onMachine} here={!pinned} onChange={setMachine} />}
         {showWhere && <SheetSelect
           label={t("mobile.newTab.where")}
-          untested={isUntested("mobile.newTab.worktree")}
+          untested={headless ? isUntested("mobile.headless.worktreeLaunch") : isUntested("mobile.newTab.worktree")}
           rows={[{ id: "", label: t("mobile.newTab.projectFolder") }, ...linked.map((row) => ({ id: row.id, label: row.branch || row.label, sub: row.branch ? row.label : undefined }))]}
           value={where}
           onChange={setWhere}
@@ -180,7 +183,7 @@ export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, s
         : machines.some((row) => !row.connected) ? <p className="sheet-note">{t("mobile.newTab.machineConnectHint")}</p> : null)}
       {creates && <p className="sheet-note">{t("mobile.newTab.note")}</p>}
       {creates && agentsOnly && <p className="sheet-note">{t("mobile.newTab.agentsOnly")}</p>}
-      {creates && headless && !pinned && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+      {creates && headless && !pinned && <p className="sheet-note">{t(isOnServer() ? "mobile.newTab.headlessServer" : "mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       {creates && pinned && headless && <p className="sheet-note">{t("mobile.newTab.remoteOnlyNeedsWindow")}{isUntested("mobile.newTab.remoteOnly") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       <div className="create">
         {/* Every row that opens a tab is behind `creates`; the file row at the
@@ -201,7 +204,7 @@ export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, s
         {showCloud && options.api_key && !headless && here && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
         {!headless && here && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
         {showCloud && options.sign_in.length > 0 && !headless && !pinned && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
-        {headless && !pinned && <NeedsWindow agents={agents} options={options} linked={linked} />}
+        {headless && !pinned && <NeedsWindow agents={agents} options={options} />}
         </>}
         {/* At the sheet's foot, under everything that opens a tab. No desktop
             round trip — the sidecar writes the file itself — so neither a
@@ -303,9 +306,11 @@ function DefaultStar({ starred, label, onClick }: { starred: boolean; label: str
 
 /** With no window, everything only the window can start, folded into one
  * group at the sheet's foot — the reader sees what waits without a sheet of
- * dead buttons to tap: an agent's modes, the cloud sessions, the linked
- * worktrees, the local model's agents and the sign-in list. */
-function NeedsWindow({ agents, options, linked }: { agents: AgentRow[]; options: LaunchOptions; linked: LaunchOptions["worktrees"] }) {
+ * dead buttons to tap: an agent's modes, the cloud sessions, the local
+ * model's agents and the sign-in list. (The worktrees a host lists with no
+ * window it starts agents in itself.) On a server, which never has a window,
+ * the group names the browser client instead. */
+function NeedsWindow({ agents, options }: { agents: AgentRow[]; options: LaunchOptions }) {
   const t = useT();
   const rows: { key: string; label: string; items: string[] }[] = [];
   for (const agent of agents) {
@@ -313,13 +318,12 @@ function NeedsWindow({ agents, options, linked }: { agents: AgentRow[]; options:
   }
   const clouded = agents.filter((agent) => options.cloud.some((launch) => launch.agent_id === agent.id)).map((agent) => agent.label);
   if (clouded.length) rows.push({ key: "cloud", label: t("mobile.newTab.cloudGroup"), items: clouded });
-  if (linked.length && agents.length) rows.push({ key: "where", label: t("mobile.newTab.where"), items: linked.map((row) => row.branch || row.label) });
   if (options.local?.agents.length) rows.push({ key: "local", label: t("mobile.newTab.localGroup", { model: options.local.model }), items: options.local.agents.map((row) => row.label) });
   if (options.sign_in.length) rows.push({ key: "sign-in", label: t("mobile.signIn.listEntry"), items: [] });
   if (!rows.length) return null;
   const count = rows.reduce((sum, row) => sum + Math.max(row.items.length, 1), 0);
   return <details className="new-tab-held">
-    <summary>{t("mobile.newTab.needsWindow", { count: String(count) })}{isUntested("mobile.newTab.needsWindow") && <span className="untested">{t("mobile.newTab.untested")}</span>}</summary>
+    <summary>{t(isOnServer() ? "mobile.newTab.needsBrowser" : "mobile.newTab.needsWindow", { count: String(count) })}{isUntested("mobile.newTab.needsWindow") && <span className="untested">{t("mobile.newTab.untested")}</span>}</summary>
     <ul>{rows.map((row) => <li key={row.key}><strong>{row.label}</strong>{row.items.length > 0 && <span>{row.items.join(" · ")}</span>}</li>)}</ul>
   </details>;
 }

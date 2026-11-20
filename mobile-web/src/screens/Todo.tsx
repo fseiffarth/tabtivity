@@ -3,6 +3,7 @@ import { CheckboxIcon, ClockIcon } from "../../../src/components/common/icons/Ic
 import { ChevronDownIcon, ChevronRightIcon, CheckIcon, CloseIcon, FilterIcon, MoreIcon, PlusIcon, SearchIcon } from "../glyphs";
 import { api, normalizeTodoBoard, reloadIfApplied, wasApplied, type TodoBoard, type TodoCard, type TodoColumn, type TodoTaskInput } from "../api";
 import { describeFailure, failureCode } from "../connection";
+import { isOnServer } from "../hostKind";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
@@ -203,7 +204,7 @@ export function Todo({ card }: { card?: string }) {
   return <main className="screen todo-screen">
     <ScreenHead title={t("todo.overlayTitle")} onRefresh={load} refreshing={busy} untested={isUntested("mobile.design.todo") || isUntested("mobile.todo.fold")} />
     {error && <p className="error">{boardError(error.reason, t)}</p>}
-    {board?.desktop_available === false && <p className="notice">{t("mobile.headless.owner")} {isUntested("mobile.headless.todo") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {board?.desktop_available === false && <p className="notice">{t(isOnServer() ? "mobile.headless.ownerServer" : "mobile.headless.owner")} {(isOnServer() ? isUntested("mobile.server.noWindow") : isUntested("mobile.headless.todo")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     <HintQueue hints={TODO_TIPS} />
     {/* The search is what a board of forty cards is opened with. Project, tag and
         the two hide switches sit behind the button in its field; only a project

@@ -34,7 +34,7 @@ const MAX_CLIP_BYTES: usize = 64 * 1024 * 1024;
 /// another drag started meanwhile, but small enough to bound memory.
 const MAX_ENTRIES: usize = 4;
 
-/// The page-transfer buffer. Registered as Tauri managed state in `lib.rs`.
+/// The page-transfer buffer ([`CLIPBOARD`] holds the process's one).
 #[derive(Default)]
 pub struct PdfClipboard {
     inner: Mutex<PdfClipState>,
@@ -78,23 +78,24 @@ impl PdfClipboard {
     }
 }
 
+/// The one page-transfer buffer of this process. Process-wide rather than
+/// Tauri managed state, so the server daemon dispatches the commands too: a
+/// browser client drags pages between its own viewers the way the window
+/// does (one daemon is one user's, so its pages share one buffer as a
+/// window's popouts do).
+static CLIPBOARD: std::sync::LazyLock<PdfClipboard> = std::sync::LazyLock::new(PdfClipboard::default);
+
 /// Park a one-off PDF (the dragged/copied pages) and return the token naming it.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn pdf_clip_set(
-    clipboard: tauri::State<'_, PdfClipboard>,
-    bytes: Vec<u8>,
-) -> Result<String, String> {
-    clipboard.set(bytes)
+pub fn pdf_clip_set(bytes: Vec<u8>) -> Result<String, String> {
+    CLIPBOARD.set(bytes)
 }
 
 /// Fetch a parked PDF by token. The entry is left in place, so the same transfer can
 /// be dropped or pasted more than once (a copy is not consumed by its first use).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn pdf_clip_get(
-    clipboard: tauri::State<'_, PdfClipboard>,
-    token: String,
-) -> Result<Vec<u8>, String> {
-    clipboard.get(&token)
+pub fn pdf_clip_get(token: String) -> Result<Vec<u8>, String> {
+    CLIPBOARD.get(&token)
 }
 
 #[cfg(test)]
@@ -142,6 +143,14 @@ mod tests {
         }
         // The oldest has been pushed out; the most recent are still there.
         assert!(cb.get(&first).is_err());
+    }
+
+    #[test]
+    fn the_commands_share_one_buffer() {
+        // What one viewer parks, another (another window, or another browser
+        // page of the same daemon) fetches by the token alone.
+        let token = pdf_clip_set(vec![4, 2]).unwrap();
+        assert_eq!(pdf_clip_get(token).unwrap(), vec![4, 2]);
     }
 
     #[test]
