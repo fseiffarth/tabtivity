@@ -166,6 +166,23 @@ describe("readAgentList", () => {
     ]);
   });
 
+  it("reads past the rows that count the agents it has no room for", () => {
+    const rows = [
+      "  ● main",
+      "  ↑ 2 more",
+      "❯ ◯ general-purpose  Gamma                 6s · ↓ 1k tokens",
+      "  ◯ Explore  Delta                         7s · ↓ 1k tokens",
+      "  ↓ 3 more",
+      "",
+    ];
+    expect(readAgentList(rows)?.map((row) => [row.main, row.cursor, row.task])).toEqual([
+      [true, false, ""],
+      [false, true, "Gamma"],
+      [false, false, "Delta"],
+    ]);
+    expect(readAgentList(["  ↓ 3 more"])).toBeNull();
+  });
+
   it("is null when the bottom of the screen is a dialog, not the list", () => {
     expect(readAgentList([" Do you want to proceed?", " ❯ 1. Yes", "   2. No", " Esc to cancel · Tab to amend"])).toBeNull();
     expect(readAgentList(["❯ ", "  ⏸ manual mode on"])).toBeNull();
