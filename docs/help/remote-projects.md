@@ -94,6 +94,16 @@ when it lived there), never deleted. On a remote-only project **Keep a local
 copy…** picks a folder and git lockstep fills it from the host. Neither is
 offered on a VM project.
 
+A **local** project becomes remote-only with **Make remote only…** on its
+pill: it opens Extend to remote with **Keep a local copy** off. After you
+pick the host and folder, git lockstep copies the project's committed history
+there. Once the host is connected, the Stop keeping a local copy check opens
+by itself and repeats while the history is still on its way. Commit or move
+everything it lists first. Files git ignores (a `.env`, data folders) are
+never copied: the check counts them, and they stay in your old folder, which
+is kept where it is. A project without git cannot be made remote-only this
+way, because nothing would reach the host on its own.
+
 ## Extend a local project to a remote
 
 1. Right-click the local project's pill → **Extend to remote…**.

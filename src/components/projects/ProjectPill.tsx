@@ -1062,6 +1062,8 @@ export function ProjectPill({
   const [extendRemoteMachine, setExtendRemoteMachine] = useState<DroppedGlobalMachine | null>(
     null,
   );
+  // "Make remote only…" opens the same dialog with its local-copy switch off.
+  const [extendRemoteOnly, setExtendRemoteOnly] = useState(false);
   // When set, the in-app "Move project…" folder browser is open, seeded at this
   // parent directory. `null` = closed.
   const [movePickerInitial, setMovePickerInitial] = useState<string | null>(null);
@@ -1117,6 +1119,14 @@ export function ProjectPill({
   const primaryConnected = useRemoteStatusStore((s) => s.byProject[project.id]?.ssh === "connected");
   const [showStopLocalCopy, setShowStopLocalCopy] = useState(false);
   const [showKeepLocalCopy, setShowKeepLocalCopy] = useState(false);
+  // Local → Remote-only (D7): extended with the local copy off, waiting for
+  // the host connection the Stop-keeping check needs. Then that check opens.
+  const [pendingRemoteOnly, setPendingRemoteOnly] = useState(false);
+  useEffect(() => {
+    if (!pendingRemoteOnly || !converts || hostPinned || !primaryConnected) return;
+    setPendingRemoteOnly(false);
+    setShowStopLocalCopy(true);
+  }, [pendingRemoteOnly, converts, hostPinned, primaryConnected]);
   const [vmRunning, setVmRunning] = useState(false);
   const pollVm = useCallback(
     (poll: PollRun) =>
@@ -1782,11 +1792,27 @@ export function ProjectPill({
                 onClick={() => {
                   setContextMenu(null);
                   setExtendRemoteMachine(null);
+                  setExtendRemoteOnly(false);
                   setExtendRemote(true);
                 }}
                 title={t("pill.extendToRemoteMenuTitle")}
               >
                 {t("pill.extendToRemoteEllipsis")}
+              </button>
+            )}
+            {!project.remote && !isVmProject && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  setExtendRemoteMachine(null);
+                  setExtendRemoteOnly(true);
+                  setExtendRemote(true);
+                }}
+                title={t("pill.makeRemoteOnlyMenuTitle")}
+              >
+                {t("pill.makeRemoteOnlyEllipsis")}
+                <UntestedTag id="pill.makeRemoteOnly" />
               </button>
             )}
             {/* Export sits with the metadata actions rather than in the danger
@@ -2434,9 +2460,12 @@ export function ProjectPill({
         <ExtendToRemoteDialog
           project={project}
           initialMachine={extendRemoteMachine ?? undefined}
+          initialKeepLocalCopy={!extendRemoteOnly}
+          onExtended={(keepLocalCopy) => setPendingRemoteOnly(!keepLocalCopy)}
           onClose={() => {
             setExtendRemote(false);
             setExtendRemoteMachine(null);
+            setExtendRemoteOnly(false);
           }}
         />
       )}

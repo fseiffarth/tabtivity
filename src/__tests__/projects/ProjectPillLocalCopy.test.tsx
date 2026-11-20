@@ -33,6 +33,7 @@ import type { ProjectEntry, RemoteSpec, UnpairPreview } from "../../types";
 const SSH: RemoteSpec = { user: "ada", host: "box.example", remote_path: "/srv/app" };
 const STOP = "Stop keeping a local copy…";
 const KEEP = "Keep a local copy…";
+const MAKE = "Make remote only…";
 
 function project(extra: Partial<ProjectEntry>): ProjectEntry {
   return {
@@ -135,6 +136,15 @@ describe("pill menu · keeping a local copy or not", () => {
     await openPillMenu(project({ remote: { ...SSH, vm: true } }));
     expect(row(STOP)).toBeNull();
     expect(row(KEEP)).toBeNull();
+  });
+
+  it("offers Make remote only… on a local project only", async () => {
+    await openPillMenu(project({ directory: "/home/ada/proj", local_file: "/home/ada/proj/project.json" }), false);
+    expect(row(MAKE)).toBeTruthy();
+    expect(row(STOP)).toBeNull();
+    cleanup();
+    await openPillMenu(project({ remote: SSH }));
+    expect(row(MAKE)).toBeNull();
   });
 
   it("names what git ignores, and re-checks on its own while lockstep copies the history", async () => {
