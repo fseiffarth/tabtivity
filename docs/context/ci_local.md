@@ -52,10 +52,20 @@ the overlap; no single compile fits until the crate is split.
 
 The backend test steps carry their own `timeout-minutes`, inside the job's. A
 job timeout cancels the run and names nothing; a step timeout fails it, and
-`ci-failed-first.sh hung` then names the tests that were still running (an
-error annotation each) and lists them to run first next time. Size the step
-timeouts for a build with no cache: a failed job saves no Rust cache, so one
-set too tight never gets a warm build.
+`ci-failed-first.sh hung` then says whether the run ran out of time (still
+compiling, or tests still printing at the cut) or stalled (silent for two
+minutes or more), names the tests that were still running (an error
+annotation each) and lists them to run first next time. A silent test binary
+is a stall, not one slow test: libtest prints `has been running for over 60
+seconds` itself. The backend run's watchdog stamps when the log last grew and,
+after `CI_TEST_STALL_SECONDS` (300) of silence, dumps the tests libtest had
+started and not reported, the processes and the test process's threads
+(`sample` on macOS) into the step's log. Size a step timeout that compiles for
+a build with no cache: a failed job saves no Rust cache, so one set too tight
+never gets a warm build. `test-macos` compiles in its own `Build backend
+tests` step (`ci-failed-first.sh build`, 80 minutes), so its test steps get
+20; a cache miss there (2026-11-20, run 673: 23 minutes for the harness alone,
+then cut off still compiling) used to eat the test step's hour.
 
 ## What a CI run keeps from the one before
 
