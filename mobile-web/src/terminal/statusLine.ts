@@ -41,7 +41,7 @@ import {
 import { claudeEffortHint, effortHintAbove, isClaudeTmuxNotice, withoutEffortHint } from "./claudeStatus";
 import { openCodePermissionShown } from "./openCodeQuestion";
 import { isActionRow, isChatRow, isStrayListRow, isUnnumberedRow } from "./selectPrompt";
-import { readAgentList } from "./subagentInput";
+import { scanAgentList } from "./subagentInput";
 
 export interface SessionStatus {
   /** Working directory, as printed (`~/…` or absolute). */
@@ -118,11 +118,9 @@ const SEARCH_WINDOW = 8;
  * counted from the screen's bottom, four agents put the box past
  * `SEARCH_WINDOW`, and the box and footer read as a dialog. */
 function agentListStart(lines: readonly StatusLineLike[]): number {
-  const list = readAgentList(lines.slice(-SEARCH_WINDOW * 4).map((line) => line.text));
-  if (!list) return lines.length;
-  let end = lines.length;
-  while (end > 0 && !lines[end - 1].text.trim()) end -= 1;
-  return end - list.length;
+  const tail = lines.slice(-SEARCH_WINDOW * 4);
+  const found = scanAgentList(tail.map((line) => line.text));
+  return found ? lines.length - tail.length + found.start : lines.length;
 }
 
 /** Status lines read below the input line. Claude Code draws at most a mode
