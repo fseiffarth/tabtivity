@@ -72,7 +72,7 @@ export interface TabAiPrefs {
 export const AC_DELAY_CHOICES = [100, 200, 400, 600, 1200] as const;
 /** The delay when none is stored (or a stored one is not a choice). A local
  *  model costs nothing but the machine, so it waits for a short pause; Copilot
- *  answers fast, and its default trigger is "on request" anyway. */
+ *  answers fast. */
 export const AC_DEFAULT_DELAY_MS = { ollama: 600, copilot: 200 } as const;
 
 /** The idle delay for the provider serving a tab, from `autocomplete_delay_ms`. */
@@ -82,11 +82,12 @@ export function acDelayMs(stored: Settings["autocomplete_delay_ms"], copilot: bo
   return (AC_DELAY_CHOICES as readonly number[]).includes(value ?? NaN) ? value! : AC_DEFAULT_DELAY_MS[key];
 }
 
-/** A tab's trigger, or the provider's default: Copilot asks only on request
- *  (each automatic request spends the account's completions), a local model
- *  after a typing pause (it costs nothing but the machine). */
-export function effectiveAcTrigger(trigger: AutocompleteTrigger | undefined, copilot: boolean): AutocompleteTrigger {
-  return trigger ?? (copilot ? "manual" : "auto");
+/** A tab's trigger, or the default: after a typing pause, for both providers —
+ *  turning Autocomplete on means suggestions come while typing. "On request"
+ *  (Ctrl+Space only) is the tab's opt-in, e.g. to spend fewer of a Copilot
+ *  account's completions. */
+export function effectiveAcTrigger(trigger: AutocompleteTrigger | undefined): AutocompleteTrigger {
+  return trigger ?? "auto";
 }
 
 /**
@@ -237,7 +238,7 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
   const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, language, path));
   const provider = useSettingsStore((s) => s.settings?.code_completion_provider ?? "ollama");
   const policy = useSettingsStore((s) => (scope ? s.settings?.completion_project_policies?.[scope] : undefined));
-  const trigger = effectiveAcTrigger(ai.trigger, copilot);
+  const trigger = effectiveAcTrigger(ai.trigger);
   const delays = useSettingsStore((s) => s.settings?.autocomplete_delay_ms);
   const delay = acDelayMs(delays, copilot);
   // Why the chosen provider is silent here; the backend gates the same way.

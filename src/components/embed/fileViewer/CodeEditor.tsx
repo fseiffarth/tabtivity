@@ -6,7 +6,7 @@ import { loadOllamaModel } from "../../../lib/agents/localDrivers";
 import { UntestedTag } from "../../common/UntestedTag";
 import { CompletionCache, caretAtLineEnd, completionLineLength, completionModels, completionWindow, editKind, inlineGhostTail, typeThrough, type CompletionGhost, type EditKind } from "../../../lib/viewers/completion/autocomplete";
 import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollamaCompletionProvider";
-import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
+import { CopilotCompletionProvider, CopilotFeedback, copilotFailureReason, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
 import { completionContext, ReferenceReads } from "../../../lib/viewers/completion/completionContext";
 import { CompletionOffers, startCompletionTiming } from "../../../lib/viewers/completion/completionTimings";
@@ -1959,25 +1959,27 @@ export function CodeEditor({
       acOffers.end();
       setSuggestion(null);
       const reason = String(e);
-      if (reason.includes("copilot_cancelled") || reason.includes("copilot_stale_document")) {
+      // Copilot says why it failed, for an automatic request too: with
+      // suggestions on while typing, a silent failure reads as "does nothing".
+      const copilotFailure = providerId === "copilot" ? copilotFailureReason(e) : undefined;
+      if (copilotFailure === null) {
         timing.outcome = "cancelled";
         setAcStatus(null);
         return;
       }
       countRequest("error");
+      if (copilotFailure) {
+        setAcStatus(t(copilotFailure.key, copilotFailure.code ? { code: copilotFailure.code } : undefined));
+        return;
+      }
       const missing = /role_not_loaded:(.+)$/.exec(reason)?.[1];
       if (missing) {
         setAcStatus(null);
         setAcRoleMissing(missing);
         return;
       }
-      // Sign-in and setup problems would otherwise be invisible with automatic
-      // suggestions on, so those two are shown even for an automatic request.
-      const setup = reason.includes("copilot_not_signed_in") ? "fileViewer.copilotNotSignedIn"
-        : reason.includes("copilot_not_installed") ? "fileViewer.copilotNotInstalled" : null;
-      setAcStatus(setup ? t(setup) : auto ? null : t(reason.includes("not_running")
-        ? "fileViewer.autocompleteUnavailable"
-        : acCopilot ? "fileViewer.copilotFailed" : "fileViewer.autocompleteFailed"));
+      setAcStatus(auto ? null : t(reason.includes("not_running")
+        ? "fileViewer.autocompleteUnavailable" : "fileViewer.autocompleteFailed"));
     } finally {
       settle();
       ctl.abort();
@@ -2004,9 +2006,9 @@ export function CodeEditor({
   // change; the cleanup clears the prior timer, so only an idle pause fires it.
   // Skipped while a suggestion is already showing or the \ref/\cite dropdown is
   // open. The focus/caret/context guards live in `requestCompletion`.
-  // On request only ("manual", Copilot's default) skips all of this: one
+  // On request only ("manual", a tab's opt-in) skips all of this: one
   // Ctrl+Space, one request.
-  const acAuto = effectiveAcTrigger(autocomplete?.trigger, acCopilot) === "auto";
+  const acAuto = effectiveAcTrigger(autocomplete?.trigger) === "auto";
   const acDelay = useSettingsStore((s) => acDelayMs(s.settings?.autocomplete_delay_ms, acCopilot));
   useEffect(() => {
     if (!autocomplete?.enabled || !acAuto || !loaded || !acVisible) return;

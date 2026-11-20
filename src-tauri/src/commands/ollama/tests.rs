@@ -160,15 +160,12 @@ fn fim_plan(suffix: &str, model: &str, references: &[ContextFile], mode: Complet
     completion_plan("let x = ", suffix, model, "typescript", mode, references, Some("src/a.ts"), true)
 }
 
-/// B3: a model with insert completes code through FIM, references or not.
+/// B3: a model with insert completes through FIM, code and prose alike,
+/// references or not; a model without it always takes the chat prompt.
 #[test]
-fn a_fim_model_always_uses_fim_for_code() {
-    assert!(uses_fim("typescript", true));
-    assert!(uses_fim("rust", true));
-    assert!(!uses_fim("rust", false));
-    for prose in ["markdown", "tex", "text", ""] {
-        assert!(!uses_fim(prose, true), "{prose}");
-    }
+fn a_fim_model_always_uses_fim() {
+    assert!(uses_fim(true));
+    assert!(!uses_fim(false));
     // With a suffix: the templated body, as before.
     let plan = fim_plan(";\n", "qwen2.5-coder:1.5b", &[], CompletionMode::Sentence);
     assert_eq!(plan.endpoint, "generate");
@@ -2144,7 +2141,7 @@ const BENCH_REFERENCES: [(&str, &str); 2] = [
 
 /// What `complete_text` would send for one keystroke.
 fn bench_request(prefix: &str, model: &str, insert: bool, references: &[ContextFile]) -> CompletionPlan {
-    let fim = uses_fim("typescript", insert);
+    let fim = uses_fim(insert);
     completion_plan(prefix, BENCH_AFTER, model, "typescript", CompletionMode::Sentence, references, Some("src/total.ts"), fim)
 }
 

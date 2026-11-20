@@ -79,7 +79,10 @@ Reviewers may not undo these.
 1. **A model with `insert` always uses FIM for code.** An empty suffix is sent
    as `"\n"`, because the published templates take the FIM branch only when
    `.Suffix` is non-empty (checked on the registry for `qwen2.5-coder` 1.5b, 3b
-   and 7b). Prose (TeX, Markdown, plain text) stays on the chat path.
+   and 7b). Prose (TeX, Markdown, plain text) takes FIM too (changed
+   2026-11-20 by the user: on the chat prompt qwen2.5-coder 1.5b answered a TeX
+   abstract with the `\end{abstract}` after the caret; through FIM it wrote the
+   sentence). Only a model without `insert` uses the chat prompt.
 2. **References never push a FIM model to chat.** On the FIM path references are
    sent only for model families with a known trained layout, through
    `raw: true` (first row: `qwen2.5-coder`, the `<|file_sep|>` repo layout).
@@ -211,7 +214,7 @@ yields `"\nfn add…"`, raw `"\nHere is the code:\nfn add…"` loses only its
 preamble; and a Sentence request without an intent comment still returns `foo`
 for raw `"\nfoo"`.
 
-**B3. FIM gate.** `fim = !prose && insert`. Empty suffix becomes `"\n"`. One
+**B3. FIM gate.** `fim = insert` (prose included since 2026-11-20). Empty suffix becomes `"\n"`. One
 pure function chooses endpoint, body and `referencesDropped`; the tests and B8
 call it. A small family table keyed on the model name (lower case, between the
 last `/` and the `:`; first row: starts with `qwen2.5-coder`) builds a
