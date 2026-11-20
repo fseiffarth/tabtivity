@@ -1120,6 +1120,14 @@ describe("the Reader's live rows", () => {
     await act(async () => { fireEvent.paste(field, { clipboardData: clipboard({}) }); });
     expect(field.value).toBe("see @inbox/a.pdf @inbox/b.png @inbox/shot.png ");
     expect(fireEvent.paste(field, { clipboardData: clipboard({ "text/plain": "words" }) })).toBe(true);
+    invoke.mockClear();
+    expect(fireEvent.paste(field, { clipboardData: clipboard({
+      "text/plain": "cat file:///tmp/log\nsecond line",
+      "text/uri-list": "file:///tmp/log",
+      "text/html": '<a href="file:///tmp/log">log</a>',
+    }) })).toBe(true);
+    expect(invoke).not.toHaveBeenCalledWith("pty_drop_files", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("pty_paste_clipboard_image", expect.anything());
   });
 
   it("shows an agent's own question as its header, its question and tagged rows — not the screen", async () => {

@@ -109,13 +109,20 @@ export function pasteIntoAgentBox(
   ptyId: string,
   done: (pasted: { text: string; error: TranslationKey | null; image: boolean }) => void,
 ): boolean {
-  const files = parseDroppedFiles(event.clipboardData);
+  const data = event.clipboardData;
+  // A shell selection can contain file:// URLs, including in its HTML
+  // formatting. Leave text insertion and selection replacement to the box.
+  const plain = data.getData("text/plain");
+  const uriList = data.getData("text/uri-list");
+  const files = data.files?.length || uriList ? parseDroppedFiles(data) : [];
+  if (plain && !data.files?.length && plain.trim() !== uriList.trim()
+      && plain.trim() !== files.map(file => file.path).join("\n")) return false;
   if (files.length > 0) {
     event.preventDefault();
     void deliverDrop(ptyId, files, true).then((pasted) => done({ ...pasted, image: false }));
     return true;
   }
-  if (event.clipboardData.getData("text/plain")) return false;
+  if (plain) return false;
   event.preventDefault();
   void pasteClipboardImage(ptyId, true).then((pasted) => done({ ...pasted, image: true }));
   return true;

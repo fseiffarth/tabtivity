@@ -22,15 +22,18 @@ export function isExternalFileDrag(dt: DataTransfer): boolean {
 
 /** Extract absolute local paths from an OS HTML5 file drop. WebKitGTK withholds
  *  `Files`/`text/uri-list` data here but leaks the `file://` URL inside
- *  `text/html`, so scan every text payload for `file://` URIs and dedupe.
+ *  `text/html`, so use that as a fallback when no URI list is available.
  *  Of a multi-file drop it leaks only the first file: `parseDroppedFiles`
  *  infers the rest. */
 export function parseDroppedFilePaths(dataTransfer: DataTransfer): string[] {
-  const sources = [
-    dataTransfer.getData("text/uri-list"),
-    dataTransfer.getData("text/plain"),
-    dataTransfer.getData("text/html"),
-  ];
+  const uriList = dataTransfer.getData("text/uri-list");
+  const plain = dataTransfer.getData("text/plain");
+  // URI lists are authoritative. In their absence WebKit can expose a file
+  // drag through HTML, but ordinary shell text can also contain file URLs.
+  if (plain && !uriList && !dataTransfer.files?.length && !dataTransfer.types?.includes("Files")) return [];
+  const sources = uriList
+    ? uriList.split(/\r?\n/).filter(line => line.startsWith("file://"))
+    : [dataTransfer.getData("text/html"), plain];
   const FILE_URI = /file:\/\/[^\s"'<>]+/g;
   const seen = new Set<string>();
   const paths: string[] = [];
