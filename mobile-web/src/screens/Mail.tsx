@@ -18,6 +18,7 @@ import {
 import { readChoice, writeChoice } from "../prefs";
 import { goBack as stepBack, useBackLayer } from "../backStack";
 import { installFocusSwipe } from "../terminal/focusSwipe";
+import { chatDayKey, chatDayLabel, chatMoment } from "../terminal/chatTimes";
 import { isUntested } from "../../../src/lib/untested";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
@@ -46,12 +47,24 @@ function dateLabel(value: string, lang: Language) {
 
 /** A list row's time: today's as a clock, an older one as a short date. The
  * full stamp stays in the element's `title`. */
-function listTime(value: string, lang: Language) {
+function listTime(value: string, lang: Language, today: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return safeText(value);
-  return date.toDateString() === new Date().toDateString()
+  return chatDayKey(date) === today
     ? date.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })
     : date.toLocaleDateString(lang, { day: "numeric", month: "short" });
+}
+
+function groupMessagesByDay(messages: MobileMailHeader[]) {
+  const groups = new Map<string, { day: Date | null; messages: MobileMailHeader[] }>();
+  for (const item of messages) {
+    const day = chatMoment(item.date);
+    const key = day ? chatDayKey(day) : "";
+    const group = groups.get(key);
+    if (group) group.messages.push(item);
+    else groups.set(key, { day, messages: [item] });
+  }
+  return Array.from(groups);
 }
 
 /** One or two capitals for the sender tile. */
@@ -344,6 +357,11 @@ export function Mail() {
   const emptyFolders = ordered.filter((item) => item.total === 0 && item.kind !== "inbox");
   const shownFolders = ordered.filter((item) => !emptyFolders.includes(item));
 
+  const messageDays = folder && !message ? groupMessagesByDay(folder.messages) : [];
+  const now = new Date();
+  const today = chatDayKey(now);
+  const dayLabels = { today: t("mobile.mail.today"), yesterday: t("mobile.mail.yesterday") };
+
   const actions = <>
     {message && writes.actions && <>
       {iconButton(t(message.message.seen ? "mobile.mail.markUnread" : "mobile.mail.markRead"),
@@ -360,7 +378,7 @@ export function Mail() {
       subtitle={subtitle}
       back={goBack ? { label: message && folder ? safeText(folder.folder.name) : t("mobile.mail.title"), onClick: goBack } : undefined}
       actions={actions} compact={!!message}
-      onRefresh={refresh} refreshing={busy} untested={isUntested("mobile.design.mail")} />
+      onRefresh={refresh} refreshing={busy} untested={isUntested("mobile.design.mail") || (folder !== null && !message && isUntested("mobile.mail.dateGroups"))} />
     <HintQueue hints={MAIL_TIPS} />
     {error && <p className="error">{error}</p>}
     {busy && !accounts && <p className="mail-mobile-empty">{t("common.loading")}</p>}
@@ -415,25 +433,28 @@ export function Mail() {
         {replyBytes(reply) > MAX_REPLY_BYTES && <p className="mail-mobile-warning">{t("mobile.mail.replyTooLong")}</p>}
       </section>}
     </article> : folder ? <>
-      <section className="mail-mobile-list tool-group">
-        {folder.messages.map((item) => <button className={`tool-row mail-mobile-row${item.seen ? "" : " unread"}${item.flagged ? " flagged" : ""}${item.answered ? " answered" : ""}`} key={item.id} onClick={() => void loadMessage(item)} disabled={busy}>
-          <i className="mail-mobile-dot" aria-hidden="true" />
-          <span className="mail-mobile-row-body">
-            <span className="mail-mobile-row-top">
-              <strong>{sender(item, t)}</strong>
-              {item.answered && <UndoIcon className="mail-mobile-mark" size="14px" />}
-              {item.flagged && <StarIcon className="mail-mobile-mark mail-mobile-flag" size="14px" />}
-              {item.has_attachments && <PaperclipIcon className="mail-mobile-mark" size="14px" />}
-              <time title={dateLabel(item.date, lang)}>{listTime(item.date, lang)}</time>
+      {messageDays.map(([key, { day, messages }]) => <section key={key}>
+        <h2 className="tool-section-head">{day ? chatDayLabel(day, now, dayLabels) : t("mobile.mail.unknownDate")}</h2>
+        <div className="tool-group">
+          {messages.map((item) => <button className={`tool-row mail-mobile-row${item.seen ? "" : " unread"}${item.flagged ? " flagged" : ""}${item.answered ? " answered" : ""}`} key={item.id} onClick={() => void loadMessage(item)} disabled={busy}>
+            <i className="mail-mobile-dot" aria-hidden="true" />
+            <span className="mail-mobile-row-body">
+              <span className="mail-mobile-row-top">
+                <strong>{sender(item, t)}</strong>
+                {item.answered && <UndoIcon className="mail-mobile-mark" size="14px" />}
+                {item.flagged && <StarIcon className="mail-mobile-mark mail-mobile-flag" size="14px" />}
+                {item.has_attachments && <PaperclipIcon className="mail-mobile-mark" size="14px" />}
+                <time title={dateLabel(item.date, lang)}>{listTime(item.date, lang, today)}</time>
+              </span>
+              <b>{safeText(item.subject) || t("mobile.mail.noSubject")}</b>
+              <span className="mail-mobile-preview">{safeText(item.preview)}</span>
             </span>
-            <b>{safeText(item.subject) || t("mobile.mail.noSubject")}</b>
-            <span className="mail-mobile-preview">{safeText(item.preview)}</span>
-          </span>
-        </button>)}
-        {folder.syncing
-          ? <p className="mail-mobile-empty">{t("mobile.mail.syncing")}</p>
-          : !busy && folder.messages.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noMessages")}</p>}
-      </section>
+          </button>)}
+        </div>
+      </section>)}
+      {folder.syncing
+        ? <p className="mail-mobile-empty" role="status">{t("mobile.mail.syncing")}</p>
+        : !busy && folder.messages.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noMessages")}</p>}
       <div className="mail-mobile-pager">
         {iconButton(t("mobile.mail.previous"), () => void loadFolder(folder.folder, Math.max(0, folder.offset - PAGE_SIZE)), <ChevronLeftIcon size="22px" />, { disabled: busy || folder.offset === 0 })}
         <small>{t("mobile.mail.pageOf", { range: folder.total === 0 ? "0" : `${folder.offset + 1}–${Math.min(folder.offset + folder.messages.length, folder.total)}`, total: folder.total })}</small>

@@ -663,7 +663,7 @@ button.mobile-alert-row { cursor:pointer; }
    the message a sender tile, its body on the raised surface, attachments as a
    group and the reply as one group. The account / folder switch is the head's
    subtitle button (`.mail-account-switch`, `.screen-head-sub > button`). */
-.mail-mobile-accounts,.mail-mobile-list { display:grid; gap:0; }
+.mail-mobile-accounts { display:grid; gap:0; }
 .mail-mobile-folders { display:grid; }
 .mail-mobile-folder i { display:grid; place-items:center; flex:0 0 auto; width:28px; color:#bcb0ff; font-style:normal; }
 .mail-mobile-folder span { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
@@ -2434,6 +2434,21 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
 .home-box-fold svg { transition:transform .15s ease-out; }
 .home-box-fold[aria-expanded="true"] svg { transform:rotate(90deg); }
 .home-box-none { margin:var(--sp-2) var(--sp-1) var(--sp-3); color:var(--ink-muted); font-size:var(--fs-foot); }
+/* The list and grid layouts' sections (`projectGroups.ts`): Favorites, the
+   reader's named groups (a tap on the heading folds it, a hold opens its
+   sheet), Other projects; the Hidden fold reuses the project screen's foot. */
+.home-group-head { display:flex; align-items:center; gap:6px; width:100%; min-height:36px; margin:var(--sp-4) 0 var(--sp-2); padding:0 2px; border:0; border-radius:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:650; text-align:left; }
+.home-group-head > span:not(.home-group-count):not(.untested) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.home-group-count { color:var(--ink-muted); font-weight:500; font-variant-numeric:tabular-nums; }
+.home-group-count::before { content:"· "; }
+.home-group-toggle { -webkit-touch-callout:none; user-select:none; }
+.home-group-toggle > svg { flex:0 0 auto; transition:transform .15s ease-out; }
+.home-group-toggle[aria-expanded="true"] > svg { transform:rotate(90deg); }
+.home-favorites-head > svg { color:#ffd36b; }
+.home-fav-mark { display:inline-grid; place-items:center; margin-right:5px; color:#ffd36b; vertical-align:-1px; }
+.home-project-card .card { -webkit-touch-callout:none; }
+.home-hidden { margin-top:var(--sp-4); }
+.home-hidden .project-closed-row { -webkit-touch-callout:none; }
 .home-screen > .home-projects.home-projects-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; background:transparent; }
 .home-projects-grid > .tab-card { border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); }
 .home-projects-grid .tab-card-head { position:relative; height:100%; }

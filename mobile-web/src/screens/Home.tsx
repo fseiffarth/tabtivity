@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ComponentType } from "react";
+import { Fragment, useEffect, useState, useSyncExternalStore, type ComponentType } from "react";
 import { api, type ActivityTab, type MobileAlerts, type ProjectRow, type TabPlace, type AgentCounts as AgentCountsRow } from "../api";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
@@ -37,7 +37,10 @@ import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
 import { AssistantIcon } from "../../../src/components/common/icons/Icon";
-import { ChevronLeftIcon, ChevronRightIcon, DiamondIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, PlusIcon, SearchIcon, StarIcon } from "../glyphs";
+import { ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, DiamondIcon, EyeIcon, FolderIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, PencilIcon, PlusIcon, SearchIcon, StarIcon } from "../glyphs";
+import { createGroup, groupOf, isFavorite, isHidden, moveToGroup, placeInSection, readProjectSorting, renameGroup, sectionProjects, setFavorite, setHidden, shiftGroup, toggleFolded, ungroup, writeProjectSorting, type ProjectGroup, type ProjectSorting, type SectionKey } from "../projectGroups";
+import { GroupNameSheet } from "../components/GroupNameSheet";
+import { useTapHolds } from "../newTabDefault";
 import { OptionSheet } from "../components/OptionSheet";
 import type { IconProps } from "../../../src/components/common/icons/Icon";
 import { FavoritesPage } from "../components/FavoritesPage";
@@ -194,6 +197,21 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
    * is read once: nothing else on the phone writes it, and re-reading it on
    * every render would undo a drag the moment a poll came back. */
   const [order, setOrder] = useState<string[]>(() => readOrder("projectOrder"));
+  /** Favorites, hidden projects and named groups, this phone's own
+   *  (`projectGroups.ts`); read once for the same reason as the order. */
+  const [sorting, setSorting] = useState<ProjectSorting>(() => readProjectSorting());
+  const updateSorting = (next: ProjectSorting) => {
+    setSorting(next);
+    writeProjectSorting(next);
+  };
+  /** The project a hold opened its sheet for, and which step of it is up:
+   *  the actions, the group picker, or naming a new group. */
+  const [rowMenu, setRowMenu] = useState<{ project: ProjectRow; step: "actions" | "group" | "name" } | null>(null);
+  /** The group a hold on its heading opened the sheet for. */
+  const [groupMenu, setGroupMenu] = useState<{ group: ProjectGroup; step: "actions" | "rename" } | null>(null);
+  /** The Hidden fold at the list's end, shut until asked for. */
+  const [hiddenOpen, setHiddenOpen] = useState(false);
+  const press = useTapHolds();
   /** Only the agents mode is remembered: the other two differ by a query the
    * reader has to type anyway, and a Projects tab that opened on an empty
    * search box would be a worse landing than the active list. */
@@ -268,21 +286,40 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
    * an answer to a query, and the best match belongs at the top of it. */
   const listed = view === "search" ? rows : arrangeProjects(sortProjectsByAgents(rows, activityTabs), (project) => project.id, order);
   const firstCounted = listed.find((project) => project.agents)?.id;
+  /** The active list's hidden rows go to the Hidden fold in every layout; a
+   *  search result shows everything it found. */
+  const hiddenRows = view === "active" ? listed.filter((project) => isHidden(sorting, project.id)) : [];
+  const shown = hiddenRows.length ? listed.filter((project) => !isHidden(sorting, project.id)) : listed;
+  /** The list and grid layouts' sections: Favorites, each named group, the
+   *  ungrouped rest (`projectGroups.ts`). The box layout has its own. */
+  const sections = view === "active" && layout !== "boxes" ? sectionProjects(listed, (project) => project.id, sorting) : null;
+  /** Each drawn row's section, for a drop that crosses into another one. */
+  const sectionOf = new Map<string, SectionKey>();
+  if (sections) {
+    for (const project of sections.favorites) sectionOf.set(project.id, { kind: "favorites" });
+    for (const { group, rows: members } of sections.groups) {
+      if (!sorting.folded.includes(group.id)) for (const project of members) sectionOf.set(project.id, { kind: "group", id: group.id });
+    }
+    for (const project of sections.loose) sectionOf.set(project.id, { kind: "loose" });
+  }
+  /** The rows as they stand on screen, top to bottom: what a drag reads its
+   *  drop positions off and the arrow keys step through. */
+  const drawnKeys = sections ? [...sectionOf.keys()] : shown.map((project) => project.id);
   /** One row cannot be rearranged, and neither can a search result — nor the
    *  box layout, where a project can stand under more than one box. */
-  const canReorder = view === "active" && layout !== "boxes" && listed.length > 1;
+  const canReorder = view === "active" && layout !== "boxes" && drawnKeys.length > 1;
   /** The box layout's groups: each box row with the listed projects it names
    *  (`members`, already narrowed by the host to what this phone may see), in
    *  the box's order, and every other row below. An older host sends no
    *  members, so its boxes fold nothing and every project stays loose. */
   const boxGroups = layout === "boxes" ? (() => {
-    const byId = new Map(listed.map((project) => [project.id, project]));
-    const groups = listed.filter((project) => project.kind === "box").map((box) => ({
+    const byId = new Map(shown.map((project) => [project.id, project]));
+    const groups = shown.filter((project) => project.kind === "box").map((box) => ({
       box,
       members: (box.members ?? []).map((id) => byId.get(id)).filter((project): project is ProjectRow => !!project && (project.kind ?? "project") === "project"),
     }));
     const boxed = new Set(groups.flatMap((group) => group.members.map((project) => project.id)));
-    return { groups, loose: listed.filter((project) => project.kind !== "box" && !boxed.has(project.id)) };
+    return { groups, loose: shown.filter((project) => project.kind !== "box" && !boxed.has(project.id)) };
   })() : null;
   /** Move one project beside another and remember it. Nothing is sent anywhere:
    *  the order is this phone's, so the drop is done the moment it is stored —
@@ -291,6 +328,10 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
     const next = mergeProjectOrder(order, placeBeside(listed, (project) => project.id, key, anchor, place).map((project) => project.id));
     setOrder(next);
     writeOrder("projectOrder", next);
+    // Dropped beside a row of another section: the project moves into it.
+    const from = sectionOf.get(key);
+    const to = sectionOf.get(anchor);
+    if (from && to && JSON.stringify(from) !== JSON.stringify(to)) updateSorting(placeInSection(sorting, key, to));
   };
   /** The list's drag hint, gone for good once dismissed or once a row has
    *  been dragged. */
@@ -299,7 +340,18 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
     setHintGone(true);
     writeFlag("homeHintReorder", true);
   };
-  const drag = useRowDrag(listed.map((project) => project.id), (key, anchor, place) => { dropHint(); moveProject(key, anchor, place); }, canReorder);
+  const drag = useRowDrag(drawnKeys, (key, anchor, place) => { dropHint(); moveProject(key, anchor, place); }, canReorder);
+  /** The hold hint under the list ("Hold a project to …"), gone for good once
+   *  dismissed or once a hold has opened the sheet. */
+  const [holdHintGone, setHoldHintGone] = useState(() => readFlag("homeHintHold"));
+  const dropHoldHint = () => {
+    setHoldHintGone(true);
+    writeFlag("homeHintHold", true);
+  };
+  const holdProject = (project: ProjectRow) => {
+    dropHoldHint();
+    setRowMenu({ project, step: "actions" });
+  };
   /** The finished tabs this phone has opened (`seenDone.ts`): Needs you lists
    *  a done tab until then. Opening one from anywhere on Home — Needs you or
    *  the Agents view — marks it. */
@@ -311,7 +363,33 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
   /** One project row's opener — tile, name and caption, agent counts, open
    *  tabs — the same in every layout. `caption` replaces the scope line (a
    *  box head says how many projects it holds). */
-  const projectCard = (project: ProjectRow, caption?: string) => <button className="card" data-steer-row={project.id} aria-current={project.id === selectedId ? "true" : undefined} onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{caption ?? scopeCaption(project)}</small></span><span className="card-trailing"><span className="home-agent-counts">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}</span><span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z" /><path d="M3 10h18" /></svg><span>{project.live_sessions}</span></span></span></button>;
+  const projectCard = (project: ProjectRow, caption?: string) => <button className="card" data-steer-row={project.id} aria-current={project.id === selectedId ? "true" : undefined} {...press(() => open(project.id), () => holdProject(project))}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{isFavorite(sorting, project.id) && <span className="home-fav-mark" role="img" aria-label={t("mobile.home.favoriteMark")} title={t("mobile.home.favoriteMark")}><StarIcon size="0.85em" /></span>}{project.label}</strong><small>{caption ?? scopeCaption(project)}</small></span><span className="card-trailing"><span className="home-agent-counts">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}</span><span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z" /><path d="M3 10h18" /></svg><span>{project.live_sessions}</span></span></span></button>;
+  /** One section's rows as an inset group: a row per project — its tile,
+   *  name and caption, the agent counts and the open tabs — with the grip in
+   *  its own column beside the opener (a press anywhere else opens the
+   *  project, a hold opens its sheet, and neither may be the drag). A box row
+   *  says it is one where a project row says its status: a "Paper" box
+   *  beside a "Paper" project must be tellable apart. */
+  const projectRows = (members: ProjectRow[], key: string) => <section key={key} className={`cards home-projects${layout === "grid" ? " home-projects-grid" : ""}`}>{members.map((project) => {
+    const first = project.id === drawnKeys[0];
+    return <div
+      className={`tab-card one-row home-project-card${project.id === selectedId ? " is-current" : ""}${drag.rowClass(project.id)}`}
+      key={project.id}
+      ref={drag.rowRef(project.id)}
+    >
+      <div className="tab-card-head">
+        {projectCard(project)}
+        {first && isUntested("mobile.home.agentOrder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+        {canReorder && first && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+        {canReorder && <button
+          className="tab-card-grip"
+          aria-label={t("mobile.home.move", { label: project.label })}
+          title={t("mobile.home.moveHint")}
+          {...drag.gripProps(project.id)}
+        ><GripIcon size="1em" /></button>}
+      </div>
+    </div>;
+  })}</section>;
   const rootWaiting = rootRow?.pending_reviews ?? 0;
   const rootLabel = rootRow ? `${t("mobile.home.openRoot")}${rootWaiting > 0 ? ` · ${t("mobile.home.awaitingApproval", { count: rootWaiting })}` : ""}` : "";
   const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
@@ -402,23 +480,27 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
           two must not be one gesture). A box row says it is one where a
           project row says its status: a "Paper" box beside a "Paper" project
           must be tellable apart. */}
-      {listed.length > 0 && !boxGroups && <section className={`cards home-projects${layout === "grid" ? " home-projects-grid" : ""}`}>{listed.map((project, index) => <div
-        className={`tab-card one-row home-project-card${project.id === selectedId ? " is-current" : ""}${drag.rowClass(project.id)}`}
-        key={project.id}
-        ref={drag.rowRef(project.id)}
-      >
-        <div className="tab-card-head">
-          {projectCard(project)}
-          {index === 0 && isUntested("mobile.home.agentOrder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
-          {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
-          {canReorder && <button
-            className="tab-card-grip"
-            aria-label={t("mobile.home.move", { label: project.label })}
-            title={t("mobile.home.moveHint")}
-            {...drag.gripProps(project.id)}
-          ><GripIcon size="1em" /></button>}
-        </div>
-      </div>)}</section>}
+      {/* Favorites, each named group under its heading (a tap folds it, a
+          hold renames, moves or dissolves it), then the ungrouped rest —
+          headed only when something stands above it. A search result is
+          one plain section: it is an answer, not the arranged list. */}
+      {sections && sections.favorites.length > 0 && <h2 className="home-group-head home-favorites-head"><StarIcon size="0.95em" /><span>{t("mobile.home.favorites")}</span><span className="home-group-count">{sections.favorites.length}</span>{isUntested("mobile.home.projectGroups") && <span className="untested">{t("mobile.newTab.untested")}</span>}</h2>}
+      {sections && sections.favorites.length > 0 && projectRows(sections.favorites, "favorites")}
+      {sections && sections.groups.map(({ group, rows: members }) => {
+        const folded = sorting.folded.includes(group.id);
+        return <Fragment key={group.id}>
+          <button
+            className="home-group-head home-group-toggle"
+            aria-expanded={!folded}
+            title={t(folded ? "mobile.home.boxUnfold" : "mobile.home.boxFold", { label: group.name })}
+            {...press(() => updateSorting(toggleFolded(sorting, group.id)), () => { dropHoldHint(); setGroupMenu({ group, step: "actions" }); })}
+          ><ChevronRightIcon size="0.95em" /><span>{group.name}</span><span className="home-group-count">{members.length}</span>{isUntested("mobile.home.projectGroups") && <span className="untested">{t("mobile.newTab.untested")}</span>}</button>
+          {!folded && projectRows(members, group.id)}
+        </Fragment>;
+      })}
+      {sections && sections.loose.length > 0 && (sections.favorites.length > 0 || sections.groups.length > 0) && <h2 className="home-group-head">{t("mobile.home.otherProjects")}<span className="home-group-count">{sections.loose.length}</span></h2>}
+      {sections && sections.loose.length > 0 && projectRows(sections.loose, "loose")}
+      {!sections && !boxGroups && shown.length > 0 && projectRows(shown, "all")}
       {/* The box layout: each box one inset group, its head the box's own row
           (opens the box) with a fold beside it, its members below; the
           projects in no box after the last one, as the list draws them. */}
@@ -450,6 +532,22 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
         <span><GripHint text={t("mobile.home.reorderHint")} />{isUntested("mobile.home.hintDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
         <button onClick={dropHint} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
       </p>}
+      {view === "active" && shown.length > 0 && !holdHintGone && <p className="home-hint">
+        <span>{t("mobile.home.holdHint")}{isUntested("mobile.home.projectGroups") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+        <button onClick={dropHoldHint} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
+      </p>}
+      {/* The hidden projects, folded shut at the end: a tap opens one, a hold
+          offers Show in the list. Search finds them as well. */}
+      {hiddenRows.length > 0 && <div className="project-foot home-hidden">
+        <section className="project-closed" aria-label={t("mobile.home.hidden")}>
+          <button className="project-foot-row" aria-expanded={hiddenOpen} onClick={() => setHiddenOpen((was) => !was)}>
+            <span aria-hidden="true" className="project-foot-icon"><EyeIcon size="1em" /></span>
+            <span>{t("mobile.home.hiddenCount", { count: hiddenRows.length })}{isUntested("mobile.home.projectGroups") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+            <svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          </button>
+          {hiddenOpen && hiddenRows.map((project) => <button key={project.id} className="project-closed-row" {...press(() => open(project.id), () => holdProject(project))}>{project.label}</button>)}
+        </section>
+      </div>}
     </>}
     {/* What goes to the desktop rather than coming from it: a file for its
         inbox and the local models it runs — plus its agent CLIs' plans and
@@ -514,6 +612,83 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
       busy={false}
       onPick={(key) => { chooseLayout(key as HomeLayout); setLayoutSheet(false); }}
       onClose={() => setLayoutSheet(false)}
+    />}
+    {/* A project row's hold: star it, put it in a group, hide it. All of it
+        stays on this phone (`projectGroups.ts`). */}
+    {rowMenu?.step === "actions" && (() => {
+      const { project } = rowMenu;
+      const favorite = isFavorite(sorting, project.id);
+      const hidden = isHidden(sorting, project.id);
+      return <OptionSheet
+        title={project.label}
+        options={[
+          { key: "favorite", label: t(favorite ? "mobile.home.unfavorite" : "mobile.home.favorite"), icon: <StarIcon size="1em" />, current: false },
+          { key: "group", label: t("mobile.home.moveToGroup"), icon: <FolderIcon size="1em" />, trailing: groupOf(sorting, project.id)?.name ?? t("mobile.home.noGroup"), more: true, current: false },
+          { key: "hide", label: t(hidden ? "mobile.home.unhide" : "mobile.home.hide"), icon: <EyeIcon size="1em" />, current: false },
+        ]}
+        waiting=""
+        busy={false}
+        onPick={(key) => {
+          if (key === "group") { setRowMenu({ project, step: "group" }); return; }
+          updateSorting(key === "favorite" ? setFavorite(sorting, project.id, !favorite) : setHidden(sorting, project.id, !hidden));
+          setRowMenu(null);
+        }}
+        onClose={() => setRowMenu(null)}
+      />;
+    })()}
+    {rowMenu?.step === "group" && (() => {
+      const { project } = rowMenu;
+      const current = groupOf(sorting, project.id)?.id;
+      return <OptionSheet
+        title={t("mobile.home.moveToGroup")}
+        subtitle={project.label}
+        options={[
+          ...sorting.groups.map((group) => ({ key: `group:${group.id}`, label: group.name, icon: <FolderIcon size="1em" />, current: group.id === current })),
+          { key: "none", label: t("mobile.home.noGroup"), current: !current },
+          { key: "new", label: t("mobile.home.newGroup"), icon: <PlusIcon size="1em" />, more: true, current: false, section: "new" },
+        ]}
+        waiting=""
+        busy={false}
+        onPick={(key) => {
+          if (key === "new") { setRowMenu({ project, step: "name" }); return; }
+          updateSorting(moveToGroup(sorting, project.id, key.startsWith("group:") ? key.slice("group:".length) : null));
+          setRowMenu(null);
+        }}
+        onClose={() => setRowMenu(null)}
+      />;
+    })()}
+    {rowMenu?.step === "name" && <GroupNameSheet
+      title={t("mobile.home.newGroup")}
+      onSave={(name) => { updateSorting(createGroup(sorting, name, rowMenu.project.id)); setRowMenu(null); }}
+      onClose={() => setRowMenu(null)}
+    />}
+    {/* A group heading's hold: rename, move the section, or dissolve it. */}
+    {groupMenu?.step === "actions" && (() => {
+      const { group } = groupMenu;
+      const index = sorting.groups.findIndex((entry) => entry.id === group.id);
+      return <OptionSheet
+        title={group.name}
+        options={[
+          { key: "rename", label: t("common.rename"), icon: <PencilIcon size="1em" />, more: true, current: false },
+          { key: "up", label: t("mobile.home.groupUp"), icon: <ArrowUpIcon size="1em" />, current: false, disabled: index <= 0 },
+          { key: "down", label: t("mobile.home.groupDown"), icon: <ArrowDownIcon size="1em" />, current: false, disabled: index < 0 || index >= sorting.groups.length - 1 },
+          { key: "ungroup", label: t("mobile.home.ungroup"), current: false, danger: true, section: "end" },
+        ]}
+        waiting=""
+        busy={false}
+        onPick={(key) => {
+          if (key === "rename") { setGroupMenu({ group, step: "rename" }); return; }
+          updateSorting(key === "up" ? shiftGroup(sorting, group.id, -1) : key === "down" ? shiftGroup(sorting, group.id, 1) : ungroup(sorting, group.id));
+          setGroupMenu(null);
+        }}
+        onClose={() => setGroupMenu(null)}
+      />;
+    })()}
+    {groupMenu?.step === "rename" && <GroupNameSheet
+      title={t("mobile.home.renameGroup")}
+      initial={groupMenu.group.name}
+      onSave={(name) => { updateSorting(renameGroup(sorting, groupMenu.group.id, name)); setGroupMenu(null); }}
+      onClose={() => setGroupMenu(null)}
     />}
     {newProject && <NewProjectSheet onClose={() => setNewProject(false)} onCreated={(project) => { setNewProject(false); open(project.id); }} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
