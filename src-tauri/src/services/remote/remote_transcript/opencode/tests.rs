@@ -194,9 +194,10 @@ async fn a_missing_or_oversized_store_answers_with_its_reason() {
     assert_eq!(observe(&local, DB, WAL).await.unwrap_err(), "no_transcript", "a database being created is not one yet");
 }
 
-fn header(seq: u32, salt: [u32; 2]) -> WalHeader {
+/// `generation` is the header's two salt words: SQLite's restart counter, not cryptography.
+fn header(seq: u32, generation: [u32; 2]) -> WalHeader {
     let mut raw = [0u8; WAL_HEADER];
-    for (i, word) in [WAL_MAGIC, WAL_VERSION, 4096, seq, salt[0], salt[1]].into_iter().enumerate() {
+    for (i, word) in [WAL_MAGIC, WAL_VERSION, 4096, seq, generation[0], generation[1]].into_iter().enumerate() {
         raw[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
     }
     let sum = wal_sum(false, &raw[..24], [0, 0]);
