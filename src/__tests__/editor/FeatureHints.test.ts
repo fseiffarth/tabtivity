@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { enSource, translate } from "../../lib/i18n";
 import { FEATURE_HINTS, type FeatureHintSpec } from "../../lib/shortcuts/featureHints";
-import { HINTS, pickHint, type HintCtx } from "../../lib/shortcuts/hints";
+import { HINTS, pickHint, resolveHintBody, type HintCtx } from "../../lib/shortcuts/hints";
 
 // vitest runs from the repo root (the untested-register gate relies on that too).
 const SRC = "src";
@@ -40,12 +40,15 @@ describe("the feature-hint catalogue", () => {
   });
 
   it("has English copy for every hint, using only known placeholders", () => {
-    for (const { id } of FEATURE_HINTS) {
+    for (const def of HINTS.filter((hint) => hint.tier === "feature")) {
+      const { id } = def;
       for (const part of ["title", "body"]) {
         const text = dict[`hint.f.${id}.${part}`];
         expect(text, `hint.f.${id}.${part} is missing from en.ts`).toBeTruthy();
-        const placeholders = (text.match(/\{[^}]*\}/g) ?? []).filter((p) => p !== "{app}" && p !== "{slug}");
-        expect(placeholders, `${id} ${part} has an unknown placeholder`).toEqual([]);
+        const rendered = part === "body"
+          ? resolveHintBody(def, (key, params) => translate("en", key, params))
+          : translate("en", def.titleKey);
+        expect(rendered, `${id} ${part} has an unresolved placeholder`).not.toMatch(/\{[^}]*\}/);
       }
       expect(dict[`hint.f.${id}.body`].length, `${id} body is too long for a bubble`).toBeLessThanOrEqual(260);
     }

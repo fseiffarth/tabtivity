@@ -11184,8 +11184,8 @@ export const enSource = {
   "hint.f.deck-layers.body": "The toolbar adds a text box, a rectangle, an icon, an image or a TeX figure. Then align, center, space evenly, duplicate and raise or lower the layers.",
   "hint.f.deck-export.title": "Export writes a flat PDF",
   "hint.f.deck-export.body": "Export writes the finished slides out as a flat PDF, warning you first about any character the built-in PDF fonts cannot write.",
-  "hint.f.editor-autocomplete.title": "Ghost-text suggestions",
-  "hint.f.editor-autocomplete.body": "With a local model pinned to Autocomplete, suggestions appear when you pause typing. Tab accepts the whole suggestion, → takes just the next word.",
+  "hint.f.editor-autocomplete.title": "Try autocomplete in the editor",
+  "hint.f.editor-autocomplete.body": "Turn on Autocomplete in the toolbar. In Auto mode, pause at the end of a line for a suggestion, or press {shortcut} to ask now. Tab accepts the whole suggestion, Ctrl+→ accepts one word, and Esc dismisses it.",
   // Browser and printing
   "hint.f.browser-reader.title": "Pages open in reader mode",
   "hint.f.browser-reader.body": "You get the text and the images: no scripts, no forms, no sign-in, and nothing fetched from the network while you read. A line at the top tells you what was not loaded.",

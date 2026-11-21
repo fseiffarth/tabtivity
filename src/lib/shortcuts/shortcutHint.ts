@@ -31,12 +31,17 @@ export function useShortcutOverrides(): ShortcutMap | undefined {
   return useSettingsStore((s) => s.settings?.keyboard_shortcuts) as ShortcutMap | undefined;
 }
 
+/** Resolve a rebindable action for copy rendered outside a shortcut hook. */
+export function liveShortcutLabel(action: ShortcutAction): string {
+  const overrides = useSettingsStore.getState().settings?.keyboard_shortcuts as ShortcutMap | undefined;
+  return chordLabel(resolveChord(action, overrides));
+}
+
 /** The panel toggle's key as the user has it — the Super/F9 default for this
  *  desktop (`livePanelToggleKey`) unless rebound — for the copy that names it
  *  (the "panels hidden" toast, the onboarding tips). Read at call time. */
 export function livePanelToggleLabel(): string {
-  const overrides = useSettingsStore.getState().settings?.keyboard_shortcuts as ShortcutMap | undefined;
-  return chordLabel(resolveChord("togglePanels", overrides));
+  return liveShortcutLabel("togglePanels");
 }
 
 /** Whether a keydown is the app's window-fullscreen chord (F11 unless
