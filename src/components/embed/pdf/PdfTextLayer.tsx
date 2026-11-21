@@ -71,6 +71,7 @@ export function PdfTextLayer({
           scale: 1,
           rotation: (((page.rotate + rot) % 360) + 360) % 360,
         });
+        container.style.setProperty("--user-unit", String(page.userUnit ?? 1));
         const source = await page.getTextContent();
         if (cancelled || !ref.current) return;
         // Built at scale 1 with the zoom carried by `--scale-factor` (set below):
@@ -107,11 +108,8 @@ export function PdfTextLayer({
     <div
       ref={ref}
       className={TEXT_LAYER_CLASS}
-      // The zoom, as the custom properties pdf.js's own layout arithmetic reads —
-      // `--total-scale-factor` sizes every span's font (pdf.js 5+), `--scale-factor`
-      // is the older name. A React style is the right home for them: they change on
-      // every zoom step, while the spans inside are built once.
-      style={{ "--scale-factor": scale, "--total-scale-factor": scale } as React.CSSProperties}
+      // Zoom changes in CSS while the page's text runs stay mounted.
+      style={{ "--scale-factor": scale } as React.CSSProperties}
     />
   );
 }

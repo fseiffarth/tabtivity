@@ -5718,6 +5718,10 @@ select.file-viewer-run-args-input {
    drag selects whatever the misplaced boxes happen to overlap. `--min-font-size` is
    the engine's minimum font size, measured and set on the container by pdf.js. */
 .file-viewer-pdf-text-layer {
+  /* pdf.js sets the unrotated layer dimensions using these rounding steps. */
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit, 1));
   --min-font-size: 1;
   --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
   --min-font-size-inv: calc(1 / var(--min-font-size));

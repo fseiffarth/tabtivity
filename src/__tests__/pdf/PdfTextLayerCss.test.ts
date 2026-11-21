@@ -57,6 +57,10 @@ describe("PDF text layer CSS", () => {
 
   it("hands the layer the zoom under the name pdf.js reads", () => {
     const src: string = readFileSync("src/components/embed/pdf/PdfTextLayer.tsx", "utf8");
-    expect(src).toContain('"--total-scale-factor": scale');
+    expect(src).toContain('"--scale-factor": scale');
+    const body = bodiesFor(".file-viewer-pdf-text-layer");
+    expect(body).toContain("--total-scale-factor: calc(var(--scale-factor) * var(--user-unit, 1))");
+    expect(body).toContain("--scale-round-x: 1px");
+    expect(body).toContain("--scale-round-y: 1px");
   });
 });
