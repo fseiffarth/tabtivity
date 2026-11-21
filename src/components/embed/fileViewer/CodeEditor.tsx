@@ -1,3 +1,4 @@
+import { locateSourceWord, type PdfWordPhrase } from "../../../lib/viewers/tex/reverseWord";
 import { isTabKey } from "../../../lib/shortcuts/keyNames";
 import { lineStarts, indexedLine } from "../lineIndex";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -260,7 +261,7 @@ export function CodeEditor({
   onFollowLink?: (caret: number) => void;
   /** SyncTeX reverse-search target: move the caret to (1-based) `line`/`column`
    *  (`column` 0 = line start) and scroll it into view whenever `nonce` changes. */
-  gotoLine?: { line: number; column?: number; nonce: number };
+  gotoLine?: { line: number; column?: number; nonce: number; phrase?: PdfWordPhrase };
   /** Called once a `gotoLine` request has been applied, so the caller can clear
    *  it (consume the editorJump request). */
   onGotoApplied?: () => void;
@@ -1763,30 +1764,34 @@ export function CodeEditor({
     const el = textareaRef.current;
     if (!el) return;
     const text = draftRef.current;
-    const lineStart = lineStartOffset(text, gotoLine.line);
+    const word = gotoLine.phrase && locateSourceWord(text, gotoLine.line, gotoLine.phrase);
+    const line = word?.line ?? gotoLine.line;
+    const column = word?.column ?? gotoLine.column;
+    const lineStart = lineStartOffset(text, line);
     let offset = lineStart;
-    if (gotoLine.column && gotoLine.column > 1) {
+    if (column && column > 1) {
       const nl = text.indexOf("\n", lineStart);
       const lineEnd = nl === -1 ? text.length : nl;
-      offset = Math.min(lineStart + (gotoLine.column - 1), lineEnd);
+      offset = Math.min(lineStart + (column - 1), lineEnd);
     }
     el.focus();
     el.selectionStart = el.selectionEnd = offset;
     // Light the target line in the gutter straight away: assigning selectionStart
     // fires no `select` event, so `emitCaret` never runs and the caret-line
     // highlight would otherwise stay on wherever the cursor last was.
-    setCaretLine(gotoLine.line);
+    setCaretLine(line);
     // Centre the target line's visual top. `lineTop` accounts for the gutter's
     // 10px padding and, under soft-wrap (the LaTeX editor), the measured per-line
     // wrapped heights — so a target below several wrapped lines lands centred
     // instead of drifting up a row per wrap, which the old (line-1)·lineHeight
     // math got wrong for exactly the wide-prose files reverse search runs on.
-    const target = lineTop(gotoLine.line) - el.clientHeight / 2 + effectiveLineHeight / 2;
+    const rowTop = word && wrap ? textareaCaretMirrorOffsets(el, offset).top : lineTop(line);
+    const target = rowTop - el.clientHeight / 2 + effectiveLineHeight / 2;
     el.scrollTop = Math.max(0, target);
     syncScroll();
     // A band across the whole landed-on line, so a jump (a PDF Ctrl+click, an
     // error row) says where it went: the gutter tint alone is easy to miss.
-    setJumpFlash({ line: gotoLine.line, nonce: gotoLine.nonce });
+    setJumpFlash({ line, nonce: gotoLine.nonce });
     onGotoApplied?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gotoLine?.nonce, loaded]);
