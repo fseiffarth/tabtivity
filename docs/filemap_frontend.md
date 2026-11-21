@@ -448,6 +448,7 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/pdf/PdfMarkupPageRail.tsx` | The read-only page rail while marking (a click jumps, a dot marks a page with marks); `PdfViewer` passes its `PdfThumb` as `thumb`. |
 | `embed/pdf/PdfNotesPane.tsx` | Remarks panel: every comment in one list in reading order (`placedNotes`); Next/Previous walk a ring (`stepNote`). |
 | `embed/pdf/PdfTextLayer.tsx` | Selectable text layer (pdf.js `TextLayer`) over rendered pages. Not a mode — always on. |
+| `embed/pdf/clickedWord.ts`, `lib/viewers/tex/reverseWord.ts` | Reverse SyncTeX word matching. A range hit on the PDF text layer supplies context for matching in the current TeX draft. |
 | `embed/pdf/textSelection.ts` | pdf.js viewer's `TextLayerBuilder` selection port: `endOfContent` block + WebKit move-on-`selectionchange` (no jump at gaps), ligature-folded copy. |
 | `embed/pdf/PdfSelectionBar.tsx` | Selection bar over selected text: 4 highlighter colours (swatch = action), highlight + remark, copy. |
 | `embed/pdf/selection.ts` | Selection as geometry: DOM Range rects → big points per page, clipped per page, merged along lines. |

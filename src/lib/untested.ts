@@ -245,6 +245,7 @@ export const UNTESTED = {
   "pdfViewer.6": { area: "embed", what: "PdfViewer · {n} remarks on {pages} pages" },
   "pdfViewer.7": { area: "embed", what: "PdfViewer · Fullscreen" },
   "pdfViewer.syncHighlightClears": { area: "embed", what: "PdfViewer · the SyncTeX forward-search highlight goes after ~2 s, also with reduced motion on; a reveal into a hidden pane waits and scrolls there when the pane is shown" },
+  "pdfViewer.syncReverseWord": { area: "embed", what: "Ctrl/Cmd-click a PDF word to place the TeX caret at its matching occurrence" },
   "pdfViewer.syncMarkVisible": { area: "embed", what: "PdfViewer · a SyncTeX forward search shows its mark on Windows too: the word boxed, its whole line tinted, held ~2 s then fading by ~3 s, also when the window lost focus during the build; the Ctrl+click ring on a reverse search shows the same way" },
   "fileViewer.jumpFlash": { area: "embed", what: "CodeEditor · a jump into a source (Ctrl+click in the PDF, an error row, a link) bands the whole landed-on line for ~3 s, scrolling with the text" },
   "pdfViewer.syncTurnedPage": { area: "embed", what: "PdfViewer · SyncTeX on a turned page (a pdflscape landscape page, or one turned in the viewer): the highlight sits on the text and a Ctrl+click jumps to the right source line" },

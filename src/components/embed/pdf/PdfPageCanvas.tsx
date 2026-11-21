@@ -15,6 +15,8 @@ import { rectFromDrag, isDraggedFar, snapToText, type Rect } from "../../../lib/
 import { loadPageLinks, type PdfLink } from "./links";
 import { pageTextItemBoxesUnturned } from "./pageText";
 import { PdfNoteLayer, type NoteMenuState, type NoteEditState } from "./PdfNoteLayer";
+import type { PdfWordPhrase } from "../../../lib/viewers/tex/reverseWord";
+import { clickedPdfWord } from "./clickedWord";
 import { PdfTextLayer } from "./PdfTextLayer";
 import { PdfSelectionBar, selectionBarPos } from "./PdfSelectionBar";
 import { scrollIntoPdfBox } from "./scrollBox";
@@ -128,7 +130,7 @@ export function PdfPageCanvas({
   onSize?: (size: { w: number; h: number }) => void;
   /** SyncTeX reverse search: a click maps to big points in this page's own,
    *  unturned space. */
-  onSyncClick?: (page: number, xBp: number, yBp: number) => void;
+  onSyncClick?: (page: number, xBp: number, yBp: number, phrase?: PdfWordPhrase) => void;
   /** SyncTeX forward search: when this page is the target, the box (big points,
    *  the page's unturned space) to scroll into view and flash. `nonce`
    *  re-triggers a repeat reveal.
@@ -688,6 +690,7 @@ export function PdfPageCanvas({
     const canvas = canvasRef.current;
     if (!onSyncClick || !canvas) return;
     const rect = canvas.getBoundingClientRect();
+    const phrase = wrapRef.current ? clickedPdfWord(wrapRef.current, clientX, clientY) : undefined;
     const left = clientX - rect.left;
     const top = clientY - rect.top;
     // Mark the clicked point so the source-jump has feedback on the PDF side; the
@@ -704,9 +707,9 @@ export function PdfPageCanvas({
         const { turned, unturned } = syncViewports(page, scale, rot);
         const p = viewportToSyncPoint(turned, unturned, left, top);
         if (turned.rotation !== 0) setClickMark((m) => (m ? { ...m, turned: true } : m));
-        onSyncClick(pageNumber, p.x, p.y);
+        onSyncClick(pageNumber, p.x, p.y, phrase);
       },
-      () => onSyncClick(pageNumber, left / scale, top / scale),
+      () => onSyncClick(pageNumber, left / scale, top / scale, phrase),
     );
   };
 
@@ -920,9 +923,10 @@ export function PdfPageCanvas({
           style={{ left: clickMark.left, top: clickMark.top }}
         />
       )}
-      {clickMark?.turned && (
+      {clickMark && (
         <span className="file-viewer-pdf-sync-pills" style={{ left: clickMark.left, top: clickMark.top + 12 }}>
-          <UntestedTag id="pdfViewer.syncTurnedPage" />
+          <UntestedTag id="pdfViewer.syncReverseWord" />
+          {clickMark.turned && <UntestedTag id="pdfViewer.syncTurnedPage" />}
         </span>
       )}
       {/* The blackout surface (#pdf-redact), under the marks so an armed click on an
