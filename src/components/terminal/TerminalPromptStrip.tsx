@@ -84,9 +84,9 @@ export function TerminalPromptStrip({
    * Diffs switch (`TerminalReaderChanges`), beside the chat or the terminal;
    * `cwd`, the pane's resolved folder, is whose earlier chats the Resume menu
    * lists (`TerminalReaderChats`). */
-  /** `onHost`: the tab runs on a remote project's host, whose copy of the
-   * conversation the chat reads. */
-  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void; empty?: boolean }; files?: { open: boolean; onToggle: () => void; empty?: boolean }; cwd?: string; onHost?: boolean };
+  /** `onHost`: the CLI of a tab that runs on a remote project's host, whose
+   * copy of the conversation the chat reads (unset for a tab that runs here). */
+  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void; empty?: boolean }; files?: { open: boolean; onToggle: () => void; empty?: boolean }; cwd?: string; onHost?: string };
 }) {
   const t = useT();
   const use24h = useUse24h();
@@ -400,7 +400,12 @@ export function TerminalPromptStrip({
               {t("terminal.reader.showTerminal")}
             </button>
             <UntestedTag id="terminal.reader.topbar" />
-            {reader.onHost && <UntestedTag id="terminal.reader.hostTab" />}
+            {reader.onHost === "claude" && <UntestedTag id="terminal.reader.hostTab" />}
+            {reader.onHost === "codex" && <UntestedTag id="terminal.reader.hostTab.codex" />}
+            {reader.onHost === "agy" && <UntestedTag id="terminal.reader.hostTab.agy" />}
+            {reader.onHost === "muse" && <UntestedTag id="terminal.reader.hostTab.muse" />}
+            {reader.onHost === "copilot" && <UntestedTag id="terminal.reader.hostTab.copilot" />}
+            {reader.onHost === "opencode" && <UntestedTag id="terminal.reader.hostTab.opencode" />}
           </div>
         ) : <>
         {reader?.changes && (

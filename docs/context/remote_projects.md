@@ -85,7 +85,9 @@ notes). Plan and step-by-step record: `docs/remote_only_projects_plan.md`,
   without a tree imports remote-only (no mirror folder); one with a tree
   imports as a plain Remote whose mirror is that tree.
 - **Conversions.** Remote ⇄ Remote-only is the pill's job after creation
-  (Local → Remote-only later, as Extend to remote followed by the conversion).
+  (Local → Remote-only: Extend to remote with the copy off, then the same
+  conversion once lockstep has seeded the host — no second engine; git-only,
+  since nothing else carries a non-git tree up).
   The mirror folder is never deleted by it (D8), and both directions refuse a
   VM in v1: the VM's mirror must be manual-pull-only, and pairing through
   ordinary lockstep would land agent-written VM bytes here.

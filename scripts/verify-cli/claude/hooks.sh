@@ -28,7 +28,9 @@ ev() { printf '"%s":[{"hooks":[{"type":"command","command":"%s"}]}]' "$1" "$out/
 echo "{\"hooks\":{$(ev SessionStart),$(ev Stop),$(ev UserPromptSubmit),$(ev PostToolUse),$(ev Notification),$(ev SessionEnd)}}" > "$out/settings.json"
 cd "$out/work" || exit 1
 echo hello > f.txt
-A=$(cat /proc/sys/kernel/random/uuid) B=$(cat /proc/sys/kernel/random/uuid)
+# Git Bash on Windows has no /proc uuid.
+uuid() { cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())'; }
+A=$(uuid) B=$(uuid)
 echo "$A" > "$out/id.default"; echo "$B" > "$out/id.plan"
 run() {
   env -u "${APP_ENV_PREFIX}TAB_UID" -u "${APP_LEGACY_ENV_PREFIX}TAB_UID" \
@@ -39,7 +41,8 @@ run -p --session-id "$A" --allowedTools Bash --output-format json "Run the Bash 
 run -p --resume "$A" --output-format json "Reply with the single word ok." > "$out/2.json" 2>"$out/2.err"
 run -p --session-id "$B" --permission-mode plan --output-format json "Reply with the single word ok." > "$out/3.json" 2>"$out/3.err"
 run -p --resume "$B" --output-format json "Reply with the single word ok." > "$out/4.json" 2>"$out/4.err"
-run -p "/usage" --output-format json > "$out/usage.json" 2>"$out/usage.err"
+# Git Bash would rewrite `/usage` into a path under its install folder.
+MSYS2_ARG_CONV_EXCL=/usage run -p "/usage" --output-format json > "$out/usage.json" 2>"$out/usage.err"
 "$bin" --help > "$out/help.txt" 2>&1
 "$bin" --version > "$out/version.txt" 2>&1
 echo "$out: $(ls "$out/dump" | wc -l) hook payloads"

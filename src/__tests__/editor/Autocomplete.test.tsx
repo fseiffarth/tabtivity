@@ -789,13 +789,57 @@ describe("autocomplete trigger (spending)", () => {
   });
   const idle = () => act(async () => { await new Promise((r) => setTimeout(r, 1500)); });
 
-  it("Copilot asks only on request: a typing pause sends nothing", async () => {
+  it("Copilot asks automatically after a typing pause, like a local model", async () => {
+    autocompleteOn = true;
+    copilotOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "copilot_prepare") return Promise.resolve("reservation");
+      if (cmd === "copilot_complete") return Promise.resolve([]);
+      return original(cmd, args);
+    });
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    expect(screen.getByText("Auto")).toBeTruthy();
+    el.focus();
+    const typed = SOURCE + "ret";
+    await act(async () => { fireEvent.change(el, { target: { value: typed } }); });
+    el.selectionStart = el.selectionEnd = typed.length;
+    await idle();
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "copilot_complete")).toBe(true);
+  });
+
+  it("a failed automatic Copilot request says why", async () => {
+    autocompleteOn = true;
+    copilotOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "copilot_prepare") return Promise.resolve("reservation");
+      if (cmd === "copilot_complete") return Promise.reject("copilot_timeout");
+      return original(cmd, args);
+    });
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.focus();
+    const typed = SOURCE + "ret";
+    await act(async () => { fireEvent.change(el, { target: { value: typed } }); });
+    el.selectionStart = el.selectionEnd = typed.length;
+    await idle();
+    expect(screen.getByText("Copilot did not answer in time.")).toBeTruthy();
+  });
+
+  it("On request is a tab's opt-in: a typing pause then sends nothing", async () => {
     autocompleteOn = true;
     copilotOn = true;
     await renderTextView();
     const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
     await waitFor(() => expect(el.value).toBe(SOURCE));
+    await act(async () => { fireEvent.click(screen.getByText("Auto")); });
+    await act(async () => { fireEvent.click(screen.getByRole("option", { name: "On request" })); });
     expect(screen.getByText("On request")).toBeTruthy();
+    expect(screen.queryByText("200 ms")).toBeNull();
     el.focus();
     const typed = SOURCE + "ret";
     await act(async () => { fireEvent.change(el, { target: { value: typed } }); });
@@ -887,7 +931,7 @@ describe("autocomplete trigger (spending)", () => {
 
   it("a stored delay that is not a choice uses the default", async () => {
     autocompleteOn = true;
-    delays = { ollama: 250 };
+    delays = { ollama: 1000 };
     try {
       await renderTextView();
       const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
@@ -896,11 +940,10 @@ describe("autocomplete trigger (spending)", () => {
       await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "r" } }); });
       el.selectionStart = el.selectionEnd = SOURCE.length + 1;
       await act(async () => { await new Promise((r) => setTimeout(r, 350)); });
-      expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
-      await idle();
       expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(true);
     } finally { delays = undefined; }
-    expect(acDelayMs({ ollama: 250, copilot: 400 }, false)).toBe(600);
+    expect(acDelayMs({ ollama: 250, copilot: 400 }, false)).toBe(200);
+    expect(acDelayMs(undefined, false)).toBe(200);
     expect(acDelayMs({ copilot: 400 }, true)).toBe(400);
     expect(acDelayMs(undefined, true)).toBe(200);
   });
@@ -910,18 +953,10 @@ describe("autocomplete trigger (spending)", () => {
     delays = { copilot: 400 };
     try {
       await renderTextView();
-      await act(async () => { fireEvent.click(screen.getByText("600 ms")); });
+      await act(async () => { fireEvent.click(screen.getByText("200 ms")); });
       await act(async () => { fireEvent.click(screen.getByRole("option", { name: "100 ms" })); });
       expect(mockUpdateSettings).toHaveBeenCalledWith({ autocomplete_delay_ms: { copilot: 400, ollama: 100 } });
     } finally { delays = undefined; }
-  });
-
-  it("no Delay choice while the trigger is on request", async () => {
-    autocompleteOn = true;
-    copilotOn = true;
-    await renderTextView();
-    expect(screen.getByText("On request")).toBeTruthy();
-    expect(screen.queryByText("200 ms")).toBeNull();
   });
 
   it("no automatic request after undo", async () => {

@@ -281,6 +281,33 @@ describe("the desktop Reader's live screen", () => {
     expect(live.status?.model).toBe("Opus 5.5");
   });
 
+  it("reads an idle box over an agent list cut short with `↓ 3 more` as the input frame, not a stray screen", () => {
+    // Eight background agents: the list shows five and counts the rest. Read
+    // as no list, the box sat past the frame window and the chat pointed at
+    // the terminal, its composer unusable.
+    const rule = "─".repeat(120);
+    const rows = [
+      "✻ Waiting for 8 background agents to finish",
+      "",
+      `${"─".repeat(100)} SkiParkManager5.8 ─`,
+      "❯ ",
+      rule,
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · ↓ to manage",
+      "",
+      "  ● main",
+      "  ◯ general-purpose  Writing 01-weather.md bugfix plan        4m 9s · ↓ 93.9k tokens",
+      "  ◯ general-purpose  Checking GameMode init order             4m 9s · ↓ 105.1k tokens",
+      "  ◯ general-purpose  Reading Spline placeable RemoveNode      4m 9s · ↓ 113.1k tokens",
+      "  ◯ general-purpose  Finding SetMesh callers                  4m 9s · ↓ 127.2k tokens",
+      "  ◯ general-purpose  Reading SPM_PlaceableMaster source       2m 8s · ↓ 111.9k tokens",
+      "  ↓ 3 more",
+    ];
+    const live = readReaderLive(plainBuffer(rows), "Claude", 120);
+    expect(live.stray).toBe(false);
+    expect(live.question).toBeNull();
+    expect(live.status?.mode).toBe("auto");
+  });
+
   it("reads a permission prompt as its question, its context and its options", () => {
     const live = readReaderLive(plainBuffer(PERMISSION), "Claude");
     expect(live.question?.options.map((option) => option.label)).toEqual([

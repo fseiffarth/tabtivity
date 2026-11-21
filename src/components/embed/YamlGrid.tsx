@@ -1,30 +1,31 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useViewerState } from "./fileViewer/viewerState";
 import { UntestedTag } from "../common/UntestedTag";
 import {
   addChild,
+  childLiteral,
   deleteNode,
   duplicateNode,
-  isFlow,
-  literalFor,
+  lastDuplicable,
   moveNodeTo,
   parseYaml,
-  scalarType,
   setValue,
   type YamlDoc,
   type YamlNode,
 } from "../../lib/viewers/yaml";
-import { cellKind, isContainer } from "../../lib/viewers/yamlGrid";
+import {
+  buildIndex,
+  buildLevels,
+  isContainer,
+  recordName,
+  subcardsOf,
+  type Level,
+  type NodeIndex,
+} from "../../lib/viewers/yamlGrid";
 import { useT } from "../../lib/i18n";
+import { useSiblingDrag, type SiblingGrip } from "../../hooks/useSiblingDrag";
 import { ChevronRightIcon, CloseIcon, GripIcon } from "../common/icons/Icon";
+import { CommitInput, FlowTag, ParseNotice, ValueCell, countBadge } from "./YamlParts";
 
 /**
  * The YAML/JSON **card grid** (#yaml-grid) — the third view on the file, beside the
@@ -59,6 +60,7 @@ export function YamlGrid({
   tabKey,
   fontSize,
   strict,
+  doc: parsed,
 }: {
   text: string;
   onChange: (next: string) => void;
@@ -66,9 +68,13 @@ export function YamlGrid({
   fontSize?: number;
   /** JSON dialect (a `.json` file): keys/strings added here are quoted. */
   strict?: boolean;
+  /** `text` already parsed in this dialect, when the host holds it — the host
+   *  parses the draft to decide whether cards are offered at all, and one parse
+   *  per edit is enough. Parsed here when absent. */
+  doc?: YamlDoc;
 }) {
   const t = useT();
-  const doc = useMemo(() => parseYaml(text, { strict }), [text, strict]);
+  const doc = useMemo(() => parsed ?? parseYaml(text, { strict }), [parsed, text, strict]);
 
   // The focused ("main") card rides with the tab, like the tree's collapse — the
   // drill position stays across a reopen and a restart. A stale id (the file
@@ -84,32 +90,17 @@ export function YamlGrid({
   );
 
   // id → {node, parent}, so a focused card's ancestors and siblings are one lookup
-  // away without threading parents through the render.
-  const index = useMemo(() => buildIndex(doc), [doc]);
+  // away without threading parents through the render. Only a focus asks it
+  // anything, so the overview does not walk the document to build it.
+  const index = useMemo(() => (focusId ? buildIndex(doc) : NO_INDEX), [doc, focusId]);
+  const focused = focusId && index.has(focusId) ? focusId : null;
+  const levels = useMemo(() => buildLevels(doc, focused, index), [doc, focused, index]);
 
-  const ctx: Ctx = useMemo(
-    () => ({ doc, text, onChange, strict: !!strict }),
-    [doc, text, onChange, strict],
-  );
+  const ctx: Ctx = useMemo(() => ({ doc, text, onChange }), [doc, text, onChange]);
 
-  if (doc.error) {
-    return (
-      <div className="yaml-tree-notice">
-        <p>
-          {t("yamlGrid.cantRead", {
-            msg: t(doc.error.messageKey, doc.error.messageVars),
-            line: doc.error.line,
-          })}
-        </p>
-        <p className="yaml-tree-notice-hint">
-          {t("yamlGrid.switchToSourcePre")}<strong>{t("yamlGrid.sourceWord")}</strong>{t("yamlGrid.switchToSourcePost")}
-        </p>
-      </div>
-    );
-  }
+  if (doc.error) return <ParseNotice error={doc.error} cantReadKey="yamlGrid.cantRead" />;
 
-  const top = topCards(doc);
-  if (!top.length) {
+  if (!levels[0].cards.length) {
     return (
       <div className="yaml-cards">
         <div className="yaml-cards-bar">
@@ -123,12 +114,7 @@ export function YamlGrid({
     );
   }
 
-  // The single root seq is the top level's parent (so its cards reorder); a single
-  // root map has no reorderable siblings at the top (its ONE card is `document`).
-  const topParent = doc.docs.length === 1 && doc.docs[0].kind === "seq" ? doc.docs[0] : null;
-  const focused = focusId && index.has(focusId) ? focusId : null;
-  const levels = buildLevels(top, topParent, focused, index);
-  const crumbs = levels.map((l) => l.selectedId).filter((x): x is string => !!x).map((id) => index.get(id)!.node);
+  const crumbs = levels.flatMap((l) => (l.selected ? [l.selected] : []));
 
   return (
     <div className="yaml-cards" style={fontSize ? { fontSize: `${fontSize}px` } : undefined}>
@@ -141,20 +127,23 @@ export function YamlGrid({
           >
             {t("yamlGrid.overviewButton")}
           </button>
-          {crumbs.map((node, i) => (
-            <span key={node.id} className="yaml-crumb-wrap">
-              <span className="yaml-crumb-sep" aria-hidden="true">
-                <ChevronRightIcon />
+          {crumbs.map((node, i) => {
+            const title = crumbTitle(t, node, index);
+            return (
+              <span key={node.id} className="yaml-crumb-wrap">
+                <span className="yaml-crumb-sep" aria-hidden="true">
+                  <ChevronRightIcon />
+                </span>
+                <button
+                  className={`yaml-crumb${i === crumbs.length - 1 ? " on" : ""}`}
+                  onClick={() => setFocus(node.id)}
+                  title={title}
+                >
+                  {title}
+                </button>
               </span>
-              <button
-                className={`yaml-crumb${i === crumbs.length - 1 ? " on" : ""}`}
-                onClick={() => setFocus(node.id)}
-                title={crumbTitle(t, node, index)}
-              >
-                {crumbTitle(t, node, index)}
-              </button>
-            </span>
-          ))}
+            );
+          })}
         </nav>
         <span className="yaml-cards-bar-spacer" />
         <UntestedTag id="yamlGrid.2" />
@@ -164,7 +153,6 @@ export function YamlGrid({
         <LevelGrid
           key={level.parent ? level.parent.id : `top-${i}`}
           level={level}
-          text={text}
           ctx={ctx}
           onFocus={setFocus}
         />
@@ -173,130 +161,33 @@ export function YamlGrid({
   );
 }
 
+const NO_INDEX: NodeIndex = new Map();
+
 /** The bundle every card needs, passed once instead of threaded field by field. */
 interface Ctx {
   doc: YamlDoc;
   text: string;
   onChange: (next: string) => void;
-  strict: boolean;
 }
 
-/** One rendered level: the cards shown, their common parent (whose child list a
- *  reorder addresses; `null` = not reorderable, e.g. a lone root map), and which
- *  card is on the path to the focus (highlighted as the "main" card). */
-interface Level {
-  cards: YamlNode[];
-  parent: YamlNode | null;
-  selectedId: string | null;
-}
+type T = ReturnType<typeof useT>;
 
-/** Keys that name a record, tried in order to title a list item's card. */
-const TITLE_KEYS = ["name", "id", "title", "label", "key", "host", "type", "kind"];
-
-/** A friendly title for a list member. A mapping is named by its first name-ish
- *  field's value; anything else falls back to a 1-based `Item N`. Never `#0`. */
-function itemTitle(t: ReturnType<typeof useT>, node: YamlNode, index: number): string {
-  if (node.kind === "map") {
-    for (const k of TITLE_KEYS) {
-      const field = node.children.find(
-        (c) => c.key === k && c.kind === "scalar" && c.value.trim() !== "",
-      );
-      if (field) return field.value;
-    }
-  }
-  return t("yamlGrid.itemFallback", { n: index + 1 });
-}
-
-/** The document's top-level cards: a root map is one `document` card; a root list
- *  is a card per item; multiple documents flatten into one top row. */
-function topCards(doc: YamlDoc): YamlNode[] {
-  return doc.docs.flatMap((root) => (root.kind === "seq" ? root.children : [root]));
-}
-
-/** A card's children that are themselves cards — its nested collections. Scalars
- *  are fields shown ON the card, not cards in the next level. */
-function subcardsOf(node: YamlNode): YamlNode[] {
-  return node.children.filter(isContainer);
-}
-
-/** id → {node, parent} for the whole document, so ancestors/siblings are a lookup. */
-function buildIndex(doc: YamlDoc): Map<string, { node: YamlNode; parent: YamlNode | null }> {
-  const m = new Map<string, { node: YamlNode; parent: YamlNode | null }>();
-  const walk = (node: YamlNode, parent: YamlNode | null) => {
-    m.set(node.id, { node, parent });
-    for (const c of node.children) walk(c, node);
-  };
-  for (const r of doc.docs) walk(r, null);
-  return m;
-}
-
-/** Whether `ancestorId` is a (strict) ancestor of `targetId` in the doc tree. */
-function isAncestorOf(
-  ancestorId: string,
-  targetId: string,
-  index: Map<string, { node: YamlNode; parent: YamlNode | null }>,
-): boolean {
-  let cur = index.get(targetId)?.parent ?? null;
-  while (cur) {
-    if (cur.id === ancestorId) return true;
-    cur = index.get(cur.id)?.parent ?? null;
-  }
-  return false;
-}
-
-/** Walk the drill from the top row down to the focused card, one level per step:
- *  each level highlights the card on the path, and the next level is that card's
- *  children — ending with the focused card's own children (nothing highlighted). */
-function buildLevels(
-  top: YamlNode[],
-  topParent: YamlNode | null,
-  focusId: string | null,
-  index: Map<string, { node: YamlNode; parent: YamlNode | null }>,
-): Level[] {
-  const levels: Level[] = [];
-  let cards = top;
-  let parent = topParent;
-  // Guard against a pathological cycle (ids are unique, but be safe).
-  for (let guard = 0; guard < 64; guard++) {
-    const selected = focusId
-      ? cards.find((c) => c.id === focusId || isAncestorOf(c.id, focusId, index)) ?? null
-      : null;
-    levels.push({ cards, parent, selectedId: selected?.id ?? null });
-    if (!selected) break;
-    const kids = subcardsOf(selected);
-    if (selected.id === focusId) {
-      if (kids.length) levels.push({ cards: kids, parent: selected, selectedId: null });
-      break;
-    }
-    if (!kids.length) break;
-    cards = kids;
-    parent = selected;
-  }
-  return levels;
-}
-
-/** A card's display title, given its parent (a mapping keeps its key; a list member
- *  gets its name-ish field, else `Item N`; a lone root map is `document`). */
-function titleFor(
-  t: ReturnType<typeof useT>,
-  node: YamlNode,
-  parent: YamlNode | null,
-  indexInParent: number,
-): string {
-  if (!parent) return node.path.length === 0 && node.kind === "map" ? t("yamlGrid.documentTitle") : itemTitle(t, node, indexInParent);
-  if (parent.kind === "map") return node.key ?? itemTitle(t, node, indexInParent);
-  return itemTitle(t, node, indexInParent);
+/** A card's display title, given its parent: a mapping's entry keeps its key; a
+ *  list member is named by its name-ish field, else a 1-based `Item N` (never
+ *  `#0`); a lone root map is `document`. */
+function titleFor(t: T, node: YamlNode, parent: YamlNode | null, indexInParent: number): string {
+  if (!parent && node.path.length === 0 && node.kind === "map") return t("yamlGrid.documentTitle");
+  return (
+    (parent?.kind === "map" ? node.key : null) ??
+    recordName(node) ??
+    t("yamlGrid.itemFallback", { n: indexInParent + 1 })
+  );
 }
 
 /** A breadcrumb crumb's short label — the same title the card wears in its level. */
-function crumbTitle(
-  t: ReturnType<typeof useT>,
-  node: YamlNode,
-  index: Map<string, { node: YamlNode; parent: YamlNode | null }>,
-): string {
+function crumbTitle(t: T, node: YamlNode, index: NodeIndex): string {
   const parent = index.get(node.id)?.parent ?? null;
-  const i = parent ? parent.children.indexOf(node) : 0;
-  return titleFor(t, node, parent, i);
+  return titleFor(t, node, parent, parent ? parent.children.indexOf(node) : 0);
 }
 
 /** How tall a level's cards may grow before their fields scroll inside them. */
@@ -311,30 +202,35 @@ const LEVEL_MAX_HEIGHT = 320;
  */
 function LevelGrid({
   level,
-  text,
   ctx,
   onFocus,
 }: {
   level: Level;
-  text: string;
   ctx: Ctx;
   onFocus: (id: string | null) => void;
 }) {
   const t = useT();
-  const { cards, parent, selectedId } = level;
+  const { cards, parent, selected } = level;
   const siblings = parent?.children ?? cards;
+  // Where each card sits in its parent's FULL child list (the scalars between the
+  // cards count) — what its `Item N` title and a reorder's target index mean.
+  const position = useMemo(() => new Map(siblings.map((s, i) => [s, i])), [siblings]);
 
   // One ref array, shared by the drag hit-test and the equal-height measurement.
   const els = useRef<(HTMLDivElement | null)[]>([]);
-  const live = useRef<{ from: number; to: number } | null>(null);
-  const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
 
   // ── Equal height ──────────────────────────────────────────────────────────
-  // Re-measure whenever the level's shape or the file text changes (an edit can
-  // add/remove a field). `null` renders the cards at natural height so the tallest
-  // can be read; the effect then pins every card to it.
+  // Re-measure when something that sets a card's height changes: which cards the
+  // level holds, how many entries each has, and how many lines each spans (a
+  // block scalar growing). Retyping a one-line value changes none of them, so an
+  // ordinary edit does not unpin and re-lay-out the whole level. `null` renders
+  // the cards at natural height so the tallest can be read; the effect then pins
+  // every card to it.
   const [height, setHeight] = useState<number | null>(null);
-  const sig = useMemo(() => cards.map((c) => c.id).join("|") + "#" + text.length, [cards, text]);
+  const sig = useMemo(
+    () => cards.map((c) => `${c.id}:${c.children.length}:${c.endLine - c.line}`).join("|"),
+    [cards],
+  );
   useLayoutEffect(() => {
     setHeight(null);
   }, [sig]);
@@ -346,144 +242,69 @@ function LevelGrid({
   });
 
   // ── Drag reorder ──────────────────────────────────────────────────────────
-  const indexAt = (x: number, y: number): number => {
-    let best = live.current?.from ?? 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < cards.length; i++) {
-      const el = els.current[i];
-      if (!el) continue;
-      const r = el.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
-      const cx = r.left + r.width / 2;
-      const cy = r.top + r.height / 2;
-      const d = (x - cx) ** 2 + (y - cy) ** 2;
-      if (d < bestDist) {
-        bestDist = d;
-        best = i;
+  const { drag, grip } = useSiblingDrag(
+    // The card under the pointer, else the nearest by centre — a 2-D grid has
+    // gaps, and a pointer in one still means the card beside it.
+    (x, y, from) => {
+      let best = from;
+      let bestDist = Infinity;
+      for (let i = 0; i < cards.length; i++) {
+        const el = els.current[i];
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
+        const d = (x - (r.left + r.width / 2)) ** 2 + (y - (r.top + r.height / 2)) ** 2;
+        if (d < bestDist) {
+          bestDist = d;
+          best = i;
+        }
       }
-    }
-    return best;
-  };
-  const start = (i: number) => {
-    live.current = { from: i, to: i };
-    setDrag(live.current);
-  };
-  const over = (x: number, y: number) => {
-    const d = live.current;
-    if (!d) return;
-    const to = indexAt(x, y);
-    if (to !== d.to) {
-      live.current = { from: d.from, to };
-      setDrag(live.current);
-    }
-  };
-  // A cancelled gesture writes NOTHING — see `hooks/useListReorder`, which states
-  // the rule for a grip drag among siblings. `drop()`'s fallback when the pointer
-  // is outside the list is card 0, so committing on cancel let a press-and-twitch
-  // move a card to the front of its level and splice the file.
-  const abort = () => {
-    live.current = null;
-    setDrag(null);
-  };
-
-  const drop = () => {
-    const d = live.current;
-    live.current = null;
-    setDrag(null);
-    if (!d || d.to === d.from) return;
-    const node = cards[d.from];
-    const target = cards[d.to];
-    if (!node.deletable || !target.deletable) return;
-    const to = siblings.findIndex((s) => s.id === target.id);
-    if (to >= 0) ctx.onChange(moveNodeTo(ctx.text, siblings, node, to));
-  };
+      return best;
+    },
+    (from, to) => {
+      const node = cards[from];
+      const target = cards[to];
+      if (!node.deletable || !target.deletable) return;
+      const at = position.get(target);
+      if (at != null) ctx.onChange(moveNodeTo(ctx.text, siblings, node, at));
+    },
+  );
 
   return (
     <div className="yaml-level">
       <div className="yaml-level-grid">
-        {cards.map((node, i) => {
-          const movable = !!parent && node.deletable && cards.length > 1;
-          const cardDrag: CardDrag = {
-            rowRef: (el) => {
+        {cards.map((node, i) => (
+          <LevelCard
+            key={node.id}
+            node={node}
+            index={i}
+            title={titleFor(t, node, parent, position.get(node) ?? i)}
+            selected={node === selected}
+            height={height}
+            onFocus={onFocus}
+            ctx={ctx}
+            cardRef={(el) => {
               els.current[i] = el;
-            },
-            dragging: drag?.from === i,
-            dropTarget: drag != null && drag.to === i && drag.to !== drag.from,
-            blocked: drag != null && !node.deletable,
-            grip: movable
-              ? {
-                  onPointerDown: (e) => {
-                    e.preventDefault();
-                    e.currentTarget.setPointerCapture?.(e.pointerId);
-                    start(i);
-                  },
-                  onPointerMove: (e) => over(e.clientX, e.clientY),
-                  onPointerUp: (e) => {
-                    e.currentTarget.releasePointerCapture?.(e.pointerId);
-                    drop();
-                  },
-                  onPointerCancel: abort,
-                }
-              : null,
-          };
-          return (
-            <LevelCard
-              key={node.id}
-              node={node}
-              title={titleFor(t, node, parent, siblings.indexOf(node))}
-              selected={node.id === selectedId}
-              height={height}
-              onFocus={onFocus}
-              ctx={ctx}
-              drag={cardDrag}
-            />
-          );
-        })}
+            }}
+            grip={parent && node.deletable && cards.length > 1 ? grip : null}
+            // The card being dragged lifts and dims; the card it would land on
+            // rings; one that can't be a target fades while a drag is in flight.
+            dragClass={
+              drag
+                ? [
+                    drag.from === i ? "yaml-card-dragging" : "",
+                    drag.to === i && drag.to !== drag.from ? "yaml-card-drop" : "",
+                    node.deletable ? "" : "yaml-card-blocked",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")
+                : ""
+            }
+          />
+        ))}
       </div>
       {parent && <AddBar node={parent} ctx={ctx} />}
     </div>
-  );
-}
-
-/** A card's slot in its level's drag — the grip handlers, its live drag flags, and
- *  the ref the level measures + hit-tests it by. `null` grip = not draggable. */
-interface CardDrag {
-  rowRef: (el: HTMLDivElement | null) => void;
-  dragging: boolean;
-  dropTarget: boolean;
-  blocked: boolean;
-  grip: {
-    onPointerDown: (e: React.PointerEvent) => void;
-    onPointerMove: (e: React.PointerEvent) => void;
-    onPointerUp: (e: React.PointerEvent) => void;
-    onPointerCancel: () => void;
-  } | null;
-}
-
-/** The classes a card wears while a drag is in flight — shared by every card. */
-function cardDragClass(drag: CardDrag | null): string {
-  if (!drag) return "";
-  return [
-    drag.dragging ? "yaml-card-dragging" : "",
-    drag.dropTarget ? "yaml-card-drop" : "",
-    drag.blocked ? "yaml-card-blocked" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function CardGrip({ drag, title }: { drag: CardDrag | null; title: string }) {
-  const t = useT();
-  if (!drag?.grip) return null;
-  return (
-    <button
-      className="yaml-grip yaml-card-grip"
-      title={t("yamlGrid.dragToReorder")}
-      aria-label={t("yamlGrid.reorderLabel", { title })}
-      {...drag.grip}
-    >
-      <GripIcon />
-    </button>
   );
 }
 
@@ -495,43 +316,60 @@ function CardGrip({ drag, title }: { drag: CardDrag | null; title: string }) {
  */
 function LevelCard({
   node,
+  index,
   title,
   selected,
   height,
   onFocus,
   ctx,
-  drag,
+  cardRef,
+  grip,
+  dragClass,
 }: {
   node: YamlNode;
+  /** The card's position in its level — what the level's drag addresses it by. */
+  index: number;
   title: string;
   selected: boolean;
   height: number | null;
   onFocus: (id: string | null) => void;
   ctx: Ctx;
-  drag: CardDrag | null;
+  /** The element the level measures and hit-tests this card by. */
+  cardRef: (el: HTMLDivElement | null) => void;
+  /** The level's drag, or `null` for a card that cannot be reordered. */
+  grip: SiblingGrip | null;
+  dragClass: string;
 }) {
   const t = useT();
   const scalar = !isContainer(node);
-  const entries = node.children.map((child, i) => ({ child, i }));
-  const scalars = entries.filter((e) => e.child.kind === "scalar");
-  const subs = scalar ? [] : subcardsOf(node);
-  const n = node.children.length;
-  const badge = scalar
-    ? ""
-    : node.kind === "seq"
-      ? t(n === 1 ? "yamlGrid.itemsBadgeOne" : "yamlGrid.itemsBadgeMany", { n })
-      : t(n === 1 ? "yamlGrid.keysBadgeOne" : "yamlGrid.keysBadgeMany", { n });
+  const subs = subcardsOf(node);
   const canDrill = subs.length > 0;
   const style: CSSProperties | undefined = height != null ? { height: `${height}px` } : undefined;
+  const commit = (entry: YamlNode) => (next: string) =>
+    ctx.onChange(setValue(ctx.text, ctx.doc, entry, next));
 
   return (
     <div
-      className={`yaml-card yaml-level-card${selected ? " yaml-card-main" : ""} ${cardDragClass(drag)}`.trimEnd()}
+      className={["yaml-card", "yaml-level-card", selected ? "yaml-card-main" : "", dragClass]
+        .filter(Boolean)
+        .join(" ")}
       style={style}
-      ref={drag?.rowRef}
+      ref={cardRef}
     >
       <div className="yaml-card-head">
-        <CardGrip drag={drag} title={title} />
+        {grip && (
+          <button
+            className="yaml-grip yaml-card-grip"
+            title={t("yamlGrid.dragToReorder")}
+            aria-label={t("yamlGrid.reorderLabel", { title })}
+            onPointerDown={(e) => grip.down(index, e)}
+            onPointerMove={grip.move}
+            onPointerUp={grip.up}
+            onPointerCancel={grip.cancel}
+          >
+            <GripIcon />
+          </button>
+        )}
         {canDrill ? (
           <button
             className="yaml-card-toggle"
@@ -544,12 +382,8 @@ function LevelCard({
         ) : (
           <span className="yaml-card-title yaml-card-title-static">{title}</span>
         )}
-        {!scalar && isFlow(node) && (
-          <span className="yaml-flow-tag" title={t("yamlGrid.flowStyleTitle")}>
-            {node.kind === "seq" ? "[ ]" : "{ }"}
-          </span>
-        )}
-        {badge && <span className="yaml-card-badge">{badge}</span>}
+        {!scalar && <FlowTag node={node} />}
+        {!scalar && <span className="yaml-card-badge">{countBadge(t, node)}</span>}
         {node.deletable && (
           <button
             className="yaml-act yaml-act-del yaml-card-del"
@@ -570,24 +404,23 @@ function LevelCard({
       <div className="yaml-card-scroll">
         {scalar ? (
           <div className="yaml-card-field yaml-card-field-scalar">
-            {cellKind(node, null) === "scalar" ? (
-              <CommitInput
-                className={`yaml-value-input yaml-val-${scalarType(node)}`}
-                initial={node.value}
-                ariaLabel={t("yamlGrid.valueOfLabel", { label: title })}
-                onCommit={(next) => ctx.onChange(setValue(ctx.text, ctx.doc, node, next))}
-              />
-            ) : (
-              <span className="yaml-value-locked" title={node.raw}>
-                {node.raw || node.value}
-              </span>
-            )}
+            <ValueCell node={node} label={title} onCommit={commit(node)} />
           </div>
-        ) : scalars.length > 0 ? (
+        ) : node.children.some((c) => c.kind === "scalar") ? (
           <div className="yaml-card-fields">
-            {scalars.map(({ child, i }) => (
-              <FieldRow key={child.id} entry={child} parentKind={node.kind} index={i} ctx={ctx} />
-            ))}
+            {node.children.map(
+              (child, i) =>
+                child.kind === "scalar" && (
+                  <FieldRow
+                    key={child.id}
+                    entry={child}
+                    inSeq={node.kind === "seq"}
+                    index={i}
+                    onCommit={commit(child)}
+                    ctx={ctx}
+                  />
+                ),
+            )}
           </div>
         ) : (
           <div className="yaml-card-empty">{t("yamlGrid.noFields")}</div>
@@ -612,19 +445,19 @@ function LevelCard({
  *  edit-in-place when the tree can rewrite it, read-only (`source only`) when not. */
 function FieldRow({
   entry,
-  parentKind,
+  inSeq,
   index,
+  onCommit,
   ctx,
 }: {
   entry: YamlNode;
-  parentKind: string;
+  inSeq: boolean;
   index: number;
+  onCommit: (next: string) => void;
   ctx: Ctx;
 }) {
   const t = useT();
-  const inSeq = parentKind === "seq";
   const label = inSeq ? "–" : entry.key ?? "";
-  const kind = cellKind(entry, null);
 
   return (
     <div className="yaml-card-field">
@@ -634,22 +467,7 @@ function FieldRow({
       >
         {label}
       </span>
-      {kind === "scalar" ? (
-        <CommitInput
-          className={`yaml-value-input yaml-val-${scalarType(entry)}`}
-          initial={entry.value}
-          ariaLabel={t("yamlGrid.valueOfLabel", { label })}
-          placeholder={entry.style === "empty" ? t("yamlGrid.nullPlaceholder") : undefined}
-          onCommit={(next) => ctx.onChange(setValue(ctx.text, ctx.doc, entry, next))}
-        />
-      ) : (
-        <span
-          className="yaml-value-locked"
-          title={entry.raw || t("yamlGrid.sourceOnlyTitle")}
-        >
-          {entry.raw || entry.value}
-        </span>
-      )}
+      <ValueCell node={entry} label={label} onCommit={onCommit} />
       {entry.deletable && (
         <button
           className="yaml-act yaml-act-del yaml-card-field-del"
@@ -669,9 +487,8 @@ function FieldRow({
 function AddBar({ node, ctx }: { node: YamlNode; ctx: Ctx }) {
   const t = useT();
   const [adding, setAdding] = useState(false);
-  if (node.kind !== "map" && node.kind !== "seq") return null;
-  const lastChild = node.children[node.children.length - 1];
-  const canCopy = node.kind === "seq" && lastChild && lastChild.deletable;
+  const add = (kind: "key" | "item", key: string, type: "text" | "map") =>
+    ctx.onChange(addChild(ctx.text, ctx.doc, node, kind, key, childLiteral(ctx.doc, node, type, "")));
 
   if (node.kind === "map") {
     return (
@@ -686,11 +503,7 @@ function AddBar({ node, ctx }: { node: YamlNode; ctx: Ctx }) {
             onCommit={(next) => {
               setAdding(false);
               const key = next.trim();
-              if (key) {
-                ctx.onChange(
-                  addChild(ctx.text, ctx.doc, node, "key", key, literalFor("text", "", ctx.strict)),
-                );
-              }
+              if (key) add("key", key, "text");
             }}
             onCancel={() => setAdding(false)}
           />
@@ -702,32 +515,30 @@ function AddBar({ node, ctx }: { node: YamlNode; ctx: Ctx }) {
       </div>
     );
   }
+  if (node.kind !== "seq") return null;
 
+  const last = lastDuplicable(node);
   return (
     <div className="yaml-card-add">
       <button
         className="yaml-add"
         title={t("yamlGrid.addCardTitle")}
-        onClick={() => ctx.onChange(addChild(ctx.text, ctx.doc, node, "item", "", "{}"))}
+        onClick={() => add("item", "", "map")}
       >
         {t("yamlGrid.addCardButton")}
       </button>
       <button
         className="yaml-add"
         title={t("yamlGrid.addValueTitle")}
-        onClick={() =>
-          ctx.onChange(
-            addChild(ctx.text, ctx.doc, node, "item", "", literalFor("text", "", ctx.strict)),
-          )
-        }
+        onClick={() => add("item", "", "text")}
       >
         {t("yamlGrid.addValueButton")}
       </button>
-      {canCopy && (
+      {last && (
         <button
           className="yaml-add"
           title={t("yamlGrid.copyLastTitle")}
-          onClick={() => ctx.onChange(duplicateNode(ctx.text, lastChild))}
+          onClick={() => ctx.onChange(duplicateNode(ctx.text, last))}
         >
           {t("yamlGrid.copyLastButton")}
         </button>
@@ -735,68 +546,3 @@ function AddBar({ node, ctx }: { node: YamlNode; ctx: Ctx }) {
     </div>
   );
 }
-
-/**
- * A single-line input that commits on Enter/blur and reverts on Escape. It holds
- * its own buffer rather than driving `onChange` per keystroke: a commit re-encodes
- * the value into the file (quoting when it must), and doing that per keypress would
- * rewrite the text under the caret.
- */
-function CommitInput({
-  initial,
-  className,
-  ariaLabel,
-  placeholder,
-  autoFocus,
-  onCommit,
-  onCancel,
-}: {
-  initial: string;
-  className: string;
-  ariaLabel: string;
-  placeholder?: string;
-  autoFocus?: boolean;
-  onCommit: (next: string) => void;
-  onCancel?: () => void;
-}) {
-  const [buf, setBuf] = useState(initial);
-  const dirty = useRef(false);
-  useEffect(() => {
-    if (!dirty.current) setBuf(initial);
-  }, [initial]);
-
-  return (
-    <input
-      className={className}
-      value={buf}
-      placeholder={placeholder}
-      aria-label={ariaLabel}
-      autoFocus={autoFocus}
-      style={fullWidth}
-      onChange={(e) => {
-        dirty.current = true;
-        setBuf(e.target.value);
-      }}
-      onBlur={() => {
-        dirty.current = false;
-        if (buf !== initial) onCommit(buf);
-        else onCancel?.();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          dirty.current = false;
-          if (buf !== initial) onCommit(buf);
-          else onCancel?.();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          dirty.current = false;
-          setBuf(initial);
-          onCancel?.();
-        }
-      }}
-    />
-  );
-}
-
-const fullWidth: CSSProperties = { width: "100%" };

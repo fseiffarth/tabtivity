@@ -1895,6 +1895,20 @@ step record: `docs/remote_only_projects_handoff.md`.
   - [ ] ❌ Doesn't work on Windows
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — pill → **Make remote only…** on a local git project: the Extend dialog
+  opens with Keep a local copy off; after Move to host and the connect, the
+  Stop keeping check opens by itself, re-checks until lockstep has the history
+  on the host, names git-ignored files, and the confirm makes the project
+  remote-only with the old folder kept where it was. Untested pills
+  `pill.makeRemoteOnly`, `extendRemote.remoteOnly`.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 - [ ] 🖐️ Manual test — pill → **Keep a local copy…** on a remote-only project: pick a folder,
   lockstep pairs it from the host, and the project is a plain Remote again.
   - [ ] ✅ Works on Linux (X11)

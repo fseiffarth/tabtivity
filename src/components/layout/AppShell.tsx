@@ -48,6 +48,7 @@ import { ShortcutHelpOverlay } from "./ShortcutHelpOverlay";
 import { RemoteConnectDialog } from "../projects/RemoteConnectDialog";
 import { GlobalMachineMonitorDialogHost } from "../monitoring/GlobalMachineMonitorDialog";
 import { BigFolderDialogHost } from "../projects/BigFolderExcludeDialog";
+import { PhoneShareDialogHost } from "../mobile/PhoneShareDialog";
 import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
@@ -1501,6 +1502,7 @@ export function AppShell() {
           above does: the project that asked may not be the active one by the time
           its census (local walk + one host `du`) comes back. */}
       <BigFolderDialogHost />
+      <PhoneShareDialogHost />
       {/* Box editor (#41): rename / member list / explicit dissolve. */}
       <BoxEditorHost />
       {/* Same reason as the alarm below: lockstep/sync can delete a file from the local

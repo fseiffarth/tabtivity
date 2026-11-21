@@ -336,7 +336,9 @@ pub fn project_window_names(dir: &Path, target: &Path) -> Vec<String> {
         let _ = file.take(256).read_to_end(&mut bytes);
         push(&String::from_utf8_lossy(&bytes));
     }
-    if has_ext(target, "code-workspace") {
+    // Rider and Visual Studio title the window after the solution, which an
+    // Unreal project names unlike its folder (`Game.sln` in `Game5.8/`).
+    if has_ext(target, "code-workspace") || has_ext(target, "sln") || has_ext(target, "slnx") {
         if let Some(stem) = target.file_stem() {
             push(&stem.to_string_lossy());
         }
@@ -386,8 +388,8 @@ pub struct Detected {
     /// The marker that identified it, relative to the project dir (`.idea`,
     /// `.vscode`, `App.sln`).
     pub marker: PathBuf,
-    /// What the IDE is handed: the directory, or the one `.sln` /
-    /// `.code-workspace` when exactly one exists.
+    /// What the IDE is handed: the directory, or the project's `.sln`
+    /// (`pick_solution`) / the one `.code-workspace` when one exists.
     pub target: PathBuf,
 }
 
@@ -416,6 +418,8 @@ struct TopLevel {
     composer: bool,
     gemfile: bool,
     solutions: Vec<PathBuf>,
+    /// `*.uproject`: an Unreal project, whose generated solution shares its stem.
+    uprojects: Vec<PathBuf>,
     workspaces: Vec<PathBuf>,
     imls: Vec<PathBuf>,
     /// `*.xcworkspace` / `*.xcodeproj` bundles (directories).
@@ -478,6 +482,7 @@ fn scan_top_level(dir: &Path) -> TopLevel {
         }
         match ext.as_str() {
             "sln" | "slnx" => top.solutions.push(path),
+            "uproject" => top.uprojects.push(path),
             "code-workspace" => top.workspaces.push(path),
             "iml" => top.imls.push(path),
             "sublime-project" => top.sublime_projects.push(path),
@@ -486,12 +491,43 @@ fn scan_top_level(dir: &Path) -> TopLevel {
         }
     }
     top.solutions.sort();
+    top.uprojects.sort();
     top.workspaces.sort();
     top.xcode_workspaces.sort();
     top.xcode_projects.sort();
     top.sublime_projects.sort();
     top.rprojs.sort();
     top
+}
+
+/// The solution a solution IDE is handed, when one is clearly the project's.
+/// A `.sln` and a `.slnx` of one stem are the same solution (the `.sln`
+/// opens in older IDE versions too). Among several stems the one an Unreal
+/// `.uproject` or the folder is named after wins — Unreal writes
+/// `Automation_<Game>.sln` beside `<Game>.sln`. `None` (open the folder, the
+/// IDE asks) when nothing singles one out.
+fn pick_solution(dir: &Path, top: &TopLevel) -> Option<PathBuf> {
+    let stem_of = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().to_lowercase());
+    let mut stems: Vec<String> = top.solutions.iter().filter_map(|p| stem_of(p)).collect();
+    stems.sort();
+    stems.dedup();
+    let stem = match stems.as_slice() {
+        [] => return None,
+        [one] => one.clone(),
+        _ => top
+            .uprojects
+            .iter()
+            .filter_map(|p| stem_of(p))
+            .chain(dir.file_name().map(|n| n.to_string_lossy().to_lowercase()))
+            .find(|want| stems.contains(want))?,
+    };
+    let of_stem = |ext: &str| {
+        top.solutions
+            .iter()
+            .find(|p| stem_of(p).as_deref() == Some(stem.as_str()) && has_ext(p, ext))
+            .cloned()
+    };
+    of_stem("sln").or_else(|| of_stem("slnx"))
 }
 
 /// The most `.iml` files read for one project, and the most of each.
@@ -581,11 +617,12 @@ pub fn detect(dir: &Path) -> Vec<Detected> {
             _ => None,
         }
     };
+    let solution = pick_solution(dir, &top);
     let mut found = Vec::new();
     if top.idea {
         let ide = jetbrains_product(dir, &top);
         let target = if ide == IdeId::Rider {
-            single(&top.solutions).unwrap_or_else(|| dir.to_path_buf())
+            solution.clone().unwrap_or_else(|| dir.to_path_buf())
         } else {
             dir.to_path_buf()
         };
@@ -599,7 +636,9 @@ pub fn detect(dir: &Path) -> Vec<Detected> {
         let marker = if top.vs {
             PathBuf::from(".vs")
         } else {
-            top.solutions[0]
+            solution
+                .as_ref()
+                .unwrap_or(&top.solutions[0])
                 .file_name()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(".vs"))
@@ -607,7 +646,7 @@ pub fn detect(dir: &Path) -> Vec<Detected> {
         found.push(Detected {
             ide: IdeId::VisualStudio,
             marker,
-            target: single(&top.solutions).unwrap_or_else(|| dir.to_path_buf()),
+            target: solution.unwrap_or_else(|| dir.to_path_buf()),
         });
     }
     if top.vscode || !top.workspaces.is_empty() {
@@ -1235,6 +1274,44 @@ mod tests {
     }
 
     #[test]
+    fn an_unreal_project_opens_its_game_solution() {
+        // UE 5.8's generated layout: two solutions, each as .sln and .slnx.
+        let p = project();
+        let dir = p.path().join("SkiParkManager5.8");
+        fs::create_dir_all(dir.join(".idea")).unwrap();
+        for name in [
+            "Automation_SkiParkManager.sln",
+            "Automation_SkiParkManager.slnx",
+            "SkiParkManager.sln",
+            "SkiParkManager.slnx",
+            "SkiParkManager.uproject",
+            "CMakeLists.txt",
+        ] {
+            touch(&dir, name, "");
+        }
+        let found = detect(&dir);
+        assert_eq!(ids(&found), vec![IdeId::Rider, IdeId::VisualStudio]);
+        assert_eq!(found[0].target, dir.join("SkiParkManager.sln"));
+        assert_eq!(found[1].target, dir.join("SkiParkManager.sln"));
+        assert_eq!(found[1].marker, PathBuf::from("SkiParkManager.sln"));
+    }
+
+    #[test]
+    fn a_sln_and_slnx_pair_is_one_solution_and_the_folder_name_picks() {
+        let p = project();
+        let dir = p.path().join("App");
+        touch(&dir, "App.slnx", "");
+        touch(&dir, "App.sln", "");
+        assert_eq!(detect(&dir)[0].target, dir.join("App.sln"), "the .sln of a pair");
+        touch(&dir, "Tools.sln", "");
+        assert_eq!(detect(&dir)[0].target, dir.join("App.sln"), "named after the folder");
+        fs::remove_file(dir.join("App.sln")).unwrap();
+        fs::remove_file(dir.join("App.slnx")).unwrap();
+        touch(&dir, "Other.sln", "");
+        assert_eq!(detect(&dir)[0].target, dir, "nothing singles one out → the folder");
+    }
+
+    #[test]
     fn vscode_from_dir_or_workspace_file() {
         let p = project();
         fs::create_dir(p.path().join(".vscode")).unwrap();
@@ -1495,5 +1572,10 @@ mod tests {
             names(&["proj", "Pretty Name", "team"])
         );
         assert_eq!(project_window_names(&dir, &dir), names(&["proj", "Pretty Name"]));
+        assert_eq!(
+            project_window_names(&dir, &dir.join("Game.sln")),
+            names(&["proj", "Pretty Name", "Game"]),
+            "Rider titles the window after the solution"
+        );
     }
 }

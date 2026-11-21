@@ -14,6 +14,7 @@ beforeEach(() => localStorage.clear());
 afterEach(() => {
   cleanup();
   vi.mocked(api).mockReset();
+  vi.useRealTimers();
 });
 
 const folder = (id: string, name: string, kind: string, unread = 0): MobileMailFolder => ({ id, name, kind, unread, total: 4 });
@@ -127,5 +128,63 @@ describe("phone mail folder still being fetched", () => {
     await screen.findByText("Filed away", undefined, { timeout: 3_000 });
     expect(screen.queryByText("Fetching this folder from the server…")).toBeNull();
     expect(paths.filter((path) => path === "/api/v1/mail/folders/w-sent?offset=0")).toHaveLength(2);
+  });
+});
+
+describe("phone mail date groups", () => {
+  it("groups recent mail by local day and older mail by month and year", async () => {
+    vi.setSystemTime(new Date(2026, 0, 12, 0, 5));
+    const recent = new Date(2026, 0, 10, 12);
+    const weekAgo = new Date(2026, 0, 5);
+    const older = new Date(2026, 0, 4, 23, 59);
+    const lastYear = new Date(2025, 11, 31, 12);
+    const twoYearsAgo = new Date(2024, 11, 31, 12);
+    const header = (id: string, subject: string, date: string) => ({
+      id, subject, date, sender: { address: "a@b.test" }, seen: true, has_attachments: false, preview: "",
+    });
+    const messages = [
+      header("m1", "After midnight", new Date(2026, 0, 12, 0, 4).toISOString()),
+      header("m2", "Before midnight", new Date(2026, 0, 11, 23, 59).toISOString()),
+      header("m3", "Yesterday morning", new Date(2026, 0, 11, 9).toISOString()),
+      header("m4", "Earlier this week", recent.toISOString()),
+      header("m5", "A week ago", weekAgo.toISOString()),
+      header("m6", "More than a week ago", older.toISOString()),
+      header("m7", "Same month", new Date(2026, 0, 2, 12).toISOString()),
+      header("m8", "Last year", lastYear.toISOString()),
+      header("m9", "Two years ago", twoYearsAgo.toISOString()),
+      header("m10", "Missing timestamp", ""),
+    ];
+    vi.mocked(api).mockImplementation(async (path: string) => ({
+      mail: path === "/api/v1/mail"
+        ? { view: "overview", accounts }
+        : { ...page(accounts[0].folders[1]), messages, total: messages.length },
+    }));
+
+    render(createElement(Mail));
+    fireEvent.click(await screen.findByText("Inbox"));
+    await screen.findByRole("heading", { name: "Today" });
+
+    const sections = Array.from(document.querySelectorAll<HTMLElement>("main > section"));
+    expect(sections.map((section) => within(section).getByRole("heading").textContent)).toEqual([
+      "Today",
+      "Yesterday",
+      recent.toLocaleDateString("en", { weekday: "long" }),
+      weekAgo.toLocaleDateString("en", { weekday: "short", day: "numeric", month: "short" }),
+      older.toLocaleDateString("en", { month: "long", year: "numeric" }),
+      lastYear.toLocaleDateString("en", { month: "long", year: "numeric" }),
+      twoYearsAgo.toLocaleDateString("en", { month: "long", year: "numeric" }),
+      "Unknown date",
+    ]);
+    const subjects = sections.map((section) => Array.from(section.querySelectorAll("button b"), (subject) => subject.textContent));
+    expect(subjects).toEqual([
+      ["After midnight"],
+      ["Before midnight", "Yesterday morning"],
+      ["Earlier this week"],
+      ["A week ago"],
+      ["More than a week ago", "Same month"],
+      ["Last year"],
+      ["Two years ago"],
+      ["Missing timestamp"],
+    ]);
   });
 });

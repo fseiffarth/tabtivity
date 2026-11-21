@@ -9,8 +9,8 @@ import { parseDroppedFiles, type DroppedFile } from "../files/droppedFiles";
  * tab gets each file copied into its folder's inbox — the drop box the phone's
  * files land in, the one place a fenced or containerized agent can read — and
  * types `@<reference>`, as the phone's composer does; a local shell gets the
- * path itself, quoted, as a native terminal would type it. A remote tab is
- * refused: the program there cannot see this disk.
+ * path itself, quoted, as a native terminal would type it. A remote tab gets the path of
+ * a private temporary copy on its SSH host.
  *
  * With the Reader open, the text goes into its composer instead of the
  * terminal (`onReaderInsert`), so a drop lands where the user is typing.
@@ -109,13 +109,20 @@ export function pasteIntoAgentBox(
   ptyId: string,
   done: (pasted: { text: string; error: TranslationKey | null; image: boolean }) => void,
 ): boolean {
-  const files = parseDroppedFiles(event.clipboardData);
+  const data = event.clipboardData;
+  // A shell selection can contain file:// URLs, including in its HTML
+  // formatting. Leave text insertion and selection replacement to the box.
+  const plain = data.getData("text/plain");
+  const uriList = data.getData("text/uri-list");
+  const files = data.files?.length || uriList ? parseDroppedFiles(data) : [];
+  if (plain && !data.files?.length && plain.trim() !== uriList.trim()
+      && plain.trim() !== files.map(file => file.path).join("\n")) return false;
   if (files.length > 0) {
     event.preventDefault();
     void deliverDrop(ptyId, files, true).then((pasted) => done({ ...pasted, image: false }));
     return true;
   }
-  if (event.clipboardData.getData("text/plain")) return false;
+  if (plain) return false;
   event.preventDefault();
   void pasteClipboardImage(ptyId, true).then((pasted) => done({ ...pasted, image: true }));
   return true;

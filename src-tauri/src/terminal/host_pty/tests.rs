@@ -168,7 +168,7 @@ async fn eventually_attached(c: &mut Client<tokio::io::DuplexStream>, want: usiz
 /// Every part dropped (the registry dropped the entry) closes the stream.
 #[tokio::test(flavor = "multi_thread")]
 async fn dropping_every_part_detaches() {
-    let (host, _fake, _clock) = test_host();
+    let (host, fake, _clock) = test_host();
     let pty = tokio::task::spawn_blocking({
         let host = host.clone();
         move || open_on(&host, "kept", false)
@@ -180,7 +180,10 @@ async fn dropping_every_part_detaches() {
     eventually_attached(&mut c, 1).await;
     let watch = pty.handle.clone();
     drop(pty);
-    // The handle above is a part too: the stream lives while it does.
+    // The handle above is a part too: the stream lives while it does, output
+    // arriving with no reader left included (the attach's snapshot can reach
+    // the pump only now on a loaded runner).
+    fake.last().emit(b"nobody reads this");
     tokio::time::sleep(Duration::from_millis(50)).await;
     eventually_attached(&mut c, 1).await;
     drop(watch);

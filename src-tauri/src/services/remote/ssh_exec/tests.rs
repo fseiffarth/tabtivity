@@ -1073,7 +1073,7 @@ fn wrap_pty_options_none_id_is_local_noop() {
     // local, so the spawn is left untouched (mount-free: there is no cwd
     // mountpoint to sniff).
     let mut opts = local_opts("/home/user/proj", None);
-    wrap_pty_options(&mut opts).unwrap();
+    assert!(wrap_pty_options(&mut opts).unwrap().is_none());
     assert_eq!(opts.cmd, "bash");
     assert!(opts.args.is_empty());
 }

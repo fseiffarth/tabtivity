@@ -1025,6 +1025,52 @@ pub async fn metadata_with_mode_on(
     Ok((size, modified, permission_bits(&meta)))
 }
 
+/// The uid the session's own processes run as: the owner of `/proc/self`,
+/// which on Linux resolves to the SFTP server's own process. `None` on a host
+/// with no such `/proc` or a server that sends no owner.
+pub async fn login_uid_on(sftp: &Sftp) -> Option<u32> {
+    sftp.fs().metadata("/proc/self").await.ok()?.uid()
+}
+
+/// The names of `path`'s entries owned by `uid`, read off the listing's attrs
+/// (no stat each), at most `max` of them — for `/proc`, the login's own
+/// processes. Names are filtered as in [`list_dir_raw_on`].
+pub async fn list_owned_names_on(sftp: &Sftp, path: &str, uid: u32, max: usize) -> Result<Vec<String>, String> {
+    validate_arg("path", path)?;
+    let dir = sftp
+        .fs()
+        .open_dir(path)
+        .await
+        .map_err(|e| format!("sftp open_dir failed: {e}"))?;
+    let mut rd = Box::pin(dir.read_dir());
+    let mut out = Vec::new();
+    while let Some(item) = rd.next().await {
+        let entry = item.map_err(|e| format!("sftp read_dir failed: {e}"))?;
+        if entry.metadata().uid() != Some(uid) {
+            continue;
+        }
+        let name = entry.filename().to_string_lossy().into_owned();
+        if is_single_component_name(&name) {
+            out.push(name);
+            if out.len() >= max {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The target a remote symlink names (not resolved further).
+pub async fn read_link_on(sftp: &Sftp, path: &str) -> Result<String, String> {
+    validate_arg("path", path)?;
+    let target = sftp
+        .fs()
+        .read_link(path)
+        .await
+        .map_err(|e| format!("sftp read_link failed: {e}"))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
 /// The permission bits (`0o777`: rwx for the three classes) of SFTP attrs,
 /// `None` when the server sent none. Never setuid/setgid/sticky: the host is
 /// attacker-controlled, and a mirror copy must not carry them.

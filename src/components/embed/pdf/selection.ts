@@ -105,6 +105,39 @@ export function mergeSelectionRects(rects: DOMRect[], gap: number): DOMRect[] {
   return lines.flatMap((l) => mergeLine(l, gap));
 }
 
+/** The class of the text layer whose spans are the selectable words. */
+const TEXT_LAYER_SELECTOR = ".file-viewer-pdf-text-layer";
+
+/**
+ * The on-screen boxes of the *selected text* in `range`, inside the text layers under
+ * `container` — and nothing else.
+ *
+ * Not `range.getClientRects()`, which also returns the border box of every element
+ * the range fully contains: while a drag is under way each layer's `endOfContent`
+ * block (`textSelection.ts`) covers its whole page, so a selection crossing a page
+ * break would have handed back a page-sized rectangle — and a page-sized highlight.
+ * Measuring each selected text node on its own leaves every element box out by
+ * construction. Only the text layers are walked: they exist on near pages only, and
+ * nothing outside a page survives the clipping below anyway.
+ */
+export function selectedTextRects(container: HTMLElement, range: Range): DOMRect[] {
+  const out: DOMRect[] = [];
+  for (const layer of Array.from(container.querySelectorAll(TEXT_LAYER_SELECTOR))) {
+    if (!range.intersectsNode(layer)) continue;
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!range.intersectsNode(n)) continue;
+      const part = document.createRange();
+      part.selectNodeContents(n);
+      if (n === range.startContainer) part.setStart(n, range.startOffset);
+      if (n === range.endContainer) part.setEnd(n, range.endOffset);
+      if (part.collapsed) continue;
+      out.push(...Array.from(part.getClientRects()));
+    }
+  }
+  return out;
+}
+
 /** The page wrapper an element sits in, or null. Walks up rather than matching a
  *  parent directly: the selection's focus is usually a text node inside a span. */
 function wrapOf(node: Node | null): HTMLElement | null {
@@ -150,12 +183,12 @@ export function readViewerSelection(
 
   const wraps = Array.from(container.querySelectorAll<HTMLElement>(`.${PAGE_WRAP_CLASS}`));
   if (wraps.length === 0) return null;
-  // One rect list for the whole selection, then sorted onto the sheets: a range's
-  // rectangles are in screen space and know nothing about pages, so the boxes are the
+  // One rect list for the whole selection (its text only — `selectedTextRects`),
+  // then sorted onto the sheets: a range's rectangles are in screen space and know nothing about pages, so the boxes are the
   // only thing that can say which sheet a fragment of the drag landed on.
   const rects: DOMRect[] = [];
   for (let i = 0; i < sel.rangeCount; i++) {
-    rects.push(...Array.from(sel.getRangeAt(i).getClientRects()));
+    rects.push(...selectedTextRects(container, sel.getRangeAt(i)));
   }
   if (rects.length === 0) return null;
 

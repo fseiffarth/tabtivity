@@ -2,7 +2,7 @@ use std::{fs, io::Read, path::Path};
 use app_core::sync::LockExt;
 
 use crate::services::mobile_control::inbox;
-use crate::terminal::PtyOptions;
+use crate::terminal::{DropTarget, PtyOptions};
 use crate::tauri_host::Ctx;
 
 // The registry's managed-state type lives beside `PtyRegistry` (S5).
@@ -363,7 +363,7 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
 pub struct PtyDropped {
     /// One per file that made it, in drop order: for an agent tab the inbox
     /// reference (`inbox::INBOX_DIR/<file>`, relative to the tab's folder),
-    /// for a shell tab the file's own path.
+    /// for a local shell the original path, for SSH tabs the uploaded path.
     pub items: Vec<String>,
     /// Why the first file that did not make it was refused — an inbox wire
     /// code, `not_a_file`, `not_found` or `unreadable`. The files after it are
@@ -371,13 +371,12 @@ pub struct PtyDropped {
     pub error: Option<String>,
 }
 
-/// Files dropped onto a local terminal tab from the OS file manager. An agent
+/// Files dropped onto a terminal tab from the OS file manager. An agent
 /// tab gets each file copied into the inbox of the folder it works in — the
 /// same git-ignored drop box a file sent from the phone lands in, and readable
 /// from inside the fence or container, which a path elsewhere on this disk is
 /// not. A shell runs on the host and gets the paths themselves, as a native
-/// terminal would. A remote tab is refused (`remote_tab`): its program cannot
-/// see this disk.
+/// terminal would. A remote tab gets a private copy on its SSH host.
 ///
 /// `sizes`, one per path, is set for a path the frontend inferred rather than
 /// read off the drag: WebKitGTK leaks only the first file's path of a
@@ -397,16 +396,15 @@ pub async fn pty_drop_files(
         .get::<RegistryState>()
         .lock_ok()
         .drop_dir(&id)
-        .ok_or("no_terminal")?
-        .ok_or("remote_tab")?;
+        .ok_or("no_terminal")?;
     let sizes = sizes.unwrap_or_default();
     // A file of a local-models-only project is never copied into the inbox of
     // a tab that is not a verified local-model tab of it (a cloud agent, a
     // Tabby chat): `services::agent_privacy`.
-    if agent && crate::services::agent_privacy::drop_refused(&id, &paths) {
+    if (agent || matches!(dir, DropTarget::Remote(_))) && crate::services::agent_privacy::drop_refused(&id, &paths) {
         return Ok(PtyDropped { error: Some(crate::services::agent_privacy::DROP_REFUSED.to_string()), ..PtyDropped::default() });
     }
-    let dropped = app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await?;
+    let dropped = app_core::rt::blocking("terminal", move || drop_files(&dir, &paths, &sizes, agent)).await?;
     // A file in a Tabby chat's inbox is an attachment, whatever is typed next.
     if agent && !dropped.items.is_empty() {
         crate::services::assistant_attach::note_tab_file(&id);
@@ -414,7 +412,7 @@ pub async fn pty_drop_files(
     Ok(dropped)
 }
 
-fn drop_files(dir: &Path, paths: &[String], sizes: &[Option<u64>], agent: bool) -> PtyDropped {
+fn drop_files(dir: &DropTarget, paths: &[String], sizes: &[Option<u64>], agent: bool) -> PtyDropped {
     let mut dropped = PtyDropped::default();
     for (i, path) in paths.iter().enumerate() {
         let path = Path::new(path);
@@ -436,11 +434,11 @@ fn drop_files(dir: &Path, paths: &[String], sizes: &[Option<u64>], agent: bool) 
     dropped
 }
 
-fn drop_file(dir: &Path, path: &Path, agent: bool) -> Result<String, &'static str> {
+fn drop_file(dir: &DropTarget, path: &Path, agent: bool) -> Result<String, &'static str> {
     if !path.is_absolute() {
         return Err("not_a_file");
     }
-    if !agent {
+    if !agent && matches!(dir, DropTarget::Local(_)) {
         return Ok(path.to_string_lossy().into_owned());
     }
     let meta = fs::metadata(path).map_err(|_| "unreadable")?;
@@ -456,12 +454,57 @@ fn drop_file(dir: &Path, path: &Path, agent: bool) -> Result<String, &'static st
         .and_then(|file| file.take(inbox::MAX_INBOX_FILE as u64 + 1).read_to_end(&mut bytes))
         .map_err(|_| "unreadable")?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    inbox::store(dir, &name, &bytes)
-        .map(|stored| stored.reference)
-        .map_err(|e| e.code())
+    match dir {
+        DropTarget::Local(dir) => inbox::store(dir, &name, &bytes)
+            .map(|stored| stored.reference)
+            .map_err(|e| e.code()),
+        DropTarget::Remote(spec) => remote_attachment(spec, &name, bytes),
+    }
 }
 
-/// The OS clipboard's image pasted into a local terminal tab — the terminal's
+/// Upload into a fresh, owner-only temporary directory on the tab's SSH host.
+/// The returned path is built here, never taken from host output that would
+/// then be typed into a shell. Only advertise it after the full write.
+fn remote_attachment(
+    spec: &crate::schema::project::RemoteSpec,
+    name: &str,
+    bytes: Vec<u8>,
+) -> Result<String, &'static str> {
+    use crate::services::{git_bounded, ssh_exec};
+    use crate::quote::posix;
+    if bytes.len() > inbox::MAX_INBOX_FILE {
+        return Err("file_too_large");
+    }
+    let dir = format!("/tmp/{}-drop-{:032x}", crate::app_slug!(), rand::random::<u128>());
+    let name = inbox::safe_name(name);
+    let script = attachment_script(&dir, &name, bytes.len());
+    let mut cmd = ssh_exec::remote_shell_command(spec, &format!("sh -c {}", posix(&script)))
+        .map_err(|_| "upload_failed")?;
+    let opts = git_bounded::Opts {
+        stdin: Some(bytes),
+        stdout_cap: Some(4096),
+        timeout: Some(std::time::Duration::from_secs(120)),
+        no_precheck: true,
+        ..Default::default()
+    };
+    let ran = git_bounded::run(&mut cmd, opts).map_err(|_| "upload_failed")?;
+    if !ran.output.status.success() {
+        return Err("upload_failed");
+    }
+    Ok(format!("{dir}/{name}"))
+}
+
+fn attachment_script(dir: &str, name: &str, size: usize) -> String {
+    // mkdir is exclusive. Only clean up after it succeeds, so a collision
+    // can never remove or replace someone else's file.
+    let dir = crate::quote::posix(dir);
+    let file = crate::quote::posix(name);
+    format!("umask 077; mkdir {dir} && cd {dir} || exit 1; \
+        if cat > {file} && [ \"$(wc -c < {file})\" -eq {size} ]; then exit 0; fi; \
+        rm -f {file}; rmdir {dir}; exit 1")
+}
+
+/// The OS clipboard's image pasted into a terminal tab — the terminal's
 /// paste chord, an agent pane's Ctrl+V or double-click, or the Reader's
 /// composer, whenever the clipboard holds no text. A fenced agent cannot read
 /// the clipboard itself (its `/tmp` and `/run` hide the display), so the image
@@ -469,15 +512,14 @@ fn drop_file(dir: &Path, path: &Path, agent: bool) -> Result<String, &'static st
 /// its folder's inbox, typed as the `@` reference. A shell gets the path of a
 /// copy in the global inbox instead, outside the project, since nothing pasted
 /// into a shell files itself into the project. The `Err` is a wire code:
-/// `no_clipboard_image`, `remote_tab` or an inbox one.
+/// `no_clipboard_image`, `upload_failed` or an inbox one.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pty_paste_clipboard_image(ctx: Ctx, id: String, agent: bool) -> Result<String, String> {
     let dir = ctx
         .get::<RegistryState>()
         .lock_ok()
         .drop_dir(&id)
-        .ok_or("no_terminal")?
-        .ok_or("remote_tab")?;
+        .ok_or("no_terminal")?;
     // On X11 a clipboard with no image waits out a selection transfer timeout.
     let read = app_core::rt::spawn_blocking(crate::commands::mobile_control::clipboard_png);
     let png = tokio::time::timeout(std::time::Duration::from_secs(3), read)
@@ -485,7 +527,10 @@ pub async fn pty_paste_clipboard_image(ctx: Ctx, id: String, agent: bool) -> Res
         .map_err(|_| "no_clipboard_image")?
         .map_err(|_| "no_clipboard_image")??;
     let state_dir = crate::storage::state_dir();
-    let pasted = app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?;
+    let pasted = app_core::rt::blocking("terminal", move || match dir {
+        DropTarget::Local(dir) => paste_image(&dir, &state_dir, &png, agent),
+        DropTarget::Remote(spec) => remote_attachment(&spec, "clipboard.png", png).map_err(String::from),
+    }).await?;
     if agent && pasted.is_ok() {
         crate::services::assistant_attach::note_tab_file(&id);
     }
@@ -834,11 +879,32 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let shot = outside.path().join("shot one.png");
         fs::write(&shot, b"png bytes").unwrap();
-        let dropped = drop_files(tab.path(), &[shot.to_string_lossy().into_owned()], &[], true);
+        let dropped = drop_files(&DropTarget::Local(tab.path().into()), &[shot.to_string_lossy().into_owned()], &[], true);
         assert_eq!(dropped.error, None);
         let reference = &dropped.items[0];
         assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
         assert_eq!(fs::read(tab.path().join(reference)).unwrap(), b"png bytes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_copy_is_binary_safe_exclusive_and_cleans_up_short_writes() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("private copy");
+        let write = |size: usize| {
+            let script = attachment_script(dir.to_str().unwrap(), "sample.bin", size);
+            let mut child = Command::new("sh").args(["-c", &script])
+                .stdin(Stdio::piped()).spawn().unwrap();
+            let _ = child.stdin.take().unwrap().write_all(b"\0\xff");
+            child.wait().unwrap().success()
+        };
+        assert!(!write(3));
+        assert!(!dir.exists());
+        assert!(write(2));
+        assert!(!write(2));
+        assert_eq!(fs::read(dir.join("sample.bin")).unwrap(), b"\0\xff");
     }
 
     #[test]
@@ -846,7 +912,7 @@ mod tests {
         let tab = tempfile::tempdir().unwrap();
         // Absolute on this OS: a leading `/` alone is relative on Windows.
         let path = if cfg!(windows) { r"C:\somewhere\a file.txt" } else { "/somewhere/a file.txt" }.to_string();
-        let dropped = drop_files(tab.path(), std::slice::from_ref(&path), &[], false);
+        let dropped = drop_files(&DropTarget::Local(tab.path().into()), std::slice::from_ref(&path), &[], false);
         assert_eq!(dropped, PtyDropped { items: vec![path], error: None });
         assert!(!tab.path().join(inbox::INBOX_DIR).exists());
     }
@@ -885,10 +951,10 @@ mod tests {
             outside.path().to_string_lossy().into_owned(),
             good.to_string_lossy().into_owned(),
         ];
-        let dropped = drop_files(tab.path(), &paths, &[], true);
+        let dropped = drop_files(&DropTarget::Local(tab.path().into()), &paths, &[], true);
         assert_eq!(dropped.items.len(), 1);
         assert_eq!(dropped.error.as_deref(), Some("not_a_file"));
-        assert_eq!(drop_files(tab.path(), &["rel.txt".into()], &[], true).error.as_deref(), Some("not_a_file"));
+        assert_eq!(drop_files(&DropTarget::Local(tab.path().into()), &["rel.txt".into()], &[], true).error.as_deref(), Some("not_a_file"));
     }
 
     #[test]
@@ -901,15 +967,15 @@ mod tests {
         fs::write(&second, b"bbb").unwrap();
         let paths = [first.to_string_lossy().into_owned(), second.to_string_lossy().into_owned()];
         for agent in [true, false] {
-            let dropped = drop_files(tab.path(), &paths, &[None, Some(3)], agent);
+            let dropped = drop_files(&DropTarget::Local(tab.path().into()), &paths, &[None, Some(3)], agent);
             assert_eq!((dropped.items.len(), dropped.error), (2, None));
             // Same name, another file: the drop came from a second folder.
-            let dropped = drop_files(tab.path(), &paths, &[None, Some(9)], agent);
+            let dropped = drop_files(&DropTarget::Local(tab.path().into()), &paths, &[None, Some(9)], agent);
             assert_eq!(dropped.items.len(), 1);
             assert_eq!(dropped.error.as_deref(), Some("not_found"));
         }
         let missing = outside.path().join("c.png").to_string_lossy().into_owned();
-        let dropped = drop_files(tab.path(), &[missing], &[Some(1)], false);
+        let dropped = drop_files(&DropTarget::Local(tab.path().into()), &[missing], &[Some(1)], false);
         assert_eq!(dropped.error.as_deref(), Some("not_found"));
     }
 }

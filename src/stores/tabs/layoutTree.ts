@@ -120,15 +120,19 @@ export function removeKeyFromTree(
   node: LayoutNode,
   key: string,
   keepEmpty = false,
+  // Repicks the group's active tab when `key` was it (the visit order, in the
+  // main window); the first remaining tab without one.
+  pick?: (tabKeys: string[], removedIndex: number) => string | null,
 ): LayoutNode | null {
   const found = findGroupOfTab(node, key);
   if (!found) return node;
   const removed = mapGroup(node, found.group.id, (g) => {
     const tabKeys = g.tabKeys.filter((k) => k !== key);
+    const repicked = pick ? pick(tabKeys, found.index) : (tabKeys[0] ?? null);
     return {
       ...g,
       tabKeys,
-      activeKey: g.activeKey === key ? (tabKeys[0] ?? null) : g.activeKey,
+      activeKey: g.activeKey === key ? repicked : g.activeKey,
       ...(keepEmpty && tabKeys.length === 0 ? { keepEmpty: true } : {}),
     };
   });

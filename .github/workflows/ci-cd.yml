@@ -623,11 +623,12 @@ jobs:
     needs: ci-plan
     if: ${{ !cancelled() && needs.ci-plan.outputs.skip_macos != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')) }}
     runs-on: macos-26
-    timeout-minutes: 100
+    timeout-minutes: 150
     env:
       # This runner has 7 GB and the backend crate's two compiles (library,
-      # test harness) want about 17 GB side by side: the test steps build
-      # the harness first, alone (scripts/ci-failed-first.sh, split_build).
+      # test harness) want about 17 GB side by side: Build backend tests
+      # builds the harness first, alone (scripts/ci-failed-first.sh,
+      # split_build).
       CI_CARGO_SPLIT_BUILD: "1"
 
     steps:
@@ -676,9 +677,17 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # The backend compile alone (20 to 60 minutes here: swap, see env
+      # above), sized for a build with no cache. The test steps below then
+      # only test, so a cut-off test step is never a slow build.
+      - name: Build backend tests
+        shell: bash
+        timeout-minutes: 80
+        run: bash scripts/ci-failed-first.sh build
+
       - name: Re-run the last run's failed tests first
         shell: bash
-        timeout-minutes: 60
+        timeout-minutes: 20
         run: bash scripts/ci-failed-first.sh previous
 
       # A branch push other than main runs only the tests the change since
@@ -690,10 +699,11 @@ jobs:
 
       # A step timeout, well inside the job's: the job's own cancels the
       # run and names nothing, this one fails it and the next step says
-      # which tests were still running. Sized for a build with no cache.
+      # whether it ran out of time or stalled, and which tests were still
+      # running. Built above, the suites take about five minutes here.
       - name: Run backend tests
         shell: bash
-        timeout-minutes: 60
+        timeout-minutes: 20
         run: bash scripts/ci-failed-first.sh backend
 
       - name: Name the tests a cut-off run left running

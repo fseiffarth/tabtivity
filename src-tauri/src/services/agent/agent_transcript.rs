@@ -1029,6 +1029,13 @@ fn codex_transcript_at(
     read_transcript_in(&rollout, TranscriptKind::Codex, &spawns, false, version, limit)
 }
 
+/// A host Codex tab's rollout, from its local copy `main`
+/// (`services::remote_transcript::codex`). Its spawned threads are listed in
+/// the host's state store, which is not copied: no subagent cards.
+pub(crate) fn codex_host_transcript_at(main: &Path, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+    read_transcript_in(main, TranscriptKind::Codex, &Spawns::None, false, version, limit)
+}
+
 /// A spawned thread's rollout: the path its row names, taken only when it is
 /// a file under the scope's `.codex/sessions` whose name ends in the thread's id.
 fn codex_rollout(project_id: Option<&str>, thread: &crate::services::codex_store::SpawnedThread) -> Option<PathBuf> {

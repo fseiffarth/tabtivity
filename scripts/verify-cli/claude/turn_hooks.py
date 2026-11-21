@@ -104,9 +104,10 @@ def setup(base, case, port):
     for d in (work, dump, os.path.join(home, ".claude")):
         os.makedirs(d, exist_ok=True)
     os.makedirs(os.path.join(work, "sub"), exist_ok=True)
-    hook = os.path.join(out, "dump.sh")
-    with open(hook, "w") as f:
-        f.write(f"#!/bin/sh\nf=\"{dump}/$(date +%s%N).json\"; cat > \"$f\"\n")
+    # Forward slashes: on Windows Claude runs the command in Git Bash.
+    hook = os.path.join(out, "dump.sh").replace(os.sep, "/")
+    with open(hook, "w", newline="\n") as f:
+        f.write(f"#!/bin/sh\nf=\"{dump.replace(os.sep, '/')}/$(date +%s%N).json\"; cat > \"$f\"\n")
     os.chmod(hook, 0o755)
     settings = {"hooks": {e: [{"hooks": [{"type": "command", "command": hook}]}] for e in EVENTS},
                 "apiKeyHelper": "echo sk-ant-stub-key"}

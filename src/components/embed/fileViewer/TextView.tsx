@@ -41,9 +41,9 @@ import { basename, relativePathWithin } from "../../../lib/paths";
 import { resolveProjectDirectory } from "../../../types";
 import { useFileScope } from "../../../lib/files/fileAccess";
 import { offsetToLineCol } from "../../../lib/viewers/tex/tex";
-import { isTreePath, isJsonPath } from "../../../lib/viewers/yaml";
+import { isTreePath, isJsonPath, parseYaml } from "../../../lib/viewers/yaml";
 import { isBibPath } from "../../../lib/viewers/tex/bib";
-import { hasCards } from "../../../lib/viewers/yamlGrid";
+import { docHasCards } from "../../../lib/viewers/yamlGrid";
 import { useT } from "../../../lib/i18n";
 import { CommentIcon } from "../../common/icons/Icon";
 import { ErrorNote } from "../../common/ErrorNote";
@@ -69,8 +69,8 @@ import { onCtrlWheelFont, useZoomModifierWheel, useEditorFontSize, FontSizeContr
 import { useEditorJump, useBlame, BlameButton, useBreakpoints, RunDebugButtons, SlurmBar } from "./codeTools";
 import { ZOOM_STEP, clampScale } from "./ImageView";
 
-/** How long Source-mode typing in a YAML/JSON file must pause before the Cards
- *  toggle re-asks whether the file nests anything to card (a whole-file parse). */
+/** How long Source-mode typing in a YAML/JSON file must pause before the draft
+ *  is parsed again to ask whether it nests anything to card (a whole-file parse). */
 const GRID_PROBE_SETTLE_MS = 400;
 
 /** Rendered-preview pane for HTML/SVG/CSS — a fully sandboxed (`sandbox=""`,
@@ -445,11 +445,10 @@ export function TextView({
   // back in the stricter dialect (`strict`).
   const isYaml = useMemo(() => isTreePath(path), [path]);
   const jsonStrict = useMemo(() => isJsonPath(path), [path]);
-  // #yaml-grid: the CARD view for structured YAML/JSON — a recursive grid of nested
+  // #yaml-grid: the CARD view for structured YAML/JSON — a drill through nested
   // cards, editing the same draft by splice (see YamlGrid). Offered only when the
   // file actually nests a collection worth carding, so the Cards toggle appears
   // exactly where it does something (the tree's honesty rule).
-  // (`gridAvailable` itself is computed below, once the mode is known.)
   // A `.bib` gets the bibliography CARD list as its "preview" half (see BibCards):
   // one card per entry, its `field = {value}` pairs as rows, splicing this same
   // draft — so Cards and Source are two views on one text exactly as Tree and
@@ -462,16 +461,18 @@ export function TextView({
   const structured = isYaml || isBib;
   // YAML/JSON opens in the TREE view by default ("preview"), a `.bib` in its CARDS
   // view (same mode value — a file is only one of the two); HTML/SVG in preview; CSS
-  // in the editor. The YAML card view stays available (via the toggle, when the file
-  // nests something to card) but is no longer the default — it still needs work.
+  // in the editor. The YAML card view is reached by the toggle, when the file nests
+  // something to card.
   const [mode, setMode] = useState<"preview" | "grid" | "edit">(
     structured ? "preview" : previewKind === "html" || previewKind === "svg" ? "preview" : "edit",
   );
-  // Whether the Cards toggle is offered re-parses the whole file. In Source mode
-  // that question only decides a header button, so it is asked of the draft once
-  // typing settles rather than on every keystroke — a parse of a large JSON file
-  // is tens of milliseconds of UI thread per key. The tree and the cards always
-  // see the live draft (an edit there must retire the card mode at once).
+  // The draft is parsed ONCE per change, here: the parse answers whether the Cards
+  // toggle is offered, and the tree and the cards render that same document
+  // rather than parsing the text again. In Source mode the parse only decides a
+  // header button, so it waits until typing settles instead of running on every
+  // keystroke — a parse of a large JSON file is tens of milliseconds of UI thread
+  // per key. The tree and the cards always see the live draft (an edit there
+  // must retire the card mode at once).
   const editingSource = mode === "edit";
   const [settledDraft, setSettledDraft] = useState(draft);
   // Entering (or leaving) Source starts from the live draft, set during render
@@ -486,16 +487,17 @@ export function TextView({
     const id = window.setTimeout(() => setSettledDraft(draft), GRID_PROBE_SETTLE_MS);
     return () => window.clearTimeout(id);
   }, [isYaml, editingSource, draft]);
-  const gridText = editingSource ? settledDraft : draft;
-  const gridAvailable = useMemo(
-    () => (isYaml && loaded ? hasCards(gridText, jsonStrict) : false),
-    [isYaml, loaded, gridText, jsonStrict],
+  const parsedText = editingSource ? settledDraft : draft;
+  const yamlDoc = useMemo(
+    () => (isYaml && loaded ? parseYaml(parsedText, { strict: jsonStrict }) : null),
+    [isYaml, loaded, parsedText, jsonStrict],
   );
+  const gridAvailable = yamlDoc != null && docHasCards(yamlDoc);
   // A flat file (or a card edit that removes all nesting) has no card view — retire
   // the mode rather than strand it on a toggle with no button, dropping to the tree.
-  useEffect(() => {
-    if (mode === "grid" && !gridAvailable && loaded) setMode("preview");
-  }, [mode, gridAvailable, loaded]);
+  // Set during render, so no frame shows a toggle with nothing selected. A reset,
+  // not a derivation: an undo that restores the nesting stays on the tree.
+  if (mode === "grid" && loaded && !gridAvailable) setMode("preview");
   const fileName = basename(path);
   const jumpToLine = useCallback(
     (line: number, column: number) =>
@@ -536,7 +538,7 @@ export function TextView({
   // `yamlScrollTop` because one file is never both — a `.bib` has no tree and a
   // `.yaml` has no bib cards — so there is one structured view per tab to remember.
   const treeScrolls = structured && mode === "preview";
-  const showGrid = isYaml && mode === "grid" && gridAvailable;
+  const showGrid = mode === "grid" && gridAvailable;
   const scrollRaf = useRef<number | null>(null);
   const onBodyScroll = useCallback(() => {
     if (!treeScrolls) return;
@@ -580,6 +582,14 @@ export function TextView({
     );
   }, [previewKind, draft, fileName]);
 
+  const loadingNote = <div className="file-viewer-loading">{t("common.loading")}</div>;
+  const structuredProps = {
+    text: draft,
+    onChange: setDraft,
+    tabKey,
+    fontSize: font.isCustom ? font.fontSize : undefined,
+  };
+
   return (
     <div className="file-viewer">
       <ViewerHeader onOpenExternally={onOpenExternally}>
@@ -596,9 +606,8 @@ export function TextView({
                     ? t("fileViewer.modeCards")
                     : t("fileViewer.modePreview"),
               },
-              // The card view leads no longer — Tree is the default. It is still
-              // offered, but only for a file with nesting to card (the tree's
-              // honesty rule).
+              // Cards are offered only for a file with nesting to card (the
+              // tree's honesty rule).
               ...(gridAvailable ? [{ value: "grid" as const, label: t("fileViewer.modeCards") }] : []),
               {
                 value: "edit",
@@ -697,42 +706,22 @@ export function TextView({
           error != null ? (
             <div className="file-viewer-error">{error}</div>
           ) : !loaded ? (
-            <div className="file-viewer-loading">{t("common.loading")}</div>
-          ) : isBib ? (
-            // One card per bibliography entry, splicing the same draft — a field
-            // edit here is dirty, undoable and saveable exactly like a typed one.
-            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
-              <BibCards
-                text={draft}
-                onChange={setDraft}
-                tabKey={tabKey}
-                fontSize={font.isCustom ? font.fontSize : undefined}
-              />
-            </Suspense>
-          ) : showGrid ? (
-            // The grid edits the same draft by splice, just like the tree — a cell
-            // edit is dirty, undoable and saveable exactly like a typed one.
-            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
-              <YamlGrid
-                text={draft}
-                onChange={setDraft}
-                tabKey={tabKey}
-                fontSize={font.isCustom ? font.fontSize : undefined}
-                strict={jsonStrict}
-              />
-            </Suspense>
-          ) : isYaml ? (
-            // The tree edits the draft in place — the same draft Source shows and
-            // Ctrl+S writes, so an edit made here is dirty, undoable and saveable
-            // exactly like a typed one.
-            <Suspense fallback={<div className="file-viewer-loading">{t("common.loading")}</div>}>
-              <YamlTree
-                text={draft}
-                onChange={setDraft}
-                tabKey={tabKey}
-                fontSize={font.isCustom ? font.fontSize : undefined}
-                strict={jsonStrict}
-              />
+            loadingNote
+          ) : structured ? (
+            // The structured views splice the draft in place — the same draft Source
+            // shows and Ctrl+S writes — so an edit made in one is dirty, undoable
+            // and saveable exactly like a typed one. Each is the same props on the
+            // same text; a YAML view is also handed the parse the host just made
+            // of it (the views only mount outside Source, where that is the live
+            // draft's).
+            <Suspense fallback={loadingNote}>
+              {isBib ? (
+                <BibCards {...structuredProps} />
+              ) : showGrid ? (
+                <YamlGrid {...structuredProps} strict={jsonStrict} doc={yamlDoc ?? undefined} />
+              ) : (
+                <YamlTree {...structuredProps} strict={jsonStrict} doc={yamlDoc ?? undefined} />
+              )}
             </Suspense>
           ) : (
             // Preview reflects the live draft, so it tracks unsaved edits.

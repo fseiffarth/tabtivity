@@ -73,6 +73,7 @@ import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSes
 import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../lib/brand";
 import { isHostPinned } from "../lib/projectTabHost";
+import { askToShareNewProject } from "./phoneShare";
 
 function connectionsHeadless(): boolean {
   return useSettingsStore.getState().settings?.connections_headless ?? true;
@@ -1113,6 +1114,8 @@ interface ProjectsStore {
   setSidePanelFolder: (projectId: string, folder: string) => void;
   clearSwitchToast: () => void;
   clearConnToast: () => void;
+  /** Add a project just created or imported on the desktop and open it; with
+   *  Tabtivity Mobile on and a phone paired, ask which phones reach it. */
   addProject: (project: ProjectEntry) => Promise<void>;
   activateProject: (id: string) => Promise<void>;
   deactivateProject: (id: string) => Promise<void>;
@@ -1806,6 +1809,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       return { projects: nextProjects };
     });
     await useProjectsStore.getState().setActive(project.id);
+    void askToShareNewProject(project.id);
   },
 
   activateProject: async (id) => {

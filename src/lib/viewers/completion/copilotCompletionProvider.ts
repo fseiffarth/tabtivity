@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { aiIsOff } from "../../aiSwitch";
 import type { RemoteSpec, Settings } from "../../../types";
+import type { TranslationKey } from "../../i18n";
 import { isProseLang } from "./autocomplete";
 import {
   CompletionAcceptance, inlineCandidate, offsetToPosition,
@@ -50,6 +51,46 @@ type ServerCandidate = { id: string; insertText: string; range?: CompletionRange
 
 /** The language server owns model, length and context, so none of Ollama's
  * length modes or attached references apply. One adapter per request. */
+/** Why a Copilot request failed, for the editor's status: the backend's
+ *  `copilot_*` error code (an invoke rejection) mapped to a message key, with
+ *  the code itself for one this table does not know yet. Null for the two
+ *  that are not failures (a cancel, a document that moved on). */
+export function copilotFailureReason(error: unknown): { key: TranslationKey; code?: string } | null {
+  const code = /copilot_[a-z_]+/.exec(String(error))?.[0];
+  if (!code) return { key: "fileViewer.copilotFailed" };
+  if (code === "copilot_cancelled" || code === "copilot_stale_document") return null;
+  const key = COPILOT_FAILURES[code];
+  return key ? { key } : { key: "fileViewer.copilotFailedCode", code };
+}
+
+const COPILOT_FAILURES: Record<string, TranslationKey> = {
+  copilot_not_signed_in: "fileViewer.copilotNotSignedIn",
+  copilot_no_sign_in: "fileViewer.copilotNotSignedIn",
+  copilot_sign_in_failed: "fileViewer.copilotSignInFailed",
+  copilot_not_installed: "fileViewer.copilotNotInstalled",
+  copilot_invalid_installation: "fileViewer.copilotBrokenInstall",
+  copilot_version_mismatch: "fileViewer.copilotBrokenInstall",
+  copilot_no_consent: "fileViewer.copilotNoteConsent",
+  copilot_disabled: "fileViewer.copilotNoteConsent",
+  copilot_remote_project: "fileViewer.copilotNoteConsent",
+  copilot_code_only: "fileViewer.copilotNoteText",
+  copilot_local_only: "fileViewer.copilotLocalOnly",
+  copilot_secret_file: "fileViewer.copilotSecretFile",
+  copilot_outside_project: "fileViewer.copilotOutsideProject",
+  copilot_invalid_path: "fileViewer.copilotOutsideProject",
+  copilot_invalid_project: "fileViewer.copilotOutsideProject",
+  copilot_timeout: "fileViewer.copilotTimeout",
+  copilot_server_error: "fileViewer.copilotServerError",
+  copilot_server_closed: "fileViewer.copilotServerStopped",
+  copilot_spawn_failed: "fileViewer.copilotServerStopped",
+  copilot_restart_limit: "fileViewer.copilotRestartLimit",
+  copilot_fence_unavailable: "fileViewer.copilotNoFence",
+  copilot_unsupported_platform: "fileViewer.copilotUnsupported",
+  copilot_remote_disconnected: "fileViewer.copilotRemoteDisconnected",
+  copilot_document_limit: "fileViewer.copilotBusy",
+  copilot_request_limit: "fileViewer.copilotBusy",
+};
+
 export class CopilotCompletionProvider implements CompletionProvider {
   readonly id = "copilot";
   readonly capabilities = { streaming: false, lengthModes: false, references: false };

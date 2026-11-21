@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../lib/viewers/completion/copilotCompletionProvider";
+import { CopilotCompletionProvider, CopilotFeedback, copilotFailureReason, copilotServes } from "../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionDocument } from "../../lib/viewers/completion/completionProvider";
 import type { Settings } from "../../types";
 
@@ -147,5 +147,17 @@ describe("CopilotFeedback", () => {
       range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } } });
     feedback.accept("abc");
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("copilotFailureReason", () => {
+  it("names the reason for each backend code, the code for an unknown one, nothing for a cancel", () => {
+    expect(copilotFailureReason("copilot_timeout")).toEqual({ key: "fileViewer.copilotTimeout" });
+    expect(copilotFailureReason(new Error("copilot_server_error"))).toEqual({ key: "fileViewer.copilotServerError" });
+    expect(copilotFailureReason("copilot_no_consent")).toEqual({ key: "fileViewer.copilotNoteConsent" });
+    expect(copilotFailureReason("copilot_brand_new")).toEqual({ key: "fileViewer.copilotFailedCode", code: "copilot_brand_new" });
+    expect(copilotFailureReason("socket closed")).toEqual({ key: "fileViewer.copilotFailed" });
+    expect(copilotFailureReason("copilot_cancelled")).toBeNull();
+    expect(copilotFailureReason("copilot_stale_document")).toBeNull();
   });
 });

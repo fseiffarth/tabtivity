@@ -1148,8 +1148,9 @@ pub async fn agent_tab_model(
     ctx: Ctx,
 ) -> Option<String> {
     if let Some(copy) = host_tab_copy(&ctx, &agent, project_id.as_deref(), remote_host.as_deref(), &session_id).await {
-        return read_host_copy(copy, |path| {
-            crate::services::agent_session::last_model_in_transcript(path, crate::services::agent_session::TranscriptKind::Claude)
+        let kind = host_transcript_kind(&agent);
+        return read_host_copy(copy, move |path| {
+            crate::services::agent_session::last_model_in_transcript(path, kind)
         })
         .await
         .flatten();
@@ -1198,8 +1199,9 @@ pub async fn agent_tab_last_prompt(
     ctx: Ctx,
 ) -> Option<String> {
     if let Some(copy) = host_tab_copy(&ctx, &agent, project_id.as_deref(), remote_host.as_deref(), &session_id).await {
-        return read_host_copy(copy, |path| {
-            crate::services::agent_session::last_prompt_in_transcript(path, crate::services::agent_session::TranscriptKind::Claude)
+        let kind = host_transcript_kind(&agent);
+        return read_host_copy(copy, move |path| {
+            crate::services::agent_session::last_prompt_in_transcript(path, kind)
         })
         .await
         .flatten();
@@ -1233,8 +1235,9 @@ pub async fn agent_tab_recent_prompts(
     ctx: Ctx,
 ) -> Vec<crate::services::agent_session::TranscriptPrompt> {
     if let Some(copy) = host_tab_copy(&ctx, &agent, project_id.as_deref(), remote_host.as_deref(), &session_id).await {
-        return read_host_copy(copy, |path| {
-            crate::services::agent_session::recent_prompts_in_transcript(path, crate::services::agent_session::TranscriptKind::Claude)
+        let kind = host_transcript_kind(&agent);
+        return read_host_copy(copy, move |path| {
+            crate::services::agent_session::recent_prompts_in_transcript(path, kind)
         })
         .await
         .flatten()
@@ -1268,6 +1271,13 @@ async fn host_tab_copy(
         HostCopy::At(path) => Some(Some(path)),
         HostCopy::NotYet | HostCopy::Unavailable(_) => Some(None),
     }
+}
+
+/// How a host tab's local copy ([`host_tab_copy`]) is parsed: a Codex
+/// rollout, else Claude's transcript (the only other CLI copied that way).
+fn host_transcript_kind(agent: &str) -> crate::services::agent_session::TranscriptKind {
+    use crate::services::agent_session::TranscriptKind;
+    if agent == "codex" { TranscriptKind::Codex } else { TranscriptKind::Claude }
 }
 
 /// `read` of a host tab's local copy, off the async runtime.
@@ -1338,12 +1348,17 @@ pub async fn agent_tab_transcript(
     if let (Some(project), Some(host), None, false) = (project_id.as_deref(), remote_host.as_deref(), chat.as_deref(), local_model == Some(true)) {
         let pool = ctx.get::<crate::services::remote::RemotePoolState>();
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, agent_transcript::MAX_LIMIT);
-        let read = crate::services::remote_transcript::host_tab_transcript(
+        let tab = crate::services::remote_transcript::HostTab {
             pool,
+            project_id: project,
+            host_id: host,
+            launch_id: &session_id,
+            tab_dir: tab_dir.as_deref(),
+            since,
+        };
+        let read = crate::services::remote_transcript::host_tab_transcript(
+            &tab,
             &agent,
-            project,
-            host,
-            &session_id,
             subagent.as_deref(),
             version.as_deref(),
             limit,

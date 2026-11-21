@@ -2122,17 +2122,132 @@ fn codex_event_state_in(src: &str, config_path: &str, cmd: &str, event: &str) ->
     }
 }
 
-/// `[hooks.state."<key>"]` → `<key>`. Any other table header → `None`.
+/// `[hooks.state."<key>"]` (or `'<key>'`) → `<key>`. Any other table header →
+/// `None`. A basic-string key is unescaped; one whose escapes are invalid (a
+/// raw Windows path an older build wrote, `"C:\Users\…"`) is taken verbatim,
+/// so [`repair_codex_state_headers`] can find and rewrite it.
 fn toml_state_table_key(header: &str) -> Option<String> {
     let inner = header
         .strip_prefix("[hooks.state.")?
         .strip_suffix(']')?
         .trim();
-    let unquoted = inner
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .unwrap_or(inner);
-    Some(unquoted.to_string())
+    if let Some(lit) = inner.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        return Some(lit.to_string());
+    }
+    if let Some(basic) = inner.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        return Some(toml_unescape_basic(basic).unwrap_or_else(|| basic.to_string()));
+    }
+    Some(inner.to_string())
+}
+
+/// The body of a TOML basic string, unescaped. `None` when an escape is
+/// invalid — which makes Codex refuse the whole config file.
+fn toml_unescape_basic(s: &str) -> Option<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let hex = |n: usize, chars: &mut std::str::Chars| -> Option<char> {
+            let digits: String = chars.by_ref().take(n).collect();
+            if digits.len() != n || !digits.chars().all(|d| d.is_ascii_hexdigit()) {
+                return None;
+            }
+            char::from_u32(u32::from_str_radix(&digits, 16).ok()?)
+        };
+        out.push(match chars.next()? {
+            'b' => '\u{8}',
+            't' => '\t',
+            'n' => '\n',
+            'f' => '\u{c}',
+            'r' => '\r',
+            'e' => '\u{1b}',
+            '"' => '"',
+            '\\' => '\\',
+            'x' => hex(2, &mut chars)?,
+            'u' => hex(4, &mut chars)?,
+            'U' => hex(8, &mut chars)?,
+            _ => return None,
+        });
+    }
+    Some(out)
+}
+
+/// `key` as a TOML quoted key, picked the way Codex's own writer (`toml_edit`)
+/// picks it: a plain basic string (`"…"`) when nothing needs escaping, a
+/// literal string (`'…'`) when it holds a `\` or `"` — a Windows path, whose
+/// backslashes a basic string would read as escapes — and an escaped basic
+/// string otherwise.
+fn toml_quoted_key(key: &str) -> String {
+    let control = key.chars().any(|c| c.is_control());
+    if !control && !key.contains(['\\', '"']) {
+        return format!("\"{key}\"");
+    }
+    if !control && !key.contains('\'') {
+        return format!("'{key}'");
+    }
+    let mut out = String::from("\"");
+    for c in key.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `src` with its `[hooks.state.…]` tables made loadable again, or `None` when
+/// nothing needed it. Older builds broke them two ways on Windows, and Codex
+/// then refused the whole config: they wrote a raw path as a basic string
+/// (`"C:\Users\…"`, "too few unicode value digits"), and, not reading the
+/// literal-string keys Codex writes (`'C:\Users\…'`), appended a second table
+/// under the same key. A broken header is rewritten as a valid quoted key; a
+/// table whose key came before is dropped, the first one kept.
+fn repair_codex_state_headers(src: &str) -> Option<String> {
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut changed = false;
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let body = line.trim_end_matches(['\r', '\n']);
+        let Some(key) = toml_state_table_key(body.trim()) else {
+            out.push_str(line);
+            i += 1;
+            continue;
+        };
+        let end = (i + 1..lines.len())
+            .find(|&j| lines[j].trim_start().starts_with('['))
+            .unwrap_or(lines.len());
+        if !seen.insert(key.clone()) {
+            changed = true;
+            i = end;
+            continue;
+        }
+        let broken = body
+            .trim()
+            .strip_prefix("[hooks.state.\"")
+            .and_then(|s| s.strip_suffix("\"]"))
+            .is_some_and(|basic| toml_unescape_basic(basic).is_none());
+        if broken {
+            let indent = &body[..body.len() - body.trim_start().len()];
+            out.push_str(&format!("{indent}[hooks.state.{}]{}", toml_quoted_key(&key), &line[body.len()..]));
+            changed = true;
+        } else {
+            out.push_str(line);
+        }
+        for l in &lines[i + 1..end] {
+            out.push_str(l);
+        }
+        i = end;
+    }
+    changed.then_some(out)
 }
 
 /// `key = <value>` → the value, unquoted. `None` when the line isn't `key`'s.
@@ -2280,6 +2395,8 @@ pub fn trust_codex_hooks_in(src: &str, key_paths: &[String], cmd: &str) -> Optio
         timeout: Option<u64>,
         plain: bool,
     }
+    let repaired = repair_codex_state_headers(src);
+    let src = repaired.as_deref().unwrap_or(src);
     let mut groups: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut handlers: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut hooks: Vec<Hook> = Vec::new();
@@ -2363,7 +2480,7 @@ pub fn trust_codex_hooks_in(src: &str, key_paths: &[String], cmd: &str) -> Optio
         }
     }
     if wanted.is_empty() {
-        return None;
+        return repaired;
     }
 
     // Rewrite the state tables that exist, then append the missing ones.
@@ -2424,11 +2541,11 @@ pub fn trust_codex_hooks_in(src: &str, key_paths: &[String], cmd: &str) -> Optio
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
-        out.push_str(&format!("\n[hooks.state.\"{key}\"]\ntrusted_hash = \"{hash}\"\n"));
+        out.push_str(&format!("\n[hooks.state.{}]\ntrusted_hash = \"{hash}\"\n", toml_quoted_key(key)));
         done.insert(key.clone());
         changed = true;
     }
-    changed.then_some(out)
+    (changed || repaired.is_some()).then_some(out)
 }
 
 /// Install (idempotently) the session hooks and their script for every agent
@@ -3481,8 +3598,15 @@ pub(crate) fn register_codex_hook_as(config: &HomeFile, cmd: &str) -> std::io::R
         .read()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
+    // A trust table an older build wrote with a raw Windows path stops Codex
+    // from loading the file at all: fix it on every spawn.
+    let repaired = repair_codex_state_headers(&content);
+    let repaired_any = repaired.is_some();
+    if let Some(c) = repaired {
+        content = c;
+    }
     let capped = cap_codex_session_end_timeout(&content, cmd);
-    let changed = capped.is_some();
+    let changed = repaired_any || capped.is_some();
     if let Some(c) = capped {
         content = c;
     }
