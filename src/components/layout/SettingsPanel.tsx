@@ -29,7 +29,9 @@ import { isDetachedWindow } from "../../stores/detachedContext";
 import { TabCostList } from "./TabCostList";
 import { usePowerStore, useEnergySaver } from "../../stores/power";
 import { useProjectsStore } from "../../stores/projects";
-import { DEFAULT_MIN_SUBWINDOW_PX } from "../../stores/tabs";
+import { DEFAULT_MIN_SUBWINDOW_PX, useTabsStore } from "../../stores/tabs";
+import { firstGroup, subtreeName } from "../../stores/tabs/layoutTree";
+import { setZoomFromLayout } from "../../stores/detached";
 import { DEFAULT_MAIL_CHECK_MIN } from "../../lib/mail";
 import { ThemeCustomizerDialog } from "./ThemeCustomizer";
 import type {
@@ -1234,6 +1236,50 @@ function HelpPanel({ onBack, onClose }: SubPanelProps) {
   );
 }
 
+function WindowZoomSettings() {
+  const t = useT();
+  const mainZoom = useSettingsStore((s) => s.settings?.ui_zoom);
+  const scope = useTabsStore((s) => s.scope);
+  const windows = useTabsStore((s) => s.detachedGroupsByScope[scope]);
+  const tabs = useTabsStore((s) => s.tabsByScope[scope]);
+  const options = ZOOM_STEPS.filter((z) => z >= MIN_UI_ZOOM && z <= MAX_UI_ZOOM).map((z) => ({
+    value: String(z),
+    label: `${Math.round(z * 100)}%`,
+  }));
+  const detachedOptions = [
+    { value: "main", label: t("settings.zoomSameAsMain") },
+    ...options,
+  ];
+  return <>
+    <SettingRow
+      label={t("settings.windowZoom")}
+      help={windows?.length ? t("steering.mainWindow.label") : undefined}
+      control={<Dropdown
+        ariaLabel={t("settings.windowZoom")}
+        value={String(clampZoom(mainZoom))}
+        options={options.map((o) => o.value === "1" ? { ...o, label: `${o.label} (${t("common.default")})` } : o)}
+        onChange={(v) => void useSettingsStore.getState().updateSettings({ ui_zoom: v === "1" ? undefined : Number(v) })}
+      />}
+    />
+    {windows?.map((entry, index) => {
+      const name = subtreeName(entry.subtree, entry.name)
+        ?? tabs?.find((tab) => tab.key === firstGroup(entry.subtree).activeKey)?.label;
+      const windowLabel = t("settings.detachedWindowNumber", { n: index + 1 });
+      const label = name ? `${windowLabel} · ${name}` : windowLabel;
+      return <SettingRow
+        key={entry.label}
+        label={<>{label} <UntestedTag id="settings.detachedWindowZoom" /></>}
+        control={<Dropdown
+          ariaLabel={label}
+          value={entry.zoom == null ? "main" : String(clampZoom(entry.zoom))}
+          options={detachedOptions}
+          onChange={(v) => setZoomFromLayout(scope, entry, v === "main" ? null : Number(v))}
+        />}
+      />;
+    })}
+  </>;
+}
+
 export function SettingsDialog({
   onClose,
   initialPanel = "main",
@@ -1479,26 +1525,7 @@ export function SettingsDialog({
               }
             />
             <WorkspaceParkingNote />
-            <SettingRow
-              label={t("settings.windowZoom")}
-              control={
-                <Dropdown
-                  value={String(clampZoom(settings?.ui_zoom))}
-                  onChange={(v) => {
-                    const z = parseFloat(v);
-                    void updateSettings({
-                      ui_zoom: z === 1 ? undefined : clampZoom(z),
-                    });
-                  }}
-                  options={ZOOM_STEPS.filter(
-                    (z) => z >= MIN_UI_ZOOM && z <= MAX_UI_ZOOM,
-                  ).map((z) => ({
-                    value: String(z),
-                    label: `${Math.round(z * 100)}%${z === 1 ? ` (${t("common.default")})` : ""}`,
-                  }))}
-                />
-              }
-            />
+            <WindowZoomSettings />
             <SettingsCard>
               <ToggleRow
                 label={<>{t("settings.sidePanelAutoHide")} <UntestedTag id="sidePanel.ideToggle" /></>}

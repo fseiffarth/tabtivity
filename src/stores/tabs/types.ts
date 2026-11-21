@@ -616,7 +616,7 @@ export interface DetachedGroup {
   bounds?: WindowBounds;
   // The popout's OWN UI zoom (per-window, not the global/main-window `ui_zoom`),
   // streamed back over DETACHED_ZOOM. Persisted (via the saved tree) and shipped
-  // in the popout's seed so it reopens at the zoom it was left at. Undefined = 100%.
+  // in the popout's seed so it reopens at the zoom it was left at. Undefined follows the main window.
   zoom?: number;
   // The name of a popout that is more than one pane. A single-pane popout's name
   // is its group's (`GroupNode.name`), so docking needs no hand-off; read either

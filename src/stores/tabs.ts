@@ -954,7 +954,7 @@ interface TabsStore {
   setDetachedBounds: (scope: string, groupId: string, bounds: WindowBounds) => void;
   // Record a popout's latest per-window zoom (streamed back over DETACHED_ZOOM)
   // so it persists and the popout reopens at that zoom after a restart.
-  setDetachedZoom: (scope: string, groupId: string, zoom: number) => void;
+  setDetachedZoom: (scope: string, groupId: string, zoom: number | undefined) => void;
   // #42: return and clear the scope's pending respawn targets (groups that were
   // detached at save time). Caller re-opens each via detachGroup once its pane
   // has mounted. Returns [] when there is nothing to respawn.

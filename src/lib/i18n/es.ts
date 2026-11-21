@@ -2043,6 +2043,8 @@ export const dict: Dict = {
   "settings.resetHints": "Restablecer sugerencias",
 
   "settings.layout": "Diseño",
+  "settings.zoomSameAsMain": "Igual que la ventana principal",
+  "settings.detachedWindowNumber": "Ventana desprendida {n}",
   "settings.windowZoom": "Zoom de ventana",
   "settings.minSubWidth": "Ancho mín. de subventana (px)",
   "settings.minSubHeight": "Alto mín. de subventana (px)",
@@ -2629,7 +2631,7 @@ export const dict: Dict = {
   "settings.reminderHelp": "Los recordatorios aparecen como notificación de escritorio y como ventana emergente que puedes posponer. «La cuadrícula del día empieza a las» solo fija hasta dónde se desplazan las vistas de día y semana.",
   "settings.zoomHelp1": "Escala toda la interfaz de {app}, útil en pantallas de alta densidad. El zoom es",
   "settings.zoomHelpBold": "por ventana",
-  "settings.zoomHelp2": ": las ventanas desprendidas mantienen el suyo. Ctrl + / Ctrl − hacen zoom en la ventana enfocada; Ctrl 0 lo restablece.",
+  "settings.zoomHelp2": ": las ventanas desprendidas siguen por defecto el zoom de la ventana principal. Ctrl + / Ctrl − hacen zoom en la ventana enfocada; Ctrl 0 lo restablece.",
   "settings.minSubwindowHelp": "El tamaño más pequeño al que se puede reducir una subventana arrastrando un divisor. Por defecto {px}px si se deja en blanco.",
   "settings.workspaceNoParking": "Este escritorio no puede ocultar ventanas de otras apps, así que siguen en pantalla al cambiar de proyecto. Ocultar funciona en GNOME (X11 y Wayland), Cinnamon y KDE Plasma en X11; en Wayland solo para ventanas XWayland.",
   "settings.downloadsHelp": "Carpetas que lista la sección Descargas del panel lateral, para copiar descargas recientes a un proyecto. Por defecto, la carpeta Descargas del sistema. {app} nunca cambia la ruta de descarga de un navegador.",

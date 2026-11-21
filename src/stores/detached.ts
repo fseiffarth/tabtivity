@@ -190,6 +190,14 @@ export const DETACHED_BOUNDS = "detached-bounds";
  * `ui_zoom` or any other window.
  */
 export const DETACHED_ZOOM = "detached-zoom";
+
+/** Layout settings → the addressed popout. Its record also seeds a window still opening. */
+export const detachedSetZoomEvent = (label: string) => `detached-set-zoom-${label}`;
+
+export function setZoomFromLayout(scope: string, entry: DetachedGroup, zoom: number | null) {
+  useTabsStore.getState().setDetachedZoom(scope, entry.id, zoom ?? undefined);
+  void emit(detachedSetZoomEvent(entry.label), zoom);
+}
 /**
  * #42: cross-window drag-to-dock. The detached window streams the gesture to the
  * main window, which renders the dock preview and docks the group on release.
@@ -422,7 +430,7 @@ export interface DetachedSeed {
    */
   landedKey?: string;
   /**
-   * The popout's persisted per-window zoom (undefined = 100%). The popout applies
+   * The popout's persisted zoom override (undefined follows the main window). The popout applies
    * it to its OWN webview on the FIRST seed, restoring the zoom it was left at
    * (zoom is per-window, not the global `ui_zoom`). Later re-seeds carry the
    * up-to-date value but the popout ignores it — it owns its zoom once open.
@@ -603,7 +611,7 @@ export interface DetachedBoundsEnvelope {
 export interface DetachedZoomEnvelope {
   scope: string;
   groupId: string;
-  zoom: number;
+  zoom: number | null;
 }
 
 /** Identity the detached window sends when requesting its seed. */
@@ -1255,7 +1263,7 @@ export async function listenDetachedHost(): Promise<() => void> {
 
   await on<DetachedZoomEnvelope>(DETACHED_ZOOM, (ev) => {
     const { scope, groupId, zoom } = ev.payload;
-    useTabsStore.getState().setDetachedZoom(scope, groupId, zoom);
+    useTabsStore.getState().setDetachedZoom(scope, groupId, zoom ?? undefined);
   });
 
   await on<DetachedDockEnvelope>(DETACHED_DOCK, (ev) => {

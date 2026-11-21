@@ -19,6 +19,7 @@ import { memo } from "react";
 import { loadHeap, resetTabs, type Heap } from "../helpers/detachedHarness";
 
 const shared = vi.hoisted(() => ({
+  setZoom: vi.fn((_zoom: number) => Promise.resolve()),
   handlers: new Map<string, Set<(ev: { payload: unknown }) => void>>(),
   emitted: [] as Array<{ event: string; payload: unknown }>,
   listens: [] as string[],
@@ -79,7 +80,7 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 vi.mock("@tauri-apps/api/webview", () => ({
-  getCurrentWebview: () => ({ setZoom: () => Promise.resolve() }),
+  getCurrentWebview: () => ({ setZoom: shared.setZoom }),
 }));
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   WebviewWindow: { getByLabel: () => Promise.resolve(null) },
@@ -301,6 +302,21 @@ async function mainWindowKey(): Promise<Counts> {
   cleanup();
   return cost;
 }
+
+it("follows main zoom until overridden, and follows again after reset", async () => {
+  await act(async () => { render(<DetachedApp param={{ scope: "p", groupId: popoutId }} />); });
+  const entry = main.tabs.useTabsStore.getState().detachedGroupsByScope.p[0];
+  expect(entry.zoom).toBeUndefined();
+  act(() => useSettingsStore.setState({ settings: { ui_zoom: 1.5 } }));
+  expect(shared.setZoom).toHaveBeenLastCalledWith(1.5);
+  act(() => main.detached.setZoomFromLayout("p", entry, 1));
+  expect(shared.setZoom).toHaveBeenLastCalledWith(1);
+  act(() => useSettingsStore.setState({ settings: { ui_zoom: 2 } }));
+  expect(shared.setZoom).toHaveBeenLastCalledWith(1);
+  press("0", { code: "Digit0", ctrlKey: true });
+  expect(shared.setZoom).toHaveBeenLastCalledWith(2);
+  expect(main.tabs.useTabsStore.getState().detachedGroupsByScope.p[0].zoom).toBeUndefined();
+});
 
 describe("a steering key in a popout", () => {
   it("moves the lit tab at once and costs one edit out, nothing back", async () => {

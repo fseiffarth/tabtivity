@@ -464,6 +464,7 @@ export const UNTESTED = {
   "settings.debugNoExperiments": { area: "layout", what: "SettingsPanel · Experimental · Debug mode no longer turns experiments on: on a profile that had Debug mode on before the update, the first launch ticks every experiment it was showing (not the WebGL renderer) and they stay on, browser tabs and the mail button included; a ticked experiment unticked stays off when Debug is toggled off and on; on a profile with Debug off, turning Debug on shows no experiment" },
   "settings.deckPresenter": { area: "layout", what: "SettingsPanel · Experimental · Deck presenter switch: on shows the PDF toolbar's Present button and \"New presentation\" in the file tree/browser, and a *.eldeck.json opens in the deck editor; off hides them and the deck opens as its JSON" },
   "settings.language": { area: "layout", what: "SettingsPanel · Language" },
+  "settings.detachedWindowZoom": { area: "layout", what: "Layout settings · zoom each detached window" },
   "settings.layout": { area: "layout", what: "SettingsPanel · Layout" },
   "settings.mailClient": { area: "layout", what: "SettingsPanel · Mail · Mail client switch" },
   "settings.mdGraph": { area: "layout", what: "SettingsPanel · Markdown link graph" },

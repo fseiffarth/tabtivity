@@ -2044,6 +2044,8 @@ export const dict: Dict = {
   "settings.resetHints": "Réinitialiser les astuces",
 
   "settings.layout": "Disposition",
+  "settings.zoomSameAsMain": "Comme la fenêtre principale",
+  "settings.detachedWindowNumber": "Fenêtre détachée {n}",
   "settings.windowZoom": "Zoom de la fenêtre",
   "settings.minSubWidth": "Largeur min. de la sous-fenêtre (px)",
   "settings.minSubHeight": "Hauteur min. de la sous-fenêtre (px)",
@@ -2630,7 +2632,7 @@ export const dict: Dict = {
   "settings.reminderHelp": "Les rappels apparaissent en notification de bureau et en fenêtre que vous pouvez reporter. « La grille du jour commence à » ne fixe que l'endroit où défilent les vues jour et semaine.",
   "settings.zoomHelp1": "Redimensionne toute l'interface de {app} — pratique sur les écrans haute densité. Le zoom est",
   "settings.zoomHelpBold": "par fenêtre",
-  "settings.zoomHelp2": " : les fenêtres détachées gardent le leur. Ctrl + / Ctrl − zooment la fenêtre active, Ctrl 0 réinitialise.",
+  "settings.zoomHelp2": " : les fenêtres détachées suivent par défaut le zoom de la fenêtre principale. Ctrl + / Ctrl − zooment la fenêtre active, Ctrl 0 réinitialise.",
   "settings.minSubwindowHelp": "Taille minimale qu'une sous-fenêtre peut atteindre en faisant glisser un séparateur. Par défaut {px}px si laissé vide.",
   "settings.workspaceNoParking": "Ce bureau ne peut pas masquer les fenêtres des autres apps : elles restent à l'écran quand vous changez de projet. Le masquage fonctionne sous GNOME (X11 et Wayland), Cinnamon et KDE Plasma sous X11 ; sous Wayland, seulement pour les fenêtres XWayland.",
   "settings.downloadsHelp": "Dossiers listés par la section Téléchargements du panneau latéral, pour copier les téléchargements récents dans un projet. Par défaut, le dossier Téléchargements du système. {app} ne change jamais le chemin de téléchargement d'un navigateur.",

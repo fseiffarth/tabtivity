@@ -2043,6 +2043,8 @@ export const dict: Dict = {
   "settings.resetHints": "Reimposta suggerimenti",
 
   "settings.layout": "Layout",
+  "settings.zoomSameAsMain": "Come la finestra principale",
+  "settings.detachedWindowNumber": "Finestra staccata {n}",
   "settings.windowZoom": "Zoom finestra",
   "settings.minSubWidth": "Larghezza min. sottofinestra (px)",
   "settings.minSubHeight": "Altezza min. sottofinestra (px)",
@@ -2629,7 +2631,7 @@ export const dict: Dict = {
   "settings.reminderHelp": "I promemoria appaiono come notifica desktop e come popup che puoi posticipare. «La griglia del giorno inizia alle» imposta solo dove scorrono le viste giorno e settimana.",
   "settings.zoomHelp1": "Scala l'intera interfaccia di {app}, utile su schermi ad alta densità. Lo zoom è",
   "settings.zoomHelpBold": "per finestra",
-  "settings.zoomHelp2": ": le finestre staccate mantengono il proprio. Ctrl + / Ctrl − ingrandiscono la finestra attiva, Ctrl 0 ripristina.",
+  "settings.zoomHelp2": ": le finestre staccate seguono per impostazione predefinita lo zoom della finestra principale. Ctrl + / Ctrl − ingrandiscono la finestra attiva, Ctrl 0 ripristina.",
   "settings.minSubwindowHelp": "La dimensione minima a cui una sottofinestra può essere ridotta trascinando un divisore. Predefinito {px}px se lasciato vuoto.",
   "settings.workspaceNoParking": "Questo desktop non può nascondere le finestre di altre app, quindi restano sullo schermo quando cambi progetto. Nascondere funziona su GNOME (X11 e Wayland), Cinnamon e KDE Plasma su X11; su Wayland solo per le finestre XWayland.",
   "settings.downloadsHelp": "Cartelle elencate dalla sezione Download del pannello laterale, per copiare i download recenti in un progetto. Predefinita: la cartella Download di sistema. {app} non cambia mai il percorso di download di un browser.",

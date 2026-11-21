@@ -2045,6 +2045,8 @@ export const dict: Dict = {
   "settings.resetHints": "Hinweise zurücksetzen",
 
   "settings.layout": "Layout",
+  "settings.zoomSameAsMain": "Wie im Hauptfenster",
+  "settings.detachedWindowNumber": "Ausgeklinktes Fenster {n}",
   "settings.windowZoom": "Fenster-Zoom",
   "settings.minSubWidth": "Min. Breite des Unterfensters (px)",
   "settings.minSubHeight": "Min. Höhe des Unterfensters (px)",
@@ -2631,7 +2633,7 @@ export const dict: Dict = {
   "settings.reminderHelp": "Erinnerungen erscheinen als Desktop-Benachrichtigung und als Popup, das du snoozen kannst. „Tagesraster beginnt um“ legt nur fest, wohin Tages- und Wochenansicht scrollen.",
   "settings.zoomHelp1": "Skaliert die gesamte {app}-Oberfläche – praktisch auf High-DPI-Bildschirmen. Der Zoom gilt",
   "settings.zoomHelpBold": "pro Fenster",
-  "settings.zoomHelp2": ": Ausgeklinkte Fenster behalten ihren eigenen. Strg + / Strg − zoomen das fokussierte Fenster, Strg 0 setzt zurück.",
+  "settings.zoomHelp2": ": Ausgeklinkte Fenster folgen standardmäßig dem Hauptfenster. Strg + / Strg − zoomen das fokussierte Fenster, Strg 0 setzt zurück.",
   "settings.minSubwindowHelp": "Kleinste Größe, auf die ein Unterfenster durch Ziehen einer Trennlinie verkleinert werden kann. Standardmäßig {px}px, wenn leer gelassen.",
   "settings.workspaceNoParking": "Dieser Desktop kann Fenster anderer Apps nicht ausblenden, daher bleiben sie beim Projektwechsel sichtbar. Ausblenden funktioniert unter GNOME (X11 und Wayland), Cinnamon und KDE Plasma unter X11; unter Wayland nur für XWayland-Fenster.",
   "settings.downloadsHelp": "Ordner, die der Bereich „Downloads“ der Seitenleiste auflistet, um frische Downloads in ein Projekt zu kopieren. Standard ist dein System-Downloadordner. {app} ändert nie den Downloadpfad eines Browsers.",

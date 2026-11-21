@@ -90,7 +90,7 @@ export interface RespawnTarget {
   id: string; // the FRESH group id minted during deserialize
   bounds?: WindowBounds;
   // The popout's persisted per-window zoom (see DetachedGroup.zoom), carried so
-  // the respawn re-detaches it at the zoom it was left at. Undefined = 100%.
+  // the respawn re-detaches it at the zoom it was left at. Undefined follows the main window.
   zoom?: number;
   // A multi-pane popout's own name (see DetachedGroup.name).
   name?: string;

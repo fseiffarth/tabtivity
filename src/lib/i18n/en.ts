@@ -1961,6 +1961,8 @@ export const enSource = {
 
   // Settings — layout.
   "settings.layout": "Layout",
+  "settings.zoomSameAsMain": "Same as main window",
+  "settings.detachedWindowNumber": "Detached window {n}",
   "settings.windowZoom": "Window zoom",
   "settings.minSubWidth": "Min subwindow width (px)",
   "settings.minSubHeight": "Min subwindow height (px)",
@@ -2659,7 +2661,7 @@ export const enSource = {
   "settings.reminderHelp": "Reminders show as a desktop notification and a popup you can snooze. \"Day grid starts at\" only sets where the day and week views scroll to.",
   "settings.zoomHelp1": "Scales the whole {app} interface — handy on high-DPI screens. Zoom is",
   "settings.zoomHelpBold": "per window",
-  "settings.zoomHelp2": ": popped-out windows keep their own. Ctrl + / Ctrl − zoom the focused window, Ctrl 0 resets.",
+  "settings.zoomHelp2": ": detached windows follow the main window by default. Ctrl + / Ctrl − zoom the focused window, Ctrl 0 resets.",
   "settings.minSubwindowHelp": "Smallest a subwindow may be made by dragging a split divider. Defaults to {px}px when left blank.",
   "settings.workspaceNoParking": "This desktop can't hide other apps' windows, so they stay on screen when you switch projects. Hiding works on GNOME (X11 and Wayland), Cinnamon, and KDE Plasma on X11; under Wayland only XWayland windows can be hidden.",
   "settings.downloadsHelp": "Folders the side panel's Downloads section lists, to copy fresh downloads into a project. Defaults to your system Downloads folder. {app} never changes a browser's download path.",
