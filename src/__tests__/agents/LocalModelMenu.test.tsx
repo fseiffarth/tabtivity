@@ -250,6 +250,7 @@ describe("LocalModelMenu dropdown", () => {
       autocomplete_prose: "qwen:7b",
       tabs: "qwen:7b",
       mail: "qwen:7b",
+      suggest: "qwen:7b",
     });
     // A re-hover reads the same single model again: no second write.
     fireEvent.mouseLeave(wrap);
@@ -308,7 +309,7 @@ describe("LocalModelMenu and Ollama cloud models (gap 25)", () => {
     ];
     const { wrap } = await renderInstalled();
     await hover(wrap);
-    const cloudMail = await screen.findByTitle(/gpt-oss:120b-cloud is an Ollama cloud model/);
+    const cloudMail = await screen.findByTitle(/gpt-oss:120b-cloud is an Ollama cloud model .* the Mail model/);
     expect(cloudMail.textContent).toBe("Mail");
     expect((cloudMail as HTMLButtonElement).disabled).toBe(true);
     const mailChips = screen.getAllByRole("button", { name: "Mail" }) as HTMLButtonElement[];
@@ -316,6 +317,13 @@ describe("LocalModelMenu and Ollama cloud models (gap 25)", () => {
     expect(localMail).toHaveLength(1);
     expect(localMail[0].disabled).toBe(false);
     expect(localMail[0].title).not.toMatch(/cloud/);
+    // The Suggestions model reads sessions: the same rule.
+    const cloudSuggest = screen.getByTitle(/gpt-oss:120b-cloud is an Ollama cloud model .* the Suggestions model/) as HTMLButtonElement;
+    expect(cloudSuggest.textContent).toBe("Suggestions");
+    expect(cloudSuggest.disabled).toBe(true);
+    const localSuggest = (screen.getAllByRole("button", { name: "Suggestions" }) as HTMLButtonElement[]).filter((b) => b !== cloudSuggest);
+    expect(localSuggest).toHaveLength(1);
+    expect(localSuggest[0].disabled).toBe(false);
   });
 });
 
