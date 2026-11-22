@@ -8,7 +8,7 @@ import { startPoll, type Poll } from "./usePoll";
  *
  * `ollama_status` is a `GET /api/ps` round trip, and it had two independent
  * callers on 5 s timers: the header's 🧠 `LocalModelMenu` lamp, and
- * `useLocalModelLoaded` in the file viewer — the second of which is **per
+ * the autocomplete toolbar in the file viewer — the second of which is **per
  * editable viewer tab**, so the request rate grew with the number of open tabs
  * rather than staying a property of the app. The observable result was a steady
  * stream of paired `/api/ps` hits a couple of seconds apart, forever, asking the
@@ -38,14 +38,12 @@ interface Subscriber {
 
 const subscribers = new Set<Subscriber>();
 let timer: Poll | undefined;
-let inFlight = false;
+let inFlight: Promise<void> | undefined;
 /** Last observed value, replayed to a new subscriber so it renders the known
  *  state immediately instead of flashing `stopped` until the next tick. */
 let current: OllamaStatus = "stopped";
 
-async function poll(): Promise<void> {
-  if (inFlight) return; // a wedged server must not build a queue of retries
-  inFlight = true;
+async function readStatus(): Promise<void> {
   try {
     const next = await invoke<OllamaStatus>("ollama_status");
     current = next;
@@ -54,9 +52,17 @@ async function poll(): Promise<void> {
     // Unreachable backend — report the same thing an unreachable Ollama does.
     current = "stopped";
     for (const s of subscribers) s.notify("stopped");
-  } finally {
-    inFlight = false;
   }
+}
+
+function poll(): Promise<void> {
+  return inFlight ??= readStatus().finally(() => { inFlight = undefined; });
+}
+
+/** Read again after an action changes which models are resident. */
+export async function refreshOllamaStatus(): Promise<void> {
+  await inFlight;
+  await poll();
 }
 
 /** (Re)start the shared timer at the shortest interval any subscriber wants, or
@@ -117,6 +123,6 @@ export function resetOllamaStatusPoller(): void {
   subscribers.clear();
   timer?.stop();
   timer = undefined;
-  inFlight = false;
+  inFlight = undefined;
   current = "stopped";
 }

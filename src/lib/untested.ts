@@ -192,6 +192,7 @@ export const UNTESTED = {
   "fileViewer.autocompleteLabel": { area: "embed", what: "FileViewerPane · Autocomplete" },
   "fileViewer.autocompleteProvider": { area: "embed", what: "FileViewerPane · Autocomplete always shown: Local/Copilot picker, Auto/On request trigger, why-silent note" },
   "fileViewer.autocompleteRoleNotLoaded": { area: "embed", what: "FileViewerPane · autocomplete status pill: \"<role model> not loaded — Load\" on an automatic request, Load loads it and asks again" },
+  "fileViewer.autocompleteLoadLocalModel": { area: "embed", what: "FileViewerPane · Local autocomplete with no resident model: Load local model warms an installed model; Manage local models opens Local models or Ollama setup directly" },
   "fileViewer.autocompleteDelay": { area: "embed", what: "FileViewerPane · Autocomplete · Delay (100–1200 ms) beside Auto, per provider, machine-wide" },
   "fileViewer.spellingAddLanguage": { area: "embed", what: "FileViewerPane · ＋ Language (download a spelling dictionary)" },
   "fileViewer.beamerToggle": { area: "embed", what: "FileViewerPane · Beamer" },

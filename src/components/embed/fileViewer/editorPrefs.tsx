@@ -1,18 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
-import { isProseLang } from "../../../lib/viewers/completion/autocomplete";
+import {
+  completionModelOrder, completionModels, isProseLang, pickCompletionModel,
+  RECOMMENDED_AUTOCOMPLETE_MODEL, supportsCompletion,
+} from "../../../lib/viewers/completion/autocomplete";
+import { useAiOff } from "../../../lib/aiSwitch";
+import { loadOllamaModel } from "../../../lib/agents/localDrivers";
+import type { LocalModelInfo } from "../../../stores/agents/ollamaActivity";
+import { useModelsOverlayStore, type ModelsSection } from "../../../stores/modelsOverlay";
 import { useTabsStore, type ViewerState } from "../../../stores/tabs";
 import { useSettingsStore } from "../../../stores/settings";
 import { useExperimental } from "../../../lib/experimental";
 import { useProjectsStore } from "../../../stores/projects";
 import { Dropdown } from "../../common/Dropdown";
 import { languageForPath } from "../../../lib/viewers/highlight";
-import { useOllamaStatus } from "../../../lib/ollamaStatus";
+import { refreshOllamaStatus, useOllamaStatus } from "../../../lib/ollamaStatus";
 import { type InternalViewer } from "../../../lib/viewers/fileUtils";
 import { UntestedTag } from "../../common/UntestedTag";
 import { type AutocompleteMode, type AutocompleteTrigger, type Settings } from "../../../types";
-import { useFileScope } from "../../../lib/files/fileAccess";
+import { useFileScope, usePaneVisible } from "../../../lib/files/fileAccess";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { useI18nStore, useT } from "../../../lib/i18n";
 import {
@@ -203,52 +210,36 @@ export function useTabAiPrefs(tabKey: string | undefined, type: InternalViewer):
 }
 
 /**
- * Whether at least one local (Ollama) model is currently loaded into memory.
- * Local autocomplete runs only against a resident model, so its controls hide
- * when none is loaded. Mirrors the lamp logic in `LocalModelMenu`: `ollama_status` is
- * `"loaded"` iff `/api/ps` reports a resident model.
- *
- * Rides the app-wide shared poller (`lib/ollamaStatus`) rather than owning a
- * timer. This hook runs **per editable viewer tab**, so a private 5s interval
- * made the `/api/ps` request rate a function of how many tabs happened to be
- * open — asking the same machine-wide question N times over. One timer now
- * serves every surface, and they all flip on the same observation.
- */
-function useLocalModelLoaded(): boolean {
-  return useOllamaStatus() === "loaded";
-}
-
-/**
  * In-tab AI-assist controls for the editable viewers (#45): an Autocomplete
  * on/off toggle, always shown, and while it is on: the provider (local model
  * or Copilot, the one `code_completion_provider` setting, offered while the
  * experimental Copilot flag is on), when to ask (after a pause or only on
  * Ctrl+Space, tab-local) and the length mode (local only). The dictionary
- * Spelling toggle sits beside it. When the chosen provider cannot answer here
- * (no local model loaded, Copilot not allowed for this file), a short note
- * says why instead of the button vanishing.
+ * Spelling toggle sits beside it. When the chosen provider cannot answer here,
+ * a short note says why. Local autocomplete offers to load a model in place.
  */
 export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string }) {
   const t = useT();
   const chordHint = useChordHint();
-  const modelLoaded = useLocalModelLoaded();
+  const visible = usePaneVisible();
   const scope = useFileScope();
   const enabled = useExperimental("copilot_completion");
   const remote = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.remote ?? false);
   const language = languageForPath(path);
   const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, language, path));
   const provider = useSettingsStore((s) => s.settings?.code_completion_provider ?? "ollama");
+  const usesLocal = !(enabled && provider === "copilot");
+  const modelStatus = useOllamaStatus(visible && ai.autocomplete && usesLocal);
   const policy = useSettingsStore((s) => (scope ? s.settings?.completion_project_policies?.[scope] : undefined));
   const trigger = effectiveAcTrigger(ai.trigger);
   const delays = useSettingsStore((s) => s.settings?.autocomplete_delay_ms);
   const delay = acDelayMs(delays, copilot);
   // Why the chosen provider is silent here; the backend gates the same way.
-  const note = !ai.autocomplete ? null
-    : enabled && provider === "copilot" && !copilot
-      ? policy?.copilot === true && policy.local_only !== true && isProseLang(language) && policy.copilot_text !== true
-          ? t("fileViewer.copilotNoteText")
-          : t("fileViewer.copilotNoteConsent")
-      : !copilot && !modelLoaded ? t("fileViewer.autocompleteNoteNoModel") : null;
+  const note = ai.autocomplete && !usesLocal && !copilot
+    ? policy?.copilot === true && policy.local_only !== true && isProseLang(language) && policy.copilot_text !== true
+        ? t("fileViewer.copilotNoteText")
+        : t("fileViewer.copilotNoteConsent")
+    : null;
   return (
     <div className="file-viewer-ai-controls" role="group" aria-label={t("fileViewer.aiAssistGroup")}>
       {/* Dictionary spelling needs no model, so it is offered regardless. */}
@@ -336,9 +327,92 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
           )}
           <UntestedTag id="fileViewer.autocompleteProvider" />
           {note && <span className="file-viewer-ai-note">{note}</span>}
+          {usesLocal && modelStatus !== "loaded" && (
+            <LoadAutocompleteModel
+              ac={ai.ac}
+              language={language}
+              manageSection={modelStatus === "stopped" ? "ollama" : "models"}
+            />
+          )}
         </>
       )}
     </div>
+  );
+}
+
+function LoadAutocompleteModel({
+  ac, language, manageSection,
+}: {
+  ac: TabAiPrefs["ac"]; language: string; manageSection: ModelsSection;
+}) {
+  const t = useT();
+  const aiOff = useAiOff();
+  const [progress, setProgress] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ message: string; manage: ModelsSection } | null>(null);
+
+  const load = async () => {
+    if (progress || aiOff) return;
+    setFailure(null);
+    setProgress(t("ollama.loading"));
+    let model: LocalModelInfo | undefined;
+    try {
+      await invoke("ensure_ollama_running");
+      const installed = await invoke<LocalModelInfo[]>("list_ollama_models_detailed");
+      const eligible = installed.filter((m) => m.name && !m.remote && supportsCompletion(m));
+      const roles = effectiveAcTrigger(ac.trigger) === "auto"
+        ? completionModelOrder(language, ac.role, ac.preferredProse)
+        : [];
+      const choices = roles.length ? eligible.filter((m) => roles.includes(m.name)) : eligible;
+      model = pickCompletionModel(choices, [
+        ...completionModelOrder(language, ac.preferred, ac.preferredProse),
+        RECOMMENDED_AUTOCOMPLETE_MODEL,
+      ]);
+      if (!model) {
+        setFailure(eligible.length
+          ? { message: t("fileViewer.autocompleteLoadFailed", { model: roles[0] }), manage: "models" }
+          : { message: t("fileViewer.autocompleteNoInstalledModel"), manage: "ollama" });
+        return;
+      }
+      if (!model.running) {
+        setProgress(t("fileViewer.autocompleteLoadingModel", { model: model.name }));
+        await loadOllamaModel(model.name);
+      }
+      completionModels.clear();
+      await refreshOllamaStatus();
+    } catch (error) {
+      setFailure({
+        message: model ? t("fileViewer.autocompleteLoadFailed", { model: model.name }) : String(error),
+        manage: model ? "models" : "ollama",
+      });
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  return (
+    <>
+      <span className="file-viewer-ai-note">{t("fileViewer.autocompleteNoteNoModel")}</span>
+      <button
+        type="button"
+        className="file-viewer-ai-btn"
+        disabled={progress !== null || aiOff}
+        title={aiOff ? t("sidePanel.aiOffHint") : undefined}
+        onClick={() => void load()}
+      >
+        {progress ?? t("fileViewer.autocompleteLoadLocalModel")}
+      </button>
+      <button
+        type="button"
+        className="file-viewer-ai-btn"
+        onClick={() => useModelsOverlayStore.getState().openOverlay(failure?.manage ?? manageSection)}
+      >
+        {t("localModel.manageLocalModels")}
+      </button>
+      <UntestedTag id="fileViewer.autocompleteLoadLocalModel" />
+      {failure && (
+        <ErrorNote as="span" role="alert" className="file-viewer-ai-note" error={failure.message} />
+      )}
+    </>
   );
 }
 
