@@ -43,10 +43,9 @@ function RootTabLamp({ children }: { children: (lamp: ScopeLamp, stateClass: str
 const pick = (id: RootOverlayView) => useRootOverlayStore.getState().openView(id);
 
 /**
- * The window's view strip, in the title bar: `Now Projects Tonight │ Mail
- * Calendar To-do │ Agents Models Machines │ ★ Root`. A view whose feature gate
- * is off (`lib/cockpit/viewGates`) is not offered, and a group left empty
- * takes its divider with it.
+ * The window's view strip: Root and the cockpit views on the left, system
+ * views in the middle, and cross-project apps on the right. Feature gates
+ * (`lib/cockpit/viewGates`) hide disabled views and dividers for empty groups.
  *
  * Three bands (`lib/window/frameBand`, the frame's width): `wide` shows icon +
  * label, `mid` icons only (the label is the tab's tooltip and accessible name;
@@ -57,7 +56,7 @@ export function RootViewStrip({ view, band }: { view: RootOverlayView; band: Fra
   const t = useT();
   const settings = useSettingsStore((s) => s.settings);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const groups = VIEW_GROUPS.map((g) => g.filter((id) => viewEnabled(id, settings))).filter((g) => g.length > 0);
+  const groups = VIEW_GROUPS.map((g) => g.filter((id) => viewEnabled(id, settings)));
 
   const viewTab = (id: RootOverlayView, children: React.ReactNode, extra = "") => {
     const label = t(VIEW_LABEL[id]);
@@ -136,7 +135,7 @@ export function RootViewStrip({ view, band }: { view: RootOverlayView; band: Fra
         </button>
         {menu && (
           <ContextMenuPortal x={menu.x} y={menu.y} keepBelow className="tab-new-menu root-view-menu" onClose={() => setMenu(null)}>
-            {groups.map((g, i) => (
+            {groups.filter((g) => g.length > 0).map((g, i) => (
               <div key={g.join()} className="root-view-menu-group" role="group">
                 {i > 0 && <div className="root-view-menu-sep" role="separator" />}
                 {g.map((id) => (
@@ -164,9 +163,11 @@ export function RootViewStrip({ view, band }: { view: RootOverlayView; band: Fra
   }
 
   return (
-    <div className="tab-strip root-view-strip" role="tablist" aria-label={t("rootConsole.viewStrip")}>
+    <div className="tab-strip root-view-strip root-view-strip-expanded" role="tablist" aria-label={t("rootConsole.viewStrip")}>
+      {/* Space on both sides of the system views, even when all apps are hidden. */}
       {groups.map((g, i) => [
-        i > 0 && <span key={`sep${i}`} className="root-view-divider" role="presentation" />,
+        i > 1 && <span key={`space${i}`} className="root-view-spacer" aria-hidden="true" />,
+        i > 0 && g.length > 0 && <span key={`sep${i}`} className="root-view-divider" role="presentation" />,
         ...g.map(tabOf),
       ])}
     </div>

@@ -22,7 +22,7 @@ import { useRootReviewStore } from "../../stores/rootReview";
 import { VIEW_GROUPS } from "../../lib/cockpit/views";
 import type { Settings } from "../../types";
 
-const ALL = ["now", "projects", "tonight", "mail", "calendar", "todo", "agents", "models", "machines", "root"];
+const ALL = ["root", "now", "projects", "tonight", "agents", "machines", "models", "mail", "todo", "calendar"];
 const strip = () => Array.from(document.querySelectorAll<HTMLElement>("[data-root-view]")).map((el) => el.dataset.rootView);
 const settings = (patch: Partial<Settings> = {}) =>
   useSettingsStore.setState({ settings: { mail_client: true, ...patch } as Settings });
@@ -49,6 +49,8 @@ describe("the grouped view strip", () => {
     await act(async () => useRootOverlayStore.getState().openView("now"));
     expect(VIEW_GROUPS.flat()).toEqual(ALL);
     expect(strip()).toEqual(ALL);
+    const viewStrip = document.querySelector(".root-overlay-mark + .root-view-strip");
+    expect(viewStrip?.firstElementChild).toBe(screen.getByRole("tab", { name: "Root" }));
     expect(document.querySelectorAll(".root-view-divider")).toHaveLength(3);
     // Wide: icon and label on every tab.
     expect(document.querySelectorAll(".root-view-tab .root-view-icon, .root-view-tab .root-view-star").length).toBe(10);
@@ -59,7 +61,7 @@ describe("the grouped view strip", () => {
     settings({ mail_client: false, calendar_global_app: false, todo_board: false, machines_enabled: false });
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().openView("now"));
-    expect(strip()).toEqual(["now", "projects", "tonight", "agents", "models", "root"]);
+    expect(strip()).toEqual(["root", "now", "projects", "tonight", "agents", "models"]);
     expect(document.querySelectorAll(".root-view-divider")).toHaveLength(2);
   });
 
@@ -92,7 +94,7 @@ describe("the grouped view strip", () => {
     expect(strip()).toEqual(["projects"]);
     fireEvent.click(screen.getByRole("button", { name: "More views" }));
     const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
-    expect(items).toEqual(["Now", "Projects", "Tonight", "Mail", "Calendar", "To-do", "Agents", "Models", "Machines", "Root"]);
+    expect(items).toEqual(["Root", "Now", "Projects", "Tonight", "Agents", "Machines", "Models", "Mail", "To-do", "Calendar"]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Machines" }));
     expect(useRootOverlayStore.getState().view).toBe("machines");
     expect(screen.queryByRole("menu")).toBeNull();

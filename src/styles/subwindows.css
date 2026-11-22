@@ -1712,12 +1712,17 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   height: min(93vh, calc(100vh - 24px));
   max-height: min(93vh, calc(100vh - 24px));
 }
-/* The view strip: the shipped `.tab` strip, the cockpit's three views, the
-   apps, the system pages, a divider between each group, then Root. Roving
-   focus, no motion. */
+/* Root and the cockpit views sit next to the title. Equal spaces flank the
+   system views and move the apps toward the window controls. */
 .root-view-strip {
   flex: 0 0 auto;
   align-items: center;
+}
+.root-view-strip-expanded {
+  flex: 1 1 auto;
+}
+.root-view-spacer {
+  flex: 1 0 0;
 }
 .root-view-divider {
   align-self: stretch;

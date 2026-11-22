@@ -122,10 +122,10 @@ views of one PTY would take turns resizing it.
 ## Views: one window, ten
 
 The console's window is also the cockpit's, and the apps' and system pages'
-(`docs/context/cockpit.md`). A view strip in the title bar reads Now, Projects,
-Tonight, a divider, Mail, Calendar, To-do, a divider, Agents, Models, Machines, a
-divider, then **Root** (the star): the console proper, this whole document. It is
-icon + label at 1180 px and up, icons only from 820 px, and the current tab plus a
+(`docs/context/cockpit.md`). The title bar puts **Root** (the star) next to the
+Cockpit label, followed by Now, Projects and Tonight. Agents, Machines and Models
+sit in the middle. Mail, To-do and Calendar sit on the right. The strip shows an
+icon and label at 1180 px and up, icons only from 820 px, and the current tab plus a
 ▾ menu under that. `stores/rootOverlay` holds `view` (`WindowView`, `lib/cockpit/views`)
 next to `open`; `show()` always means Root, `openView(view)` opens any other view
 (and never hydrates root), `rootViewShown` / `viewShown` ask whether a view is on
