@@ -1400,6 +1400,16 @@ pub enum DesktopRequest {
         #[serde(default)]
         limit: Option<usize>,
     },
+    /// The local-model "what's next" suggestion for one agent tab's newest
+    /// turn (`services::next_prompt`), asked by the window so the phone and the
+    /// window's own composer share one run per turn. Addressed like
+    /// `AgentTranscript`; `phase` is `warm` or `final`.
+    AgentNextPrompt {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        phase: String,
+    },
     /// What the desktop can hand the phone's composer as an image: the
     /// clipboard's image and the recent files of the screenshot and picture
     /// folders (`services::desktop_images`). Only opaque ids and labels come
@@ -1674,6 +1684,7 @@ impl DesktopRequest {
             | Self::SwitchAssistantModel { request_id, .. }
             | Self::AgentStatus { request_id, .. }
             | Self::AgentTranscript { request_id, .. }
+            | Self::AgentNextPrompt { request_id, .. }
             | Self::DesktopImages { request_id, .. }
             | Self::AttachDesktopImage { request_id, .. }
             | Self::MarkupQuestions { request_id, .. }
@@ -1809,6 +1820,7 @@ impl DesktopRequest {
             | Self::AssistantModels { .. }
             | Self::AgentStatus { .. }
             | Self::AgentTranscript { .. }
+            | Self::AgentNextPrompt { .. }
             | Self::DesktopImages { .. }
             | Self::AttachDesktopImage { .. }
             | Self::MarkupQuestions { .. }
@@ -2201,6 +2213,14 @@ pub enum DesktopResponse {
     },
     AgentTranscript {
         transcript: crate::services::agent_transcript::AgentTranscript,
+    },
+    /// Answers [`DesktopRequest::AgentNextPrompt`]: the suggestion's text and
+    /// its `services::next_prompt::Status` word (`outcome`, since `status`
+    /// names this response).
+    AgentNextPrompt {
+        #[serde(default)]
+        text: Option<String>,
+        outcome: String,
     },
     /// Acknowledges a [`DesktopRequest::TabSeen`], [`DesktopRequest::TabInput`]
     /// or [`DesktopRequest::TabPrompt`] — and a delivered

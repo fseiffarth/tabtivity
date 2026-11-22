@@ -5163,10 +5163,10 @@ const NEXT_PROMPT_LIMIT: usize = 400;
 
 /// `GET /api/v1/tabs/{tab_id}/next-prompt?phase=warm|final` — the
 /// local-model "what's next" suggestion for the agent tab's newest turn
-/// (`services::next_prompt`), for the phone's composer. The turn is read as
-/// `/transcript` reads it (the window's read over the bridge, or the CLI's
-/// own transcript off the tab record with no window) and the loopback Ollama
-/// run happens here, in this process, cached per turn. Answers only `text`
+/// (`services::next_prompt`), for the phone's composer. With the window open
+/// the window answers it (`DesktopRequest::AgentNextPrompt`, one run per turn
+/// for both screens); with none, the CLI's own transcript is read off the tab
+/// record and the loopback Ollama run happens here, cached per turn. Answers only `text`
 /// and `status` — no turn key, no id, no path — and always a status, never an
 /// error, once the tab resolves.
 async fn tab_next_prompt(
@@ -5191,34 +5191,38 @@ async fn tab_next_prompt(
     if phase == Phase::Warm && tab.local_model {
         return answer(NextPrompt::status(Status::Skipped));
     }
+    // With the window open it answers: the window's composer asks the same
+    // session, so a turn both screens watch runs the model once (user,
+    // 2026-11-22), and this process does not talk to Ollama.
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
-        &DesktopRequest::AgentTranscript {
+        &DesktopRequest::AgentNextPrompt {
             request_id: new_request_id(),
             project_id: project_id.clone(),
             tmux_session: tab.tmux_name.clone(),
-            subagent: None,
-            version: None,
-            limit: Some(NEXT_PROMPT_LIMIT),
+            phase: if phase == Phase::Warm { "warm" } else { "final" }.to_string(),
         },
     )
     .await;
-    let transcript = if desktop_down(&response) {
-        None
-    } else {
-        match response {
-            Ok(DesktopResponse::AgentTranscript { transcript }) => Some(transcript),
-            Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found" => {
-                return api_error(StatusCode::NOT_FOUND, &code);
+    if !desktop_down(&response) {
+        return match response {
+            Ok(DesktopResponse::AgentNextPrompt { text, outcome }) => {
+                // Only a status word the engine knows crosses; the text is the
+                // engine's cleaned line, capped again here.
+                let status = serde_json::from_value::<Status>(json!(outcome)).unwrap_or(Status::Unavailable);
+                let text = text.and_then(|line| next_prompt::clean(&line));
+                answer(NextPrompt { text, ..NextPrompt::status(status) })
             }
-            _ => return answer(NextPrompt::status(Status::Unavailable)),
-        }
-    };
+            Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found" => api_error(StatusCode::NOT_FOUND, &code),
+            _ => answer(NextPrompt::status(Status::Unavailable)),
+        };
+    }
+    // No window: the CLI's own transcript, read here off the tab record, and
+    // the loopback Ollama run in this process.
     let key = format!("phone\u{1f}{project_id}\u{1f}{}", tab.tmux_name);
     let prompt = tokio::task::spawn_blocking(move || {
-        // No window: the CLI's own transcript, read here off the tab record.
-        let transcript = transcript.unwrap_or_else(|| headless::transcript(&project_id, &tab, None, None, Some(NEXT_PROMPT_LIMIT)));
+        let transcript = headless::transcript(&project_id, &tab, None, None, Some(NEXT_PROMPT_LIMIT));
         let ask = Ask { key: &key, agent: &tab.cmd, phase, local_model: tab.local_model };
         next_prompt::suggest_blocking(&ask, &transcript)
     })

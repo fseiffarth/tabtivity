@@ -134,7 +134,7 @@ impl Phase {
 }
 
 /// What came of an ask (`docs/next_prompt_plan.md`, Contract).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     /// A final run answered (`text` may still be `null`: the model said NONE).
@@ -578,8 +578,11 @@ pub(crate) struct Ollama<'a> {
     /// Whether the model is resident and pinned (`keep_alive: -1`, the Load button).
     pub pinned: &'a (dyn Fn(&str, &str) -> bool + Sync),
     /// The request; `abort` ends it early with [`ollama::ABORTED`].
-    pub chat: &'a (dyn Fn(&str, &str, Duration, &ollama::Abort) -> Result<String, String> + Sync),
+    pub chat: &'a ChatFn<'a>,
 }
+
+/// The chat request of [`Ollama`]: endpoint, JSON body, timeout, abort handle.
+pub(crate) type ChatFn<'a> = dyn Fn(&str, &str, Duration, &ollama::Abort) -> Result<String, String> + Sync + 'a;
 
 /// Whether `/api/ps`'s `body` lists `model` as resident with no expiry in
 /// sight. A bare name matches its `:latest`.

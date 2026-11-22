@@ -192,3 +192,23 @@ Fixes are on `worktree-agent-a1322a530e76ea652`. Each has a regression test.
    Cache it if it shows up.
 5. Handoff A items 1–3 and 5 and B items 1–6 stand as written. None is a bug
    I could confirm in code. Nothing has been run live.
+
+## Follow-ups (main agent, 2026-11-22, user decisions)
+
+- **Final ends a running warm** (R flag 1): `ollama_client::Abort` +
+  `ollama_http_abortable`; a `final` shuts the warm's socket (Ollama stops a
+  request whose client left), the aborted warm answers `skipped`, and a warm
+  arriving while a final waits answers `busy` (`Slot::finals`). Test
+  `a_final_ends_a_warm_up_in_flight_instead_of_waiting_behind_it`.
+- **Phone through the window** (A flag 1): `DesktopRequest::AgentNextPrompt` /
+  `DesktopResponse::AgentNextPrompt { text, outcome }`; the window answers with
+  the Reader's `nextPromptArgs`, so one session and one run per turn for both
+  screens, and the sidecar no longer calls Ollama while a window is open. The
+  route re-cleans the text and lets only a known status word through. Tests:
+  the rewritten `the_next_prompt_route_answers_text_and_status_only`,
+  `src/__tests__/mobile/MobileBridgeNextPrompt.test.tsx` (3).
+- Checks run: `cargo test -p tabtivity --lib -- next_prompt protocol mail_ai
+  ollama_local` (80 passed), `cargo clippy -p tabtivity --lib --tests -D
+  warnings` clean, tsc clean, eslint on the changed files clean, the 5
+  next-prompt / bridge vitest files (37) passed. Not run: the full gate set,
+  the other two clippy variants, `cargo test --workspace`. Never live.
