@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -115,7 +115,7 @@ import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
 import { SideViewKey } from "./SideViewKey";
 import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, ArrowUpRightIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
-import { ArrowLeftIcon, EyeIcon, PlusIcon } from "../common/icons/Icon";
+import { ArrowLeftIcon, EyeIcon, MinusIcon, PlusIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -3381,50 +3381,85 @@ export function ProjectFilesView({
 
       {view === "clis" && <CliOverviewView active={active} />}
 
-      {view === "windows" && (
-        <div className="side-panel-scroll" style={{ flex: 1, overflowY: "auto", padding: 4 }}>
-          <div className="file-tree-empty" style={{ paddingBottom: 4 }}>
-            <UntestedTag id="projectFilesView.7" />
+      {view === "windows" && (() => {
+        // One app row: its window icon and name, then Close app (a live
+        // process) or Remove from list (a row whose process is gone).
+        const appRow = (w: (typeof scopedWindows)[number]) => (
+          <div key={w.id} className="sp-row sp-row--plain apps-row">
+            <span className="sp-row-main" title={w.exec}>
+              <span className="apps-row-icon"><WindowIcon /></span>
+              <span className="sp-row-name apps-row-name">
+                {basename(w.exec) || w.exec}
+                {w.file && <span className="apps-row-file"> {basename(w.file)}</span>}
+              </span>
+            </span>
+            <span className="sp-row-meta">
+              <button
+                type="button"
+                className="btn-quiet apps-row-btn"
+                onClick={() => closeApp(w.id)}
+                title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
+                aria-label={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
+              >
+                {w.pid > 0 ? <CloseIcon /> : <MinusIcon />}
+              </button>
+            </span>
           </div>
-          {/* A desktop that parks nothing is said once for the list; a
-              parking desktop under Wayland explains each row it still can't
-              hide (no window id = not an XWayland window). Linux only: the
-              Windows/macOS backends always park, and an older backend or the
-              browser client gives no usable answer (null → silence). */}
-          {scopedWindows.length > 0 && workspaceCaps?.canPark === false && IS_LINUX && (
-            <div className="file-tree-empty" style={{ paddingBottom: 4 }}>
-              {t("projectFilesView.noParkingNote")} <UntestedTag id="projectFilesView.noParkingNote" />
+        );
+        // A desktop that parks splits the list by what a project switch does
+        // to each row (`rowStaysVisible`); one that parks nothing, or gives no
+        // usable answer, keeps the single list.
+        const parks = workspaceCaps?.canPark === true;
+        const staying = parks ? scopedWindows.filter((w) => rowStaysVisible(workspaceCaps, w.window_id) === "wayland") : [];
+        const hidden = parks ? scopedWindows.filter((w) => rowStaysVisible(workspaceCaps, w.window_id) !== "wayland") : [];
+        return (
+          <div className="side-panel-scroll sp-list-view apps-view" style={{ flex: 1, overflowY: "auto" }}>
+            <div className="sp-toolbar">
+              <UntestedTag id="projectFilesView.7" />
             </div>
-          )}
-          {scopedWindows.length === 0 ? (
-            <div className="file-tree-empty">{t("projectFilesView.noOpenedWindows")}</div>
-          ) : (
-            scopedWindows.map((w) => (
-              <Fragment key={w.id}>
-                <div className="file-entry">
-                  <span className="file-icon"><WindowIcon /></span>
-                  <span className="file-name" title={w.exec}>
-                    {basename(w.exec) || w.exec}
-                    {w.file && <span style={{ color: "var(--text-muted)" }}> {basename(w.file)}</span>}
-                  </span>
-                  <button
-                    className="tab-close"
-                    onClick={() => closeApp(w.id)}
-                    title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
-                  >
-                    <CloseIcon />
-                  </button>
-                </div>
-                {rowStaysVisible(workspaceCaps, w.window_id) === "wayland" && (
-                  <div className="file-tree-empty" style={{ paddingTop: 0 }}>
-                    {t("projectFilesView.waylandStaysVisible")} <UntestedTag id="projectFilesView.waylandStaysVisible" />
-                  </div>
+            {/* A desktop that parks nothing is said once for the list; a
+                parking desktop under Wayland says once, under the section of
+                the rows it still can't hide (no window id = not an XWayland
+                window), why they stay. Linux only: the Windows/macOS backends
+                always park, and an older backend or the browser client gives
+                no usable answer (null → silence). */}
+            {scopedWindows.length > 0 && workspaceCaps?.canPark === false && IS_LINUX && (
+              <p className="sp-note">
+                {t("projectFilesView.noParkingNote")} <UntestedTag id="projectFilesView.noParkingNote" />
+              </p>
+            )}
+            {scopedWindows.length === 0 ? (
+              <p className="sp-note">{t("projectFilesView.noOpenedWindows")}</p>
+            ) : parks ? (
+              <>
+                {hidden.length > 0 && (
+                  <section className="apps-section" data-section="hidden">
+                    <div className="sp-head">
+                      <span>{t("projectFilesView.appsHiddenOnSwitch")}</span>
+                      <span className="sp-head-end">{hidden.length}</span>
+                    </div>
+                    {hidden.map(appRow)}
+                  </section>
                 )}
-              </Fragment>
-            ))
-          )}
-        </div>
-      )}
+                {staying.length > 0 && (
+                  <section className="apps-section" data-section="staying">
+                    <div className="sp-head">
+                      <span>{t("projectFilesView.appsStayOnScreen")}</span>
+                      <span className="sp-head-end">{staying.length}</span>
+                    </div>
+                    <p className="sp-note">
+                      {t("projectFilesView.waylandXwaylandOnly")} <UntestedTag id="projectFilesView.waylandStaysVisible" />
+                    </p>
+                    {staying.map(appRow)}
+                  </section>
+                )}
+              </>
+            ) : (
+              scopedWindows.map(appRow)
+            )}
+          </div>
+        );
+      })()}
       {view !== "files" && footer}
       {showSettings && project && localFile && (
         <ProjectFilesSettingsDialog

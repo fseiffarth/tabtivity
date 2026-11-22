@@ -1953,6 +1953,25 @@
   gap: var(--space-1);
 }
 
+/* Apps: two sections on a desktop that parks (hidden on a project switch,
+   stays on screen), else one list. A row is the app's icon and name, the
+   file it opened in meta ink, and Close app or Remove from list. */
+.apps-view .apps-row-icon {
+  display: inline-flex;
+  color: var(--text-secondary);
+}
+
+.apps-view .apps-row-file {
+  color: var(--text-muted);
+}
+
+.apps-view .apps-row-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--space-1);
+}
+
 /* ── The browser desktop client (hosted plan P2) ─────────────────────────── */
 /* The one "connection lost" banner, mounted outside the app's root. */
 .server-link-banner {
