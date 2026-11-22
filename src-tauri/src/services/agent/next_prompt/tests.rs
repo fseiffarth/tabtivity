@@ -309,3 +309,19 @@ fn the_answer_serializes_to_the_contract() {
     let refused = NextPrompt::refused(Status::NoModel, "why".into());
     assert_eq!(serde_json::to_value(&refused).unwrap(), serde_json::json!({ "text": null, "turnKey": null, "status": "no_model", "reason": "why" }));
 }
+
+/// A tab Tabtivity mints no launch id for (a local-model tab, OpenCode,
+/// Antigravity, Muse) reads its session by its folder, as the Chat view does:
+/// it must get a session of its own, not `unavailable` on every ask.
+#[test]
+fn a_tab_without_a_launch_id_is_named_by_its_folder() {
+    let local = desktop_key("pi", Some("p1"), "", Some("/work/a"), Some(10), None);
+    assert!(local.is_some(), "a local-model tab without a session id still asks");
+    let other_folder = desktop_key("pi", Some("p1"), "", Some("/work/b"), Some(10), None);
+    let other_launch = desktop_key("pi", Some("p1"), "", Some("/work/a"), Some(11), None);
+    assert_ne!(local, other_folder);
+    assert_ne!(local, other_launch);
+    assert!(desktop_key("codex", Some("p1"), "uid-1", None, None, None).is_some());
+    assert_eq!(desktop_key("codex", Some("p1"), "", None, None, None), None, "named by nothing");
+    assert_eq!(desktop_key("codex", None, &"x".repeat(MAX_KEY_CHARS), None, None, None), None);
+}

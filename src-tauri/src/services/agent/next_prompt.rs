@@ -495,6 +495,32 @@ fn sessions() -> &'static Mutex<Sessions> {
     SESSIONS.get_or_init(Default::default)
 }
 
+/// The session key of a desktop ask, from `agent_tab_transcript`'s tab
+/// identity. A tab with no launch id (a local-model tab, OpenCode, Antigravity,
+/// Muse: read by their folder and launch moment, as the Chat view reads them)
+/// is named by its folder and that moment as well; `None` only for a tab named
+/// by nothing at all, or a key past [`MAX_KEY_CHARS`].
+pub fn desktop_key(
+    agent: &str,
+    project_id: Option<&str>,
+    session_id: &str,
+    tab_dir: Option<&str>,
+    since: Option<i64>,
+    remote_host: Option<&str>,
+) -> Option<String> {
+    let tab_dir = tab_dir.unwrap_or("");
+    if session_id.is_empty() && tab_dir.is_empty() {
+        return None;
+    }
+    let since = since.map(|at| at.to_string()).unwrap_or_default();
+    let key = format!(
+        "desktop\u{1f}{agent}\u{1f}{}\u{1f}{session_id}\u{1f}{}\u{1f}{tab_dir}\u{1f}{since}",
+        project_id.unwrap_or(""),
+        remote_host.unwrap_or("")
+    );
+    (key.len() <= MAX_KEY_CHARS).then_some(key)
+}
+
 /// `key`'s slot, made on first use; the least recently asked goes past
 /// [`MAX_SESSIONS`].
 fn session(key: &str) -> Arc<Mutex<Session>> {

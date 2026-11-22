@@ -1512,7 +1512,7 @@ pub async fn agent_next_prompt(
     since: Option<i64>,
     ctx: Ctx,
 ) -> crate::services::next_prompt::NextPrompt {
-    use crate::services::next_prompt::{NextPrompt, Phase, Status, MAX_KEY_CHARS};
+    use crate::services::next_prompt::{desktop_key, NextPrompt, Phase, Status};
     let Some(phase) = Phase::parse(&phase) else {
         return NextPrompt::status(Status::Unavailable);
     };
@@ -1520,14 +1520,9 @@ pub async fn agent_next_prompt(
     if phase == Phase::Warm && local_model {
         return NextPrompt::status(Status::Skipped);
     }
-    let key = format!(
-        "desktop\u{1f}{agent}\u{1f}{}\u{1f}{session_id}\u{1f}{}",
-        project_id.as_deref().unwrap_or(""),
-        remote_host.as_deref().unwrap_or("")
-    );
-    if session_id.is_empty() || key.len() > MAX_KEY_CHARS {
+    let Some(key) = desktop_key(&agent, project_id.as_deref(), &session_id, tab_dir.as_deref(), since, remote_host.as_deref()) else {
         return NextPrompt::status(Status::Unavailable);
-    }
+    };
     let transcript = agent_tab_transcript(
         agent.clone(),
         project_id,
