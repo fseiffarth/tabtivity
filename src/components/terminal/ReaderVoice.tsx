@@ -18,6 +18,7 @@ import {
   voiceCandidates,
   voiceLangTag,
   voiceModelInstallCommand,
+  voiceSpeakStop,
   voiceStatus,
   type DesktopDictation,
   type VoiceDevice,
@@ -32,8 +33,13 @@ import { useSettingsStore } from "../../stores/settings";
 import { Dropdown } from "../common/Dropdown";
 import { MicIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
+import type { UntestedId } from "../../lib/untested";
 import { isStopWord, paintMicLevel } from "../../../shared/voice";
+import { matchDraftEdit, matchStartWord, mayAskHelp, mayEditDraft, mayNavigate } from "../../lib/voice/voiceCommands";
 import type { LiveDictation } from "./useLiveDictation";
+import { useReaderTabbyGate } from "./useReaderTabbyGate";
+import { useReaderVoiceNav, type ReaderSpeech } from "./useReaderVoiceNav";
+import type { NavLine } from "../../../shared/voiceNavMode";
 
 type Phase = "off" | "starting" | "preparing" | "listening";
 
@@ -63,10 +69,22 @@ const REOPEN_SETTLE_MS = 800;
  * (`reading`). A settled segment that picks a row of the question on screen
  * (`pick`) answers it instead.
  *
+ * Spoken navigation (docs/desktop_tabby_navigate_plan.md, `useReaderVoiceNav`):
+ * "{assistant} navigate" opens a mode in which every settled segment is a
+ * command, "{assistant} help" says what can be said. With Hands-free on, the
+ * mic does not pause for the agent's turn any more: the Tabby gate
+ * (`useReaderTabbyGate`) lets through only what starts with the start word
+ * ("{assistant}, and add a test, go {assistant}" queues a next prompt), so the
+ * mode can be opened while the agent works. Each final is checked in this
+ * order: empty or filtered as before; the mode, help or navigate; the gate;
+ * then recovery, a question's pick, the send guard and the draft.
+ *
  * The mic pauses while the pane is hidden and resumes when it is shown; the
  * session ends with the composer. A browser client offers no mic.
  */
-export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, live, onSend, hasDraft, pick, commitPick, spokenIn, readProblem = null, note = "" }: {
+export function useReaderVoice({ scope, tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, live, onSend, hasDraft, pick, commitPick, spokenIn, readProblem = null, note = "", landingLine = null }: {
+  /** The scope the tab is in: what "tab two" and "Claude tab" mean. */
+  scope: string;
   tabKey: string;
   ptyId: string;
   visible: boolean;
@@ -102,6 +120,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   readProblem?: TranslationKey | null;
   /** What a spoken edit of the draft did ("Removed …"), for a moment. */
   note?: string;
+  /** What a spoken jump's landing is saying (`useReaderVoiceLanding`). */
+  landingLine?: NavLine | null;
 }) {
   const t = useT();
   const uiLanguage = useI18nStore((s) => s.lang);
@@ -122,7 +142,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const sessionDetect = useRef(false);
   const langPickerRef = useRef<HTMLSpanElement>(null);
   const [guardPhase, setGuardPhase] = useState<GuardPhase>("idle");
-  /** Hands-free sent at this time; the mic is paused until the turn is over. */
+  /** Hands-free sent at this time; the Tabby gate is on until the turn is
+   * over and its answer read. */
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const waitingRef = useRef(false);
   waitingRef.current = waitingSince !== null;
@@ -140,6 +161,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   });
   /** The segment whose speech is open: the one a pause drops. */
   const openSegment = useRef<number | null>(null);
+  /** The gate ends once this segment has settled (the turn ended mid-utterance). */
+  const gateEndsAfter = useRef<number | null>(null);
   const questionOpenRef = useRef(questionOpen);
   questionOpenRef.current = questionOpen;
   const lastAnswerRef = useRef(lastAnswer);
@@ -148,6 +171,40 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
 
   const model = settings?.voice_model ?? DEFAULT_VOICE_MODEL;
   const langChoice = (settings?.voice_lang ?? "auto") as VoiceLangChoice;
+  /** Commands are heard and lines said in the language listened in; with the
+   * recognizer left to detect it, in the app's. */
+  const navLanguage: Language = langChoice !== "auto" && langChoice !== "detect" ? langChoice : uiLanguage;
+  const navLanguageRef = useRef(navLanguage);
+  navLanguageRef.current = navLanguage;
+  /** Whether a line can be spoken (`voice_status` at the last start); a voice
+   * that turns out missing fails the read, and the mode goes on. */
+  const canSpeak = useRef(true);
+  const speechRef = useRef<ReaderSpeech | null>(null);
+  {
+    const tag = voiceLangTag(langChoice, uiLanguage);
+    speechRef.current = canSpeak.current
+      ? { lang: tag === "auto" ? uiLanguage : tag, rate: settings?.voice_rate ?? 1, natural: settings?.voice_natural ?? true }
+      : null;
+  }
+  const handsFreeRef = useRef(handsFree);
+  handsFreeRef.current = handsFree;
+  const phaseRef = useRef<Phase>("off");
+  phaseRef.current = phase;
+  const gate = useReaderTabbyGate();
+  const dropRef = useRef<() => void>(() => {});
+  const nav = useReaderVoiceNav({
+    scope, tabKey, ptyId,
+    lang: () => navLanguageRef.current,
+    speech: () => speechRef.current,
+    handsFree: () => handsFreeRef.current,
+    guardReset: () => guard.current?.reset(),
+    sessionOn: () => session.current !== null || phaseRef.current !== "off",
+    startMic: () => void startRef.current(),
+    dropSession: () => dropRef.current(),
+  });
+  const navMode = nav.mode;
+  /** The gate lets `text` through as it stands: its window is open or a draft is under way. */
+  const gateOpen = () => gate.windowOpen() || handlers.current.hasDraft();
 
   const guard = useRef<SendGuard | null>(null);
   // The voice detector already waited the pause before it closed the segment.
@@ -175,6 +232,9 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const reset = () => {
     session.current = null;
     guard.current?.reset();
+    gate.clear();
+    gateEndsAfter.current = null;
+    navMode.end();
     handlers.current.live.removeAll();
     openSegment.current = null;
     paintMicLevel(buttonRef.current, null);
@@ -185,7 +245,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     setHeardAs(null);
   };
 
-  /** Hands-free waits for the turn what was sent (or answered) starts. */
+  /** Hands-free waits for the turn what was sent (or answered) starts: the
+   * mic stays open, behind the Tabby gate (a chime, the cue line). */
   const awaitTurn = () => {
     guard.current?.reset();
     waitingRef.current = true;
@@ -193,12 +254,16 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     handlers.current.live.removeAll();
     setHeard("");
     setWaitingSince(Date.now());
+    gate.arm();
   };
 
   /** `use`: the model to listen with (the card's pick), else the setting's;
-   * `lang`: the language choice to listen in, else the setting's. */
-  const start = async (use: string = model, lang: VoiceLangChoice = langChoice) => {
+   * `lang`: the language choice to listen in, else the setting's; `gated`:
+   * a landing's start with the Tabby gate on (any other start clears it). */
+  const start = async (use: string = model, lang: VoiceLangChoice = langChoice, gated = false) => {
     const mine = ++attempt.current;
+    if (gated && handsFree) gate.set(true);
+    else gate.clear();
     handlers.current.live.dismissRecovery();
     handlers.current.live.removeAll();
     setProblem(null);
@@ -208,6 +273,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     try {
       const status = await voiceStatus();
       if (mine !== attempt.current) return;
+      canSpeak.current = status.speak === null || status.natural.voices.some((voice) => voice.installed);
       if (status.listen) {
         setProblem(voiceErrorKey(status.listen));
         setPhase("off");
@@ -222,6 +288,82 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       }
       setUsing({ models: whisper, id: use as VoiceModel });
       sessionHandsFree.current = loop;
+      /** A settled segment, in the order of checks this hook's comment gives. */
+      const settleFinal = (heardText: string, segment: number, filtered?: boolean) => {
+        setHeard("");
+        if (openSegment.current === segment) openSegment.current = null;
+        let text = heardText;
+        const said = text.trim();
+        // The mode, "{assistant} help" or "{assistant} navigate": before an
+        // open question's pick and the send guard, and never typed.
+        if (said && !filtered && navMode.route(said)) {
+          handlers.current.live.remove(segment);
+          return;
+        }
+        if (!sessionHandsFree.current) {
+          handlers.current.onText(text, segment);
+          return;
+        }
+        // The Tabby gate: only what starts with the start word counts (a
+        // spoken edit kept whole, the rest without it), or anything while
+        // its window is open or a draft is under way. Other talk is dropped.
+        if (said && !filtered && gate.on.current) {
+          const language = navLanguageRef.current;
+          const start = matchStartWord(said, language);
+          if (matchDraftEdit(said, language)) gate.kept();
+          else if (start && !start.rest) {
+            handlers.current.live.remove(segment);
+            gate.listen();
+            if (guard.current?.phase() === "holding") guard.current.settled("");
+            return;
+          } else if (start) {
+            text = start.rest;
+            gate.kept();
+          } else if (gateOpen()) gate.kept();
+          else {
+            handlers.current.live.remove(segment);
+            if (guard.current?.phase() === "holding") guard.current.settled("");
+            return;
+          }
+        }
+        if (filtered) {
+          handlers.current.live.remove(segment);
+          if (guard.current?.phase() === "holding") guard.current.settled("");
+          else guard.current?.reset();
+          return;
+        }
+        if (handlers.current.live.hasRecovery()) {
+          if (questionOpenRef.current || isStopWord(text)) handlers.current.live.remove(segment);
+          else handlers.current.onText(text, segment);
+          return;
+        }
+        // Any new utterance supersedes a staged pick ("stop" cancels it).
+        if (text) staged.current.heard();
+        const picked = text ? handlers.current.pick(text) : null;
+        if (picked === "refused") {
+          // A dialog a voice may not answer: nothing is typed or picked.
+          handlers.current.live.remove(segment);
+          guard.current?.settled("");
+          return;
+        }
+        if (picked) {
+          // "Heard: 2", then the chime and the cancel window; the dialog
+          // is answered only when it closes.
+          handlers.current.live.remove(segment);
+          staged.current.stage(picked);
+          setPickHeard(picked.heard);
+          guard.current?.settled(text);
+          return;
+        }
+        if (!guard.current?.settled(text)) {
+          // A stop word is no text.
+          handlers.current.live.remove(segment);
+          return;
+        }
+        handlers.current.onText(text, segment);
+        // A gated draft scratched to nothing is no draft under way.
+        if (gate.on.current && !handlers.current.hasDraft()) gate.idle();
+      };
       // A new session detects again (docs/voice_language_detection_plan.md D3).
       sessionDetect.current = lang === "detect";
       spokenIn.current = null;
@@ -251,21 +393,45 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
             setHeard("");
           } else {
             openSegment.current = segment;
-            if (!waitingRef.current) handlers.current.live.begin?.(segment);
-            if (sessionHandsFree.current && !waitingRef.current) guard.current?.speechStarted();
+            if (!navMode.isOpen()) handlers.current.live.begin?.(segment);
+            if (sessionHandsFree.current && !navMode.isOpen()) guard.current?.speechStarted();
           }
         },
         onPartial: (text, segment) => {
-          if (mine !== attempt.current || waitingRef.current) return;
+          if (mine !== attempt.current) return;
+          // Words are being said: the mode's quiet seconds start again.
+          navMode.activity();
+          // In the mode nothing is typed; behind the gate only what starts
+          // with the start word (shown without it), or goes on a draft.
+          let shown = text;
+          let gated = navMode.isOpen();
+          if (!gated && sessionHandsFree.current && gate.on.current && !gateOpen()) {
+            const language = navLanguageRef.current;
+            const start = matchStartWord(text, language);
+            if (!start || !start.rest) gated = true;
+            // A command in the making stays whole: the draft holds it back.
+            else if (!mayEditDraft(text, language) && !mayNavigate(text, language) && !mayAskHelp(text, language)) shown = start.rest;
+          }
           // Hands-free keeps what may be a stop word or a dialog's answer out
           // of the draft until it has settled; the Heard line says it.
-          const held = loop && (isStopWord(text) || questionOpenRef.current);
+          const held = gated || (loop && (isStopWord(text) || questionOpenRef.current));
           if (held) handlers.current.live.hide?.(segment);
-          const written = !held && handlers.current.live.show(segment, text);
+          const written = !held && handlers.current.live.show(segment, shown);
           setHeard(written ? "" : text);
         },
         onIncomplete: (segment) => {
-          if (mine !== attempt.current || waitingRef.current) return;
+          if (mine !== attempt.current) return;
+          const gated = sessionHandsFree.current && gate.on.current && !gateOpen();
+          if (gateEndsAfter.current === segment) {
+            gateEndsAfter.current = null;
+            gate.clear();
+          }
+          // Talk the gate would have dropped, or a command: no recovery for it.
+          if (navMode.isOpen() || gated) {
+            handlers.current.live.remove(segment);
+            setHeard("");
+            return;
+          }
           guard.current?.reset();
           handlers.current.live.fail(segment);
           setHeard("");
@@ -278,62 +444,29 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
           rememberSpokenLang(tabKey, language);
           setHeardAs(language);
         },
-        onFinal: (text, segment, filtered, spoken) => {
+        onFinal: (heardText, segment, filtered, spoken) => {
           if (mine !== attempt.current) return;
           // Before the text is handled: the composer matches it in this language.
           const language = appLanguage(spoken);
           if (sessionDetect.current && language) spokenIn.current = language;
-          setHeard("");
-          if (openSegment.current === segment) openSegment.current = null;
-          if (!sessionHandsFree.current) {
-            handlers.current.onText(text, segment);
-            return;
+          try {
+            settleFinal(heardText, segment, filtered);
+          } finally {
+            // The turn ended while this was being said: judged gated, then the gate is off.
+            if (gateEndsAfter.current === segment) {
+              gateEndsAfter.current = null;
+              gate.clear();
+            }
           }
-          // Words still on their way from before a send are not the next prompt.
-          if (waitingRef.current) {
-            handlers.current.live.remove(segment);
-            return;
-          }
-          if (filtered) {
-            handlers.current.live.remove(segment);
-            if (guard.current?.phase() === "holding") guard.current.settled("");
-            else guard.current?.reset();
-            return;
-          }
-          if (handlers.current.live.hasRecovery()) {
-            if (questionOpenRef.current || isStopWord(text)) handlers.current.live.remove(segment);
-            else handlers.current.onText(text, segment);
-            return;
-          }
-          // Any new utterance supersedes a staged pick ("stop" cancels it).
-          if (text) staged.current.heard();
-          const picked = text ? handlers.current.pick(text) : null;
-          if (picked === "refused") {
-            // A dialog a voice may not answer: nothing is typed or picked.
-            handlers.current.live.remove(segment);
-            guard.current?.settled("");
-            return;
-          }
-          if (picked) {
-            // "Heard: 2", then the chime and the cancel window; the dialog
-            // is answered only when it closes.
-            handlers.current.live.remove(segment);
-            staged.current.stage(picked);
-            setPickHeard(picked.heard);
-            guard.current?.settled(text);
-            return;
-          }
-          if (!guard.current?.settled(text)) {
-            // A stop word is no text.
-            handlers.current.live.remove(segment);
-            return;
-          }
-          handlers.current.onText(text, segment);
         },
         onLevel: (level) => { if (mine === attempt.current) paintMicLevel(buttonRef.current, level); },
         // Pausing drops the open segment: no final comes for it.
         onPaused: (paused) => {
           if (mine !== attempt.current || !paused || openSegment.current === null) return;
+          if (gateEndsAfter.current === openSegment.current) {
+            gateEndsAfter.current = null;
+            gate.clear();
+          }
           handlers.current.live.remove(openSegment.current);
           openSegment.current = null;
           setHeard("");
@@ -351,7 +484,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
         return;
       }
       session.current = dictation;
-      if (!visible || waitingRef.current) dictation.pause(true);
+      if (!visible) dictation.pause(true);
     } catch (error) {
       if (mine !== attempt.current) return;
       setProblem(voiceErrorKey(error));
@@ -366,6 +499,9 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const stop = () => {
     setWaitingSince(null);
     guard.current?.reset();
+    gate.clear();
+    // A click on the mic ends the mode, and what it was saying.
+    if (navMode.end()) void voiceSpeakStop().catch(() => {});
     const active = session.current;
     if (active) active.stop();
     else {
@@ -382,9 +518,16 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     reset();
     active?.abort();
   };
+  /** A spoken jump leaves this tab: its session ends, and so does the wait for
+   * the turn it sent — coming back later must not reopen a mic by itself. */
+  dropRef.current = () => {
+    setWaitingSince(null);
+    waitingRef.current = false;
+    drop();
+  };
 
   /** A send empties the draft: what is still on its way must not land in it.
-   * Hands-free keeps the session, paused, for the answer's turn. */
+   * Hands-free keeps the session, behind the gate, for the answer's turn. */
   const end = () => {
     handlers.current.live.dismissRecovery();
     if (session.current && sessionHandsFree.current) {
@@ -405,10 +548,10 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     guard.current?.cancel();
   };
 
-  // A hidden pane is no place to dictate into, nor is a turn still running.
+  // A hidden pane is no place to dictate into. A turn still running is: behind the gate.
   useEffect(() => {
-    session.current?.pause(!visible || waitingSince !== null);
-  }, [visible, waitingSince]);
+    session.current?.pause(!visible);
+  }, [visible]);
   // Switching the loop on or off mid-session: the next start takes the mode.
   useEffect(() => {
     if (!handsFree) setWaitingSince(null);
@@ -423,27 +566,35 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     guard.current?.reset();
   }, [tabKey]);
 
-  // Hands-free: the turn over and the answer read — the mic listens again.
-  // With a headset it listens while the answer is read: talking over the
-  // voice stops it (the backend's barge-in), and the words go in the draft.
+  // Hands-free: the turn over and the answer read — the gate is off, and the
+  // mic dictates again (it is started if it ended). Not while the mode is
+  // open: it reopens once the mode is over. With a headset it listens while
+  // the answer is read: talking over the voice stops it (the backend's
+  // barge-in), and the words go in the draft.
   const headset = settings?.voice_headset ?? false;
   const turn = useAgentTurn(ptyId, waitingSince !== null);
   useEffect(() => {
     if (waitingSince === null) return;
     const over = questionOpen || sentTurnOver(turn.reading, waitingSince, turn.litSince, lastAnswer !== answerAtSend.current);
-    if (!over || (reading && !headset) || !visible) return;
+    if (!over || (reading && !headset) || !visible || nav.open) return;
     const timer = setTimeout(() => {
       setWaitingSince(null);
+      // An utterance under way was begun behind the gate: it is judged so.
+      if (gate.on.current && openSegment.current !== null) gateEndsAfter.current = openSegment.current;
+      else gate.clear();
       if (!session.current) void startRef.current();
     }, REOPEN_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [waitingSince, turn, questionOpen, lastAnswer, reading, headset, visible]);
+  // `gate` is a new object every render; its state is in refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingSince, turn, questionOpen, lastAnswer, reading, headset, visible, nav.open]);
 
   /** The running session's picker: an installed model becomes the setting and
    * listening starts over with it; a missing one opens the install card. */
   const switchModel = async (id: VoiceModel) => {
     const current = using;
     if (!current || id === current.id) return;
+    const gated = gate.on.current;
     drop();
     if (!current.models.some((m) => m.id === id && m.installed)) {
       setInstall({ models: current.models, pick: id });
@@ -455,7 +606,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       setProblem(voiceErrorKey(error));
       return;
     }
-    void start(id);
+    void start(id, langChoice, gated);
   };
 
   /** The running session's language picker: the pick becomes the setting and
@@ -463,6 +614,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const switchLang = async (choice: VoiceLangChoice) => {
     const current = using;
     if (!current || choice === langChoice) return;
+    const gated = gate.on.current;
     drop();
     try {
       await updateSettings({ voice_lang: choice });
@@ -470,7 +622,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       setProblem(voiceErrorKey(error));
       return;
     }
-    void start(current.id, choice);
+    void start(current.id, choice, gated);
   };
 
   const pickedHere = (target: { models: VoiceModelState[]; pick: VoiceModel }) =>
@@ -520,11 +672,14 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
 
   const inWindow = guardPhase === "window" || guardPhase === "holding";
   const shownProblem = problem ?? readProblem;
+  const micOn = phase === "listening";
   const line = shownProblem ? t(shownProblem)
     : pickHeard && guardPhase !== "idle" ? t(inWindow ? "terminal.reader.voice.pickWindow" : "terminal.reader.voice.pickHeard", { text: pickHeard })
     : inWindow ? t("terminal.reader.voice.sendWindow")
-    : waiting ? t(reading ? "terminal.reader.voice.reading" : "terminal.reader.voice.waiting")
+    : gate.line === "listening" && micOn ? t("voice.gate.listening")
+    : waiting ? t(reading ? "terminal.reader.voice.reading" : gate.line === "cue" && micOn ? "voice.gate.cue" : "terminal.reader.voice.waiting")
     : heard ? t("terminal.reader.voice.heard", { text: heard })
+    : gate.line === "cue" && micOn ? t("voice.gate.cue")
     : note && listening ? note
     : phase === "preparing" ? t("terminal.reader.voice.preparing")
     : listening ? t(sessionHandsFree.current ? "terminal.reader.voice.listeningHandsFree" : "terminal.reader.voice.listening")
@@ -575,7 +730,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   ) : null;
   const recovery = live.recovery;
   const recoverable = recovery.filter((item) => item.text);
-  const strip = (line || install || picker || recovery.length > 0) ? (
+  const navLine = nav.line ?? landingLine;
+  const strip = (navLine || line || install || picker || recovery.length > 0) ? (
     <div className="terminal-reader-voice">
       {install && (
         <div className="terminal-reader-voice-card" role="dialog" aria-label={t("terminal.reader.voice.installTitle")}>
@@ -597,7 +753,13 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
           <UntestedTag id="terminal.reader.voice.install" />
         </div>
       )}
-      {line && !shownProblem && inWindow ? (
+      {navLine ? (
+        // The mode's line (or the help): a click skips the voice.
+        <button type="button" className="terminal-reader-voice-line" aria-live="polite" onClick={() => navLine.run?.()}>
+          {navLine.text}
+          <UntestedTag id={(navLine.untested ?? "terminal.reader.voice.navigate") as UntestedId} />
+        </button>
+      ) : line && !shownProblem && inWindow ? (
         <button type="button" className="terminal-reader-voice-line send-window" aria-live="polite" onClick={cancelSend}>
           {line}
           <UntestedTag id="terminal.reader.voice.handsFree" />
@@ -610,6 +772,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
           {listening && !heard && !shownProblem && !note && (sessionHandsFree.current
             ? <UntestedTag id="terminal.reader.voice.handsFree" />
             : <UntestedTag id="terminal.reader.voice.spokenSend" />)}
+          {gate.line && micOn && !shownProblem && <UntestedTag id="terminal.reader.voice.tabbyGate" />}
           {(heard || phase === "preparing") && !shownProblem && <UntestedTag id="terminal.reader.voice.dictate" />}
           {problem === "terminal.reader.voice.err.silent" && <UntestedTag id="terminal.reader.voice.silent" />}
         </div>
@@ -636,7 +799,20 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     button, strip, toggle, end, cancelSend,
     active: phase !== "off" || waiting,
     listening,
+    /** Read-aloud holds: the mic dictates, a prompt is under way behind the
+     * gate, or the mode is open — the voice must not mute the mic mid-word. */
+    holdsReading: listening || (micOn && (gate.drafting || nav.open)),
     /** Read-aloud may speak while this listens: a headset in hands-free. */
     speakOver: sessionHandsFree.current && headset,
+    /** Starts the mic as a click would; `gated`: with the Tabby gate on (a
+     * Hands-free landing). */
+    start: (gated: boolean) => {
+      if (!offered || disabled || phase !== "off") return;
+      void startRef.current(model, langChoice, gated);
+    },
+    /** Text typed into the box: the gate is off. */
+    typed: () => gate.clear(),
+    /** How a line is spoken, or null with no speech output. */
+    speech: () => speechRef.current,
   };
 }

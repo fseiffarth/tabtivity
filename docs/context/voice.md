@@ -258,6 +258,46 @@ the gate on. Hands-free's reopen of the mic defers to the open mode (`navOpen`).
 The start word is exact (phonetic spelling plus `voice.assistantAliases`): a
 fuzzy score let "taxi" and "toby" in.
 
+## Spoken navigation on the desktop (docs/desktop_tabby_navigate_plan.md)
+
+The slim slice, inside the mic a Chat already owns. The mode itself is one
+controller for both hosts (`shared/voiceNavMode.ts`: the order of checks, the
+ask-back, the idle timer, the epochs); the phone's `useVoiceNav` and the
+desktop's `useReaderVoiceNav` are its adapters. Hosts answer a command by
+calling `ctx.apply` in the tick they decided it, not by returning a promise:
+an extra await moved the phone's lines a tick later and broke its tests.
+
+- **A whisper final is an utterance.** The voice detector closed it, so the
+  desktop judges each final directly and needs no settle rule; only the live
+  preview is held back (`useLiveDictation` `show`: a spoken edit, "Tabby
+  navigate" or "Tabby help" in the making shows on the "Heard:" line). Each
+  final goes: empty or filtered → the mode / help / navigate → the Tabby gate
+  → recovery, `pick`, the send guard, the draft. So navigation beats an open
+  question's pick and never reaches the send guard.
+- **The mic stays open through a turn** (Hands-free). Pausing it meant nothing
+  could be said while the agent works. Now only a hidden pane pauses it, and
+  the Tabby gate (`useReaderTabbyGate`) drops talk that does not start with the
+  start word until the turn is over and its answer read. While a prompt is
+  being dictated behind the gate, read-aloud holds (`holdsReading`), so the
+  voice never mutes the mic mid-word.
+- **No mic bounce to speak.** Mode lines go through `voice_speak` under
+  `${ptyId}#nav:n`; the backend drops captured audio while it speaks plus a
+  300 ms tail, and the next step waits for that read's `voice:speaking` end
+  (guarded by a timer).
+- **The queues are steering's walk** (`statusTabs` / `nextStatusTab` from the
+  tab shown, `afterStatusJump` for Back), so voice and the status keys agree;
+  no module cursor.
+- **Root is out of reach**, and so are Tabby's chats: no list or queue holds
+  them, so a landing never opens a mic on the unfenced Host session.
+- **Main window only.** A popout's Chat answers "Navigation works in the main
+  window"; a jump to a tab in a popout raises it, says where, listens nowhere.
+  A tab with no Chat (Terminal view, a shell) is said before the jump, and
+  nothing listens there: voice never switches a pane's view.
+- **The landing is a note** by PTY id (`desktopNav.ts`, 30 s), taken by the
+  Chat that comes into view; the tab left drops its session at the jump. The
+  note records whether the jump was made with Hands-free on (read, then
+  listen gated) or off (the mic just opens, ungated).
+
 ## Where this goes: hands-free navigation
 
 The goal is to use Tabtivity entirely by voice (plan step 9). Its rules, for

@@ -3321,8 +3321,8 @@ unchanged; the new agents are additive.
   voice: good enough, or is Piper needed?** Settings → Experimental →
   Hands-free, then the chip: ask, pause, the chime, the prompt goes after the
   window; once more, say "stop" in the window and the draft stays. The answer
-  is read, the mic listens again, and stays paused while the agent still
-  runs tools. Sit silent in a noisy room for a minute: nothing is sent.
+  is read, the mic dictates without "Tabby" again, and keeps the Tabby gate
+  while the agent still runs tools. Sit silent in a noisy room for a minute: nothing is sent.
   Ctrl+Shift+Q stops the voice and the agent keeps going. With a headset and
   Headset mode on, talking over the voice stops it. **Judge: is interrupting
   like this enough?** Start the mic in a second tab: the first stops, the
@@ -3394,6 +3394,27 @@ unchanged; the new agents are additive.
 - [ ] Talk over a natural voice through speakers: `webrtc-audio-processing`
   echo cancellation against the samples `piper.rs` plays (plan step 7);
   probe the crate on the three CI OSes first.
+- [x] "Tabby navigate" in the Chat mic (built 2026-11-22, not run live,
+  `docs/desktop_tabby_navigate_plan.md`): the shared mode
+  (`shared/voiceNavMode.ts`), the Tabby gate through a turn, the landing.
+  Pills `terminal.reader.voice.navigate`, `.tabbyGate`, `.help`.
+- [ ] 🖐️ Test gate, "Tabby navigate" (main window, Hands-free and read-aloud
+  on) — the nine steps of the plan's Verification: a spoken send then
+  "Tabby, and add a test, go Tabby" queues the second prompt while other talk
+  is dropped; "Tabby navigate", "project …", "yes" lands on its agent tab,
+  reads the last prompt and answer, then listens; "the done tab" twice walks
+  as the next-done key does and Back returns; "box …"; a root agent waiting is
+  never landed on; silence closes it after ~10 s; "Tabby help" in both places;
+  a popout's Chat says "Navigation works in the main window"; Hands-free off,
+  "Tabby navigate, tab two" jumps and the mic dictates there ungated.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 ### Send skill — `docs/context/agent_sessions.md`
 

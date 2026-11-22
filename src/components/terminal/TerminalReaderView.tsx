@@ -91,6 +91,8 @@ import { ReaderSlashMenu, slashMenuKey } from "./ReaderSlashMenu";
 import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useLiveDictation } from "./useLiveDictation";
 import { useReaderVoice } from "./ReaderVoice";
+import { useReaderVoiceLanding } from "./useReaderVoiceLanding";
+import type { ReaderSpeech } from "./useReaderVoiceNav";
 import { matchDraftEdit } from "../../lib/voice/voiceCommands";
 import { DraftVoiceHistory, type DraftEditNote } from "../../lib/voice/draftEdit";
 import { useReaderReadAloud } from "./ReaderReadAloud";
@@ -703,6 +705,12 @@ interface ReaderVoiceLoop {
   onListening: (listening: boolean, speakOver: boolean) => void;
   /** The read-aloud and hands-free chips, for the chip row's end. */
   chips: ReactNode;
+  /** The session's turns, and whether it has been read once: what a spoken
+   * jump's landing reads (`useReaderVoiceLanding`). */
+  turns: readonly TranscriptTurn[];
+  transcriptRead: boolean;
+  /** Answers the landing said: read-aloud does not say them again. */
+  markRead: (keys: readonly string[]) => void;
 }
 
 /** `entries` without the prompt Claude handed back on a stop, while it is
@@ -1072,7 +1080,24 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     }
     if (spoken && !recovering) void send();
   };
+  /** A spoken jump landed here (`useReaderVoiceLanding`): the mic starts as
+   * its button would, once `voice` exists. */
+  const voiceStart = useRef<(gated: boolean) => void>(() => {});
+  const voiceSpeech = useRef<() => ReaderSpeech | null>(() => null);
+  const landingLine = useReaderVoiceLanding({
+    ptyId,
+    visible,
+    ready: !sending && !inputBlocked,
+    transcriptRead: voiceLoop.transcriptRead,
+    turns: voiceLoop.turns,
+    startMic: (gated) => voiceStart.current(gated),
+    hasDraft: () => dictation.settledDraft().trim() !== "",
+    markRead: voiceLoop.markRead,
+    speech: () => voiceSpeech.current(),
+    lang: editLanguageOf,
+  });
   const voice = useReaderVoice({
+    scope,
     tabKey,
     ptyId,
     visible,
@@ -1091,9 +1116,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     spokenIn,
     readProblem: voiceLoop.readProblem,
     note: editNote ? t(editNote.key, editNote.params) : "",
+    landingLine,
   });
+  voiceStart.current = voice.start;
+  voiceSpeech.current = voice.speech;
   const { onListening } = voiceLoop;
-  useEffect(() => onListening(voice.listening, voice.speakOver), [onListening, voice.listening, voice.speakOver]);
+  useEffect(() => onListening(voice.holdsReading, voice.speakOver), [onListening, voice.holdsReading, voice.speakOver]);
   const holdsDock = draft.trim() !== "" || voice.listening || slashMenu.length > 0 || steerOpen !== null;
   useEffect(() => onBusy(holdsDock), [onBusy, holdsDock]);
 
@@ -1436,7 +1464,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
             : t("terminal.reader.placeholder"))}
           onPointerUp={e => dictation.capture(e.currentTarget)}
           onKeyUp={e => dictation.capture(e.currentTarget)}
-          onChange={(e) => editDraft(e.target.value, true)}
+          onChange={(e) => {
+            // Typing takes over from the voice: the Tabby gate is off.
+            voice.typed();
+            editDraft(e.target.value, true);
+          }}
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
         />
@@ -2147,7 +2179,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // Read at once, then whenever the backend's watch on the transcript says it
   // changed (`watchedReads`), with a slow backstop — or every 2 s while the
   // read cannot be watched (nothing on disk yet).
+  /** A read has come back since the pane was last shown: what a spoken
+   * jump's landing reads must not be the transcript it held while hidden. */
+  const [readSinceShown, setReadSinceShown] = useState(false);
   useEffect(() => {
+    setReadSinceShown(false);
     if (!visible) return;
     let cancelled = false;
     const stop = watchedReads(async (watch) => {
@@ -2156,6 +2192,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       const args = readerRequest(scope, current, cwd, version.current, limit, undefined, chatId, remoteHost);
       if (!args) {
         setTranscript({ available: false, reason: "no_session", entries: [], truncated: false });
+        setReadSinceShown(true);
         return false;
       }
       const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch })
@@ -2164,6 +2201,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       if (cancelled) return next.watched === true;
       if (!next.unchanged) version.current = next.version;
       setTranscript((previous) => mergeTranscript(previous, next));
+      setReadSinceShown(true);
       return next.watched === true;
     });
     return () => {
@@ -2448,6 +2486,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     readProblem: readAloud.problem,
     onListening: onVoiceListening,
     chips: voiceChips,
+    turns: sessionTurns,
+    transcriptRead: readSinceShown && transcript !== null,
+    markRead: readAloud.markRead,
   };
   const sessionAgents = useMemo(() => entries.filter((entry) => entry.kind === "agent"), [entries]);
   /** The CLI whose queue the moves on it can read, the turn running: Claude,
