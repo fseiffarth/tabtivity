@@ -13,6 +13,7 @@ import {
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
+import { endedTurnKey, useLocalNextPrompt } from "../../lib/agents/nextPrompt";
 import { NO_LIVE, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
 import { isAiOffRefusal } from "../../lib/aiSwitch";
 import { forgetSentPrompts, onSentPrompt, useSentPrompts, type SentPrompt } from "../../lib/agents/sentPrompts";
@@ -699,7 +700,7 @@ function withoutTakenBack(entries: TranscriptEntry[], text: string | null): Tran
   return [...entries.slice(0, at), ...entries.slice(at + 1)];
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, inputBlocked, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -721,8 +722,14 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   questionOpen: boolean;
   /** Startup and CLI dialogs must finish before composing a message. */
   inputBlocked: boolean;
-  /** Claude's own suggestion for the next message, read off its empty box. */
+  /** A suggestion for the next message: Claude's own, read off its empty
+   * box, else the local model's (`lib/agents/nextPrompt`). */
   suggestion: string;
+  /** `suggestion` is the local model's. */
+  suggestionLocal?: boolean;
+  /** Told whether the draft is empty, on every change of it: the local
+   * model's suggestion is dropped at the first keystroke. */
+  onDraftEmpty?: (empty: boolean) => void;
   /** The facts row's end, where the chip row goes; in the text box without it. */
   chipSlot: HTMLElement | null;
   /** The top bar's right end: a send error shows there while the composer is hidden. */
@@ -770,6 +777,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const settledDraft = useRef(dictation.settledDraft);
   settledDraft.current = dictation.settledDraft;
   useEffect(() => setReaderDraft(scope, tabKey, settledDraft.current()), [scope, tabKey, draft]);
+  const onDraftEmptyRef = useRef(onDraftEmpty);
+  onDraftEmptyRef.current = onDraftEmpty;
+  const draftEmpty = !draft;
+  useEffect(() => onDraftEmptyRef.current?.(draftEmpty), [draftEmpty]);
   const renderedRef = useRef(dictation.rendered);
   renderedRef.current = dictation.rendered;
   useLayoutEffect(() => {
@@ -1380,7 +1391,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
             : shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion })
             : t("terminal.reader.placeholder")}
           aria-label={subagent ? t("terminal.reader.subagentPlaceholder")
-            : shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}`
+            : shownSuggestion ? `${t(suggestionLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion")}: ${shownSuggestion}`
             : t("terminal.reader.placeholder")}
           onPointerUp={e => dictation.capture(e.currentTarget)}
           onKeyUp={e => dictation.capture(e.currentTarget)}
@@ -1388,7 +1399,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
         />
-        {shownSuggestion && !draft && <span className="terminal-reader-suggestion-tag"><UntestedTag id="terminal.reader.promptSuggestion" /></span>}
+        {shownSuggestion && !draft && <span className="terminal-reader-suggestion-tag">
+          {!suggestionLocal && <UntestedTag id="terminal.reader.promptSuggestion" />}
+          {suggestionLocal && <UntestedTag id="agents.localNextPrompt" />}
+        </span>}
         {voice.button}
         <button
           type="button"
@@ -1860,6 +1874,27 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // The host such a tab runs on, whose copy of the conversation is read.
   const remoteHost = useProjectsStore((s) =>
     !tab || localOnly ? null : hostTabId(tab, s.projects.find((p) => p.id === projectId)));
+  /** The composer holds no draft (`ReaderComposer`'s `onDraftEmpty`). */
+  const [composerEmpty, setComposerEmpty] = useState(true);
+  /** The local model's suggestion for the turn the session ended on, where
+   * the CLI draws none of its own (`lib/agents/nextPrompt`): asked only for
+   * the session itself, shown in the composer, with no dialog up. */
+  const sessionTurn = transcript?.available && !browsed && !openStep && !live.working && !live.question
+    ? endedTurnKey(transcript.entries)
+    : null;
+  const localSuggestion = useLocalNextPrompt({
+    scope,
+    tab,
+    cwd,
+    remoteHost,
+    visible: visible && shown && !changesOpen && !filesOpen && !browsed && !openStep,
+    working: !!live.working,
+    turnKey: sessionTurn,
+    progress: transcript?.version,
+    screenSuggestion: live.suggestion,
+    composerEmpty,
+  });
+  const shownSuggestion = picking ? "" : live.suggestion || localSuggestion;
   const pathContext = usePathLinkContext(projectId, tabDir, localOnly);
   const pathContextRef = useRef(pathContext);
   pathContextRef.current = pathContext;
@@ -2976,7 +3011,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         steering={steering}
         questionOpen={!!shownLive.question || !!asyncAsk.sending}
         inputBlocked={!!shownLive.question || !!asyncAsk.sending || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working)}
-        suggestion={shownLive.suggestion}
+        suggestion={shownSuggestion}
+        suggestionLocal={!shownLive.suggestion && !!shownSuggestion}
+        onDraftEmpty={setComposerEmpty}
         chipSlot={actionSlot || scope === ASSISTANT_SCOPE ? null : chipSlot}
         actionSlot={actionSlot}
         voiceLoop={voiceLoop}
