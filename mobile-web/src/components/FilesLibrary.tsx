@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode } from "react";
 import { CloseIcon } from "../glyphs";
 import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
@@ -8,7 +8,7 @@ import { buildDocsGroup, type DocsGroup } from "../../../src/components/files/pr
 import type { DocState, DocStatus } from "../../../src/lib/projects/docStatus";
 import { ApiError, MAX_UPLOAD_FILE, checkProjectFolderZip, createProjectDoc, makeProjectFolder, markablePicture, listProjectFiles, lookUpFileRow, lookUpProjectFile, projectFolderZipUrl, searchProjectFiles, undoProjectFolder, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
 import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
-import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readDocsOpen, readLibraryView, sortEntries, writeDocsOpen, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
+import { LISTED_CAP, LIBRARY_SORTS, glyphOf, isHiddenRow, kindGroups, readDocsOpen, readLibraryView, sortEntries, writeDocsOpen, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { canShareFiles, shareAs, shareSize, sizeOfMany, useOutboxShare, useShareMany } from "../outboxShare";
 import { ShareSizeSheet } from "./ShareSizeSheet";
 import { TAB_COLORS, TAB_COLOR_IDS, tabColorCss } from "../../../src/lib/theme/tabColors";
@@ -100,11 +100,13 @@ export function LibraryCover({ projectId, entry, place, thumbs, color, side }: L
 }
 
 /** The folder's rows as the desktop tree groups them: the rest first, then
- * the project root's scaffold (README, AGENTS.md, …) and what git ignores,
+ * the project root's scaffold (README, AGENTS.md, …), what is hidden (dotfiles
+ * and the side panel's hidden endings, `hiddenExt`) and what git ignores,
  * each folded into its own section. A scaffold file git ignores stays a
- * scaffold file, as on the desktop. Each section is sorted on its own, so the
- * folded ones stay at the end whatever the sort. */
-function sectionsOf(entries: ProjectFileEntry[], atRoot: boolean, view: LibraryView, lang?: string, docs?: DocStatus[]) {
+ * scaffold file, as on the desktop, and an ignored dotfile stays ignored.
+ * Each section is sorted on its own, so the folded ones stay at the end
+ * whatever the sort. */
+function sectionsOf(entries: ProjectFileEntry[], atRoot: boolean, view: LibraryView, lang?: string, docs?: DocStatus[], hiddenExt?: string[]) {
   const scaffold = atRoot ? entries.filter((entry) => STANDARD_PROJECT_FILES.has(entry.name)) : [];
   const rest = atRoot ? entries.filter((entry) => !STANDARD_PROJECT_FILES.has(entry.name)) : entries;
   // The root's "Project docs" group, as the desktop tree builds it: the
@@ -112,10 +114,13 @@ function sectionsOf(entries: ProjectFileEntry[], atRoot: boolean, view: LibraryV
   // under AGENTS.md), then a ghost row per doc that can be created. With no
   // status (an older desktop, a folder, a timed-out read) it is the plain group.
   const group = buildDocsGroup(sortEntries(scaffold, view, lang), atRoot ? docs ?? null : null);
+  const hiddenNames = new Set(hiddenExt ?? []);
+  const kept = rest.filter((entry) => !entry.ignored);
   return {
-    regular: sortEntries(rest.filter((entry) => !entry.ignored), view, lang),
+    regular: sortEntries(kept.filter((entry) => !isHiddenRow(entry, hiddenNames)), view, lang),
     scaffold: group.files,
     docs: group,
+    hidden: sortEntries(kept.filter((entry) => isHiddenRow(entry, hiddenNames)), view, lang),
     ignored: sortEntries(rest.filter((entry) => entry.ignored), view, lang),
   };
 }
@@ -353,6 +358,16 @@ function savedEntry(item: FilesSaved | FilesRecent): ProjectFileEntry {
  * phone can draw (not a GIF, not a HEIC, which an Android phone cannot). */
 const markable = (kind: string) => kind === "application/pdf" || markablePicture(kind);
 
+/** The header over each kind's rows while the view groups by kind. */
+const KIND_HEADS: Record<Glyph, TranslationKey> = {
+  dir: "mobile.files.kind.dir",
+  pdf: "mobile.files.kind.pdf",
+  image: "mobile.files.kind.image",
+  media: "mobile.files.kind.media",
+  text: "mobile.files.kind.text",
+  file: "mobile.files.kind.file",
+};
+
 const SORT_LABELS: Record<LibrarySort, TranslationKey> = {
   name: "mobile.files.library.sortName",
   modified: "mobile.files.library.sortModified",
@@ -485,6 +500,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     writeDocsOpen(projectId, open);
   };
   const [ignoredOpen, setIgnoredOpen] = useState(false);
+  const [hiddenOpen, setHiddenOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<ProjectFileSearch | null>(null);
   /** The search's chips: inside the folder the library stands in, and what
@@ -764,13 +780,21 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     rememberFilesPlace(placeId, trail.flatMap((crumb) => crumb.token ? [{ token: crumb.token, name: crumb.name }] : []));
   }, [placeId, trail]);
 
-  const sections = useMemo(() => sectionsOf(listing?.entries ?? [], atRoot, view, lang, listing?.docs), [listing, atRoot, view, lang]);
+  const sections = useMemo(() => sectionsOf(listing?.entries ?? [], atRoot, view, lang, listing?.docs, listing?.hidden_ext), [listing, atRoot, view, lang]);
+
+  /** The unfolded rows as drawn: under a header per kind while the view
+   * groups them and more than one kind is there, else one headless run. */
+  const regularShown = useMemo(() => {
+    const groups = view.groupKinds ? kindGroups(sections.regular) : [];
+    return groups.length > 1 ? groups : [{ glyph: null, entries: sections.regular }];
+  }, [sections, view.groupKinds]);
 
   /** The folder's shown pictures, which the viewer steps through in shown order. */
   const pictures = useMemo(
-    () => [...sections.regular, ...(scaffoldOpen ? sections.scaffold : []), ...(ignoredOpen ? sections.ignored : [])]
+    () => [...(scaffoldOpen ? sections.scaffold : []), ...regularShown.flatMap((group) => group.entries),
+      ...(hiddenOpen ? sections.hidden : []), ...(ignoredOpen ? sections.ignored : [])]
       .filter((entry) => entry.kind.startsWith("image/")).map(asViewerFile),
-    [sections, scaffoldOpen, ignoredOpen],
+    [sections, regularShown, scaffoldOpen, hiddenOpen, ignoredOpen],
   );
 
   /** ‹ and the swipe: up one folder, or out of the library at the root. */
@@ -1188,6 +1212,22 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     </div>;
   }
 
+  /** The Hidden section, folded: dotfiles and the side panel's hidden endings
+   * behind a divider like the gitignored one, then its entries when open. */
+  function hiddenSection(entries: ProjectFileEntry[]) {
+    return <>
+      <li className="files-section">
+        <button aria-expanded={hiddenOpen} onClick={() => setHiddenOpen(!hiddenOpen)}
+          title={t(hiddenOpen ? "mobile.files.collapseHidden" : "mobile.files.expandHidden")}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          <span>{t("mobile.files.hiddenSection", { count: entries.length })}{isUntested("mobile.files.hiddenSection")
+            && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</span>
+        </button>
+      </li>
+      {hiddenOpen && entries.map((entry) => item(entry, true))}
+    </>;
+  }
+
   /** The gitignored section, folded: the desktop tree's divider (across the
    * whole grid), then its entries when open. */
   function ignoredSection(entries: ProjectFileEntry[]) {
@@ -1264,7 +1304,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   /** The view menu (⋯): the sheet's own rows, grouped, each choice applied at
    * once and ticked; the sheet stays up for the next one. */
   function viewSheet() {
-    const choice = (key: string, labelText: string, on: boolean, pick: () => void) =>
+    const choice = (key: string, labelText: ReactNode, on: boolean, pick: () => void) =>
       <li key={key}><button className={on ? "current" : ""} aria-pressed={on} onClick={pick}><span><strong>{labelText}</strong></span>{on && CHECK}</button></li>;
     const group = (heading: TranslationKey, rows: ReactNode[]) =>
       <div className="notifications-group"><h3>{t(heading)}</h3><ul className="option-list">{rows}</ul></div>;
@@ -1288,7 +1328,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
           choice("desc", t("mobile.files.library.descending"), view.desc, () => setView({ desc: true })),
         ])}
         {group("mobile.files.library.show", [
-          choice("folders", t("mobile.files.library.foldersFirst"), view.foldersFirst, () => setView({ foldersFirst: !view.foldersFirst })),
+          choice("kinds", <>{t("mobile.files.library.groupKinds")}{isUntested("mobile.files.library.groupKinds")
+            && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</>, view.groupKinds, () => setView({ groupKinds: !view.groupKinds })),
+          // Grouped, folders already come first under their own header.
+          !view.groupKinds && choice("folders", t("mobile.files.library.foldersFirst"), view.foldersFirst, () => setView({ foldersFirst: !view.foldersFirst })),
           choice("thumbs", t("mobile.files.library.thumbs"), view.thumbs, () => setView({ thumbs: !view.thumbs })),
         ])}
     </LibrarySheet>;
@@ -1471,7 +1514,11 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
               : <ul className={listClass} aria-label={here.name}>
                 {/* The docs group leads, as on the desktop tree. */}
                 {sections.docs.rows.length > 0 && docsSection(sections.docs)}
-                {sections.regular.map((entry) => item(entry))}
+                {regularShown.map((group) => <Fragment key={group.glyph ?? "all"}>
+                  {group.glyph && <li className="files-kind-head"><h3>{t(KIND_HEADS[group.glyph])}</h3></li>}
+                  {group.entries.map((entry) => item(entry))}
+                </Fragment>)}
+                {sections.hidden.length > 0 && hiddenSection(sections.hidden)}
                 {sections.ignored.length > 0 && ignoredSection(sections.ignored)}
               </ul>}
       {showRecents ? null : searching

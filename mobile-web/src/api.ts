@@ -1650,6 +1650,8 @@ export interface ProjectFileListing {
   git_unread?: boolean
   /** The project root's catalog docs and the state each is in (the desktop tree's "Project docs" group; names only, in the catalog's order). Root of this computer's side only; missing in any folder, on the remote side, from an older desktop, or when the read timed out — the plain group then. A ghost row is `state === "missing" && creatable`. */
   docs?: DocStatus[]
+  /** The rows the desktop side panel hides by ending for this project (its "Hidden by extension" group), by name; the library folds them into Hidden. Missing from an older desktop. */
+  hidden_ext?: string[]
 }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of

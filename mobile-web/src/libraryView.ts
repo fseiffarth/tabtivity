@@ -4,8 +4,8 @@ import { readJson, writeJson } from "../../src/lib/persist";
 
 /**
  * How the phone's files library (`FilesLibrary`) lays out a folder: grid or
- * list, the sort, its direction, folders on top, and whether tiles may draw
- * thumbnails. One choice per phone, not per folder or project, kept in
+ * list, the sort, its direction, grouped by kind or folders on top, and
+ * whether tiles may draw thumbnails. One choice per phone, not per folder or project, kept in
  * localStorage; a missing, broken or refused store reads as the defaults.
  *
  * `sortEntries` is the one ordering the library applies, on the phone, over
@@ -26,9 +26,12 @@ export interface LibraryView {
   foldersFirst: boolean;
   /** Tiles may draw a thumbnail in place of the kind icon. */
   thumbs: boolean;
+  /** Rows under a header per kind (Folders, PDFs, Pictures, …), each sorted
+   * on its own; `foldersFirst` is moot while on. */
+  groupKinds: boolean;
 }
 
-export const DEFAULT_LIBRARY_VIEW: LibraryView = { layout: "grid", sort: "name", desc: false, foldersFirst: true, thumbs: true };
+export const DEFAULT_LIBRARY_VIEW: LibraryView = { layout: "grid", sort: "name", desc: false, foldersFirst: true, thumbs: true, groupKinds: true };
 
 /** The listing's cap (`files::MAX_ENTRIES`): a folder counted past it says "500+". */
 export const LISTED_CAP = 500;
@@ -40,7 +43,7 @@ export function readLibraryView(storage?: ViewStorage): LibraryView {
   return readJson(KEY, (parsed) => {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ...DEFAULT_LIBRARY_VIEW };
     const value = parsed as Partial<Record<keyof LibraryView, unknown>>;
-    const flag = (key: "desc" | "foldersFirst" | "thumbs") =>
+    const flag = (key: "desc" | "foldersFirst" | "thumbs" | "groupKinds") =>
       typeof value[key] === "boolean" ? value[key] as boolean : DEFAULT_LIBRARY_VIEW[key];
     return {
       layout: value.layout === "grid" || value.layout === "list" ? value.layout : DEFAULT_LIBRARY_VIEW.layout,
@@ -48,14 +51,15 @@ export function readLibraryView(storage?: ViewStorage): LibraryView {
       desc: flag("desc"),
       foldersFirst: flag("foldersFirst"),
       thumbs: flag("thumbs"),
+      groupKinds: flag("groupKinds"),
     };
   }, { ...DEFAULT_LIBRARY_VIEW }, storage);
 }
 
 export function writeLibraryView(view: LibraryView, storage?: ViewStorage): void {
   // A private browser may refuse storage; the choice then lasts this visit.
-  const { layout, sort, desc, foldersFirst, thumbs } = view;
-  writeJson(KEY, { layout, sort, desc, foldersFirst, thumbs }, storage);
+  const { layout, sort, desc, foldersFirst, thumbs, groupKinds } = view;
+  writeJson(KEY, { layout, sort, desc, foldersFirst, thumbs, groupKinds }, storage);
 }
 
 const DOCS_OPEN_KEY = storageKey("mobile.filesDocsOpen");
@@ -87,6 +91,26 @@ export function glyphOf(kind: string): Glyph {
 
 /** The order Sort by kind groups in, ascending. */
 const GLYPH_ORDER: Record<Glyph, number> = { dir: 0, pdf: 1, image: 2, media: 3, text: 4, file: 5 };
+const GLYPHS = (Object.keys(GLYPH_ORDER) as Glyph[]).sort((a, b) => GLYPH_ORDER[a] - GLYPH_ORDER[b]);
+
+/** `entries` under a header per kind, in the kind order (Folders, PDFs,
+ * Pictures, Films & sound, Text, Other files), each keeping the order it came
+ * in; empty kinds are left out. */
+export function kindGroups<T extends ProjectFileEntry>(entries: readonly T[]): { glyph: Glyph; entries: T[] }[] {
+  const by = new Map<Glyph, T[]>();
+  for (const entry of entries) {
+    const glyph = glyphOf(entry.kind);
+    by.set(glyph, [...by.get(glyph) ?? [], entry]);
+  }
+  return GLYPHS.flatMap((glyph) => by.has(glyph) ? [{ glyph, entries: by.get(glyph)! }] : []);
+}
+
+/** A row the library folds into its Hidden section: a dotfile or dot-folder,
+ * or one the desktop side panel hides by ending (`hiddenExt`, the listing's
+ * `hidden_ext`). */
+export function isHiddenRow(entry: Pick<ProjectFileEntry, "name">, hiddenExt: ReadonlySet<string>): boolean {
+  return entry.name.startsWith(".") || hiddenExt.has(entry.name);
+}
 
 /** A name collator per language (the app's, so the order matches what the
  * reader reads); `undefined` is the browser's own. */

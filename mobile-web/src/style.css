@@ -1603,6 +1603,12 @@ span.files-close { background:transparent; }
 .files-tile-menu svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
 .files-tile-share { justify-self:start; padding:5px 10px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.75rem; }
 .files-grid > .files-section { grid-column:1 / -1; }
+/* A kind's header (Folders, PDFs, …) while the library groups by kind: the
+   saved strips' small caps, across the whole grid; not a button. */
+.files-library-body .files-kind-head { grid-column:1 / -1; list-style:none; }
+.files-library-body .files-kind-head h3 { margin:6px 0 -4px; padding:0 4px; color:#98a0b4; font-size:.76rem; font-weight:650; letter-spacing:.04em; text-transform:uppercase; }
+.files-library-body .files-list > .files-kind-head h3 { margin:12px 0 4px; }
+.files-library-body .files-kind-head:first-child h3 { margin-top:0; }
 .files-grid .files-section button { display:flex; align-items:center; width:100%; text-align:left; }
 .files-grid .files-section svg { fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .files-grid .files-share-error { padding:0 2px; }
