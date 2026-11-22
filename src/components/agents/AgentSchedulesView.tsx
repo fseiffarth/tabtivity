@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
-import { relativeToNow, scheduleStatus, scheduleSummary, type ScheduledAgentPrompt } from "../../lib/agents/agentSchedule";
+import { isAgentProposal, relativeToNow, scheduleStatus, scheduleSummary, type ScheduledAgentPrompt } from "../../lib/agents/agentSchedule";
 import { agentModelsFor, buildPreface, prefaceCommandsFor } from "../../lib/agents/agentPrefaces";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { useChordHint } from "../../lib/shortcuts/shortcutHint";
@@ -18,7 +18,7 @@ import { AgentScheduleDialog } from "./AgentScheduleDialog";
 import { AgentScheduleProposal } from "./AgentScheduleProposal";
 import { GitPushProposals } from "./GitPushMcp";
 import { isPromptTargetTab } from "./promptTarget";
-import { ArrowUpRightIcon, ClockIcon, PencilIcon, RefreshIcon } from "../common/icons/Icon";
+import { ArrowUpRightIcon, ChevronDownIcon, ChevronRightIcon, ClockIcon, HourglassIcon, PencilIcon, RefreshIcon, SparkleIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
 import { storageKey } from "../../lib/brand";
@@ -27,6 +27,9 @@ interface Props { scope: string; active: boolean }
 const EMPTY_TABS: TabEntry[] = [];
 const EMPTY_SCHEDULES: ScheduledAgentPrompt[] = [];
 type AgentState = "working" | "decision" | "done" | "idle";
+/** The row's status word wears the kit's lamp: green while it works, amber
+ *  while it waits on the user, muted once it has nothing to say. */
+const STATUS_CLASS: Record<AgentState, string> = { working: " sp-status--running", decision: " sp-status--waiting", done: "", idle: "" };
 
 /** The list's order is the reader's, kept across relaunches; the phone keeps
  * its own copy of the same choice (`mobile-web/src/prefs.ts`). */
@@ -105,6 +108,9 @@ export function AgentSchedulesView({ scope, active }: Props) {
   const continueByTarget = useAgentContinueStore((state) => state.byTarget);
   const [now, setNow] = useState(() => new Date());
   const [dialog, setDialog] = useState<TabEntry | null>(null);
+  /** Rows whose details and actions are open, and, inside an open row, the
+   *  ones whose prompt composer is shown. Both local and per row. */
+  const [details, setDetails] = useState<string[]>([]);
   const [unfolded, setUnfolded] = useState<string[]>([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [sort, setSort] = useState<AgentSort>(readAgentSort);
@@ -238,19 +244,24 @@ export function AgentSchedulesView({ scope, active }: Props) {
     setRenaming(null);
   };
 
-  return <div className="side-panel-scroll agent-prompts-view" style={{ flex: 1, overflowY: "auto", padding: 6 }}>
-    <section className="agent-prompts-section">
-      <div className="agent-prompts-tabs-head">
-        <h3 className="settings-section-title">{t("agentPrompts.tabsHeading")}</h3>
-        <button className="settings-btn sm" type="button" data-testid="open-prompt-chart" title={t("promptChart.openTabTitle")} onClick={() => void openPromptChartTab(scope)}>⧗ {t("promptChart.openTab")}</button>
+  const toggle = (setter: typeof setUnfolded, key: string) => setter((keys) => keys.includes(key) ? keys.filter((item) => item !== key) : [...keys, key]);
+
+  return <div className="agent-prompts-view">
+    <div className="sp-toolbar">
+      <span className="sp-toolbar-title">{t("agentPrompts.tabsHeading")}</span>
+      {agentTabs.length > 0 && <span className="sp-count">{agentTabs.length}</span>}
+      <div className="sp-toolbar-end">
         {agentTabs.length > 1 && <div className="agent-prompts-sort" data-testid="agent-sort">
           <span>{t("agentPrompts.sort.label")}</span>
           <Dropdown value={sort} title={t("agentPrompts.sort.title")} options={AGENT_SORTS.map((value) => ({ value, label: t(`agentPrompts.sort.${value}`) }))} onChange={(value) => { if (isAgentSort(value)) chooseSort(value); }} />
         </div>}
+        <button className="toolbar-btn toolbar-btn--sm" type="button" data-testid="open-prompt-chart" title={t("promptChart.openTabTitle")} aria-label={t("promptChart.openTab")} onClick={() => void openPromptChartTab(scope)}><HourglassIcon /></button>
       </div>
+    </div>
+    <div className="side-panel-scroll agent-prompts-list">
       {/* Agent push requests for this scope (`services::git_push_mcp`). */}
       <GitPushProposals projectId={scope} />
-      {agentTabs.length === 0 ? <div className="file-tree-empty">{t("agentPrompts.noTabs")}</div> : sortedTabs.map((tab) => {
+      {agentTabs.length === 0 ? <p className="sp-note">{t("agentPrompts.noTabs")}</p> : sortedTabs.map((tab) => {
         const schedules = schedulesByTarget[scheduleCacheKey(scope, tab.scheduleTargetId!)] ?? EMPTY_SCHEDULES;
         const summary = scheduleSummary(schedules, now);
         const queued = schedules.filter((schedule) => scheduleStatus(schedule, now).kind === "due");
@@ -261,43 +272,74 @@ export function AgentSchedulesView({ scope, active }: Props) {
         // changes the screen and nothing else, and this row is re-rendered on
         // the 30-second tick and on every edge the activity store reports.
         const model = agentTabModelTag(scope, tab, modelByTab, screenModelByTab);
+        const lastPrompt = promptByTab[`${scope}:${tab.key}`];
+        const expanded = details.includes(tab.key);
         const open = unfolded.includes(tab.key);
         const slot = drop?.anchor === tab.key ? ` drop-${drop.place}` : "";
+        const continueText = continueLabel(tab);
+        // An agent's proposal waits on the user, so it stays under the row
+        // whether or not the row is open; a schedule it merely authored is a
+        // detail like the others.
+        const proposals = schedules.filter((s) => s.origin && isAgentProposal(s));
+        const authored = schedules.filter((s) => s.origin && !isAgentProposal(s));
+        const proposal = (schedule: ScheduledAgentPrompt) => <div key={schedule.id} className="agent-prompts-proposal">
+          <small>{schedule.message}</small>
+          <AgentScheduleProposal projectId={scope} targetId={tab.scheduleTargetId!} schedule={schedule} />
+        </div>;
         return <div
-          className={`agent-prompts-tab is-agent-${state}${drop?.key === tab.key ? " dragging" : ""}${slot}${canReorder ? " reorderable" : ""}`}
+          className={`agent-prompts-item${expanded ? " expanded" : ""}${drop?.key === tab.key ? " dragging" : ""}${slot}`}
           key={tab.key}
           ref={(node) => { if (node) rowRefs.current.set(tab.key, node); else rowRefs.current.delete(tab.key); }}
-          onPointerDown={(event) => onRowPointerDown(event, tab.key)}
-          title={`${t(`agentPrompts.state.${state}`)} · ${t("agentPrompts.jumpTitle", { tab: tab.label })}`}
-          data-testid="agent-prompts-tab"
-          data-state={state}
         >
-          <div className="agent-prompts-tab-main">
-            <div className="agent-prompts-tab-head">
-              {renaming === tab.key ? <input className="agent-prompts-rename" defaultValue={tab.label} autoFocus aria-label={t("tabBar.renameAriaLabel")} ref={(node) => node?.select()} onKeyDown={(event) => { if (event.key === "Enter") commitRename(tab.key, event.currentTarget.value); if (event.key === "Escape") setRenaming(null); }} onBlur={(event) => commitRename(tab.key, event.target.value)} /> : <><button className="agent-prompts-tab-name" type="button" title={t("agentPrompts.jumpTitle", { tab: tab.label })} onClick={() => jumpToTab(scope, tab.key)}><strong>{tab.label}</strong></button><button className="agent-composer-chip agent-prompts-rename-btn" type="button" title={t("common.rename")} aria-label={t("tabBar.renameAriaLabel")} onClick={() => setRenaming(tab.key)}><PencilIcon /></button></>}
-              <small>{tab.cmd}</small>
-              {model && <small className="agent-prompts-model" data-testid="agent-model" title={t("agentPrompts.modelTagTitle")}>{model}</small>}
-              {!isResumableAgentTab(tab) && <small className="danger-text">{t("agentPrompts.nonResumable")}</small>}
+          <div
+            className={`sp-row sp-row--two agent-prompts-tab${expanded ? " selected" : ""}${canReorder ? " reorderable" : ""}`}
+            onPointerDown={(event) => onRowPointerDown(event, tab.key)}
+            title={`${t(`agentPrompts.state.${state}`)} · ${t("agentPrompts.jumpTitle", { tab: tab.label })}`}
+            data-testid="agent-prompts-tab"
+            data-state={state}
+          >
+            <span className="sp-row-state">
+              {queued.length > 0 && <span className="sp-chip agent-prompts-queued" title={t("agentPrompts.queuedCount", { count: queued.length })}>{t("agentPrompts.queuedChip")}</span>}
+            </span>
+            <span className="sp-row-act">
+              <button className="btn-quiet agent-prompts-chevron" type="button" aria-expanded={expanded} aria-label={t(expanded ? "agentPrompts.collapse" : "agentPrompts.expand", { tab: tab.label })} title={t(expanded ? "agentPrompts.collapse" : "agentPrompts.expand", { tab: tab.label })} onClick={() => toggle(setDetails, tab.key)}>{expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}</button>
+            </span>
+            <span className="sp-row-main">
+              <SparkleIcon className="agent-prompts-icon" />
+              <span className="sp-row-text">
+                {renaming === tab.key
+                  ? <input className="agent-prompts-rename" defaultValue={tab.label} autoFocus aria-label={t("tabBar.renameAriaLabel")} ref={(node) => node?.select()} onKeyDown={(event) => { if (event.key === "Enter") commitRename(tab.key, event.currentTarget.value); if (event.key === "Escape") setRenaming(null); }} onBlur={(event) => commitRename(tab.key, event.target.value)} />
+                  : <button className="sp-row-name agent-prompts-tab-name" type="button" title={t("agentPrompts.jumpTitle", { tab: tab.label })} onClick={() => jumpToTab(scope, tab.key)}>{tab.label}</button>}
+                <span className="sp-row-sub">
+                  <span className="agent-prompts-cmd">{tab.cmd}</span>
+                  {model && <> · <span data-testid="agent-model" title={t("agentPrompts.modelTagTitle")}>{model}</span></>}
+                  {" · "}<span data-testid="agent-tab-times">{timesLabel(tab, state)}</span>
+                  {!isResumableAgentTab(tab) && <> · <span data-testid="agent-non-resumable">{t("agentPrompts.nonResumable")}</span></>}
+                </span>
+              </span>
+            </span>
+            <span className="sp-row-meta">
+              <span className={`sp-status${STATUS_CLASS[state]}`}>{t(`agentPrompts.state.${state}`)}</span>
+            </span>
+          </div>
+          {proposals.length > 0 && <div className="agent-prompts-details">{proposals.map(proposal)}</div>}
+          {expanded && <div className="agent-prompts-details" data-testid="agent-details">
+            {lastPrompt && <small className="agent-prompts-last-prompt" data-testid="agent-last-prompt" title={`${t("agentPrompts.lastPromptTitle")}\n\n${lastPrompt}`}>{t("agentPrompts.lastPrompt", { prompt: lastPrompt })}</small>}
+            <small>{summary.total === 0 ? t("agentPrompts.noSchedules") : summary.next ? `${summary.enabled} · ${t("agentPrompts.nextRun", { relative: relativeToNow(summary.next, now, lang) })}` : queued.length ? `${summary.enabled} · ${t("agentPrompts.queuedCount", { count: queued.length })}` : `${summary.enabled} · ${t("agentSchedule.noNext")}`}</small>
+            {continueText && <small className="agent-prompts-continue" data-testid="agent-continue-status"><RefreshIcon /> {continueText}{tab.scheduleTargetId && continueByTarget[continueKey(scope, tab.scheduleTargetId)]?.source === "screen" && <> <UntestedTag id="agentContinue.screenNotice" /></>}</small>}
+            {authored.map(proposal)}
+            <div className="agent-prompts-actions">
+              <button className="settings-btn sm" type="button" onClick={() => jumpToTab(scope, tab.key)}><ArrowUpRightIcon /> {t("agentPrompts.jump")}</button>
+              <button className={`settings-btn sm${open ? " active" : ""}`} type="button" aria-pressed={open} title={t("agentPrompts.composerToggleTitle")} onClick={() => toggle(setUnfolded, tab.key)}>{t("agentPrompts.composerToggle")}</button>
+              <button className={`settings-btn sm${tab.autoContinue ? " active" : ""}`} type="button" aria-pressed={!!tab.autoContinue} title={t("agentContinue.toggleTitle")} data-testid="agent-continue-toggle" onClick={() => { setAutoContinue(scope, tab.key, !tab.autoContinue); void persistScopeLayout(scope); }}><RefreshIcon /> {t("agentContinue.toggle")}</button>
+              <button className="settings-btn sm" type="button" onClick={() => setDialog(tab)}><ClockIcon /> {t("agentPrompts.schedulesButton")}</button>
+              <button className="toolbar-btn toolbar-btn--sm agent-prompts-rename-btn" type="button" title={t("common.rename")} aria-label={t("tabBar.renameAriaLabel")} onClick={() => setRenaming(tab.key)}><PencilIcon /></button>
             </div>
-            <small className="agent-prompts-tab-when" data-testid="agent-tab-times">{timesLabel(tab, state)}</small>
-            {promptByTab[`${scope}:${tab.key}`] && <small className="agent-prompts-tab-when agent-prompts-last-prompt" data-testid="agent-last-prompt" title={`${t("agentPrompts.lastPromptTitle")}\n\n${promptByTab[`${scope}:${tab.key}`]}`}>{t("agentPrompts.lastPrompt", { prompt: promptByTab[`${scope}:${tab.key}`] })}</small>}
-            <small className="agent-prompts-tab-when">{summary.total === 0 ? t("agentPrompts.noSchedules") : summary.next ? `${summary.enabled} · ${t("agentPrompts.nextRun", { relative: relativeToNow(summary.next, now, lang) })}` : queued.length ? `${summary.enabled} · ${t("agentPrompts.queuedCount", { count: queued.length })}` : `${summary.enabled} · ${t("agentSchedule.noNext")}`}</small>
-            {continueLabel(tab) && <small className="agent-prompts-tab-when" data-testid="agent-continue-status"><RefreshIcon /> {continueLabel(tab)}{tab.scheduleTargetId && continueByTarget[continueKey(scope, tab.scheduleTargetId)]?.source === "screen" && <> <UntestedTag id="agentContinue.screenNotice" /></>}</small>}
             {open && <AgentTabComposer scope={scope} tab={tab} offered={prefaceCommandsFor(tab.cmd, settings?.agent_preface_commands)} models={agentModelsFor(tab.cmd, settings?.agent_models)} />}
-          </div>
-          <div className="agent-prompts-tab-actions">
-            <button className="agent-composer-chip" type="button" onClick={() => jumpToTab(scope, tab.key)}><ArrowUpRightIcon /> {t("agentPrompts.jump")}</button>
-            <button className={`agent-composer-chip${open ? " active" : ""}`} type="button" aria-pressed={open} onClick={() => setUnfolded((keys) => keys.includes(tab.key) ? keys.filter((key) => key !== tab.key) : [...keys, tab.key])}>{t("agentPrompts.composerToggle")}</button>
-            <button className={`agent-composer-chip${tab.autoContinue ? " active" : ""}`} type="button" aria-pressed={!!tab.autoContinue} data-testid="agent-continue-toggle" onClick={() => { setAutoContinue(scope, tab.key, !tab.autoContinue); void persistScopeLayout(scope); }}><RefreshIcon /> {t("agentContinue.toggle")}</button>
-            {schedules.filter((s) => s.origin).map((schedule) => <div key={schedule.id}>
-              <small>{schedule.message}</small>
-              <AgentScheduleProposal projectId={scope} targetId={tab.scheduleTargetId!} schedule={schedule} />
-            </div>)}
-            <button className="settings-btn sm" type="button" onClick={() => setDialog(tab)}><ClockIcon /> {t("agentPrompts.schedulesButton")}</button>
-          </div>
+          </div>}
         </div>;
       })}
-    </section>
+    </div>
     {dialog && <AgentScheduleDialog scope={scope} tab={dialog} onClose={() => setDialog(null)} />}
   </div>;
 }

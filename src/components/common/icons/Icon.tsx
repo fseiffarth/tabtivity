@@ -355,6 +355,16 @@ export function TimerIcon(p: IconProps) {
   );
 }
 
+/** ⧗ — the prompt chart: prompts laid out over time. */
+export function HourglassIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M7 3.5h10M7 20.5h10" />
+      <path d="M8.5 3.5V6L12 12l3.5-6V3.5M8.5 20.5V18L12 12l3.5 6v2.5" />
+    </Frame>
+  );
+}
+
 export function BugIcon(p: IconProps) {
   return (
     <Frame {...p}>

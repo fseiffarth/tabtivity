@@ -73,6 +73,8 @@ describe("Agents view rename", () => {
     });
 
     const user = userEvent.setup();
+    // Rename is one of the row's actions: open the row first.
+    await user.click(screen.getByRole("button", { name: "Show details of Claude" }));
     await user.click(screen.getByRole("button", { name: "Rename tab" }));
     const input = screen.getByRole("textbox", { name: "Rename tab" });
     await user.clear(input);
@@ -89,6 +91,8 @@ describe("Agents view rename", () => {
     });
 
     const user = userEvent.setup();
+    // Rename is one of the row's actions: open the row first.
+    await user.click(screen.getByRole("button", { name: "Show details of Claude" }));
     await user.click(screen.getByRole("button", { name: "Rename tab" }));
     await user.type(screen.getByRole("textbox", { name: "Rename tab" }), "Reviewer{Escape}");
 

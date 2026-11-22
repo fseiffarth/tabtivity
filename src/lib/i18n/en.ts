@@ -3753,6 +3753,11 @@ export const enSource = {
   "agentPrompts.state.idle": "Idle",
   "agentPrompts.jump": "Go to",
   "agentPrompts.jumpTitle": "Show the {tab} tab",
+  // A row's chevron opens its details and actions; the chip in front of it
+  // is a letter for "a prompt is waiting" (its title says how many).
+  "agentPrompts.expand": "Show details of {tab}",
+  "agentPrompts.collapse": "Hide details of {tab}",
+  "agentPrompts.queuedChip": "Q",
   "agentPrompts.heading": "Collected prompts",
   "agentPrompts.intro": "Prompts kept for this project without a tab. Send one to an agent tab now, or turn it into a schedule.",
   "agentPrompts.target": "Target tab",
