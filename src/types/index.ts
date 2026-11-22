@@ -738,6 +738,9 @@ export interface Settings {
    *  rather than the OS voice (unset: yes). */
   voice_model?: string;
   voice_lang?: string;
+  /** The candidate languages `detect` picks among: app language codes, 1 to 5
+   *  (unset: the UI language and English). */
+  voice_detect_langs?: string[];
   voice_gpu?: boolean;
   voice_headset?: boolean;
   voice_pause_ms?: number;
