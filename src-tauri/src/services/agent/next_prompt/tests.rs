@@ -152,7 +152,7 @@ fn the_agent_name_is_a_plain_word_or_nothing() {
 fn a_final_run_answers_once_per_turn_and_a_warm_run_writes_one_token() {
     ollama::test_tags::set(Some(TAGS));
     let bodies = Mutex::new(Vec::<String>::new());
-    let chat = |addr: &str, body: &str, _: Duration| -> Result<String, String> {
+    let chat = |addr: &str, body: &str, _: Duration, _: &ollama::Abort| -> Result<String, String> {
         assert_eq!(addr, "127.0.0.1:11434");
         bodies.lock().unwrap().push(body.to_string());
         Ok(answer_json("\"Run the whole suite\""))
@@ -204,7 +204,7 @@ fn concurrent_asks_share_one_run() {
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
     let entered_tx = Mutex::new(entered_tx);
     let release_rx = Mutex::new(release_rx);
-    let chat = |_: &str, _: &str, _: Duration| -> Result<String, String> {
+    let chat = |_: &str, _: &str, _: Duration, _: &ollama::Abort| -> Result<String, String> {
         calls.fetch_add(1, Ordering::SeqCst);
         entered_tx.lock().unwrap().send(()).unwrap();
         release_rx.lock().unwrap().recv().unwrap();
@@ -239,7 +239,7 @@ fn concurrent_asks_share_one_run() {
 /// comes before the chat request, with a reason, as a status.
 #[test]
 fn a_cloud_model_and_a_remote_host_are_refused_before_any_request() {
-    let chat = |_: &str, _: &str, _: Duration| -> Result<String, String> { panic!("no request may be sent") };
+    let chat = |_: &str, _: &str, _: Duration, _: &ollama::Abort| -> Result<String, String> { panic!("no request may be sent") };
     let caps = |_: &str, _: &str| -> Vec<String> { panic!("no probe may be sent") };
     let backend = Ollama { caps: &caps, pinned: &not_pinned, chat: &chat };
     let t = ended_turn();
@@ -267,7 +267,7 @@ fn a_cloud_model_and_a_remote_host_are_refused_before_any_request() {
 
 #[test]
 fn asks_with_nothing_to_do_are_skipped_without_a_request() {
-    let chat = |_: &str, _: &str, _: Duration| -> Result<String, String> { panic!("no request may be sent") };
+    let chat = |_: &str, _: &str, _: Duration, _: &ollama::Abort| -> Result<String, String> { panic!("no request may be sent") };
     let caps = |_: &str, _: &str| -> Vec<String> { panic!("no probe may be sent") };
     let backend = Ollama { caps: &caps, pinned: &not_pinned, chat: &chat };
     let settings = suggest_on("llama3");
@@ -356,7 +356,7 @@ fn the_keep_alive_never_shortens_the_users_choice() {
     // Through an ask: an infinite setting reaches the request.
     ollama::test_tags::set(Some(TAGS));
     let body = Mutex::new(String::new());
-    let chat = |_: &str, sent: &str, _: Duration| -> Result<String, String> {
+    let chat = |_: &str, sent: &str, _: Duration, _: &ollama::Abort| -> Result<String, String> {
         *body.lock().unwrap() = sent.to_string();
         Ok(answer_json("Commit it"))
     };
@@ -371,4 +371,48 @@ fn the_keep_alive_never_shortens_the_users_choice() {
     let sent: serde_json::Value = serde_json::from_str(&body.lock().unwrap()).unwrap();
     assert_eq!(sent["keep_alive"], -1, "a pinned model stays pinned");
     ollama::test_tags::set(None);
+}
+
+#[test]
+fn a_final_ends_a_warm_up_in_flight_instead_of_waiting_behind_it() {
+    use std::sync::atomic::AtomicBool;
+    let calls = AtomicUsize::new(0);
+    let warm_started = AtomicBool::new(false);
+    // The first request is the warm-up: it hangs until it is aborted (or five
+    // seconds pass, which fails the test). The second is the final.
+    let chat = |_: &str, _: &str, _: Duration, abort: &ollama::Abort| -> Result<String, String> {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            warm_started.store(true, Ordering::SeqCst);
+            let until = Instant::now() + Duration::from_secs(5);
+            while !abort.is_aborted() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            return if abort.is_aborted() { Err(ollama::ABORTED.to_string()) } else { Ok(answer_json("\"\"")) };
+        }
+        Ok(answer_json("\"Run the whole suite\""))
+    };
+    let backend = Ollama { caps: &no_caps, pinned: &not_pinned, chat: &chat };
+    let settings = suggest_on("llama3");
+    let key = "test-final-ends-warm";
+    let mut running = ended_turn();
+    running.entries.pop();
+    let ended = ended_turn();
+
+    let (warm, final_answer, waited) = std::thread::scope(|s| {
+        let warm = s.spawn(|| {
+            ollama::test_tags::set(Some(TAGS));
+            suggest_with(&settings, &ask(key, Phase::Warm), &running, &backend)
+        });
+        while !warm_started.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        ollama::test_tags::set(Some(TAGS));
+        let started = Instant::now();
+        let final_answer = suggest_with(&settings, &ask(key, Phase::Final), &ended, &backend);
+        (warm.join().unwrap(), final_answer, started.elapsed())
+    });
+    assert_eq!(warm.status, Status::Skipped, "{warm:?}");
+    assert_eq!(final_answer.status, Status::Ok, "{final_answer:?}");
+    assert_eq!(final_answer.text.as_deref(), Some("Run the whole suite"));
+    assert!(waited < Duration::from_secs(2), "the final waited {waited:?} behind the warm-up");
 }

@@ -35,10 +35,14 @@
 //!
 //! # One run per turn
 //!
-//! Each session (one key per tab, per process) has one slot: a `final` waits
-//! for a run in flight and then reads the cached answer when the turn is the
-//! same (keyed by the turn's last entry), a `warm` that finds the slot taken
+//! Each session (one key per tab, per process) has one slot: a `final` ends a
+//! warm-up in flight (its socket is shut, Ollama stops it; user decision
+//! 2026-11-22 — the suggestion is never late behind a slow first warm-up),
+//! waits for another final, then reads the cached answer when the turn is the
+//! same (keyed by the turn's last entry); a `warm` that finds the slot taken
 //! is `busy`. Memory only; the newest turn per session, a few dozen sessions.
+//! The phone asks through the window when it is open
+//! (`DesktopRequest::AgentNextPrompt`), so both share the window's slot.
 //!
 //! `AppHandle`-free: the command (`commands::agents::agent_next_prompt`) and
 //! the phone route (`mobile_control::host`, `/next-prompt`) read the transcript
@@ -46,6 +50,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
@@ -490,9 +495,19 @@ struct Session {
     last_warm: Option<Instant>,
 }
 
+/// One session's slot: its state, held over a run, and the abort handle of a
+/// warm-up in flight, which a `final` reaches without that lock.
+#[derive(Default)]
+struct Slot {
+    state: Mutex<Session>,
+    warm: Mutex<Option<Arc<ollama::Abort>>>,
+    /// Finals waiting for `state`: a warm-up arriving meanwhile stands aside.
+    finals: std::sync::atomic::AtomicUsize,
+}
+
 #[derive(Default)]
 struct Sessions {
-    slots: HashMap<String, (Arc<Mutex<Session>>, u64)>,
+    slots: HashMap<String, (Arc<Slot>, u64)>,
     clock: u64,
 }
 
@@ -529,7 +544,7 @@ pub fn desktop_key(
 
 /// `key`'s slot, made on first use; the least recently asked goes past
 /// [`MAX_SESSIONS`].
-fn session(key: &str) -> Arc<Mutex<Session>> {
+fn session(key: &str) -> Arc<Slot> {
     let mut all = sessions().lock_ok();
     all.clock += 1;
     let now = all.clock;
@@ -562,7 +577,8 @@ pub(crate) struct Ollama<'a> {
     pub caps: &'a (dyn Fn(&str, &str) -> Vec<String> + Sync),
     /// Whether the model is resident and pinned (`keep_alive: -1`, the Load button).
     pub pinned: &'a (dyn Fn(&str, &str) -> bool + Sync),
-    pub chat: &'a (dyn Fn(&str, &str, Duration) -> Result<String, String> + Sync),
+    /// The request; `abort` ends it early with [`ollama::ABORTED`].
+    pub chat: &'a (dyn Fn(&str, &str, Duration, &ollama::Abort) -> Result<String, String> + Sync),
 }
 
 /// Whether `/api/ps`'s `body` lists `model` as resident with no expiry in
@@ -605,7 +621,7 @@ pub fn suggest_blocking(ask: &Ask<'_>, transcript: &AgentTranscript) -> NextProm
             ollama::ollama_http_at(addr, "GET", "/api/ps", None, PS_TIMEOUT)
                 .is_ok_and(|body| pinned_in_ps(&body, model, chrono::Utc::now()))
         },
-        chat: &|addr, body, timeout| ollama::ollama_http_at(addr, "POST", "/api/chat", Some(body), timeout),
+        chat: &|addr, body, timeout, abort| ollama::ollama_http_abortable(addr, "POST", "/api/chat", Some(body), timeout, abort),
     };
     suggest_with(&settings, ask, transcript, &ollama)
 }
@@ -639,8 +655,19 @@ pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &Agen
 
     let slot = session(ask.key);
     let mut state = match ask.phase {
-        Phase::Final => slot.lock_ok(),
-        Phase::Warm => match slot.try_lock() {
+        Phase::Final => {
+            // A turn's suggestion never waits behind a warm-up: that one is
+            // ended, and its lock comes free as soon as its socket closes.
+            slot.finals.fetch_add(1, Ordering::SeqCst);
+            if let Some(warm) = slot.warm.lock_ok().as_ref() {
+                warm.abort();
+            }
+            let state = slot.state.lock_ok();
+            slot.finals.fetch_sub(1, Ordering::SeqCst);
+            state
+        }
+        Phase::Warm => match slot.state.try_lock() {
+            Ok(_) if slot.finals.load(Ordering::SeqCst) > 0 => return NextPrompt::keyed(Status::Busy, &key),
             Ok(guard) => guard,
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
             Err(TryLockError::WouldBlock) => return NextPrompt::keyed(Status::Busy, &key),
@@ -681,8 +708,18 @@ pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &Agen
     let keep_alive = keep_alive_for(settings.ollama_keep_alive.as_deref(), (backend.pinned)(&addr, &model));
     let body = chat_body(&model, &user, ask.phase, caps.iter().any(|c| c == "thinking"), keep_alive);
     let timeout = if ask.phase == Phase::Warm { WARM_TIMEOUT } else { FINAL_TIMEOUT };
-    let raw = match (backend.chat)(&addr, &body, timeout) {
+    let abort = Arc::new(ollama::Abort::default());
+    if ask.phase == Phase::Warm {
+        *slot.warm.lock_ok() = Some(abort.clone());
+    }
+    let sent = (backend.chat)(&addr, &body, timeout, &abort);
+    if ask.phase == Phase::Warm {
+        slot.warm.lock_ok().take();
+    }
+    let raw = match sent {
         Ok(raw) => raw,
+        // A final ended it; what Ollama read of the turn so far stays cached.
+        Err(error) if error == ollama::ABORTED => return NextPrompt::keyed(Status::Skipped, &key),
         Err(error) if error == ollama::MODEL_NOT_RUNNING => return NextPrompt::keyed(Status::NotRunning, &key),
         Err(_) => return NextPrompt::keyed(Status::Unavailable, &key),
     };
