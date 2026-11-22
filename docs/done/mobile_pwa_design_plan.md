@@ -2,7 +2,9 @@
 
 > **Status (screened against code 2026-11-22):** ARCHIVE (built and committed; only live QA open). Steps 1-7 landed after the 2026-11-01 "uncommitted" note: `0f076be6b` (octagon token system), `96f393bff` (skeletons, Pair/Unlock), `e8e456896` (strings and untested rows); icons exist in `src/components/common/icons/Icon.tsx` (`CloseIcon`, `MoreIcon`, `GripIcon`, `DiamondIcon`, …). The 11-02 revision described under "Fixed decisions" (cut corners became radii, facts strip back above the composer, `mobile.design.rounded`) is what the code does; the bullets below describe the first-built pass. Rows `mobile.design.*`, `mobile.composer.bar`, `mobile.focus.flatAnswers` are in `src/lib/untested.ts`. Not live-tested.
 
-Why: the October Home/project redesign (`docs/mobile_home_redesign_plan.md`,
+Original status (2026-11-01): steps 1–7 implemented; the user chose all eight proposals from the design canvas (Phone PWA Design Proposals, 2026-11-01).
+
+Why: the October Home/project redesign (`docs/done/mobile_home_redesign_plan.md`,
 "octagon, but calm") left the rest of the phone app in the older idiom —
 16–20 px radii and circles in chrome, ~30 one-off greys, 14 font sizes outside
 the `--fs-*` scale, and chrome glyphs drawn as text characters (‹ ✕ ⋯ ◷ ⎇ ⠿

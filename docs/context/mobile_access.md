@@ -36,7 +36,12 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    `agents` (remote with a mirror; the agent runs `local_only` in the mirror and
    is saved `location: "local"`) or `none` (container, VM, mirror-less remote):
    a refused create/reopen answers `not_attachable`, in the sidecar and the
-   bridge. The scheduler's headless relaunch follows the same placement
+   bridge. A remote project that lists host tabs also offers the ＋ sheet its
+   `machines` (the primary, then each worker; `ResolvedProject::machines`, opaque
+   ids, `machine_label` the only host fact that crosses): an agent started on one
+   runs on the host, not in the mirror (`host::creatable`'s `on_host`). A project
+   that lives only on its host (`pinned`: remote-only; `create_verdict`) takes only
+   such creates, and none at all while it has no machines. The scheduler's headless relaunch follows the same placement
    (`launch_place`, via `headless::restart_options`): a remote project's local
    agent restarts in the mirror, a container project's agent as it always did
    (`launch_prep` puts it in the container); a remote-host or VM agent is not
@@ -281,8 +286,10 @@ stands in is the consent, so it is **add-only**: a new name through an
 exclusive create, never an overwrite, rename or delete — except the undo of a
 file this feature wrote that is still byte-for-byte as logged (the log in the
 sidecar's control dir names it; the disk decides). Folders are named by the
-browser's sealed tokens and walked held, no link followed, and none is
-created. **No path segment may start with `.`**: the listing shows `.github`,
+browser's sealed tokens and walked held, no link followed, and an upload
+creates none. **New folder** is its own add-only route (`POST …/files/folder`,
+same guards, same dot rule, a taken name is `already_exists`); its Undo removes
+only an empty folder this sidecar made within the hour (`uploads::MADE`). **No path segment may start with `.`**: the listing shows `.github`,
 `.cargo`, `.vscode` (only `.git`, `.tabtivity`, `.env*` are hidden), and a
 new file there can change what tools run (`.github/workflows/*.yml`,
 `.cargo/config.toml`, `.envrc`) — the user picking the folder is not enough

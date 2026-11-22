@@ -47,8 +47,9 @@ No Node.js needed; Claude uses its own native installer.
 ## Resume
 
 Claude tabs come back on their exact prior conversation after a Tabtivity
-restart. Tabtivity records each tab's session through Claude's session hooks — the
-one place Tabtivity writes into another app's configuration.
+restart. Tabtivity records each tab's session through Claude's session hooks,
+which it registers in the project's own agent home, never in your personal
+Claude configuration.
 
 ## Updating
 

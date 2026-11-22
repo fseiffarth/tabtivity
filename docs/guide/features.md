@@ -222,6 +222,13 @@ remain; some Mobile UI has been live-tested.*
   Dock it back with the ⤓ button (re-docks into the main layout; session-only, so
   it re-docks on restart too). Closing the popped-out window instead closes its
   tabs for good — they are not docked back and do not restore on next launch.
+- **Tabby, the chat assistant** *(experimental, on by default)*: a chat overlay
+  that can search and read the web and look things up in Tabtivity's help, with
+  no access to your folders, projects, mail or calendar. See
+  [docs/help/assistant.md](../help/assistant.md).
+- **Local models only** *(per project, live QA pending)*: a pill-menu switch
+  that lets a project start agents on a local model alone, with no cloud agent
+  or sign-in. See [docs/help/local-models.md](../help/local-models.md).
 - **Root control terminal**: opens in `~/tabtivity/root/` with workspace-level
   context files.
 - **Project terminals**: each active project gets a PTY tab scoped to its
@@ -327,6 +334,11 @@ with availability and model capability checks.
   sibling `boxes.json`, so `projects.json` is untouched. Box tab scopes
   persist and restore like a project's; box tabs run locally, with local agents
   covered by the agent fence and access derived from the box's member roots.
+- **Export, import and archive**: **Export project…** writes one
+  `.tabtivityproj` file (files, optional git history and open tabs) for another
+  computer; closed projects can be archived and restored, and a local project's
+  folder can be renamed from the pill's rename dialog. See
+  [docs/help/project-transfer.md](../help/project-transfer.md).
 - **Publish to GitHub / GitLab**: a local (or SSH-remote) git project can be
   published to a new GitHub or GitLab repository from the project pill menu.
   Choose the provider and public/private; Tabtivity runs `gh repo create …
@@ -374,11 +386,12 @@ app — a `mailto:` or `webcal:` from a terminal or the file tree — the router
 opens the in-app surface when it is enabled and falls back to your configured
 external app when it is not.
 
-**Several of these are experimental and off by default** — mail
-(`mail_client`), the browser (`web_browser`), the deck presenter
-(`deck_presenter`), and Python run/debug (`python_run_debug`). Turn each on
-under Settings → Experimental. Debug mode no longer turns them on; a profile
-that had Debug mode on before this change keeps the ones it was showing, ticked.
+**Some of these are experimental and off by default** — the browser
+(`web_browser`), the deck presenter (`deck_presenter`), and Python run/debug
+(`python_run_debug`). Turn each on under Settings → System → Experimental. Mail
+(`mail_client`) is on by default; Settings → Workspace & apps → Mail switches
+it off. Debug mode no longer turns the others on; a profile that had Debug mode
+on before this change keeps the ones it was showing, ticked.
 
 - **Mail** *(IMAP/SMTP)*: a full client over the whole window — folders, message
   list, compose/reply, attachments (saved into the active project by opaque id,
@@ -430,7 +443,8 @@ that had Debug mode on before this change keeps the ones it was showing, ticked.
   would a dialog edit); the board tools add, edit, complete, reopen, move, and
   delete cards through the same gestures a drag uses; plus read-only sweeps —
   which projects have uncommitted work, what is out of sync with its host, last
-  week's time and usage. **Mail tools are next**. The tools live on a loopback endpoint behind a per-run bearer token
+  week's time and usage. **Mail tools** come with their own switch in Settings → Agents → Root console
+and MCPs, and a cloud agent can then only write drafts, never read mail. The tools live on a loopback endpoint behind a per-run bearer token
   that is never written to disk, and **no project's agents ever get them**. One
   switch in Settings turns it all off without a restart: new root agents are
   handed nothing and the ones already running are refused. Inside the mail,
@@ -468,8 +482,8 @@ app until they land.
 | **Audio / video** | `.mp3` `.mp4` `.webm` `.wav` … | ✅ Shipping | Native in-tab `<audio>`/`<video>` player. |
 
 Other office formats (`.docx`, `.pptx`, `.ods`, …) open in their external
-default app. Viewer behaviour is configured per file type under **Settings →
-Native Viewers**: the per-type autocomplete and spell-check defaults (each tab
+default app. Viewer behaviour is configured per file type under the file panel's
+**Project settings → Native Viewers**: the per-type autocomplete and spell-check defaults (each tab
 can override them from its header) plus a global autosave switch. The text/LaTeX/Markdown editors carry an `A−`/`A+` text-size control
 (`Ctrl` +/−, `Ctrl`+0 to reset; scales the Markdown preview too), persisted
 per file type. Every viewer remembers where you left off — editor/PDF scroll
@@ -530,5 +544,5 @@ restarting Tabtivity) restores your position instead of jumping to the top.
   projects, SSH projects and OpenVPN, extending a local project onto a host,
   compute machines, persistent sessions, the HPC pipeline, and Mobile.
 - **Five languages**: every user-facing string goes through one place
-  (`src/lib/i18n.ts`) — English, German, Spanish, French, and Italian, with
+  (`src/lib/i18n/`) — English, German, Spanish, French, and Italian, with
   English as the source of truth and the fallback.

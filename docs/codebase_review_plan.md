@@ -18,8 +18,7 @@ Severity: **HIGH** = real user-visible defect or data-safety risk;
 substantial maintenance debt; **LOW** = cheap cleanup, cosmetic, or
 defense-in-depth.
 
-Nothing here has been fixed yet — this document is the work plan. Tick items as
-they land.
+(As written 2026-08-27: nothing was fixed yet; items were ticked as they landed.)
 
 ## Top priorities
 

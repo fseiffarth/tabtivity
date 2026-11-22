@@ -2527,7 +2527,7 @@ Nothing run live.
 3. Deck with no slides and a TeX engine: put non-UTF-8 bytes in
    `<deck>.tex`, press "Create a starter presentation": the file is
    unchanged (compile fails or recompiles), not replaced by the starter.
-4. Markdown file with `[a](docs/x.md)`, `[b](#heading)`,
+4. Markdown file with `[a](docs/x.md)`, `[b](../#heading)`,
    `[c](https://example.com)`, `[d](//example.com/x)`: a opens a tab, b
    scrolls, c opens in the browser, d renders as text. Same links in a
    notebook markdown cell, the Agents prompt preview, a Skills preview and
@@ -5116,7 +5116,7 @@ lands on develop. Steps 1–2 once, first.
     refused, nothing in `/tmp`.
 
 *Links and the navigation gate (steps 3, 4)*
-15. A Markdown file with `[a](docs/x.md)`, `[b](#h)`, `[c](https://example.com)`,
+15. A Markdown file with `[a](docs/x.md)`, `[b](../#h)`, `[c](https://example.com)`,
     `[d](//example.com/x)`: a opens a tab, b scrolls, c opens the browser, d is
     text. Same in a notebook cell, the prompt preview, a Skills preview and the
     dev to-do board: the window never reloads. Middle-click c → system browser;

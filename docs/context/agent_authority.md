@@ -265,7 +265,7 @@ RTK hook and Codex MCP servers reached no agent; the user asked for "one
 global Tabtivity" instead, and chose a layer over one shared home (2026-09-25),
 because a shared home would give back exactly the gap-7 path above.
 `services::agent_global` keeps a home-shaped tree at
-`<state_dir>/agent-global/` that the user fills (Settings → Global agent
+`<state_dir>/agent-global/` that the user fills (Settings → Manage CLIs → Accounts & keys → Global agent
 config: one-click import from `~/.claude`, `~/.codex`, `~/.gemini` without
 logins, transcripts, folder trust or Tabtivity's own hooks; or "Open folder").
 The import also takes the hook and plugin files the other CLIs read
@@ -353,7 +353,7 @@ Settings shows the refusal, and switching accounts is Sign out then log in
 again (the same rule `copilot_auth` had). The fence also sets the per-CLI
 "keep your login in a file" variables (`GEMINI_FORCE_FILE_STORAGE`,
 `FACTORY_DISABLE_KEYRING`, …), since the keyring is not reachable inside
-it. Settings → Agent fence → Agent logins imports a login this computer
+it. Settings → Manage CLIs → Accounts & keys → Agent logins imports a login this computer
 already holds (the one safe direction) and signs out. An older Tabtivity's
 Claude mirror (`agent-creds/`) is adopted into the store at startup. The
 first start after the upgrade also runs both imports once
@@ -717,12 +717,15 @@ Composition is explicit:
   registry CLI typed into one runs through the shim, fenced (above).
 - A persistent (tmux) agent tab keeps an **unfenced** login shell after the
   agent exits, on the same terminal. Where the kernel still honours `TIOCSTI`
-  (Linux before 6.2 or with `dev.tty.legacy_tiocsti=1`, macOS), a fenced agent
-  could queue keystrokes on its own terminal and exit, and that shell would run
-  them. So the pane drains the input queue between the two
-  (`tmux_local::FENCE_INPUT_DRAIN`). bubblewrap's `--new-session` would block
-  `TIOCSTI` at the source, but it detaches the agent from its controlling
-  terminal, so it never gets `SIGWINCH` and a TUI stops reflowing on resize.
+  (Linux before 6.2 or with `dev.tty.legacy_tiocsti=1`), a fenced agent could
+  queue keystrokes on its own terminal and exit, and that shell would run
+  them. On Linux the fence's seccomp program (`agent_fence::keyring_seccomp_filter`)
+  fails `ioctl` `TIOCSTI` and `TIOCLINUX` with `EPERM`, so the queue stays empty
+  (the earlier input-queue drain between agent and shell, `tmux_local::FENCE_INPUT_DRAIN`,
+  is gone; the trailing shell is plain `exec "$SHELL" -l`). bubblewrap's
+  `--new-session` would also block it, but it detaches the agent from its
+  controlling terminal, so it never gets `SIGWINCH` and a TUI stops reflowing
+  on resize. macOS has no such filter in the Seatbelt profile.
 
 Fenced Linux Codex gets no sandbox-backend override. Its own bubblewrap
 cannot nest under the fence on Ubuntu: the outer bwrap runs under the stacked

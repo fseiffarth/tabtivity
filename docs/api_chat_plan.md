@@ -13,10 +13,6 @@ Only `api.openai.com` is dialled. The hosted administrator's key keeper still
 offers Claude/Gemini only. The earlier exclusion notes below describe the
 original scope; Codex is no longer excluded from the user's own keys.
 
-Status: Part A built 2026-10-04 (see "Implementation notes (Part A)" at the
-end; never live-verified); Part B not scheduled. Reviewed against the code the
-same day (see "Review notes").
-
 ## Why
 
 Every agent tab runs a vendor CLI, and every CLI signs in with whatever its

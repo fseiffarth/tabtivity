@@ -6,10 +6,12 @@ picks the CLI that runs the model: Claude Code or Codex on their own login, or
 a local Ollama model through OpenCode or Claude Code. Tabby can search and read
 the web and read Tabtivity's own user docs (the help lane, below). It cannot see
 a file on the computer, a project, the user's MCP servers or anything else
-Tabtivity holds. Experimental (`useExperimental("assistant")`, off by
-default); the backend reads the same flag (`Settings::assistant_enabled`).
-Plan and the step-by-step build record: `docs/assistant_plan.md`,
-`docs/assistant_handoff.md` (untracked in the main checkout).
+Tabtivity holds. On unless switched off (`useExperimental("assistant")`, listed in
+`ON_BY_DEFAULT_FLAGS`; the switch sits at the top of Settings → Agents → Tabby,
+not under Experimental); the backend reads the same flag
+(`Settings::assistant_enabled`).
+Plan and the step-by-step build record: `docs/done/assistant_plan.md`,
+`docs/done/assistant_handoff.md`.
 
 Why it exists: most questions need no project. The root console holds the
 calendar, mail and to-do rights; a project agent sees the project. Both give
@@ -415,8 +417,8 @@ same picker (`setAssistantReach`); turning the switch off drops the list.
 
 ## Where things are
 
-Backend: `services/assistant.rs` (profiles, `launch_line`, `new_chat_record`),
-`services/web_lane.rs`, `commands/assistant.rs` (options, new chat, search
+Backend: `services/agent/assistant.rs` (profiles, `launch_line`, `new_chat_record`;
+also `assistant_attach.rs`, `assistant_model_probe.rs`), `services/mcp/web_lane.rs`, `commands/assistant.rs` (options, new chat, search
 setup; all `core`, refuse with `assistant_off`), `mobile_control/assistant.rs`.
 Frontend: `src/components/assistant/`, `stores/assistantScope.ts`,
 `stores/assistantView.ts`, `components/layout/AttachedAgentPane.tsx`,

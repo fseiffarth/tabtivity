@@ -78,7 +78,7 @@ start page, downloads, and a chip that warns about disguised addresses.
 engine and where links open. **Allow live pages** (off by default) opens a real,
 script-running page in a separate window with a throwaway profile; a live
 page can reach services on this computer, so leave it off unless you need it.
-**Open in external browser** is always there.
+**Open in your browser** is always there.
 
 ## Downloads
 

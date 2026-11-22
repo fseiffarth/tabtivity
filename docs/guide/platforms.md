@@ -8,8 +8,9 @@ Moved out of the [README](../../README.md).
 | ------------------------- | ------------------ | -------------------------------------------------------------------------------------------- |
 | **Linux — X11**           | Yes, used regularly on Ubuntu | Two-desktop workspace parking model (EWMH/xcb). Primary development target.  |
 | **Linux — KDE Wayland**   | Yes                | Per-project virtual desktop model via KWin DBus scripting. KDE 5 and KDE 6 supported.        |
+| **Linux — GNOME (X11 and Wayland)** | Yes, not live-tested | Parks onto the hidden workspace on the right via the X11 backend (under Wayland, XWayland windows only). |
 | **Linux — other Wayland** | Partial            | Null backend (no workspace switching, no sticky windows). Terminal and file management work. |
-| **Windows**               | Partially tested   | Win32 `SW_HIDE`/`SW_SHOW` parking model (+ best-effort virtual-desktop pinning). Start-Menu app launch with `.lnk`/icon resolution, shell file associations, external-window tracking, OpenVPN, SSH/SFTP remote projects, Claude/Codex agent resume, project containers via Docker Desktop, project VMs via QEMU + WHPX, Tabtivity Mobile (Run-key sidecar), in-app browser live pages (deny-all permission handler), DXGI GPU readouts, and a WebView2 renderer crash reporter. No agent fence (no unprivileged sandbox on Windows), no tmux session persistence, no ControlMaster link counters. Partially tested on real hardware. |
+| **Windows**               | Partially tested   | Win32 `SW_HIDE`/`SW_SHOW` parking model (+ best-effort virtual-desktop pinning). Start-Menu app launch with `.lnk`/icon resolution, shell file associations, external-window tracking, OpenVPN, SSH/SFTP remote projects, Claude/Codex agent resume, project containers via Docker Desktop, project VMs via QEMU + WHPX, Tabtivity Mobile (Run-key sidecar), in-app browser live pages (deny-all permission handler), DXGI GPU readouts, and a WebView2 renderer crash reporter. No agent fence (no unprivileged sandbox on Windows), no tmux (an experimental session host can keep agent tabs alive instead), no ControlMaster link counters. Partially tested on real hardware. |
 | **macOS**                 | Untested           | App-granular window parking via `NSRunningApplication` hide/unhide (no public per-window API), `.app` scanner, LaunchServices file defaults, Keychain, `caffeinate` presenter inhibitor, `sandbox-exec` agent fence, project containers (Docker Desktop), project VMs via QEMU + HVF (arm64 guests on Apple silicon), Tabtivity Mobile (launchd agent), `nettop` SSH-link counters, IOKit GPU readouts. Compiles and passes tests on the CI macOS runner; not yet tried on a real Mac. |
 
 ## Current Limits
@@ -30,8 +31,9 @@ Moved out of the [README](../../README.md).
   limits described above.
 - Detached subwindows re-dock on restart. Closing a detached window closes its
   tabs; it does not dock them back.
-- Non-KDE Wayland compositors fall back to the null backend.
-- Remaining office formats (`.docx`, `.pptx`, `.ods`, …) have no native viewer
+- Wayland compositors other than KWin and GNOME fall back to the null backend.
+- Remaining office formats (`.docx`, `.pptx`, `.ods`, …; `.odt` and `.xlsx` have
+  viewers) have no native viewer
   yet and open in the external default app.
 - **Code-complete does not mean live-verified.** Mail and selected calendar,
   to-do, Mobile, import, and monitor controls have recorded live use. That does
@@ -47,7 +49,7 @@ Moved out of the [README](../../README.md).
   hardware acceleration (KVM, Hypervisor.framework, or the Windows Hypervisor
   Platform) and have never been booted on any host.
 - Windows has no agent fence (there is no unprivileged filesystem sandbox to
-  build one on), no tmux-backed local session persistence, and no SSH
+  build one on), no tmux (an experimental session host can keep agent tabs alive instead), and no SSH
   ControlMaster to read link traffic from; each is reported in the UI rather
   than silently skipped.
 - The Agent Skills library is Claude-only, with no manifest, versioning, or

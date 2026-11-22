@@ -2,9 +2,9 @@
 
 Two features that share a prefix and almost nothing else.
 
-- **`services/mail_crypt.rs`** encrypts the **local store**. Applies to every
+- **`services/mail/mail_crypt.rs`** encrypts the **local store**. Applies to every
   account, independent of what any correspondent supports.
-- **`services/mail_crypto.rs`** + **`services/mail_pgp.rs`** handle what the
+- **`services/mail/mail_crypto.rs`** + **`services/mail/mail_pgp.rs`** handle what the
   **sender** did to a message before it left their machine.
 
 They are sequenced, not merely ordered: the end-to-end track caches nothing and
@@ -229,7 +229,7 @@ perfectly good email-certificate validator remains correct and free.
 
 ## What the agent path can and cannot read
 
-The root MCP's mail tools (`services::root_mcp_mail`, `docs/context/root_console.md`)
+The root MCP's mail tools (`services::root_mcp::root_mcp_mail`, `docs/context/root_console.md`)
 reach mail through `commands::mail::AgentMail`, which **never opens or unlocks
 the store**: a store not opened this run, or opened as the memory-only
 stand-in, answers "mail is locked" and nothing prompts. `mail_read` shares

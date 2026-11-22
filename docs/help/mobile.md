@@ -65,8 +65,10 @@ Tailscale command.
    (iPhone: Share → Add to Home Screen; Android: browser menu → Install app or
    Add to Home screen). On iPhone this is needed for notifications.
 
-On Windows the phone cannot open this computer's terminals or agent tabs:
-they attach through tmux, which Windows does not have.
+On Windows there is no tmux, so by default the phone cannot open this
+computer's terminals or agent tabs. Turn on the experimental **Windows session
+host** (Settings → Mobile, **Turn on**) and agent tabs run in a background host
+the phone can attach to; shell tabs still run in the window and stay off the phone.
 
 An agent tab that was already running when you switched access on has no
 terminal session for the phone to attach to yet. Tap it on the phone and the
@@ -93,10 +95,17 @@ host tab is only typed into: sending a file from the phone or the desktop,
 **Submit** of a markup and **Sign in** are not offered on it (they work through
 the project's inbox and this computer, which the host cannot see), and with no
 window open its schedules are not offered either. Recaps fall back to the
-screen for it, and its Chat has no conversation to show — use **Terminal** —
-as the desktop has no transcript of a session on the host. A tab on the host
+screen for it, and its Chat on the phone has no conversation to show — use
+**Terminal** — though the desktop's Chat can read a host session's transcript. A tab on the host
 has a session to attach to only while the project's **Persistent sessions
 (tmux)** (its pill's menu) is on, the default.
+
+For a remote project the project's menu has **Diverged**: the files whose local
+copy and host copy disagree, and new local files, with a compare on tap. Taking
+**Use host** or **Use local**, **Upload** and **Delete** need **Phone may resolve
+diverged files** (Settings → Mobile, off by default), the desktop open and
+connected to the host; each asks first and the desktop re-checks every file
+before it acts. Merging stays on the desktop.
 
 To start an agent on the host instead of in the mirror, pick the machine in
 the ＋ sheet's **Runs on** dropdown: **Desktop (local copy)**, the primary host,
@@ -373,8 +382,17 @@ the agent's status line (a shell tab has none, so there any left→right swipe
 goes back); the ☰ in the header opens the files too, in either view. Walk the folders and
 open a file —
 pictures and text full screen, PDFs in the browser, with Save and Share. Nothing
-can be changed, moved or deleted from there; the one write is adding a new
-file with **Upload here** (below), behind a switch of its own.
+can be changed, moved or deleted from there. The only writes are adding a new
+file with **Upload here** (below), making a **New folder…** (same switch), and
+**Annotate** on a PDF (below), each behind a switch of its own.
+
+A project that lives on a remote computer shows a **Which computer's files**
+choice, **This computer** (its local copy) or **Remote computer**. The remote
+side is read-only and works only while the project is connected on the desktop;
+otherwise it says so. The menu on a folder has **Download as zip** (a folder of
+up to 2,000 files and 1 GB; files whose names are unsafe to unpack are left
+out and counted), and a file can be marked as a favourite, which collects in
+the start page's ☆ **Favorites**.
 
 The box under the drawer's head finds a file or folder anywhere in the
 project by name: type part of it (several words must all be in the name, in
@@ -405,6 +423,14 @@ the group read-only.
 - Files up to 24 MiB open; a longer text file shows its first 24 MiB.
 - Switching it off closes the drawer within seconds, without restarting the host.
 
+**Annotate.** With **Phone may write remarks into PDFs** on (Settings → Mobile,
+off by default, needs **Project files on the phone**), a project PDF opened from
+the files offers **Annotate**: highlights and sticky-note remarks are written
+into the PDF itself when you press **Save**, the way the desktop's Remarks do.
+They are appended, so the file before stays as it was; a PDF that changed since
+you opened it is refused, and you reload it first. The phone shows saved notes
+as icons only; their words show on the desktop.
+
 ### Upload here
 
 Switch on **Phone may add files to projects** under **Project files on the
@@ -420,7 +446,9 @@ under their own name. A row per file says **Uploading…**, then **Added to
 - Folders whose name starts with a dot (`.github`, `.cargo`, `.vscode`, …)
   and everything inside them take nothing: there the button is missing and
   the drawer's note still says read-only. Elsewhere the note reads
-  **Add-only**. No folder is created; pick an existing one.
+  **Add-only**. An upload never creates a folder; pick an existing one, or make
+  it first with **New folder…** (it is add-only too, and can be undone only while
+  it is still empty).
 - Each file can be up to 24 MiB, and the phone adds at most 1 GB a day to a
   project (an undone upload still counts for that day).
 - The file lands untracked: nothing is added to git, committed or synced.
@@ -576,8 +604,8 @@ mobile host**) does it by hand; either appears only while the server is behind.
 
 ## The desktop app in a browser on this computer
 
-**Settings → Mobile → Browser access** has the Mobile host also serve the
-whole desktop app at `http://127.0.0.1:<port>/desktop/` — for a browser on
+**Settings → Mobile → Serve Tabtivity to a browser on this computer** has the
+Mobile host also serve the whole desktop app at `http://127.0.0.1:<port>/desktop/` — for a browser on
 this computer only, never through Tailscale. Open **Show sign-in link** once
 in the browser. The link carries this computer's sign-in token, which is the
 whole protection: anyone with it can use the app as you, so keep it off on a

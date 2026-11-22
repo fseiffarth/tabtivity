@@ -31,7 +31,7 @@ per module (`the_unchanged_pair_…`).
 
 ## Names as values
 
-`brand.rs` declares every persisted name once, in `names!`, which now also
+`src-core/src/brand.rs` (re-exported as `crate::brand`) declares every persisted name once, in `names!`, which now also
 generates `Name` (an enum of them) and `Forms::name`. A `Pair` is the current
 and the old brand; production passes `brand::PAIR`, tests an invented brand
 over the real old one (`testing::RENAMED`). Steps and dual reads never read the
@@ -40,7 +40,7 @@ constants, which is the only way to test "the names differ" while they do not.
 
 `brand.rs` is also compiled into `build.rs`, so it cannot name `services`: the
 hit sink is a function pointer installed by `hits::install()`, first thing in
-`main` and `run`.
+`main`, `run` and the daemon.
 
 ## Steps
 
@@ -159,8 +159,8 @@ has changed.
 
 ## Things that deliberately do not follow the name
 
-- **Pinned ids** (`brand::PINNED_*`, `PINNED_ICS_UID_DOMAIN`): hash contexts
-  and the ICS UID domain. Their values are stored or handed out and cannot be
+- **Pinned ids** (Rust `brand::PINNED_*`; TS `PINNED_ICS_UID_DOMAIN` in
+  `src/lib/brand.ts`): hash contexts and the ICS UID domain. Their values are stored or handed out and cannot be
   recomputed, so they are literals outside the brand table.
 - **The mail store's labels**: a store keeps the label set it was written
   under, for good. There is no re-key.

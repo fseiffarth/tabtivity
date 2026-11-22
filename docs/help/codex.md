@@ -40,6 +40,10 @@ you approve them once:
 3. Use the review/trust key named in the footer, and make sure the row ends
    up switched on (if it is already trusted but off, press the toggle key).
 
+Each project has its own agent home, and Codex asks per home. **Trust in every
+agent home**, in the Session hook notice on the Codex row of Manage CLIs,
+approves Tabtivity's hook in all of them at once.
+
 Until then Tabtivity works out the conversation from Codex's own logs, which can
 mix up two Codex tabs open in the same folder. Manage CLIs shows a "Session
 hook" notice on the Codex row while the hook is not active, and a hint with an

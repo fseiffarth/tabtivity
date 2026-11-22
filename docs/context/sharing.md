@@ -1,7 +1,7 @@
 # Sharing on the hosted server: projects through a hub, calendars through a service
 
 *Design rationale for hosted plan P4 (`docs/tabtivity_hosted_plan.md` §6.2–§6.7,
-§4.3/§4.4), as built on branch `hosted`. Nothing here has run on a real server;
+§4.3/§4.4), as built (merged into `develop` 2026-10-11). Nothing here has run on a real server;
 the live steps are in `docs/hosted_handoff.md` § P4. The gateway, daemons and
 helper this builds on: [`server_gateway.md`](server_gateway.md).*
 
@@ -234,7 +234,7 @@ alone* — and therefore needs a decision before it is built (#2382):
   starve their user's own edits or other users.
 - **Agents read nothing and write nothing there:** the fence hides the
   socket; the agent-facing calendar paths read and write `calendar.json` only
-  (on a server they do not run at all yet, #2339); a proposal naming a
+  (on a server they run through the daemon's root MCP lane, #2391, still on `calendar.json` only); a proposal naming a
   `shared:` calendar is refused.
 - **Switches:** with `calendar_sharing` off the service opens nothing new and
   hides incoming calendars (owners keep theirs); with `calendar` or `todo` off

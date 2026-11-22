@@ -935,10 +935,10 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     recorded there, not a rediscovery.
 
     *Windows*
-    - [ ] **2442a — Windows CI is red; no installer since v0.2.64.** The
+    - [x] **2442a — Windows CI is red; no installer since v0.2.64.** The
       `muse_session` test fixture writes a raw temp path into JSON
       (`muse_session.rs:357`); backslashes make it invalid. JSON-escape `root`
-      in that test module. Blocks every other push.
+      in that test module. Blocks every other push. Fixed in `4403f8f9e` (the test `log()` JSON-escapes the folder).
     - [x] **2442b — Codex ignores its scope home.** Confirmed from Codex's source (`codex-rs/utils/home-dir`: `CODEX_HOME`, else `dirs::home_dir`, which on Windows is the profile Known Folder) and that `CODEX_HOME` must exist. `agent_home::home_override_env` is the per-CLI table (Codex only so far); Windows tabs, the probe and the shell shim set `CODEX_HOME=<home>\.codex` and create it; the persisted-env deny-list drops a layout's `CODEX_HOME`. ⚠️ never run on Windows.
       - [x] 🤖 Automated test — `codex_gets_its_home_variable_on_windows_only`, `a_live_windows_tab_moves_the_profile_set_and_keeps_user_python`
       - [ ] 🖐️ Manual test — Windows: open a Codex tab in a project, `/status` (or `echo %CODEX_HOME%` in its shell) names `…\agent-homes\<project>\.codex`; sign in once and a second project's Codex tab is signed in too

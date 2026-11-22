@@ -65,7 +65,8 @@ Settings → Agents → Manage CLIs (see `agent-clis`).
   tab then shows ☑ (click to open the card) and the card shows the tab (click
   to go to it). Right-click again to open or unlink the card.
 
-Your layout is saved automatically per project.
+Your layout is saved automatically per project. A popped-out window follows
+the main window's zoom unless you give it its own in Settings → Layout.
 
 ## Find a tab
 
@@ -83,8 +84,8 @@ start of the palette does the same. Rebind the chord in Settings → Keyboard.
 
 Shell and Files tabs always return. Agent tabs return when their CLI can
 resume: Claude, Codex, Mistral and OpenCode reopen their exact prior
-conversation; Gemini, Qwen, Grok, Cursor, Copilot and Antigravity continue the
-project's most recent one. Agents without a resume path (Aider, for one) start
+conversation; Gemini, Qwen, Grok, Cursor, Copilot, Antigravity and Muse
+continue the project's most recent one. Agents without a resume path (Aider, for one) start
 fresh from the `+` menu. Closing a popped-out window closes its tabs for good.
 
 ## Archiving tabs
@@ -145,14 +146,12 @@ Host session, the tools and their settings.
 The chip-icon button in the header hubs local Ollama models (load, unload,
 pull, role chips), installed agent CLIs (Default, "+ tab", Root and MCP
 chips), **Manage CLIs…**, **Skills library…**, and live CPU/RAM/GPU meters.
-Hover it for the quick menu; **click** it for the **Models & agents** window,
-which opens on a grid of four tiles, each showing what is there right now —
-**Agents & CLIs** (install, update, remove, plus the same chips), **Local
-models** (everything the menu shows, full size), **Ollama** (install Ollama,
-model storage, downloads, the catalog) and **Skills**. Click a tile (or use
-the arrow keys and Enter) to open it; **All sections** in the title bar goes
-back. Every entry in the menu opens its section directly; Escape or a click
-outside closes the window.
+Hover it for the quick menu; **click** it to open the **Models** view of the
+console window, whose sections are **Local models** (everything the menu shows,
+full size) and **Ollama** (install Ollama, model storage, downloads, the
+catalog). The **Agents** view next to it holds **Agents & CLIs** (install,
+update, remove, plus the same chips), **Usage** and **Skills**. Every entry in
+the menu opens its section directly; Escape closes the window.
 
 Once a day, about a minute and a half after start and then whenever a CLI's last check is
 a day old, the app asks each installed CLI's release feed (npm, PyPI, GitHub

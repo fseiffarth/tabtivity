@@ -57,7 +57,7 @@ the grouping. Each box has a colour, and every surface that names the box wears
 it.
 
 **Make one.** Click `+` beside the pills → **New Box**, or the dashed **+ Box**
-pill that stands beside the ✦ root button until you have a box, or press
+pill that stands beside the ★ root button until you have a box, or press
 Ctrl+K → **New box…**. Type a name (it is pre-filled "Box 1", and must be
 non-empty and not used by another box) and press Enter: the box exists and you
 are already inside it.
@@ -89,11 +89,12 @@ swatch on a project's pill opens that box.
   active tab's project, and the menu header says which. Hover **Agents**,
   **Shell** or **Files** for **Start in…** to choose another project or the
   whole box.
-- The side panel is an accordion: one section per project, one open at a time.
+- The side panel has one collapsible section per project; a header click
+  toggles only that section. With one open it follows the active tab.
   Each header shows the project's colour dot, a dot when its git state needs
   attention, and its agent count. Which sections you fold is remembered per box.
   The `⋯` on a header offers Files/Git, the file manager, project settings and
-  **Open as tab**; the search field above the sections searches the open
+  **Open as tab**; the search field above the sections searches every open
   project; drag a header's grip to reorder the projects.
 - The box pill's status bars count the agents of the box and of its member
   projects.

@@ -1,7 +1,7 @@
 # The browser desktop client — why it is the way it is
 
 *Hosted plan P2 (`docs/tabtivity_hosted_plan.md` §3.5, §7.1, §10), built
-2026-10-03 on branch `hosted`; per-client PTYs (#2347) the same day;
+2026-10-03 (merged into `develop` 2026-10-11, `4ed492a5d`); per-client PTYs (#2347) the same day;
 nothing run live. Handoff:
 `docs/hosted_handoff.md` § P2. Files: `src-tauri/src/services/mobile_control/web_client.rs`,
 `src-tauri/src/services/core_dispatch.rs` (+ `build.rs`),
@@ -91,6 +91,9 @@ loops against one mirror and one `sync.json`. Now:
   admin socket next to it — the whole state dir is a tmpfs inside every agent
   fence), and nothing of one is ever accepted by a route of the other.
   Ten failed logins in a minute lock the login route for a minute.
+  A sign-in link (`/desktop/login?exp=&n=&sig=`, an HMAC of that token over an
+  expiry and nonce, good for one login within `LOGIN_LINK_TTL`, 10 min;
+  `rotate_login_token` retires all of them) is the other way in.
 - **Localhost only, enforced per route.** Every `/desktop/*` route and the
   content origin refuse a `Host` that is not a loopback literal on the
   expected port; the socket also requires `Origin` to be `http://` + that same

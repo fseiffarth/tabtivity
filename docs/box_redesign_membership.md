@@ -5,7 +5,7 @@
 Lens: how a box is learned about, created, filled, edited and dissolved.
 Header access (lens a) and in-box arrangement (lens b) are touched only where
 this design depends on them. Based on the code as of 2026-11-03, not the docs
-alone. Nothing here is built.
+alone.
 
 ## 1. Today
 

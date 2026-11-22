@@ -121,10 +121,13 @@ the *why*.
     file, and only a regular file no larger than listed is recorded in the
     manifest afterwards. A manual pull has no per-file cap: the SFTP path
     streams a file over 64 MiB instead of reading it whole.
-- **Concurrent writers are serialized at their ownership boundary.** Every
+- **Concurrent writers are serialized at their ownership boundary.** One lock
+  per remote project, `services::sync_op` (in-process async mutex plus a
+  `<state_dir>/leases/` file lock for the other process), is taken whole by every
   lockstep reconcile—poll, watcher, retry, checkout, pairing, resolve, or backup
-  restore—takes the same per-project async guard before touching bundle paths or
-  `git_peer.json`. Worker fan-out has the equivalent per-project/host in-flight
+  restore—and by the auto pass and each manual byte pull/push/delete; a user's
+  click (`acquire_manual`) makes the auto pass yield at its next safe point. It is
+  not reentrant: take it only at command and loop entry points. Worker fan-out has the equivalent per-project/host in-flight
   guard, including its manual button; an ask that meets a running sync is
   queued (one coalesced rerun from the newest HEAD, forced if any ask was),
   never dropped. The local-loss journal locks its complete

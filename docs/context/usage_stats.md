@@ -1,7 +1,5 @@
 # Usage stats
 
-Referenced from `AGENTS.md`.
-
 **Usage stats are local-only** (`usage_stats.json`, `schema::usage_stats`): a
 rolling hour+day counter store behind the daily recap (which agents/models you
 used, prompts asked, shell commands, file churn, tabs). It clones
@@ -68,7 +66,7 @@ let old history in later. Homes are agent-writable, so reads go through
 `home_io` (no symlinks), long lines are skipped unbuffered, counts and
 timestamps are bounded, and each scan has a byte/file budget — past it the
 command answers `partial` and the frontend asks again a few times (capped),
-never polling. CLIs Eldrun cannot read show as "not reported", never `0`; no
+never polling. CLIs Tabtivity cannot read show as "not reported", never `0`; no
 cost figures.
 
 **The CLI overview** (`services::cli_overview`, `docs/done/cli_overview_plan.md`)

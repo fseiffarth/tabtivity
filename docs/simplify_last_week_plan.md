@@ -66,5 +66,5 @@ Everything else was meant to be behaviour-identical.
 | 21 | repo-wide | `wrapStep` for the remaining `(at + delta + n) % n` sites. | Applied to the steering files only. |
 | 23 | `components/settings/ClaudeTokenRow.tsx` | The In use / Standby label goes stale after a login import or sign-out. | Needs `AgentsPanel`'s `loginsVersion` passed to both copies. |
 | 11 | `components/mail/MailView.tsx` | Inbox tab key handler. | Not the same contract as the view-bar tabs (no arrows, middle-click close). |
-| — | `services/web_safety.rs` `RESERVED_NAMES` | A fourth Windows device-name list (mail attachments). | Outside the finding; could use `paths::is_windows_device_name`. |
+| — | `src-core/src/services/web_safety.rs` `RESERVED_NAMES` | A fourth Windows device-name list (mail attachments). | Outside the finding; could use `paths::is_windows_device_name`. |
 | 47 | `commands/tex/host.rs:66,115` | `engine.filter(ENGINES.contains)`. | Kept on purpose: the value reaches a remote command line. |

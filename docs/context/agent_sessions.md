@@ -38,10 +38,13 @@ in the card instead of guessed. These controls are tagged as untested live.
 
 ## Mechanism
 
-`services/agent_session.rs`, installed at startup: Tabtivity installs a
-`SessionStart` hook — into `~/.claude/settings.json` (JSON) and
-`~/.codex/config.toml` (TOML text-append) — that records each tab's live
-`session_id` under `~/.local/share/tabtivity/live_sessions/<key>`, keyed by the
+`services/agent/agent_session.rs`, installed at startup: Tabtivity installs a
+`SessionStart` hook — into each Tabtivity-owned agent home
+(`register_hooks_in_home`: `.claude/settings.json` JSON, `.codex/config.toml`
+TOML text-append, Vibe's `hooks.toml`; never the user's own `~/.claude` or
+`~/.codex`) — that records each tab's live
+`session_id` under `<state_dir>/live_sessions/<key>` (`~/.local/share/tabtivity/`
+on Linux), keyed by the
 `TABTIVITY_TAB_UID` env var Tabtivity sets on the agent. At spawn,
 `resolve_{claude,codex}_session` reads that to resume the *current* session,
 following a `/clear`. The same script is also registered as a Claude `Stop`
@@ -501,32 +504,23 @@ folder-trust question came back on every Tabtivity restart, since a fresh Codex
 start in an untrusted cwd is exactly what asks it. `codex_session_exists` now
 takes either answer, and `services::codex_store` reads the store (read-only,
 best-effort: a renamed file, table or column yields "no", never an error). The
-store needs the SQLite-aware scope mount described below; the rollout directory
-continues through the ordinary per-entry rule.
+store lives in the scope's agent home beside the rollout directory (see below).
 
-The *other* half of the repeated question is the fence's config shadow.
-`~/.codex/config.toml` is staged as a per-project throwaway copy so an agent
-cannot repoint the host's SessionStart hook, and re-copying the host original at
-every spawn threw away the `[projects."<path>"] trust_level` Codex had just
-recorded there. `staged_config_mounts` now carries those tables — and only
-those — across a restage, so the answer the user gave inside the fence sticks
-while the rest of the file stays the host's, and nothing is ever written back to
-the host.
+The *other* half of the repeated question was the folder-trust answer: a fresh
+Codex start in an untrusted cwd asks it. Codex now runs in the scope's own agent
+home (`<state_dir>/agent-homes/<scope>`, `services::agent_home`), where its
+`config.toml` and the `[projects."<path>"] trust_level` Codex records there
+persist like any other home file, so the answer sticks; `agent_home` seeds the
+trust entry for the tab's folder and never writes the user's own `~/.codex`.
 
 Codex's SQLite files are different from ordinary agent-state entries. SQLite
 replaces its `-wal`/`-shm` sidecars, so bind-mounting `state_<n>.sqlite` and its
-siblings one file at a time pins old inodes: the rollout JSONL survives through
-the mounted `sessions/` directory, but the thread row and paginated turn store
-can disappear with the fence's tmpfs home. Codex 0.154 then discovers the
-rollout on `codex resume <id>` but fails bootstrap with `list_turns is not
-supported yet`. Linux-fenced and containerized tabs now mount a durable,
-per-scope Codex state directory over `~/.codex`; safe host directories are
-mounted beneath it, while `config.toml` remains shadowed. The state and thread
-history databases are seeded once with consistent SQLite snapshots, and Codex
-can thereafter create/rotate every database and sidecar normally. The directory
-lives under `<state_dir>/codex-state/`, outside the startup-cleared sandbox
-stage. macOS Seatbelt and unfenced native tabs continue to use the host store
-directly because they do not substitute a tmpfs home.
+siblings one file at a time pins old inodes and the thread row can vanish
+(Codex 0.154 then fails `codex resume <id>` with `list_turns is not
+supported yet`). The agent home avoids that: the fence mounts the whole home
+directory, so Codex creates and rotates every database and sidecar normally.
+A scope's earlier per-scope `<state_dir>/codex-state/<key>` store is imported
+into its home once, at seeding (`agent_home`'s `SEEDED_MARKER`).
 
 ## Only the tab's own session may move the record
 
@@ -624,14 +618,13 @@ saved, so a relaunch ranks which tabs come back running.
 `--resume` to `--session-id <launch>` when it can find no log for the id, so
 every place a log can be has to be probed:
 
-- `~/.claude/projects/*/<id>.jsonl` — the ordinary case;
-- the project's **sandbox stage** (`<state_dir>/sandbox-stage/<project>/
-  claude-projects/`), where a fenced or contained agent writes a transcript for
-  a cwd that had no host dir yet. It is harvested into `~/.claude/projects`
-  when the tab goes away — and, for a crashed run, by
-  `sandbox::harvest_and_clear_stage` at startup, which runs **synchronously
-  before the window can restore anything** (it used to share the off-thread
-  container sweep, racing the restored tabs);
+- `<state_dir>/agent-homes/<scope>/.claude/projects/*/<id>.jsonl`
+  (`claude_projects_roots`; the assistant scope also its `.local` home). Every
+  local tab's Claude runs with that home as `$HOME`, so this is the one place
+  its transcript lands; a scope's first seeding copied the transcripts it had
+  under the user's `~/.claude/projects` (`services::agent_home`). Startup
+  wipes the throwaway per-scope stage (`sandbox::clear_stage`) **synchronously,
+  before the window can restore anything**, so no fenced spawn races it;
 - a **remote** tab's Claude runs on the far host, where no hook is installed
   and the local probe sees nothing. The remote command therefore decides on the
   host (`ssh_exec::host_side_resume`): a transcript named after the id under

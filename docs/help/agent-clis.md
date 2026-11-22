@@ -54,7 +54,7 @@ the detail pane lists the last 20, and **While you were away** shows the ones
 reported while you were gone, marked as agent-reported with the time the app
 received them. Agents are limited to 30 calls a minute.
 
-Manage CLIs → Tools → **Let agents rename their own tab and leave notes
+Manage CLIs → Tabtivity tools → **Let agents rename their own tab and leave notes
 (Cockpit MCP)** is on by default. Turning it off refuses running tabs' calls
 too. Turn it on before launching a new agent to give that agent the tools.
 Existing MCP tools retain their separate permissions. Tabby keeps its web and
@@ -86,7 +86,7 @@ local tabs reach only each other; elsewhere local-model tabs and cloud agent
 tabs never mix. An agent is limited to 30 sends and 120 list or inbox calls an
 hour.
 
-Manage CLIs → Tools → **Let agent tabs of a project message each other
+Manage CLIs → Tabtivity tools → **Let agent tabs of a project message each other
 (MCP)** is on by default; off, running tabs' calls are refused. Below it, each
 project has an off-by-default switch to wake idle tabs: with it on, a tab that
 gets new unread messages is sent the fixed notice by itself once idle, at
@@ -94,9 +94,10 @@ most six times an hour.
 
 ## Install an agent CLI
 
-1. Click the **Models & agents** button in the header (chip icon) and pick
-   the **Agents & CLIs** tile — or hover it and pick **Manage CLIs…**. The
-   same list is also in **Settings → Agents → Manage CLIs**.
+1. Open the **Agents** view of the Cockpit window (the header's Agents
+   button) — or hover the **Models & agents** button in the header (chip icon)
+   and pick **Manage CLIs…**. The same list is also in **Settings → Agents →
+   Manage CLIs**.
 2. Find the agent. Installed ones are listed first; use the search box for
    the rest.
 3. Click **Install <name>**. Tabtivity runs the vendor's official installer and
@@ -319,8 +320,8 @@ vendor's cloud needs a plan that includes it.
 
 ## Talk to an agent as a chat
 
-Claude, Codex and OpenCode tabs can be used as a chat instead of the
-terminal — the same chat view the phone's Focus uses. Click **Chat** at the
+Claude, Codex, OpenCode, Antigravity, Copilot and Meta Muse Code tabs can be
+used as a chat instead of the terminal — the same chat view the phone's Focus uses. Click **Chat** at the
 right end of the prompt row above the terminal:
 your prompts show on the right, the agent's answers on the left as
 formatted text, and slash commands as thin rules (a picture from the inbox
@@ -335,8 +336,8 @@ that box, or click **Terminal**, to go back. The terminal keeps running
 underneath, so nothing is lost by switching. The chat is optional: tabs
 open on their terminal until you pick Chat. The choice is kept per agent
 and remembered: picking Chat (or Terminal) in a Claude tab switches every
-open Claude tab, and new Claude tabs open the same way, while Codex and
-OpenCode tabs keep their own choice. Agents without a chat view keep their
+open Claude tab, and new Claude tabs open the same way, while each other
+agent's tabs keep their own choice. Agents without a chat view keep their
 terminal.
 
 **Cache cold.** The provider keeps a conversation's prompt cache only for a
@@ -401,10 +402,11 @@ While AI is off:
 
 ## Resume after a restart
 
-Claude, Codex, Mistral and OpenCode tabs reopen their exact conversation (an
-OpenCode tab that never got a prompt starts fresh). Gemini, Qwen, Grok,
-Cursor, Copilot and Antigravity continue the project's most recent
-conversation. Others start fresh.
+Claude, Codex, Mistral, OpenCode and Copilot tabs reopen their exact
+conversation (an OpenCode tab that never got a prompt starts fresh).
+Antigravity and Meta Muse Code tabs reopen their own conversation once they
+have taken a prompt; before that they start fresh. Gemini, Qwen, Grok, Cursor
+and Droid continue the project's most recent conversation. Others start fresh.
 
 ## Permission modes
 
@@ -470,7 +472,7 @@ is not adopted until you sign out first.
 ## Custom agents and skills
 
 - `+` → **Add agent…** registers any command as a custom agent.
-- **Skills library…** (the Models & agents window's **Skills** tile, or the
+- **Skills library…** (in the Cockpit window's Agents view, or the
   `+` menu) installs reusable
   Agent Skills into one project (`.claude/skills/`) or for every project on
   this machine (Tabtivity's own agent settings, copied into every agent tab's

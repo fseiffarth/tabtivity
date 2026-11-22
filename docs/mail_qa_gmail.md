@@ -18,8 +18,8 @@ doesn't**, so a surprise is reportable rather than just confusing.
 1. **Rebuild.** The last change touched `src-tauri/`, so hot-reload will not pick
    it up. Restart your instance from the rebuilt binary.
 2. **Check the flag is on.** The client sits behind the `mail_client`
-   experimental flag: off in a release build unless debug mode is on. If no Mail
-   tab type is offered, that is the flag, not a bug.
+   experimental flag, which is on by default (Settings → Mail → "Mail client").
+   If the header has no Mail button, that is the flag, not a bug.
 3. **Get an app password.** `myaccount.google.com/apppasswords` — needs 2-Step
    Verification enabled. Your normal password will not work; Google retired basic
    auth. Make one *for this test* so you can revoke it in Phase 7.

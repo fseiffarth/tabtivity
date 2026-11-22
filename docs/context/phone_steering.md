@@ -53,10 +53,10 @@ does not resolve is untouched, which keeps Tab, F-keys and browser shortcuts.
 
 ## Why some views pause steering
 
-The files library, the viewers and Mark up already own arrows, `/` and Esc.
-Rather than edit those files (several are dirty on develop), the engine lists
-their root classes (`OWN_KEYS_SELECTOR`) and passes every key through while one
-is on top; `MobileKeydownGuards` fails if a class goes missing. A sheet opened
+The files library and the markup/outbox viewer already own arrows, `/` and Esc.
+Rather than edit those files, the engine lists their root classes
+(`OWN_KEYS_SELECTOR`: `.files-library`, `.outbox-viewer`) and passes every key
+through while one is on top; `MobileKeydownGuards` fails if a class goes missing. A sheet opened
 over one is the top surface and is walked as `region`.
 
 ## The legend and its room

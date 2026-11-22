@@ -105,7 +105,7 @@ which may be a session made outside Tabtivity). A remote session lives on under
 its host's tmux daemon; a crash or a respawn **leaves any session alive**, and
 so does an app exit for a **remote** session. A **clean quit ends every local `tabtivity-*` session** —
 the window's × runs `local_tmux_kill_app_sessions` before `destroy()`, and
-`RunEvent::Exit` runs the same `tmux_local::kill_tabtivity_sessions` as the net for
+`RunEvent::Exit` runs the same `tmux_local::kill_app_sessions` as the net for
 exits that never reach frontend code (the dev launcher's Ctrl+C: SIGTERM/SIGINT
 are routed into `app.exit()` on Unix). Only a crash leaves local sessions
 behind, and those are what the next launch reattaches.

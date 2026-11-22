@@ -16,7 +16,7 @@ out of scope** — `docs/ui_unification_plan.md` owns every CSS/token item in
 viewer territory and its Tier 1 landed the same day; findings of that kind are
 handed back there by ID rather than re-filed here.
 
-**Status.** The review itself was read-only — every agent was held to reading,
+**History.** The review itself was read-only — every agent was held to reading,
 and no agent edited anything. Since then **V-01 has landed** (`FileViewerPane.
 tsx`, +34/−4) and **V-02 was landed and then reverted** (see V-26). Everything
 else in this document is still a plan. Live verification is the user's alone —

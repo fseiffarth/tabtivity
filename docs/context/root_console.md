@@ -525,11 +525,12 @@ does not exist for it — the same "unknown tool" an invented name gets.
   per request.
 - **"Local" means the model, not the endpoint** (gap 25). A loopback Ollama
   runs an Ollama cloud model (`*-cloud`) on ollama.com. The tab's model is
-  fixed at spawn in `Identity::model` (`local_model_of`: the raw
-  `TABTIVITY_LOCAL_MODEL`, else the `VIBE_ACTIVE_MODEL` alias mapped back
-  through the "MCP"-chipped models; a disagreeing pair or an ambiguous alias
-  is `None`; never read from the Vibe home, which the tab writes). Each read
-  asks `ollama::model_is_local_at` with the spawn endpoint: the model must be
+  fixed at spawn in `Identity::model` (`VibeLaunch::model` from
+  `agent_privacy::local_vibe_launch`: the model the verified
+  `vibe_local/<alias>` home's `config.toml` names, which a
+  `TABTIVITY_LOCAL_MODEL` label must match; a spawn that is not verified
+  local gets no token, and the label alone proves nothing). Each read
+  asks `ollama_client::model_is_local_at` with the spawn endpoint: the model must be
   listed by that endpoint's `/api/tags` with no remote and no `cloud` tag
   (cached a minute; an unreadable list, no server or no recorded model fail
   closed) — else `LOCAL_READ_CLOUD`. The mail assistant

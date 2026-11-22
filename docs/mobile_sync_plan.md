@@ -107,7 +107,7 @@ Line numbers are from 2026-10-23; verify before relying on them.
 ## Decisions to confirm
 
 1. **Connect from the phone.**
-   - (a) *Never* (matches `mobile_remote_projects_plan.md` decision 2): the
+   - (a) *Never* (matches `done/mobile_remote_projects_plan.md` decision 2): the
      phone shows the lamp and "Connect on the desktop".
    - (b) *Promptless only*: the phone's Connect uses the eligibility rule
      the desktop's silent auto-connect uses (`stores/projects.ts`
@@ -307,7 +307,7 @@ Connect and Measure host show an extra "this is an HPC host" line
 Per-block merge (`CompareView`) on the phone; worker-host sync toggles
 (`RemoteMachinesWindow`); "Download to…" outside the mirror; box scopes;
 container and VM projects; OpenVPN; any headless sync without a window;
-remote tabs (`mobile_remote_projects_plan.md`).
+remote tabs (`done/mobile_remote_projects_plan.md`).
 
 ## Strings, untested tags, docs
 
