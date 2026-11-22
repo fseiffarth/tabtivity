@@ -6974,10 +6974,13 @@ export const enSource = {
   "machines.waitingForLogin": "Waiting for the login…",
   "machines.loggedInAdd": "I've logged in — add",
   "machines.loggedInEdit": "I've logged in — save",
+  "machines.loggedInRetry": "I've logged in — reconnect",
+  "machines.loginInTerminalRetryTitle": "Open this host's SSH login in the root terminal — for a host that wants a key, a passphrase or a code instead of a password. {app} never sees what you type, and reconnects the machine once the login is through.",
   "machines.err.address": "Enter a host as [user@]host[:port]",
   "machines.err.saveFailed": "Logged in, but the machine couldn't be saved.",
   "machines.err.noLoginYet": "No login detected yet. Finish logging in in the root terminal, then click “I've logged in — add”.",
   "machines.err.noLoginYetEdit": "No login detected yet. Finish logging in in the root terminal, then click “I've logged in — save”.",
+  "machines.err.noLoginYetRetry": "No login detected yet. Finish logging in in the root terminal, then click “I've logged in — reconnect”.",
 
   // Import / export.
   "machines.import": "Import…",

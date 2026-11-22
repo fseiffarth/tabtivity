@@ -347,6 +347,7 @@ export const UNTESTED = {
   "machinesIndicator.15": { area: "header", what: "MachinesIndicator · — off for an HPC cluster" },
   "machinesIndicator.16": { area: "header", what: "MachinesIndicator · HPC cluster (login node)" },
   "machinesIndicator.17": { area: "header", what: "MachinesIndicator · Add to a project: Already added" },
+  "machinesIndicator.18": { area: "header", what: "MachinesIndicator · Retry form: Log in in terminal" },
   "machinesIndicator.2": { area: "header", what: "MachinesIndicator · Reading file…" },
   "machinesIndicator.3": { area: "header", what: "MachinesIndicator · Save password" },
   "machinesIndicator.4": { area: "header", what: "MachinesIndicator · Connect on launch & VPN-up" },
