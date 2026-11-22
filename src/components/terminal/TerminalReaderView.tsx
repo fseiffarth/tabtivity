@@ -928,6 +928,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (unlocked) {
       const active = document.activeElement;
       const fromNowhere = !active || active === document.body;
+      // The Reader holds Diffs/Data too, but `focused` is false under them.
       const fromThisPane = !!box.closest(".terminal-reader")?.contains(active)
         || !!terminalFor(ptyId)?.element?.contains(active);
       if (!fromNowhere && !fromThisPane) return;
@@ -2024,10 +2025,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     stuck.current = true;
   }, [sessionId, chatId]);
   // An earlier chat takes the keyboard for its bar (Esc goes back): the
-  // composer is not there to hold it.
+  // composer is not there to hold it. Not over Diffs or Data: they hold it.
   useEffect(() => {
-    if (chatId && visible) regionRef.current?.focus({ preventScroll: true });
-  }, [chatId, visible]);
+    if (chatId && visible && !changesOpen && !filesOpen) regionRef.current?.focus({ preventScroll: true });
+  }, [chatId, visible, changesOpen, filesOpen]);
 
   // Read at once, then whenever the backend's watch on the transcript says it
   // changed (`watchedReads`), with a slow backstop — or every 2 s while the
@@ -2578,6 +2579,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const resumeLabel = t(live.working ? "terminal.chats.resumeBusy" : "terminal.chats.resumeHint");
   const onRegionKey = (event: KeyboardEvent) => {
     if (!browsed || event.key !== "Escape") return;
+    // Diffs and Data sit inside the Reader: Esc in a note box, the file
+    // viewer or the panel itself is theirs, never the earlier chat's Back.
+    if ((event.target as Element).closest?.(".terminal-changes")) return;
     event.preventDefault();
     if (openStep) subagentUp();
     else chatBack();
@@ -2729,8 +2733,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     />
     <div
       ref={regionRef}
-      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}`}
-      hidden={!shown || changesOpen || filesOpen}
+      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}${changesOpen || filesOpen ? " panel-open" : ""}`}
+      hidden={!shown}
       role="region"
       aria-label={t("terminal.reader.title")}
       tabIndex={browsed ? -1 : undefined}
@@ -2963,6 +2967,44 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           </button>
         )}
       </div>
+      {/* Diffs or Data in place of the chat, which `.panel-open` hides without
+          unmounting it: inside the Reader, so the composer under them is the
+          same one. Beside the stream, never in it: none of the chat's
+          providers wraps the panels. */}
+      {changesOpen && shown && tab && (
+        <TerminalReaderChanges
+          scope={scope}
+          ptyId={ptyId}
+          tab={tab}
+          cwd={cwd}
+          visible={visible}
+          subagent={subToken}
+          subagentTitle={openStep ? openStep.task || openStep.role : undefined}
+          chat={chatId}
+          chatTitle={browsed?.chat.title}
+          steerId={ptyId}
+          onClose={() => onShowChat?.()}
+        />
+      )}
+      {filesOpen && shown && (
+        <TerminalReaderFiles
+          tabKey={tabKey}
+          files={readerFiles}
+          links={readerLinks}
+          onOpenLink={onOpenUrl}
+          use24h={use24h}
+          picked={shownFile}
+          projectId={projectId}
+          disabled={pathContext.disabled}
+          visible={visible}
+          scopeNote={openStep ? t("terminal.changes.subagent", { name: openStep.task || openStep.role || "" })
+            : browsed ? t("terminal.changes.chat", { name: browsed.chat.title ?? "" }) : undefined}
+          onPick={setFilePicked}
+          onOpenTab={openFileAsTab}
+          steerId={ptyId}
+          onClose={() => onShowChat?.()}
+        />
+      )}
       {/* No facts row in a Tabby chat: the view's own model dropdown says enough. */}
       {tab && !browsed && scope !== ASSISTANT_SCOPE && (
         <TerminalReaderFacts
@@ -3031,39 +3073,5 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       {workspacesMenu}
     </>, navigationSlot)}
     {checkpoints.dialog}
-    {changesOpen && shown && tab && (
-      <TerminalReaderChanges
-        scope={scope}
-        ptyId={ptyId}
-        tab={tab}
-        cwd={cwd}
-        visible={visible}
-        subagent={subToken}
-        subagentTitle={openStep ? openStep.task || openStep.role : undefined}
-        chat={chatId}
-        chatTitle={browsed?.chat.title}
-        steerId={ptyId}
-        onClose={() => onShowChat?.()}
-      />
-    )}
-    {filesOpen && shown && (
-      <TerminalReaderFiles
-        tabKey={tabKey}
-        files={readerFiles}
-        links={readerLinks}
-        onOpenLink={onOpenUrl}
-        use24h={use24h}
-        picked={shownFile}
-        projectId={projectId}
-        disabled={pathContext.disabled}
-        visible={visible}
-        scopeNote={openStep ? t("terminal.changes.subagent", { name: openStep.task || openStep.role || "" })
-          : browsed ? t("terminal.changes.chat", { name: browsed.chat.title ?? "" }) : undefined}
-        onPick={setFilePicked}
-        onOpenTab={openFileAsTab}
-        steerId={ptyId}
-        onClose={() => onShowChat?.()}
-      />
-    )}
   </>, host);
 }

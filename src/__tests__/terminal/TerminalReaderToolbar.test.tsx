@@ -100,7 +100,9 @@ describe("desktop conversation toolbar", () => {
     fireEvent.change(box, { target: { value: "keep this draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     await screen.findByText("No file changes in this conversation yet.");
-    expect(screen.queryByRole("textbox")).toBeNull();
+    // The same box, under the panel inside the Reader.
+    expect(screen.getByRole("textbox")).toBe(box);
+    expect(host.querySelector(".terminal-reader")?.classList.contains("panel-open")).toBe(true);
     fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
     expect(screen.getByRole("tab", { name: "Terminal" }).getAttribute("aria-selected")).toBe("true");
     await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Chat" })));
@@ -137,7 +139,8 @@ describe("desktop conversation toolbar", () => {
     // Nothing picked yet: the newest file is shown.
     expect(option.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("file-viewer").textContent).toBe("/project/src/result.ts");
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(host.querySelector(".terminal-reader")?.classList.contains("panel-open")).toBe(true);
+    expect(host.querySelector(".terminal-reader")?.contains(host.querySelector(".terminal-files"))).toBe(true);
     expect(openFile).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /^Open in a tab/ }));
     expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ entry: expect.objectContaining({ path: "/project/src/result.ts" }) }));

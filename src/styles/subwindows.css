@@ -3406,6 +3406,20 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   font-family: var(--font-sans);
   font-size: var(--text-sm);
 }
+/* Diffs and Data inside the Reader, a flex child in place of the chat (which
+   stays mounted, hidden). `z-index: 0`: its own stacking context, below the
+   composer's upward menus (`/`, Commit, the facts pickers). */
+.terminal-reader > .terminal-changes {
+  position: relative;
+  inset: auto;
+  z-index: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.terminal-reader.panel-open > :is(.terminal-reader-subagent-bar, .terminal-reader-subagent-index, .terminal-reader-stream),
+.terminal-reader.panel-open :is(.terminal-reader-facts-wrap, .terminal-reader-composer, .terminal-reader-error, .terminal-reader-waiting, .terminal-reader-chat-foot) {
+  display: none;
+}
 .terminal-changes-body { display: flex; flex: 1; min-height: 0; }
 .terminal-changes-body > .terminal-changes-files {
   width: clamp(160px, 22%, 260px);

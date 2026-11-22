@@ -11,6 +11,7 @@ import { TerminalReaderView } from "../../components/terminal/TerminalReaderView
 import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStrip";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
+import { useReaderChatsStore } from "../../lib/agents/agentChats";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1", launchedAt: 1000 };
@@ -45,6 +46,7 @@ describe("the Reader's Changes panel", () => {
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));
     useAgentReaderStore.setState({ byAgent: {} });
     useAgentClearUndoStore.setState({ cleared: {}, marks: {} });
+    useReaderChatsStore.setState({ byPty: {} });
     host = document.createElement("div");
     document.body.appendChild(host);
   });
@@ -67,9 +69,12 @@ describe("the Reader's Changes panel", () => {
     expect(invoke).toHaveBeenCalledWith("agent_tab_changes", expect.objectContaining({
       agent: "claude", projectId: "p", sessionId: "launch-1", tabDir: "/p", subagent: null, limit: null,
     }));
-    // Chat stays mounted with its draft, while Diffs owns the pane.
+    // Chat stays mounted with its draft, while Diffs owns the pane: the panel
+    // sits inside the Reader, which hides its chat by class.
     const chat = host.querySelector<HTMLElement>(".terminal-reader");
-    expect(chat?.hidden).toBe(true);
+    expect(chat?.hidden).toBe(false);
+    expect(chat?.classList.contains("panel-open")).toBe(true);
+    expect(chat?.contains(panel)).toBe(true);
     expect(panel.classList.contains("terminal-changes-tab")).toBe(true);
     expect(panel.querySelector('[role="separator"]')).toBeNull();
     const cards = [...panel.querySelectorAll<HTMLElement>(".terminal-changes-card")];
@@ -154,6 +159,25 @@ describe("the Reader's Changes panel", () => {
     await screen.findByText("No file changes in this conversation yet.");
     fireEvent.click(screen.getByRole("button", { name: "Hide the diffs" }));
     expect(onShowChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an earlier chat on Esc in the Diffs panel", async () => {
+    const chats = [
+      { id: "c-now", title: "the work at hand", updated: Date.now(), current: true },
+      { id: "c-1", title: "fix the parser", updated: Date.now() - 86_400_000, current: false },
+    ];
+    useReaderChatsStore.getState().browse("p:agent-1", chats[1], chats);
+    reader(host, true);
+    const panel = await waitFor(() => {
+      const found = host.querySelector<HTMLElement>(".terminal-changes");
+      expect(found?.querySelectorAll(".terminal-changes-card").length).toBe(3);
+      return found!;
+    });
+    fireEvent.keyDown(panel, { key: "Escape" });
+    expect(useReaderChatsStore.getState().byPty["p:agent-1"]?.chat.id).toBe("c-1");
+    // Over the chat, Esc still goes back.
+    fireEvent.keyDown(host.querySelector<HTMLElement>(".terminal-reader")!, { key: "Escape" });
+    expect(useReaderChatsStore.getState().byPty["p:agent-1"]).toBeUndefined();
   });
 
   it("is switched from the prompt strip, chat shown or not", () => {

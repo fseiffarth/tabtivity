@@ -164,7 +164,7 @@ describe("terminalScroll", () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
     host.appendChild(term.element);
-    host.insertAdjacentHTML("beforeend", '<div class="terminal-reader" hidden><div class="terminal-reader-list"></div></div><aside class="terminal-changes"><div class="terminal-changes-list"></div></aside>');
+    host.insertAdjacentHTML("beforeend", '<div class="terminal-reader panel-open"><div class="terminal-reader-list"></div><aside class="terminal-changes"><div class="terminal-changes-list"></div></aside></div>');
     const chat = host.querySelector<HTMLElement>(".terminal-reader-list")!;
     const diff = host.querySelector<HTMLElement>(".terminal-changes-list")!;
     Object.defineProperty(diff, "clientHeight", { value: 500 });
@@ -175,6 +175,9 @@ describe("terminalScroll", () => {
     expect(chat.scrollTop).toBe(0);
     expect(wheels).toEqual([]);
     host.querySelector(".terminal-changes")!.remove();
+    const root = host.querySelector<HTMLElement>(".terminal-reader")!;
+    root.classList.remove("panel-open");
+    root.hidden = true;
     scrollTerminal("p:t", -0.5);
     expect(wheels).toEqual([-1, -1, -1, -1]);
   });
