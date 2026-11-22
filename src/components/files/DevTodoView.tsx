@@ -5,7 +5,7 @@ import { renderMarkdown, taskSourceLines, toggleTaskCheckbox } from "../../lib/v
 import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
-import { RefreshIcon } from "../common/icons/Icon";
+import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "../common/icons/Icon";
 
 /**
  * The dev build's Todo view: the checkout's `todo/*.md` groups, each folding
@@ -177,51 +177,54 @@ export function DevTodoView({ active }: { active: boolean }) {
   };
 
   return (
-    <div className="side-panel-scroll dev-todo-view">
-      <div className="dev-todo-head">
-        <strong>{t("devTodo.title")}</strong>
+    <div className="dev-todo-view">
+      <div className="sp-toolbar">
+        <span className="sp-toolbar-title">{t("devTodo.title")}</span>
         <UntestedTag id="devTodo.title" />
-        <button
-          className="toolbar-btn toolbar-btn--sm"
-          style={{ marginLeft: "auto" }}
-          onClick={() => void reload()}
-          title={t("common.refresh")}
-          aria-label={t("common.refresh")}
-        >
-          <RefreshIcon />
-        </button>
+        <div className="sp-toolbar-end">
+          <button
+            type="button"
+            className="toolbar-btn toolbar-btn--sm"
+            onClick={() => void reload()}
+            title={t("common.refresh")}
+            aria-label={t("common.refresh")}
+          >
+            <RefreshIcon />
+          </button>
+        </div>
       </div>
-      {error && <ErrorNote className="project-dialog-error" error={error} />}
-      {notice && <div className="dev-todo-notice">{notice}</div>}
-      {groups == null ? (
-        <div className="file-tree-empty">{t("common.loading")}</div>
-      ) : groups.length === 0 ? (
-        <div className="file-tree-empty">{t("devTodo.empty")}</div>
-      ) : (
-        groups.map((g) => {
-          const unfolded = open.includes(g.name);
-          const text = texts[g.name];
-          return (
-            <section key={g.name} className="dev-todo-group">
-              <button
-                className={`dev-todo-group-head${unfolded ? " open" : ""}`}
-                aria-expanded={unfolded}
-                title={`todo/${g.name}`}
-                onClick={() => toggleOpen(g.name)}
-              >
-                <span className="dev-todo-chevron" aria-hidden="true">{unfolded ? "▾" : "▸"}</span>
-                <span className="dev-todo-group-title">{g.title}</span>
-                <span className="dev-todo-count" title={t("devTodo.counts", { open: g.open, done: g.done })}>
-                  {g.open}
-                </span>
-              </button>
-              {unfolded && (text == null
-                ? <div className="file-tree-empty">{t("common.loading")}</div>
-                : <GroupBody text={text} onToggle={(index) => void onToggle(g.name, index)} />)}
-            </section>
-          );
-        })
-      )}
+      <div className="side-panel-scroll dev-todo-list">
+        {error && <ErrorNote className="project-dialog-error" error={error} />}
+        {notice && <p className="sp-note dev-todo-notice">{notice}</p>}
+        {groups == null ? (
+          <p className="sp-note">{t("common.loading")}</p>
+        ) : groups.length === 0 ? (
+          <p className="sp-note">{t("devTodo.empty")}</p>
+        ) : (
+          groups.map((g) => {
+            const unfolded = open.includes(g.name);
+            const text = texts[g.name];
+            return (
+              <section key={g.name} className="dev-todo-group">
+                <button
+                  type="button"
+                  className={`sp-head dev-todo-group-head${unfolded ? " open" : ""}`}
+                  aria-expanded={unfolded}
+                  title={`todo/${g.name}`}
+                  onClick={() => toggleOpen(g.name)}
+                >
+                  {unfolded ? <ChevronDownIcon className="dev-todo-chevron" /> : <ChevronRightIcon className="dev-todo-chevron" />}
+                  <span className="dev-todo-group-title">{g.title}</span>
+                  <span className="sp-head-end" data-testid="dev-todo-counts">{t("devTodo.counts", { open: g.open, done: g.done })}</span>
+                </button>
+                {unfolded && (text == null
+                  ? <p className="sp-note">{t("common.loading")}</p>
+                  : <GroupBody text={text} onToggle={(index) => void onToggle(g.name, index)} />)}
+              </section>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

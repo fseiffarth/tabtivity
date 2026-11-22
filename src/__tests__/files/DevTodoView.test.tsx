@@ -4,7 +4,7 @@
  * the file in between.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
@@ -53,10 +53,13 @@ beforeEach(() => {
 });
 
 describe("DevTodoView", () => {
-  it("lists every group with its open count", async () => {
+  it("lists every group as a folding head with its open and done counts", async () => {
     render(<DevTodoView active />);
-    expect((await screen.findByRole("button", { name: /Group A/ })).textContent).toContain("2");
-    expect(screen.getByRole("button", { name: /Done/ }).textContent).toContain("0");
+    const head = await screen.findByRole("button", { name: /Group A/ });
+    expect(head.className).toContain("sp-head");
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(within(head).getByTestId("dev-todo-counts").textContent).toBe("2 open · 0 done");
+    expect(within(screen.getByRole("button", { name: /^Done/ })).getByTestId("dev-todo-counts").textContent).toBe("0 open · 1 done");
   });
 
   it("reads nothing while hidden", () => {
@@ -69,7 +72,7 @@ describe("DevTodoView", () => {
     await act(async () => { fireEvent.click(boxes()[1]); });
     await waitFor(() => expect(disk).toBe("## Group A\n- [ ] first\n- [x] second\n"));
     await waitFor(() => expect(boxes()[1].checked).toBe(true));
-    expect(screen.getByRole("button", { name: /Group A/ }).textContent).toContain("1");
+    expect(screen.getByRole("button", { name: /Group A/ }).textContent).toContain("1 open · 1 done");
   });
 
   it("re-applies the click to the same task after an agent edit", async () => {

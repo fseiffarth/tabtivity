@@ -7166,16 +7166,15 @@ select.file-viewer-run-args-input {
 .project-remark-actions { gap:0; }
 .project-remark-actions .btn-quiet { display:inline-flex; align-items:center; padding: var(--space-1); }
 /* Dev build's Todo view (files/DevTodoView): todo groups folding into rendered markdown. */
-.dev-todo-view { flex:1; min-height:0; overflow-y:auto; padding:6px; color:var(--text-primary); }
-.dev-todo-head { display:flex; align-items:center; gap:6px; padding:2px 2px 6px; }
-.dev-todo-notice { padding:4px 6px; font-size: var(--text-xs); color:var(--text-secondary); }
-.dev-todo-group { border-bottom:1px solid var(--border-color); }
-.dev-todo-group-head { display:flex; align-items:center; gap:6px; width:100%; padding:5px 4px; border:0; background:none; font:inherit; color:inherit; text-align:left; cursor: var(--cur-pointer, pointer); }
-.dev-todo-group-head:hover { background:var(--bg-hover); }
-.dev-todo-chevron { width:10px; color:var(--text-muted); }
+/* The kit's toolbar over the list; each group is a folding `.sp-head` whose
+   end reads "N open · N done". The rendered body is unchanged. */
+.dev-todo-view { flex:1; min-height:0; display:flex; flex-direction:column; color:var(--text-primary); }
+.dev-todo-list { flex:1; min-height:0; overflow-y:auto; padding-bottom: var(--space-2); }
+.dev-todo-notice { color:var(--text-secondary); }
+.dev-todo-group-head:hover { background: var(--pill-hover-bg); }
+.dev-todo-chevron { color:var(--text-muted); }
 .dev-todo-group-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.dev-todo-count { min-width:16px; padding:0 4px; border-radius:8px; background:var(--bg-hover); color:var(--text-secondary); font-size: var(--text-xs); text-align:center; }
-.markdown-body.dev-todo-body { padding:4px 6px 10px 18px; font-size:12px; }
+.markdown-body.dev-todo-body { padding: var(--space-1) var(--space-3) 10px calc(var(--space-3) + 18px); font-size: var(--text-md); }
 .file-delete-dialog textarea.file-paste-name { resize:vertical; }
 
 /* ── The achromatic pair: document colour ──────────────────────────────────
