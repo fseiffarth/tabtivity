@@ -2220,19 +2220,61 @@
   word-break: break-all;
 }
 
-/* The tab archive's list (`tabs/TabArchiveList`): the Sessions view's rows,
-   under a filter row. Shown in the side panel's Archive view and the + menu's
-   Archived tabs dialog. */
+/* The tab archive's list (`tabs/TabArchiveList`): the kit's toolbar (filter,
+   bulk delete) over two-line `.sp-row--plain` rows — kind glyph in the
+   kind's tab colour, label over the kind word, the date and a trash button
+   at the end. Shown in the side panel's Archive view and the + menu's
+   Archived tabs dialog. The toolbar stays put while the list scrolls. */
 .tab-archive-head {
-  display: flex;
-  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 1;
   gap: var(--space-2);
-  padding: var(--space-1) 0 var(--space-2);
+  background: var(--bg-panel);
 }
 
 .tab-archive-head input {
   flex: 1;
   min-width: 0;
+  height: 28px;
+}
+
+/* The side panel mounts the list in the orange views' padded scroll box; the
+   kit's rows bring their own inset, so the list cancels that padding. */
+.side-panel-orange > .tab-archive-list {
+  margin: calc(-1 * var(--space-1)) -6px 0;
+}
+
+.tab-archive-dialog .tab-archive-head {
+  background: transparent;
+  position: static;
+}
+
+.tab-archive-restore {
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+
+.tab-archive-restore:disabled {
+  cursor: var(--cur-default, default);
+  opacity: 0.6;
+}
+
+.tab-archive-icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.tab-archive-delete {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1);
 }
 
 .tab-archive-dialog {

@@ -78,6 +78,14 @@ const VIEWER_LABEL_KEY: Record<InternalViewer, TranslationKey> = {
   eldeck: "viewerLabel.eldeck",
 };
 
+/** The word for what a tab is: its viewer for a file tab ("PDF viewer"),
+ *  else its kind ("Shell"). Also the Archive rows' kind word. */
+export function tabKindLabelKey(tab: { kind?: TabKind; viewer?: InternalViewer }): TranslationKey {
+  return tab.kind === "embed" && tab.viewer
+    ? VIEWER_LABEL_KEY[tab.viewer] ?? KIND_LABEL_KEY.embed
+    : KIND_LABEL_KEY[tab.kind ?? "shell"] ?? KIND_LABEL_KEY.shell;
+}
+
 /** What the backend knows an agent tab was handed (`agent_tab_features`,
  *  `services::agent_features`); `null` for a tab this process did not spawn. */
 interface AgentTabFeatures {
@@ -315,11 +323,7 @@ export function TabHoverCard({
   // the concrete viewer, where the process runs (remote projects), and which
   // side a viewed file came from. An agent's permission mode is deliberately
   // absent: it is set inside the agent's own CLI and Tabtivity does not track it.
-  const kindBits: string[] = [
-    tab.kind === "embed" && tab.viewer
-      ? t(VIEWER_LABEL_KEY[tab.viewer] ?? KIND_LABEL_KEY.embed)
-      : t(KIND_LABEL_KEY[tab.kind]),
-  ];
+  const kindBits: string[] = [t(tabKindLabelKey(tab))];
   if (isRemote && isLocatableKind(tab.kind)) {
     const loc = effectiveTabLocation(tab, { hostPinned });
     if (remoteHostIdOf(loc) === null) {
