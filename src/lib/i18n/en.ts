@@ -8736,7 +8736,6 @@ export const enSource = {
   "fileTree.totalSizeHiddenExt": "Total size of the hidden-by-extension group",
   "fileTree.collapseHiddenExt": "Collapse files hidden by extension",
   "fileTree.expandHiddenExt": "Expand files hidden by extension",
-  "fileTree.hiddenExtSection": "hidden ({count})",
   "fileTree.hiddenExtHead": "Hidden by extension",
   "fileTree.showMoreTitle": "Only the first {shown} entries are rendered — showing every file at once in a folder this size would stall the window. Click to render {more} more.",
   "fileTree.showMoreButton": "show {more} more ({hidden} not shown)",

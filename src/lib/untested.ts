@@ -311,7 +311,7 @@ export const UNTESTED = {
   "projectFilesView.6": { area: "files", what: "ProjectFilesView · Side panel, Jobs view" },
   "projectFilesView.7": { area: "files", what: "ProjectFilesView · Side panel, Windows view" },
   "projectFilesView.noParkingNote": { area: "files", what: "Side panel Apps view · on a desktop that parks nothing (XFCE, KDE Wayland) one muted line says the apps stay on screen on a project switch" },
-  "projectFilesView.waylandStaysVisible": { area: "files", what: "Side panel Apps view · under Wayland on a parking desktop (GNOME), a row with no XWayland window (a native Wayland app) says it stays on screen on a project switch; XWayland rows (older Java/Qt apps, Wine) show no line" },
+  "projectFilesView.waylandStaysVisible": { area: "files", what: "Side panel Apps view · under Wayland on a parking desktop (GNOME), rows with no XWayland window (native Wayland apps) sit in their own \"Stays on screen when you switch projects\" section, with one sentence under its head saying why; XWayland rows (older Java/Qt apps, Wine) sit in \"Hidden when you switch projects\"" },
   "downloads.remembered": { area: "files", what: "Recent Downloads section under the file tree · shown by default in the side panel and in Files (Project) tabs; hiding it (toolbar inbox button or ×) is remembered for that kind of viewer across project switches, new tabs and a restart" },
   "projectFilesView.8": { area: "files", what: "ProjectFilesView · Sessions view, Kill all / Kill closed per machine" },
   "projectFilesView.openInIde": { area: "files", what: "ProjectFilesView · Side panel header, Open in IDE button" },

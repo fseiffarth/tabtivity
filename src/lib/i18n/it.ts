@@ -8377,7 +8377,6 @@ export const dict: Dict = {
   "fileTree.totalSizeHiddenExt": "Dimensione totale del gruppo nascosto per estensione",
   "fileTree.collapseHiddenExt": "Comprimi i file nascosti per estensione",
   "fileTree.expandHiddenExt": "Espandi i file nascosti per estensione",
-  "fileTree.hiddenExtSection": "nascosti ({count})",
   "fileTree.hiddenExtHead": "Nascosti per estensione",
   "fileTree.showMoreTitle": "Vengono visualizzate solo le prime {shown} voci — mostrare tutti i file contemporaneamente in una cartella di queste dimensioni bloccherebbe la finestra. Clic per visualizzarne altre {more}.",
   "fileTree.showMoreButton": "mostra altri {more} ({hidden} non mostrati)",

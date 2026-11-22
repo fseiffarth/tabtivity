@@ -7144,8 +7144,6 @@ select.file-viewer-run-args-input {
 .md-graph-node-current text {
   font-weight: 650;
 }
-.file-remark-slot { display:inline-flex; width:18px; min-width:18px; justify-content:center; }
-.file-remark-count { min-width:14px; height:14px; padding:0 3px; border-radius:7px; background:var(--accent); color:var(--accent-contrast); font-size: var(--text-xs); line-height:14px; text-align:center; }
 /* The Remarks view (files/RemarksPane): the kit's toolbar (walker, counts,
    Open REMARKS.md), one `.sp-head` per file with its "+", and kit rows — done
    box, go-to, the remark (it wraps: a remark can run to several lines) over

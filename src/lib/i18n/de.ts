@@ -8383,7 +8383,6 @@ export const dict: Dict = {
   "fileTree.totalSizeHiddenExt": "Gesamtgröße der nach Endung ausgeblendeten Gruppe",
   "fileTree.collapseHiddenExt": "Nach Endung ausgeblendete Dateien einklappen",
   "fileTree.expandHiddenExt": "Nach Endung ausgeblendete Dateien ausklappen",
-  "fileTree.hiddenExtSection": "ausgeblendet ({count})",
   "fileTree.hiddenExtHead": "Nach Endung ausgeblendet",
   "fileTree.showMoreTitle": "Nur die ersten {shown} Einträge werden angezeigt — alle Dateien gleichzeitig in einem Ordner dieser Größe anzuzeigen würde das Fenster blockieren. Klicken, um {more} weitere anzuzeigen.",
   "fileTree.showMoreButton": "{more} weitere anzeigen ({hidden} nicht angezeigt)",

@@ -1,6 +1,6 @@
 # Files tab and side panel redesign — plan
 
-Status: in progress (2026-11-22). Design canvas:
+Status: built 2026-11-22, never run live. Design canvas:
 <https://claude.ai/artifact/PGiR6Qnxd1jq2grD47ma8x> (thirteen artboards: the wide
 Files tab and all twelve side panel views). Handoff: `docs/files_panel_redesign_handoff.md`.
 
@@ -69,7 +69,7 @@ Reviewers and implementers do not reopen these.
   existing keys.
 - **Untested pills:** the new column list wears `UntestedTag` id
   `fileTree.columns`; no other pill is added (a restyle is not a new feature).
-  The row is added at merge, not by the implementers.
+  Implementer A adds its row (the registry test fails on a pill without one).
 
 ## Shared kit (landed first, by the main agent)
 
