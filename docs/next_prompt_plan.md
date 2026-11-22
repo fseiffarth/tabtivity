@@ -145,6 +145,53 @@ Caveats to measure, not assume:
   `promptSuggestion` — the existing fill-once/clear-when-gone effect handles
   the rest. Rebuild with `npm run mobile:bundle`.
 
+## Contract (fixed before the parallel run)
+
+Desktop command `agent_next_prompt`, camelCase args, same identity meaning as
+`agent_tab_transcript`: `agent: string`, `projectId?: string`,
+`tabDir?: string`, `sessionId: string`, `localModel?: boolean`,
+`remoteHost?: string`, plus `phase: "warm" | "final"`. Returns
+
+```ts
+type NextPrompt = {
+  text: string | null;      // final only; null on warm or when the model says NONE
+  turnKey: string | null;   // id of the turn's last entry the answer was built from
+  status: "ok" | "warmed" | "skipped" | "busy" | "not_running" | "no_model" | "refused" | "unavailable";
+  reason?: string;          // human text for refused/no_model, never shown as an error bubble
+};
+```
+
+- `warm`: feed the prompt so far (`num_predict: 1`), return `warmed`; `skipped`
+  when `localModel` is true (a local agent owns the GPU) or the transcript has
+  no turn yet; `busy` when a request for this session is already in flight.
+- `final`: build from the finished turn; the same `turnKey` returns the cached
+  text without a new Ollama request; a concurrent caller waits for the
+  in-flight run (single-flight per session).
+- Ollama down / no model / remote host / cloud model never throw: a status.
+
+Phone route `GET /api/v1/tabs/{tab_id}/next-prompt?phase=warm|final` →
+`{ "text": string | null, "status": … }` (no `turnKey`, ids or paths), the tab
+resolved like `/api/v1/tabs/{tab_id}/transcript`.
+
+Frontend side: the desktop skips `warm` while any local-model agent tab is
+working; both clients call `final` once per ended turn (Claude: only after
+~1.5 s settle with no screen suggestion; Claude's own replaces it later).
+
+## Organisation
+
+Disjoint subsystems once the contract above is fixed → **two parallel
+implementers** in separate worktrees (A backend, B frontend: desktop + phone),
+then **one reviewer** over the merged range; the main agent merges (cherry-pick
+onto develop). Three Opus subagents in all (user, 2026-11-22).
+
+| Agent step | Plan steps | Files |
+|---|---|---|
+| A backend | 1–3, backend part of 7 | `services/mail/mail_ai.rs`, new `services/agent/next_prompt.rs` (+ tests), `commands/agents.rs`, `services::command_class` + regenerated `src/lib/transport/commandClasses.ts`, `services/mobile_control/host.rs`, `model_allowlist.rs` doc line, `docs/filemap_backend.md` |
+| B frontend | 4–6, frontend part of 7 | `ModelsHubSections.tsx`, `src/lib/i18n/*`, new `src/lib/agents/nextPrompt.ts`, `TerminalReaderView.tsx`, `SteeringPromptOverlay.tsx`, `mobile-web/src/screens/Terminal.tsx`, `src/lib/untested.ts`, tests, `docs/filemap_frontend.md`, `docs/context/agent_reader.md` |
+| R review | whole range | bugs only, each with a regression test |
+
+Handoff: `docs/next_prompt_handoff.md`.
+
 ## Steps
 
 1. Lift the loopback + no-cloud endpoint check out of `mail_ai` into a shared
