@@ -590,10 +590,18 @@ pub async fn pty_paste_image(ctx: Ctx, id: String, agent: bool, image: String) -
         .get::<RegistryState>()
         .lock_ok()
         .drop_dir(&id)
-        .ok_or("no_terminal")?
-        .ok_or("remote_tab")?;
+        .ok_or("no_terminal")?;
     let state_dir = crate::storage::state_dir();
-    app_core::rt::blocking("terminal", move || paste_image_named(Path::new(&dir), &state_dir, name, &bytes, agent)).await?
+    // Filed as [`pty_paste_clipboard_image`] files the OS clipboard's: a
+    // local tab's inbox, or the host of a remote one.
+    let pasted = app_core::rt::blocking("terminal", move || match dir {
+        DropTarget::Local(dir) => paste_image_named(&dir, &state_dir, name, &bytes, agent),
+        DropTarget::Remote(spec) => remote_attachment(&spec, name, bytes).map_err(String::from),
+    }).await?;
+    if agent && pasted.is_ok() {
+        crate::services::assistant_attach::note_tab_file(&id);
+    }
+    pasted
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
