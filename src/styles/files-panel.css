@@ -1802,6 +1802,75 @@
   cursor: var(--cur-not-allowed, not-allowed);
 }
 
+/* ── Diverged, Sessions, Jobs, Apps (`.sp-list-view`) ─────────────────────
+   Lists built from the side panel kit: the kit's rows and heads carry the
+   inset, so the view has none of its own. The row and action classes below
+   (`orange-file-*`, `tmux-*`) are shared with the file tree's sync slot and
+   the Archive view, so they are only re-set here, under these views. */
+.sp-list-view {
+  padding: 0 0 var(--space-2);
+}
+
+.sp-list-view .sp-row.orange-file-row {
+  display: grid;
+  padding: 0 var(--space-3);
+  border-bottom: 0;
+}
+
+/* A row's name is its open / attach / watch button, filling column 3. */
+.sp-list-view .sp-row-main.orange-file-name {
+  height: 100%;
+  min-height: inherit;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.sp-list-view .sp-row-main.orange-file-name:hover:not(:disabled) {
+  color: inherit;
+}
+
+.sp-list-view .sp-row-meta.orange-file-actions {
+  gap: 2px;
+}
+
+/* Row and head actions rest borderless; the side's tint (take remote, keep
+   local, delete) stays on the icon and comes back as a fill on hover. */
+.sp-list-view .orange-file-act--icon:not(:hover) {
+  border-color: transparent;
+}
+
+.sp-list-view .sp-head .orange-file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* "Take the newer copy automatically": the view's one toolbar row. */
+.sp-list-view .sp-toolbar.orange-take-newer {
+  flex-direction: row;
+  align-items: center;
+  margin: 0;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 0;
+}
+
+/* The diverged head's "exclude changed on both" tick, under the head. */
+.sp-list-view .orange-bulk-exclude {
+  padding: 0 var(--space-3) var(--space-1);
+}
+
+/* Which side moved, as the word on the row's second line, in its side's ink
+   (the pill it was until the redesign is the chip in column 1 now). */
+.sp-list-view .sp-row-sub .orange-mtime-badge {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
 /* ── The browser desktop client (hosted plan P2) ─────────────────────────── */
 /* The one "connection lost" banner, mounted outside the app's root. */
 .server-link-banner {

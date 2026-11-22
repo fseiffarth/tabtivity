@@ -2430,21 +2430,8 @@ export function ProjectFilesView({
       )}
 
       {view === "orange" && (
-        <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
-          {orangeError && (
-            <div className="project-files-sync-result" role="alert">
-              <ErrorNote as="span" error={orangeError} />
-              <button
-                className="file-tree-up"
-                onClick={() => setOrangeError(null)}
-                title={t("common.close")}
-                aria-label={t("common.close")}
-              >
-                <CloseIcon />
-              </button>
-            </div>
-          )}
-          <div className="orange-take-newer">
+        <div className="side-panel-scroll sp-list-view diverged-view" style={{ flex: 1, overflowY: "auto" }}>
+          <div className="sp-toolbar orange-take-newer">
             <label className="tmux-scope-toggle" title={t("projectFilesView.takeNewerAutoTitle")}>
               <input
                 type="checkbox"
@@ -2464,39 +2451,40 @@ export function ProjectFilesView({
               {t("projectFilesView.takeNewerAuto")}
               <UntestedTag id="projectFilesView.takeNewerAuto" />
             </label>
-            {takeNewer && !anyAutoSync && (
-              <span className="orange-take-newer-note">{t("projectFilesView.takeNewerAutoNoAuto")}</span>
-            )}
           </div>
+          {takeNewer && !anyAutoSync && (
+            <p className="sp-note">{t("projectFilesView.takeNewerAutoNoAuto")}</p>
+          )}
+          {orangeError && (
+            <div className="project-files-sync-result" role="alert">
+              <ErrorNote as="span" error={orangeError} />
+              <button
+                className="file-tree-up"
+                onClick={() => setOrangeError(null)}
+                title={t("common.close")}
+                aria-label={t("common.close")}
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          )}
           {orangeFiles.length === 0 && newLocalFiles.length === 0 ? (
-            <div className="side-panel-orange-empty">{t("projectFilesView.noDivergedFiles")}</div>
+            <p className="sp-note">{t("projectFilesView.noDivergedFiles")}</p>
           ) : (
             <>
               {/* Bulk "…for all" resolution: take one side for every diverged
                   file at once. Both are destructive to the losing side — and by
                   definition every file here has content on BOTH sides — so each
                   goes through the shared transfer confirmation, which names the
-                  losing files rather than only counting them. Header + icon
-                  buttons (not a text button per row) so the bar stays compact. */}
+                  losing files rather than only counting them. Icon buttons in
+                  the group's head (not a text button per row) so it stays one
+                  line. */}
               {orangeFiles.length > 0 && (
-              <div className="orange-bulk-bar">
-                <span className="orange-bulk-count">
-                  {t("projectFilesView.divergedCount", { count: orangeFiles.length })}
-                </span>
+              <>
+              <div className="sp-head orange-head">
+                <span>{t("projectFilesView.divergedCount", { count: orangeFiles.length })}</span>
                 <UntestedTag id="projectFilesView.3" />
-                <label
-                  className="tmux-scope-toggle orange-bulk-exclude"
-                  title={t("projectFilesView.excludeBothChangedTitle")}
-                >
-                  <input
-                    type="checkbox"
-                    checked={excludeBothChanged}
-                    onChange={(e) => setExcludeBothChanged(e.target.checked)}
-                  />
-                  {t("projectFilesView.excludeBothChanged")}
-                  <UntestedTag id="projectFilesView.excludeBothChanged" />
-                </label>
-                <div className="orange-file-actions">
+                <div className="sp-head-end orange-file-actions">
                   <button
                     type="button"
                     className="orange-file-act orange-file-act--icon orange-file-act--remote"
@@ -2651,17 +2639,32 @@ export function ProjectFilesView({
                   <UntestedTag id="projectFilesView.deleteAll" />
                 </div>
               </div>
+              <label
+                className="tmux-scope-toggle orange-bulk-exclude"
+                title={t("projectFilesView.excludeBothChangedTitle")}
+              >
+                <input
+                  type="checkbox"
+                  checked={excludeBothChanged}
+                  onChange={(e) => setExcludeBothChanged(e.target.checked)}
+                />
+                {t("projectFilesView.excludeBothChanged")}
+                <UntestedTag id="projectFilesView.excludeBothChanged" />
+              </label>
+              </>
               )}
               {orangeFiles.map((rel) => {
                 const rowHostMtime = syncMap?.[rel]?.hostMtime;
                 const rowLocalMtime = syncMap?.[rel]?.localMtime;
                 const rowHostChecked = syncMap?.[rel]?.hostChecked ?? false;
+                const rowHostDiverged = syncMap?.[rel]?.hostDiverged ?? false;
+                const rowLocalDiverged = syncMap?.[rel]?.localDiverged ?? false;
                 const mtimeCue = mtimeDivergenceCue(
                   t,
                   rowHostMtime,
                   rowLocalMtime,
-                  syncMap?.[rel]?.hostDiverged ?? false,
-                  syncMap?.[rel]?.localDiverged ?? false,
+                  rowHostDiverged,
+                  rowLocalDiverged,
                   rowHostChecked,
                 );
                 // "Remote only" / "Local only": the other side has no file at
@@ -2680,40 +2683,62 @@ export function ProjectFilesView({
                 // transfer, nothing to merge — the only sensible action left is
                 // to stop tracking the entry.
                 const goneBoth = noHostFile && noLocalFile;
+                // The row's chip: which side moved, as one letter (the cue's
+                // word is its title and the second line). Gone on both: D;
+                // only the host's copy moved or is left: R; the local one: L;
+                // both changed: B.
+                const chip = goneBoth ? "D"
+                  : noHostFile ? "L"
+                  : noLocalFile ? "R"
+                  : rowHostDiverged && rowLocalDiverged ? "B"
+                  : rowHostDiverged ? "R"
+                  : rowLocalDiverged ? "L"
+                  : "=";
+                const chipColor = chip === "B" ? "var(--warning)"
+                  : mtimeCue.tone === "remote" ? "var(--warning)"
+                  : mtimeCue.tone === "local" ? "var(--success)"
+                  : "var(--text-secondary)";
                 return (
-                  <div key={rel} className="orange-file-row" title={rel}>
-                <button
-                  type="button"
-                  className="orange-file-name"
-                  disabled={!mirrorRoot || goneBoth}
-                  title={mirrorRoot && !goneBoth ? t("projectFilesView.openFileTitle", { rel }) : rel}
-                  onClick={() => {
-                    if (!mirrorRoot) return;
-                    const abs = `${mirrorRoot}/${rel}`;
-                    // Open the diverged file in the three-way merge viewer
-                    // (local mirror ⇄ merged ⇄ remote host, PyCharm-style), so
-                    // the user can take changes from either side per block and
-                    // resolve the divergence in one place.
-                    openLinkedFile(undefined, dirname(abs), {
-                      path: abs,
-                      viewer: "syncmerge",
-                      label: basename(abs),
-                    });
-                  }}
-                >
-                  <span className="orange-file-dot" aria-hidden="true">±</span>
-                  {rel}
-                </button>
-                {mtimeCue && (
-                  <span
-                    className={`orange-mtime-badge orange-mtime-badge--${mtimeCue.tone}`}
-                    title={mtimeCue.title}
-                  >
-                    {mtimeCue.text}
-                  </span>
-                )}
+                  <div key={rel} className="sp-row sp-row--two orange-file-row" title={rel}>
+                    <span className="sp-row-state">
+                      <span className="sp-chip" style={{ color: chipColor }} title={mtimeCue.text}>{chip}</span>
+                    </span>
+                    <span className="sp-row-act" />
+                    <button
+                      type="button"
+                      className="sp-row-main orange-file-name"
+                      disabled={!mirrorRoot || goneBoth}
+                      title={mirrorRoot && !goneBoth ? t("projectFilesView.openFileTitle", { rel }) : rel}
+                      onClick={() => {
+                        if (!mirrorRoot) return;
+                        const abs = `${mirrorRoot}/${rel}`;
+                        // Open the diverged file in the three-way merge viewer
+                        // (local mirror ⇄ merged ⇄ remote host, PyCharm-style), so
+                        // the user can take changes from either side per block and
+                        // resolve the divergence in one place.
+                        openLinkedFile(undefined, dirname(abs), {
+                          path: abs,
+                          viewer: "syncmerge",
+                          label: basename(abs),
+                        });
+                      }}
+                    >
+                      <span className="sp-row-text">
+                        <span className="sp-row-name">{rel}</span>
+                        <span className="sp-row-sub">
+                          <span
+                            className={`orange-mtime-badge orange-mtime-badge--${mtimeCue.tone}`}
+                            title={mtimeCue.title}
+                          >
+                            {mtimeCue.text}
+                          </span>
+                          {" · "}
+                          {mtimeCue.title.split("\n").join(" · ")}
+                        </span>
+                      </span>
+                    </button>
                 {goneBoth ? (
-                  <div className="orange-file-actions">
+                  <div className="sp-row-meta orange-file-actions">
                     {/* Deselecting drops the row to state "none" immediately and
                         stops tracking; the manifest keeps an inert unselected
                         marker (the backend prune only runs for entries still
@@ -2735,7 +2760,7 @@ export function ProjectFilesView({
                     </button>
                   </div>
                 ) : (
-                <div className="orange-file-actions">
+                <div className="sp-row-meta orange-file-actions">
                   <button
                     type="button"
                     className="orange-file-act orange-file-act--icon orange-file-act--remote"
@@ -2852,12 +2877,10 @@ export function ProjectFilesView({
                   the manifest has seen. */}
               {newLocalFiles.length > 0 && (
                 <>
-                  <div className="orange-bulk-bar">
-                    <span className="orange-bulk-count">
-                      {t("projectFilesView.newLocalCount", { count: newLocalFiles.length })}
-                    </span>
+                  <div className="sp-head orange-head">
+                    <span>{t("projectFilesView.newLocalCount", { count: newLocalFiles.length })}</span>
                     <UntestedTag id="projectFilesView.4" />
-                    <div className="orange-file-actions">
+                    <div className="sp-head-end orange-file-actions">
                       <button
                         type="button"
                         className="orange-file-act orange-file-act--icon orange-file-act--local"
@@ -2887,10 +2910,14 @@ export function ProjectFilesView({
                     </div>
                   </div>
                   {newLocalFiles.map((rel) => (
-                    <div key={rel} className="orange-file-row" title={rel}>
+                    <div key={rel} className="sp-row orange-file-row" title={rel}>
+                      <span className="sp-row-state">
+                        <span className="sp-chip" title={t("projectFilesView.newLocalChipTitle")}>N</span>
+                      </span>
+                      <span className="sp-row-act" />
                       <button
                         type="button"
-                        className="orange-file-name"
+                        className="sp-row-main orange-file-name"
                         disabled={!mirrorRoot}
                         title={
                           mirrorRoot
@@ -2909,12 +2936,9 @@ export function ProjectFilesView({
                           });
                         }}
                       >
-                        <span className="orange-file-dot orange-file-dot--new" aria-hidden="true">
-                          +
-                        </span>
-                        {rel}
+                        <span className="sp-row-name">{rel}</span>
                       </button>
-                      <div className="orange-file-actions">
+                      <div className="sp-row-meta orange-file-actions">
                         <button
                           type="button"
                           className="orange-file-act orange-file-act--icon orange-file-act--local"

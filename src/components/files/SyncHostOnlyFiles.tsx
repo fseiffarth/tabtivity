@@ -105,8 +105,8 @@ export function SyncHostOnlyFiles({
 
   return (
     <>
-      <div className="orange-bulk-bar">
-        <span className="orange-bulk-count">
+      <div className="sp-head orange-head">
+        <span>
           {scanning
             ? t("projectFilesView.scanningHost")
             : scan
@@ -116,7 +116,7 @@ export function SyncHostOnlyFiles({
               : t("projectFilesView.scanHost")}
         </span>
         <UntestedTag id="syncHostOnlyFiles.scan" />
-        <div className="orange-file-actions">
+        <div className="sp-head-end orange-file-actions">
           <button
             type="button"
             className="orange-file-act orange-file-act--icon"
@@ -154,20 +154,21 @@ export function SyncHostOnlyFiles({
         </div>
       </div>
       {scan?.truncated && (
-        <div className="side-panel-orange-empty">
+        <p className="sp-note">
           {t("projectFilesView.hostOnlyTruncated")}
-        </div>
+        </p>
       )}
       {error && <ErrorNote className="project-files-sync-result" role="alert" error={error} />}
       {files.map((f) => (
-        <div key={f.relPath} className="orange-file-row" title={f.relPath}>
-          <span className="orange-file-name">
-            <span className="orange-file-dot" aria-hidden="true">
-              −
-            </span>
-            {f.relPath}
+        <div key={f.relPath} className="sp-row orange-file-row" title={f.relPath}>
+          <span className="sp-row-state">
+            <span className="sp-chip" title={t("projectFilesView.hostOnlyChipTitle")}>H</span>
           </span>
-          <div className="orange-file-actions">
+          <span className="sp-row-act" />
+          <span className="sp-row-main">
+            <span className="sp-row-name">{f.relPath}</span>
+          </span>
+          <div className="sp-row-meta orange-file-actions">
             <button
               type="button"
               className="orange-file-act orange-file-act--icon orange-file-act--remote"
