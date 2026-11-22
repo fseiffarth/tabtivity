@@ -38,6 +38,10 @@ fn no_caps(_: &str, _: &str) -> Vec<String> {
     vec!["completion".into()]
 }
 
+fn not_pinned(_: &str, _: &str) -> bool {
+    false
+}
+
 fn answer_json(text: &str) -> String {
     serde_json::json!({ "message": { "content": text } }).to_string()
 }
@@ -154,7 +158,7 @@ fn a_final_run_answers_once_per_turn_and_a_warm_run_writes_one_token() {
         Ok(answer_json("\"Run the whole suite\""))
     };
     let caps = |_: &str, _: &str| vec!["completion".to_string(), "thinking".to_string()];
-    let backend = Ollama { caps: &caps, chat: &chat };
+    let backend = Ollama { caps: &caps, pinned: &not_pinned, chat: &chat };
     let settings = suggest_on("llama3");
     let key = "test-final-once";
 
@@ -206,7 +210,7 @@ fn concurrent_asks_share_one_run() {
         release_rx.lock().unwrap().recv().unwrap();
         Ok(answer_json("Commit it"))
     };
-    let backend = Ollama { caps: &no_caps, chat: &chat };
+    let backend = Ollama { caps: &no_caps, pinned: &not_pinned, chat: &chat };
     let settings = suggest_on("llama3");
     let t = ended_turn();
     let key = "test-single-flight";
@@ -237,7 +241,7 @@ fn concurrent_asks_share_one_run() {
 fn a_cloud_model_and_a_remote_host_are_refused_before_any_request() {
     let chat = |_: &str, _: &str, _: Duration| -> Result<String, String> { panic!("no request may be sent") };
     let caps = |_: &str, _: &str| -> Vec<String> { panic!("no probe may be sent") };
-    let backend = Ollama { caps: &caps, chat: &chat };
+    let backend = Ollama { caps: &caps, pinned: &not_pinned, chat: &chat };
     let t = ended_turn();
     ollama::test_tags::set(Some(TAGS));
     for model in ["gpt-oss:120b-cloud", "qwen3-coder:cloud"] {
@@ -265,7 +269,7 @@ fn a_cloud_model_and_a_remote_host_are_refused_before_any_request() {
 fn asks_with_nothing_to_do_are_skipped_without_a_request() {
     let chat = |_: &str, _: &str, _: Duration| -> Result<String, String> { panic!("no request may be sent") };
     let caps = |_: &str, _: &str| -> Vec<String> { panic!("no probe may be sent") };
-    let backend = Ollama { caps: &caps, chat: &chat };
+    let backend = Ollama { caps: &caps, pinned: &not_pinned, chat: &chat };
     let settings = suggest_on("llama3");
     // A local-model tab's agent owns the GPU: never warmed.
     let local = Ask { local_model: true, ..ask("test-skip", Phase::Warm) };
@@ -324,4 +328,47 @@ fn a_tab_without_a_launch_id_is_named_by_its_folder() {
     assert!(desktop_key("codex", Some("p1"), "uid-1", None, None, None).is_some());
     assert_eq!(desktop_key("codex", Some("p1"), "", None, None, None), None, "named by nothing");
     assert_eq!(desktop_key("codex", None, &"x".repeat(MAX_KEY_CHARS), None, None, None), None);
+}
+
+/// A request's `keep_alive` replaces the model's expiry: it must never cut
+/// short a longer `ollama_keep_alive`, an infinite one, or a model the user
+/// pinned with Load.
+#[test]
+fn the_keep_alive_never_shortens_the_users_choice() {
+    use serde_json::json;
+    assert_eq!(keep_alive_for(None, false), json!(KEEP_ALIVE));
+    assert_eq!(keep_alive_for(Some("30m"), false), json!(KEEP_ALIVE));
+    assert_eq!(keep_alive_for(Some("1h"), false), json!("1h"));
+    assert_eq!(keep_alive_for(Some(" -1 "), false), json!(-1));
+    assert_eq!(keep_alive_for(Some("30m"), true), json!(-1));
+
+    let now = chrono::DateTime::parse_from_rfc3339("2026-11-22T12:00:00Z").unwrap().with_timezone(&chrono::Utc);
+    let ps = r#"{"models":[
+        {"name":"llama3:latest","expires_at":"2318-03-01T10:00:00+01:00"},
+        {"name":"qwen3:4b","expires_at":"2026-11-22T12:20:00Z"}
+    ]}"#;
+    assert!(pinned_in_ps(ps, "llama3", now));
+    assert!(pinned_in_ps(ps, "llama3:latest", now));
+    assert!(!pinned_in_ps(ps, "qwen3:4b", now), "a countdown is not a pin");
+    assert!(!pinned_in_ps(ps, "mistral", now));
+    assert!(!pinned_in_ps("not json", "llama3", now));
+
+    // Through an ask: an infinite setting reaches the request.
+    ollama::test_tags::set(Some(TAGS));
+    let body = Mutex::new(String::new());
+    let chat = |_: &str, sent: &str, _: Duration| -> Result<String, String> {
+        *body.lock().unwrap() = sent.to_string();
+        Ok(answer_json("Commit it"))
+    };
+    let pinned = |_: &str, _: &str| true;
+    let settings = Settings { ollama_keep_alive: Some("-1".into()), ..suggest_on("llama3") };
+    let backend = Ollama { caps: &no_caps, pinned: &not_pinned, chat: &chat };
+    assert_eq!(suggest_with(&settings, &ask("test-keep-alive", Phase::Final), &ended_turn(), &backend).status, Status::Ok);
+    let sent: serde_json::Value = serde_json::from_str(&body.lock().unwrap()).unwrap();
+    assert_eq!(sent["keep_alive"], -1);
+    let backend = Ollama { caps: &no_caps, pinned: &pinned, chat: &chat };
+    assert_eq!(suggest_with(&suggest_on("llama3"), &ask("test-keep-alive-pin", Phase::Warm), &ended_turn(), &backend).status, Status::Warmed);
+    let sent: serde_json::Value = serde_json::from_str(&body.lock().unwrap()).unwrap();
+    assert_eq!(sent["keep_alive"], -1, "a pinned model stays pinned");
+    ollama::test_tags::set(None);
 }

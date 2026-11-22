@@ -81,8 +81,14 @@ pub const MAX_SUGGESTION_CHARS: usize = 200;
 /// Tokens a final run may write — one short line.
 const FINAL_NUM_PREDICT: i64 = 48;
 /// How long the model stays loaded after a request: long enough to outlast a
-/// turn between a warm-up and the final run.
+/// turn between a warm-up and the final run. Never shorter than what the user
+/// chose or pinned ([`keep_alive_for`]).
 const KEEP_ALIVE: &str = "30m";
+/// How long the resident-model read before a request may take.
+const PS_TIMEOUT: Duration = Duration::from_secs(3);
+/// An expiry further out than this is a pinned model (`keep_alive: -1`, which
+/// `/api/ps` reports as expiring centuries away; `commands::ollama`'s rule).
+const PINNED_AFTER_SECS: i64 = 365 * 24 * 60 * 60;
 const FINAL_TIMEOUT: Duration = Duration::from_secs(60);
 /// A warm-up reads the whole turn so far cold on its first run.
 const WARM_TIMEOUT: Duration = Duration::from_secs(120);
@@ -554,7 +560,39 @@ pub struct Ask<'a> {
 /// capabilities and the chat request (endpoint, JSON body, timeout).
 pub(crate) struct Ollama<'a> {
     pub caps: &'a (dyn Fn(&str, &str) -> Vec<String> + Sync),
+    /// Whether the model is resident and pinned (`keep_alive: -1`, the Load button).
+    pub pinned: &'a (dyn Fn(&str, &str) -> bool + Sync),
     pub chat: &'a (dyn Fn(&str, &str, Duration) -> Result<String, String> + Sync),
+}
+
+/// Whether `/api/ps`'s `body` lists `model` as resident with no expiry in
+/// sight. A bare name matches its `:latest`.
+pub(crate) fn pinned_in_ps(body: &str, model: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Ok(ps) = serde_json::from_str::<serde_json::Value>(body) else { return false };
+    let latest = (!model.contains(':')).then(|| format!("{model}:latest"));
+    ps["models"].as_array().into_iter().flatten().any(|entry| {
+        let name = entry["name"].as_str().or_else(|| entry["model"].as_str()).unwrap_or("");
+        (name == model || latest.as_deref() == Some(name))
+            && entry["expires_at"]
+                .as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .is_some_and(|at| (at.with_timezone(&chrono::Utc) - now).num_seconds() > PINNED_AFTER_SECS)
+    })
+}
+
+/// The `keep_alive` a request sends: [`KEEP_ALIVE`], unless the user keeps
+/// models longer (`ollama_keep_alive` `1h` or `-1`) or pinned this one. A
+/// request's keep-alive replaces the model's expiry, so sending a shorter one
+/// would unload a model the user meant to keep.
+pub(crate) fn keep_alive_for(setting: Option<&str>, pinned: bool) -> serde_json::Value {
+    if pinned {
+        return serde_json::json!(-1);
+    }
+    match setting.map(str::trim) {
+        Some("-1") => serde_json::json!(-1),
+        Some("1h") => serde_json::json!("1h"),
+        _ => serde_json::json!(KEEP_ALIVE),
+    }
 }
 
 /// [`suggest_with`] against the configured Ollama and today's settings.
@@ -563,6 +601,10 @@ pub fn suggest_blocking(ask: &Ask<'_>, transcript: &AgentTranscript) -> NextProm
     let settings = crate::storage::load_settings().unwrap_or_default();
     let ollama = Ollama {
         caps: &ollama::capabilities_of_at,
+        pinned: &|addr, model| {
+            ollama::ollama_http_at(addr, "GET", "/api/ps", None, PS_TIMEOUT)
+                .is_ok_and(|body| pinned_in_ps(&body, model, chrono::Utc::now()))
+        },
         chat: &|addr, body, timeout| ollama::ollama_http_at(addr, "POST", "/api/chat", Some(body), timeout),
     };
     suggest_with(&settings, ask, transcript, &ollama)
@@ -636,7 +678,8 @@ pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &Agen
         Phase::Warm => prompt.message().to_string(),
         Phase::Final => prompt.final_message(answer),
     };
-    let body = chat_body(&model, &user, ask.phase, caps.iter().any(|c| c == "thinking"));
+    let keep_alive = keep_alive_for(settings.ollama_keep_alive.as_deref(), (backend.pinned)(&addr, &model));
+    let body = chat_body(&model, &user, ask.phase, caps.iter().any(|c| c == "thinking"), keep_alive);
     let timeout = if ask.phase == Phase::Warm { WARM_TIMEOUT } else { FINAL_TIMEOUT };
     let raw = match (backend.chat)(&addr, &body, timeout) {
         Ok(raw) => raw,
@@ -658,12 +701,12 @@ pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &Agen
 /// `num_predict`: anything else that differed (the context length, the
 /// thinking switch) would reload the model or re-render the template and
 /// throw the cache away.
-fn chat_body(model: &str, user: &str, phase: Phase, thinking: bool) -> String {
+fn chat_body(model: &str, user: &str, phase: Phase, thinking: bool, keep_alive: serde_json::Value) -> String {
     let num_predict = if phase == Phase::Warm { 1 } else { FINAL_NUM_PREDICT };
     let mut body = serde_json::json!({
         "model": model,
         "stream": false,
-        "keep_alive": KEEP_ALIVE,
+        "keep_alive": keep_alive,
         "options": { "temperature": 0.2, "num_predict": num_predict },
         "messages": [
             { "role": "system", "content": SYSTEM },
