@@ -13,7 +13,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { GitMergeBar, GitPullPanel, type FetchReceipt, type MergeState } from "./GitPullPanel";
-import { BranchIcon, CloseIcon, LockIcon, RefreshIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, BranchIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LockIcon, RefreshIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename } from "../../lib/paths";
@@ -144,6 +144,12 @@ interface Props {
   /** Bumped by the parent to open the pull preview for the checked-out branch
    *  (the git bar's Pull button). 0 = never asked. */
   pullRequest?: number;
+  /** The branch's upstream line ("origin/main · 1 outgoing · 0 incoming"),
+   *  read by the parent's status, shown beside the branch in the toolbar. */
+  upstream?: string;
+  /** The change groups (Not staged, Staged, Outgoing), shown between the
+   *  toolbar and the branches, above the history they will join. */
+  changes?: React.ReactNode;
   onWorktreeChanged?: (selection: GitWorktreeSelection | null) => void;
   actionsBusy?: boolean;
   selectionBusy?: boolean;
@@ -305,7 +311,7 @@ function computeGraph(commits: GitCommit[]): RowLayout[] {
 }
 
 const LANE_W = 14;
-const GRAPH_ROW_H = 22;
+const GRAPH_ROW_H = 26;
 const cx = (col: number) => col * LANE_W + LANE_W / 2;
 
 /**
@@ -404,7 +410,7 @@ export function GitHistory(props: Props) {
   return <GitHistoryView key={props.projectDir} {...props} />;
 }
 
-function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, authProjectId, onChanged, pullRequest, onWorktreeChanged, actionsBusy = false, selectionBusy = actionsBusy, connected = true }: Props) {
+function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, authProjectId, onChanged, pullRequest, upstream, changes, onWorktreeChanged, actionsBusy = false, selectionBusy = actionsBusy, connected = true }: Props) {
   const t = useT();
   // Every destructive git question below is asked in the panel's own dialog —
   // the native `confirm()` these used arrives themeless, titled with the page
@@ -1166,35 +1172,40 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
       {dialogs}
       {/* One row: the branch and the worktree it is checked out in share the
           toolbar (the worktree had a row of its own above it until 2026-11-04). */}
-      <div className="git-history-toolbar">
+      <div className="sp-toolbar git-history-toolbar">
         <span
-          className="git-history-branch"
+          className="sp-toolbar-title git-history-branch"
           title={`${t("gitHistory.currentBranchTitle")}\n${t("gitHistory.selectedWorktree", { name: selectedWorktree?.path ?? projectDir })}`}
         >
-          ⎇ {current ?? t("gitHistory.detached")}
+          <BranchIcon /> {current ?? t("gitHistory.detached")}
+        </span>
+        <span className="sp-toolbar-meta git-history-meta">
+          {upstream && <span className="git-history-upstream">{upstream}</span>}
           <span className="git-history-worktree">{basename(selectedWorktree?.path ?? projectDir)}</span>
           {remote && <span className="git-history-worktree">{t(wtSite === "host" ? "gitHistory.worktreeSiteHost" : "gitHistory.worktreeSiteMirror")}</span>}
         </span>
         <UntestedTag id="gitHistory.worktreeSelection" />
-        <button
-          className={`toolbar-btn git-history-mode${graphMode ? " active" : ""}`}
-          onClick={toggleGraphMode}
-          aria-pressed={graphMode}
-          title={t(graphMode ? "gitHistory.switchToListView" : "gitHistory.switchToGraphView")}
-        >
-          {t(graphMode ? "gitHistory.graphModeGraph" : "gitHistory.graphModeList")}
-        </button>
-        <button
-          className="toolbar-btn git-history-mode"
-          onClick={() => void fetchNow()}
-          title={t("gitPull.fetchTitle")}
-          disabled={loading || fetching || actionsBusy || !connected}
-        >
-          {fetching ? t("gitPull.fetchingShort") : t("gitPull.fetch")}
-        </button>
-        <button className="toolbar-btn git-history-refresh" onClick={load} title={t("common.refresh")} disabled={loading || actionsBusy || !connected}>
-          <RefreshIcon />
-        </button>
+        <span className="sp-toolbar-end">
+          <button
+            className={`toolbar-btn toolbar-btn--sm git-history-mode${graphMode ? " active" : ""}`}
+            onClick={toggleGraphMode}
+            aria-pressed={graphMode}
+            title={t(graphMode ? "gitHistory.switchToListView" : "gitHistory.switchToGraphView")}
+          >
+            {t(graphMode ? "gitHistory.graphModeGraph" : "gitHistory.graphModeList")}
+          </button>
+          <button
+            className="toolbar-btn toolbar-btn--sm git-history-mode"
+            onClick={() => void fetchNow()}
+            title={t("gitPull.fetchTitle")}
+            disabled={loading || fetching || actionsBusy || !connected}
+          >
+            {fetching ? t("gitPull.fetchingShort") : t("gitPull.fetch")}
+          </button>
+          <button className="toolbar-btn toolbar-btn--sm git-history-refresh" onClick={load} title={t("common.refresh")} aria-label={t("common.refresh")} disabled={loading || actionsBusy || !connected}>
+            <RefreshIcon />
+          </button>
+        </span>
       </div>
 
       {mergeState?.merging && (
@@ -1378,9 +1389,14 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
         </div>
       )}
 
+      {changes}
+
       {(localBranches.length > 0 || remoteBranches.length > 0) && (
         <div className="git-worktree-section">
-          <div className="git-worktree-header"><span className="git-worktree-title">{t("gitHistory.branches")}</span></div>
+          <div className="sp-head git-worktree-header">
+            <span>{t("gitHistory.branches")}</span>
+            <span className="sp-head-meta">{localBranches.length}</span>
+          </div>
           <div className="git-branch-list">
           {localBranches.map((b) => {
             const occupied = worktrees.find((wt) => wt.branch === b.name && wt.path !== selectedWorktree?.path);
@@ -1418,7 +1434,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                   count: b.behind,
                 })}
               >
-                ↓{b.behind}
+                <ArrowDownIcon />{b.behind}
               </button>,
             ];
           })}
@@ -1429,7 +1445,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
               aria-expanded={showRemoteBranches}
               title={t(showRemoteBranches ? "gitHistory.hideRemoteBranches" : "gitHistory.showRemoteBranches")}
             >
-              {showRemoteBranches ? "▾" : "▸"} {t("gitHistory.remoteBranches", { count: remoteBranches.length })}
+              {showRemoteBranches ? <ChevronDownIcon /> : <ChevronRightIcon />} {t("gitHistory.remoteBranches", { count: remoteBranches.length })}
             </button>
           )}
           {showRemoteBranches && remoteBranches.map((b) => (
@@ -1451,8 +1467,9 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
       )}
 
       <div className="git-worktree-section">
-        <div className="git-worktree-header">
-          <span className="git-worktree-title">{t("gitHistory.worktrees")}</span>
+        <div className="sp-head git-worktree-header">
+          <span>{t("gitHistory.worktrees")}</span>
+          {worktrees.length > 0 && <span className="sp-head-meta">{worktrees.length}</span>}
           <UntestedTag id="gitHistory.1" />
           {remote && !hostPinned && (
             // #23 I2: two repos, two answers. `git_publish`'s "Publish from"
@@ -1714,7 +1731,17 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
         </div>
       )}
 
-      <div className={`git-commit-list${graphMode && !searchActive ? " graph" : ""}`}>
+      <div className="sp-head git-history-head">
+        <span>{t("gitHistory.history")}</span>
+      </div>
+      <div
+        className={`git-commit-list${graphMode && !searchActive ? " graph" : ""}`}
+        // The row grid's first two columns hold the graph; past three lanes
+        // the second one widens so every subject still starts on one line.
+        style={graphMode && !searchActive
+          ? ({ "--sp-row-cols": `16px ${Math.max(20, graphLanes * LANE_W - 22)}px minmax(0, 1fr) auto` } as React.CSSProperties)
+          : undefined}
+      >
         {shown.map((c, i) => {
           const refs = parseRefs(c.refs);
           // A branch tip carries at least one non-tag ref; mark it in the graph.
@@ -1722,34 +1749,43 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
           return (
             <button
               key={c.hash}
-              className={`git-commit-row${c.is_head ? " head" : ""}`}
+              className={`sp-row git-commit-row${c.is_head ? " head" : ""}`}
               onClick={() => setSelected(c)}
               title={c.subject}
             >
-              {graphMode && !searchActive && (
-                <CommitGraphCell
-                  row={graph[i]}
-                  height={GRAPH_ROW_H}
-                  lanes={graphLanes}
-                  head={c.is_head}
-                  tip={isTip}
-                />
+              {graphMode && !searchActive ? (
+                <span className="git-commit-graph">
+                  <CommitGraphCell
+                    row={graph[i]}
+                    height={GRAPH_ROW_H}
+                    lanes={graphLanes}
+                    head={c.is_head}
+                    tip={isTip}
+                  />
+                </span>
+              ) : (
+                <>
+                  <span className="sp-row-state" />
+                  <span className="sp-row-act" />
+                </>
               )}
-              <span className="git-commit-hash">{c.short}</span>
-              <span className="git-commit-subject">{c.subject}</span>
-              {refs.map((r) => {
-                const color = branchColor.get(r);
-                return (
-                  <span
-                    key={r}
-                    className="git-commit-ref"
-                    style={color ? { background: color } : undefined}
-                  >
-                    {r}
-                  </span>
-                );
-              })}
-              <span className="git-commit-date">{c.date}</span>
+              <span className="sp-row-main">
+                <span className="git-commit-hash">{c.short}</span>
+                <span className="sp-row-name git-commit-subject">{c.subject}</span>
+                {refs.map((r) => {
+                  const color = branchColor.get(r);
+                  return (
+                    <span
+                      key={r}
+                      className="git-commit-ref"
+                      style={color ? { color } : undefined}
+                    >
+                      {r}
+                    </span>
+                  );
+                })}
+              </span>
+              <span className="sp-row-meta git-commit-date">{c.date}</span>
             </button>
           );
         })}
@@ -1760,17 +1796,21 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
         {hasMore && !searchActive && (
           <button
             ref={sentinelRef}
-            className="git-commit-row git-commit-more"
+            className="sp-row git-commit-row git-commit-more"
             onClick={() => {
               setAutoPage(true);
               loadMore();
             }}
             disabled={loadingMore || !connected}
           >
-            {loadingMore
-              ? t("gitHistory.loadingMoreCommits")
-              : t("gitHistory.loadMoreCommits")}
-            <UntestedTag id="gitHistory.loadMoreCommits" />
+            <span className="sp-row-state" />
+            <span className="sp-row-act" />
+            <span className="sp-row-main">
+              {loadingMore
+                ? t("gitHistory.loadingMoreCommits")
+                : t("gitHistory.loadMoreCommits")}
+              <UntestedTag id="gitHistory.loadMoreCommits" />
+            </span>
           </button>
         )}
       </div>

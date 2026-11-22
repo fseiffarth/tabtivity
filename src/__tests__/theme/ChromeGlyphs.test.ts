@@ -12,7 +12,6 @@ const JSX_GLYPH = new RegExp(`>\\s*(?:${GLYPH.source})\\s*(?:<|\\{)`, "u");
 const ALLOWED = new Set(
   [
     "embed/pdf/PdfMarkupBar.tsx",
-    "files/GitHistory.tsx",
     "layout/RootReviewStrip.tsx",
     "terminal/TerminalReaderFacts.tsx",
     "terminal/TerminalReaderView.tsx",

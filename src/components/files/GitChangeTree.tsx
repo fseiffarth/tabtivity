@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { useT } from "../../lib/i18n";
-import { FolderIcon } from "../common/icons/Icon";
+import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, DiffIcon, FolderIcon, PageIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 
 export interface FileChange {
@@ -89,6 +90,42 @@ export function buildTree(changes: FileChange[]): TreeNode {
   return root;
 }
 
+/** Every folder path in a tree, for starting a long list folded. */
+function dirPaths(node: TreeNode, out: string[] = []): string[] {
+  for (const c of node.children) {
+    if (c.isDir) {
+      out.push(c.path);
+      dirPaths(c, out);
+    }
+  }
+  return out;
+}
+
+/** Past this many files a group opens with its folders folded, so one big
+ *  untracked tree does not push the history a screen down. */
+const FOLD_FOLDERS_OVER = 40;
+
+/** The git state a change-list row stands for: its letter, word and colour. */
+type GitState = "untracked" | "modified" | "staged" | "unpushed";
+const GIT_LETTER: Record<GitState, string> = { untracked: "U", modified: "M", staged: "S", unpushed: "P" };
+const GIT_WORD: Record<GitState, "fileTree.statusUntracked" | "fileTree.statusModified" | "fileTree.statusStaged" | "fileTree.statusUnpushed"> = {
+  untracked: "fileTree.statusUntracked",
+  modified: "fileTree.statusModified",
+  staged: "fileTree.statusStaged",
+  unpushed: "fileTree.statusUnpushed",
+};
+
+/** The `.sp-chip` letter of a git state: the letter in the state colour, the
+ *  word as its title (the same letters the file tree shows). */
+export function GitStateChip({ state }: { state: GitState }) {
+  const t = useT();
+  return (
+    <span className="sp-chip" title={t(GIT_WORD[state])} style={{ color: GIT_STATE_COLOR[state] }}>
+      {GIT_LETTER[state]}
+    </span>
+  );
+}
+
 function Stat({ added, deleted, binary }: { added: number; deleted: number; binary: boolean }) {
   if (binary) return <span className="git-change-stat git-change-stat--bin">bin</span>;
   return (
@@ -105,37 +142,48 @@ function Row({
   depth,
   collapsed,
   toggle,
-  actions,
+  stateOf,
+  toggleFor,
+  extra,
 }: {
   node: TreeNode;
   depth: number;
   collapsed: Set<string>;
   toggle: (path: string) => void;
-  actions: (node: TreeNode) => React.ReactNode;
+  stateOf: (node: TreeNode) => GitState;
+  toggleFor: (node: TreeNode) => React.ReactNode;
+  extra: (node: TreeNode) => React.ReactNode;
 }) {
   const isCollapsed = collapsed.has(node.path);
   return (
     <>
       <div
-        className={`git-change-row${node.isDir ? " is-dir" : ""}`}
-        style={{ paddingLeft: 6 + depth * 13 }}
+        className={`sp-row git-change-row${node.isDir ? " is-dir" : ""}`}
         onClick={node.isDir ? () => toggle(node.path) : undefined}
         role={node.isDir ? "button" : undefined}
+        aria-expanded={node.isDir ? !isCollapsed : undefined}
         title={node.path}
         data-count-path={!node.isDir && node.needs_count ? node.path : undefined}
       >
-        <span className="git-change-caret">{node.isDir ? (isCollapsed ? "▸" : "▾") : ""}</span>
-        <span className="git-change-name">
-          {node.isDir ? <><FolderIcon /> </> : null}
-          {node.name}
+        <span className="sp-row-state"><GitStateChip state={stateOf(node)} /></span>
+        <span className="sp-row-act">
+          {node.isDir
+            ? <span className="git-change-caret">{isCollapsed ? <ChevronRightIcon /> : <ChevronDownIcon />}</span>
+            : toggleFor(node)}
         </span>
-        {node.needs_count ? <span className="git-change-zero">—</span> : <Stat added={node.added} deleted={node.deleted} binary={node.binary} />}
-        {!node.isDir && actions(node)}
+        <span className="sp-row-main" style={depth ? { paddingLeft: depth * 16 } : undefined}>
+          <span className="git-change-icon">{node.isDir ? <FolderIcon /> : <PageIcon />}</span>
+          <span className="sp-row-name">{node.name}</span>
+        </span>
+        <span className="sp-row-meta">
+          {!node.isDir && extra(node)}
+          {node.needs_count ? <span className="git-change-zero">—</span> : <Stat added={node.added} deleted={node.deleted} binary={node.binary} />}
+        </span>
       </div>
       {node.isDir &&
         !isCollapsed &&
         node.children.map((c) => (
-          <Row key={c.path} node={c} depth={depth + 1} collapsed={collapsed} toggle={toggle} actions={actions} />
+          <Row key={c.path} node={c} depth={depth + 1} collapsed={collapsed} toggle={toggle} stateOf={stateOf} toggleFor={toggleFor} extra={extra} />
         ))}
     </>
   );
@@ -151,14 +199,18 @@ interface Props {
   comparisonCheckout?: string;
   comparisonHead?: string;
   comparisonTracking?: string;
+  /** Changes whenever the repo's status does: the list re-reads in place
+   *  (no "Loading…" flash), so staging in one group shows in the other. */
+  refreshKey?: string;
 }
 
 /**
- * Click-opened, navigable folder tree of the files behind an Add/Commit/Push
- * action, each row annotated with its `+added / -deleted` line stats. Folders
- * collapse/expand on click; the parent owns open/close (Escape, outside-click).
+ * The navigable folder tree of the files behind an Add/Commit/Push action, each
+ * row a `.sp-row` with its git state chip, its stage toggle and its
+ * `+added / -deleted` line stats. Folders fold on click. Shown inline in the
+ * Git view, one per `GitChangeGroup`.
  */
-export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled, onBusy, comparisonCheckout, comparisonHead, comparisonTracking }: Props) {
+export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled, onBusy, comparisonCheckout, comparisonHead, comparisonTracking, refreshKey }: Props) {
   const t = useT();
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -167,19 +219,21 @@ export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled
   const [counts, setCounts] = useState<Map<string, FileChange>>(new Map());
   const [busy, setBusy] = useState(false);
   const [diff, setDiff] = useState<{ path: string; text: string } | null>(null);
-  // The flyout is CSS-anchored to the action bar's right edge and grows left, so
-  // when the file viewer is docked on the LEFT of the window it runs off the left
-  // screen border. Measure the rendered box and shift it back on-screen (either
-  // edge). We measure the box with its own shift cleared, so the correction is a
-  // fixed reference and converges in one pass instead of chasing its transform.
   const treeRef = useRef<HTMLDivElement>(null);
-  const [shiftX, setShiftX] = useState(0);
+  // What the list is OF. A change here starts it over; a mere refresh of the
+  // same list keeps the rows on screen until the new read lands.
+  const identity = JSON.stringify([projectDir, scope, worktree?.site ?? "", worktree?.path ?? "", comparisonCheckout ?? "", comparisonHead ?? "", comparisonTracking ?? ""]);
+  const identityRef = useRef<string | null>(null);
+  const foldedOnce = useRef(false);
 
   useEffect(() => {
     let live = true;
-    setChanges(null);
-    setCounts(new Map());
-    setDiff(null);
+    if (identityRef.current !== identity) {
+      identityRef.current = identity;
+      foldedOnce.current = false;
+      setChanges(null);
+      setDiff(null);
+    }
     setError(null);
     invoke<FileChange[]>("git_change_stats", {
       projectDir, ...gitWorktreeArgs(worktree), scope,
@@ -187,14 +241,24 @@ export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled
         branchComparison: { checkout: comparisonCheckout, head: comparisonHead, tracking: comparisonTracking },
       } : {}),
     })
-      .then((c) => live && setChanges(c))
+      .then((c) => {
+        if (!live) return;
+        setChanges(c);
+        setCounts(new Map());
+        if (!foldedOnce.current) {
+          foldedOnce.current = true;
+          if (c.length > FOLD_FOLDERS_OVER) setCollapsed(new Set(dirPaths(buildTree(c))));
+        }
+      })
       .catch((e) => live && setError(String(e)));
     return () => {
       live = false;
     };
-  }, [projectDir, scope, worktree, revision, comparisonCheckout, comparisonHead, comparisonTracking]);
+  }, [projectDir, scope, worktree, revision, comparisonCheckout, comparisonHead, comparisonTracking, refreshKey, identity]);
 
   const tree = useMemo(() => changes && buildTree(changes.map((c) => counts.get(c.path) ?? c)), [changes, counts]);
+  // Untracked rows are the ones `git_change_stats` could not count yet.
+  const untracked = useMemo(() => new Set((changes ?? []).filter((c) => c.needs_count).map((c) => c.path)), [changes]);
 
   useEffect(() => {
     const el = treeRef.current;
@@ -202,6 +266,8 @@ export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled
     let live = true;
     let reading = false;
     const visible = new Set<string>();
+    // The implicit root: the panel's own scroller clips the rows, so only the
+    // ones on screen count, wherever in the view the group sits.
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         const path = (entry.target as HTMLElement).dataset.countPath;
@@ -210,7 +276,7 @@ export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled
         else visible.delete(path);
       }
       void readVisible();
-    }, { root: el });
+    });
     async function readVisible() {
       if (reading) return;
       reading = true;
@@ -251,34 +317,38 @@ export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled
   // An older backend ignores the unstage/staged options on these commands.
   // Its rows predate needs_count and must only expose the original stats.
   const canEdit = scope !== "unpushed" && changes?.some((row) => typeof row.needs_count === "boolean");
-  const actions = (node: TreeNode) => canEdit && <>
-    {scope === "staged" && <button className="toolbar-btn" disabled={busy || disabled} onClick={() => void act(node.path, true)}>{t("gitChangeTree.diff")}</button>}
-    <button className="toolbar-btn" disabled={busy || disabled} onClick={() => void act(node.path, false)}>
-      {t(scope === "staged" ? "gitChangeTree.unstage" : "gitChangeTree.stage")}
+  const stateOf = (node: TreeNode): GitState => {
+    if (scope === "staged") return "staged";
+    if (scope === "unpushed") return "unpushed";
+    const all = (n: TreeNode): boolean => (n.isDir ? n.children.every(all) : untracked.has(n.path));
+    return all(node) ? "untracked" : "modified";
+  };
+  // Column 2: the row's stage toggle, a box that is ticked once staged.
+  const toggleFor = (node: TreeNode) => canEdit && (
+    <button
+      type="button"
+      className={`git-stage-toggle${scope === "staged" ? " is-on" : ""}`}
+      aria-pressed={scope === "staged"}
+      aria-label={t(scope === "staged" ? "gitChangeTree.unstage" : "gitChangeTree.stage")}
+      title={`${t(scope === "staged" ? "gitChangeTree.unstage" : "gitChangeTree.stage")}: ${node.path}`}
+      disabled={busy || disabled}
+      onClick={() => void act(node.path, false)}
+    >
+      {scope === "staged" && <CheckIcon />}
     </button>
-  </>;
-
-  useLayoutEffect(() => {
-    const el = treeRef.current;
-    if (!el) return;
-    // Measure the NATURAL box with any prior shift removed, so the correction is
-    // computed from a fixed reference and can't chase its own transform. (A real
-    // browser folds the applied translateX into rect.left, so `rect − shiftX`
-    // would also converge — but an env that does NOT reflect the transform into
-    // layout, e.g. jsdom under test, makes that subtraction drift by `margin`
-    // every render into an infinite loop. Clearing the transform first is stable
-    // in both.)
-    const prev = el.style.transform;
-    el.style.transform = "none";
-    const rect = el.getBoundingClientRect();
-    el.style.transform = prev;
-    const margin = 8;
-    let dx = 0;
-    if (rect.left < margin) dx = margin - rect.left; // clips left → push right
-    else if (rect.right > window.innerWidth - margin)
-      dx = window.innerWidth - margin - rect.right; // clips right → push left
-    if (dx !== shiftX) setShiftX(dx);
-  }, [tree, error, shiftX]);
+  );
+  const extra = (node: TreeNode) => canEdit && scope === "staged" && (
+    <button
+      type="button"
+      className="btn-quiet git-change-diff"
+      aria-label={t("gitChangeTree.diff")}
+      title={t("gitChangeTree.diff")}
+      disabled={busy || disabled}
+      onClick={() => void act(node.path, true)}
+    >
+      <DiffIcon />
+    </button>
+  );
 
   const toggle = (path: string) =>
     setCollapsed((prev) => {
@@ -289,23 +359,17 @@ export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled
     });
 
   return (
-    <div
-      ref={treeRef}
-      className="git-change-tree"
-      data-testid="git-change-tree"
-      style={shiftX ? { transform: `translateX(${shiftX}px)` } : undefined}
-      onClick={(e) => e.stopPropagation()}
-    >
-      {error && <div className="git-change-empty">{error}</div>}
+    <div ref={treeRef} className="git-change-tree" data-testid="git-change-tree">
+      {error && <p className="sp-note git-change-error">{error}</p>}
       {canEdit && <UntestedTag id="gitSelectiveCommit" />}
-      {!error && !tree && <div className="git-change-empty">{t("gitChangeTree.loading")}</div>}
+      {!error && !tree && <p className="sp-note">{t("gitChangeTree.loading")}</p>}
       {tree && tree.children.length === 0 && (
-        <div className="git-change-empty">{t("gitChangeTree.noChanges")}</div>
+        <p className="sp-note">{t("gitChangeTree.noChanges")}</p>
       )}
       {tree && tree.children.length > 0 && (
-        <div className="git-change-rows menu-scroll-region">
+        <div className="git-change-rows">
           {tree.children.map((c) => (
-            <Row key={c.path} node={c} depth={0} collapsed={collapsed} toggle={toggle} actions={actions} />
+            <Row key={c.path} node={c} depth={0} collapsed={collapsed} toggle={toggle} stateOf={stateOf} toggleFor={toggleFor} extra={extra} />
           ))}
           {diff && <section className="git-change-preview" ref={(el) => el?.scrollIntoView?.({ block: "nearest" })}>
             <strong>{diff.path}</strong>
@@ -314,5 +378,24 @@ export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * One group of the Git view's change list (Not staged, Staged, Outgoing): a
+ * folding `.sp-head` over its `GitChangeTree`. A folded group does not read its
+ * list at all, so folding is also how to keep a huge one off the git refresh.
+ */
+export function GitChangeGroup({ title, meta, ...tree }: Props & { title: string; meta?: string }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section className="git-change-group" data-scope={tree.scope}>
+      <button type="button" className="sp-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
+        <span>{title}</span>
+        {meta && <span className="sp-head-meta">{meta}</span>}
+      </button>
+      {open && <GitChangeTree {...tree} />}
+    </section>
   );
 }

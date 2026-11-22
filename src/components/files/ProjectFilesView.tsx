@@ -6,7 +6,7 @@ import { subscribeTauri } from "../../hooks/useTauriListener";
 import { invokeTrusted } from "../../lib/execTrust";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { GitHistory } from "./GitHistory";
-import { GitChangeTree, type ChangeScope } from "./GitChangeTree";
+import { GitChangeGroup } from "./GitChangeTree";
 import { GitPushProposals } from "../agents/GitPushMcp";
 import {
   FileSourceSwitch,
@@ -114,6 +114,7 @@ import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
 import { SideViewKey } from "./SideViewKey";
 import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, ArrowUpRightIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowLeftIcon, PlusIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -550,7 +551,6 @@ export function ProjectFilesView({
     () => readGitBarSnapshot(projectDir)?.unpushed ?? [],
   );
   const [publishContext, setPublishContext] = useState<string | null>(null);
-  const [openTree, setOpenTree] = useState<"add" | "commit" | "push" | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [receipt, setReceipt] = useState<{ context: string; text: string } | null>(null);
   const [gitBusy, setGitBusy] = useState(false);
@@ -587,7 +587,6 @@ export function ProjectFilesView({
   const [nestedRoot, setNestedRoot] = useState<string | null>(null);
   const [preferProjectRepo, setPreferProjectRepo] = useState(false);
   const commitRef = useRef<HTMLTextAreaElement>(null);
-  const actionBarRef = useRef<HTMLDivElement>(null);
   const barScheduler = useRef<CoalescedRun | null>(null);
 
   const localFile = project?.local_file;
@@ -640,28 +639,6 @@ export function ProjectFilesView({
   const refreshGit = (dir: string) => {
     if (dir === effectiveGitRoot && gitContextKey === gitContextKeyRef.current) barScheduler.current?.request();
   };
-
-  // The change tree is click-opened and persistent; close it on Escape or a
-  // click anywhere outside the action bar (which contains both the toggles and
-  // the tree itself).
-  useEffect(() => {
-    if (!openTree) return;
-    const onDown = (e: MouseEvent) => {
-      if (!actionBarRef.current?.contains(e.target as Node)) setOpenTree(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpenTree(null);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [openTree]);
-
-  const treeScope: ChangeScope | null =
-    openTree === "add" ? "unstaged" : openTree === "commit" ? "staged" : openTree === "push" ? "unpushed" : null;
 
   // Detect a nested git repo: if the folder currently browsed in the file tree
   // lives inside a git repo distinct from the project's own repo, re-root the
@@ -729,7 +706,6 @@ export function ProjectFilesView({
   useEffect(() => {
     if (previousGitContext.current === gitContextKey) return;
     previousGitContext.current = gitContextKey;
-    setOpenTree(null);
     setGitError(null);
     setGitReadError(null);
     setGitRecovery(null);
@@ -1527,6 +1503,21 @@ export function ProjectFilesView({
   const networkBehind = networkBranch ? networkBranch.behind ?? 0 : exchange ? 0 : gitStatus?.behind ?? 0;
   const canPublishRepo = exchange?.state === "no_remote" && project && projectId &&
     !onNestedRepo && !selectedGitWorktree;
+  // The Git footer's actions, and the one of them that is the view's primary:
+  // the next step a change has to take (commit what is staged, push what is
+  // committed, add what is changed), then pull, then release.
+  const gitCanAdd = !!gitStatus && gitStatus.unstaged + gitStatus.untracked > 0;
+  const gitCanCommit = !!gitStatus && gitStatus.staged > 0;
+  const gitCanPush = (!exchange && networkAhead > 0) || destinations.length > 0;
+  const gitCanPull = networkBehind > 0;
+  // Release: only once everything is pushed and nothing is incoming, on a
+  // local project's own repo, and not when the tip already carries a tag.
+  const gitCanRelease = !!gitStatus && !onNestedRepo && !project?.remote && gitStatus.has_remote && !gitStatus.head_tagged &&
+    networkAhead === 0 && networkBehind === 0 && (!exchange || (!!networkBranch && destinations.length === 0 && !!networkBranch.upstream));
+  const gitPrimary = gitCanCommit ? "commit" : gitCanPush ? "push" : gitCanAdd ? "add" : gitCanPull ? "pull" : gitCanRelease ? "release" : null;
+  const gitBtn = (action: NonNullable<typeof gitPrimary>) => `settings-btn sm git-action-btn${gitPrimary === action ? " primary" : ""}`;
+  // The inline change lists re-read whenever the status they summarise moves.
+  const gitChangesKey = JSON.stringify([gitStatus, unpushedCommits]);
   const actionLabel = (dest: GitBranchDestination) => {
     const destination = `${dest.remote}/${dest.branch}`;
     if (dest.action === "publish") return t("projectFilesView.publishBranchTo", { destination });
@@ -2275,6 +2266,43 @@ export function ProjectFilesView({
             selectionBusy={gitBusy}
             connected={active && !remoteBlocked}
             pullRequest={pullRequest}
+            upstream={networkBranch && (networkBranch.ahead !== null || networkBranch.behind !== null)
+              ? t("projectFilesView.branchCounts", {
+                  destination: networkBranch.upstream ?? networkBranch.branch,
+                  ahead: networkBranch.ahead ?? 0,
+                  behind: networkBranch.behind ?? 0,
+                })
+              : undefined}
+            // The files behind Add / Commit / Push, inline above the history
+            // (they were popovers off the footer's carets until 2026-11-22).
+            // Read only while the repo is reachable: a remote read over a dead
+            // session would hang.
+            changes={!activeBox && gitStatus?.is_repo && projectDir && active && !remoteBlocked && (
+              <div className="git-change-groups">
+                {gitCanAdd && (
+                  <GitChangeGroup key={gitContextKey + "unstaged"} title={t("gitChangeTree.groupUnstaged")}
+                    meta={String(gitStatus.unstaged + gitStatus.untracked)}
+                    projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="unstaged" refreshKey={gitChangesKey}
+                    disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
+                )}
+                {gitCanCommit && (
+                  <GitChangeGroup key={gitContextKey + "staged"} title={t("gitChangeTree.groupStaged")}
+                    meta={String(gitStatus.staged)}
+                    projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="staged" refreshKey={gitChangesKey}
+                    disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
+                )}
+                {gitCanPush && canReviewOutgoing && (
+                  <GitChangeGroup key={gitContextKey + "unpushed"}
+                    title={networkBranch?.upstream
+                      ? t("gitChangeTree.groupOutgoingTo", { destination: networkBranch.upstream })
+                      : t("gitChangeTree.groupOutgoing")}
+                    meta={networkAhead > 0 ? t(networkAhead === 1 ? "gitChangeTree.commitsOne" : "gitChangeTree.commitsMany", { count: networkAhead }) : undefined}
+                    projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="unpushed" refreshKey={gitChangesKey}
+                    comparisonCheckout={networkBranch?.checkout} comparisonHead={networkBranch?.head} comparisonTracking={comparisonTracking}
+                    disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
+                )}
+              </div>
+            )}
           />
         </div>
         {/* Add / Commit / Push live at the FOOT of the panel, below the history
@@ -2282,10 +2310,10 @@ export function ProjectFilesView({
             sits, and out of the scroll area so they stay reachable however far
             down the log you are. The commit box is rendered above the buttons
             for that reason too: the footer grows upward, so the confirm stays
-            the bottom-most thing. Its change-tree popover opens upward
-            (`.git-action-bar` in files-panel.css). */}
+            the bottom-most thing. One of the buttons is the primary
+            (`gitPrimary`); the files each acts on are listed inline above. */}
         {!activeBox && gitStatus?.is_repo && (
-          <div ref={actionBarRef} className="git-action-bar">
+          <div className="sp-foot git-action-bar">
             {commitMsg !== null && (
               <textarea
                 ref={commitRef}
@@ -2297,49 +2325,30 @@ export function ProjectFilesView({
             )}
             {commitMsg !== null ? (
               <>
-                <button className="git-action-btn git-action-btn--commit" disabled={gitBusy} onClick={handleCommitConfirm} title={t("projectFilesView.confirmCommitTitle")}>
+                <button className="settings-btn sm primary git-action-btn" disabled={gitBusy} onClick={handleCommitConfirm} title={t("projectFilesView.confirmCommitTitle")}>
                   <span data-testid="commit-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.staged }} />
-                  <span className="git-btn-glyph">↵</span><span className="git-btn-label">{t("projectFilesView.confirm")}</span>
+                  <CheckIcon /><span className="git-btn-label">{t("projectFilesView.confirm")}</span>
                 </button>
-                <button className="git-action-btn git-action-btn--back" disabled={gitBusy} onClick={() => setCommitMsg(null)} title={t("projectFilesView.goBackTitle")}>
-                  <span className="git-btn-glyph">←</span><span className="git-btn-label">{t("projectFilesView.back")}</span>
+                <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => setCommitMsg(null)} title={t("projectFilesView.goBackTitle")}>
+                  <ArrowLeftIcon /><span className="git-btn-label">{t("projectFilesView.back")}</span>
                 </button>
               </>
             ) : (
               <>
-                {gitStatus.unstaged + gitStatus.untracked > 0 && (
-                  <div className="git-action git-action--add">
-                    <button className="git-action-btn git-action-btn--add" disabled={gitBusy} onClick={handleAdd} title={t("projectFilesView.stageAllTitle", { count: gitStatus.unstaged + gitStatus.untracked })}>
-                      <span data-testid="add-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.modified }} />
-                      <span className="git-btn-glyph">⊕</span><span className="git-btn-label">{t("projectFilesView.add", { count: gitStatus.unstaged + gitStatus.untracked })}</span>
-                    </button>
-                    <button className="git-action-toggle" disabled={gitBusy} aria-label={t("projectFilesView.showChangedFiles")} aria-expanded={openTree === "add"} title={t("projectFilesView.showChangedFiles")} onClick={() => setOpenTree((prev) => (prev === "add" ? null : "add"))}>
-                      {openTree === "add" ? "▾" : "▴"}
-                    </button>
-                  </div>
+                {gitCanAdd && (
+                  <button className={gitBtn("add")} disabled={gitBusy} onClick={handleAdd} title={t("projectFilesView.stageAllTitle", { count: gitStatus.unstaged + gitStatus.untracked })}>
+                    <span data-testid="add-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.modified }} />
+                    <PlusIcon /><span className="git-btn-label">{t("projectFilesView.add", { count: gitStatus.unstaged + gitStatus.untracked })}</span>
+                  </button>
                 )}
-                {gitStatus.staged > 0 && (
-                  <div className="git-action git-action--commit">
-                    <button className="git-action-btn git-action-btn--commit" disabled={gitBusy} onClick={handleCommitOpen} title={t("projectFilesView.commitStagedTitle", { count: gitStatus.staged })}>
-                      <span data-testid="commit-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.staged }} />
-                      <span className="git-btn-glyph"><CheckIcon /></span><span className="git-btn-label">{t("projectFilesView.commit", { count: gitStatus.staged })}</span>
-                    </button>
-                    <button className="git-action-toggle" disabled={gitBusy} aria-label={t("projectFilesView.showStagedFiles")} aria-expanded={openTree === "commit"} title={t("projectFilesView.showStagedFiles")} onClick={() => setOpenTree((prev) => (prev === "commit" ? null : "commit"))}>
-                      {openTree === "commit" ? "▾" : "▴"}
-                    </button>
-                  </div>
-                )}
-                {networkBranch && (networkBranch.ahead !== null || networkBranch.behind !== null) && (
-                  <div className="git-branch-status">
-                    {t("projectFilesView.branchCounts", {
-                      destination: networkBranch.upstream ?? networkBranch.branch,
-                      ahead: networkBranch.ahead ?? 0,
-                      behind: networkBranch.behind ?? 0,
-                    })}
-                  </div>
+                {gitCanCommit && (
+                  <button className={gitBtn("commit")} disabled={gitBusy} onClick={handleCommitOpen} title={t("projectFilesView.commitStagedTitle", { count: gitStatus.staged })}>
+                    <span data-testid="commit-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.staged }} />
+                    <CheckIcon /><span className="git-btn-label">{t("projectFilesView.commit", { count: gitStatus.staged })}</span>
+                  </button>
                 )}
                 {exchange?.state === "detached" && (
-                  <button className="git-action-btn" disabled={gitBusy} onClick={() => void handleCreateBranch()}>
+                  <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => void handleCreateBranch()}>
                     {t("projectFilesView.detachedCreateBranch")} <UntestedTag id="gitBranchExchange" />
                   </button>
                 )}
@@ -2350,62 +2359,47 @@ export function ProjectFilesView({
                   <span className="git-branch-status">{t("projectFilesView.noRemoteBranch", { branch: exchange.branch })}</span>
                 )}
                 {canPublishRepo && (
-                  <button className="git-action-btn" disabled={gitBusy} onClick={() => setPublishContext(gitContextKey)}>
+                  <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => setPublishContext(gitContextKey)}>
                     {t("pill.publishEllipsis")} <UntestedTag id="gitBranchExchange" />
                   </button>
                 )}
-                {((!exchange && networkAhead > 0) || destinations.length > 0) && (
-                  <div className="git-action git-action--push">
-                    <button className="git-action-btn git-action-btn--push" disabled={gitBusy || gitRecovery !== null} onClick={handlePush} title={exchange ? undefined : t(networkAhead === 1 ? "projectFilesView.pushCommitOneTitle" : "projectFilesView.pushCommitManyTitle", { count: networkAhead })}>
-                      <span data-testid="push-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.unpushed }} />
-                      <span className="git-btn-glyph"><ArrowUpIcon /></span>
-                      <span className="git-btn-label">{destinations.length > 1
-                        ? t("projectFilesView.choosePushTarget")
-                        : destinations[0] ? actionLabel(destinations[0]) : t("projectFilesView.push", { count: networkAhead })}</span>
-                      {exchange && <UntestedTag id="gitBranchExchange" />}
-                    </button>
-                    {canReviewOutgoing && (
-                      <button className="git-action-toggle" disabled={gitBusy} aria-label={t("projectFilesView.showUnpushedFiles")} aria-expanded={openTree === "push"} title={t("projectFilesView.showUnpushedFiles")} onClick={() => setOpenTree((prev) => (prev === "push" ? null : "push"))}>
-                        {openTree === "push" ? "▾" : "▴"}
-                      </button>
-                    )}
-                  </div>
+                {gitCanPush && (
+                  <button className={gitBtn("push")} disabled={gitBusy || gitRecovery !== null} onClick={handlePush} title={exchange ? undefined : t(networkAhead === 1 ? "projectFilesView.pushCommitOneTitle" : "projectFilesView.pushCommitManyTitle", { count: networkAhead })}>
+                    <span data-testid="push-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.unpushed }} />
+                    <ArrowUpIcon />
+                    <span className="git-btn-label">{destinations.length > 1
+                      ? t("projectFilesView.choosePushTarget")
+                      : destinations[0] ? actionLabel(destinations[0]) : t("projectFilesView.push", { count: networkAhead })}</span>
+                    {exchange && <UntestedTag id="gitBranchExchange" />}
+                  </button>
                 )}
-                {/* No caret, so no `.git-action` group: the preview it opens is
-                    GitHistory's pull panel, above. */}
-                {networkBehind > 0 && (
+                {/* The preview it opens is GitHistory's pull panel, above. */}
+                {gitCanPull && (
                   <button
-                    className="git-action-btn git-action-btn--pull"
+                    className={gitBtn("pull")}
                     disabled={gitBusy}
                     onClick={() => setPullRequest((n) => n + 1)}
                     title={t("projectFilesView.pullTitle", { count: networkBehind })}
                   >
-                    <span className="git-btn-glyph"><ArrowDownIcon /></span><span className="git-btn-label">{t("projectFilesView.pull", { count: networkBehind })}</span>
+                    <ArrowDownIcon /><span className="git-btn-label">{t("projectFilesView.pull", { count: networkBehind })}</span>
                   </button>
                 )}
-                {/* Release: only once everything is pushed and nothing is
-                    incoming, on a local project's own repo, and not when the
-                    tip already carries a tag. */}
-                {!onNestedRepo && !project?.remote && gitStatus.has_remote && !gitStatus.head_tagged && networkAhead === 0 && networkBehind === 0 && (!exchange || (networkBranch && destinations.length === 0 && networkBranch.upstream)) && (
-                  <button className="git-action-btn git-action-btn--release" disabled={gitBusy} onClick={() => void handleRelease()} title={t("projectFilesView.releaseTitle")}>
-                    <span className="git-btn-glyph"><TagIcon /></span><span className="git-btn-label">{t("projectFilesView.release")}</span>
+                {gitCanRelease && (
+                  <button className={gitBtn("release")} disabled={gitBusy} onClick={() => void handleRelease()} title={t("projectFilesView.releaseTitle")}>
+                    <TagIcon /><span className="git-btn-label">{t("projectFilesView.release")}</span>
                     <UntestedTag id="gitRelease" />
                   </button>
                 )}
-                {treeScope && projectDir && (treeScope !== "unpushed" || canReviewOutgoing) && <GitChangeTree key={gitContextKey + treeScope} projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope={treeScope} comparisonCheckout={treeScope === "unpushed" ? networkBranch?.checkout : undefined}
-                  comparisonHead={treeScope === "unpushed" ? networkBranch?.head : undefined}
-                  comparisonTracking={treeScope === "unpushed" ? comparisonTracking : undefined}
-                  disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />}
               </>
             )}
             {exchange?.state === "error" && (
               <>
                 <ErrorNote className="git-action-error" error={t("projectFilesView.branchComparisonFailed", { error: exchange.error })} />
-                <button className="git-action-btn" disabled={gitBusy} onClick={() => refreshGit(effectiveGitRoot)}>{t("projectFilesView.retryGitStatus")}</button>
+                <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => refreshGit(effectiveGitRoot)}>{t("projectFilesView.retryGitStatus")}</button>
               </>
             )}
             {gitRecovery !== null && (
-              <button className="git-action-btn" disabled={gitBusy} onClick={() => void handlePushRecovery()}>{t("projectFilesView.fetchPushTarget")}</button>
+              <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => void handlePushRecovery()}>{t("projectFilesView.fetchPushTarget")}</button>
             )}
             {gitError && <ErrorNote className="git-action-error" error={gitError} />}
             {!gitError && receipt?.context === gitContextKey && <span role="status" className="git-action-receipt">{receipt.text}</span>}
@@ -2415,9 +2409,9 @@ export function ProjectFilesView({
           </div>
         )}
         {!activeBox && !gitStatus?.is_repo && gitReadError && (
-          <div className="git-action-bar">
+          <div className="sp-foot git-action-bar">
             <ErrorNote className="git-action-error" error={t("projectFilesView.gitStatusFailed", { error: gitReadError })} />
-            <button className="git-action-btn" disabled={gitBusy} onClick={() => refreshGit(effectiveGitRoot)}>{t("projectFilesView.retryGitStatus")}</button>
+            <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => refreshGit(effectiveGitRoot)}>{t("projectFilesView.retryGitStatus")}</button>
           </div>
         )}
         {project && projectId && publishContext === gitContextKey && (

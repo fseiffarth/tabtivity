@@ -8,7 +8,7 @@
  * - Hovering a button shows the relevant staged/unpushed list
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { STATUS_COLOR } from "../../components/files/FileTree";
 import { clearFileViewSnapshots } from "../../lib/projects/fileViewSnapshots";
@@ -55,7 +55,7 @@ const ACTIVE_PROJECT = {
   local_file: "/tmp/test-project/project.json",
 };
 
-type Change = { path: string; added: number; deleted: number; binary: boolean };
+type Change = { path: string; added: number; deleted: number; binary: boolean; needs_count?: boolean };
 
 function setupInvoke({
   staged = 0,
@@ -189,7 +189,7 @@ describe("git action button bars", () => {
   });
 });
 
-describe("git change tree", () => {
+describe("git change groups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // The panel seeds its git bar and tree from module-level snapshots so a
@@ -209,15 +209,12 @@ describe("git change tree", () => {
     return result!;
   }
 
-  it("the tree is closed until its caret is clicked", async () => {
-    setupInvoke({ untracked: 1, changeStats: { unstaged: [{ path: "new.ts", added: 3, deleted: 0, binary: false }] } });
-    await renderOpenPanel();
-    await screen.findByTitle(/Stage all changes/);
-    expect(screen.queryByTestId("git-change-tree")).toBeNull();
-  });
+  const group = (title: RegExp) =>
+    screen.findByRole("button", { name: title }).then((head) => head.closest("section") as HTMLElement);
 
-  it("opening Add shows the changed files with +/- stats", async () => {
-    const user = userEvent.setup();
+  // The trees were popovers behind a caret on each footer button until
+  // 2026-11-22; they are inline now, so no click opens them.
+  it("lists the Add files inline under Not staged, with +/- stats", async () => {
     setupInvoke({
       untracked: 1,
       unstaged: 1,
@@ -229,50 +226,67 @@ describe("git change tree", () => {
       },
     });
     await renderOpenPanel();
-    const toggle = await screen.findByLabelText("Show changed files");
-    await user.click(toggle);
-    const tree = await screen.findByTestId("git-change-tree");
-    expect(tree.textContent).toContain("changed.ts");
-    expect(tree.textContent).toContain("new.ts");
-    expect(tree.textContent).toContain("+12");
-    expect(tree.textContent).toContain("-5");
+    const section = await group(/^Not staged/);
+    await within(section).findByText("changed.ts");
+    expect(section.textContent).toContain("new.ts");
+    expect(section.textContent).toContain("+12");
+    expect(section.textContent).toContain("-5");
     // The directory is rendered as a navigable node above its file.
-    expect(tree.textContent).toContain("src");
+    expect(section.textContent).toContain("src");
+    expect(screen.queryByLabelText("Show changed files")).toBeNull();
   });
 
-  it("opening Commit requests the staged scope", async () => {
-    const user = userEvent.setup();
+  it("lists the Commit files under Staged, read from the staged scope", async () => {
     setupInvoke({
       staged: 1,
       changeStats: { staged: [{ path: "staged.ts", added: 7, deleted: 1, binary: false }] },
     });
     await renderOpenPanel();
-    const toggle = await screen.findByLabelText("Show staged files");
-    await user.click(toggle);
-    const tree = await screen.findByTestId("git-change-tree");
-    expect(tree.textContent).toContain("staged.ts");
-    expect(tree.textContent).toContain("+7");
+    const section = await group(/^Staged/);
+    await within(section).findByText("staged.ts");
+    expect(section.textContent).toContain("+7");
     expect(mockInvoke).toHaveBeenCalledWith("git_change_stats", { projectDir: expect.any(String), scope: "staged" });
+    // No group for a step with nothing in it.
+    expect(screen.queryByRole("button", { name: /^Not staged/ })).toBeNull();
   });
 
-  it("clicking the caret again closes the tree", async () => {
+  it("marks each row with its git state letter", async () => {
+    setupInvoke({
+      untracked: 1,
+      unstaged: 1,
+      staged: 1,
+      changeStats: {
+        unstaged: [
+          { path: "edited.ts", added: 1, deleted: 0, binary: false, needs_count: false },
+          { path: "fresh.ts", added: 0, deleted: 0, binary: false, needs_count: true },
+        ],
+        staged: [{ path: "ready.ts", added: 2, deleted: 0, binary: false, needs_count: false }],
+      },
+    });
+    await renderOpenPanel();
+    const chipOf = async (name: string) =>
+      (await screen.findByText(name)).closest(".sp-row")!.querySelector(".sp-chip")!;
+    expect((await chipOf("edited.ts")).textContent).toBe("M");
+    expect((await chipOf("fresh.ts")).textContent).toBe("U");
+    expect((await chipOf("ready.ts")).textContent).toBe("S");
+  });
+
+  it("clicking a group's head folds it", async () => {
     const user = userEvent.setup();
     setupInvoke({ staged: 1, changeStats: { staged: [{ path: "staged.ts", added: 1, deleted: 0, binary: false }] } });
     await renderOpenPanel();
-    const toggle = await screen.findByLabelText("Show staged files");
-    await user.click(toggle);
-    await screen.findByTestId("git-change-tree");
-    await user.click(toggle);
-    expect(screen.queryByTestId("git-change-tree")).toBeNull();
+    await screen.findByText("staged.ts");
+    const head = screen.getByRole("button", { name: /^Staged/ });
+    expect(head.getAttribute("aria-expanded")).toBe("true");
+    await user.click(head);
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("staged.ts")).toBeNull();
   });
 
   it("shows 'No changes' when the scope is empty", async () => {
-    const user = userEvent.setup();
     setupInvoke({ staged: 1, changeStats: { staged: [] } });
     await renderOpenPanel();
-    const toggle = await screen.findByLabelText("Show staged files");
-    await user.click(toggle);
-    const tree = await screen.findByTestId("git-change-tree");
-    expect(tree.textContent).toContain("No changes");
+    const section = await group(/^Staged/);
+    await within(section).findByText("No changes");
   });
 });

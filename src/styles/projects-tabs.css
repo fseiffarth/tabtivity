@@ -2401,7 +2401,6 @@
 :root[data-blurred] .project-search-popover,
 :root[data-blurred] .file-run-args,
 :root[data-blurred] .file-viewer-run-args,
-:root[data-blurred] .git-change-tree,
 :root[data-blurred] .presentation-settings,
 :root[data-blurred] .cal-alarm-popup,
 :root[data-blurred] .project-switch-toast,
@@ -3033,14 +3032,13 @@ button.tab-todo-link {
 .project-search-popover,
 .file-run-args,
 .file-viewer-run-args,
-.git-change-tree,
 .presentation-settings,
 .cal-alarm-popup {
   /* No hairline outline: the elevation shadow separates the menu from what
      it floats over, and the accent ring — matching the header bar and the
      dialog chrome — is the only edge that carries meaning. Fill and ring come
      from the floating recipe in apps.css, whose ring rule outranks this
-     border (the change tree, rail-less, keeps it). */
+     border. */
   border: 0;
   border-top: 2px solid transparent;
   border-radius: var(--radius);
