@@ -4190,7 +4190,7 @@ export const dict: Dict = {
   "intro.models.drivers": "Exécuteurs disponibles : {list}",
   "intro.models.noDrivers": "Aucun exécuteur installé pour l’instant. Installez Mistral (Vibe) pour utiliser le modèle dans un onglet.",
   "intro.models.step6Title": "Facultatif : autocomplétion",
-  "intro.models.step6Body": "Ouvrez les paramètres du projet dans le panneau des fichiers → Visionneuses natives et cochez Autocomplétion pour un type de fichier ; puis appuyez sur {modifier}+Espace dans l’éditeur. Tab accepte, {altRight} prend un mot, Maj+Tab change la longueur.",
+  "intro.models.step6Body": "Ouvrez les paramètres du projet dans le panneau des fichiers → Visionneuses natives et cochez Autocomplétion pour un type de fichier ; puis appuyez sur {modifier}+Espace dans l’éditeur. Tab accepte, {ctrlRight} prend un mot, {altRight} la ligne, Maj+Tab change la longueur.",
   "intro.agents.step1BodyInline": "Un clic lance ici même l’installateur officiel de l’éditeur et affiche sa sortie — la même installation que Paramètres → Gérer les CLI :",
   "intro.agents.installNeedsNode": "L’installation attend Node.js : installez-le d’abord avec le bouton ci-dessus.",
   "intro.agents.installFallback": "Si l’échec persiste, lancez l’installateur dans un onglet terminal : il pourra y demander votre mot de passe. Cela ferme l’introduction.",

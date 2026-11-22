@@ -4193,7 +4193,7 @@ export const dict: Dict = {
   "intro.models.drivers": "Verfügbare Runner: {list}",
   "intro.models.noDrivers": "Noch kein Runner installiert. Installiere Mistral (Vibe), um das Modell in einem Tab zu nutzen.",
   "intro.models.step6Title": "Optional: Autovervollständigung",
-  "intro.models.step6Body": "Öffne im Dateipanel die Projekteinstellungen → Native Viewer und hake „Autovervollständigung“ für einen Dateityp an; drücke dann {modifier}+Leertaste im Editor. Tab übernimmt, {altRight} nimmt ein Wort, Umschalt+Tab wechselt die Länge.",
+  "intro.models.step6Body": "Öffne im Dateipanel die Projekteinstellungen → Native Viewer und hake „Autovervollständigung“ für einen Dateityp an; drücke dann {modifier}+Leertaste im Editor. Tab übernimmt, {ctrlRight} nimmt ein Wort, {altRight} die Zeile, Umschalt+Tab wechselt die Länge.",
   "intro.agents.step1BodyInline": "Ein Klick führt den offiziellen Installer des Anbieters direkt hier aus und zeigt seine Ausgabe — dieselbe Installation wie in Einstellungen → CLIs verwalten:",
   "intro.agents.installNeedsNode": "Die Installation wartet auf Node.js: Installiere es zuerst mit der Schaltfläche oben.",
   "intro.agents.installFallback": "Schlägt es weiter fehl, führe den Installer stattdessen in einem Terminal-Tab aus — dort kann er nach deinem Passwort fragen. Das schließt die Einführung.",

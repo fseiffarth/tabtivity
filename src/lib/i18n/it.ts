@@ -4188,7 +4188,7 @@ export const dict: Dict = {
   "intro.models.drivers": "Esecutori disponibili: {list}",
   "intro.models.noDrivers": "Nessun esecutore ancora installato. Installa Mistral (Vibe) per usare il modello in una scheda.",
   "intro.models.step6Title": "Facoltativo: completamento automatico",
-  "intro.models.step6Body": "Apri le impostazioni del progetto nel pannello dei file → Visualizzatori nativi e spunta Completamento automatico per un tipo di file; poi premi {modifier}+Spazio nell’editor. Tab accetta, {altRight} prende una parola, Maiusc+Tab cambia la lunghezza.",
+  "intro.models.step6Body": "Apri le impostazioni del progetto nel pannello dei file → Visualizzatori nativi e spunta Completamento automatico per un tipo di file; poi premi {modifier}+Spazio nell’editor. Tab accetta, {ctrlRight} prende una parola, {altRight} la riga, Maiusc+Tab cambia la lunghezza.",
   "intro.agents.step1BodyInline": "Un clic esegue qui l’installer ufficiale del fornitore e ne mostra l’output: la stessa installazione di Impostazioni → Gestisci CLI:",
   "intro.agents.installNeedsNode": "L’installazione attende Node.js: installalo prima con il pulsante qui sopra.",
   "intro.agents.installFallback": "Se continua a non riuscire, esegui l’installer in una scheda terminale: lì può chiedere la tua password. Questo chiude l’introduzione.",

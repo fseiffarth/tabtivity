@@ -4199,7 +4199,7 @@ export const enSource = {
   "intro.models.drivers": "Runners available: {list}",
   "intro.models.noDrivers": "No runner is installed yet. Install Mistral (Vibe) to use the model in a tab.",
   "intro.models.step6Title": "Optional: autocomplete",
-  "intro.models.step6Body": "Open the file panel's Project settings → Native Viewers and tick Autocomplete for a file type; then press {modifier}+Space in the editor. Tab accepts, {altRight} takes one word, Shift+Tab cycles the length.",
+  "intro.models.step6Body": "Open the file panel's Project settings → Native Viewers and tick Autocomplete for a file type; then press {modifier}+Space in the editor. Tab accepts, {ctrlRight} takes one word, {altRight} the line, Shift+Tab cycles the length.",
   "intro.agents.step1BodyInline": "One click runs the vendor's official installer right here and shows its output — the same install as Settings → Manage CLIs:",
   "intro.agents.installNeedsNode": "Install waits for Node.js: install it with the button above first.",
   "intro.agents.installFallback": "If it keeps failing, run the installer in a terminal tab instead — that one can ask for your password. This closes the intro.",
