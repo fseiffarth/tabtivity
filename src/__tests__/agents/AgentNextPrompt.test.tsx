@@ -12,6 +12,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 import {
   NEXT_PROMPT_CLAUDE_SETTLE_MS,
+  NEXT_PROMPT_FINAL_RETRIES,
+  NEXT_PROMPT_RETRY_MS,
   NEXT_PROMPT_SETTLE_MS,
   NEXT_PROMPT_WARM_MS,
   cleanNextPrompt,
@@ -106,6 +108,21 @@ describe("useNextPrompt — final", () => {
     const failed = setup({}, () => Promise.reject(new Error("no command")));
     await advance(NEXT_PROMPT_SETTLE_MS);
     expect(failed.hook.result.current).toBe("");
+  });
+
+  it("asks a skipped final again, a few times, for a transcript that had not caught up with the turn's end", async () => {
+    const answers: NextPromptAnswer[] = [{ text: null, status: "skipped" }, { text: null, status: "skipped" }, ok("commit it")];
+    const { hook, phases } = setup({}, () => Promise.resolve(answers.shift() ?? ok("commit it")));
+    await advance(NEXT_PROMPT_SETTLE_MS);
+    expect(phases()).toEqual(["final"]);
+    expect(hook.result.current).toBe("");
+    await advance(NEXT_PROMPT_RETRY_MS * 2);
+    expect(phases()).toEqual(["final", "final", "final"]);
+    expect(hook.result.current).toBe("commit it");
+    // Never more than the bound, however often it is skipped.
+    const skipped = setup({}, () => Promise.resolve({ text: null, status: "skipped" }));
+    await advance(NEXT_PROMPT_SETTLE_MS + NEXT_PROMPT_RETRY_MS * (NEXT_PROMPT_FINAL_RETRIES + 3));
+    expect(skipped.phases()).toHaveLength(NEXT_PROMPT_FINAL_RETRIES + 1);
   });
 
   it("on Claude, waits out the settle with no screen suggestion, and its own suggestion replaces it later", async () => {

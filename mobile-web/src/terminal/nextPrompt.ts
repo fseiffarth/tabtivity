@@ -43,6 +43,12 @@ export const NEXT_PROMPT_CLAUDE_SETTLE_MS = 1_500;
 /** Any other CLI's: long enough that the screen's busy row flickering off
  * between two steps is not a turn's end. */
 export const NEXT_PROMPT_SETTLE_MS = 400;
+/** A `final` answered `skipped` is asked again this much later, at most
+ * `NEXT_PROMPT_FINAL_RETRIES` times: the screen can go idle before the CLI
+ * has written the turn's answer to its transcript, and a surface keyed by
+ * the work's end (steering, the phone) has no later key to ask on. */
+export const NEXT_PROMPT_RETRY_MS = 1_500;
+export const NEXT_PROMPT_FINAL_RETRIES = 3;
 /** The longest suggestion shown. */
 export const NEXT_PROMPT_MAX_CHARS = 200;
 
@@ -166,15 +172,22 @@ export function useNextPrompt({ enabled, working, turnKey, progress, canWarm, se
     if (dropped.current === turnKey || asked.current === turnKey) return;
     const turn = turnKey;
     let current = true;
-    const timer = setTimeout(() => {
+    const run = (attempt: number) => {
       asked.current = turn;
       ownSeen.current = false;
       void askRef.current("final").catch(() => null).then((answer) => {
-        if (!current || answer?.status !== "ok") return;
+        if (!current) return;
+        // The transcript had not caught up with the turn's end yet.
+        if (answer?.status === "skipped" && attempt < NEXT_PROMPT_FINAL_RETRIES) {
+          timer = setTimeout(() => run(attempt + 1), NEXT_PROMPT_RETRY_MS);
+          return;
+        }
+        if (answer?.status !== "ok") return;
         const text = cleanNextPrompt(answer.text);
         setShown(text ? { turn, text } : null);
       });
-    }, settleMs);
+    };
+    let timer = setTimeout(() => run(0), settleMs);
     return () => {
       current = false;
       clearTimeout(timer);
