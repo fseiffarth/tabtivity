@@ -402,6 +402,7 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .home-needs-title { font-size:var(--fs-body); font-weight:600; }
 .home-needs-copy small { color:var(--ink-muted); font-size:var(--fs-foot); }
 .home-needs-row time { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-caption); font-variant-numeric:tabular-nums; }
+.home-needs-row.unavailable > :not(time),.activity-card.unavailable > span:first-child { opacity:.45; }
 .home-group-more { min-height:var(--hit); color:#bcb0ff; font-size:var(--fs-sub); font-weight:600; }
 .home-projects > .tab-card { border:0; border-radius:0; background:transparent; }
 .home-project-card .card { gap:var(--sp-3); min-height:60px; padding:10px var(--sp-3); }
