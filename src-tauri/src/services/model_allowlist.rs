@@ -26,6 +26,11 @@
 //!   a row there, or it ships unchecked;
 //! * `services::mail_ai::chat` (summaries, drafts, events, tasks, and the
 //!   classifier an inbox sync runs);
+//! * `services::next_prompt` (the local-model next-prompt suggestion), through
+//!   the shared gate `services::ollama_local::preflight`. Its command
+//!   `agent_next_prompt` needs no [`MODEL_ARG`] row: it takes a tab identity,
+//!   never a model name — the Suggestions role is resolved backend-side from
+//!   the settings, and the model it picks is checked here at the request.
 //!
 //! The root MCP's local-model lane, served by a server daemon too (#2339),
 //! forwards no model to Ollama: `ollama_mcp_models` only picks which local

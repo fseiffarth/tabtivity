@@ -5151,6 +5151,82 @@ async fn agent_transcript(
     }
 }
 
+/// `?phase=warm|final` (`final` when absent). Anything else is refused.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct NextPromptQuery {
+    phase: Option<String>,
+}
+
+/// Entries read for a next-prompt suggestion: enough for a long turn whole.
+const NEXT_PROMPT_LIMIT: usize = 400;
+
+/// `GET /api/v1/tabs/{tab_id}/next-prompt?phase=warm|final` — the
+/// local-model "what's next" suggestion for the agent tab's newest turn
+/// (`services::next_prompt`), for the phone's composer. The turn is read as
+/// `/transcript` reads it (the window's read over the bridge, or the CLI's
+/// own transcript off the tab record with no window) and the loopback Ollama
+/// run happens here, in this process, cached per turn. Answers only `text`
+/// and `status` — no turn key, no id, no path — and always a status, never an
+/// error, once the tab resolves.
+async fn tab_next_prompt(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<NextPromptQuery>,
+) -> impl IntoResponse {
+    use crate::services::next_prompt::{self, Ask, NextPrompt, Phase, Status};
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Some(phase) = Phase::parse(query.phase.as_deref().unwrap_or("final")) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_phase");
+    };
+    let (project_id, tab) = match agent_tab(&state, &phone, &tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let answer = |prompt: NextPrompt| (StatusCode::OK, Json(json!({ "text": prompt.text, "status": prompt.status })));
+    if phase == Phase::Warm && tab.local_model {
+        return answer(NextPrompt::status(Status::Skipped));
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::AgentTranscript {
+            request_id: new_request_id(),
+            project_id: project_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            subagent: None,
+            version: None,
+            limit: Some(NEXT_PROMPT_LIMIT),
+        },
+    )
+    .await;
+    let transcript = if desktop_down(&response) {
+        None
+    } else {
+        match response {
+            Ok(DesktopResponse::AgentTranscript { transcript }) => Some(transcript),
+            Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found" => {
+                return api_error(StatusCode::NOT_FOUND, &code);
+            }
+            _ => return answer(NextPrompt::status(Status::Unavailable)),
+        }
+    };
+    let key = format!("phone\u{1f}{project_id}\u{1f}{}", tab.tmux_name);
+    let prompt = tokio::task::spawn_blocking(move || {
+        // No window: the CLI's own transcript, read here off the tab record.
+        let transcript = transcript.unwrap_or_else(|| headless::transcript(&project_id, &tab, None, None, Some(NEXT_PROMPT_LIMIT)));
+        let ask = Ask { key: &key, agent: &tab.cmd, phase, local_model: tab.local_model };
+        next_prompt::suggest_blocking(&ask, &transcript)
+    })
+    .await
+    .unwrap_or_else(|_| NextPrompt::status(Status::Unavailable));
+    answer(prompt)
+}
+
 /// `GET /api/v1/tabs/{tab_id}/uncommitted` — the files the agent tab's
 /// conversation changed that are still not committed, for the chat screen's
 /// Commit chip (`chat_uncommitted`). Answered here, window open or not: the
@@ -9110,6 +9186,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/tabs/{tab_id}/status", get(agent_status))
         .route("/api/v1/tabs/{tab_id}/transcript", get(agent_transcript))
+        .route("/api/v1/tabs/{tab_id}/next-prompt", get(tab_next_prompt))
         .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
         .route("/api/v1/tabs/{tab_id}/changes", get(tab_changes))
         .route("/api/v1/tabs/{tab_id}/named-files", get(tab_named_files))

@@ -387,6 +387,7 @@ const AUTHENTICATED_GETS: &[&str] = &[
     "/api/v1/tabs/anything",
     "/api/v1/tabs/anything/schedules",
     "/api/v1/tabs/anything/transcript",
+    "/api/v1/tabs/anything/next-prompt",
     "/api/v1/tabs/anything/uncommitted",
     "/api/v1/tabs/anything/changes",
     "/api/v1/tabs/anything/named-files",
@@ -1100,6 +1101,53 @@ async fn the_window_route_drops_a_waiting_question_unless_the_turn_says_decision
         // answered `unchanged` and miss the entry for good.
         assert_eq!(json(&body)["transcript"].get("version").is_some(), count == 1, "{text}: {body}");
     }
+    desktop.abort();
+}
+
+/// The next-prompt route reads the turn through the window as `/transcript`
+/// does and answers `text` and `status` only — no turn key, id or path. A
+/// turn that has not ended is `skipped` before any model is asked; a phase
+/// other than `warm`/`final`, or any other parameter (a model name), is
+/// refused.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_next_prompt_route_answers_text_and_status_only() {
+    use crate::services::agent_transcript::{AgentTranscript, TranscriptEntry};
+    let host = Fixture::with_project();
+    let (cookie, _) = host.pair_device(&signing_key(57)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel::<DesktopRequest>();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else { continue };
+            let _ = seen_tx.send(request);
+            let entry = |kind: &str, text: &str| TranscriptEntry { kind: kind.into(), text: text.into(), ..Default::default() };
+            let transcript = AgentTranscript {
+                available: true,
+                entries: vec![entry("prompt", "fix the test"), entry("agent", "Explore the suite")],
+                cwd: Some("/home/someone/private".into()),
+                ..Default::default()
+            };
+            admin::write_frame(&mut stream, &DesktopResponse::AgentTranscript { transcript }).await.expect("answer");
+        }
+    });
+    for phase in ["", "?phase=final"] {
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/next-prompt{phase}"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body), json!({ "text": null, "status": "skipped" }), "{phase}: {body}");
+        match seen.recv().await.expect("a desktop read") {
+            DesktopRequest::AgentTranscript { subagent: None, version: None, limit: Some(400), .. } => {}
+            other => panic!("read {other:?}"),
+        }
+    }
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/next-prompt?phase=now"), &cookie)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(json(&body)["error"], "invalid_phase");
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/next-prompt?phase=final&model=x"), &cookie)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "an unknown parameter is refused: {body}");
     desktop.abort();
 }
 
