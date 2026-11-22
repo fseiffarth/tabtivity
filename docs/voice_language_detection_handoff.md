@@ -95,7 +95,85 @@ now, with the numbers test). Frontend gates not applicable (no frontend change).
 
 ## B
 
-(not started)
+Branch `worktree-agent-a48d6fb43d2f64461`, three commits on top of `e2cd38b20`:
+`a854c80ed` (desktopVoice client + `voice_detect_langs` type), `fb204e256`
+(dictation, chip, matcher, read-aloud), `18ca90677` (Settings checkboxes, copy,
+register, search index, filemap). The handoff itself is the fourth.
+
+**Built against the Contract, as written.**
+- `desktopVoice.ts`: `VOICE_EVENTS.lang`, `LangEvent`, `FinalEvent.lang`;
+  `onFinal(text, segment, filtered, lang?)` and an **optional** `onLang?(lang)`;
+  `DesktopDictationOptions.langs?/fallback?` go into the `voice_listen_start`
+  args only when `langs` is non-empty. New helpers: `appLanguage`,
+  `detectLangs` (stored app languages, deduped, max 5, else `[ui, "en"]`),
+  `voiceCandidates(choice, stored, ui)` (`{}` unless `detect`; `fallback` is
+  the UI language when it is a candidate, else the first), and
+  `rememberSpokenLang`/`lockedSpokenLang` (module `Map` by tab key; D5).
+- `ReaderVoice.tsx`: `start()` sends the candidates from the choice it was
+  *given* (so `switchLang` works), sets `sessionDetect`, clears `spokenIn` and
+  the chip. `onFinal` sets `spokenIn` synchronously before the text is handled,
+  only for a `detect` session and only for an app language. `onLang` sets
+  `spokenIn`, the chip and the per-tab memory, only for a `detect` session.
+  Forced-language sessions ignore both (as the Contract says).
+- `spokenIn` is a `useRef` **owned by `TerminalReaderView`** and passed to
+  `useReaderVoice` (the view needs it before the hook is called, for
+  `useLiveDictation`). `editLanguageOf()` = forced choice, else (under
+  `detect`) `spokenIn.current`, else the UI language. `useLiveDictation`'s
+  `language` prop is now a getter `() => Language`, so partials and finals both
+  read the live value (a stale render value would lag one segment).
+- Chip: "Heard as {lang}" button in the picker row next to the language
+  dropdown (`.settings-btn`, no new CSS); click clicks the dropdown's trigger,
+  i.e. opens the existing picker. Appears only after `voice:lang`.
+- `ReaderReadAloud.ts` takes a new `tabKey` argument; under `detect` it reads in
+  `lockedSpokenLang(tabKey) ?? uiLanguage`.
+- `VoiceSettings.tsx`: a checkbox row (`settings.voice.detectLangs`) when
+  `voice_lang === "detect"`; the last ticked box is disabled; saves
+  `voice_detect_langs` in app-language order. Row added to `settingsIndex.ts`
+  and `docs/help/settings-links.md` regenerated (a test checks both).
+- `src/styles/subwindows.css`: `.settings-voice-langs` (flex wrap).
+
+**New i18n keys** (all five dictionaries): `settings.voice.detectLangs`,
+`settings.voice.detectLangsHelp`, `terminal.reader.voice.heardAs` (`{lang}`),
+`terminal.reader.voice.heardAsHelp`; reworded `settings.voice.langDetect`
+("Pick among my languages") and `settings.voice.langHelp`.
+**New untested ids** (`src/lib/untested.ts`): `terminal.reader.voice.heardAs`,
+`settings.voice.detectLangs`.
+**Filemap rows touched** (`docs/filemap_frontend.md`): `VoiceSettings.tsx`,
+`ReaderVoice.tsx + desktopVoice.ts`, `ReaderReadAloud.ts`. No new source file.
+
+**Tests added.** `DesktopVoice.test.ts` (args with/without `langs`, `lang` on
+finals, `voice:lang`, helpers), `ReaderVoice.test.tsx` "speech language
+detection" (candidates sent only under detect; matcher follows the final's
+`lang`; non-app language and forced choice ignored; chip on `voice:lang`, opens
+the picker, cleared at session end), `ReaderHandsFree.test.tsx` (read-aloud
+language), new `VoiceSettings.test.tsx` (checkboxes).
+
+**Gotchas.**
+- Spoken-edit tests need `loadDict("de")` first; the matcher reads the loaded
+  dictionary.
+- `lang` on a final is ignored unless it names an app language (`LANGUAGES`);
+  Whisper may report e.g. `nl` under open `auto`, which then falls back to the
+  UI language for edits.
+- The chip lives in the picker row, which shows only while listening/preparing,
+  so it disappears with the session (as `heardAs` is cleared in `reset()`).
+- `VoiceSettings`' natural-voice install still keys on the UI language under
+  `detect` (it is a global setting; the per-tab lock is only for read-aloud).
+- The worktree's `git commit` prints a "MOBILE BUNDLE IS STALE" notice; unrelated.
+
+**Gates** (`scripts/gates-job.sh start --base e2cd38b20`, whole branch): brand
+PASS, whitespace PASS, lint PASS (no new warnings), `npm run build` PASS,
+vitest PASS: 957 test files, 9663 tests (957 of 1273 files affected; the
+earlier run failed only `SettingsLinkCatalog`, fixed by regenerating
+`docs/help/settings-links.md`). Rust gates were selected by the base diff but
+are agent A's territory; no Rust file is touched by B.
+
+**Flagged for user.**
+- Nothing in the Contract was wrong. One interpretation: the chip is not a
+  separate control that opens a hidden picker, since the picker row is always
+  visible while listening; the chip programmatically opens that dropdown.
+- Read-aloud keeps the lock per tab in memory only, so a reloaded window starts
+  at the UI language until the next lock (D5 as written).
+- Not live-verified: both new UI pieces wear `UntestedTag`.
 
 ## Final review
 
