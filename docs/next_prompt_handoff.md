@@ -134,4 +134,61 @@ Flagged for user:
 
 ## R review
 
-_(not started)_
+Reviewed `82047262e..8215df915` (merged on `worktree-agent-a35b84a50ca2d9ee5`).
+Fixes are on `worktree-agent-a1322a530e76ea652`. Each has a regression test.
+
+**Fixed**
+- `ca9517878` **A turn could lose its suggestion when `final` came back
+  `skipped`.** Steering's box and the phone key a turn by the screen going idle,
+  not by the transcript. If the CLI had not yet written the answer to its
+  transcript, the one `final` came back `skipped`, and no later key ever asked
+  again. Now `useNextPrompt` asks a skipped final again up to 3 times, 1.5 s
+  apart (`NEXT_PROMPT_RETRY_MS`, `NEXT_PROMPT_FINAL_RETRIES`).
+- `6d7f434d7` **Local-model tabs and the folder agents never got a
+  suggestion.** `agent_next_prompt` answered `unavailable` for an empty
+  `sessionId`. But `readerRequest` sends `""` for a `local_agent` tab and for
+  OpenCode, Antigravity and Muse, and the Chat view reads those by folder and
+  launch moment. The session key (`next_prompt::desktop_key`) now also names
+  `tabDir` and `since`. It is refused only when both the id and the folder are
+  missing.
+- `c28c0fea3` **Handoff A item 4 confirmed: `keep_alive: "30m"` cut short a
+  longer choice.** A request's keep-alive replaces the model's expiry, so the
+  fixed value cut an `ollama_keep_alive` of `1h` or `-1` down to 30 minutes. It
+  did the same to a model pinned with Load (`keep_alive: -1`). Now
+  `keep_alive_for` sends `-1` for a pinned model (read from `/api/ps` at the
+  gated loopback endpoint, after the preflight) or for an infinite setting,
+  `1h` for `1h`, and `30m` otherwise.
+
+**Checked, no change needed**
+- The command's args match the Rust parameters, and `since` is `Option<i64>`
+  like `agent_tab_transcript`'s. The status strings match the snake_case enum.
+- The phone sends only `?phase=`. The 400 on an unknown param does not trip.
+- The frontend never reads or stores the backend `turnKey`.
+- The loopback and no-cloud checks run before any Ollama socket, on both the
+  command and the route. The route answers `{text, status}` only.
+- Nothing sends the suggestion by itself. Hidden panes gate on `enabled`.
+- The command is async over `spawn_blocking`.
+- The `command_class` row is there, and so is the `commandClasses.ts` line. The
+  three i18n keys are in all five dictionaries, and the untested row exists.
+- brand-check and privacy-check (range) are clean. There are no TODOs.
+
+**Flagged for user**
+1. **A `final` can wait behind a cold `warm`.** One mutex per session, and a
+   warm's timeout is 120 s. A first warm of a long turn can hold the slot for
+   tens of seconds, and the phone's `final` gives up at 30 s
+   (`NEXT_PROMPT_TIMEOUT`). The desktop waits with no limit. Options: lower the
+   warm timeout, or let `final` cancel or skip a running warm.
+2. **A `skipped` answer can't always be told apart from a stale transcript.**
+   The retry covers a transcript that lags by a few seconds. If the
+   transcript is still a whole turn behind (the new prompt not written yet),
+   the backend answers from its cache with the *previous* turn's suggestion,
+   and the phone or steering box shows that one. Rare, and still only a
+   placeholder.
+3. **An `OLLAMA_KEEP_ALIVE` set outside the setting** (a hand-written systemd
+   env, or a value other than `30m`/`1h`/`-1`) is still not known to the
+   request. That case still gets `30m` unless the model is pinned.
+4. **`/api/ps` is read once per request** (warm and final) to see whether the
+   model is pinned. This is cheap on loopback, but it is one extra request.
+   Cache it if it shows up.
+5. Handoff A items 1–3 and 5 and B items 1–6 stand as written. None is a bug
+   I could confirm in code. Nothing has been run live.
