@@ -3441,6 +3441,38 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader.panel-open:not(.dock-open) .terminal-reader-input::before { content: none; }
 .terminal-reader.panel-open:not(.dock-open) .terminal-reader-send { right: 4px; bottom: 3px; }
 .terminal-reader.panel-open:not(.dock-open) .terminal-reader-mic { right: 36px; bottom: 6px; }
+/* The one status line over the docked composer (`ReaderDockStatus`): the
+   working row's dots and Stop, or the question waiting, as a strip rather
+   than Chat's pill. The strip under it then has no top rule of its own. */
+.terminal-reader-dock-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 14px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+}
+.terminal-reader-dock-status > :is(.terminal-reader-dock-line, strong) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-reader-dock-status > strong { color: var(--text-primary); font-weight: 600; }
+.terminal-reader-dock-status > small {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.terminal-reader-dock-status > button { flex: none; margin-left: auto; }
+.terminal-reader-dock-status + .terminal-reader-dock > .terminal-reader-facts-wrap:first-child,
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-dock-status + .terminal-reader-dock .terminal-reader-composer {
+  border-top: none;
+}
 /* The dock's untested pill: top right in the open box, left of the mic at rest. */
 .terminal-reader-dock-tag {
   position: absolute;

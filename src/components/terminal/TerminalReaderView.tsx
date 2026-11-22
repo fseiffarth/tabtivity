@@ -56,6 +56,7 @@ import { replaceAssistantChat } from "../../stores/assistantScope";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { ReaderSelectionMenu } from "./ReaderSelectionMenu";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
+import { ReaderDockStatus } from "./ReaderDockStatus";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges } from "./TerminalReaderChanges";
@@ -2633,6 +2634,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     void resumeChatWithToast(scope, tab, cwd, browsed.chat, t).finally(() => setResumingChat(false));
   };
   const resumeLabel = t(live.working ? "terminal.chats.resumeBusy" : "terminal.chats.resumeHint");
+  /** The dock's "Answer in Chat": Chat, the keyboard on the question's rows
+   * once they are drawn (its composer is locked, so focus would fall to the
+   * page). */
+  const answerInChat = () => {
+    onShowChat?.();
+    window.setTimeout(() => {
+      if (regionRef.current) focusQuestionOption(regionRef.current);
+    }, 0);
+  };
   const onRegionKey = (event: KeyboardEvent) => {
     if (!browsed || event.key !== "Escape") return;
     // Diffs and Data sit inside the Reader: Esc in a note box, the file
@@ -3061,6 +3071,26 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           onClose={() => onShowChat?.()}
         />
       )}
+      {/* Under a panel only, one line on what the chat would show: the agent
+          at work (Chat's working row) or asking. A question outranks work. */}
+      {panelShown && !browsed && (questionOpen ? (
+        <ReaderDockStatus kind="question" onAnswerInChat={onShowChat ? answerInChat : undefined} />
+      ) : openStep ? subagentWorking && (
+        <ReaderDockStatus
+          kind="working"
+          line={subagentModel ? t("terminal.reader.workingModel", { model: subagentModel }) : t("terminal.reader.working")}
+          facts={subagentFacts}
+          onStop={live.working ? stop : undefined}
+        />
+      ) : live.working && (
+        <ReaderDockStatus
+          kind="working"
+          line={workingLine}
+          facts={[live.working.elapsed, live.working.tokens && t("terminal.reader.workingTokens", { count: live.working.tokens })].filter(Boolean).join(" · ")}
+          queued={queuedPrompts.length}
+          onStop={stop}
+        />
+      ))}
       {/* The dock: no box of its own (`display: contents`), only where a press
           or focus inside it engages it (`engageDock`). */}
       <div className="terminal-reader-dock" onPointerDown={engageDock} onFocus={engageDock}>
