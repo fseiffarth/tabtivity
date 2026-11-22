@@ -235,12 +235,31 @@ describe("desktop conversation toolbar", () => {
     expect(invoke).toHaveBeenCalledWith("open_in_file_manager", { path: "/project/blender" });
   });
 
-  it("lists the conversation's workflow runs as Workspaces, apart from its subagents", async () => {
+  it("over Chat leaves the top bar without the menus: the dock stands for them", async () => {
     entries.push(
       { kind: "agent", text: "Review parser", role: "reviewer", subagent: "child", at: "2026-10-25T09:01:00Z" },
       { kind: "agent", text: "Audit the repo", role: "workflow", subagent: "run", workflow: true, at: "2026-10-25T09:02:00Z" },
     );
     render(<Pane host={host} />);
+    const done = await screen.findByRole("button", { name: /2 done/ });
+    expect(done.closest(".terminal-reader-agent-dock")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^Subagents \(|^Workspaces \(/ })).toBeNull();
+    expect(document.querySelector(".reader-topbar-navigation .terminal-reader-subagent-index")).toBeNull();
+    // Diffs covers the chat and its dock: the menus are back in the top bar.
+    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
+    expect(await screen.findByRole("button", { name: /^Subagents \(1\)/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Subagents \(/ })).toBeNull());
+  });
+
+  it("lists the conversation's workflow runs as Workspaces over Diffs, apart from its subagents", async () => {
+    entries.push(
+      { kind: "agent", text: "Review parser", role: "reviewer", subagent: "child", at: "2026-10-25T09:01:00Z" },
+      { kind: "agent", text: "Audit the repo", role: "workflow", subagent: "run", workflow: true, at: "2026-10-25T09:02:00Z" },
+    );
+    render(<Pane host={host} />);
+    await screen.findByRole("button", { name: /2 done/ });
+    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     expect(await screen.findByRole("button", { name: /^Subagents \(1\)/ })).toBeTruthy();
     const workspaces = screen.getByRole("button", { name: /^Workspaces \(1\)/ });
     expect(workspaces.closest(".reader-topbar-navigation")).not.toBeNull();
@@ -254,9 +273,10 @@ describe("desktop conversation toolbar", () => {
   it("keeps subagent navigation above the views and returns from Diffs to its chat", async () => {
     entries.push({ kind: "agent", text: "Review parser", role: "reviewer", subagent: "child", at: "2026-10-25T09:01:00Z" });
     render(<Pane host={host} />);
+    await screen.findByRole("button", { name: /1 done/ });
+    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     const menu = await screen.findByRole("button", { name: /^Subagents \(1\)/ });
     expect(menu.closest(".reader-topbar-navigation")).not.toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     fireEvent.click(menu);
     const navigation = screen.getByRole("navigation", { name: "Subagents in this conversation" });
     fireEvent.click(within(navigation).getByRole("button", { name: /Review parser/ }));

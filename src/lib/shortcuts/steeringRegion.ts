@@ -60,9 +60,10 @@ const chromeFrames = new WeakSet<HTMLElement>();
  *  whole window but its view strip, which is the chrome level's. */
 const appFrames = new WeakSet<HTMLElement>();
 const APP_SKIP = ".root-view-strip";
-/** What the subagents region walks in an agent tab's pane: the Subagents (and
- *  Workspaces) lists in the Chat's top bar, and an open subagent's bar. */
-const SUBAGENT_ZONE = ".terminal-reader-subagent-index, .terminal-reader-subagent-bar";
+/** What the subagents region walks in an agent tab's pane: the Chat dock's
+ *  pills and its Subagents list, the Subagents (and Workspaces) lists in the
+ *  top bar over Diffs or Data, and an open subagent's bar. */
+const SUBAGENT_ZONE = ".terminal-reader-agents, .terminal-reader-subagent-index, .terminal-reader-subagent-bar";
 /** The panes the subagents region walks, so `regionTargets` keeps to its zone. */
 const subagentFrames = new WeakSet<HTMLElement>();
 /** What the chrome level walks: the title bar's view tabs and buttons, and the
@@ -346,10 +347,11 @@ export function activeTabCard(): HTMLElement | null {
   return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
 }
 
-/** The active agent tab's Subagents toggle, or its open subagent's bar —
- *  whichever is on screen first; only the active tab's pane is. */
+/** The active agent tab's Subagents toggle (the dock's done pill, or the top
+ *  bar's), its open subagent's bar, or the dock's pills — whichever is on
+ *  screen first; only the active tab's pane is. */
 function activeSubagentControl(): HTMLElement | null {
-  const controls = ".terminal-reader-subagent-toggle, .terminal-reader-subagent-bar";
+  const controls = ".terminal-reader-subagent-toggle, .terminal-reader-subagent-bar, .terminal-reader-agents";
   if (steeringInRoot()) {
     return firstShown(`.root-console-backdrop :is(${controls})`);
   }
@@ -388,7 +390,7 @@ export function openSubagentList(frame: HTMLElement): boolean {
  *  that spawned it. False when no subagent is open. */
 export function subagentGoUp(frame: HTMLElement): boolean {
   const back = frame.querySelector<HTMLElement>(
-    ".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar) .terminal-reader-subagent-nav:not(:disabled)",
+    ".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar) .terminal-reader-subagent-up:not(:disabled)",
   );
   if (!back) return false;
   back.click();
@@ -403,9 +405,12 @@ export function subagentStopsShown(frame: HTMLElement): boolean {
   );
 }
 
-/** Close whichever of the pane's lists is open. */
+/** Close whichever of the pane's lists is open (the dock's may have been
+ *  opened by its `+N` pill). */
 export function closeSubagentList(frame: HTMLElement): void {
-  frame.querySelector<HTMLElement>('.terminal-reader-subagent-toggle[aria-expanded="true"]')?.click();
+  frame
+    .querySelector<HTMLElement>('.terminal-reader-subagent-toggle[aria-expanded="true"], .terminal-reader-agent-pill[aria-expanded="true"]')
+    ?.click();
 }
 
 /** The subagents region's first stop: an open list's first subagent (the ones
@@ -414,7 +419,7 @@ export function placeSubagentCursor(frame: HTMLElement): boolean {
   if (cursor?.isConnected && frame.contains(cursor) && regionTargets(frame).includes(cursor)) return true;
   const first =
     frame.querySelector<HTMLElement>(".terminal-reader-subagent-list button:not(:disabled)") ??
-    frame.querySelector<HTMLElement>(".terminal-reader-subagent-bar .terminal-reader-subagent-nav:not(:disabled)");
+    frame.querySelector<HTMLElement>(".terminal-reader-subagent-bar .terminal-reader-subagent-up:not(:disabled)");
   return (first && pointRegionCursor(frame, first)) || placeRegionCursor(frame);
 }
 

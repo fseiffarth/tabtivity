@@ -57,6 +57,8 @@ import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { ReaderSelectionMenu } from "./ReaderSelectionMenu";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { ReaderDockStatus } from "./ReaderDockStatus";
+import { ReaderSubagentDock } from "./ReaderSubagentDock";
+import type { DockAgent } from "../../lib/agents/subagentDock";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges } from "./TerminalReaderChanges";
@@ -554,7 +556,7 @@ type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflo
 
 /** Memoised: the Reader re-renders on every live-screen tick while an agent
  * streams, and a turn already drawn has nothing new to say then. */
-const Turn = memo(function Turn({ turn, lead, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore, pickAsync, asyncBusy, asyncSending }: {
+const Turn = memo(function Turn({ turn, lead, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore, pickAsync, asyncBusy, asyncSending, atWork = false }: {
   /** On a command: the commands sent just before it, drawn on its rule (`commandRuns`). */
   lead?: string;
   /** A prompt bubble's "Restore files to before this" (`ReaderCheckpoints`). */
@@ -570,7 +572,11 @@ const Turn = memo(function Turn({ turn, lead, cutLabel, planLabel, interruptedLa
   pickAsync?: ReturnType<typeof useReaderAsyncAsk>["pick"];
   asyncBusy?: boolean;
   asyncSending?: boolean;
+  /** On a subagent's card: it is at work (`subagentAtWork`, read where the
+   *  turns are drawn), so only a card whose state changed redraws. */
+  atWork?: boolean;
 }) {
+  const t = useT();
   const withFiles = useDrawsInbox(turn.text);
   const moment = chatMoment(turn.stamp);
   const time = moment && <small className="terminal-reader-time">{chatTime(moment, use24h)}</small>;
@@ -580,15 +586,27 @@ const Turn = memo(function Turn({ turn, lead, cutLabel, planLabel, interruptedLa
     // conversation. One that has reported back wears the tab strip's ✓ (where
     // its CLI records that). One whose CLI has not yet recorded where its
     // conversation lives cannot be opened yet.
+    // Its state line: done and when it started, "starting…" until it can be
+    // opened, else when it started. At work, its tile wears the working dots.
     const openable = !!turn.subagent;
+    const started = moment ? chatTime(moment, use24h) : "";
+    const state = turn.finished ? (started ? t("terminal.reader.subagentDoneAt", { time: started }) : t("terminal.reader.subagentDone"))
+      : !openable ? t("terminal.reader.subagentStarting") : started;
+    const classes = ["terminal-reader-subagent", turn.finished && "finished", atWork && "running"].filter(Boolean).join(" ");
     return (
-      <button type="button" className="terminal-reader-subagent" disabled={!openable} onClick={() => onOpenAgent(turn)}>
-        <span className="terminal-reader-subagent-body">
-          <small>{turn.role ?? agentLabel} <UntestedTag id="terminal.reader.subagents" /></small>
-          <span>{turn.text}{turn.cut && "…"}</span>
-          {time}
+      <button type="button" className={classes} disabled={!openable} onClick={() => onOpenAgent(turn)}>
+        <span className="terminal-reader-subagent-tile">
+          {atWork ? <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
+            : turn.finished && <TabStatusMark stateClass="finished" />}
         </span>
-        {turn.finished && <TabStatusMark stateClass="finished" />}
+        <span className="terminal-reader-subagent-body">
+          <small>
+            <b>{turn.role ?? agentLabel}</b>
+            {state && <> <span className="terminal-reader-subagent-state">{state}</span></>}
+            {" "}<UntestedTag id="terminal.reader.subagents" />
+          </small>
+          <span className="terminal-reader-subagent-task">{turn.text}{turn.cut && "…"}</span>
+        </span>
         {openable && <span className="terminal-reader-subagent-chevron" aria-hidden="true">›</span>}
       </button>
     );
@@ -1552,12 +1570,18 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The subagents walked into from the session, outermost first; empty
    * while the session itself is shown. */
   const [subagentPath, setSubagentPath] = useState<readonly SubagentStep[]>([]);
+  /** The Subagents list: the dock's over Chat, the top bar's over Diffs or
+   * Data (`toolbarMenus`). */
   const [subagentListOpen, setSubagentListOpen] = useState(false);
   const subagentListId = useId();
   /** The top bar's Workspaces list: the session's Claude `Workflow` runs. */
   const [workflowListOpen, setWorkflowListOpen] = useState(false);
   const workflowListId = useId();
-  const toolbarMenuOpen = subagentListOpen || workflowListOpen;
+  /** The top bar holds the Subagents and Workspaces menus only while Diffs or
+   * Data covers the chat — and so its dock — since Diffs follows the picked
+   * subagent; over Chat the dock stands for them. */
+  const toolbarMenus = !!navigationSlot && (changesOpen || filesOpen);
+  const toolbarMenuOpen = toolbarMenus && (subagentListOpen || workflowListOpen);
   useEffect(() => {
     if (!toolbarMenuOpen || !navigationSlot) return;
     const closeAll = () => {
@@ -2593,9 +2617,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const planLabel = t("mobile.transcript.plan");
   const subagentLabel = t("terminal.reader.subagent");
   const empty = transcript?.available && turns.length === 0 && pending.length === 0 && !unrecorded && !live.question && !live.working;
-  /** Where the open subagent stands among its siblings, and the conversation
-   * the bar goes back up to. */
-  const position = openStep ? siblingPosition(openStep) : { index: -1, count: 0 };
+  /** The conversation the bar and the Main pill go back up to. */
   const backLabel = t("mobile.subagent.back", {
     name: subagentPath.length > 1 ? subagentPath[subagentPath.length - 2].task : t("mobile.subagent.main"),
   });
@@ -2626,9 +2648,63 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     workingElapsed(subagentStart, subagentNow),
     subagentTokens && t("terminal.reader.workingTokens", { count: subagentTokens }),
   ].filter(Boolean).join(" · ");
-  /** Subagents sent to the background still at work once the session's own
-   * turn is over: the main conversation's working row stands for them. */
-  const backgroundAtWork = browsed || openStep || live.working ? 0 : sessionAgents.filter((entry) => subagentAtWork(entry, false)).length;
+  /** The facts the open subagent's bar names: its model, how long it has
+   * worked while it still does, and its newest request's tokens. */
+  const subagentElapsed = subagentWorking ? workingElapsed(subagentStart, subagentNow) : undefined;
+  const subagentBarFacts = [
+    subagentModel,
+    subagentElapsed && t("terminal.reader.subagentFactsWorking", { time: subagentElapsed }),
+    subagentTokens && t("terminal.reader.workingTokens", { count: subagentTokens }),
+  ].filter(Boolean).join(" · ");
+  /** The bar's and the Main pill's name for the conversation one level up. */
+  const parentStep = subagentPath.length > 1 ? subagentPath[subagentPath.length - 2] : undefined;
+  const upName = parentStep ? parentStep.task || parentStep.role || t("terminal.reader.dockMain") : t("terminal.reader.dockMain");
+  /** The dock's pills: the session's subagents; with a subagent open, its
+   * siblings (the open one marked), at work by the session's own records as
+   * its working row is; with a workflow run open, the run's agents. Background
+   * ones stay pills at work after the session's own turn is over. None while
+   * an earlier chat is read without a subagent of it open. */
+  const sessionBusy = !browsed && !!live.working;
+  const agentsOf = (list: readonly TranscriptEntry[], busy: boolean): DockAgent[] => list.flatMap((entry, index) => entry.kind === "agent" ? [{
+    key: `${entry.subagent ?? ""}:${entry.at ?? ""}:${index}`,
+    token: entry.subagent,
+    role: entry.role,
+    task: entry.text,
+    ...(entry.cut ? { cut: true } : {}),
+    at: entry.at,
+    atWork: subagentAtWork(entry, busy),
+    ...(entry.workflow ? { workflow: true } : {}),
+  }] : []);
+  const dockAgents: DockAgent[] | null = !transcript?.available ? null
+    : !openStep ? (browsed ? null : agentsOf(entries, sessionBusy))
+      : openStep.workflow ? agentsOf(levelEntries, subagentWorking)
+        : openStep.siblings.map((sibling, index) => ({
+          key: `${sibling.token}:${index}`,
+          token: sibling.token,
+          role: sibling.role,
+          task: sibling.task,
+          at: sibling.at,
+          // The sibling as its own step: none of the open one's flags.
+          atWork: openSubagentRunning([...subagentPath.slice(0, -1), { ...sibling, siblings: openStep.siblings, scrollTop: openStep.scrollTop }], entries, sessionBusy),
+          selected: sibling.token === openStep.token,
+          ...(sibling.workflow ? { workflow: true } : {}),
+        }));
+  /** A workflow run's agents are labelled by phase: the run open, or one of
+   * its agents. */
+  const dockPhases = !!openStep && (openStep.workflow === true || parentStep?.workflow === true);
+  /** A pill or list row picked in the dock: a sibling of the open subagent is
+   * stepped to (the way up still lands where the parent was scrolled), any
+   * other one opened from the conversation on screen. */
+  const pickDocked = (agent: DockAgent, fromList: boolean) => {
+    if (!agent.token) return;
+    if (openStep && !openStep.workflow) {
+      const delta = openStep.siblings.findIndex((sibling) => sibling.token === agent.token) - siblingPosition(openStep).index;
+      if (delta !== 0) subagentSibling(delta);
+      if (!fromList) setSubagentListOpen(false);
+      return;
+    }
+    openAgent({ subagent: agent.token, text: agent.task, role: agent.role, workflow: agent.workflow }, fromList);
+  };
   /** The shells the shown conversation runs, beside its working row. One it
    * waits on shows only while that row does — a call the CLI never answered
    * (killed mid-command) is not a shell at work; a background one shows while
@@ -2678,11 +2754,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   };
 
   /** A list of the session's `agent` entries under a toggle, the ones at work
-   * grouped above the finished ones: the chat's own
-   * Subagents index, or in the top bar Subagents and Workspaces (Claude
-   * `Workflow` runs, the orchestrations) side by side. A pick opens it in the
-   * chat; from the top bar it also brings the chat back over Diffs or the
-   * terminal. */
+   * grouped above the finished ones: in the top bar over Diffs or Data,
+   * Subagents and Workspaces (Claude `Workflow` runs, the orchestrations) side
+   * by side (over Chat the dock stands for them). A pick opens it in the chat
+   * and brings the chat back. */
   const agentMenu = ({ list, earlier, label, region, untestedId, open, setOpen, listId }: {
     list: readonly TranscriptEntry[];
     /** Agents only earlier turns hold: counted, and read in by the last row. */
@@ -2853,21 +2928,19 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         </nav>
       )}
       {openStep ? (
+        // Its siblings are the dock's pills: no ‹ n of m › here.
         <nav className="terminal-reader-subagent-bar" aria-label={subagentLabel}>
-          <button type="button" className="terminal-reader-subagent-nav" onClick={subagentUp} aria-label={backLabel} title={`${backLabel} (Esc)`}>‹</button>
           <div className="terminal-reader-subagent-title">
-            <small>{openStep.role ?? subagentLabel} <UntestedTag id="terminal.reader.subagents" /></small>
+            <small className="terminal-reader-subagent-path">
+              <button type="button" className="terminal-reader-subagent-up" onClick={subagentUp} aria-label={backLabel} title={`${backLabel} (Esc)`}>{upName}</button>
+              <span aria-hidden="true">/</span>
+              <b>{openStep.role ?? subagentLabel}</b>
+            </small>
             <strong title={openStep.task}>{openStep.task || openStep.role}</strong>
           </div>
-          {position.count > 1 && (
-            <div className="terminal-reader-subagent-steps">
-              <button type="button" className="terminal-reader-subagent-nav" disabled={position.index <= 0} onClick={() => subagentSibling(-1)} aria-label={t("mobile.subagent.previous")} title={t("mobile.subagent.previous")}>‹</button>
-              <span>{t("mobile.subagent.position", { index: position.index + 1, count: position.count })}</span>
-              <button type="button" className="terminal-reader-subagent-nav" disabled={position.index >= position.count - 1} onClick={() => subagentSibling(1)} aria-label={t("mobile.subagent.next")} title={t("mobile.subagent.next")}>›</button>
-            </div>
-          )}
+          {subagentBarFacts && <small className="terminal-reader-subagent-facts">{subagentBarFacts}</small>}
         </nav>
-      ) : !navigationSlot && subagentsMenu}
+      ) : null}
       <div className="terminal-reader-stream">
         <PathLinksContext.Provider value={pathLinks}>
         <ReaderInboxContext.Provider value={readerInbox}>
@@ -2924,6 +2997,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                   pickAsync={turn.asking && canAnswerAsync ? asyncAsk.pick : undefined}
                   asyncBusy={turn.asking && (!!asyncAsk.sending || !!answered || held)}
                   asyncSending={turn.asking && asyncAsk.sending === turn.key}
+                  atWork={turn.kind === "agent" && subagentAtWork(turn, openStep ? subagentWorking : sessionBusy)}
                   restore={turn.kind === "prompt" ? checkpoints.restoreFor(turn.stamp) : undefined} action={
                   !browsed && !openStep && canLogIn
                   && index === turns.length - 1 && turn.kind === "answer"
@@ -2977,32 +3051,6 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             onType={answerText}
             onStep={step}
           />
-          {openStep ? subagentWorking && (
-            <div className="terminal-reader-working" role="status">
-              <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
-              <span>{subagentModel ? t("terminal.reader.workingModel", { model: subagentModel }) : t("terminal.reader.working")}</span>
-              {subagentFacts && <small>{subagentFacts} <UntestedTag id="terminal.reader.subagentWorkingFacts" /></small>}
-              <UntestedTag id="terminal.reader.subagentWorking" />
-              {/* Esc stops the session's turn: nothing to stop while only a
-                  background subagent works on. */}
-              {live.working && (
-                <button type="button" className="terminal-reader-stop" onClick={stop} title={t("terminal.reader.stopHint")}>
-                  {t("terminal.reader.stop")}
-                </button>
-              )}
-            </div>
-          ) : !browsed && live.working && (
-            <div className="terminal-reader-working" role="status">
-              <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
-              <span>{workingLine}</span>
-              {(live.working.elapsed || live.working.tokens) && (
-                <small>{[live.working.elapsed, live.working.tokens && t("terminal.reader.workingTokens", { count: live.working.tokens })].filter(Boolean).join(" · ")}</small>
-              )}
-              <button type="button" className="terminal-reader-stop" onClick={stop} title={t("terminal.reader.stopHint")}>
-                {t("terminal.reader.stop")}
-              </button>
-            </div>
-          )}
           {strayShown && !browsed && !openStep && live.screen.length > 0 && (
             <details className="terminal-reader-stray-output">
               <summary>{t("terminal.reader.strayOutput")}</summary>
@@ -3016,13 +3064,6 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                 {t("terminal.reader.strayOpen")}
               </button>
               {strayShown ? <UntestedTag id="terminal.reader.stray" /> : <UntestedTag id="terminal.reader.unrecorded" />}
-            </div>
-          )}
-          {backgroundAtWork > 0 && (
-            <div className="terminal-reader-working" role="status">
-              <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
-              <span>{t("terminal.reader.backgroundSubagents", { count: backgroundAtWork })}</span>
-              <UntestedTag id="terminal.reader.backgroundSubagents" />
             </div>
           )}
           {!browsed && !openStep && lowLimits.map((warning) => (
@@ -3057,6 +3098,48 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           </button>
         )}
       </div>
+      {/* Pinned under the chat, outside its scroller: the working row and the
+          subagents at work (`ReaderSubagentDock`). Over Chat only: under
+          Diffs or Data the dock status line and the top bar's menus stand
+          for it. */}
+      {!panelShown && <ReaderSubagentDock
+        working={openStep ? !browsed && subagentWorking && (
+          <div className="terminal-reader-working terminal-reader-agent-dock-working" role="status">
+            <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
+            <span>{subagentModel ? t("terminal.reader.workingModel", { model: subagentModel }) : t("terminal.reader.working")}</span>
+            {subagentFacts && <small>{subagentFacts} <UntestedTag id="terminal.reader.subagentWorkingFacts" /></small>}
+            <UntestedTag id="terminal.reader.subagentWorking" />
+            {/* Esc stops the session's turn: nothing to stop while only a
+                background subagent works on. */}
+            {live.working && (
+              <button type="button" className="terminal-reader-stop" onClick={stop} title={t("terminal.reader.stopHint")}>
+                {t("terminal.reader.stop")}
+              </button>
+            )}
+          </div>
+        ) : !browsed && live.working && (
+          <div className="terminal-reader-working terminal-reader-agent-dock-working" role="status">
+            <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
+            <span>{workingLine}</span>
+            {(live.working.elapsed || live.working.tokens) && (
+              <small>{[live.working.elapsed, live.working.tokens && t("terminal.reader.workingTokens", { count: live.working.tokens })].filter(Boolean).join(" · ")}</small>
+            )}
+            <button type="button" className="terminal-reader-stop" onClick={stop} title={t("terminal.reader.stopHint")}>
+              {t("terminal.reader.stop")}
+            </button>
+          </div>
+        )}
+        agents={dockAgents}
+        phases={dockPhases}
+        earlier={openStep ? 0 : agentsEarlier}
+        active={visible && shown}
+        listOpen={subagentListOpen}
+        onListOpen={setSubagentListOpen}
+        listId={subagentListId}
+        onPick={pickDocked}
+        onEarlier={showEarlier}
+        main={openStep ? { label: upName, title: backLabel, onUp: subagentUp } : undefined}
+      />}
       {/* Diffs or Data in place of the chat, which `.panel-open` hides without
           unmounting it: inside the Reader, so the composer under them is the
           same one. Beside the stream, never in it: none of the chat's
@@ -3181,9 +3264,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       />}
       </div>
     </div>
-    {/* The conversation's menus only over Chat or Diffs: in Terminal the
-        transcript and the live screen are not read, so they would go stale. */}
-    {navigationSlot && shown && createPortal(<>
+    {/* The conversation's menus only over Diffs or Data (`toolbarMenus`):
+        over Chat the dock stands for them, and in Terminal the transcript and
+        the live screen are not read, so they would go stale. */}
+    {toolbarMenus && navigationSlot && shown && createPortal(<>
       {subagentsMenu}
       {workspacesMenu}
     </>, navigationSlot)}

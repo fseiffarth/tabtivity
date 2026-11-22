@@ -180,7 +180,10 @@ describe("the agent pane's Reader", () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, agentsEarlier: 2 } : []));
     reader(host);
-    await screen.findByRole("button", { name: /^Subagents \(2\)/ });
+    // Folded into the dock's done pill, which reads them in from its list.
+    const done = await screen.findByRole("button", { name: /2 done/ });
+    fireEvent.click(done);
+    expect(within(document.getElementById(done.getAttribute("aria-controls")!)!).getByRole("button", { name: "Find subagents in earlier turns" })).toBeTruthy();
   });
 
   it("sends a prompt through the prompt box's path and shows it as sending", async () => {
@@ -701,25 +704,36 @@ describe("the Reader's subagents", () => {
   });
   let term: Terminal | undefined;
 
-  /** Opens the session's subagent named `task` from the list over the chat. */
-  async function openListed(task: string) {
-    const toggle = await screen.findByRole("button", { name: /Subagents \(/ });
+  /** The dock pinned under the chat. */
+  const dock = () => host.querySelector<HTMLElement>(".terminal-reader-agent-dock");
+  /** Opens the dock's Subagents list from its done pill. */
+  async function openDone() {
+    const toggle = await screen.findByRole("button", { name: /\d+ done/ });
+    expect(toggle.closest(".terminal-reader-agent-dock")).not.toBeNull();
     if (toggle.getAttribute("aria-expanded") !== "true") fireEvent.click(toggle);
-    const list = document.getElementById(toggle.getAttribute("aria-controls")!)!;
-    fireEvent.click(within(list).getByText(task).closest("button")!);
+    return document.getElementById(toggle.getAttribute("aria-controls")!)!;
+  }
+  /** Opens the subagent named `task` from the dock's list. */
+  async function openListed(task: string) {
+    fireEvent.click(within(await openDone()).getByText(task).closest("button")!);
   }
 
-  it("shows the session's subagents in its chat, when each started, and a ✓ on the finished one", async () => {
+  it("shows the session's subagents in its chat with their state, and a ✓ on the finished one", async () => {
     reader(host);
     await screen.findByText("Both found.");
     const cards = [...host.querySelectorAll<HTMLElement>(".terminal-reader-subagent")];
-    expect(cards.map((card) => card.textContent)).toEqual([
-      expect.stringContaining("Find the parser"),
-      expect.stringContaining("Find the tests"),
-      expect.stringContaining("Not recorded yet"),
+    expect(cards.map((card) => card.querySelector(".terminal-reader-subagent-task")?.textContent)).toEqual([
+      "Find the parser", "Find the tests", "Not recorded yet",
     ]);
-    expect(cards.every((card) => card.querySelector(".terminal-reader-time"))).toBe(true);
-    expect(cards.map((card) => !!card.querySelector(".tab-status-mark.done"))).toEqual([true, false, false]);
+    // Done and when it started; when it started; not openable yet.
+    expect(cards.map((card) => card.querySelector(".terminal-reader-subagent-state")?.textContent)).toEqual([
+      expect.stringMatching(/^done · \d/), expect.stringMatching(/^\d/), "starting…",
+    ]);
+    expect(cards.map((card) => card.classList.contains("finished"))).toEqual([true, false, false]);
+    expect(cards.map((card) => !!card.querySelector(".terminal-reader-subagent-tile .tab-status-mark.done"))).toEqual([true, false, false]);
+    // None at work: the dock holds only the done pill.
+    expect(dock()?.querySelectorAll(".terminal-reader-agent-pill")).toHaveLength(1);
+    expect(dock()?.querySelector(".terminal-reader-agent-pill.done")?.textContent).toContain("3 done");
   });
 
   it("opens the subagent Claude's terminal is viewing, and stays on the session otherwise", async () => {
@@ -753,29 +767,49 @@ describe("the Reader's subagents", () => {
     const bar = screen.getByRole("navigation", { name: "Subagent" });
     expect(bar.textContent).toContain("Find the parser");
     expect(screen.queryByText("Both found.")).toBeNull();
+    // The bar names the way up, its kind and its task; no ‹ n of m ›.
+    expect(bar.querySelector(".terminal-reader-subagent-path")?.textContent).toBe("Main/Explore");
+    expect(screen.queryByText("1 of 2")).toBeNull();
     fireEvent.click(within(bar).getByRole("button", { name: "Back to the main conversation" }));
     await screen.findByText("Both found.");
     expect(screen.queryByRole("navigation", { name: "Subagent" })).toBeNull();
   });
 
+  it("goes back up from the dock's Main pill, which shows only while a subagent is open", async () => {
+    reader(host);
+    await screen.findByText("Both found.");
+    expect(dock()?.querySelector(".terminal-reader-agent-pill.main")).toBeNull();
+    await openListed("Find the parser");
+    await screen.findByText("It lives in parse.ts.");
+    const main = dock()!.querySelector<HTMLButtonElement>(".terminal-reader-agent-pill.main")!;
+    expect(main.textContent).toContain("Main");
+    expect(main.getAttribute("aria-label")).toBe("Back to the main conversation");
+    // The open one keeps its pill, marked, though it has finished.
+    const open = dock()!.querySelector<HTMLElement>(".terminal-reader-agent-pill.selected")!;
+    expect(open.textContent).toContain("Find the parser");
+    expect(open.getAttribute("aria-current")).toBe("true");
+    expect(open.classList.contains("finished")).toBe(true);
+    fireEvent.click(main);
+    await screen.findByText("Both found.");
+    expect(dock()?.querySelector(".terminal-reader-agent-pill.main")).toBeNull();
+  });
+
   it("cannot open a subagent whose CLI has not said where it lives", async () => {
     reader(host);
-    const toggle = await screen.findByRole("button", { name: /Subagents \(3\)/ });
-    fireEvent.click(toggle);
-    const list = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    const list = await openDone();
     expect(within(list).getByText("Not recorded yet").closest("button")?.disabled).toBe(true);
     expect(host.querySelectorAll<HTMLButtonElement>(".terminal-reader-subagent")[2].disabled).toBe(true);
   });
 
-  it("steps between siblings and opens nested subagents from cards; Esc goes up one level", async () => {
+  it("steps between siblings from the dock's list and opens nested subagents from cards; Esc goes up one level", async () => {
     reader(host);
     await openListed("Find the parser");
     await screen.findByText("It lives in parse.ts.");
-    expect(screen.getByText("1 of 2")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Next subagent" }));
+    // With a subagent open the list holds its siblings.
+    await openListed("Find the tests");
     await screen.findByText("Tests sit beside the sources.");
-    expect(screen.getByText("2 of 2")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Previous subagent" }));
+    expect(dock()!.querySelector(".terminal-reader-agent-pill.selected")?.textContent).toContain("Find the tests");
+    await openListed("Find the parser");
     fireEvent.click((await screen.findByText("Read parse.ts")).closest("button")!);
     await waitFor(() => expect(host.textContent).toContain("This subagent’s conversation can’t be read"));
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
@@ -784,13 +818,15 @@ describe("the Reader's subagents", () => {
     await screen.findByText("Both found.");
   });
 
-  it("lists every subagent of the session and opens one from the list", async () => {
+  it("lists every subagent of the session from the done pill and opens one from the list", async () => {
     reader(host);
-    const toggle = await screen.findByRole("button", { name: /Subagents \(3\)/ });
-    fireEvent.click(toggle);
-    const list = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    const list = await openDone();
+    expect(within(screen.getByRole("region", { name: "Finished (3)" })).getAllByRole("button")).toHaveLength(3);
     fireEvent.click(within(list).getByText("Find the tests").closest("button")!);
     await screen.findByText("Tests sit beside the sources.");
+    // A click elsewhere closes it.
+    fireEvent.pointerDown(document.body);
+    expect(document.getElementById(list.id)).toBeNull();
   });
 
   it("goes back to the session when a prompt is sent from a subagent on another CLI", async () => {
@@ -818,19 +854,29 @@ describe("the Reader's subagents", () => {
     term = fakeTerminal(["> survey", "", "✻ Thinking… (9s · esc to interrupt)", ">", "~/p (develop) · Opus 4.1 · 85% context left"]);
     registerTerminal("p:agent-1", term);
     reader(host);
-    await screen.findByText("Opus is working…");
-    fireEvent.click(await screen.findByRole("button", { name: /Subagents \(3\)/ }));
-    // The list marks the one still at work.
-    const busy = screen.getAllByRole("img", { name: "Agent is working…" });
-    expect(busy).toHaveLength(1);
-    expect(busy[0].closest("button")?.textContent).toContain("Find the parser");
-    await openListed("Find the parser");
+    // The session's working row sits in the dock, outside the scrolling chat.
+    const sessionRow = (await screen.findByText("Opus is working…")).closest(".terminal-reader-working")!;
+    expect(sessionRow.closest(".terminal-reader-agent-dock")).not.toBeNull();
+    expect(sessionRow.classList.contains("terminal-reader-agent-dock-working")).toBe(true);
+    expect(sessionRow.closest(".terminal-reader-list")).toBeNull();
+    // A pill for the one at work, with its dots; the two others fold into done.
+    const pills = [...dock()!.querySelectorAll<HTMLButtonElement>(".terminal-reader-agent-pill:not(.done):not(.main)")];
+    expect(pills.map((pill) => pill.querySelector(".terminal-reader-agent-pill-task")?.textContent)).toEqual(["Find the parser"]);
+    expect(within(pills[0]).getByRole("img", { name: "Agent is working…" })).toBeTruthy();
+    expect(dock()!.querySelector(".terminal-reader-agent-pill.done")?.textContent).toContain("2 done");
+    // Its card in the chat wears the working dots too.
+    expect(host.querySelector(".terminal-reader-subagent.running .terminal-reader-subagent-tile .terminal-reader-working-dots")).not.toBeNull();
+    fireEvent.click(pills[0]);
     const row = (await screen.findByText("Haiku is working…")).closest(".terminal-reader-working")!;
+    expect(row.closest(".terminal-reader-agent-dock")).not.toBeNull();
     expect(screen.queryByText("Opus is working…")).toBeNull();
-    // Its own figures, as the phone's row shows them.
+    expect(dock()!.querySelector(".terminal-reader-agent-pill.selected")?.getAttribute("aria-current")).toBe("true");
+    // Its own figures, as the phone's row shows them, and in its bar.
     expect(row.querySelector("small")?.textContent).toMatch(/12\.3k tokens/);
+    const facts = screen.getByRole("navigation", { name: "Subagent" }).querySelector(".terminal-reader-subagent-facts")?.textContent;
+    expect(facts).toMatch(/^Haiku · working .+ · 12\.3k tokens$/);
     // A sibling that has reported back shows no working row.
-    fireEvent.click(screen.getByRole("button", { name: "Next subagent" }));
+    await openListed("Find the tests");
     await screen.findByText("Tests sit beside the sources.");
     expect(screen.queryByText(/is working…/)).toBeNull();
   });
@@ -843,18 +889,53 @@ describe("the Reader's subagents", () => {
       return Promise.resolve(args?.subagent === "sa-1" ? sub : args?.subagent ? conversations[args.subagent] : running);
     });
     reader(host);
-    // The session's turn is over: its working row stands for the subagent.
-    expect(await screen.findByText("Subagents working in the background… (1)")).toBeTruthy();
-    fireEvent.click(await screen.findByRole("button", { name: /Subagents \(3\)/ }));
-    expect(screen.getAllByRole("img", { name: "Agent is working…" })).toHaveLength(1);
+    // The session's turn is over: the dock stays up for the subagent's pill,
+    // with no working row of the session's.
+    await screen.findByText("Both found.");
+    await waitFor(() => expect(dock()?.querySelector(".terminal-reader-agent-pill:not(.done)")?.textContent).toContain("Find the parser"));
+    expect(dock()!.querySelector(".terminal-reader-working")).toBeNull();
+    expect(dock()!.querySelector(".terminal-reader-agent-dock-sep")).toBeNull();
+    // Its time counts from its own start stamp.
+    expect(dock()!.querySelector(".terminal-reader-agent-pill-time")?.textContent).toMatch(/\d+h \d+m/);
+    await openDone();
     // It sits under Running, the other two under Finished.
     within(screen.getByRole("region", { name: "Running (1)" })).getByRole("button", { name: /Find the parser/ });
     expect(within(screen.getByRole("region", { name: "Finished (2)" })).getAllByRole("button")).toHaveLength(2);
     await openListed("Find the parser");
     expect(await screen.findByText("Haiku is working…")).toBeTruthy();
-    expect(screen.queryByText(/in the background…/)).toBeNull();
     // The session is idle: Esc would stop nothing.
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("crowds by count: more than 3 pills turn compact, more than 6 fold into +N, which opens the list", async () => {
+    const agents = Array.from({ length: 7 }, (_, index) => ({
+      kind: "agent", text: `Task ${index + 1}`, role: "Explore", subagent: `bg-${index + 1}`, at: "2026-09-30T08:00:10Z", running: true, background: true,
+    }));
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? { ...session, entries: [session.entries[0], ...agents] } : []));
+    reader(host);
+    await waitFor(() => expect(dock()?.querySelector(".terminal-reader-agent-pill.more")).not.toBeNull());
+    const pills = [...dock()!.querySelectorAll<HTMLElement>(".terminal-reader-agent-pill:not(.more)")];
+    expect(pills.map((pill) => pill.querySelector(".terminal-reader-agent-pill-task")?.textContent)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
+    expect(pills.every((pill) => pill.classList.contains("compact"))).toBe(true);
+    // None finished: no done pill; +2 opens the list of all seven.
+    expect(dock()!.querySelector(".terminal-reader-agent-pill.done")).toBeNull();
+    const more = dock()!.querySelector<HTMLButtonElement>(".terminal-reader-agent-pill.more")!;
+    expect(more.textContent).toBe("+2");
+    fireEvent.click(more);
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    expect(within(document.getElementById(more.getAttribute("aria-controls")!)!).getAllByRole("button")).toHaveLength(7);
+  });
+
+  it("turns four pills compact without folding any", async () => {
+    const agents = Array.from({ length: 4 }, (_, index) => ({
+      kind: "agent", text: `Task ${index + 1}`, role: "Explore", subagent: `bg-${index + 1}`, running: true, background: true,
+    }));
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? { ...session, entries: [session.entries[0], ...agents] } : []));
+    reader(host);
+    await waitFor(() => expect(dock()?.querySelectorAll(".terminal-reader-agent-pill.compact")).toHaveLength(4));
+    expect(dock()!.querySelector(".terminal-reader-agent-pill.more")).toBeNull();
+    // No start stamp: no time, never 0s.
+    expect(dock()!.querySelector(".terminal-reader-agent-pill-time")).toBeNull();
   });
 });
 
