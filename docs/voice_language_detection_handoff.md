@@ -77,7 +77,16 @@ Backend, steps 0, 1, 2 and step 4's ignored test. Branch of worktree
 > candidate (each setter leaks a C string); `lang_detect` is not abortable, so
 > `cancel` is checked after it.
 
-**Gate status:** see below.
+**Gate status:** skipped at the user's request after the run below was stopped.
+Seen passing on `--base e2cd38b20` (tree at the clippy fix commit): brand-check,
+`git diff --check`, `cargo clippy -p tabtivity -p app-serverd --all-targets`,
+`cargo clippy -p tabtivity --no-default-features --lib` (the daemon's build, so
+`lang.rs` and `transcribe_final` build without `voice`),
+`cargo clippy -p app-serverd --all-targets`, and `cargo test -p tabtivity -p
+app-serverd` (full suite, PASS). Not finished: the no-default-features test run
+(`--lib --test server_secrets`, killed). Before that, `cargo test -p tabtivity
+--lib voice::` gave 104 passed, 0 failed, 2 ignored (the real-model tests; 3
+now, with the numbers test). Frontend gates not applicable (no frontend change).
 
 **Flagged for user**
 - Nothing in the Contract was wrong. Open items: the real-model tests have not
