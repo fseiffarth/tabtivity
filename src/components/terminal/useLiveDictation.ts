@@ -32,8 +32,8 @@ export function useLiveDictation({ draftRef, setDraft, boxRef, language, record 
   draftRef: MutableRefObject<string>;
   setDraft: Dispatch<SetStateAction<string>>;
   boxRef: RefObject<HTMLTextAreaElement | null>;
-  /** The language spoken edits are matched in. */
-  language: Language;
+  /** The language spoken edits are matched in, read when a partial is judged. */
+  language: () => Language;
   record(before: string, after: string): void;
 }) {
   const spans = useRef(new ProvisionalDraft());
@@ -153,7 +153,7 @@ export function useLiveDictation({ draftRef, setDraft, boxRef, language, record 
       // A spoken send is no text; a spoken edit, while it may still turn out
       // one, is held back like a navigation is.
       const words = spokenSend(clean) ?? clean;
-      if (!words || mayEditDraft(clean, languageRef.current)) {
+      if (!words || mayEditDraft(clean, languageRef.current())) {
         hide(segment);
         return false;
       }

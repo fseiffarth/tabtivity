@@ -31,7 +31,7 @@ import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import { noteAgentTurn } from "../../stores/activity";
 import { setReaderDraft } from "../../lib/agents/readerDrafts";
-import type { VoiceStatus } from "../../lib/voice/desktopVoice";
+import { rememberSpokenLang, type VoiceStatus } from "../../lib/voice/desktopVoice";
 import type { Settings } from "../../types";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1", launchedAt: 1000 };
@@ -272,6 +272,21 @@ describe("hands-free and read-aloud in the Chat", () => {
     noteAgentTurn("p:agent-1", "working");
     await wait(500);
     expect(spoken().map(([, args]) => (args as { chunks: string[] }).chunks)).toEqual([["Agent is working."]]);
+  }, 15_000);
+
+  it("reads in the tab's last locked language under detect, else the app's", async () => {
+    await open({ voice_read_aloud: true, voice_lang: "detect" });
+    noteAgentTurn("p:agent-1", "done");
+    await wait(500);
+    noteAgentTurn("p:agent-1", "working");
+    await wait(500);
+    expect(spoken().slice(-1)[0]?.[1]).toEqual(expect.objectContaining({ lang: "en" }));
+    rememberSpokenLang("agent-1", "de");
+    noteAgentTurn("p:agent-1", "done");
+    await wait(500);
+    noteAgentTurn("p:agent-1", "working");
+    await wait(500);
+    expect(spoken().slice(-1)[0]?.[1]).toEqual(expect.objectContaining({ lang: "de" }));
   }, 15_000);
 
   it("says nothing of a turn already running when it opens", async () => {

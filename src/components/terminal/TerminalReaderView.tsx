@@ -789,13 +789,16 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const draftRef = useRef(draft);
   const caretAt = useRef<number | null>(null);
   /** Spoken edits are matched in the language listened in; with the
-   * recognizer left to detect it, in the app's. */
+   * recognizer left to detect it, in the one it has heard (`spokenIn`, set by
+   * `useReaderVoice` from the finals' language and `voice:lang`), else the app's. */
   const uiLanguage = useI18nStore((s) => s.lang);
   const voiceLangChoice = useSettingsStore((s) => s.settings?.voice_lang);
-  const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
+  const spokenIn = useRef<Language | null>(null);
+  const forcedLanguage: Language | null = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : null;
+  const editLanguageOf = () => forcedLanguage ?? (voiceLangChoice === "detect" ? spokenIn.current : null) ?? uiLanguage;
   /** Dictation writes the words of a segment still being said into the draft
    * (`useLiveDictation`); it keeps the caret where the user had it. */
-  const dictation = useLiveDictation({ draftRef, setDraft, boxRef: composerRef, language: editLanguage,
+  const dictation = useLiveDictation({ draftRef, setDraft, boxRef: composerRef, language: editLanguageOf,
     record: (before, after) => undo.current.record(before, after, false),
   });
   const settledDraft = useRef(dictation.settledDraft);
@@ -1029,7 +1032,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const { at, taken, removed } = dictation.settle(segment);
     const clean = sanitizeVoiceTranscript(heard);
     if (!clean) return;
-    const edit = matchDraftEdit(clean, editLanguage);
+    // Read now, not from this render: the final that brought these words may
+    // have named the language in the same tick.
+    const edit = matchDraftEdit(clean, editLanguageOf());
     const recovering = dictation.live.hasRecovery();
     if (edit) {
       if (recovering) return;
@@ -1083,6 +1088,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     hasDraft: () => dictation.settledDraft().trim() !== "",
     pick: voiceLoop.pick,
     commitPick: voiceLoop.commitPick,
+    spokenIn,
     readProblem: voiceLoop.readProblem,
     note: editNote ? t(editNote.key, editNote.params) : "",
   });
@@ -2349,6 +2355,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const agentTurn = useAgentTurn(ptyId, readAloudOn || handsFreeOn);
   const readAloud = useReaderReadAloud({
     readId: ptyId,
+    tabKey,
     enabled: readAloudOn,
     visible,
     listening: voiceListening.on && !voiceListening.over,

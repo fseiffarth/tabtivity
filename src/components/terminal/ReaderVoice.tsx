@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { LANGUAGES, useI18nStore, useT, type Language, type TranslationKey } from "../../lib/i18n";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import {
@@ -7,12 +7,15 @@ import {
   VOICE_MODELS,
   VOICE_MODEL_LABELS,
   VOICE_PAUSE_MS,
+  appLanguage,
+  rememberSpokenLang,
   startDesktopDictation,
   voiceErrorKey,
   voiceInputOffered,
   voiceLangOptions,
   voiceDeviceLabel,
   voiceDeviceWhy,
+  voiceCandidates,
   voiceLangTag,
   voiceModelInstallCommand,
   voiceStatus,
@@ -63,7 +66,7 @@ const REOPEN_SETTLE_MS = 800;
  * The mic pauses while the pane is hidden and resumes when it is shown; the
  * session ends with the composer. A browser client offers no mic.
  */
-export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, live, onSend, hasDraft, pick, commitPick, readProblem = null, note = "" }: {
+export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, live, onSend, hasDraft, pick, commitPick, spokenIn, readProblem = null, note = "" }: {
   tabKey: string;
   ptyId: string;
   visible: boolean;
@@ -90,6 +93,11 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   pick: (utterance: string) => VoicePickResult;
   /** The window closed on a staged pick: answer the dialog it was heard on. */
   commitPick: (pick: VoicePick) => void;
+  /** The app language the running `detect` session hears (the composer
+   * matches spoken edits in it): a ref, because a final's text is handled in
+   * the same tick as the final. Set from the finals' `lang` and `voice:lang`,
+   * cleared when a session starts; this hook only writes it. */
+  spokenIn: MutableRefObject<Language | null>;
   /** Why read-aloud could not speak: said on the same line. */
   readProblem?: TranslationKey | null;
   /** What a spoken edit of the draft did ("Removed …"), for a moment. */
@@ -108,6 +116,11 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const [using, setUsing] = useState<{ models: VoiceModelState[]; id: VoiceModel } | null>(null);
   /** Where the running session's model landed, once it has. */
   const [device, setDevice] = useState<VoiceDevice | null>(null);
+  /** The language a `detect` session locked on (`voice:lang`): the chip's. */
+  const [heardAs, setHeardAs] = useState<Language | null>(null);
+  /** The running session was started with the `detect` choice. */
+  const sessionDetect = useRef(false);
+  const langPickerRef = useRef<HTMLSpanElement>(null);
   const [guardPhase, setGuardPhase] = useState<GuardPhase>("idle");
   /** Hands-free sent at this time; the mic is paused until the turn is over. */
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
@@ -169,6 +182,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     setHeard("");
     setUsing(null);
     setDevice(null);
+    setHeardAs(null);
   };
 
   /** Hands-free waits for the turn what was sent (or answered) starts. */
@@ -208,6 +222,10 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       }
       setUsing({ models: whisper, id: use as VoiceModel });
       sessionHandsFree.current = loop;
+      // A new session detects again (docs/voice_language_detection_plan.md D3).
+      sessionDetect.current = lang === "detect";
+      spokenIn.current = null;
+      setHeardAs(null);
       const dictation = await startDesktopDictation({
         tabKey,
         model: use,
@@ -216,6 +234,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
         pauseMs: settings?.voice_pause_ms ?? VOICE_PAUSE_MS.default,
         headset: settings?.voice_headset ?? false,
         gpu: settings?.voice_gpu ?? true,
+        ...voiceCandidates(lang, settings?.voice_detect_langs, uiLanguage),
       }, {
         onPreparing: () => { if (mine === attempt.current) setPhase("preparing"); },
         onDevice: (next) => { if (mine === attempt.current) setDevice(next); },
@@ -251,8 +270,19 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
           handlers.current.live.fail(segment);
           setHeard("");
         },
-        onFinal: (text, segment, filtered) => {
+        onLang: (code) => {
+          // Only a `detect` session locks; a forced language is the choice itself.
+          const language = appLanguage(code);
+          if (mine !== attempt.current || !sessionDetect.current || !language) return;
+          spokenIn.current = language;
+          rememberSpokenLang(tabKey, language);
+          setHeardAs(language);
+        },
+        onFinal: (text, segment, filtered, spoken) => {
           if (mine !== attempt.current) return;
+          // Before the text is handled: the composer matches it in this language.
+          const language = appLanguage(spoken);
+          if (sessionDetect.current && language) spokenIn.current = language;
           setHeard("");
           if (openSegment.current === segment) openSegment.current = null;
           if (!sessionHandsFree.current) {
@@ -513,13 +543,28 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       />
       <UntestedTag id="terminal.reader.voice.modelPicker" />
       <span>{t("settings.voice.lang")}</span>
-      <Dropdown
-        value={langChoice}
-        ariaLabel={t("settings.voice.lang")}
-        onChange={(value) => void switchLang(value as VoiceLangChoice)}
-        options={voiceLangOptions(t)}
-      />
+      <span ref={langPickerRef}>
+        <Dropdown
+          value={langChoice}
+          ariaLabel={t("settings.voice.lang")}
+          onChange={(value) => void switchLang(value as VoiceLangChoice)}
+          options={voiceLangOptions(t)}
+        />
+      </span>
       <UntestedTag id="terminal.reader.voice.langPicker" />
+      {heardAs && (
+        <>
+          <button
+            type="button"
+            className="settings-btn"
+            title={t("terminal.reader.voice.heardAsHelp")}
+            onClick={() => langPickerRef.current?.querySelector<HTMLElement>(".dropdown-trigger")?.click()}
+          >
+            {t("terminal.reader.voice.heardAs", { lang: LANGUAGES.find((language) => language.value === heardAs)?.label ?? heardAs })}
+          </button>
+          <UntestedTag id="terminal.reader.voice.heardAs" />
+        </>
+      )}
       {device && (
         <>
           <span title={voiceDeviceWhy(device, t)}>{voiceDeviceLabel(device, t)}</span>

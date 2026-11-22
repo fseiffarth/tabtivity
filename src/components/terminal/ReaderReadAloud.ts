@@ -5,6 +5,7 @@ import { speechChunks, spokenText } from "../../../shared/voice";
 import {
   SPEAK_LIMITS,
   VOICE_EVENTS,
+  lockedSpokenLang,
   voiceErrorKey,
   voiceInputOffered,
   voiceLangTag,
@@ -46,9 +47,11 @@ export interface SpokenTurn {
  * `owed` also while a turn's answer is still to come; `stop` ends it (the
  * stop key, the indicator, a send).
  */
-export function useReaderReadAloud({ readId, enabled, visible, listening, turns, turnEnd, working, turnStart, workingLine }: {
+export function useReaderReadAloud({ readId, tabKey, enabled, visible, listening, turns, turnEnd, working, turnStart, workingLine }: {
   /** Prefix of this tab's read ids (its PTY id). */
   readId: string;
+  /** The tab's key: what its dictation last locked on is read in (`detect`). */
+  tabKey: string;
   enabled: boolean;
   visible: boolean;
   /** The mic is listening: nothing is said over it. */
@@ -83,8 +86,9 @@ export function useReaderReadAloud({ readId, enabled, visible, listening, turns,
 
   const lang = () => {
     const tag = voiceLangTag(settings?.voice_lang as VoiceLangChoice | undefined, uiLanguage);
-    // Whisper may guess the language it hears; a voice must be told one.
-    return tag === "auto" ? uiLanguage : tag;
+    // Whisper may guess the language it hears; a voice must be told one: the
+    // one this tab's dictation last locked on (in memory), else the app's.
+    return tag === "auto" ? lockedSpokenLang(tabKey) ?? uiLanguage : tag;
   };
   const say = (id: string, text: string) => {
     const chunks = speechChunks(text, SPEAK_CHUNK).slice(0, SPEAK_LIMITS.chunks);

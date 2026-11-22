@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
 type Handler = (event: { payload: unknown }) => void;
@@ -27,7 +27,10 @@ import { TerminalReaderView } from "../../components/terminal/TerminalReaderView
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { setReaderDraft } from "../../lib/agents/readerDrafts";
-import type { VoiceStatus } from "../../lib/voice/desktopVoice";
+import { loadDict } from "../../lib/i18n";
+import { useSettingsStore } from "../../stores/settings";
+import type { Settings } from "../../types";
+import { lockedSpokenLang, type VoiceStatus } from "../../lib/voice/desktopVoice";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1", launchedAt: 1000 };
 
@@ -476,5 +479,81 @@ describe("dictating into the Chat's composer", () => {
       fireEvent.keyDown(box, { key: "D", code: "KeyD", ctrlKey: true, shiftKey: true });
     });
     expect(invoke).toHaveBeenCalledWith("voice_listen_start", expect.anything());
+  });
+
+  describe("speech language detection", () => {
+    const withSettings = (settings: Partial<Settings>) =>
+      useSettingsStore.setState({ settings: settings as Settings, loaded: true });
+    // The matcher reads the spoken language's dictionary.
+    beforeAll(async () => {
+      expect(await loadDict("de")).toBe(true);
+    });
+    afterEach(() => useSettingsStore.setState({ settings: null, loaded: false }));
+
+    it("sends the candidates and the UI language as fallback under detect only", async () => {
+      withSettings({ voice_lang: "detect", voice_detect_langs: ["de", "en"] });
+      await composer(host);
+      await startMic();
+      expect(invoke).toHaveBeenCalledWith("voice_listen_start", expect.objectContaining({ lang: "auto", langs: ["de", "en"], fallback: "en" }));
+    });
+
+    it.each(["auto", "de"])("sends no candidates for %s", async (choice) => {
+      withSettings({ voice_lang: choice, voice_detect_langs: ["de", "en"] });
+      await composer(host);
+      await startMic();
+      const args = invoke.mock.calls.find(([command]) => command === "voice_listen_start")?.[1] as Record<string, unknown>;
+      expect(args).not.toHaveProperty("langs");
+      expect(args).not.toHaveProperty("fallback");
+    });
+
+    it("matches a spoken edit in the language the final was decoded in", async () => {
+      withSettings({ voice_lang: "detect", voice_detect_langs: ["de", "en"] });
+      const box = await composer(host);
+      await startMic();
+      emit("voice:final", { session: 11, segment: 1, text: "Fix the login.", outcome: "transcribed", lang: "en" });
+      expect(box.value).toBe("Fix the login.");
+      emit("voice:final", { session: 11, segment: 2, text: "Tabby streich das", outcome: "transcribed", lang: "de" });
+      expect(box.value).toBe("");
+    });
+
+    it("falls back to the UI language when no final names one, and ignores a language outside the app's", async () => {
+      withSettings({ voice_lang: "detect" });
+      const box = await composer(host);
+      await startMic();
+      emit("voice:final", { session: 11, segment: 1, text: "Fix the login." });
+      emit("voice:final", { session: 11, segment: 2, text: "Tabby streich das", outcome: "transcribed", lang: "nl" });
+      expect(box.value).toContain("Fix the login.");
+      expect(box.value).toContain("streich das");
+    });
+
+    it("ignores a final's language when the speech language is forced", async () => {
+      withSettings({ voice_lang: "en" });
+      const box = await composer(host);
+      await startMic();
+      emit("voice:final", { session: 11, segment: 1, text: "Fix the login.", outcome: "transcribed", lang: "en" });
+      emit("voice:final", { session: 11, segment: 2, text: "Tabby streich das", outcome: "transcribed", lang: "de" });
+      expect(box.value).toContain("streich das");
+      emit("voice:lang", { session: 11, lang: "de" });
+      expect(screen.queryByRole("button", { name: /^Heard as/ })).toBeNull();
+    });
+
+    it("shows a Heard-as chip once voice:lang arrives, opens the picker, and clears it on the next session", async () => {
+      withSettings({ voice_lang: "detect", voice_detect_langs: ["de", "en"] });
+      await composer(host);
+      await startMic();
+      expect(screen.queryByRole("button", { name: /^Heard as/ })).toBeNull();
+      emit("voice:lang", { session: 11, lang: "de" });
+      const chip = screen.getByRole("button", { name: "Heard as Deutsch" });
+      expect(lockedSpokenLang("agent-1")).toBe("de");
+      await act(async () => {
+        fireEvent.click(chip);
+      });
+      expect(screen.getByRole("listbox")).toBeTruthy();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Stop dictating" }));
+      });
+      emit("voice:state", { session: 11, state: "stopped" });
+      expect(screen.queryByRole("button", { name: /^Heard as/ })).toBeNull();
+    });
   });
 });
