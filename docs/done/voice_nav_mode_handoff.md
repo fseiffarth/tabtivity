@@ -1,6 +1,9 @@
 # Voice nav mode — implementer handoff
 
-Plan: `docs/voice_nav_mode_plan.md`. Each agent step appends its section: commits, what landed, interfaces, gate status with test counts, "Flagged for user".
+> **Status (screened against code 2026-11-22):** REFERENCE (log of the built `docs/done/voice_nav_mode_plan.md`; N1-N3 and the review landed in develop, 6e5696840). Not live-tested.
+
+
+Plan: `docs/done/voice_nav_mode_plan.md`. Each agent step appends its section: commits, what landed, interfaces, gate status with test counts, "Flagged for user".
 
 ## N1 (plan steps 1–3) — done
 

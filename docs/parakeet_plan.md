@@ -1,9 +1,7 @@
 # Parakeet: a second local speech engine
 
-Status: plan only (2026-11-13). Nothing built; step 0 has not run. The engine
-beside whisper.cpp for desktop dictation. How voice works now:
-`docs/context/voice.md`; earlier decisions: `docs/desktop_voice_plan.md`,
-`docs/voice_gpu_plan.md`.
+> **Status (screened against code 2026-11-22):** NOT-STARTED. No Parakeet code, feature flag, model entry or script exists in `src/`, `src-tauri/` or `scripts/`; whisper.cpp is still the only engine (`src-tauri/src/services/voice/stt.rs`). Step 0 has not run.
+
 
 ## Why
 

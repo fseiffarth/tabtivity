@@ -1,7 +1,6 @@
 # Reader: show Claude's prompt suggestion — plan
 
-Status: implemented 2026-10-24 on develop (uncommitted at the time of writing),
-never live. Probed on Claude Code 2.1.310.
+> **Status (screened against code 2026-11-22):** Built: `mobile-web/src/terminal/promptSuggestion.ts` (`readPromptSuggestion`), `ReaderLive.suggestion` in `lib/agents/readerLive.ts`, the Reader composer panel, the phone strip, tests `AgentPromptSuggestion.test.ts` and `MobilePromptSuggestion.test.tsx`; later re-probed on 2.1.316 with `ssh_exec::TMUX_VT100_DIM`. Probed on Claude Code 2.1.310. Nothing open but live QA (`terminal.reader.promptSuggestion`). Not live-tested unless the doc/todo says so.
 
 ## Goal
 

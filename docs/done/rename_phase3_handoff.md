@@ -1,5 +1,8 @@
 # Rename phase 3 — the flip, release A (2026-10-01); handoff
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. The flip (release A) is in code: `brand::PAIR` holds the new name and `brand::LEGACY` the old, the migrator and dual reads are live. Its "Not done" items are release B (`docs/rename_plan.md` Phase 5, open) and Phase M (plan only). Not live-tested beyond what the doc states.
+
+
 Branch `rename`, worktree `.claude/worktrees/rename`. The plan is the untracked
 `docs/rename_plan.md` (never `git add` it). Earlier phases:
 `docs/done/rename_phase1_handoff.md` (the brand modules' conventions),

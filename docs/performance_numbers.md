@@ -1,6 +1,9 @@
 # Performance numbers
 
-Appended by `scripts/perf-numbers.sh` (see `docs/performance_plan.md` §1).
+> **Status (screened against code 2026-11-22):** REFERENCE (append-only log written by `scripts/perf-numbers.sh`; the labels `before-merge` / `after-merge` are cited by
+> `docs/done/performance_plan.md`). Retake the RSS rows after a few hours of uptime before quoting them. Not live-tested unless the doc/todo says so.
+
+Appended by `scripts/perf-numbers.sh` (see `docs/done/performance_plan.md` §1).
 Each section is one run; the label says which build state it measured.
 
 ## before-merge-pdfs-closed — 2026-10-11T07:36:41Z (window 30s)

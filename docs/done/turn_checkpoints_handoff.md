@@ -1,6 +1,8 @@
 # Per-turn checkpoints — handoff
 
-Implements `docs/turn_checkpoints_plan.md` Steps 1–7 (decisions 1–7 unchanged).
+> **Status (screened against code 2026-11-22):** Steps 1–7 and the review fixes are on `develop` (code: `services/checkpoints/`, `commands/checkpoints.rs`). The branch and worktree named below no longer exist. Open: the live click-through only. Not live-tested unless the doc/todo says so.
+
+Implements `docs/done/turn_checkpoints_plan.md` Steps 1–7 (decisions 1–7 unchanged).
 Built in the worktree `.claude/worktrees/agent-a3b50c0cd7734fab6`, branch
 `worktree-agent-a3b50c0cd7734fab6`, on top of `develop` a2a5ecb45 (v0.2.73).
 Design notes for later readers: `docs/context/checkpoints.md`. **Never run

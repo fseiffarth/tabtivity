@@ -1,5 +1,8 @@
 # App-name migration code review
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. All four findings are fixed in `src-tauri/src/services/brand_migration/`: (1) `state_dir.rs` returns `Pending("the state dir has not moved yet")` while `state-dir` is not `Done`; (2) a failed old-path link returns `Pending("moved; the old path could not be linked")`; (3) `agent_homes.rs` `rewrite_file` returns `Result` and failures land in `Migrated.failed`, keeping the step pending (`reopen_step`); (4) `state_dir.rs` rewrites through `persisted::rewrite_json_locked`. `docs/context/brand_migration.md` records these rules. Not live-tested.
+
+
 Review date: 2026-10-02. Scope: the Eldrun → Tabtivity migration in
 `src-tauri/src/services/brand_migration/`, including its startup retry behavior
 and agent-home migration. This is a static review; no migration was run against

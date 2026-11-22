@@ -1,5 +1,7 @@
 # Localhost viewer — phase 1 handoff
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. Phase 1 is on `develop` as `f0edce684` (the branch's `314f2bd9` was rebased) and `66eb029a3`; files named below exist (`services/port_forward.rs`, `commands/port_forward.rs`, `PortForwardList`). Remaining work is in `docs/localhost_viewer_plan.md` (phases 3 and 4). Never run live.
+
 Branch `localhost-viewer` (from `develop` ee3685eb). Plan: `docs/localhost_viewer_plan.md`;
 rationale for the shipped shape: `docs/context/port_forwards.md`. **Never run live** in the app.
 

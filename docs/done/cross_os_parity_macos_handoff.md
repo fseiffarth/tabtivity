@@ -1,5 +1,7 @@
 # Cross-OS parity — macOS run, handoff (2026-11-15)
 
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (handoff executed). Landed under rebased hashes (`git log --grep=2442`: `578bd24fc` Seatbelt, `06dab493b` open -a tracking, `9a425c1ba` webview rename, `ebc63dff9` PATH, `f165f2b90` keyboard, `5ee8a3394` Tailscale/tmux/Homebrew); the SHAs in the body no longer resolve. Evidence: `add_canonical_spellings` and `lsopen` rules in `src-tauri/src/services/agent/agent_fence.rs` (+ `agent_fence/seatbelt_tests.rs`). Still open per `todo/group-h-crossplatform.md`: Mach lookups in the fence, 2442p, u, v, ad and the partial x/y/z. Not run on a Mac.
+
 The macOS half of todo **2442** (`docs/cross_os_parity_2026_11_12.md`). Every
 item was re-read against the tree first; **nothing here was run on a Mac.**
 The Mac-only behaviour is covered by `#[cfg(target_os = "macos")]` tests that

@@ -1,5 +1,7 @@
 # Native TensorBoard viewer: phase 1 handoff
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. Everything under "What was built" is in code (`e069ff5db`, text-token fix `1479a4eb3`, hardening `2ba7e3e7f`); the open phases 2 to 5 are tracked in `docs/tensorboard_viewer_plan.md`. Never run live.
+
 Branch `tb-viewer` (from `develop` at ee3685eb), built in a worktree. **Never run
 live in the app.** Plan: `docs/tensorboard_viewer_plan.md` (phase 1 only:
 scalars, one file and folder runs, live refresh, local + SSH).

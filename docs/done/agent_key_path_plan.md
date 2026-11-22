@@ -1,8 +1,6 @@
 # One agent-API-key path (#2389)
 
-*Status: built on branch `hosted` (2026-10-10, steps 1–5), since merged into
-`develop`; never run live. Settles open problem 1 of `docs/server.md` before
-`hosted` → `develop` (#2386).*
+> **Status (screened against code 2026-11-22):** Steps 1–5 are in code: token budget (`api_usage.rs`, `agent_api_token_limits`, `worst_case_billed`), own keys in the daemon, admin keys through the proxy (`api_proxy.rs` `admin_key_for`, `services/server/agent_keys.rs` `for_proxy`/`admin_for_spawn`/`refuse_in_container`, `KEY_CLIS`), one Manage CLIs control. Nothing open but the live steps in `docs/hosted_handoff.md`. Settled open problem 1 of `docs/server.md` before `hosted` → `develop` (#2386). Not live-tested unless the doc/todo says so.
 
 ## Why
 

@@ -1,5 +1,7 @@
 # Prompt chart redesign: handoff from implementer A (steps 1-5)
 
+> **Status (screened against code 2026-11-22):** All three implementers' work and the review fixes are on `develop` (merge `77f19e02a`; the branch names below are gone). The flagged behaviours (Skip when the predecessor finished, Resume without `files_at`, inspector buffer reset) are not confirmed fixed in code. Not live-tested unless the doc/todo says so.
+
 Branch `prompt-chart-redesign` (worktree `.claude/worktrees/agent-a40cba7d0f34f1d42`),
 started from `develop` at `4cf65018d`. Plan: `docs/done/prompt_chart_redesign_plan.md`.
 Nothing here was run live; every claim below is from tests, `tsc`, lint and

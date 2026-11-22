@@ -1,6 +1,9 @@
 # Whole-project screen 2026-10-15 Medium findings — handoff
 
-Per-agent handoffs and review reports of the run, concatenated. Plan: `docs/screen_2026_10_15_medium_plan.md`.
+> **Status (screened against code 2026-11-22):** ARCHIVE (record of the run). Plan `docs/done/screen_2026_10_15_medium_plan.md`; its Medium batches (M1 i18n, M2 dialogs, M3 hooks/state,
+> M4a–d confinement/sync/locks/login, M5 dead IPC, M6 repo/CI, M7 dedupes) are in code, evidence in that plan's status block. Worktree shas were cherry-picked onto develop; find them by subject. Not live-tested unless the doc/todo says so.
+
+Per-agent handoffs and review reports of the run, concatenated. Plan: `docs/done/screen_2026_10_15_medium_plan.md`.
 
 ---
 

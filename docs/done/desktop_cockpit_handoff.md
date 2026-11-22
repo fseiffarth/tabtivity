@@ -1,5 +1,7 @@
 # Desktop cockpit — implementation handoff
 
+> **Status (screened against code 2026-11-22):** Log of `docs/desktop_cockpit_plan.md` C0-C6 (all on develop; the `cockpit` worktree is history). Later reshaped by the root merge and the apps merge: `CockpitOverlay.tsx` and `CockpitUsage.tsx` no longer exist. C7 was out of scope and is still unbuilt. The click-through is still open. Not live-tested.
+
 Plan: `docs/desktop_cockpit_plan.md`. Branch `cockpit` (worktree
 `.claude/worktrees/cockpit`), based on develop `06905950`. Nothing here has
 been run live: every step is gates-only until the user clicks through it in a

@@ -1,5 +1,7 @@
 # Diff viewer — handoff C (data loading, robustness, big diffs)
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. `embed/diff/useDiffSource.ts`, `embed/diff/DiffStates.tsx` and `src/lib/viewers/diffBudget.ts` are in code, landed as `339a4e490`; the "Half done" note about `wip` is moot. Still open from its list: a renamed file with edits and a file with both staged and unstaged edits (see `docs/done/diff_viewer_resume.md`). Landed on `develop` 2026-11-05 (the branch shas below were cherry-picked); the doc's "nothing is on develop" is out of date. The listed untested ids are in `src/lib/untested.ts`. Never run live.
+
 ## Resume
 
 - Branch `worktree-agent-ae9230fc338dc223d`, worktree

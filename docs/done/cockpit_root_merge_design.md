@@ -1,8 +1,9 @@
 # Cockpit + root console: visual and interaction design
 
-Status: **implemented (layout A) on branch `cockpit-root-merge`, not live-tested**; the
-build log is `docs/cockpit_root_merge_handoff.md`. Architecture, ownership,
-steps and gates are in `docs/cockpit_root_merge_plan.md`; this document is the
+> **Status (screened against code 2026-11-22):** Layout A is built: one window with the view strip, sub-bar, rail and chrome in `components/layout/RootOverlay.tsx`, `RootViewStrip.tsx`, `RootView.tsx`, `components/cockpit/RootRail.tsx`, `lib/window/frameBand.ts`. Since then the strip grew from five to ten views in four groups (`lib/cockpit/views.ts`, apps merge) and the `cockpit` experiment was dropped. Mockups named below are history. Not live-tested.
+
+The build log is `docs/done/cockpit_root_merge_handoff.md`. Architecture, ownership,
+steps and gates are in `docs/done/cockpit_root_merge_plan.md`; this document is the
 layout and behaviour the plan defers to. Written 2026-11-04 on develop.
 Reviewed 2026-11-04: every choice that differs from the plan is now one of the
 plan's **Open decisions** (`docs/done/cockpit_root_merge_plan.md`); recommendations

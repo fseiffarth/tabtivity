@@ -1,6 +1,8 @@
 # Mobile Focus: what each agent CLI draws
 
-A survey of the agent CLIs Tabtivity offers (`src/components/tabs/newTabItems.ts`
+> **Status (screened against code 2026-11-22):** REFERENCE (a 2026-09 survey, not a plan; nothing here is "built"). The Focus parsers it describes exist in `mobile-web/src/terminal/` (`readableScreen`, `statusLine`, `chatTurns`, `agentModes`, `selectPrompt`, plus per-CLI readers such as `cursorAgent.ts`, `antigravity.ts`, `muse.ts`, `openCodeMini.ts`). Since the survey: the stored-session reader (`src-tauri/src/services/agent/agent_transcript.rs`) reads more than Claude and Codex (OpenCode and Copilot paths, `read_transcript`), and the phone's resumable set is the registry's (`agent_registry::is_resumable_bin`: claude, codex, agy, gemini, vibe, opencode, cursor-agent, copilot, droid, grok, qwen, muse). The screen shapes were never re-measured here. Not live-tested.
+
+A survey of the agent CLIs Tabtivity offers (`src/lib/tabs/newTabItems.ts`
 `AGENT_ITEMS`), taken 2026-09-15, for the phone's **Focus** view
 (`mobile-web/src/terminal/`): what each CLI puts on the screen, whether that
 screen can be read at all, and where the conversation is stored when it cannot.

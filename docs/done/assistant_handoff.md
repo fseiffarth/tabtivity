@@ -1,7 +1,9 @@
 # Tabby assistant — handoff
 
-Plan: `docs/assistant_plan.md` (in the MAIN checkout, untracked; read it
-from `docs/assistant_plan.md`).
+> **Status (screened against code 2026-11-22):** Record of the S0–S5c build of `docs/done/assistant_plan.md`; all steps are in code (see that plan's status). Of its "Flagged for user" notes, the Codex first-run catalog is closed (`docs/context/assistant.md`: copied from a sibling agent home's cache); the chat folder's own CLI config is still not refused (`launch_prep::ensure_chat_dir` only creates the folder). Not live-tested unless the doc/todo says so.
+
+Plan: `docs/done/assistant_plan.md` (in the MAIN checkout, untracked; read it
+from `docs/done/assistant_plan.md`).
 Integration branch `assistant-int` (worktree
 `.claude/worktrees/assistant-int`),
 started from develop 2f0569c5. This handoff file also lives only in the main

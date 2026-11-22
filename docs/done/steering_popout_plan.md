@@ -1,9 +1,7 @@
 # Steering inside popout windows — plan
 
-Status: implemented 2026-11-11, on `develop` as 367e8e095..0103a6333; never run
-live. Decisions U1–U4 settled with the user the same day. Frontend only (no
-`src-tauri/` change). What was built, and where it departs from this plan:
-`docs/steering_popout_handoff.md`.
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (built; only live QA open). In code: `src/hooks/useSteering.ts` (scope-aware handler), `src/lib/shortcuts/steeringPopout.ts`, `src/lib/window/focusPopout.ts` (`focusNextPopout`, `popoutAfter`), the `mainWindow` action (`Home` / `0`) in `steeringBindings.ts` (fd3f1c74d, 04cfa2910), tests under `src/__tests__/shell/Steering*`. Differs from the plan as decided later: one dedicated key (`mainWindow`) goes back to the main window; J only walks popouts and Up stops at the title bar (see the handoff's last section). Frontend only. Not live-tested.
+
 
 ## Why
 

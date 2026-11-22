@@ -1,6 +1,8 @@
 # Cockpit declutter — handoff
 
-Plan: `docs/cockpit_declutter_plan.md`. Branch `cockpit-declutter` (from `develop`
+> **Status (screened against code 2026-11-22):** Log of `docs/done/cockpit_declutter_plan.md` D1-D4; the work is on develop under other shas (4ab12f553, 1a58766ea), the `fcca819c`..`dc53032a` shas and the `cockpit-declutter` branch below are the worktree's. The Usage view it describes was removed by the apps merge (`docs/done/cockpit_apps_merge_plan.md`, S2). Not live-tested.
+
+Plan: `docs/done/cockpit_declutter_plan.md`. Branch `cockpit-declutter` (from `develop`
 d6eefa36), four commits D1–D4, not pushed. Frontend only; no backend read, store
 or command added. Design notes: `docs/context/cockpit.md` ("Layout").
 

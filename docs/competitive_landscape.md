@@ -1,5 +1,8 @@
 # Competitive landscape
 
+> **Status (screened against code 2026-11-22):** REFERENCE (survey; the competitor facts are marketing-sourced as dated in each section and were not re-checked). One claim about Tabtivity is stale: "no GitHub ... CI ... connectors at all" -- agents now get GitHub push, release and CI-run reading through Tabtivity (`src-tauri/src/services/mcp/git_push_mcp.rs`, `services/git/git_ci.rs`), though still no Jira/Notion/Vercel-style connectors and no project knowledge graph that I could find. Not live-tested.
+
+
 Where Tabtivity sits relative to tools that claim overlapping ground. One section
 per contender, newest first; the short list of partial-overlap tools lives at
 the bottom.

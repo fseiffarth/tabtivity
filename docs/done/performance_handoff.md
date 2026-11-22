@@ -1,5 +1,8 @@
 # Performance plan — handoff
 
+> **Status (screened against code 2026-11-22):** ARCHIVE (record of the run; S1–S12 sections, each with its review). See `docs/done/performance_plan.md`'s status block for what is in
+> code and what is open. Commit shas are of the `perf` worktree branch; develop holds cherry-picks. Not live-tested unless the doc/todo says so.
+
 *One section per agent step of [`performance_plan.md`](performance_plan.md)
 §11. Each step's implementer appends its own section; its reviewer appends a
 "Review" subsection. Nothing here was run live unless a section says so.

@@ -1,11 +1,6 @@
 # Diff notes to the agent — plan
 
-Status (2026-11-14): built in `1288b3b1e` (steps 1–6, frontend only); never run live,
-it wears the `diff-notes` `UntestedTag`. Differences from the text below: the
-steering key is `C` (`viewNote`), not `n` (`n` is Next new); notes are per card,
-not per file; the 8 000-character cap inserts the notes that fit and keeps the
-rest. See `docs/diff_notes_handoff.md`. "Later" (phone `ChatChanges`, git-panel
-`DiffView`) is open.
+> **Status (screened against code 2026-11-22):** Built in `1288b3b1e` (+ `aceb58445`): `lib/agents/diffNotes.ts`, `stores/agents/diffNotes.ts`, `DiffNoteBox.tsx`, `TerminalReaderChanges.tsx`. Differs from the text below: steering key is `C` (`viewNote`), not `n`; notes are per card, not per file; the 8 000-character cap inserts the notes that fit and keeps the rest. "Later" (phone `ChatChanges`, git-panel `DiffView`) is open and unbuilt. Live QA tag: `diff-notes`. Not live-tested unless the doc/todo says so.
 
 ## Why
 

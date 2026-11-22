@@ -1,6 +1,8 @@
 # Tab messaging MCP — handoff
 
-Plan: `docs/tab_messaging_mcp_plan.md`. Branch based on `develop` (fe629c117).
+> **Status (screened against code 2026-11-22):** Log of `docs/done/tab_messaging_mcp_plan.md` steps 1-8 (I1 backend, I2 window/wake/docs, independent review); all in code on develop (`services/mcp/tabs_mcp.rs`, `TabMessagesHost.tsx`). The review's flags were fixed afterwards (todo/group-s-agents.md ticks). Manual verification still open. Not live-tested.
+
+Plan: `docs/done/tab_messaging_mcp_plan.md`. Branch based on `develop` (fe629c117).
 
 ## I1 backend lane (plan steps 1–5)
 

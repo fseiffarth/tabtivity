@@ -1,5 +1,8 @@
 # Threat recheck 2026-10-24 — reviewer handoff
 
+> **Status (screened against code 2026-11-22):** REFERENCE (raw reviewer drafts behind `docs/threat_recheck_2026_10_24_plan.md`; gaps 42–64 are fixed in code, 51 mitigated). Line numbers are as of `21eadf64`/`ff9f83ab`. Not live-verified.
+
+
 Raw material behind `docs/threat_recheck_2026_10_24_plan.md`: the shared brief, the three round-1 drafts (A, B, C) and the three round-2 cross-reviews, as the reviewers wrote them. Line numbers are at `21eadf64` (round 1) and `ff9f83ab` (round 2). Read-only reviews; nothing was run. Never read this file whole: `rg -n`.
 
 

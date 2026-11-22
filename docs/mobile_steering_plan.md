@@ -1,7 +1,9 @@
 # Keyboard steering on the phone
 
-Status: **plan only, 2026-11-09. Nothing here is built.** Branch `mobile-steering`
-(worktree `.claude/worktrees/mobile-steering`, based on develop `b3239822`).
+> **Status (screened against code 2026-11-22):** PARTIAL. Steps 1-3 are built (commits 1ebce675f, 4ade3613d, 9767325dc, review fixes ..ede4d7a6c; todo 31cr): `mobile-web/src/steering/` (`phoneSteeringKeys.ts`, `steeringState.ts`, `steeringDom.ts`, `usePhoneSteering.ts`, `SteeringBar.tsx`, `SteeringConfirm.tsx`, `phoneStatusJump.ts`, `steering.css`), tests `src/__tests__/mobile/MobileSteering*.test.ts*`, `MobileKeydownGuards.test.ts`. Code differs from the plan: `OWN_KEYS_SELECTOR` is now `.files-library, .outbox-viewer`. Still open: the "Later" list (no `settings.steering_keys` on the phone, no `?` sheet, no digit-new-agent on the tabs level, no U key, no steering inside the files library / Mark up) and the device-only checks. Not live-tested.
+
+Branch `mobile-steering` (worktree `.claude/worktrees/mobile-steering`, based on develop `b3239822`).
+
 
 ## Why
 

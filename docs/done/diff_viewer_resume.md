@@ -1,5 +1,7 @@
 # Diff viewer + sync resolver run — resume here
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. All four parts are on `develop`: A `fc36d599b`, B `2fe291b8b`, C `339a4e490`, D `45fa9e844` (resolver times, `lib/viewers/syncSideTimes.ts`) and `492003c81` (Hand to an agent: `lib/viewers/syncHandoff*.ts`, `commands/sync_handoff.rs`). The "Next steps" are done; the "Flagged for user" list (handoff folder in the agent home, camelCase word marks, fixed N/P/F7 keys, clock skew) is still open design questions. Never run live.
+
 Paused 2026-11-05 at the user's request. Nothing is on `develop` yet and
 nothing was run live. To continue: read this file, then the per-agent
 handoffs it names (each has a **Resume** section at the top).

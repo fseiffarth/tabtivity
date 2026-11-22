@@ -1,5 +1,9 @@
 # Code Review — Group L #42 (Detach a Subwindow Out of the Tabtivity Main Window)
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. The Blocker and both Majors were closed: `listenDetachedHost` is registered in `src/components/layout/AppShell.tsx`,
+> a destroyed detached window docks its tabs back (`detached-window-destroyed` in `src/stores/detached.ts`, `src-tauri/src/commands/subwindow.rs`).
+> The review's test-gap list is not tracked further. Open: live QA only. Not live-tested unless the doc/todo says so.
+
 Reviewer pass over the #42 implementation on `develop`, cross-checked against
 `docs/group_l_42_detach_plan.md`, `docs/group_l_42_detach_plan_review.md`
 (whose Blocker/Major items were required fixes), the user-locked decisions, and

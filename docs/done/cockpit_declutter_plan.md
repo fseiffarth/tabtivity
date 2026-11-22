@@ -1,6 +1,8 @@
 # Cockpit declutter
 
-Status: **plan** (2026-11-06). The user found the cockpit window (Now,
+> **Status (screened against code 2026-11-22):** D1-D4 landed on develop (4ab12f553 chrome + Now, 1a58766ea Tonight + Usage): `components/cockpit/CockpitUntested.tsx`, `CockpitProjects.tsx` with `lib/cockpit/projectCards.ts` (`runHostLabel`, `splitGroups`), `EntryMenu.tsx`. The Usage part was superseded by the apps merge: `CockpitUsage` is deleted and its machine list is the Machines view (`header/MachinesTable.tsx`, `lib/cockpit/machines.ts`). Not live-tested.
+
+Written 2026-11-06. The user found the cockpit window (Now,
 Projects, Tonight, Usage) "very crowded" and approved a redesign. Mockups: design canvas
 https://claude.ai/artifact/BP72ZyPEaJ5GvmUR3nSnNU (one artboard per view).
 Design background: `docs/context/cockpit.md`; file rows: `docs/filemap_frontend.md`

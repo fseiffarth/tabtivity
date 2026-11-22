@@ -1,5 +1,8 @@
 # Code screen 2026-10-25 — handoff
 
+> **Status (screened against code 2026-11-22):** REFERENCE (record of `docs/code_screen_plan.md`'s run; see its status block for what is in code and what stayed optional).
+> Develop shas are matched by subject in the text below. Not live-tested unless the doc/todo says so.
+
 Plan `docs/code_screen_plan.md`, base 312ffb7b. [n] = handoff step (1=A1, 2=A2, 3=A3, 4=C1, 5=C2, 6=B1, 7=B2, 8=D1, 9=D2, 10=D3, 11=D4, 12=E+G). Develop shas matched by subject. Nothing run live. [F] = final review.
 
 ## Status

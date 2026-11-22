@@ -1,5 +1,9 @@
 # Simplify pass over the week of 2026-11-05 — what is still open
 
+> **Status (screened against code 2026-11-22):** PARTIAL (a live to-do list). Sampled rows are still open: #6 `copy_tree_core` is still in `commands/projects.rs` beside
+> `services/tree_copy.rs`; #13 `commitOpen` still separate in `SteeringPromptOverlay.tsx`; #38 `MutationObserver` still in
+> `mobile-web/src/steering/usePhoneSteering.ts`. #— `RESERVED_NAMES` now lives in `src-core/src/services/web_safety.rs`. Not live-tested unless the doc/todo says so.
+
 A quality review (reuse, simplification, efficiency, altitude) of the 356
 commits since `5ec871f38` found 62 items. 49 were implemented on 2026-11-12
 (uncommitted on `develop` at the time of writing; checked by type-check, lint,

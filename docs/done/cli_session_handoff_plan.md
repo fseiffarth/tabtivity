@@ -1,6 +1,8 @@
 # Continue work with another CLI
 
-Status: steps A–D implemented on branch `cli-handoff`, never live. Rewritten 2026-11-18. Replaces the 2026-11-15 version. A
+> **Status (screened against code 2026-11-22):** Steps A-D are in code: `components/terminal/TerminalLimitHandoff.tsx`, `lib/agents/limitHandoff.ts`, `components/agents/CliHandoffDialog.tsx` + `CliHandoffMenuItem.tsx`, `lib/agents/cliHandoff.ts`, `services/agent/agent_cli_handoff.rs` (`agent_cli_handoff_prepare` in `commands/agents.rs`), docs in `docs/context/agent_sessions.md` ("Continuing in another CLI"). Open: "Later" (remote tabs, local-model targets, the phone). Not live-tested.
+
+Rewritten 2026-11-18. Replaces the 2026-11-15 version. A
 first version has been live in the code since 2026-11-04 (`b041edf8f`,
 `9db7ee235`); this plan hardens and extends it. It does not start over.
 

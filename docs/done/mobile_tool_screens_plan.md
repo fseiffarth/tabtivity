@@ -1,7 +1,8 @@
 # Phone Mail, Calendar and To-do redesign — Plan
 
-Status: **implemented 2026-11-15 (steps A–D + an unused-strings cleanup on
-develop); reviewed before implementation (notes at the end); never live.**
+> **Status (screened against code 2026-11-22):** ARCHIVE (built; only live QA open). Mail, Calendar and To-do use the shared `mobile-web/src/components/ScreenHead.tsx` and the `OptionSheet` info/more/filter sheets (`Mail.tsx`, `Calendar.tsx`, `Todo.tsx`); register rows `mobile.design.toolHead`, `.tips`, `.mail`, `.calendar`, `.todo` exist in `src/lib/untested.ts`. Mail has since grown date grouping (`880406149`, `f710fc26e`), which the plan does not mention. Not live-tested.
+
+Plan text: implemented 2026-11-15 (steps A–D plus an unused-strings cleanup on develop); reviewed before implementation (notes at the end).
 Mockups: Design canvas "Phone Mail, Calendar & To-do"
 (https://claude.ai/artifact/NnhGGac3rd1YqYgwseBmYJ, nine artboards). Nothing
 here is live-verified; every changed screen wears an untested pill with a row

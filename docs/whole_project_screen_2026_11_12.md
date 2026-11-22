@@ -1,5 +1,10 @@
 # Whole-project screen — 2026-11-12
 
+> **Status (screened against code 2026-11-22):** PARTIAL. All 13 Highs are fixed on develop (`docs/done/screen_2026_11_12_fix_plan.md`; e.g. `HOST_SCOPE_KEY` in `storage.rs`,
+> `REMOTE_STATE_FILES` in `commands/project_transfer.rs`, `ssh_trust_host_key` in `commands/ssh.rs`, `loginPayload` in
+> `mobile-web/src/auth.ts`). The Medium and Low items were left out of that run and are not tracked anywhere else; verify each against
+> the code before acting. Line numbers are of `214933ab5` plus that day's working tree. Not live-tested unless the doc/todo says so.
+
 Ten parallel read-only auditors, one per slice (agents; remote & sync; git/fs/
 trust; phone API + PWA; server crates; MCP/mail/calendar; backend runtime;
 frontend lib/stores; frontend components/CSS; tooling/CI/docs), run against

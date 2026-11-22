@@ -1,9 +1,6 @@
 # Per-turn checkpoints — plan
 
-Status: steps 1–7 built, reviewed and review fixes landed on `develop`
-(2026-11-13/14); see `docs/turn_checkpoints_handoff.md` for deviations and
-what was resolved. Never run live: the click-through in
-`todo/group-s-agents.md` is open.
+> **Status (screened against code 2026-11-22):** Steps 1–7 are in code: `services/checkpoints/{store,snapshot,restore,worker,mod}.rs`, `commands/checkpoints.rs`, `components/terminal/{ReaderCheckpoints,CheckpointRestoreDialog,CheckpointDiffScope}.tsx`, help topic `checkpoints`. Deviations: `docs/done/turn_checkpoints_handoff.md`; design: `docs/context/checkpoints.md`. "Later" items (conversation rewind, remote, phone) are not built. Open: the click-through in `todo/group-s-agents.md`. Not live-tested unless the doc/todo says so.
 
 ## Why
 

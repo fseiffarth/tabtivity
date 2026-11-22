@@ -1,11 +1,8 @@
 # Agent fence on Windows and macOS: match the Linux fence
 
-Status: plan only (2026-09-27). Not implemented; implementation waits until
-asked. **2026-11-15 (2442n):** the macOS profile is still `(allow default)`,
-not §5's deny-default base, but it now denies `lsopen` / `appleevent-send`,
-unix sockets in the shared temps, home and Docker, unsets `SSH_AUTH_SOCK` and
-gives each scope a private `TMPDIR`; Mach (keychain) and `launchctl` remain
-open. What is closed and what is not: `docs/context/agent_authority.md`. Decisions the user made when this plan was written: **Windows = native sandbox accounts first, WSL2
+> **Status (screened against code 2026-11-22):** PARTIAL (macOS hardening only; Windows NOT-STARTED). Windows: no `agent_fence_win`, `--fence-setup`/`--fence-runner` or `FenceDecision::SetupNeeded` exists; `platform_fenceable()` is still false there and the accept-once path (`PlatformUnaccepted`) is the only gate. macOS: the Seatbelt profile is still `(allow default)` (`sandbox_exec_profile`, `SEATBELT_ESCAPE_DENIALS` in `src-tauri/src/services/agent/agent_fence.rs`), not §5's deny-default base, but it denies `lsopen`/`appleevent-send`, unix sockets in the shared temps, home and Docker, unsets `SSH_AUTH_SOCK` and gives each scope a private `TMPDIR` (2442n, 2026-11-15); Mach/keychain and `launchctl` stay open (`docs/context/agent_authority.md`). The fence now lives in `services/agent/agent_fence.rs` (the body says `services/agent_fence.rs`). Never run on a Mac. Not live-tested.
+
+Decisions the user made when this plan was written: **Windows = native sandbox accounts first, WSL2
 as a later second backend**; **macOS = deny-default Seatbelt profile**.
 
 ---

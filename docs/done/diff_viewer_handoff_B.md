@@ -1,5 +1,7 @@
 # Diff viewer, part B: layout and navigation
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. `src/lib/viewers/diffRows.ts` (`splitDiffRows`, `stepChange`, `foldRanges`) is in code and used by `embed/DiffView.tsx`, landed as `2fe291b8b`. Landed on `develop` 2026-11-05 (the branch shas below were cherry-picked); the doc's "nothing is on develop" is out of date. The listed untested ids are in `src/lib/untested.ts`. Never run live.
+
 Branch `worktree-agent-ac84388c94ef34606` (from `develop` HEAD b07d96c9). Not run live.
 
 ## What changed

@@ -1,11 +1,6 @@
 # Git worktrees (#23) — audit and improvement plan
 
-> **Status (2026-07-28): Phases 0, 1 and 2 are implemented on `develop`; phases 3
-> and 4 are not.** Everything below is kept as the audit that produced them —
-> the findings are the record of *why* each piece is shaped the way it is, not a
-> backlog. See the “What shipped” section at the end for the per-finding outcome,
-> including the two places the implementation deliberately deviates from what is
-> written here. None of it has been live-verified in the running app.
+> **Status (screened against code 2026-11-22):** PARTIAL. Phases 0–2 are in code: `commands/git.rs` (`git_worktree_list/_add/_remove/_lock/_unlock/_prune`, `resolve_worktree_path`), `services/git/git_peer.rs` (`linked_checkout_branches`), `services/git/git_hardened.rs` (`NO_HOOKS_CONFIG`), `src/lib/gitWorktree.ts`, tests `src/__tests__/git/GitWorktree*.test.tsx`. Phase 3 (Rung 1, worktree-aware tabs) is partly there: the "+ agent" worktree picker (`src/components/tabs/agentWorktrees.ts`, `NewTabMenu.tsx`) and `src/stores/agents/agentWorktreeSwitch.ts`; tab groups per worktree and Phase 4 (worktree as project, agent per branch) are not started. File:line refs in the audit body are as of v0.1.43. Not live-tested.
 
 Audited on `develop` at v0.1.43. Two independent passes: the backend command
 surface (`commands/git.rs` + every subsystem a worktree touches) and the

@@ -1,6 +1,11 @@
 # Performance — plan
 
-Status: implementation in progress (plan 2026-10-06, revised after two
+> **Status (screened against code 2026-11-22):** ARCHIVE. All 12 agent steps (S1–S12) are in code: `commands::persist_lane::ordered` in `lib.rs`, `services/proc_table.rs`,
+> `src/lib/usePoll.ts`, `components/layout/SleepingPane.tsx` (sleeping tabs; setting `settings.sleepTabs`), lazy panes in `TabPane.tsx`.
+> Thin LTO (§6) landed then was reverted (`f1c7281f3`, `80142cc72`; no `[profile.release]` now). Open: the user's §1 host-shell
+> measurements, the RSS retake after a few hours, QA rows in `todo/group-u-performance.md`. Not live-tested unless the doc/todo says so.
+
+History: implementation in progress (plan 2026-10-06, revised after two
 reviews the same day; agent steps in §11, handoff in
 `docs/done/performance_handoff.md`). Findings come from five read-only code audits (frontend render
 cost; backend hot paths; startup, IPC and bundle; existing perf debt +

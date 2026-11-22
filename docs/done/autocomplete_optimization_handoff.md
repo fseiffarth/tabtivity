@@ -1,6 +1,8 @@
 # Autocomplete optimization — handoff
 
-Plan: `docs/autocomplete_optimization_plan.md`. Built by two implementers
+> **Status (screened against code 2026-11-22):** All B1–B12 and A1–A10 commits named below are on `develop` (checked by `git log`). Open items are the "Flagged for the user" list (fenced Copilot run, stay-signed-in against a live account). Current design: `docs/context/copilot_completion.md`. Not live-tested unless the doc/todo says so.
+
+Plan: `docs/done/autocomplete_optimization_plan.md`. Built by two implementers
 (backend B1–B12, frontend A1–A10) against the plan's IPC contract, reviewed
 on the joined tree, landed on `develop` 2026-11-14. Nothing here was run
 live. The shas in the two implementer sections below are the worktree

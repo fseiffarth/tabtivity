@@ -1,8 +1,8 @@
 # Scaffold files: a lean default set and a "Project docs" group
 
-Status: all nine steps implemented and reviewed on `develop` (2026-11-14,
-last commit f342aa178; handoff in `docs/scaffold_files_handoff.md`). Never run
-live: the click-through in §8 is open. Three research subagents
+> **Status (screened against code 2026-11-22):** Steps 1–9 are in code: catalog `services/scaffold.rs` (`DOCS`, `DocStatus`, `gitignore_sections_at`), phone route `mobile_control/project_docs.rs`; `.gitignore` sections by folder detection landed last (`f342aa178`). Handoff: `docs/done/scaffold_files_handoff.md`. Open: the click-through in §8. Not live-tested unless the doc/todo says so.
+
+Three research subagents
 (agent-instruction files, doc files, display) read the code and searched the
 web; their findings are condensed below. The user answered the five open
 decisions on 2026-11-13; they are recorded under **Fixed decisions** —

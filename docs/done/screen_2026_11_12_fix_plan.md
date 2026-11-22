@@ -1,5 +1,10 @@
 # Screen 2026-11-12 — fix plan for the High items
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. H1–H13 landed on develop (`214933ab5..dcad0276c`): H1 `de0fabd09`, H2 `a5f272df4`, H6 `13abd7bf5`, H10 `b9adda684`,
+> H12 `80e436933`, H13 `27eb4f92d`; code in `services/launch_prep.rs` (fail-closed fence match), `storage::is_reserved_scope`,
+> `commands/project_transfer.rs`, `services/exec_trust.rs`, `commands/ssh.rs`, `.githooks/pre-push`, `release.yml` (waits for `security.yml`).
+> Open: the follow-ups the handoffs list (remote tmux kill/rename prefix match, unsaved-close ask covers text editors only, `known_hosts` is the user's real file) and live QA. Not live-tested unless the doc/todo says so.
+
 Source: `docs/whole_project_screen_2026_11_12.md`, section "High — fix first"
 (items H1–H13 below keep its numbering), plus the one Medium that shares a
 file with H3 (bundle `state/` adoption). Everything else in the screen is out

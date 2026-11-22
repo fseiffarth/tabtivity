@@ -1,7 +1,14 @@
 # Whole-project screen 2026-10-15 — High findings: fix plan
 
-Status: implemented and landed on develop 2026-10-15; never run live
-(plan review at the end; per-step results in the handoff). Source: `docs/whole_project_screen_2026_10_15.md` § "High — fix
+> **Status (screened against code 2026-11-22):** ARCHIVE. All 12 Highs are in code: backend-spawned login PTY (`LoginTarget` in
+> `src-tauri/src/terminal/mod.rs`, `commands/credentials.rs`), `save_project` deleted, `agent_tasks` structs keep unknown
+> fields instead of `deny_unknown_fields` (`schema/agent_tasks.rs`), `hardened_git_command_in` in `commands/git_publish.rs`,
+> `kill_pidfile` in `services/openvpn.rs`, `WsClient.close()` settles waiters (`src/lib/transport/wsClient.ts`), the pending-password
+> map gone, the animated shadows now transform/opacity (`src/styles/projects-tabs.css`), the private screenshot untracked
+> (`fdaf7c480`), bump commit from a private index (`.githooks/pre-push`). Open: live QA only. Not live-tested unless the doc/todo says so.
+
+History: landed on develop 2026-10-15
+(plan review at the end; per-step results in the handoff). Source: `docs/done/whole_project_screen_2026_10_15.md` § "High — fix
 first" (12 items, screened at `dd5ede60`; line numbers drift — find by
 anchor). Handoff: `docs/done/screen_2026_10_15_high_handoff.md`.
 

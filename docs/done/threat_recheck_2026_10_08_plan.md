@@ -1,11 +1,8 @@
 # Threat-model recheck 2026-10-08 — findings and fix plan
 
-Status: **code-complete, landing pending.** Plan steps 1, 2, 3, 6, 8, 13 and
-14 are in develop and main (`bdafdf03`, 2026-10-09). Plan steps 4, 5, 7, 9,
-10, 11 and 12 (the "Run 2026-10-12" section: 8 agent steps, 2 follow-up
-steps, a final review) are done on branch `threat/1012-final` (worktree
-`.claude/worktrees/threat1012-final`), not yet merged into develop. Nothing
-of either run is live-verified.
+> **Status (screened against code 2026-11-22):** REFERENCE / ARCHIVE-class: both runs (2026-10-08 steps and 2026-10-12 steps) landed on develop (`eacfa41a` is an ancestor of HEAD; gaps 16–41 read "Fixed, not live-verified" in `docs/threat_model.md`). The "Resume state" and the "Status:" line below are as of 2026-10-13 and are stale: `threat/1012-final` is no longer a branch. Still open from it: the live click-through (never run) and the follow-ups of "Resume state" item 4 (some since built, e.g. `.jnlp`/`.webloc` in `services/os_open.rs`; the rest unchecked). Not live-tested.
+
+
 
 ## Resume state (2026-10-13)
 

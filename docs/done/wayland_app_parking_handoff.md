@@ -1,6 +1,8 @@
 # GNOME/Wayland app parking — implementation handoff
 
-Plan: `docs/wayland_app_parking_plan.md` (uncommitted in the main checkout
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (handoff executed; steps A1a–A3 and the final review are in `develop`, see the plan's status). Per-step "Flagged for user" lists are live-QA items for GNOME; the plan is `docs/done/wayland_app_parking_plan.md`. Not live-tested.
+
+Plan: `docs/done/wayland_app_parking_plan.md` (uncommitted in the main checkout
 when A1a ran; A1a's worktree branched from develop `bfc89615`). One section
 per agent step.
 

@@ -1,6 +1,8 @@
 # Cockpit MCP — small workspace conveniences
 
-Status: implemented, 2026-11-06; never live-tested.
+> **Status (screened against code 2026-11-22):** First delivery is in code: `tab_rename` in `services/mcp/cockpit_mcp.rs` on `/mcp/cockpit` (`Caller::Cockpit`, `root_mcp::grant_cockpit`), `Settings::cockpit_mcp`, `workspace::rename_tab_id_in`. As built and limits: `docs/context/cockpit_mcp.md`; later tools: `docs/cockpit_mcp_extensions_plan.md`. Not live-tested.
+
+Implemented 2026-11-06.
 Focused verification: build, five Rust tests, 92 frontend tests, lint, brand
 and whitespace checks passed. Full-tree verification uses `scripts/gates.sh`.
 As-built details and v1 limits: `docs/context/cockpit_mcp.md`.

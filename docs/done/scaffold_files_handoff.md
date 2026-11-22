@@ -1,6 +1,8 @@
 # Scaffold files — implementation handoff
 
-Plan: `docs/scaffold_files_plan.md` (Fixed decisions §2 are final).
+> **Status (screened against code 2026-11-22):** Plan review, I1–I5, R1/R2, the final review and the 2026-11-14 user decisions are all landed on `develop` (`services/scaffold.rs`, `mobile_control/project_docs.rs`). The integration branch named above is gone. Open: live click-through only. Not live-tested unless the doc/todo says so.
+
+Plan: `docs/done/scaffold_files_plan.md` (Fixed decisions §2 are final).
 Integration branch: `scaffold-files` (from `develop` a2a5ecb45).
 
 Each agent appends its own section: shas, choices made, gotchas, gate status

@@ -1,8 +1,9 @@
 # Plan: Tabtivity MCP tools after a reattach
 
-Status: Phase 1 and Phase 2 implemented 2026-11-18 (I1, I3, I2, R1, V0, I4,
-R3, F; history in `docs/mcp_reattach_handoff.md`), never run live; the Windows
-host code is compiled by CI only. How it works now: `docs/context/tmux_sessions.md`
+> **Status (screened against code 2026-11-22):** Phase 1 (stamp, Stale flag, `launch_prep::attach_only`) and Phase 2 (revival) are in code: `services/root_mcp/root_mcp_reattach.rs` (`cli_revives`, `pending_bearer`, `peer_in_session`, `refusal_marks_stale`), `root_mcp_mark.rs`, frontend `stores/agents/mcpStale.ts`. Open: only the unverified CLI behaviour on `503`/later `401` named below. The list below is where the code differs from the plan. Not live-tested.
+
+Implemented 2026-11-18 (I1, I3, I2, R1, V0, I4, R3, F; history in
+`docs/done/mcp_reattach_handoff.md`); the Windows host code is compiled by CI only. How it works now: `docs/context/tmux_sessions.md`
 ("The MCP stamp of a local agent session") and `docs/context/agent_mcp_wiring.md`
 §3–5; the residual is in `docs/threat_model.md` (loopback row). Where the result
 differs from the plan below:

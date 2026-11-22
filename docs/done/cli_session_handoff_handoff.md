@@ -1,6 +1,8 @@
 # CLI session hand-off: implementer notes
 
-Running log for `docs/cli_session_handoff_plan.md`; each step appends a section.
+> **Status (screened against code 2026-11-22):** Log of `docs/done/cli_session_handoff_plan.md` steps A-D; all in code on develop (`agent_cli_handoff.rs`, `CliHandoffDialog.tsx`); the `cli-handoff` branch is history. Open: the live checks and the plan's "Later" list. Not live-tested.
+
+Running log for `docs/done/cli_session_handoff_plan.md`; each step appends a section.
 
 ## Step A
 

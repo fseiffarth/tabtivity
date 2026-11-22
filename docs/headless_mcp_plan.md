@@ -1,5 +1,7 @@
 # Headless MCP plan — the agent MCP servers for tabs the Mobile host starts
 
+> **Status (screened against code 2026-11-22):** Phases 1 and 1b are in code: `commands::root_mcp::start_headless` called from `services/mobile_control/host.rs`, `Runtime { serves_root, serves_markup, serves_web }`, `git_push_mcp::serve_without_keyring` (`window_required`), the single `root_mcp::grant_lanes`. Open: phase 2 (the file-locked git queue `git_queue.json`, not in code) and phase 3 (sidecar sessions in MCP session access). Not live-tested.
+
 TODO #2339 (`todo/group-z-server.md`). Follows the headless owner work
 (`docs/done/headless_owner_plan.md`, `docs/done/headless_owner_handoff.md`, "H3 parity
 gaps").

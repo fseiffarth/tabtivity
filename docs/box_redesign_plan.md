@@ -1,6 +1,8 @@
 # Project boxes redesign — merged plan
 
-Status: **plan only, 2026-11-03. Nothing is built.** Merges three design
+> **Status (screened against code 2026-11-22):** PARTIAL (steps 1–13 landed; 2dff17a2). In code: `commands/boxes.rs` (`clean_box_name`, `create_box(member_ids, color)`, `BoxPatch` with `order`), `src/stores/boxSlice.ts`, `components/projects/{BoxMemberChecklist,BoxEditorDialog (the box sheet),useQuickCreateBox,BoxEmptyLine}`, `components/tabs/{TabMemberChip,startIn}.ts(x)`, `components/files/{useBoxAccordion,BoxMemberMenu}`. Open: step 14 (phone member chip and selector, 31av/31aw, see `docs/mobile_box_parity_plan.md`) and step 15 ("Open beside" split); no `PublicTab` member field exists. Per-step notes and review in `docs/box_redesign_handoff.md`. Nothing live-verified (todo `group-a-boxes.md`).
+
+Merges three design
 lenses written the same day; each holds the detail (today's flow with
 `file:line` refs, ranked friction, mockups, per-step files):
 

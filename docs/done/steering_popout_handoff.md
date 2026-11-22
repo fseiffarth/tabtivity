@@ -1,6 +1,9 @@
 # Steering inside popout windows — implementer's handoff
 
-Plan: `docs/steering_popout_plan.md`. Worktree branch starts at `develop`
+> **Status (screened against code 2026-11-22):** REFERENCE (log of the built `docs/done/steering_popout_plan.md`; all six steps plus the later `mainWindow` key are in develop). Open: the "Flagged for user" live checks (focus hand-over per platform, popout bar look). Not live-tested.
+
+
+Plan: `docs/done/steering_popout_plan.md`. Worktree branch starts at `develop`
 40f3918b2. Nothing here was run live (the app is never started by the
 implementer); everything below is verified by tests and gates only.
 

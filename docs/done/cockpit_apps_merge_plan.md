@@ -1,7 +1,8 @@
 # Cockpit: the apps and the system pages as views
 
-Status: **implemented on develop, not live-tested** (2026-11-06, 87e736d8..36602de6;
-build log, flagged items and click-through: `docs/cockpit_apps_merge_handoff.md`).
+> **Status (screened against code 2026-11-22):** S1-S5 are in code: `lib/cockpit/views.ts` (`AppView`, `VIEW_GROUPS`), `components/layout/viewBarSlots.tsx`, `lib/cockpit/viewGates.ts`, `components/header/AgentsButton.tsx` (commits 87e736d8, 6ff58f38, 00a44101, 213cc7bd, 69bf72ac on develop); the overlay hosts, `consoleCover`, `consoleFront` and the Usage view are deleted. Nothing open but the click-through in the handoff. Not live-tested.
+
+Written 2026-11-06 (build log, flagged items and click-through: `docs/done/cockpit_apps_merge_handoff.md`).
 develop's cockpit declutter landed meanwhile; its machine list
 (`CockpitMachineList`) is the Machines view's list. The user asked to merge
 mail, to-do and calendar into the cockpit, and then models, machines and agents

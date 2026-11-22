@@ -1,6 +1,9 @@
 # Remote-only projects — Plan
 
-Status: **plan only** (2026-10-28). Nothing is built. The plan was drafted in
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (live QA only: `todo/group-g-remote.md` G.27). E1–E9 and F1–F10 are built (handoff A1–A13 + Final review, commits `b7e05ab94`..`4528202cb`, 2026-10-28/29): `RemoteSpec::is_remote_only`, `remote::local_copy_in`, `remote_sync::mirror_dir_opt`, `launch_prep` `Pin`, `commands/remote_unpair.rs`, `services/remote/host_search.rs`, `isHostPinned` in `src/`, phone `projectHostReach`. D7's "Local → Remote-only later" landed 2026-11-20 as the pill's "Make remote only…" (`4b3b6daf7`; see `remote_only_conversion_plan.md`). Not live-tested.
+
+
+Written as **plan only** (2026-10-28). The plan was drafted in
 two halves, engine (backend + data model) and cockpit (frontend, creation,
 phone, docs), and then merged. Code sites were checked against `develop` at
 76ea8097. Reviewed against the code on 2026-10-28; what the review changed is

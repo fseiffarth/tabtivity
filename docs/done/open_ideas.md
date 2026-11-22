@@ -1,3 +1,5 @@
+> **Status (screened against code 2026-11-22):** SUPERSEDED as a backlog (last real edit 2026-06-22; real TODOs live in `todo/*.md`). Most items are built: git worktrees (`commands/git.rs`, `git/git_worktrees.rs`), git history view (`src/components/files/GitHistory.tsx`), project boxes (`commands/boxes.rs`), keyboard steering (`src/hooks/useSteering.ts`), native mail and reader-mode browser (`services/mail/`, `commands/browser.rs`), no-scaffold import (`projectDialog.skipScaffoldLabel`), session resume, per-project security tiers (`projectDialog.trustTierLabel`). The right-panel / bottom-panel items name layouts that were redesigned since (`SidePanel`, header project strip). Not re-triaged item by item; ARCHIVE candidate. Not live-tested.
+
 - make tabtivity repo public publish check
 - replace public / private by local / remote (public, private)
 - add a no scaffold option for importing

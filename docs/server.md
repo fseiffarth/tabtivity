@@ -4,6 +4,8 @@ The front door for everything about the server version: where it stands,
 what the user decided, what is open, and which document holds the detail.
 Read this first; keep it current when a decision or an open point changes.
 
+> **Status (screened against code 2026-11-22):** the whole of P0–P5 is in `develop` (`4ed492a5d`, 2026-10-11): `src-gateway`, `src-serverd`, `src-core`, `services::server`/`connect`/`command_class`, `scripts/package-server-deb.sh` + ci-cd.yml `package-server`. Nothing has run on a real server. The bullets below are the 2026-10-11 record, corrected where the merge made them stale; no `hosted` branch or `.claude/worktrees/hosted` exists any more. Open items here are not re-verified individually. Not live-tested.
+
 ## Status (2026-10-11)
 
 - **Built, reviewed, unmerged, never run live.** Branch `hosted`

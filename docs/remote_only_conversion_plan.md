@@ -1,6 +1,9 @@
 # Converting a project to Remote-only — Plan
 
-Status: **plan only** (2026-10-29). Nothing is built. Code sites were checked
+> **Status (screened against code 2026-11-22):** PARTIAL / SUPERSEDED in shape. A lighter flow landed 2026-11-20 (`4b3b6daf7`): the pill row "Make remote only…" (`pill.makeRemoteOnlyEllipsis`) reuses `ExtendToRemoteDialog` (Keep a local copy off, git projects only) and then the existing `StopLocalCopyDialog`. NOT built: S1's mirror scan and new refusals (`filesNotOnHost`, `leftBehind`, `dirtyWorktrees` appear nowhere in `commands/remote_unpair.rs`/`src/`), S2's upload / send-commits / move-tabs helper buttons, the Danger-zone move of the rows, the label "Move to the host only…" and the G.28 todo section (it is not in `todo/group-g-remote.md`). Decide whether S1/S2 are still wanted before building from this text. Not live-tested.
+
+
+Written as **plan only** (2026-10-29). Code sites were checked
 against `develop` at ab935481, which includes the remote-only work
 (`docs/done/remote_only_projects_plan.md`, handoff
 `docs/done/remote_only_projects_handoff.md` A12 + Final review).

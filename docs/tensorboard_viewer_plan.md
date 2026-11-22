@@ -1,6 +1,6 @@
 # Native TensorBoard viewer — plan
 
-Status: plan only (2026-11-05). No code yet. Never run live.
+> **Status (screened against code 2026-11-22):** PARTIAL. Phase 1 (scalars, one file or folder runs, live refresh, local + SSH) is in code: `src-tauri/src/services/tfevents.rs`, `commands/tfevents.rs` (`tfevents_read`, `tfevents_discover`), `src/lib/viewers/tensorboard.ts`, `components/embed/TensorBoardView.tsx` + `embed/tensorboard/ScalarChart.tsx`, "Open as training runs" (`openTrainingRuns`); hardened by `2ba7e3e7f`. Phases 2 to 5 (images and text, hparams, histograms, phone) are not built; the parser only counts such series as skipped. Never run live.
 
 Tabtivity reads TensorBoard event files (`events.out.tfevents.*`) itself and
 draws the training curves in its own viewer tab. No TensorBoard server, no

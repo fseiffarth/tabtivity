@@ -1,5 +1,8 @@
 # Steering coverage fixes
 
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (all five gaps built; its own "Implementation verification" section records the gates). In code: `focusNextPopout(scope)` in `src/lib/window/focusPopout.ts` and its use in `useSteering.ts` (gaps 1-2); range inputs get an explicit handoff in `src/lib/shortcuts/steeringRegion.ts` (3); the calendar rename in `CalendarSidebar.tsx` (4); the cockpit region `src/lib/shortcuts/steeringCockpit.ts` with `U` (`cockpit`) and the `cockpit*` actions in `steeringBindings.ts` (5; `UntestedTag` `steering.cockpit`). Manual steps at the end are still to be run. Not live-tested.
+
+
 ## Scope and working rules
 
 Implement the five gaps confirmed in the steering audit. Work on develop and preserve all existing staged, unstaged and untracked work: this checkout already contains substantial steering and Reader changes. Re-read current source before editing. Do not commit, push, start, stop or restart the app. Frontend changes only are expected. Follow AGENTS.md, translations, shared dialogs, existing state ownership and untested-feature registration rules. Do not add phone key rebinding: default-only phone steering is an explicit v1 decision.

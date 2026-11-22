@@ -1,8 +1,9 @@
 # Cockpit + root console: one surface
 
-Status: **implemented on branch `cockpit-root-merge`, not live-tested** (A1-A9;
-log: `docs/cockpit_root_merge_handoff.md`; the user settled the eight Open decisions
-below on 2026-11-04). Written as a plan, reviewed 2026-11-04. The
+> **Status (screened against code 2026-11-22):** A1-A9 and the follow-up round F1-F9 (section at the end) are in code on develop: `lib/window/floatingFrame.ts`, `stores/rootOverlay.ts` (`view`, `openView`), `components/layout/RootOverlay.tsx`, `components/cockpit/RootRail.tsx`, `NeedsYouPopover.tsx`, `cockpit` gate removed. Differs from the plan: F9's front rule was replaced by the apps merge (Machines/Models are views). Open: C7 (sphere view) and the Tabby Now view, both not built. Not live-tested.
+
+Log: `docs/done/cockpit_root_merge_handoff.md`; the user settled the eight Open decisions
+below on 2026-11-04. Written as a plan, reviewed 2026-11-04. The
 user asked only to "merge the cockpit with the root"; what that means below is
 read from the code (develop). Visual and interaction design is
 `docs/done/cockpit_root_merge_design.md`; this plan covers architecture, ownership,

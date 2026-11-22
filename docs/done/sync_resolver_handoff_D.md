@@ -1,5 +1,7 @@
 # Sync resolver, handoff D
 
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (live QA only; both goals landed). Commits `45fa9e844` (change times) and `492003c81` (hand to an agent), then `78ab92b4e`, `c8983b287` (agent picker / new-tab choice), `6bc9d159f`. In code: `services/sync_handoff.rs`, `commands/sync_handoff.rs`, `SyncHandoffButton`, `core_dispatch.rs` `USER_CONFINED` rows for both commands (lines ~512–515), untested rows `compareView.sideTimes`, `syncHandoff.{resolver,reveal,newAgent,panel}`. Flagged item 1's "reveal folder" button was added (`syncHandoff.reveal`); the branch/worktree named below is gone and the "wip, not green" state is stale. Host-side agent tabs and a merge base remain unbuilt. Not live-tested.
+
 Branch `worktree-agent-abf751677bf453196` (worktree
 `.claude/worktrees/agent-abf751677bf453196`), from `develop` HEAD `b07d96c9`.
 Two commits: **1** `feat(sync): show which side is newer in the sync resolver`

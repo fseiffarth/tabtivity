@@ -1,5 +1,8 @@
 # Threat analysis extension — new features, 2026-11-12
 
+> **Status (screened against code 2026-11-22):** REFERENCE (the review method; its output is the handoff). The review ran: findings are gaps 105–114 in `docs/threat_model.md`. 105–111 are fixed in code (`ViewBudget` in `src/lib/viewers/tensorboard.ts`, `print_mcp` `claim`/`State::Printing`, `services/sync_handoff.rs`, `agent_privacy::recheck_spawn_in`, `binaryFilesPaths` in `src/lib/viewers/diff.ts`); 112 and 113 remain open; 114's plain-text paste case was closed by `5d8906dfe`. "Plan only" below describes the plan at writing. Not live-verified.
+
+
 ## Status and authorization
 
 **Plan only. No review findings, implementation changes or fixes are authorized

@@ -1,6 +1,9 @@
 # Screen 2026-11-12 — handoff C (H7, H10, H12, H13)
 
-Plan: `docs/screen_2026_11_12_fix_plan.md`. Worktree branch
+> **Status (screened against code 2026-11-22):** ARCHIVE (record of the run). H7, H10, H12, H13 are in code on develop (see `docs/done/screen_2026_11_12_fix_plan.md`'s status block).
+> The shas below are worktree commits; develop holds cherry-picks with other hashes (find by subject). Not live-tested unless the doc/todo says so.
+
+Plan: `docs/done/screen_2026_11_12_fix_plan.md`. Worktree branch
 `worktree-agent-a76382eec5420a05b`, based on develop `214933ab5`. Nothing
 was pushed, run live or released.
 

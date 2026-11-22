@@ -1,5 +1,10 @@
 # Native Viewers Review — 2026-09-16
 
+> **Status (screened against code 2026-11-22):** PARTIAL. V-01, V-04, V-05, V-08, V-09, V-10 landed (e.g. `lineEndingOf` in `src/lib/viewers/fileUtils.ts`, `useEditableFile` in
+> `src/components/embed/fileViewer/editableFile.tsx`); V-02 stays reverted by design. The vitest double-run it reports is fixed
+> (`vitest.config.ts` `include`). Sampled V-19 (`mdGraph.ts` serial crawl) is still open; the other V-IDs were not individually re-checked.
+> `FileViewerPane.tsx:<line>` refs now point into `src/components/embed/fileViewer/`; `src/lib/viewers/tex.ts` is `tex/tex.ts`. Not live-tested unless the doc/todo says so.
+
 A read-only review of the four native viewers — TeX, Markdown, YAML/JSON and
 PDF — by eight parallel agents, followed by a cross-critique round in which each
 agent was shown its peers' findings and asked to defend, correct or withdraw its

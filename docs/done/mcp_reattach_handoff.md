@@ -1,6 +1,8 @@
 # MCP reattach: handoff between implementer steps
 
-Plan: `docs/mcp_reattach_plan.md` (kept by the main agent; Phase 1 steps and
+> **Status (screened against code 2026-11-22):** Log of `docs/done/mcp_reattach_plan.md` Phase 1 (I1-I3, R1) and Phase 2 (I4, R3, F); both phases are in code (`root_mcp_reattach.rs`, `root_mcp_mark.rs`, `launch_prep.rs`, `session_mux/`). Open: the "Flags for the user" and CLI `503` behaviour; the worktree branch named here is history. Not live-tested.
+
+Plan: `docs/done/mcp_reattach_plan.md` (kept by the main agent; Phase 1 steps and
 fixed decisions are settled). Each step appends its own section.
 
 ## I1: Phase 1 backend

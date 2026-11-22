@@ -1,6 +1,11 @@
 # Code screen 2026-10-25 — plan
 
-Status: A–E and G landed on develop 2026-10-25, S1–S5 and S7's frontend
+> **Status (screened against code 2026-11-22):** PARTIAL. A–E, G and S1–S5, S7's frontend splits are in code: `git_bounded::run`, `useVisiblePoll`, `ContextMenuPortal`,
+> `src/lib/i18n/`, `src/components/embed/fileViewer/`, `services/{mail,git,agent,…}/` groups, `services → commands` down from 211
+> refs to ~56. Not done (optional, user's call 2026-10-26): S6 (phone modules → `shared/`, partial), S8 (no `components/hosts` or
+> `components/remote`), S9 (`schema/` still in `src-tauri/src/schema/`), S7's Rust function splits. Not live-tested unless the doc/todo says so.
+
+History: A–E and G landed on develop 2026-10-25, S1–S5 and S7's frontend
 splits on 2026-10-26 (not run live). S6, S8, S9 and S7's Rust function splits
 stay optional, kept for a later plan (user's call 2026-10-26). Results, flags and click-through: `docs/code_screen_handoff.md`. Findings come from five read-only screening
 agents (Rust services; Rust commands/terminal/platform/crates; frontend

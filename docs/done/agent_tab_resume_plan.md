@@ -1,6 +1,8 @@
 # Per-tab resume for Antigravity and Muse
 
-Status: steps A, B, C and the follow-up run built 2026-11-16 (probed offline, never live).
+> **Status (screened against code 2026-11-22):** Steps A-C and the follow-up run are in code: Antigravity resolves by id in `services/agent/google_chat.rs::resolve` (hook in `antigravity_session.rs`), Muse in `services/agent/muse_session.rs::resolve` (`muse_session/hook.rs`), and `agent_resume_pinned` reads the same records. Nothing open but live checks. Not live-tested.
+
+Built 2026-11-16 (probed offline).
 
 ## Why
 

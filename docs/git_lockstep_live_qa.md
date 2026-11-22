@@ -1,5 +1,8 @@
 # Git Lockstep — Live QA against a real SSH host (#28p)
 
+> **Status (screened against code 2026-11-22):** REFERENCE (a finished live run, 28/28 cases; history). The driver `src-tauri/examples/lockstep_drv.rs` still exists; the code it drove has changed since the run (sync_op guard, auto_sync_safety phase 1), so a re-run is not implied by it.
+
+
 Companion to `docs/git_lockstep_case_matrix.md`, which until now carried the line
 *"Unit tests cover every pure decision function; none of this has run against a real
 SSH host."* This is that run.

@@ -1,6 +1,6 @@
 # Python debugging with a bundled debugpy — plan
 
-Status: plan only (2026-10-20). No code yet. Never run live.
+> **Status (screened against code 2026-11-22):** NOT-STARTED. No `services/debugpy/`, no `src-tauri/vendor/debugpy/`, no `python-debugpy` row in `src/lib/untested.ts`, no todo entry; the Debug button still types `python -m pdb` via `debugPythonFile` in `src/lib/terminal/pythonRun.ts` (called from `TextView.tsx`). Plan unchanged. Never run live.
 
 The code viewer's **Debug** button today types `python -m pdb -c "b f:N" …`
 into a terminal tab (`src/lib/terminal/pythonRun.ts`, TODO group-m #87).

@@ -1,5 +1,9 @@
 # Whole-project screen — 2026-10-15
 
+> **Status (screened against code 2026-11-22):** ARCHIVE (audit report). The 12 Highs and the Medium batches were fixed (`docs/done/screen_2026_10_15_high_plan.md`,
+> `docs/done/screen_2026_10_15_medium_plan.md`, both landed). Lows and "Systemic patterns" were never tracked as a list; rename residue
+> (`start-eldrun-*.sh`) is gone (`257703475`). Line numbers are of `dd5ede60`. Not live-tested unless the doc/todo says so.
+
 Five parallel read-only auditors, one per slice (backend commands/core, backend
 services + server crates, frontend stores/lib, frontend components + CSS,
 phone PWA + scripts/CI/repo hygiene), run against develop `dd5ede60`.

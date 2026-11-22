@@ -1,6 +1,10 @@
 # Repo root cleanup — plan
 
-Status: plan only (2026-10-05). Two review passes by a subagent, both folded
+> **Status (screened against code 2026-11-22):** NOT-STARTED (one side effect). The `start-eldrun-*.sh` shims are gone (`257703475`, the rename). Still at the root: the three
+> `start-tabtivity-*.sh` launchers, `vite.mobile.config.ts`/`vite.pdf-frame.config.ts`, `postcss.config.js`, `shared/`, `screenshots/`,
+> `site/`, `test-fixtures/`, `.gitleaksignore`; steps 1–7 beyond the shim deletion are open. Not live-tested unless the doc/todo says so.
+
+History: plan only (2026-10-05). Two review passes by a subagent, both folded
 in: the first covered the original draft, the second the steps added after
 the user refined the goal (marked †). Nothing is implemented.
 

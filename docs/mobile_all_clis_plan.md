@@ -1,7 +1,6 @@
 # Every desktop CLI on the phone — plan
 
-Status: proposal, 2026-09-27. Nothing here is implemented yet.
-
+> **Status (screened against code 2026-11-22):** NOT-STARTED (proposal of 2026-09-27). The gate is unchanged: `MobileBridgeHost.tsx` `agentChoices` still filters on `item.cmd in RESUMABLE_AGENTS` (and custom agents on `resumeArgs`), `tmuxSession.ts` `shouldPersistLocalTab` still requires `resumableAgent`, and `discovery.rs::resumable` still requires a `session_id` plus a registry-resumable bin or resume args. The resumable set is now generated from the registry (`agent_registry::is_resumable_bin`; 12 of the registry's 30 CLIs, `droid` and `muse` added since) and `discovery.rs` no longer holds a hand copy (`BUILTIN` is gone), so step 4's cleanup is partly moot. No `mobile.newTab.allClis` row exists. Not live-tested.
 ## Today
 
 The phone's ＋ (`NewTabSheet`) lists what the desktop answers to `catalog`

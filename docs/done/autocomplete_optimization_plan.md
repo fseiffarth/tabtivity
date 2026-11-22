@@ -1,7 +1,6 @@
 # Autocomplete optimization — plan
 
-Status: plan, reviewed before implementation (2026-11-14). Line numbers are as
-of `a70bc3e32`.
+> **Status (screened against code 2026-11-22):** Backend B1–B12 and frontend A1–A10 are on `develop` (e.g. `7df932017` FIM gate, `fc56f404c` prompt order, `cd3c91095` time budget, `31aa8b5c5` stay signed in, `633a60131` trigger hygiene, `71b512f66` `autocomplete_delay_ms` menu; list in `docs/done/autocomplete_optimization_handoff.md`). Open: the fenced Copilot 1.565.6 run and a signed-in check. Line numbers are as of `a70bc3e32`. Not live-tested unless the doc/todo says so.
 
 Inline ghost-text completion in the native editor has two providers behind one
 contract: a local Ollama model (todo #45, shipped) and GitHub Copilot's language

@@ -1,7 +1,6 @@
 # Agent CLI prompt caching — plan
 
-Status 2026-11-19: research done (below); phases 1a–1e and 2–5 implemented, not live-verified;
-phase 6 measured, not worth offering.
+> **Status (screened against code 2026-11-22):** Phases 1–5 are in code: cache shares and OpenCode/Gemini/Copilot sources in `services/token_stats.rs` (`opencode.db`, `assistant_usage_events`, `ephemeral_5m/1h`), `warming` in `agent_global.rs`, the cold-cache chip (`agentResumeCost`, `PromptCache` in `agent_transcript.rs`), `GeminiCachingNotice`, `settings.ollama_keep_alive` with the `keep-alive.conf` drop-in (`commands/ollama.rs`). Phase 6 was measured and not offered; nothing is open. Not live-tested unless the doc/todo says so.
 
 ## What the research found
 

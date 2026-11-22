@@ -1,5 +1,7 @@
 # Cross-OS parity — Windows handoff (2026-11-15)
 
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (handoff executed). The listed fixes are in the tree under rebased hashes (`git log --grep=2442`, e.g. `4ee9609e9`); the SHAs in the body (`82171671f`, …) and the BASE/worktree-branch line no longer resolve in `develop`. Evidence: `agent_home::windows_profile_env` / `home_override_env`, `<cli>.cmd` shims in `agent_bin`, `paths::is_windows_device_name`, `commands/tex.rs` `canonical`. Open items (2442k, l, part of f/m) live in `todo/group-h-crossplatform.md`. Not run on Windows.
+
 The Windows half of item **2442** (`todo/group-h-crossplatform.md`, audit
 `docs/cross_os_parity_2026_11_12.md`). Nothing here was run on Windows: every
 fix is covered by a test that runs on Linux (the OS as a parameter) or by a

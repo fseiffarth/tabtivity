@@ -1,6 +1,8 @@
 # Diff notes to the agent — handoff
 
-Implements every step of `docs/diff_notes_plan.md` (frontend only, no Rust).
+> **Status (screened against code 2026-11-22):** All three commits named below are on `develop` and the files listed exist; the feature is complete for the Reader Diffs tab. Open: live QA (`diff-notes`). Not live-tested unless the doc/todo says so.
+
+Implements every step of `docs/done/diff_notes_plan.md` (frontend only, no Rust).
 Never run live: the feature wears the `diff-notes` `UntestedTag`.
 
 ## Commits

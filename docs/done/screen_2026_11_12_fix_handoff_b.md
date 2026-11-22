@@ -1,5 +1,8 @@
 # Screen 2026-11-12 — handoff B (untrusted input → host)
 
+> **Status (screened against code 2026-11-22):** ARCHIVE (record of the run). H3, H4, H5, H6, H8 are in code on develop (see `docs/done/screen_2026_11_12_fix_plan.md`'s status block).
+> The shas below are worktree commits; develop holds cherry-picks with other hashes (find by subject). Not live-tested unless the doc/todo says so.
+
 Branch `worktree-agent-a69fd7785e5bb7c54`, based on develop `214933ab5`.
 Items H3 (+ bundle `state/` filter), H4, H5, H6, H8 of
 `docs/done/screen_2026_11_12_fix_plan.md`. Never run live.

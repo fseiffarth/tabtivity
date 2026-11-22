@@ -1,8 +1,7 @@
 # Reader view switch + native Diffs steering — plan (the run's umbrella)
 
-Status: plan, reviewed 2026-11-10. Nothing built. Planned against the working
-tree, which holds uncommitted steering edits from other sessions; see **Base
-dependency** before starting.
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (umbrella built; only live QA open). In code: `src/lib/agents/readerSteering.ts` (registry, `cycleReaderView`, `registerReaderInside`), `readerView` (Tab) and the `inside` scope in `src/lib/shortcuts/steeringBindings.ts`, Diffs steering in `TerminalReaderChanges.tsx` (`changesSteerKey`), commits fd66dc998, 7eb23bc51, 9ea2a7378, 599ddb9cb, 2d9c8a383; register rows `steering.readerView`, `steering.insideChanges`. Base dependency and blocking questions are settled history (`Tab` stays the view cycle; `nextTab` has no default). The Files view is now labelled **Data** (`terminal.reader.filesTab`). Open: live click-through (todo 213h/i/j) and the final-review flags in `docs/done/reader_steering_handoff.md`. Not live-tested.
+
 
 ## Run overview
 

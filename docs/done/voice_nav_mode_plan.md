@@ -1,7 +1,8 @@
 # Phone voice: "Tabby navigate" and "Tabby" prompts in the Focus mic
 
-Status: built (2026-11-09), unreviewed and not run live — handoff:
-`docs/voice_nav_mode_handoff.md`. A slim slice of
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (built; only live QA open). In code: `mobile-web/src/screens/terminal/useVoiceNav.ts`, `useVoiceLanding.ts`, `useTabbyGate.ts`, `mobile-web/src/voiceNav.ts`, `needsYouGroups.ts`, `voice.navigate` / `voice.assistantAliases` in `en.ts` (6e5696840), `UntestedTag` `mobile.voice.navigate`; N1-N3 and the review in `docs/done/voice_nav_mode_handoff.md`. The wording "go on" below is now "go Tabby". Not live-tested.
+
+Original status: built 2026-11-09, unreviewed; handoff `docs/done/voice_nav_mode_handoff.md`. A slim slice of
 `docs/phone_voice_plan.md` that needs none of its probe results: it lives
 inside the Focus screen's existing mic (`screens/terminal/useVoiceInput.ts`,
 `useHandsFree.ts`), not in that plan's App-level session (S3/S4), which stays

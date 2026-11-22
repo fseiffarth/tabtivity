@@ -1,5 +1,8 @@
 # Rename phase 2 — the migration engine (2026-10-01); handoff to phase 3
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. The engine is in code: `src-tauri/src/services/brand_migration/` (`mod.rs` `STARTUP_STEPS`/`LAZY_STEPS`, `state_dir.rs`, `agent_homes.rs`, `persisted.rs`, `copy_run.rs`, `hits.rs`) and `scripts/brand-copy-run.sh`. The user ran the copy run on 2026-10-01 per this doc; the review findings of `docs/done/rename_migration_review.md` were fixed afterwards. Nothing open. Not otherwise live-tested.
+
+
 Branch `rename`, worktree `.claude/worktrees/rename`. The plan is the untracked
 `docs/rename_plan.md` (never `git add` it). The new name is no longer secret
 (the user removed its denylist entry on purpose): it may appear in tracked

@@ -1,5 +1,10 @@
 # Codebase Review Plan — 2026-08-27
 
+> **Status (screened against code 2026-11-22):** PARTIAL. 88 of 101 checkboxes are ticked (rsync fast path, `projects.json` atomicity, freeze class, lazy viewers, tokens,
+> box-shadow animations). The 13 open ones are mostly notes and owner calls (§7.12, §14.6, 14.13–14.16, 14.20, 14.28–14.31, the
+> §14.32 i18n inventory, 38 dead keys). §14.6 is superseded: every agent now runs in its own per-scope home (`services::agent_home`).
+> `embed/FileViewerPane.tsx:<line>` refs are now in `src/components/embed/fileViewer/`; `dragDbg` (14.28) is gone. Not live-tested unless the doc/todo says so.
+
 Merged findings of five parallel review agents, each covering one slice of the
 repository: frontend application logic (`src/`), CSS/UI unification, Rust
 backend (`src-tauri/src/`), the remote/sync/security-sensitive subsystem, and

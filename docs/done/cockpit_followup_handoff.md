@@ -1,7 +1,9 @@
 # Cockpit + root console: follow-up round, build log
 
-Plan: the "Follow-up round" section of `docs/cockpit_root_merge_plan.md` (F1-F9).
-Previous round: `docs/cockpit_root_merge_handoff.md`. Each implementer appends a
+> **Status (screened against code 2026-11-22):** Log of the follow-up round F1-F9 (I1-I3 + reviews); all nine are in code on develop (`cockpit` out of the experiments, `hooks/useKeyboard.ts` `windowUp`/`inRootView`, `components/cockpit/RootRail.tsx` with `cockpitRootRailWidth`, `NeedsYouPopover.tsx`). F9's mechanism (`consoleCover`, `consoleFront`, `.under-overlay`) is gone: the apps merge made Machines and Models views of the window. Live click-through (F1-F9) still open. Not live-tested.
+
+Plan: the "Follow-up round" section of `docs/done/cockpit_root_merge_plan.md` (F1-F9).
+Previous round: `docs/done/cockpit_root_merge_handoff.md`. Each implementer appends a
 section. Never run live.
 
 ## I1: F2, the cockpit is no longer an experiment

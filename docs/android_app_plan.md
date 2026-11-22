@@ -1,6 +1,8 @@
 # Native Android app from the phone PWA — plan
 
-Status: **plan only, 2026-11-15. Nothing here is built.** No TODO entry yet.
+> **Status (screened against code 2026-11-22):** NOT-STARTED. No Android project exists (`src-tauri/Cargo.toml` says there is no mobile build; `src-tauri/gen/` holds only `schemas`), no Phase 0 probe code, no TODO entry. The PWA pieces it builds on (`mobile-web/src/shell/` switcher, `mobile_control/linked.rs`, push) are in code. Not live-tested.
+
+Plan text: plan only, 2026-11-15.
 Reviewed 2026-11-15 by a Fable subagent against the code and the Android
 documentation; its findings are folded in.
 Access model this extends: `docs/context/mobile_access.md`; sidecar notes:

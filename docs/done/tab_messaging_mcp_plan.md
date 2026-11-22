@@ -1,10 +1,8 @@
 # Tab messaging MCP — agent tabs of one project message each other
 
-Status: steps 1–8 are implemented and reviewed on `develop` (2026-11-14); build
-notes, deviations and the reviewer's flags are in
-`docs/tab_messaging_mcp_handoff.md`. Nothing was run live: the manual
-verification below is still open. Open design flags (stacked wake notices, wake
-ignoring class, no liveness check) are listed in `todo/group-s-agents.md`.
+> **Status (screened against code 2026-11-22):** Steps 1-8 are in code: `services/mcp/tabs_mcp.rs` (`tabs_list`/`tabs_send`/`tabs_inbox`, caps `MAX_TEXT_CHARS` 4000, 30 sends and 120 reads per hour), `commands/tabs_mcp.rs`, `lib/window/tabsMcp.ts`, `components/layout/TabMessagesHost.tsx`, `CockpitMessages.tsx`. The design flags named below (stacked wake notices, wake ignoring class, no liveness check) were fixed and are ticked in `todo/group-s-agents.md`. Only the manual verification is open. Not live-tested.
+
+Build notes, deviations and the reviewer's flags: `docs/done/tab_messaging_mcp_handoff.md` (reviewed 2026-11-14).
 Builds on the per-tab lanes (`docs/context/agent_mcp_wiring.md`,
 `cockpit_mcp.md`, `markup_mcp.md`, `print_mcp.md`, `git_push_mcp.md`) and the
 trust rules in `docs/context/local_models_only.md` and `agent_authority.md`.

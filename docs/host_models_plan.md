@@ -1,8 +1,6 @@
 # Model tabs on a remote machine's own Ollama — Plan
 
-Status: **plan only** (2026-11-20). Nothing is built. Code sites were read on
-`develop` at a368eeeb3 (other sessions had uncommitted remote work in the tree;
-line numbers are approximate).
+> **Status (screened against code 2026-11-22):** Nothing is built: no `host_ollama`, `hostModel`/`hostModelTabSpec` or `host_model_spawn` symbol exists in `src/` or `src-tauri/`, and the named `docs/host_models_handoff.md` and `docs/context/host_models.md` do not exist. Code sites were read on `develop` at a368eeeb3; line numbers are approximate. Not live-tested unless the doc/todo says so.
 
 ## Context
 

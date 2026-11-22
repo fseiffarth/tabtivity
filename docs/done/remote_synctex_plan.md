@@ -1,6 +1,6 @@
 # SyncTeX on remote projects — plan
 
-Status: implemented for host PDFs and local mirrors. Live SSH verification is pending.
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (live SSH verification only). Built: `services/synctex/remote.rs` (`CacheKey::Remote`, SFTP map loader), `Spelling::from_roots` in `services/synctex.rs`, `UntestedTag id="pdfViewer.syncRemote"` in `TexView.tsx`, `pdfViewer.syncRemoteMsg` reworded to "Connect to the host to jump between source and PDF." (`en.ts`). Not live-tested.
 
 ## Why
 

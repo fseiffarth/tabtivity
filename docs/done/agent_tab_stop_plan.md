@@ -1,8 +1,8 @@
 # Stop idle agent tabs, resume them when shown — plan
 
-Status: implemented (2026-11-18, base `7cc15e858`), never run live; decisions
-at the end. Rationale now lives in `docs/context/agent_sessions.md`
-("Stopped tabs").
+> **Status (screened against code 2026-11-22):** Implemented: `lib/agents/agentTabStop.ts` (policy), `stores/agents/agentTabStop.ts` (`stopAgentTab`), `components/layout/AgentTabStopHost.tsx`, settings `stop_agent_tabs_cap`/`_idle_min`/`_min_free_mb`, `services::agent_resume_pinned`. Differs from the plan: CLIs are stopped only while their tab's own conversation is pinned (see `docs/context/agent_sessions.md`, "Stopped tabs", the current description). Live verification (section 12) is open. Not live-tested.
+
+Base `7cc15e858` (2026-11-18); decisions at the end.
 Why: ~210 agent tabs, each live `claude` 0.35–0.45 GB (~50 GiB), systemd-oomd
 killing apps. "Unload hidden tabs after" (`sleep_tabs_after_min`) frees only
 the xterm; the agent process keeps running. This feature ends the process,

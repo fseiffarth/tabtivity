@@ -1,7 +1,8 @@
 # mattpocock/skills for Tabtivity development — plan
 
-Status: **done (2026-11-06)** — six skills adapted into the repo's
-`.claude/skills/` (committed; user's choice), #2430. Installed by hand from a
+> **Status (screened against code 2026-11-22):** All six skills are in `.claude/skills/` (`diagnosing-bugs`, `to-tickets`, `handoff`, `writing-for-agents`, `retro`, `tdd`) with `THIRD_PARTY_NOTICES.md`; nothing is open. Not live-tested unless the doc/todo says so.
+
+Six skills were adapted into the repo's `.claude/skills/` (committed; user's choice), #2430, installed by hand from a
 pinned clone, since the creator's Customize does not exist yet. Source: <https://github.com/mattpocock/skills>
 (MIT, 27 skills in `skills/engineering/` and `skills/productivity/`, each a
 folder with `SKILL.md`). Read 2026-11-06. Companion to

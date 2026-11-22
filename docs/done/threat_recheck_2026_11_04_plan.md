@@ -1,5 +1,8 @@
 # Threat recheck 2026-11-04 — fix plan
 
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate for the fix run: all 31 gaps (74–104) are fixed in develop except 79, which is mitigated by masking (`docs/threat_model.md` rows; run closed by `2fdcf00c7`; later phone-mask work `2f84f38ad`). The "Resume state" below is the paused state of 2026-11-05 and is stale. Not live-verified.
+
+
 Gaps 74–104 of `docs/threat_model.md` ("Gaps found 2026-11-04"). Evidence, line
 numbers (as of `b3abe5ba`) and each reviewer's suggested fix are in
 `docs/done/threat_recheck_2026_11_04_handoff.md`. Scope chosen by the user on

@@ -1,6 +1,8 @@
 # Cockpit + root console merge: handoff
 
-Running log of the implementers of `docs/cockpit_root_merge_plan.md`, one
+> **Status (screened against code 2026-11-22):** Build log of `docs/done/cockpit_root_merge_plan.md` A1-A9 (I1-I4 + reviews); everything is on develop (70c25a3a..5ec871f3, `lib/window/floatingFrame.ts`, `stores/rootOverlay.ts`, `components/layout/RootOverlay.tsx`). The follow-up round is in `docs/done/cockpit_followup_handoff.md`. The click-through section is still open. Not live-tested.
+
+Running log of the implementers of `docs/done/cockpit_root_merge_plan.md`, one
 section per A-step. Baseline before the first edit (develop `b3abe5ba`):
 **1058 test files, 10775 tests**.
 

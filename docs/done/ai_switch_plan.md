@@ -1,7 +1,6 @@
 # AI switch: one power button that stops new AI use
 
-*Status: built 2026-10-20, landed on develop `08306d8b`, never run live. Deviations from
-the first draft are marked **(as built)**.*
+> **Status (screened against code 2026-11-22):** Built (`08306d8b5`, timed off `3e2b7f4d3`): `services/ai_switch.rs` (`AI_OFF`, `is_off`, `off_now`), `ai_off`/`ai_off_until` settings, `src/lib/aiSwitch.ts`, `RailAiSwitch.tsx` (the switch sits on the side panel's edge rail), the phone refusals in `mobile-web`. Deviations from the first draft are marked **(as built)** in the body. Nothing open but live QA (`sidePanel.aiSwitch`). Not live-tested unless the doc/todo says so.
 
 ## Why
 

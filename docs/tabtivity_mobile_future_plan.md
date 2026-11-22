@@ -1,6 +1,6 @@
 # Tabtivity Mobile — future directions plan
 
-Status: **Proposed. Nothing in this document is implemented.**
+> **Status (screened against code 2026-11-22):** PARTIAL. Built: A (push: `mobile_control/push.rs`, `mobile-web/src/push.ts`, the agent-turn edge; see the note under A), E (mail actions, E.3), D (file browsing, as the files library: `docs/done/mobile_files_library_plan.md`, `done/phone_files_browsing_plan.md`). Not built: B (no `relaunch` `DesktopRequest`; the phone only shows `mobile.failure.sessionGone`), C (the only code splitting is `React.lazy` of `voiceProbe` in `mobile-web/src/main.tsx`), G (no WebAuthn PRF key wrapping in `mobile-web/src/localLock.ts`; the lock is the PIN verifier plus an enrolled credential). F (multi-host) is partly overtaken by host tabs (`docs/done/mobile_remote_host_tabs_plan.md`) and `docs/phone_multi_desktop_plan.md`. "Last evaluated" below is the 2026-08 text. Not live-tested.
 
 This is the follow-up review the original mobile plan (removed once built;
 its still-deferred list is kept at the end of this file) required before any

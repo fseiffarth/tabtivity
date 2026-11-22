@@ -1,11 +1,6 @@
 # Phone PWA design pass — Plan
 
-Status: **steps 1–7 implemented, uncommitted, 2026-11-01; never live.** The
-user chose all eight proposals from the design canvas (Phone PWA Design
-Proposals, 2026-11-01). Nothing here is live-verified; every behaviour change
-wears an `UntestedTag` row (`mobile.focus.caption`, `mobile.composer.bar`,
-`mobile.focus.flatAnswers`, `mobile.design.skeletons`, `mobile.design.pair`,
-`mobile.design.sheets`, `mobile.design.icons`).
+> **Status (screened against code 2026-11-22):** ARCHIVE (built and committed; only live QA open). Steps 1-7 landed after the 2026-11-01 "uncommitted" note: `0f076be6b` (octagon token system), `96f393bff` (skeletons, Pair/Unlock), `e8e456896` (strings and untested rows); icons exist in `src/components/common/icons/Icon.tsx` (`CloseIcon`, `MoreIcon`, `GripIcon`, `DiamondIcon`, …). The 11-02 revision described under "Fixed decisions" (cut corners became radii, facts strip back above the composer, `mobile.design.rounded`) is what the code does; the bullets below describe the first-built pass. Rows `mobile.design.*`, `mobile.composer.bar`, `mobile.focus.flatAnswers` are in `src/lib/untested.ts`. Not live-tested.
 
 Why: the October Home/project redesign (`docs/mobile_home_redesign_plan.md`,
 "octagon, but calm") left the rest of the phone app in the older idiom —

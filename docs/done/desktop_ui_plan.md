@@ -1,7 +1,8 @@
 # Desktop UI pass — Plan
 
-Status: **implemented on develop 2026-11-02, never run live** (see "As built"
-at the end; the system itself is `docs/context/desktop_ui_system.md`). The user chose all seven
+> **Status (screened against code 2026-11-22):** ARCHIVE. All seven proposals are in code: type tokens (`--text-xs…xl`, `themes.css`), `Icon.tsx` set, command palette (`layout/CommandPalette.tsx`, Ctrl+K; `components/files/QuickOpen.tsx` is now its `#` door), skeletons (`.skeleton-row`, `base.css`), the floating recipe (`apps.css`, `theme/FloatingRecipe.test.ts`), `--focus-ring`, and the single reduced-motion block. The code differs from the plan below where "As built" says so (rounded, not cut, corners; `--radius*` are 6/10/14 px). Open only: folding the per-feature `*-btn` classes (continued in `docs/desktop_ui_round2_plan.md`). The current rules live in `docs/context/desktop_ui_system.md`. Never run live.
+
+The user chose all seven
 proposals from the design canvas (Tabtivity desktop UI plan,
 https://claude.ai/artifact/8f6xLVjZ4ZQbzePgWk4Q3q — six boards: workspace
 chrome, command palette, empty subwindow + skeletons, floating surfaces, the

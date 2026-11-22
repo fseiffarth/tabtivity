@@ -1,5 +1,7 @@
 # Diff viewer, agent A: parser and word-level highlights
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. `src/lib/viewers/wordDiff.ts` and the sturdier parser in `src/lib/viewers/diff.ts` are in code, landed as `fc36d599b`. Landed on `develop` 2026-11-05 (the branch shas below were cherry-picked); the doc's "nothing is on develop" is out of date. The listed untested ids are in `src/lib/untested.ts`. Never run live.
+
 Branch `worktree-agent-a17b139159945edc0` (from `develop` HEAD b07d96c9). The
 commit sha is in `git log` (a doc cannot name the commit that holds it).
 Nothing here was run live; the app was never started.

@@ -1,5 +1,7 @@
 # Markup mode, notes-app style — plan
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. All five steps are in code (`34d7c7182`, then `9e53bb165`): `PdfMarkupDock.tsx`, `PdfMarkupAgentPanel.tsx`, `PdfMarkupPageRail.tsx` (the plan's `PdfMarkupPages`), `PdfMarkupBar.tsx` as the send header, shared `mobile-web/src/markup/{pen,layer}.ts` with the six tools, and the phone's `MarkupView.tsx` dock. Untested ids `desktop.markup.dock`, `desktop.markup.agentPanel` and the `mobile.markup.*` pair are registered. The help page now describes the dock. Never run live.
+
 Turn the PDF/picture **Mark up** mode (desktop `PdfViewer`/`ImageView`, phone
 `MarkupView`) into a calm writing surface in the manner of handwriting apps:
 a small floating tool dock, options only when asked for, saved pens one tap

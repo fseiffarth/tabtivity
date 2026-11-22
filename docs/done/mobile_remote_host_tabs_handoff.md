@@ -1,6 +1,8 @@
 # Remote-host tabs on the phone — handoff
 
-Plan: `docs/mobile_remote_host_tabs_plan.md`. Each agent edits only its own
+> **Status (screened against code 2026-11-22):** ARCHIVE (see the plan's status line). The branch hashes named below are pre-merge; the work is on develop (`6519e9551`, `02b6bb140`, `fd411cc4`-era fixes). The two items flagged for the user under "Final review" are closed by the "Follow-up" section (`PublicTab.host_down`, `-F none` on the mux args), both present in `discovery.rs` / `ssh_exec.rs`. Not live-tested.
+
+Plan: `docs/done/mobile_remote_host_tabs_plan.md`. Each agent edits only its own
 section below (shas, choices, gotchas, gate status + test counts, "Flagged
 for user").
 

@@ -1,5 +1,8 @@
 # Raspberry Pi as a Tabtivity Remote Machine (+ HDD-backed project storage)
 
+> **Status (screened against code 2026-11-22):** REFERENCE / NOT-STARTED (an operator runbook for a Raspberry Pi host, no code involved; execution and verification are outside the repo). Not live-tested.
+
+
 Status: **plan only** — nothing here has been executed or verified.
 
 Scope: stand a Raspberry Pi on the LAN up as a first-class Tabtivity **remote

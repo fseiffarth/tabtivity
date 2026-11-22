@@ -1,7 +1,6 @@
 # Privacy curtain: hide the other windows while presenting
 
-*Status: built 2026-10-27, landed on develop `5d2b1293`, never run live. Deviations from
-the plan are in "As built" below.*
+> **Status (screened against code 2026-11-22):** ARCHIVE (built; only live QA open). `5d2b1293e` is on develop: `src/lib/window/privacyCurtain.ts`, `src/components/layout/PrivacyCurtain.tsx`, `commands/presenter.rs` `privacy_curtain_set`, `notificationsHeld` in `stores/calendar/alarms.ts`, the `privacyCurtain` shortcut in `lib/shortcuts/shortcuts.ts`, a setting in `SettingsPanel.tsx`. "As built" below is accurate. Not live-tested.
 
 ## Why
 

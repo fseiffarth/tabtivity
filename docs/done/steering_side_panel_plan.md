@@ -1,8 +1,7 @@
 # Steering: rows-first navigation in the side panel — plan
 
-Status: plan, 2026-11-10. Decisions settled with the user the same day.
-Frontend only. One implementer (Sonnet) in a worktree on `develop`; the main
-agent lands it. Never run live.
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (built; only live QA open). In code: `src/lib/shortcuts/steeringSidePanel.ts` (commit 2306feedc), the side-panel rows region, register row `steering.sidePanelRows` (`src/lib/untested.ts`); `docs/help/keyboard.md` describes the keys. Not live-tested.
+
 
 ## Why
 

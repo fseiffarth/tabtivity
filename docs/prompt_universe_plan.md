@@ -1,6 +1,6 @@
 # Prompt Universe — a global, cross-project prompt viewer on a 3D sphere
 
-Status: **plan only.** Nothing here is implemented.
+> **Status (screened against code 2026-11-22):** Nothing is built: no `lib/blobSphere.ts`, `SphereScene.tsx` or prompt-universe overlay exists (only the pre-existing `ProjectBlobPane.tsx`). Superseded as a standalone overlay by the cockpit plans; the sphere survives only as the unbuilt C7 view of `docs/desktop_cockpit_plan.md` / `docs/done/cockpit_root_merge_plan.md`. Not live-tested unless the doc/todo says so.
 
 **2026-11-03:** the overlay, store and header button (Step 3) are superseded by
 `docs/desktop_cockpit_plan.md`. The sphere (Steps 1–2) becomes that cockpit's

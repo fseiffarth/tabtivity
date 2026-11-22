@@ -1,5 +1,9 @@
 # Tabtivity Code Review
 
+> **Status (screened against code 2026-11-22):** SUPERSEDED by `docs/done/whole_project_screen_2026_10_15.md`, `docs/code_screen_plan.md` and the later screens. Its top items are in
+> code: CSP is set (`src-tauri/tauri.conf.json`), file commands are confined (`services/fs_confine.rs`), `commands/fs.rs` was split
+> out of `commands/projects.rs`. Counts (59 test files, 1,395-line `projects.rs`) are long out of date. Not live-tested unless the doc/todo says so.
+
 A three-reviewer review of the Tabtivity codebase (Tauri 2 + React 18 + TypeScript,
 Rust backend). The review was conducted by three specialists working in
 parallel — **Security**, **Efficiency/Performance**, and **Structure &

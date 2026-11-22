@@ -1,5 +1,7 @@
 # Tabtivity — Feature Checklist
 
+> **Status (screened against code 2026-11-22):** REFERENCE (manual-QA matrix). The matrix columns are still empty: no row is ticked, and nothing here is live-verified. Notes were repointed at files that exist now; shipped items moved out of "Open". Shipped features this matrix does not list are in `docs/guide/features.md`; add a row here only when you QA one.
+
 A manual-QA matrix for the current **Tauri 2 + React + TypeScript** Tabtivity
 (the former Python/GTK `app/` implementation and its `plan_*.md` / `tests/`
 files are gone — ignore any older snapshot that references them).

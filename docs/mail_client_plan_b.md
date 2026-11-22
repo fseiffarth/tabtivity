@@ -1,5 +1,8 @@
 # Mail Client — Plan B: Mail Domain & Security Hardening
 
+> **Status (screened against code 2026-11-22):** PARTIAL, core ARCHIVE. The v1 security core is built: `mail-parser`, `async-imap` (`runtime-tokio`), `ammonia` (`src-tauri/Cargo.toml`), `services/mail/mail_sanitize.rs`, `mail_engine.rs` (implicit TLS only), `mail_store.rs`, `mail_authres.rs`; file names in §8 (`sanitize.rs`, `store.rs`, ...) are `mail_*.rs` now, and the frontend `MessageBody.tsx` is `src/components/mail/MailMessageView.tsx`. Several deferred items shipped later: at-rest encryption (§5.2 "none in v1" is superseded; `mail_crypt.rs`, `docs/context/mail_encryption.md`; pure-Rust, not SQLCipher), OpenPGP (`mail_pgp.rs`), contacts (`mail_contacts.rs`), filters (`mail_filters.rs`). Still open: OAuth2/XOAUTH2 (`MailAuth::Oauth2` stub in `schema/mail.rs`), S/MIME decryption/signing (flags only), live QA. Not live-tested.
+
+
 > Scope: the mail protocol/domain layer and the security posture of an embedded mail
 > client. Tab-system wiring, the Tauri command registration pattern, and the
 > Docker/sandbox machinery are Plan A's; this document assumes that integration

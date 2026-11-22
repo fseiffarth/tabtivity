@@ -1,7 +1,6 @@
 # CLI overview — plan
 
-Status: implemented 2026-10-28 (uncommitted, never live). Desktop side panel
-view + phone Home section.
+> **Status (screened against code 2026-11-22):** Built (`ab9354814`): `services/agent/cli_overview.rs` (`rows_in`, `for_phone`), command `agent_overview`, `shared/cliOverview.ts`, `components/agents/CliOverviewView.tsx` (side-panel view `clis`), `mobile-web/src/screens/CliOverviewSheet.tsx`. Differs from decision 5: `GET /api/v1/clis` (in `mobile_control/host.rs`, no `cli_overview.rs` there) asks the window over the bridge (`DesktopRequest::CliOverview`, `MobileBridgeHost`) and answers file-only rows from the sidecar only when no window answers. Nothing open but live QA (`clis.overview`, `mobile.clis`). Not live-tested unless the doc/todo says so.
 
 ## Why
 

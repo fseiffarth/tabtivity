@@ -1,5 +1,7 @@
 # One phone, several desktops — Phase 3 (minimal) handoff
 
+> **Status (screened against code 2026-11-22):** Merged: the commit named below as `522038ab1` is `bb964b68b` on develop; everything under "What was built" is present in `mobile-web/src/shell/` (plus `frameGuard.ts`, added later). The "Out of scope" list is still open, and Phase 5's docs are done. Not live-tested.
+
 Plan: `docs/phone_multi_desktop_plan.md` (Phase 3, "as built" paragraph).
 TODO: `todo/group-h-crossplatform.md` 31cs. Never live: nothing here has run
 on a phone.

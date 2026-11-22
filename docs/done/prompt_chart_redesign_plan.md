@@ -1,7 +1,6 @@
 # Prompt chart redesign plan
 
-Status: plan, implementation in progress (2026-11-19). Handoff:
-`docs/prompt_chart_redesign_handoff.md`.
+> **Status (screened against code 2026-11-22):** Steps 1–10 are on `develop` (merge `77f19e02a`): `PromptChartCommandBar`, `PromptInspector`, `PromptComposer`, `PromptSequenceGroup`, `lib/agents/prompt/{sequences,outcome}.ts`. Nothing open but live QA and the flagged items in the handoff. Handoff: `docs/done/prompt_chart_redesign_handoff.md`. Not live-tested unless the doc/todo says so.
 
 ## Why
 

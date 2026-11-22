@@ -1,6 +1,8 @@
 # Remote projects on the phone — Plan
 
-Status: **proposed, 2026-10-15. Nothing here is built.** Lets a paired phone
+> **Status (screened against code 2026-11-22):** SUPERSEDED by `docs/done/mobile_remote_host_tabs_plan.md` (built: host tabs attach over the desktop's ControlMaster, `host_live.rs`) plus `docs/mobile_every_project_type_plan.md` phase 1 (remote projects get the ordinary Mobile switch). The `tabtivity_mobile_host.remote_projects` switch and R1-R5 as written were never built (no `remote_projects` in `mobile_control` or the settings schema; `discovery::mobile_local` no longer exists). R6 (host file browsing) landed as `ee7be547c`, through the window rather than the sidecar. R4 (remote transcripts) landed differently: `src-tauri/src/services/remote/remote_transcript/` reads a host session's conversation over the existing SSH connection (one module per CLI). R5 (turn state/pushes for remote tabs) was not checked. Not live-tested.
+
+Proposed 2026-10-15. Lets a paired phone
 open the agent tabs of a remote (SSH) project, start new ones, and later read
 their conversation and browse their files. Every step rides the desktop's
 existing SSH connection; the phone never causes a login.

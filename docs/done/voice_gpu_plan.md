@@ -1,8 +1,7 @@
 # Voice on the GPU
 
-Status: implemented on develop's working tree (2026-10-30), never run live with a
-GPU. This is step 8's GPU half from `docs/desktop_voice_plan.md`. How it works now:
-`docs/context/voice.md`. This file keeps why, and what is still unproven.
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (built; GPU run unproven live). In code: `voice-vulkan` / `voice-metal` features in `src-tauri/Cargo.toml`, `src-tauri/src/services/voice/gpu.rs` (load-log device read, crash marker), `voice_gpu_retry` in `src-tauri/src/commands/voice.rs`, `scripts/lib/voice_gpu.sh`, Settings → Voice ("Use the GPU", "Try the GPU again"); commit a79e5a8ca. How it works now: `docs/context/voice.md`. Not live-tested.
+
 
 ## Why
 

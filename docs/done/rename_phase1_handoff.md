@@ -1,5 +1,8 @@
 # Rename phase 1 — done (2026-10-01); handoff to phase 2
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. Phase 1 is in code and merged: the brand now lives in `src-core/src/brand.rs` (re-exported as `crate::brand`; the `src-tauri/src/brand.rs` path below is old), `src/lib/brand.ts`, `scripts/lib/brand.sh`, and `scripts/brand-check.sh` enforces it. The codemods it describes are deleted (`257703475`). Nothing open. Not live-tested.
+
+
 Branch `rename`, worktree `.claude/worktrees/rename`. The plan is the untracked
 `docs/rename_plan.md` (never `git add` it; the new name is secret and must not
 appear in any tracked file or commit message).

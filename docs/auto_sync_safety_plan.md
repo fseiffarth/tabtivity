@@ -1,6 +1,8 @@
 # Auto-sync safety improvement plan
 
-Status: proposed, 2026-10-20. Source review at `2920161b` on `develop` by three
+> **Status (screened against code 2026-11-22):** PARTIAL. Phase 1a (fail-closed probes: `remote_sync::check_manifest_readable`, `commands/sync.rs` `apply_status_heal`, `process_lease::claim_sync`) and 1b (operation guard `services/remote/sync_op.rs`, nesting `sync_auto::pause` guard) are built (commits `adc6f76b5`, `56e2d325d`, `fe8acd491`, 2026-10-23..26). NOT built: phase 2 (no content digest on `SyncEntry`, no transfer receipt), 3 (no durable recovery journal / version store), 4, 5 (no harness). Interim behaviour (auto-sync keeps overwriting under size/mtime) still holds. Note the later `sync_take_newer.rs` (`2c3687cf1`) is a separate opt-in feature, not part of this plan. Not live-tested.
+
+Written as proposed, 2026-10-20. Source review at `2920161b` on `develop` by three
 collaborating agents covering conflict detection, recovery, and coordination.
 Revised 2026-10-23: every anchor re-read at `63676f77` (no sync, Lockstep or lease
 code changed since the review); one anchor corrected, five findings added, findings

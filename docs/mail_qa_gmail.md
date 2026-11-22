@@ -1,5 +1,7 @@
 # Mail client — first live QA against Gmail
 
+> **Status (screened against code 2026-11-22):** REFERENCE (live-QA script). The code it walks is built (`src-tauri/src/services/mail/`, `commands/mail.rs`, the header ✉ overlay); the QA itself is still the open item (no live verdict recorded here). Phase 0 step 2 was corrected: `mail_client` is in `ON_BY_DEFAULT_FLAGS` (`src/lib/experimental.ts`). Not live-tested.
+
 The mail client is code-complete and has **never touched a real server**. This is
 the ordered plan for the first live session. It extends
 `docs/mail_client_plan_b.md` §7.9 with the setup, the Gmail specifics, and the

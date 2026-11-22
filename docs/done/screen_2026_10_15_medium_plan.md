@@ -1,6 +1,11 @@
 # Whole-project screen 2026-10-15 — Medium findings: fix plan
 
-Status: implemented and landed on develop 2026-10-16; never run live (plan
+> **Status (screened against code 2026-11-22):** ARCHIVE. The Medium batches are in code: `src/lib/useDiskReloadPoll.ts` (one poll for the 7 copies), browser-client path
+> confinement `src-tauri/src/services/fs_confine.rs`, i18n past the component boundary (`mobile-web/src/pushTitles.ts`, raw-dict
+> placeholder check in `src/__tests__/shell/i18n.test.ts`). `src/lib/i18n.ts` named below is now the folder `src/lib/i18n/`.
+> Out-of-scope structural refactors were taken up by `docs/code_screen_plan.md` S7. Open: live QA. Not live-tested unless the doc/todo says so.
+
+History: landed on develop 2026-10-16 (plan
 review and decision change at the end; per-step results in the handoff). Source:
 `docs/done/whole_project_screen_2026_10_15.md` § "Medium — worth a batch each"
 (screened at `dd5ede60`; line numbers drift — find by anchor; the anchors

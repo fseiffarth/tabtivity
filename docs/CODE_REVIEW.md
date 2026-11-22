@@ -1,5 +1,9 @@
 # Code Review: Efficiency And Simplification
 
+> **Status (screened against code 2026-11-22):** PARTIAL (early 11-item cleanup list; line refs are stale). Done: #1 (`storage::today_utc` is the only copy), #2 (single
+> `read_dir` in `commands/apps.rs`), #10 (`useMemo` in `OllamaPanel.tsx`). #7's `list_ollama_models` no longer exists; #11
+> (`patchScopeTabs`) was not done. The rest were not re-checked. Not live-tested unless the doc/todo says so.
+
 Scope: full-codebase cleanup review for the current Tauri 2 + React/TypeScript + Rust tree.
 This pass focuses on maintainability and small efficiency wins. No item below appears to be an
 urgent correctness bug, so priorities are based on duplication, blast radius, and ease of review.

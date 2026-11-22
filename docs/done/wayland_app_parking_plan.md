@@ -1,11 +1,8 @@
 # GNOME/Wayland: launched apps in the Apps view and parked on project switch
 
-Status: implemented and landed on develop 2026-10-26 (A1a `756b9fd3` through
-the final review `d658df66`); never run live. Written from three read-only
-investigations (tracking, parking backend, switch flow + frontend). None could
-reach the X display from the fence, so live window facts are still owed.
-Handoff: `docs/wayland_app_parking_handoff.md` (per-step notes and the final
-review's "Flagged for user").
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate. All three phases are in code and the commits are in `develop` (A1a `756b9fd3`, final review `d658df66`): launch marker `commands/apps.rs::new_launch_id` + `services/proc_table.rs`, GNOME routed to the `x11` backend (`src-tauri/src/platform/x11.rs`, Cinnamon/GNOME workspace-settings table), frontend honesty via `src/lib/workspaceCaps.ts`. Only live QA on GNOME (X11 and Wayland) is open. Never run live.
+
+> Handoff: `docs/done/wayland_app_parking_handoff.md` (per-step notes and the final review's "Flagged for user").
 
 ## Fixed decisions (user, 2026-10-26 — reviewers may not undo)
 

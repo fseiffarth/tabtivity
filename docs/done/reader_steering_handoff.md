@@ -1,7 +1,10 @@
 # Reader steering run: handoff log
 
-Plans: `docs/reader_diffs_steering_plan.md` (umbrella: mechanism, Agent steps,
-Organisation, Base dependency) and `docs/reader_files_steering_plan.md`.
+> **Status (screened against code 2026-11-22):** REFERENCE (log of the built plans `docs/done/reader_diffs_steering_plan.md` and `docs/done/reader_files_steering_plan.md`; A1-A5 and the final review landed, all commits in develop; the baseline and gate fields were never filled in). Open: the final review's flagged items and the live click-through. Not live-tested.
+
+
+Plans: `docs/done/reader_diffs_steering_plan.md` (umbrella: mechanism, Agent steps,
+Organisation, Base dependency) and `docs/done/reader_files_steering_plan.md`.
 Frontend only; not run live (nothing here can be). Each agent starts with
 `git checkout -B <branch> develop` (worktrees branch from `origin/main`), runs
 `scripts/gates.sh` in the background, commits green, and fills its section.

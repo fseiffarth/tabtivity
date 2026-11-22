@@ -1,13 +1,6 @@
 # Desktop voice: dictation, read-aloud and hands-free in the Chat
 
-Status: plan (2026-10-21; reviewed and amended 2026-10-22 and, before
-Batch A, 2026-10-23). Step 0 partly done 2026-10-22: build, API and CI probes
-recorded under step 0; the host's audio probes (`scripts/voice-probe/`) are
-still for the user to run. Both of step 0's decisions are made (2026-10-23).
-Step 1 and steps 2a/2b built; steps 3 and 2c built; steps 4, 5 and 6 built
-2026-10-25 on `feat/voice-hands-free` and landed on `develop` 2026-10-28
-(the phone loop moved into `screens/terminal/useHandsFree.ts` after the
-Terminal split; none run live). Next: the test gate.
+> **Status (screened against code 2026-11-22):** PARTIAL. Built: steps 1-6 and the later steps 7-8 — `shared/voice.ts`, `src-tauri/src/services/voice/` (capture, vad, stt, session, tts, ssip, models, gpu, piper), `src/lib/voice/`, `ReaderVoice.tsx` / `useLiveDictation.ts`, the phone loop in `mobile-web/src/screens/terminal/useHandsFree.ts`, Piper (4b3bf94a5) and the GPU (a79e5a8ca); `docs/context/voice.md` and `docs/help/talking-to-an-agent.md` are step 6's docs. Still open: step 9 (desktop hands-free navigation, `docs/voice_navigation_plan.md`), step 10 (the phone as mic, `docs/mobile_speech_plan.md`), the host audio probes in `scripts/voice-probe/`, echo cancellation, and the live test gate. Not live-tested.
 
 Order of work: **phase 1** (steps 0–6) ships with the OS voice, then the user
 tests it live. **Phase 2** (Piper, step 7) happens only if that test finds

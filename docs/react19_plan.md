@@ -1,6 +1,9 @@
 # React 19 — plan
 
-**Status: plan only** (2026-10-14). Nothing installed, nothing committed.
+> **Status (screened against code 2026-11-22):** NOT-STARTED. `package.json` still has `react`/`react-dom`/`@types/react*` at `^18`; no `useEffectEvent`, no
+> `createRoot` `onUncaughtError` wiring. Re-measure the counts below on the install day. Not live-tested unless the doc/todo says so.
+
+**History: plan only** (2026-10-14). Nothing installed, nothing committed.
 Counts below were measured on develop `78c6bb4b` with `rg` over `src/` and
 `mobile-web/src/`; re-measure on the install day.
 

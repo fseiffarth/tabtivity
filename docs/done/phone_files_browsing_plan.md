@@ -1,8 +1,6 @@
 # Phone / iPad file browsing — bugs and small improvements plan
 
-> **Status (2026-11-04): batches A (`06905950`), B (`791e581e`) and C
-> (`680f74c8`) committed; D, E and F built, not committed; none run on a phone
-> or iPad. B8 (the iPhone edge-swipe check) is still owed.**
+> **Status (screened against code 2026-11-22):** ARCHIVE (built; only live QA open). Batches A (`06905950`), B (`791e581e`), C (`680f74c8`) and D–F (`823244f0c`: streaming, films, split view, folder management) are all committed on develop; the symbols named below exist (`uploads::MADE`, `files::search_in` / `SearchScope`, `files/zip?check=1` in `host.rs`, `lookUpProjectFile` in `mobile-web/src/api.ts`). Still open: B8 (the iPhone edge-swipe check) and every item on a real phone or iPad. Not live-tested.
 >
 > D–F as built, where they differ from "Phase 3 as picked":
 > - L10 New folder is not in the uploads ledger (its records are files the

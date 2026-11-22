@@ -1,5 +1,8 @@
 # Faulty-test screen — 2026-11-19
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. Every item was fixed on 2026-11-19 (`d4886c0e3`): `test_util::skip_or_fail` + `CI_REQUIRE_TOOLS` in
+> `src-tauri/src/test_util.rs` and `.github/workflows/ci-cd.yml`. Open: nothing but running the suites on all three OSes in CI. Not live-tested unless the doc/todo says so.
+
 A read-only screen of the test suites for tests that pass while the behaviour
 they name is broken, never run, or fail for reasons unrelated to the code.
 Three agents, one per slice: TS `src/__tests__/{mobile,shell,terminal,agents}`;

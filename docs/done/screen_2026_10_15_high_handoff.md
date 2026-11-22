@@ -1,6 +1,9 @@
 # Whole-project screen 2026-10-15 High findings — handoff
 
-Per-agent handoffs and review reports of the run, concatenated. Plan: `docs/screen_2026_10_15_high_plan.md`.
+> **Status (screened against code 2026-11-22):** ARCHIVE (record of the run). Plan `docs/done/screen_2026_10_15_high_plan.md`; every High it covers is in code (evidence in that plan's
+> status block). Worktree shas named below were cherry-picked onto develop with new hashes; find them by subject. Not live-tested unless the doc/todo says so.
+
+Per-agent handoffs and review reports of the run, concatenated. Plan: `docs/done/screen_2026_10_15_high_plan.md`.
 
 ---
 

@@ -1,5 +1,7 @@
 # Sandbox hardening plan — the audit follow-ups
 
+> **Status (screened against code 2026-11-22):** PARTIAL. Done: Phase 1 #142 (layout/`open_apps` in `<state_dir>/sessions/`, tripwire `src-tauri/tests/project_tree_intent.rs`), Phase 2 #150 (host-bound marker; the uid is `hostBoundUid` in `src/stores/tabs.ts`, no longer `src/lib/hostBound.ts`), Phase 4 #143 (`sandbox::detect_spec_source` only reports; `commands::projects::set_project_sandbox` records the user's decision and `spec_source_hash`). Not built: Phase 3 #145 (no `claude_project_dir_name`; local agents now run in per-scope homes, `services::agent_home`, so re-check before doing it) and Phase 5 #144 (`capabilities/default.json` still grants `main`, `detached-*`, `present-*` alike). The CSP tripwire is `src/__tests__/security/CspTripwire.test.ts`. Not live-tested.
+
 Plan for TODO Group O #142–#150, the items an adversarial review of the agent-tab
 sandbox found and that were **deliberately not** fixed in the audit pass because
 each one is a product decision, needs a UI, or takes on an external dependency.

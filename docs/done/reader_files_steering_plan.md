@@ -1,6 +1,6 @@
 # Reader Files view: a Links section and native steering — plan
 
-Status: plan, reviewed 2026-11-10. Nothing built; no code changed.
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (built; only live QA open). Links section: `mobile-web/src/terminal/chatLinks.ts`, `TerminalReaderFiles.tsx` (commit 30bb5c706, `UntestedTag` `terminal.reader.links`); steering inside the view: `src/lib/terminal/readerFilesSteer.ts` (b9f5b15b7, fix 2d9c8a383), `steering.readerFiles` row. The view is now called **Data** in the UI (`terminal.reader.filesTab`, `terminal.readerFiles.title`); `docs/context/agent_reader.md` describes it. Not live-tested.
 
 Part of one run with `docs/reader_diffs_steering_plan.md` (the **umbrella**: the
 shared mechanism, Agent steps, Organisation, Base dependency, blocking

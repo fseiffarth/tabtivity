@@ -1,5 +1,7 @@
 # PDF GPU-rendering check — plan for an unfenced session
 
+> **Status (screened against code 2026-11-22):** ARCHIVE. The check was run (see "Results"), and its candidate change is built: the experimental `gpu_compositing` setting (`src-tauri/src/lib.rs` `services::webkit_gpu::should_disable_dmabuf`, `src/components/layout/SettingsPanel.tsx` "GPU compositing"), per `docs/done/gpu_compositing_plan.md`. Open: the long live soak the plan asks for before changing the default, and the bug-report draft (not filed as far as the repo shows). Not live-tested.
+
 Written 2026-10-14 by a fenced session that could not see the host. Execute it
 from a session **outside** the agent fence (normal terminal, project root).
 Self-contained: the fenced session's memory notes are not visible from there.

@@ -1,5 +1,8 @@
 # Tabtivity — Known Issues
 
+> **Status (screened against code 2026-11-22):** SUPERSEDED. This list is from the Python/GTK app (`Gtk.Paned`, `LeftPanel`, `XReparentWindow` embedding, VTE, GSK renderer); none of those files exist in the Tauri app (`LeftPanel*` and `show_app_window` are gone from `src/` and `src-tauri/`). The issue numbers are not tracked anywhere current; live bugs go in `todo/*.md`. ARCHIVE candidate. Not live-tested.
+
+
 ## Open
 
 ### ISSUE-001: X11 app embedding untested

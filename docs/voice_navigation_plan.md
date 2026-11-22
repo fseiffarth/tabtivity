@@ -1,8 +1,7 @@
 # Voice navigation: driving Tabtivity by spoken commands
 
-Status: future plan (2026-10-22). Nothing implemented. It starts only after
-the desktop voice plan's phase 1 (`docs/desktop_voice_plan.md`, steps 0–4)
-has landed and the user has tested it live. This is that plan's step 9.
+> **Status (screened against code 2026-11-22):** NOT-STARTED (desktop half). Phase 1 of the desktop voice plan has landed, but nothing of step 9 exists on the desktop: no spoken `SteeringAction` route and `services::voice::Owner` has only `Tab` (no `Window`). The matcher it relies on is built once for both hosts (`src/lib/voice/voiceCommands.ts`, 84fa79233), and the phone got a slim slice instead, "Tabby navigate" in the Focus mic (`docs/done/voice_nav_mode_plan.md`). Not live-tested.
+
 
 ## Why
 

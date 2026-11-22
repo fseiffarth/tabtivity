@@ -1,5 +1,8 @@
 # Mail client in Tabtivity — Plan A (host integration / architecture)
 
+> **Status (screened against code 2026-11-22):** ARCHIVE (kept as the architecture reference). Built: `src-tauri/src/services/mail/` (`mail_engine`, `mail_store`, `mail_crypt`, `mail_sanitize`, ...), `src-tauri/src/commands/mail.rs`, the header overlay (`src/components/mail/MailPane.tsx`, `MailIndicator.tsx`). The tab surface of §1 and the `mail_global_app` toggle are gone (`RETIRED_TAB_CMDS` in `src/stores/tabs/tabKinds.ts`); the `mail_client` flag is on by default (`src/lib/experimental.ts`). Open: live QA only (`docs/mail_qa_gmail.md`). Not live-tested.
+
+
 Scope: how a native mail client plugs into Tabtivity. IMAP/SMTP library choice and
 HTML sanitization are Plan B's (`docs/mail_client_plan_b.md`); this plan owns the
 tab surface, the backend surface, the sandbox/capability boundary, persistence,

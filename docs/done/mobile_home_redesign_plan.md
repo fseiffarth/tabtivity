@@ -1,5 +1,7 @@
 # Phone Home + project screen redesign — plan
 
+> **Status (screened against code 2026-11-22):** ARCHIVE (built; the "deferred" list in section 7 is still deferred). Landed as `12093ce59` (redesign of Home and the project screen, 2026-10-16) and `85f0330a0` (start page with agent tiles and views); `components/TabCard.tsx`, `components/NeedsYou.tsx`, `needsYouGroups.ts` exist, and the register has `mobile.home.needsYou`, `mobile.home.seenDone`, `mobile.project.cardMenu`, `mobile.project.fab`, `mobile.project.hintDismiss`. Differences: the FAB is a circle and the cut corners of "octagon, but calm" were later replaced by radii (`docs/done/mobile_pwa_design_plan.md`, `mobile.design.rounded`). Not live-tested.
+
 Goal (user, 2026-10-15): make the PWA start page (`mobile-web/src/screens/Home.tsx`)
 and the project tab view (`mobile-web/src/screens/Project.tsx`) modern like
 existing apps and more user-friendly. Three planners (visual design, usability,

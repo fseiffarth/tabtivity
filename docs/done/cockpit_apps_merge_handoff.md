@@ -1,6 +1,8 @@
 # Cockpit apps merge: handoff log
 
-Plan: `docs/cockpit_apps_merge_plan.md`. Branch `cockpit-apps` (worktree
+> **Status (screened against code 2026-11-22):** Build log of `docs/done/cockpit_apps_merge_plan.md` (S1-S5); all five steps are on develop (87e736d8..69bf72ac), so the `cockpit-apps` branch and worktree named below are history. The live click-through at the end is still open. Not live-tested.
+
+Plan: `docs/done/cockpit_apps_merge_plan.md`. Branch `cockpit-apps` (worktree
 `.claude/worktrees/cockpit-apps`), based on `develop` d6eefa36. Frontend only; not
 run live (nothing here can be). Design notes live in `docs/context/cockpit.md`
 ("The apps and system pages as views") and `docs/context/root_console.md`

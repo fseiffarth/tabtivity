@@ -1,6 +1,9 @@
 # Remote-only projects — handoff
 
-Plan: `docs/remote_only_projects_plan.md`. Base: develop 70344a96b87026a1e2d3fe2b385ce98676587046 (2026-10-28).
+> **Status (screened against code 2026-11-22):** REFERENCE (build log; ARCHIVE together with the plan). Steps A1–A13 and the Final review are all in `develop` (commits `b7e05ab94`..`4528202cb`, 2026-10-28/29; integration branch `ro-int` is gone). Flagged-for-user items in the Final review are not re-verified. Not live-tested.
+
+
+Plan: `docs/done/remote_only_projects_plan.md`. Base: develop 70344a96b87026a1e2d3fe2b385ce98676587046 (2026-10-28).
 Integration branch: `ro-int` (main agent merges each step into it).
 
 Each agent step appends its own section below (never edits another's):

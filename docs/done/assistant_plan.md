@@ -1,6 +1,6 @@
 # Tabby — a chat assistant with web access and no reach into the computer — plan
 
-Status: implemented 2026-10-16 (Sonnet subagents; see docs/assistant_handoff.md). Never run live.
+> **Status (screened against code 2026-11-22):** Built (A0–A6): `storage::ASSISTANT_SCOPE`, `services/agent/assistant.rs` (`launch_line`), `services/mcp/web_lane.rs` (`/mcp/web`), `commands/assistant.rs`, side-panel view (`components/assistant/`, `stores/assistantScope.ts`), phone (`services/mobile_control/assistant.rs`, `mobile-web/src/screens/TabbyOpen.tsx`). Code differs from the plan: one chat per scope with no chat list, on by default and no longer an Experimental switch (Settings → Agents → Tabby), in-place model switch (`assistant_model_probe.rs`), a help lane beside the web lane. Current design: `docs/context/assistant.md`. Open: Gemini (needs a transcript reader), live QA. Not live-tested unless the doc/todo says so.
 
 Tabby is a chatbot on the desktop and in the phone PWA. The user picks
 the CLI that runs the model: Claude Code or Codex on their own login, or

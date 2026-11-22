@@ -1,10 +1,6 @@
 # Remote-host tabs on the phone
 
-*Status: plan, 2026-10-24, reviewed the same day (see the last section).
-Phase 2 (remote-host part) of `docs/mobile_every_project_type_plan.md`.
-Landed on develop 2026-10-24 (`d29097fa` through `caf2260a`), never run live;
-handoff: `docs/mobile_remote_host_tabs_handoff.md`.*
-
+> **Status (screened against code 2026-11-22):** ARCHIVE (whole scope in code; only live QA open). Landed on develop 2026-10-24 (`d29097fa` through `caf2260a`), never run live; handoff: `docs/done/mobile_remote_host_tabs_handoff.md`. In code: `services/mobile_control/host_live.rs` (the no-dial liveness rounds), `PublicTab.on_host` / `host_down` in `discovery.rs`, the host `AttachTarget` in `pty_bridge.rs`, `ssh_exec::host_mux_args` / `master_check_args` (`-F none`), phone `TabCard.tsx` (`mobile.project.hostOffline` / `hostSessionEnded`), untested row `mobile.project.onHost`. Phase 2 of this plan's parent (`mobile_every_project_type_plan.md`) is therefore done for remote hosts; the later remote-only / "Runs on" picker work (`fcac81cf1`, `945a878d8`) built on it.
 ## Why
 
 The user: "show also remote agent tabs on phone". Phase 1 lists a remote

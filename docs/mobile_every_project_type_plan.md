@@ -1,11 +1,6 @@
 # Phone access for every project type
 
-*Status: plan, 2026-10-21, reviewed the same day (see "Plan review"). Phase 1
-landed on develop 2026-10-21 (handoff final review `11c2f9b9`), never run live;
-handoff: `docs/mobile_every_project_type_handoff.md`. Phase 2's remote-host
-part landed through `docs/mobile_remote_host_tabs_plan.md`; its container and
-VM tabs are still open.*
-
+> **Status (screened against code 2026-11-22):** PARTIAL. Phase 1 (trust tiers gone: any project type gets the Mobile switch) is in code: `ProjectFilesView.tsx` `mobileEligible` is just `!!projectId && !!project`, `discovery.rs` has `Local/Remote/Container/Vm` scope kinds with a `CreateVerdict` per kind. Phase 2's remote-host part landed through `docs/done/mobile_remote_host_tabs_plan.md`. Still open: container and VM tabs (`CreateVerdict::None`, "no local tmux session to attach to"), the `docs/done/mobile_remote_projects_plan.md` host switch was not built. Not live-tested.
 ## Why
 
 The phone reaches only plain local projects. A remote, container or VM

@@ -1,5 +1,8 @@
 # Threat recheck 2026-11-04 — raw reviewer reports
 
+> **Status (screened against code 2026-11-22):** REFERENCE (raw reviewer reports for gaps 74–104). The fix run is complete: all 31 gaps are fixed in code except 79 (mitigated by masking); see `docs/done/threat_recheck_2026_11_04_plan.md` and `docs/threat_model.md`. Line numbers are as of `b3abe5ba`. Not live-verified.
+
+
 Five read-only reviewers checked HEAD `b3abe5ba` on 2026-11-04: A agents, fence,
 credentials, API proxy, Tabby; B the phone; C remote machines, remote-only
 projects, sync, VPN, server mode; D window perimeter, IPC, viewers, desktop voice,
