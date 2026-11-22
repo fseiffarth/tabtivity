@@ -93,6 +93,17 @@ const SIGN_IN_KEYS = ["response_type", "code_challenge", "user_code", "challenge
  *  `/activate` other providers use — as a whole path segment, so `/devices`
  *  or `/activated` are not. */
 const DEVICE_PATH = /\/(?:login\/device|devicelogin|device|activate)(?:\/|$)/iu;
+/** An OAuth authorization endpoint. With a query it is a request on its own,
+ *  `client_id` or not: Claude Code 2.1.330 prints
+ *  `https://claude.ai/oauth/authorize?<opaque>`, a short link the server
+ *  expands, with none of the usual keys. */
+const OAUTH_AUTHORIZE_PATH = /\/oauth\/authorize\/?$/iu;
+
+/** Whether `url` is an OAuth authorization request — the kind of sign-in that
+ *  may end on a code to paste back (a device login never does). */
+function isOAuthRequest(parsed: URL): boolean {
+  return parsed.searchParams.has("client_id") || (parsed.search.length > 1 && OAUTH_AUTHORIZE_PATH.test(parsed.pathname));
+}
 
 /**
  * Whether `url` is a page that signs the user in to a program — the one rule
@@ -103,6 +114,7 @@ const DEVICE_PATH = /\/(?:login\/device|devicelogin|device|activate)(?:\/|$)/iu;
  *    response type, a PKCE challenge or an `oauth`/`authorize` path (Google,
  *    Anthropic, OpenAI and GitHub all look like this). A `client_id` alone is
  *    not enough — the CLI's own `localhost` callback carries one too;
+ *  - any query on an `/oauth/authorize` path (Claude Code's short link);
  *  - any URL with one of `SIGN_IN_KEYS`;
  *  - a device-login page (`DEVICE_PATH`).
  *
@@ -120,6 +132,7 @@ export function isSignInUrl(url: string | URL): boolean {
   const q = parsed.searchParams;
   if (SIGN_IN_KEYS.some((key) => q.has(key))) return true;
   if (q.has("client_id") && (q.has("redirect_uri") || /oauth|authorize/iu.test(parsed.pathname))) return true;
+  if (parsed.search.length > 1 && OAUTH_AUTHORIZE_PATH.test(parsed.pathname)) return true;
   return DEVICE_PATH.test(parsed.pathname);
 }
 
@@ -155,7 +168,7 @@ export function findSignInRequest(
   for (let y = last.end.y + 1; y <= Math.min(toY, last.end.y + CODE_PROMPT_ROWS); y++) {
     after += " " + (getLine(y)?.translateToString(true) ?? "");
   }
-  const oauth = new URL(last.url).searchParams.has("client_id");
+  const oauth = isOAuthRequest(new URL(last.url));
   return { url: last.url, wantsCode: oauth && CODE_PROMPT.test(after) };
 }
 

@@ -1,6 +1,6 @@
 //! The stored conversation of an Antigravity tab that runs on a remote
 //! project's host (see the parent module for the Claude case this mirrors),
-//! for the desktop Reader. Probed against 1.5.13
+//! for the desktop Reader. Probed against 1.5.14
 //! (`scripts/verify-cli/antigravity/remote.py`).
 //!
 //! Antigravity keeps one SQLite database per conversation,

@@ -768,6 +768,26 @@ fn request_replay_records_neither_fill_the_tail_nor_reach_the_reader() {
 }
 
 #[test]
+fn claude_2_1_330_bookkeeping_records_reach_no_bubble() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    // As 2.1.330 wrote them around a `-p` turn: no `message`, nothing to show.
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"type\":\"derived-from\",\"v\":1,\"sessionId\":\"s1\",\"sessions\":[{\"type\":\"claude_code_session\",\"id\":\"p1\",\"via\":\"subprocess\",\"started\":\"s1\"}]}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"say hi\"}}\n",
+            "{\"type\":\"data-flow-records\",\"v\":1,\"sessionId\":\"s1\",\"records\":[]}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n",
+            "{\"type\":\"data-flow-records\",\"v\":1,\"sessionId\":\"s1\",\"records\":[{\"response_id\":\"msg_2\",\"listed\":[\"msg_1\"]}]}\n",
+        ),
+    )
+    .unwrap();
+    let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(kinds(&read), vec![("prompt", "say hi"), ("answer", "hi")]);
+}
+
+#[test]
 fn the_tail_grows_with_the_limit_up_to_its_cap() {
     assert_eq!(tail_bytes(0), TAIL_BYTES);
     assert_eq!(tail_bytes(TAIL_STEP_ENTRIES), TAIL_BYTES);

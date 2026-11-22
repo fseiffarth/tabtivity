@@ -2,7 +2,7 @@
 //! in and its turn state, and its registration in an agent home's
 //! `.config/muse/settings.json`.
 //!
-//! Probed offline on 1.3.0, 1.4.15, 1.4.23 and 1.4.24 (`scripts/verify-cli/muse/resume.py`,
+//! Probed offline on 1.3.0, 1.4.15, 1.4.23, 1.4.24 and 1.4.25 (`scripts/verify-cli/muse/resume.py`,
 //! `turns.py`): the settings take Claude-shaped `hooks` from 1.3.0 on, and
 //! Muse exits at launch on a settings file it cannot read, so the file is
 //! merged only when it is plain JSON with `schema_version` 1 (or new) and

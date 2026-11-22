@@ -1,6 +1,6 @@
 //! The stored conversation of a Muse tab that runs on a remote project's
 //! host (see the parent module for the Claude case this mirrors), for the
-//! desktop Reader. Probed against 1.4.24
+//! desktop Reader. Probed against 1.4.25
 //! (`scripts/verify-cli/muse/remote.py`).
 //!
 //! Muse files each session as an append-only log of JSON records,
