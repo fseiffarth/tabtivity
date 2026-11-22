@@ -3416,9 +3416,41 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   flex: 1 1 auto;
   min-height: 0;
 }
-.terminal-reader.panel-open > :is(.terminal-reader-subagent-bar, .terminal-reader-subagent-index, .terminal-reader-stream),
-.terminal-reader.panel-open :is(.terminal-reader-facts-wrap, .terminal-reader-composer, .terminal-reader-error, .terminal-reader-waiting, .terminal-reader-chat-foot) {
+.terminal-reader.panel-open > :is(.terminal-reader-subagent-bar, .terminal-reader-subagent-index, .terminal-reader-stream) {
   display: none;
+}
+/* The composer docked under the panel (`.terminal-reader-dock`, no box of its
+   own). At rest, one line: field, mic and Send; the facts row and the chips
+   stay mounted (steering's Alt keys click them) but are not drawn. Engaged or
+   holding a draft (`.dock-open`), it is Chat's whole dock. No transition. */
+.terminal-reader-dock { display: contents; }
+.terminal-reader.panel-open:not(.dock-open) :is(.terminal-reader-facts-wrap, .terminal-reader-chips) {
+  display: none;
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-composer {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input textarea {
+  min-height: 34px;
+  max-height: 34px;
+  padding: 7px 72px 7px 12px;
+  overflow: hidden;
+  border-radius: var(--radius);
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input::before { content: none; }
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-send { right: 4px; bottom: 3px; }
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-mic { right: 36px; bottom: 6px; }
+/* The dock's untested pill: top right in the open box, left of the mic at rest. */
+.terminal-reader-dock-tag {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-dock-tag {
+  top: 50%;
+  right: 64px;
+  transform: translateY(-50%);
 }
 .terminal-changes-body { display: flex; flex: 1; min-height: 0; }
 .terminal-changes-body > .terminal-changes-files {

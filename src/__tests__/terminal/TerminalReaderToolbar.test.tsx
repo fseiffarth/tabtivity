@@ -100,9 +100,12 @@ describe("desktop conversation toolbar", () => {
     fireEvent.change(box, { target: { value: "keep this draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     await screen.findByText("No file changes in this conversation yet.");
-    // The same box, under the panel inside the Reader.
+    // The same box, docked under the panel, open since it holds a draft.
     expect(screen.getByRole("textbox")).toBe(box);
-    expect(host.querySelector(".terminal-reader")?.classList.contains("panel-open")).toBe(true);
+    expect(box.value).toBe("keep this draft");
+    const root = host.querySelector(".terminal-reader")!;
+    expect(root.classList.contains("panel-open")).toBe(true);
+    expect(root.classList.contains("dock-open")).toBe(true);
     fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
     expect(screen.getByRole("tab", { name: "Terminal" }).getAttribute("aria-selected")).toBe("true");
     await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Chat" })));
@@ -118,15 +121,18 @@ describe("desktop conversation toolbar", () => {
     expect((screen.getByRole("tab", { name: /^Data/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("returns to Chat when a prompt or dropped file is inserted while reviewing Diffs", async () => {
+  it("keeps Diffs when a prompt or dropped file is inserted, the docked field open", async () => {
     render(<Pane host={host} />);
     await screen.findByText("hello");
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     await screen.findByText("No file changes in this conversation yet.");
     act(() => { expect(insertIntoReader("p:a", "file.ts")).toBe(true); });
-    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("draft file.ts");
-    expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(box.value).toBe("draft file.ts");
+    expect(screen.getByRole("tab", { name: "Diffs" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(box);
+    expect(host.querySelector(".terminal-reader")?.classList.contains("dock-open")).toBe(true);
   });
 
   it("lists the conversation's files in the Files tab with the picked one in its viewer", async () => {

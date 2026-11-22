@@ -6191,6 +6191,8 @@ export const dict: Dict = {
   "terminal.reader.cut": "Coupé ici — le texte complet est dans le terminal et la session.",
   "terminal.reader.subagent": "Sous-agent",
   "terminal.reader.placeholder": "Message à l'agent — Entrée envoie, Maj+Entrée pour une nouvelle ligne, ↑ pour les messages précédents, collez une capture ou déposez des fichiers pour les joindre",
+  "terminal.reader.dockPlaceholder": "Message à l'agent — Entrée envoie",
+  "terminal.reader.dockBlocked": "Répondez d'abord à la question de l'agent",
   "terminal.reader.suggestion": "Claude suggère",
   "terminal.reader.localSuggestion": "Le modèle local suggère",
   "terminal.reader.suggestionPlaceholder": "{text}   ⇥ Tab ou → pour l'utiliser",

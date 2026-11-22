@@ -6388,6 +6388,8 @@ export const enSource = {
   "terminal.reader.cut": "Cut here — the full text is in the terminal and the session.",
   "terminal.reader.subagent": "Subagent",
   "terminal.reader.placeholder": "Message the agent — Enter sends, Shift+Enter for a new line, ↑ for earlier messages, paste a screenshot or drop files to attach them",
+  "terminal.reader.dockPlaceholder": "Message the agent — Enter sends",
+  "terminal.reader.dockBlocked": "Answer the agent's question first",
   "terminal.reader.suggestion": "Claude suggests",
   "terminal.reader.localSuggestion": "Local model suggests",
   "terminal.reader.suggestionPlaceholder": "{text}   ⇥ Tab or → to use it",

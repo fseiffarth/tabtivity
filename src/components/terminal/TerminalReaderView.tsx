@@ -1,4 +1,4 @@
-import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type SyntheticEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import { wrapStep } from "../../lib/wrapStep";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -700,7 +700,7 @@ function withoutTakenBack(entries: TranscriptEntry[], text: string | null): Tran
   return [...entries.slice(0, at), ...entries.slice(at + 1)];
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, docked, resting, onBusy, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -714,9 +714,16 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   /** Prompts sent to the session while Claude works, still drawn as sending. */
   queued: readonly SentPrompt[];
   focused: boolean;
+  /** Chat, Diffs or Data is shown: the box is on screen and takes inserts. */
   visible: boolean;
-  acceptInserts?: boolean;
-  onReveal?: () => void;
+  /** Docked under Diffs or Data rather than under the chat. */
+  docked: boolean;
+  /** Docked and at rest: one line, no chips (`dockOpen` in the Reader). */
+  resting: boolean;
+  /** Told when the box starts or stops holding something that keeps the
+   * dock open (a draft, the mic, the `/` menu, a Prompt-key handoff); only
+   * on the change, so the Reader never renders per keystroke. */
+  onBusy: (busy: boolean) => void;
   steering: boolean;
   /** A dialog waits on an answer: ↑/↓ in an empty composer walk its rows. */
   questionOpen: boolean;
@@ -756,8 +763,6 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const [waitingOnQuestion, setWaitingOnQuestion] = useState(false);
   const pulling = useRef(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const revealRef = useRef(onReveal);
-  revealRef.current = onReveal;
   /** Ctrl+Z / Ctrl+Shift+Z (`editorUndo`/`editorRedo`): the composer's own
    * history, since React setting the value loses the box's. `draftRef` is
    * the text a change replaces; `caretAt` where an undo puts the caret. */
@@ -791,13 +796,18 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     renderedRef.current(moved);
   }, [draft]);
   // Three lines until the text needs more: the box grows with it (upward, the
-  // composer stays on the pane's last row) up to its CSS max-height.
+  // composer stays on the pane's last row) up to its CSS max-height. At rest
+  // under a panel it is one line whatever it holds: CSS sets the height.
   useLayoutEffect(() => {
     const box = composerRef.current;
     if (!box) return;
+    if (resting) {
+      box.style.height = "";
+      return;
+    }
     box.style.height = "auto";
     if (box.scrollHeight > box.clientHeight) box.style.height = `${box.scrollHeight + box.offsetHeight - box.clientHeight}px`;
-  }, [draft]);
+  }, [draft, resting]);
   const shortcutOverrides = useShortcutOverrides();
   /** Where the ↑/↓ walk stands in `history`, and the draft it set aside;
    * null while the composer holds the user's own draft. */
@@ -938,8 +948,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   // Files dropped onto the pane (`lib/terminal/terminalDrop`) land here while
   // the Reader is up: at the cursor when the box has focus, else at the end.
-  useEffect(() => acceptInserts ? onReaderInsert(ptyId, (text) => {
-    revealRef.current?.();
+  // Under Diffs or Data too, where the focus opens the docked box.
+  useEffect(() => visible ? onReaderInsert(ptyId, (text) => {
     const box = composerRef.current;
     const focusedBox = box !== null && document.activeElement === box;
     const current = draftRef.current;
@@ -949,7 +959,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setDraft(next);
     setSendError("");
     box?.focus();
-  }) : undefined, [ptyId, acceptInserts]);
+  }) : undefined, [ptyId, visible]);
 
   // Files copied in the file manager, or an image with no text on the
   // clipboard (a screenshot), land like a dropped file: an inbox `@`
@@ -1059,6 +1069,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   });
   const { onListening } = voiceLoop;
   useEffect(() => onListening(voice.listening, voice.speakOver), [onListening, voice.listening, voice.speakOver]);
+  const holdsDock = draft.trim() !== "" || voice.listening || slashMenu.length > 0 || steerOpen !== null;
+  useEffect(() => onBusy(holdsDock), [onBusy, holdsDock]);
 
   const send = async () => {
     const current = tabRef.current;
@@ -1347,7 +1359,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       e.preventDefault();
     } else if (slashKey(e) || suggestionKey(e)) {
       e.preventDefault();
-    } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
+    } else if (questionOpen && !docked && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
       e.preventDefault();
     } else if (e.key === "ArrowUp" && pullKey(e)) {
       e.preventDefault();
@@ -1364,6 +1376,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   };
 
   if (steering && steerOpen === null) return null;
+  /** The one line under Diffs or Data: short, or why it is locked. */
+  const restingPlaceholder = !resting ? null
+    : t(questionOpen ? "terminal.reader.dockBlocked" : "terminal.reader.dockPlaceholder");
   const chips = <ReaderComposerChips
     prefixes={prefixCommands}
     active={draftPrefix(draft, prefixCommands)}
@@ -1386,14 +1401,14 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           ref={composerRef}
           value={draft}
           disabled={inputBlocked && steerOpen === null}
-          rows={3}
+          rows={resting ? 1 : 3}
           spellCheck={false}
-          placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
+          placeholder={restingPlaceholder ?? (subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion })
-            : t("terminal.reader.placeholder")}
-          aria-label={subagent ? t("terminal.reader.subagentPlaceholder")
+            : t("terminal.reader.placeholder"))}
+          aria-label={restingPlaceholder ?? (subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? `${t(suggestionLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion")}: ${shownSuggestion}`
-            : t("terminal.reader.placeholder")}
+            : t("terminal.reader.placeholder"))}
           onPointerUp={e => dictation.capture(e.currentTarget)}
           onKeyUp={e => dictation.capture(e.currentTarget)}
           onChange={(e) => editDraft(e.target.value, true)}
@@ -1404,6 +1419,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           {!suggestionLocal && <UntestedTag id="terminal.reader.promptSuggestion" />}
           {suggestionLocal && <UntestedTag id="agents.localNextPrompt" />}
         </span>}
+        {docked && <span className="terminal-reader-dock-tag"><UntestedTag id="terminal.reader.dock" /></span>}
         {voice.button}
         <button
           type="button"
@@ -1597,6 +1613,39 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [chipSlot, setChipSlot] = useState<HTMLDivElement | null>(null);
   const [statusRequest, setStatusRequest] = useState(0);
   const requestStatus = (panel: ReaderPanel) => { setStatusOpen(panel); setStatusRequest((request) => request + 1); };
+  /** Under Diffs or Data the composer docks below the panel: one line at
+   * rest, Chat's whole dock (facts row, chips) while it is in use. In use is
+   * a press or focus inside the dock (`dockEngaged`, until one lands
+   * elsewhere: WebKit focuses no button on a click, so `:focus` would close
+   * it under a chip's press) or what the composer holds (`composerBusy`). */
+  const panelShown = shown && (changesOpen || filesOpen);
+  const [composerBusy, setComposerBusy] = useState(false);
+  const [dockEngaged, setDockEngaged] = useState(false);
+  /** The press or focus that engaged the dock, which its own document
+   * listener below must not take for one elsewhere. */
+  const dockEvent = useRef<Event | null>(null);
+  const engageDock = (event: SyntheticEvent) => {
+    if (!panelShown) return;
+    dockEvent.current = event.nativeEvent;
+    setDockEngaged(true);
+  };
+  useEffect(() => {
+    if (!panelShown) setDockEngaged(false);
+  }, [panelShown]);
+  // Bubble phase: React's own listener, nearer the target, records the dock's
+  // event first; a menu portaled out of the dock still bubbles through it.
+  useEffect(() => {
+    if (!panelShown || !dockEngaged) return;
+    const away = (event: Event) => {
+      if (event !== dockEvent.current) setDockEngaged(false);
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("focusin", away);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("focusin", away);
+    };
+  }, [panelShown, dockEngaged]);
   const closeStatus = () => setStatusOpen(null);
   /** Steering holds the keyboard (or its prompt box does): a composer on show
    * would take typing that goes to steering, so it stands aside — steering's
@@ -1837,6 +1886,13 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   };
   const stop = pressEscape;
   const shownLive = picking ? NO_LIVE : live;
+  /** A dialog waits on an answer (or one is being sent): no prompt goes. */
+  const questionOpen = !!shownLive.question || !!asyncAsk.sending;
+  /** That, or the CLI is still starting: the box is locked. */
+  const inputBlocked = questionOpen || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working);
+  /** The docked composer opens to Chat's whole dock (`dock-open`). Never
+   * while a question locks it: it rests, a draft kept. */
+  const dockOpen = panelShown && !browsed && !inputBlocked && (dockEngaged || composerBusy || statusOpen !== null || picking);
   /** The call a permission dialog on screen waits on, named in full from the
    * stored session — only while the lamp says the agent asks: a running,
    * approved `Bash` call has no result either. */
@@ -2733,7 +2789,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     />
     <div
       ref={regionRef}
-      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}${changesOpen || filesOpen ? " panel-open" : ""}`}
+      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}${changesOpen || filesOpen ? " panel-open" : ""}${dockOpen ? " dock-open" : ""}`}
       hidden={!shown}
       role="region"
       aria-label={t("terminal.reader.title")}
@@ -3005,6 +3061,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           onClose={() => onShowChat?.()}
         />
       )}
+      {/* The dock: no box of its own (`display: contents`), only where a press
+          or focus inside it engages it (`engageDock`). */}
+      <div className="terminal-reader-dock" onPointerDown={engageDock} onFocus={engageDock}>
       {/* No facts row in a Tabby chat: the view's own model dropdown says enough. */}
       {tab && !browsed && scope !== ASSISTANT_SCOPE && (
         <TerminalReaderFacts
@@ -3047,12 +3106,13 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         history={history}
         queued={queuedPrompts}
         focused={focused}
-        visible={visible && shown && !changesOpen && !filesOpen}
-        acceptInserts={visible && shown}
-        onReveal={onShowChat}
+        visible={visible && shown}
+        docked={panelShown}
+        resting={panelShown && !dockOpen}
+        onBusy={setComposerBusy}
         steering={steering}
-        questionOpen={!!shownLive.question || !!asyncAsk.sending}
-        inputBlocked={!!shownLive.question || !!asyncAsk.sending || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working)}
+        questionOpen={questionOpen}
+        inputBlocked={inputBlocked}
         suggestion={shownSuggestion}
         suggestionLocal={!shownLive.suggestion && !!shownSuggestion}
         onDraftEmpty={setComposerEmpty}
@@ -3065,6 +3125,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         pullRef={pullQueued}
         takeBackRef={takeBackRef}
       />}
+      </div>
     </div>
     {/* The conversation's menus only over Chat or Diffs: in Terminal the
         transcript and the live screen are not read, so they would go stale. */}
