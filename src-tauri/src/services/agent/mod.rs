@@ -52,6 +52,9 @@ pub mod agent_session;
 pub mod agent_shim;
 pub mod agent_sqlite;
 pub mod agent_tasks;
+// The local-model "what's next" suggestion: the session's last turn, sent to
+// a loopback Ollama for the one line the user would likely type next.
+pub mod next_prompt;
 // The stored conversation behind an agent tab (Claude's session log, Codex's
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;
