@@ -46,7 +46,7 @@ import { usePoll, type PollRun } from "../../lib/usePoll";
 import { SyncHandoffButton } from "../embed/SyncHandoffButton";
 import { collectHandoffFiles } from "../../lib/viewers/syncHandoffCollect";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
-import type { SortKey } from "../../lib/viewers/fileUtils";
+import type { TreeSortKey } from "./useFileTreeRows";
 import {
   readGitBarSnapshot,
   writeGitBarSnapshot,
@@ -55,7 +55,7 @@ import {
 } from "../../lib/projects/fileViewSnapshots";
 import { basename, dirname } from "../../lib/paths";
 import { readDownloadsShown, writeDownloadsShown, type DownloadsHost } from "../../lib/projects/downloadsShown";
-import { projectTypeTags } from "../projects/projectTypeTags";
+import { projectTypeTags, providerName } from "../projects/projectTypeTags";
 import { ScaffoldTagPopover } from "./ScaffoldTagPopover";
 import { PublishWindow } from "../projects/PublishWindow";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
@@ -113,7 +113,7 @@ import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
 import { SideViewKey } from "./SideViewKey";
-import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, ArrowUpRightIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -495,7 +495,7 @@ export function ProjectFilesView({
   const [mobileAccessError, setMobileAccessError] = useState<string | null>(null);
   // Kept here (not in the pane): the pane unmounts while the view shows Git or
   // Search, and the chosen sort must survive the trip back to Files.
-  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortKey, setSortKey] = useState<TreeSortKey>("name");
   const [descending, setDescending] = useState(false);
 
   // The Mobile host is machine-wide, but enabling its deliberately narrow
@@ -1735,6 +1735,121 @@ export function ProjectFilesView({
           ? GIT_STATE_COLOR.unpushed
           : null;
 
+  // The header's tags. With a host tag (SSH) on the row, the Git tag goes and
+  // the provider tag shortens to the provider's name, so the project name is
+  // not the first thing to truncate; the hover card keeps the full set.
+  const headerTags = typeTags.some((tag) => tag.key === "ssh")
+    ? typeTags
+        .filter((tag) => tag.key !== "git")
+        .map((tag) => (tag.key === "provider" ? { ...tag, label: providerName(project?.git_provider ?? project?.detected_provider) } : tag))
+    : typeTags;
+
+  // The project's settings: the header row's last button (the docked viewer,
+  // which has no header row, ends its view strip with it instead).
+  const settingsButton = projectId ? (
+    <button
+      type="button"
+      className="side-panel-mobile-btn side-panel-settings-btn"
+      onClick={() => setShowSettings(true)}
+      title={t("projectFilesView.projectSettingsTitle")}
+      aria-label={t("projectFilesView.projectSettingsTitle")}
+    >
+      <GearIcon />
+    </button>
+  ) : null;
+
+  // The Files view's actions, at the right end of its one toolbar row (the
+  // tree draws the row: breadcrumb and folder total on its left). The search
+  // fold and ↻ act on the tree, which is only mounted in this view; import,
+  // open in the file manager and the Downloads toggle act on the browsed
+  // folder. Same chrome as every other toolbar button — see `toolbar-btn`.
+  const filesActions = (
+    <>
+      <button
+        type="button"
+        className={`toolbar-btn toolbar-btn--sm toolbar-btn--icon${searchOpen ? " active" : ""}`}
+        aria-pressed={searchOpen}
+        aria-expanded={searchOpen}
+        onClick={() => setSearchOpen((v) => !v)}
+        title={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
+        aria-label={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
+      >
+        <SearchIcon />
+      </button>
+      <button
+        type="button"
+        className="toolbar-btn toolbar-btn--sm toolbar-btn--icon"
+        onClick={() => setRefreshNonce((n) => n + 1)}
+        title={t("fileTree.refreshTitle")}
+        aria-label={t("common.refresh")}
+      >
+        <RefreshIcon />
+      </button>
+      {importDrop.canImport && (
+        <button
+          type="button"
+          className="toolbar-btn toolbar-btn--sm toolbar-btn--icon"
+          aria-haspopup="menu"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setImportMenu({ x: r.left, y: r.bottom + 2 });
+          }}
+          title={t("projectFilesView.importTitle")}
+          aria-label={t("projectFilesView.importTitle")}
+        >
+          <ArrowDownIcon />
+        </button>
+      )}
+      {importMenu && (
+        <ContextMenuPortal
+          x={importMenu.x}
+          y={importMenu.y}
+          onClose={() => setImportMenu(null)}
+        >
+            <button
+              onClick={() => {
+                setImportMenu(null);
+                void importDrop.importViaDialog();
+              }}
+            >
+              {t("projectFilesView.importFiles")}
+            </button>
+            <button
+              onClick={() => {
+                setImportMenu(null);
+                void importDrop.importFolderViaDialog();
+              }}
+            >
+              {t("projectFilesView.importFolder")}
+            </button>
+        </ContextMenuPortal>
+      )}
+      {projectDir && !hostPinned && (
+        <button
+          type="button"
+          className="toolbar-btn toolbar-btn--sm toolbar-btn--icon"
+          onClick={openInOsBrowser}
+          title={t("projectFilesView.openInFileManagerTitle")}
+          aria-label={t("projectFilesView.openInFileManagerTitle")}
+        >
+          <ArrowUpRightIcon />
+        </button>
+      )}
+      {!activeBox && projectDir && (
+        <button
+          type="button"
+          className={`toolbar-btn toolbar-btn--sm toolbar-btn--icon${showDownloads ? " active" : ""}`}
+          aria-pressed={showDownloads}
+          onClick={() => setShowDownloads(!showDownloads)}
+          title={t("projectFilesView.showDownloadsTitle")}
+          aria-label={t("projectFilesView.showDownloadsTitle")}
+        >
+          <InboxIcon />
+        </button>
+      )}
+    </>
+  );
+
   return (
     <div
       className={`${containerClassName}${importDrop.dropActive ? " drop-active" : ""}${importDrop.dropFlash ? " drop-flash" : ""}`}
@@ -1746,11 +1861,11 @@ export function ProjectFilesView({
       {importDrop.conflictModal}
       {dialogs}
       {/* Compact (docked subwindow) viewer: only the project-name/tags/source-
-          switch/git-bar header is stripped — the tree's find-files search stays
-          topmost. The Files/Git/Search/Apps toolbar (± diverged, sessions, jobs,
-          import, open-in-OS, downloads, settings) renders in both modes, so a
-          subwindow file viewer behaves identically to the side panel / Files
-          (Project) tab except for that header row. */}
+          switch header row is stripped. The view strip and each view's own
+          toolbar row (the Files view's: breadcrumb, import, open-in-OS,
+          downloads) render in both modes, the settings button moving to the
+          strip's end, so a subwindow file viewer behaves identically to the
+          side panel / Files (Project) tab except for that header row. */}
       {!compact && (
       <div className="side-panel-header">
         {pin}
@@ -1797,9 +1912,9 @@ export function ProjectFilesView({
             labels only — no interactivity — so they deliberately look nothing
             like the source switch below: a neutral chip whose kind colour is
             only its lamp (`--tag-color`). */}
-        {!activeBox && typeTags.length > 0 && (
+        {!activeBox && headerTags.length > 0 && (
           <span className="side-panel-type-tags">
-            {typeTags.map((tag) => {
+            {headerTags.map((tag) => {
               // The SSH tag carries a right-click menu (connect / manage · remote
               // machines); the rest stay pure labels.
               const isSsh = tag.key === "ssh" && !!project?.remote && !!projectId;
@@ -1904,6 +2019,7 @@ export function ProjectFilesView({
             <MobileAccessIcon on={mobileAccessOn} />
           </button>
         )}
+        {settingsButton}
         {mobilePicker && mobileHostConnected && mobileEligible && (
           <MobileAccessPicker
             x={mobilePicker.x}
@@ -2037,11 +2153,12 @@ export function ProjectFilesView({
           host has never seen is invisible in the remote tree, so this count is
           where its existence first shows up), the live tmux sessions, the
           queued jobs. */}
-      {/* The two rows share one container: on a narrow panel (a container query
-          in files-panel.css) the tabs drop to their glyph and the actions join
-          their row, so the head is one row shorter. */}
+      {/* The strip's container: on a narrow panel (a container query in
+          files-panel.css) the tabs drop to their glyph, the active one keeping
+          its label. A view's actions are not here: each view has at most one
+          toolbar row of its own (the Files view's is the tree's breadcrumb
+          row, `filesActions` at its end). */}
       <div className="side-panel-toolbars">
-      <div className="side-panel-toolbars-row">
       <div className="side-panel-toolbar side-panel-views">
         {availableSidePanelViews(viewGates).map(({ view: v, labelKey, Icon }, i) => {
           const count =
@@ -2088,106 +2205,9 @@ export function ProjectFilesView({
             </button>
           );
         })}
-      </div>
-
-      {/* Row 2: everything that acts rather than switches the view — smaller,
-          icon-only. */}
-      <div className="side-panel-toolbar side-panel-actions">
-        {/* The tree's search + refresh, hoisted out of the tree itself. Files
-            view only: both act on the tree, and the tree is only mounted there
-            (a ↻ in the Git view would bump a counter nothing is listening to).
-            Same chrome as every other toolbar button — see `toolbar-btn`. */}
-        {view === "files" && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm${searchOpen ? " active" : ""}`}
-            aria-pressed={searchOpen}
-            aria-expanded={searchOpen}
-            onClick={() => setSearchOpen((v) => !v)}
-            title={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
-            aria-label={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
-          >
-            <SearchIcon />
-          </button>
-        )}
-        {view === "files" && (
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            onClick={() => setRefreshNonce((n) => n + 1)}
-            title={t("fileTree.refreshTitle")}
-            aria-label={t("common.refresh")}
-          >
-            <RefreshIcon />
-          </button>
-        )}
-        {importDrop.canImport && (
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            onClick={(e) => {
-              const r = e.currentTarget.getBoundingClientRect();
-              setImportMenu({ x: r.left, y: r.bottom + 2 });
-            }}
-            title={t("projectFilesView.importTitle")}
-          >
-            <ArrowDownIcon />
-          </button>
-        )}
-        {importMenu && (
-          <ContextMenuPortal
-            x={importMenu.x}
-            y={importMenu.y}
-            onClose={() => setImportMenu(null)}
-          >
-              <button
-                onClick={() => {
-                  setImportMenu(null);
-                  void importDrop.importViaDialog();
-                }}
-              >
-                {t("projectFilesView.importFiles")}
-              </button>
-              <button
-                onClick={() => {
-                  setImportMenu(null);
-                  void importDrop.importFolderViaDialog();
-                }}
-              >
-                {t("projectFilesView.importFolder")}
-              </button>
-          </ContextMenuPortal>
-        )}
-        {projectDir && !hostPinned && (
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            onClick={openInOsBrowser}
-            title={t("projectFilesView.openInFileManagerTitle")}
-          >
-            ⧉
-          </button>
-        )}
-        {!activeBox && projectDir && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm${showDownloads ? " active" : ""}`}
-            aria-pressed={showDownloads}
-            onClick={() => {
-              setShowDownloads(!showDownloads);
-              // The section lives in the files view; jump there when revealing it.
-              if (!showDownloads) setView("files");
-            }}
-            title={t("projectFilesView.showDownloadsTitle")}
-          >
-            <InboxIcon />
-          </button>
-        )}
-        {projectId && (
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            onClick={() => setShowSettings(true)}
-            title={t("projectFilesView.projectSettingsTitle")}
-          >
-            <GearIcon />
-          </button>
-        )}
-      </div>
+        {/* The compact (docked) viewer has no header row: the project's
+            settings ride at the end of the view strip there instead. */}
+        {compact && settingsButton}
       </div>
       </div>
 
@@ -3274,6 +3294,7 @@ export function ProjectFilesView({
           searchOpen={searchOpen}
           onSearchOpenChange={setSearchOpen}
           refreshNonce={refreshNonce}
+          toolbarActions={filesActions}
         />
       )}
       {view === "remarks" && projectId && (

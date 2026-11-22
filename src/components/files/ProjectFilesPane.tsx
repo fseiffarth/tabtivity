@@ -29,7 +29,7 @@ import {
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
 import type { ProjectBox, ProjectEntry } from "../../types";
-import type { SortKey } from "../../lib/viewers/fileUtils";
+import type { TreeSortKey } from "./useFileTreeRows";
 import { useT } from "../../lib/i18n";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { UntestedTag } from "../common/UntestedTag";
@@ -341,9 +341,9 @@ function BoxRootSection({
   onOnlyThis,
   onOpenAll,
 }: BoxRoot & {
-  sortKey: SortKey;
+  sortKey: TreeSortKey;
   descending: boolean;
-  onSortChange?: (sortKey: SortKey, descending: boolean) => void;
+  onSortChange?: (sortKey: TreeSortKey, descending: boolean) => void;
   active?: boolean;
   searchOpen?: boolean;
   onSearchOpenChange?: (open: boolean) => void;
@@ -795,9 +795,9 @@ interface Props {
    *  rendered by the tree, right-aligned in the breadcrumb (⌂) row — it used to
    *  own a full-width row of key buttons above the tree, which cost a row of
    *  height for five words the view already sorts by. */
-  sortKey: SortKey;
+  sortKey: TreeSortKey;
   descending: boolean;
-  onSortChange: (sortKey: SortKey, descending: boolean) => void;
+  onSortChange: (sortKey: TreeSortKey, descending: boolean) => void;
   showDownloads: boolean;
   onCloseDownloads: () => void;
   /** The host's own bottom frame chrome (the side panel's TTY / DEBUG / version
@@ -829,6 +829,11 @@ interface Props {
   searchOpen?: boolean;
   onSearchOpenChange?: (open: boolean) => void;
   refreshNonce?: number;
+  /** The host's actions for the Files view (search, refresh, import, open in
+   *  the file manager, downloads). They end the single tree's toolbar row —
+   *  one row of chrome with the breadcrumb — and get a row of their own where
+   *  no single tree draws one (a box's sections, a disconnected host). */
+  toolbarActions?: ReactNode;
 }
 
 export function ProjectFilesPane({
@@ -858,6 +863,7 @@ export function ProjectFilesPane({
   searchOpen,
   onSearchOpenChange,
   refreshNonce,
+  toolbarActions,
 }: Props) {
   const t = useT();
   const { activeBox, boxRoots } = useBoxRoots(scope);
@@ -1119,6 +1125,14 @@ export function ProjectFilesPane({
           </button>
         </div>
       )}
+      {/* The actions' own row, where no single tree carries them in its
+          toolbar: a box (one row of actions over all its sections) and a
+          remote source whose tree is not mounted while disconnected. */}
+      {toolbarActions !== undefined && (!!activeBox || (isRemoteProject && (source === "remote" || pinned) && remoteBlocked)) && (
+        <div className="sp-toolbar files-actions-row">
+          <div className="sp-toolbar-end">{toolbarActions}</div>
+        </div>
+      )}
       {mountTree && boxSearchOpen && (
         <div className="file-tree-search box-shared-search">
           <div className="file-tree-search-row">
@@ -1336,6 +1350,7 @@ export function ProjectFilesPane({
                 searchOpen={searchOpen}
                 onSearchOpenChange={onSearchOpenChange}
                 refreshNonce={refreshNonce}
+                toolbarEnd={toolbarActions}
               />
             );
           })()

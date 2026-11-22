@@ -19,7 +19,7 @@ import { isPathExcluded, type SyncFileState } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { useActivityStore } from "../../stores/activity";
 import { useFileClipboardStore } from "../../stores/fileClipboard";
-import { type FileEntry, type InternalViewer, type SortKey, fmtSize, fmtModified, visibleEntries, internalViewerFor, disabledViewers, fileEntriesEqual, stringMapsEqual, nextSelection } from "../../lib/viewers/fileUtils";
+import { type FileEntry, type InternalViewer, fmtSize, fmtModified, visibleEntries, internalViewerFor, disabledViewers, fileEntriesEqual, stringMapsEqual, nextSelection } from "../../lib/viewers/fileUtils";
 import {
   dropFileTreeSnapshot,
   readFileTreeSnapshot,
@@ -61,7 +61,7 @@ import { RenameDialog, containingFolderLabel } from "./RenameDialog";
 import { useDialogs } from "../common/PromptDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { FileIcon } from "../common/icons/FileIcon";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, RefreshIcon, SearchIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DiffIcon, HomeIcon, PlayIcon, PlusIcon, RefreshIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useProjectsStore } from "../../stores/projects";
@@ -73,7 +73,7 @@ import { useFileTreeFsWatch, useFileTreeListingState, useFileTreeMountLoad } fro
 import { useFileTreeEmbedCaps, useFileTreeMountProbes, useFileTreeSearch, useFileTreeTooltip } from "./useFileTreeChrome";
 import { useFileTreePythonMain, useFileTreeRunState } from "./useFileTreeRun";
 import { useFileTreeRemote, useFileTreeSyncStatus } from "./useFileTreeRemote";
-import { ROW_CAP_STEP, useFileTreeRowActions, useFileTreeRows } from "./useFileTreeRows";
+import { ROW_CAP_STEP, type TreeSortKey, useFileTreeRowActions, useFileTreeRows } from "./useFileTreeRows";
 import { useAgentMemory, useDocsGroupOpen, useProjectDocsStatus } from "./useProjectDocs";
 import { AGENT_MEMORY_CLI_NAME, AgentMemoryDialog } from "./AgentMemoryDialog";
 import { createProjectDoc, type AgentMemoryEntry, type DocState } from "../../lib/projects/projectDocs";
@@ -96,13 +96,6 @@ const HIDDEN_EXT_EXPANDED_KEY = storageKey("fileTree.hiddenExtExpanded");
 /// `handleEntryMouseEnter` for why entry-triggered tooltips were expensive.
 const TOOLTIP_DWELL_MS = 400;
 
-function sizeCategory(bytes: number): string {
-  if (bytes < 10 * 1024) return "size-small";
-  if (bytes < 500 * 1024) return "size-medium";
-  if (bytes < 10 * 1024 * 1024) return "size-large";
-  return "size-huge";
-}
-
 /** Hover title for a non-ignored size figure: the total + ignored split when
  *  there's ignored content to split out, else the plain fallback wording. A pure
  *  helper, not a component, so it takes `t` explicitly — the same shape
@@ -123,24 +116,37 @@ function sizeTitle(
 
 /** Sort keys as the breadcrumb's dropdown labels them. Lives here now that the
  *  control sits in the ⌂ row rather than in a row of its own above the tree. */
-const SORT_KEY_LABEL: Record<SortKey, TranslationKey> = {
+const SORT_KEY_LABEL: Record<TreeSortKey, TranslationKey> = {
   name: "sortKey.name",
   size: "sortKey.size",
   type: "sortKey.type",
   created: "sortKey.created",
   modified: "sortKey.modified",
+  git: "sortKey.git",
 };
+
+/** The compact sort control's keys, in its menu's order. */
+const TREE_SORT_KEYS: TreeSortKey[] = ["name", "size", "type", "created", "modified", "git"];
+
+/** The wide layout's sortable column heads, left to right (Share of folder,
+ *  the last column, is a plain label). */
+const COLUMN_SORTS: { key: TreeSortKey; label: TranslationKey; cls: string }[] = [
+  { key: "name", label: "fileTree.colName", cls: "file-cols-name" },
+  { key: "git", label: "fileTree.colGit", cls: "file-cols-git" },
+  { key: "modified", label: "fileTree.colModified", cls: "file-cols-mod" },
+  { key: "size", label: "fileTree.colSize", cls: "file-cols-size" },
+];
 
 interface Props {
   projectDir: string;
   projectId: string | null;
-  sortKey?: SortKey;
+  sortKey?: TreeSortKey;
   descending?: boolean;
   /** When given, the breadcrumb (⌂) row carries the sort control — a right-
    *  aligned key dropdown plus a direction toggle. Omitted by hosts that keep
    *  the row minimal (the compact docked subwindow), which then just render
    *  whatever order the props already say. */
-  onSortChange?: (sortKey: SortKey, descending: boolean) => void;
+  onSortChange?: (sortKey: TreeSortKey, descending: boolean) => void;
   hiddenEndings?: string[];
   hiddenPaths?: string[];
   shownPaths?: string[];
@@ -202,6 +208,12 @@ interface Props {
   /** Bumped by the host's ↻ to force a re-list. A counter, not a boolean: two
    *  refreshes in a row must both land. */
   refreshNonce?: number;
+  /** The host's own actions for this view (search, refresh, import, open in
+   *  the file manager, downloads), drawn at the right end of the tree's
+   *  toolbar row so the view has ONE row of chrome: breadcrumb and folder
+   *  total on the left, actions on the right. Omitted by hosts that draw their
+   *  actions elsewhere (a box's member roots, a bare tree). */
+  toolbarEnd?: React.ReactNode;
 }
 
 /** `rowRect` is the right-clicked row's bounding box, captured at open time, so
@@ -248,32 +260,74 @@ const STATUS_TITLE_KEY: Record<string, TranslationKey> = {
   ignored:   "fileTree.statusIgnored",
 };
 
-/** Marker shown to the left of a tree entry for its git status.
- *  Ignored → gray ✕ glyph; everything else → a colored dot (red unstaged/
- *  untracked, orange staged, green committed-not-pushed); clean → empty slot. */
+/** The chip's letter per state: U untracked, M modified, S staged, P committed
+ *  but not pushed. Ignored has none (the row's name is muted instead). */
+const STATUS_LETTER_KEY: Record<string, TranslationKey> = {
+  modified:  "fileTree.chipModified",
+  untracked: "fileTree.chipUntracked",
+  staged:    "fileTree.chipStaged",
+  unpushed:  "fileTree.chipUnpushed",
+};
+
+/** The state as one word, for the wide layout's Git column. */
+const STATUS_WORD_KEY: Record<string, TranslationKey> = {
+  modified:  "fileTree.gitWordModified",
+  untracked: "fileTree.gitWordUntracked",
+  staged:    "fileTree.gitWordStaged",
+  unpushed:  "fileTree.gitWordUnpushed",
+  ignored:   "fileTree.gitWordIgnored",
+};
+
+/** Column 1 of a tree row: the git state as a letter chip (`.sp-chip`), the
+ *  letter in the state's colour and the word in its `title`. Clean and ignored
+ *  rows leave the cell empty — it is reserved on every row either way, so the
+ *  icons and names below it stay on one vertical line. */
 function GitMarker({ status }: { status: string | undefined }) {
   const t = useT();
-  const slot: React.CSSProperties = {
-    width: 11,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-    marginRight: 3,
-    fontSize: 11,
-    lineHeight: 1,
-  };
-  if (status === "ignored") {
-    return (
-      <span style={{ ...slot, color: STATUS_COLOR[status] }} title={t(STATUS_TITLE_KEY[status])}>
-        <CloseIcon />
-      </span>
-    );
-  }
-  const color = status ? STATUS_COLOR[status] : undefined;
+  const letter = status ? STATUS_LETTER_KEY[status] : undefined;
   return (
-    <span style={slot} title={status ? t(STATUS_TITLE_KEY[status]) : undefined}>
-      <span style={{ width: 6, height: 6, borderRadius: "50%", background: color ?? "transparent" }} />
+    <span className="sp-row-state file-state">
+      {letter && status && (
+        <span
+          className="sp-chip file-git-chip"
+          title={t(STATUS_TITLE_KEY[status])}
+          style={{ color: STATUS_COLOR[status] }}
+        >
+          {t(letter)}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The entry's share of its section total as a whole percent, for the share
+ *  bar; null when either figure is unknown. Rounded so a size landing elsewhere
+ *  in the section re-renders only the rows whose bar actually moved, and never
+ *  0 for a non-empty entry (its fill keeps a 2 px floor, file-tree.css). */
+function sharePercent(bytes: number | undefined, total: number): number | null {
+  if (bytes === undefined || !(total > 0)) return null;
+  if (bytes <= 0) return 0;
+  return Math.max(1, Math.min(100, Math.round((bytes / total) * 100)));
+}
+
+/** A folding section's chevron: down while open, right while folded. */
+function SectionCaret({ open }: { open: boolean }) {
+  return (
+    <span className="file-tree-caret" aria-hidden="true">
+      {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
+    </span>
+  );
+}
+
+/** The share bar cell: the kit's `.sp-bar`, filled to the entry's share. */
+function ShareBar({ pct }: { pct: number | null }) {
+  return (
+    <span className="file-share" aria-hidden="true">
+      {pct !== null && (
+        <span className="sp-bar">
+          {pct > 0 && <span style={{ width: `${pct}%` }} />}
+        </span>
+      )}
     </span>
   );
 }
@@ -309,15 +363,18 @@ interface FileRowProps {
   doc: { state: DocState | null; nested: boolean } | null;
   /** Git letter (never for the gitignored / hidden-ending sections). */
   status: string | undefined;
+  /** Git ignores the entry (its section, or its own status): no chip, a muted
+   *  name, and "Ignored" in the wide layout's Git column. */
+  ignored: boolean;
   /** A folder's headline size (its non-ignored weight), once known. */
   dirShown: number | undefined;
+  /** The entry's share of its section's total, in whole percent (`null`:
+   *  unknown, no bar). */
+  sharePct: number | null;
   /** A folder excluded from the size scans (shows a note instead of a size). */
   scanExcluded: boolean;
   canPyRun: boolean;
   canShRun: boolean;
-  /** Some row of the listing wears a run button: rows without one reserve its
-   *  width so icons and names stay in one column. */
-  runSlot: boolean;
   isRunning: boolean;
   runLocked: boolean;
   isCompiling: boolean;
@@ -336,8 +393,8 @@ interface FileRowProps {
   syncAnyBusy: boolean;
   syncThisBusy: boolean;
   remoteListing: boolean;
-  /** Remark count for the slot, or null when the slot is not shown at all. */
-  remarkCount: number | null;
+  /** Remark count for the action slot (0: none to show). */
+  remarkCount: number;
   ctrlHeld: boolean;
   moveTargetAttrs: MoveTargetAttrs;
   rows: RowActions;
@@ -356,11 +413,12 @@ const FileRow = React.memo(function FileRow({
   scaffold,
   doc,
   status,
+  ignored,
   dirShown,
+  sharePct,
   scanExcluded,
   canPyRun,
   canShRun,
-  runSlot,
   isRunning,
   runLocked,
   isCompiling,
@@ -383,10 +441,158 @@ const FileRow = React.memo(function FileRow({
 }: FileRowProps) {
   const t = useT();
   const canRun = canShRun || canPyRun;
-  const sizeClass = !e.is_dir ? sizeCategory(e.size) : "";
+
+  /** What the sync state puts in the action slot, or null when it has nothing
+   *  to say (in sync, not auto) — the slot then goes to the run button or the
+   *  remark count. `none` → pull/push button; `localnew` → push; `amber` → the
+   *  diff button (a file) or the diverged mark (a folder); auto + green → the
+   *  quiet auto-sync mark; excluded → the grey ✕ ahead of all of them. */
+  function syncAction(): React.ReactNode {
+    if (!syncTracked) return null;
+    if (pathExcluded) {
+      return (
+        <span
+          className="file-sync-excluded"
+          title={t("fileTree.excludedFromByteSync")}
+          aria-label={t("fileTree.excludedFromByteSync")}
+        >
+          <CloseIcon />
+        </span>
+      );
+    }
+    if (syncState === "none") {
+      return (
+        <button
+          type="button"
+          className={`orange-file-act orange-file-act--icon orange-file-act--slot ${remoteListing ? "orange-file-act--remote" : "orange-file-act--local"}${syncThisBusy ? " busy" : ""}`}
+          title={t(remoteListing ? "fileTree.syncToLocal" : "fileTree.pushToHost")}
+          aria-label={t(remoteListing ? "fileTree.syncToLocal" : "fileTree.pushToHost")}
+          disabled={syncAnyBusy}
+          onClick={(ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (remoteListing) rows.syncToLocal(e);
+            else rows.pushToHost(e);
+          }}
+        >
+          {syncThisBusy ? <span className="file-run-spinner" /> : remoteListing ? <ArrowDownIcon /> : <ArrowUpIcon />}
+        </button>
+      );
+    }
+    // NEW local-only content: this file (or something inside this folder)
+    // exists in the mirror and was never synced, so the host has no copy. The
+    // only meaningful action is the upload, whichever tree is showing — hence
+    // always ⬆ and always the push handler, unlike the "none" slot above whose
+    // direction follows the listing side.
+    if (syncState === "localnew") {
+      const title = t(e.is_dir ? "fileTree.folderHasNewFiles" : "fileTree.pushNewFile");
+      return (
+        <button
+          type="button"
+          className={`orange-file-act orange-file-act--icon orange-file-act--slot orange-file-act--local${syncThisBusy ? " busy" : ""}`}
+          title={title}
+          aria-label={title}
+          disabled={syncAnyBusy}
+          onClick={(ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            rows.pushToHost(e);
+          }}
+        >
+          {syncThisBusy ? <span className="file-run-spinner" /> : <ArrowUpIcon />}
+        </button>
+      );
+    }
+    if (syncState === "amber" && !e.is_dir) {
+      return (
+        <button
+          type="button"
+          className="file-diff-btn"
+          title={t("fileTree.diffTitle")}
+          aria-label={t("fileTree.diffAria")}
+          onClick={(ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            rows.openSyncMerge(e);
+          }}
+        >
+          <DiffIcon />
+        </button>
+      );
+    }
+    if (syncState === "amber") {
+      return (
+        <span
+          className="file-sync-dir-diverged"
+          title={t("fileTree.folderDiverged")}
+          aria-label={t("fileTree.folderDiverged")}
+        >
+          <DiffIcon />
+        </span>
+      );
+    }
+    // Auto-sync indicator (non-interactive): only when the slot has no action
+    // button. Amber auto paths still show the diff mark (needs resolving).
+    if (autoSync && syncState === "green") {
+      return (
+        <span
+          className="file-autosync-icon"
+          title={t("fileTree.autoSyncing")}
+          aria-label={t("fileTree.autoSyncing")}
+        >
+          <RefreshIcon />
+        </span>
+      );
+    }
+    return null;
+  }
+
+  // Column 2 is ONE slot that every row reserves, folders and files alike (the
+  // old per-feature gutters were each reserved on some rows only, which is what
+  // set file icons one slot right of folder icons). Its contents by priority:
+  // the sync action, then run (or the compile spinner), then the remark count.
+  const act = syncAction() ?? (isCompiling ? (
+    <span
+      className="file-run-btn running"
+      title={t("fileTree.compilingNameEllipsis", { name: e.name })}
+      aria-label={t("fileTree.compilingName", { name: e.name })}
+    >
+      <span className="file-run-spinner" />
+    </span>
+  ) : canRun ? (
+    <button
+      type="button"
+      className={`file-run-btn${isRunning ? " running" : ""}`}
+      // No native `title` here on purpose: hovering this button sits inside the
+      // row, which already has the row's own portaled tooltip open — a browser
+      // title tooltip on top of it would be a second, uncontrolled hover.
+      // Everything it would have said (run/args/right-click hint) lives in that
+      // tooltip instead.
+      aria-label={t(isRunning ? "fileTree.runningName" : "fileTree.runName", { name: e.name })}
+      onClick={(ev) => (canPyRun ? rows.runPython(ev, e) : rows.runShell(ev, e))}
+      // Right-click the Run button → set arguments: `sys.argv` for a Python
+      // script, `$@` for a shell script. Swallowed either way so it doesn't fall
+      // through to the row's file context menu.
+      onContextMenu={(ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        rows.openRunArgs(ev, e);
+      }}
+      disabled={runLocked}
+    >
+      <PlayIcon />
+    </button>
+  ) : remarkCount ? (
+    <span className="sp-count file-remark-count">
+      {remarkCount}
+    </span>
+  ) : null);
+
+  const gitWord = ignored ? STATUS_WORD_KEY.ignored : status ? STATUS_WORD_KEY[status] : undefined;
+  const shownBytes = e.is_dir ? dirShown : e.size;
   return (
     <div
-      className={`file-entry ${e.is_dir ? "dir" : "file"}${dragTarget ? " embeddable" : ""}${scaffold ? " scaffold" : ""}${doc?.state === "template" ? " doc-template" : ""}${doc?.nested ? " doc-nested" : ""}${isMoveTarget ? " move-drop-target" : ""}${selected ? " selected" : ""}${notOnRemote ? " not-on-remote" : ""}`}
+      className={`file-entry file-grid ${e.is_dir ? "dir" : "file"}${dragTarget ? " embeddable" : ""}${scaffold ? " scaffold" : ""}${ignored ? " git-ignored" : ""}${doc?.state === "template" ? " doc-template" : ""}${doc?.nested ? " doc-nested" : ""}${isMoveTarget ? " move-drop-target" : ""}${selected ? " selected" : ""}${notOnRemote ? " not-on-remote" : ""}`}
       // Row key for jump-to-path reveal scroll (search results).
       data-entry-path={e.path}
       // Keyboard steering opens a file as the pointer does, with a double-click
@@ -415,167 +621,33 @@ const FileRow = React.memo(function FileRow({
       onMouseEnter={(ev) => rows.mouseEnter(ev, e)}
       onMouseLeave={rows.mouseLeave}
     >
-      <GitMarker status={status} />
-      {remarkCount !== null && (
-        <span className="file-remark-slot">
-          {remarkCount > 0 && <span className="file-remark-count">{remarkCount}</span>}
-        </span>
-      )}
-      {/* Fixed-width sync slot: always reserved on a sync-tracked tree so
-          file/folder names stay left-aligned whether or not the row has an
-          action button. `none` → red sync/push button; `amber` → orange
-          diff button; `green` → empty (in sync). */}
-      {syncTracked && (
-        <span className="file-sync-slot">
-          {pathExcluded ? (
-            <span
-              className="file-sync-excluded"
-              title={t("fileTree.excludedFromByteSync")}
-              aria-label={t("fileTree.excludedFromByteSync")}
-            >
-              <CloseIcon />
-            </span>
-          ) : (
-            <>
-              {syncState === "none" && (
-                <button
-                  type="button"
-                  className={`orange-file-act orange-file-act--icon orange-file-act--slot ${remoteListing ? "orange-file-act--remote" : "orange-file-act--local"}${syncThisBusy ? " busy" : ""}`}
-                  title={t(remoteListing ? "fileTree.syncToLocal" : "fileTree.pushToHost")}
-                  aria-label={t(remoteListing ? "fileTree.syncToLocal" : "fileTree.pushToHost")}
-                  disabled={syncAnyBusy}
-                  onClick={(ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    if (remoteListing) rows.syncToLocal(e);
-                    else rows.pushToHost(e);
-                  }}
-                >
-                  {syncThisBusy ? <span className="file-run-spinner" /> : remoteListing ? <ArrowDownIcon /> : <ArrowUpIcon />}
-                </button>
-              )}
-              {/* NEW local-only content: this file (or something inside
-                  this folder) exists in the mirror and was never synced,
-                  so the host has no copy. The only meaningful action is
-                  the upload, whichever tree is showing — hence always ⬆
-                  and always the push handler, unlike the "none" slot
-                  above whose direction follows the listing side. */}
-              {syncState === "localnew" && (() => {
-                const title = t(
-                  e.is_dir ? "fileTree.folderHasNewFiles" : "fileTree.pushNewFile",
-                );
-                return (
-                  <button
-                    type="button"
-                    className={`orange-file-act orange-file-act--icon orange-file-act--slot orange-file-act--local${syncThisBusy ? " busy" : ""}`}
-                    title={title}
-                    aria-label={title}
-                    disabled={syncAnyBusy}
-                    onClick={(ev) => {
-                      ev.preventDefault();
-                      ev.stopPropagation();
-                      rows.pushToHost(e);
-                    }}
-                  >
-                    {syncThisBusy ? <span className="file-run-spinner" /> : <ArrowUpIcon />}
-                  </button>
-                );
-              })()}
-              {syncState === "amber" && !e.is_dir && (
-                <button
-                  type="button"
-                  className="file-diff-btn"
-                  title={t("fileTree.diffTitle")}
-                  aria-label={t("fileTree.diffAria")}
-                  onClick={(ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    rows.openSyncMerge(e);
-                  }}
-                >
-                  ±
-                </button>
-              )}
-              {syncState === "amber" && e.is_dir && (
-                <span
-                  className="file-sync-dir-diverged"
-                  title={t("fileTree.folderDiverged")}
-                  aria-label={t("fileTree.folderDiverged")}
-                >
-                  ±
-                </span>
-              )}
-              {/* Auto-sync indicator (non-interactive): only when the slot
-                  has no action button, so it never crowds out the
-                  red/orange controls. Amber auto paths still show ±
-                  (needs resolving). */}
-              {autoSync && syncState === "green" && (
-                <span
-                  className="file-autosync-icon"
-                  title={t("fileTree.autoSyncing")}
-                  aria-label={t("fileTree.autoSyncing")}
-                >
-                  <RefreshIcon />
-                </span>
-              )}
-            </>
-          )}
-        </span>
-      )}
-      {canRun && (
-        <button
-          type="button"
-          className={`file-run-btn${isRunning ? " running" : ""}`}
-          // No native `title` here on purpose: hovering this button sits
-          // inside the row, which already has the row's own portaled
-          // tooltip open (below) — a browser title tooltip on top of it
-          // would be a second, uncontrolled hover. Everything it would
-          // have said (run/args/right-click hint) lives in that tooltip
-          // instead.
-          aria-label={t(isRunning ? "fileTree.runningName" : "fileTree.runName", { name: e.name })}
-          onClick={(ev) => (canPyRun ? rows.runPython(ev, e) : rows.runShell(ev, e))}
-          // Right-click the Run button → set arguments: `sys.argv` for a
-          // Python script, `$@` for a shell script. Swallowed either way so
-          // it doesn't fall through to the row's file context menu.
-          onContextMenu={(ev) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            rows.openRunArgs(ev, e);
-          }}
-          disabled={runLocked}
-        >
-          <PlayIcon />
-        </button>
-      )}
-      {isCompiling && (
-        <span
-          className="file-run-btn running"
-          title={t("fileTree.compilingNameEllipsis", { name: e.name })}
-          aria-label={t("fileTree.compilingName", { name: e.name })}
-        >
-          <span className="file-run-spinner" />
-        </span>
-      )}
-      {runSlot && !canRun && !isCompiling && <span className="file-run-slot" aria-hidden="true" />}
-      <span className="file-icon"><FileIcon ext={e.extension} isDir={e.is_dir} /></span>
-      <span className="file-name">{e.name}</span>
-      {(doc?.state === "template" || doc?.state === "pointer") && (
-        <span
-          className={`file-doc-badge file-doc-badge--${doc.state}`}
-          title={t(doc.state === "template" ? "fileTree.docTemplateTitle" : "fileTree.docPointerTitle")}
-        >
-          {t(doc.state === "template" ? "fileTree.docTemplate" : "fileTree.docPointer")}
-        </span>
-      )}
-      {notOnRemote && (
-        <span
-          className="file-offhost-tag"
-          title={t("fileTree.localOnlyFolderTitle")}
-          aria-label={t("fileTree.localOnlyFolderAria")}
-        >
-          {t("fileTree.localOnlyTag")}
-        </span>
-      )}
+      <GitMarker status={ignored ? undefined : status} />
+      <span className="sp-row-act file-act">{act}</span>
+      <span className="sp-row-main file-main">
+        <span className="file-icon"><FileIcon ext={e.extension} isDir={e.is_dir} /></span>
+        <span className="file-name">{e.name}</span>
+        {(doc?.state === "template" || doc?.state === "pointer") && (
+          <span
+            className={`file-doc-badge file-doc-badge--${doc.state}`}
+            title={t(doc.state === "template" ? "fileTree.docTemplateTitle" : "fileTree.docPointerTitle")}
+          >
+            {t(doc.state === "template" ? "fileTree.docTemplate" : "fileTree.docPointer")}
+          </span>
+        )}
+        {notOnRemote && (
+          <span
+            className="file-offhost-tag"
+            title={t("fileTree.localOnlyFolderTitle")}
+            aria-label={t("fileTree.localOnlyFolderAria")}
+          >
+            {t("fileTree.localOnlyTag")}
+          </span>
+        )}
+      </span>
+      {/* The wide layout's Git and Modified columns (hidden in the narrow one by
+          the container query in file-tree.css). */}
+      <span className="file-git">{gitWord ? t(gitWord) : ""}</span>
+      <span className="file-mod">{fmtModified(e.modified_secs)}</span>
       {e.is_dir && scanExcluded ? (
         // Stands in for the size rather than sitting beside it: there is no
         // size to show, and saying why is more use than an empty column.
@@ -585,15 +657,10 @@ const FileRow = React.memo(function FileRow({
         >
           {t("fileTree.notScanned")}
         </span>
-      ) : e.is_dir ? (
-        dirShown !== undefined && (
-          <span className={`file-size ${sizeCategory(dirShown)}`}>
-            {fmtSize(dirShown)}
-          </span>
-        )
-      ) : (
-        <span className={`file-size ${sizeClass}`}>{fmtSize(e.size)}</span>
+      ) : shownBytes !== undefined && (
+        <span className="file-size">{fmtSize(shownBytes)}</span>
       )}
+      <ShareBar pct={e.is_dir && scanExcluded ? null : sharePct} />
     </div>
   );
 });
@@ -601,7 +668,9 @@ const FileRow = React.memo(function FileRow({
 /**
  * A creatable doc that is not there: `+ name  create`. Deliberately not a file
  * row — no selection, drag, context menu or run slot; the whole row is one
- * button that creates the file from its template and opens it.
+ * button that creates the file from its template and opens it. It sits on the
+ * row grid all the same (empty state and action cells), so its name lines up
+ * with the file names around it.
  */
 const DocGhostRow = React.memo(function DocGhostRow({
   name, busy, onCreate,
@@ -614,14 +683,18 @@ const DocGhostRow = React.memo(function DocGhostRow({
   return (
     <button
       type="button"
-      className="file-entry doc-ghost"
+      className="file-entry file-grid doc-ghost"
       disabled={busy}
       title={t("fileTree.docCreateTitle", { name })}
       onClick={() => onCreate(name)}
     >
-      <span className="file-icon doc-ghost-plus" aria-hidden="true">+</span>
-      <span className="file-name">{name}</span>
-      <span className="file-doc-badge file-doc-badge--create">{t("fileTree.docCreate")}</span>
+      <span className="sp-row-state file-state" />
+      <span className="sp-row-act file-act" />
+      <span className="sp-row-main file-main">
+        <span className="file-icon doc-ghost-plus" aria-hidden="true"><PlusIcon /></span>
+        <span className="file-name">{name}</span>
+        <span className="file-doc-badge file-doc-badge--create">{t("fileTree.docCreate")}</span>
+      </span>
     </button>
   );
 });
@@ -649,6 +722,7 @@ export function FileTree({
   onSearchOpenChange,
   sharedSearch,
   refreshNonce,
+  toolbarEnd,
 }: Props) {
   const t = useT();
   // Non-null inside a detached popout: replaces the main window's CenterPanel
@@ -809,8 +883,10 @@ export function FileTree({
     () => visibleEntries(rawEntries, {
       showHidden: true,
       showStandardFiles: true,
-      sortKey,
-      descending,
+      // The Git order is applied over the name order by the section split
+      // (`useFileTreeRows`): the listing knows nothing of git.
+      sortKey: sortKey === "git" ? "name" : sortKey,
+      descending: sortKey === "git" ? false : descending,
       hiddenEndings,
       keepHiddenEndings: true,
       relPath,
@@ -915,13 +991,13 @@ export function FileTree({
    * `≥ 1.2 MB` once part of it has — and a bare figure means the total really is
    * the total.
    */
-  const renderGroupTotal = (bytes: number, partial: boolean, title: string) => (
+  const renderGroupTotal = (bytes: number, partial: boolean, title: string, place = "") => (
     // Fast mode: no folder walk means every sum is a permanent lower bound, so
     // the header would read "\u2265 1.2 MB" for the rest of the session. A
     // figure that can never resolve is worse than none — see `lib/agents/fastMode`'s
     // rule that an absence must be legible rather than look stuck.
     fastMode ? null : <span
-      className={`file-tree-path-total${partial ? " partial" : ""}`}
+      className={`file-tree-path-total${place ? ` ${place}` : ""}${partial ? " partial" : ""}`}
       title={partial ? `${title} — ${t("fileTree.sizeIncomplete")}` : title}
     >
       {!partial
@@ -2482,9 +2558,20 @@ export function FileTree({
   );
   const pasteModalRef = useModalFocus(() => { if (!pasteBusy) setPastePrompt(null); }, !!pastePrompt);
 
+  // With nothing to list, the host's actions still need their row: they are
+  // the view's only chrome (refresh, import, …).
+  const bareToolbar = toolbarEnd !== undefined && (
+    <div className="sp-toolbar file-tree-toolbar">
+      <div className="sp-toolbar-end">{toolbarEnd}</div>
+    </div>
+  );
+
   if (!projectDir) {
     return (
-      <div className="file-tree-empty">{t("common.noProjectSelected")}</div>
+      <>
+        {bareToolbar}
+        <div className="file-tree-empty">{t("common.noProjectSelected")}</div>
+      </>
     );
   }
 
@@ -2493,11 +2580,14 @@ export function FileTree({
   // reconnect from the header lamp; the tree re-lists once the pool is up.
   if (remoteBlocked) {
     return (
-      <div className="file-tree-empty">
-        {remoteSshState === "connecting"
-          ? t("fileTree.connectingToHost")
-          : t("fileTree.disconnectedReconnect")}
-      </div>
+      <>
+        {bareToolbar}
+        <div className="file-tree-empty">
+          {remoteSshState === "connecting"
+            ? t("fileTree.connectingToHost")
+            : t("fileTree.disconnectedReconnect")}
+        </div>
+      </>
     );
   }
 
@@ -2560,7 +2650,7 @@ export function FileTree({
           title={t("fileTree.folderDiverged")}
           aria-label={t("fileTree.folderDiverged")}
         >
-          ±
+          <DiffIcon />
         </span>
       );
     }
@@ -2646,20 +2736,22 @@ export function FileTree({
       onKeyDown={handleTreeKeyDown}
       onContextMenu={showRootContextMenu}
     >
-      {/* Sticky header: the remote/refresh bar, the in-tree search box and the
-          breadcrumb path line stay pinned while the tree body scrolls (the sort
-          row lives above the scroll container and is already fixed). They share
-          ONE sticky wrapper so they stack instead of each pinning to top:0 and
-          colliding — which is what hid the path line behind the search box.
-          Shared by the side panel and the Files (Project) tab (both render
-          FileTree), so both get the fixed path line. */}
+      {/* Sticky header: the view's toolbar row (breadcrumb, folder total, the
+          browsed folder's sync control and — under a host that passes them —
+          the host's actions), the in-tree search box and the wide layout's
+          column header stay pinned while the tree body scrolls. They share ONE
+          sticky wrapper so they stack instead of each pinning to top:0 and
+          colliding. Shared by the side panel and the Files (Project) tab (both
+          render FileTree). */}
       <div className="file-tree-head">
-      {remoteListing && (
+      {/* A bare tree (no host chrome) keeps its own remote / local bars: their
+          refresh and the label are its only ones. Under a host that owns the
+          chrome the folder sync control and the progress counter ride in the
+          toolbar row below instead, and the host's ↻ is the refresh. */}
+      {!hostOwnsSearchChrome && remoteListing && (
         <div className="file-tree-remote-bar" title={t("fileTree.remoteBarTitle")}>
           <span className="file-tree-remote-label">{t("fileSourceSwitch.remote")}</span>
           <div className="file-tree-bar-actions">
-            {/* The browsed folder's own pull control — the root's included, which
-                is the one this bar exists to give it. */}
             {folderSyncSlot}
             {syncProgress && (
               <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
@@ -2678,26 +2770,171 @@ export function FileTree({
           </div>
         </div>
       )}
-      {/* The local source needs a bar only while it has folder-sync state to
-          report. Refresh itself belongs in the existing search row below, so it
-          never creates an otherwise empty row. */}
-      {!remoteListing && (folderSyncSlot || syncProgress) && (
+      {!hostOwnsSearchChrome && !remoteListing && (folderSyncSlot || syncProgress) && (
         <div className="file-tree-local-bar">
           <div className="file-tree-bar-actions">
-            {/* The browsed folder's own push control (see `renderFolderSyncSlot`).
-                The local bar is where it matters most: a push starts from this
-                side, and at the root there was no row to start it from. */}
             {folderSyncSlot}
-            {/* Same counter, same class, same slot as the remote bar's. It belongs
-                here MORE than there: a push is started from the Local side, so this
-                is the bar that is on screen while the longest transfer in the app
-                runs. Without it the local side showed nothing at all. */}
             {syncProgress && (
               <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
                 <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
               </span>
             )}
           </div>
+        </div>
+      )}
+      {/* The toolbar row. Rendered at the ROOT too, where the breadcrumb holds
+          only ⌂ and the folder total: it is what keeps the total, the
+          right-click path editor and the drag-into-the-root target on screen
+          there. While search results replace the listing the breadcrumb steps
+          aside and the row keeps only the actions. */}
+      {(!searching || toolbarEnd !== undefined) && (
+        <div className="sp-toolbar file-tree-toolbar">
+          {!searching && pathEdit !== null && (
+            <div className="file-tree-breadcrumb file-tree-path-edit">
+              <input
+                ref={pathEditRef}
+                className="file-tree-path-input"
+                value={pathEdit}
+                spellCheck={false}
+                onChange={(e) => setPathEdit(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitPathEdit();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setPathEdit(null);
+                  }
+                }}
+                onBlur={() => setPathEdit(null)}
+              />
+            </div>
+          )}
+          {!searching && pathEdit === null && (() => {
+            // Parent of the current folder — the up button doubles as a
+            // drag-to-move target ("move into the parent dir"). The crumbs cover
+            // the other ancestors (and ⌂ the project root).
+            const parentRel = relPath.split("/").filter(Boolean).slice(0, -1).join("/");
+            return (
+              <div
+                className="file-tree-breadcrumb"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  startPathEdit();
+                }}
+              >
+                {relPath && (
+                  <button
+                    className={`file-tree-up${moveTargetRel === parentRel ? " move-drop-target" : ""}`}
+                    data-move-rel={parentRel}
+                    {...moveTargetAttrs}
+                    onClick={goUp}
+                    title={t("fileTree.goUp")}
+                    aria-label={t("fileTree.goUp")}
+                  >
+                    <ArrowUpIcon />
+                  </button>
+                )}
+                <button
+                  className={`file-tree-crumb file-tree-crumb--home${!relPath ? " current" : ""}${moveTargetRel === "" ? " move-drop-target" : ""}`}
+                  data-move-rel=""
+                  {...moveTargetAttrs}
+                  onClick={() => load("")}
+                  title={t("fileTree.projectRootTitle")}
+                  aria-label={t("fileTree.projectRootTitle")}
+                >
+                  <HomeIcon />
+                </button>
+                {relPath.split("/").filter(Boolean).map((seg, i, arr) => {
+                  const target = arr.slice(0, i + 1).join("/");
+                  const isLast = i === arr.length - 1;
+                  // When a remote listing failed, `missingCrumbDepth` marks where
+                  // the path leaves the host tree: segments before it exist on the
+                  // host (on-host), segments from it on are local-only (missing).
+                  // The cue is shape first — strike-through plus a mark for
+                  // missing — with a colour tint only as reinforcement.
+                  const missing = missingCrumbDepth !== null && i >= missingCrumbDepth;
+                  const onHost = missingCrumbDepth !== null && i < missingCrumbDepth;
+                  return (
+                    <React.Fragment key={target}>
+                      <span className="file-tree-crumb-sep">/</span>
+                      <button
+                        className={`file-tree-crumb${isLast ? " current" : ""}${moveTargetRel === target ? " move-drop-target" : ""}${missing ? " crumb-missing" : ""}${onHost ? " crumb-on-host" : ""}`}
+                        data-move-rel={target}
+                        {...moveTargetAttrs}
+                        onClick={() => { if (!isLast) load(target); }}
+                        title={
+                          missing
+                            ? t("fileTree.crumbNotOnHost", { target })
+                            : onHost
+                              ? t("fileTree.crumbOnHost", { target })
+                              : target
+                        }
+                      >
+                        {seg}
+                        {missing && <span className="file-tree-crumb-missing-mark" aria-hidden="true"><CloseIcon /></span>}
+                      </button>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          {/* The context half of the row: the folder total, then the compact sort
+              control (the narrow layout's; the wide one sorts by its column
+              heads, so the container query hides this there). */}
+          {!searching && pathEdit === null && renderGroupTotal(
+            groupSizes.regular,
+            groupSizes.regularPartial,
+            sizeTitle(t, groupSizes.regular, groupSizes.regularIgnored, t("fileTree.totalSizeShown")),
+          )}
+          {!searching && onSortChange && (
+            <span
+              className="file-tree-sort"
+              /* The whole row opens the path editor on right-click; the sort
+                 control keeps its clicks to itself. */
+              onContextMenu={(e) => e.stopPropagation()}
+            >
+              <Dropdown
+                className="file-tree-sort-key"
+                value={sortKey}
+                onChange={(v) => onSortChange(v as TreeSortKey, descending)}
+                title={t("projectFilesPane.sortByTitle", { key: t(SORT_KEY_LABEL[sortKey]) })}
+                options={TREE_SORT_KEYS.map(
+                  (key) => ({ value: key, label: t(SORT_KEY_LABEL[key]) }),
+                )}
+              />
+              <button
+                type="button"
+                className="file-tree-sort-dir"
+                onClick={() => onSortChange(sortKey, !descending)}
+                title={t(
+                  descending
+                    ? "projectFilesPane.sortDescendingTitle"
+                    : "projectFilesPane.sortAscendingTitle",
+                )}
+                aria-label={t(
+                  descending
+                    ? "projectFilesPane.sortDescendingTitle"
+                    : "projectFilesPane.sortAscendingTitle",
+                )}
+              >
+                {descending ? <ArrowDownIcon /> : <ArrowUpIcon />}
+              </button>
+            </span>
+          )}
+          {hostOwnsSearchChrome && folderSyncSlot}
+          {hostOwnsSearchChrome && syncProgress && (
+            <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
+              <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
+            </span>
+          )}
+          {toolbarEnd !== undefined && (
+            <div className="sp-toolbar-end" onContextMenu={(e) => e.stopPropagation()}>
+              {toolbarEnd}
+            </div>
+          )}
         </div>
       )}
       {/* Closed under a host that owns the chrome, there is nothing left to
@@ -2843,151 +3080,51 @@ export function FileTree({
         </div>
       )}
       {/* Search backends walk the canonical local path, so the Remote side of a
-          plain remote project has no search box. Say why in its place — the
-          Local/Remote switch is already visible in the source row — rather than
-          leaving the affordance to silently vanish. */}
-      {!canSearch && (
+          plain remote project has no search box. Say why in its place — once
+          the search is asked for, under a host that owns the toggle; a bare
+          tree says it up front, having no toggle to ask with. */}
+      {!canSearch && (searchOpen || !hostOwnsSearchChrome) && (
         <div className="file-tree-search-remote-hint">{t("fileTree.searchRemoteHint")}</div>
       )}
-      {!searching && pathEdit !== null && (
-        <div className="file-tree-breadcrumb file-tree-path-edit">
-          <input
-            ref={pathEditRef}
-            className="file-tree-path-input"
-            value={pathEdit}
-            spellCheck={false}
-            onChange={(e) => setPathEdit(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                commitPathEdit();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                setPathEdit(null);
-              }
-            }}
-            onBlur={() => setPathEdit(null)}
-          />
-        </div>
-      )}
-      {!searching && pathEdit === null && (() => {
-        // Parent of the current folder — the up button doubles as a drag-to-move
-        // target ("move into the parent dir"). The breadcrumb crumbs cover the
-        // other ancestors (and ⌂ the project root).
-        //
-        // Rendered at the ROOT too, where it holds only ⌂ and the folder total.
-        // The root used to be served by the scaffold toggle's row instead, which
-        // carried both of those as a side effect of being the one thing under
-        // the tree; with the toggle moved into Project Settings the breadcrumb
-        // is what keeps the total, the right-click path editor and the
-        // drag-into-the-root target on screen there.
-        const parentRel = relPath.split("/").filter(Boolean).slice(0, -1).join("/");
-        return (
-        <div
-          className="file-tree-breadcrumb"
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            startPathEdit();
-          }}
-        >
-          {relPath && (
-            <button
-              className={`file-tree-up${moveTargetRel === parentRel ? " move-drop-target" : ""}`}
-              data-move-rel={parentRel}
-              {...moveTargetAttrs}
-              onClick={goUp}
-              title={t("fileTree.goUp")}
-            >
-              ↑
-            </button>
-          )}
-          <button
-            className={`file-tree-crumb${!relPath ? " current" : ""}${moveTargetRel === "" ? " move-drop-target" : ""}`}
-            data-move-rel=""
-            {...moveTargetAttrs}
-            onClick={() => load("")}
-            title={t("fileTree.projectRootTitle")}
-          >
-            ⌂
-          </button>
-          {relPath.split("/").filter(Boolean).map((seg, i, arr) => {
-            const target = arr.slice(0, i + 1).join("/");
-            const isLast = i === arr.length - 1;
-            // When a remote listing failed, `missingCrumbDepth` marks where the
-            // path leaves the host tree: segments before it exist on the host
-            // (on-host), segments from it on are local-only (missing). The cue is
-            // shape first — strike-through + a ⊘ badge for missing — with a colour
-            // tint only as reinforcement, so it reads without relying on colour.
-            const missing = missingCrumbDepth !== null && i >= missingCrumbDepth;
-            const onHost = missingCrumbDepth !== null && i < missingCrumbDepth;
+      {/* The wide layout's column header (hidden in the narrow one by the
+          container query in file-tree.css). Its cells are the sort control:
+          a click sorts by that column, a second click reverses it. */}
+      {!searching && onSortChange && (
+        <div className="file-cols" role="row">
+          <span className="file-cols-pad" aria-hidden="true" />
+          <span className="file-cols-pad" aria-hidden="true" />
+          {COLUMN_SORTS.map(({ key, label, cls }) => {
+            const on = sortKey === key;
             return (
-              <React.Fragment key={target}>
-                <span className="file-tree-crumb-sep">/</span>
-                <button
-                  className={`file-tree-crumb${isLast ? " current" : ""}${moveTargetRel === target ? " move-drop-target" : ""}${missing ? " crumb-missing" : ""}${onHost ? " crumb-on-host" : ""}`}
-                  data-move-rel={target}
-                  {...moveTargetAttrs}
-                  onClick={() => { if (!isLast) load(target); }}
-                  title={
-                    missing
-                      ? t("fileTree.crumbNotOnHost", { target })
-                      : onHost
-                        ? t("fileTree.crumbOnHost", { target })
-                        : target
-                  }
-                >
-                  {seg}
-                </button>
-              </React.Fragment>
-            );
-          })}
-          {/* The row's right end: the folder total and — where the host offers
-              one — the sort control. Grouped in one flex box because both want
-              to sit right, and two independent `margin-left:auto` siblings
-              would split the free space between them instead of stacking at
-              the edge. */}
-          <span className="file-tree-crumb-end">
-            {renderGroupTotal(
-              groupSizes.regular,
-              groupSizes.regularPartial,
-              sizeTitle(t, groupSizes.regular, groupSizes.regularIgnored, t("fileTree.totalSizeShown")),
-            )}
-            {onSortChange && (
               <span
-                className="file-tree-sort"
-                /* The crumbs are drag-to-move targets and the whole row opens
-                   the path editor on right-click; neither belongs to the sort
-                   control, so it keeps its clicks to itself. */
-                onContextMenu={(e) => e.stopPropagation()}
+                key={key}
+                role="columnheader"
+                className={`file-cols-cell ${cls}`}
+                aria-sort={on ? (descending ? "descending" : "ascending") : "none"}
               >
-                <Dropdown
-                  className="file-tree-sort-key"
-                  value={sortKey}
-                  onChange={(v) => onSortChange(v as SortKey, descending)}
-                  title={t("projectFilesPane.sortByTitle", { key: t(SORT_KEY_LABEL[sortKey]) })}
-                  options={(["name", "size", "type", "created", "modified"] as SortKey[]).map(
-                    (key) => ({ value: key, label: t(SORT_KEY_LABEL[key]) }),
-                  )}
-                />
                 <button
                   type="button"
-                  className="file-tree-sort-dir"
-                  onClick={() => onSortChange(sortKey, !descending)}
-                  title={t(
-                    descending
-                      ? "projectFilesPane.sortDescendingTitle"
-                      : "projectFilesPane.sortAscendingTitle",
-                  )}
+                  className={`file-cols-sort${on ? " active" : ""}`}
+                  onClick={() => onSortChange(key, on ? !descending : false)}
+                  // Named for what it does: a bare "Git" / "Name" would read
+                  // as the view tab or a search mode of the same name.
+                  aria-label={t("projectFilesPane.sortByTitle", { key: t(label) })}
+                  title={t(on
+                    ? descending ? "projectFilesPane.sortDescendingTitle" : "projectFilesPane.sortAscendingTitle"
+                    : "projectFilesPane.sortByTitle", { key: t(label) })}
                 >
-                  {descending ? "↓" : "↑"}
+                  {t(label)}
+                  {on && (descending ? <ArrowDownIcon /> : <ArrowUpIcon />)}
                 </button>
               </span>
-            )}
+            );
+          })}
+          <span role="columnheader" className="file-cols-cell file-cols-share">
+            {t("fileTree.colShare")}
+            <UntestedTag id="fileTree.columns" />
           </span>
         </div>
-        );
-      })()}
+      )}
       </div>
       {loading && <SkeletonRows count={6} className="file-tree-skeleton" />}
       {error && <ErrorNote className="file-tree-error" error={error} />}
@@ -3037,17 +3174,6 @@ export function FileTree({
         // from `rows` alone.
         const { gitignored, hiddenExt } = sections;
         const rows = rowWindow;
-
-        // The same two run verdicts `renderEntry` hands each row, asked of every
-        // row on screen: one runnable file reserves the run-button column for
-        // all of them, so the ▶ never pushes only its own row's icon right.
-        const runnableRow = (e: FileEntry) =>
-          !e.is_dir && (shellRunnerFor(e.extension, HOST_OS) !== null
-            || (isPythonPath(e.path) && isMainScriptCached(pyMainCache, e.path)));
-        const runSlot = rows.regular.some(runnableRow)
-          || (scaffoldExpanded && rows.standard.some(runnableRow))
-          || (gitignoredExpanded && rows.gitignored.some(runnableRow))
-          || (hiddenExtExpanded && rows.hiddenExt.some(runnableRow));
 
         function renderEntry(
           e: FileEntry,
@@ -3144,6 +3270,15 @@ export function FileTree({
             treatLocal &&
             hostChildNames !== null &&
             !hostChildNames.has(e.name);
+          // The share bar measures the row against its own section's total —
+          // the figure that section's head prints.
+          const sectionTotal = doc
+            ? groupSizes.standard
+            : isGitignored
+              ? groupSizes.gitignored
+              : isHiddenExt
+                ? groupSizes.hiddenExt
+                : groupSizes.regular;
           return (
             <FileRow
               key={e.path}
@@ -3151,11 +3286,12 @@ export function FileTree({
               scaffold={isScaffold || isGitignored || isHiddenExt}
               doc={doc}
               status={status}
+              ignored={isGitignored || status === "ignored"}
               dirShown={dirShown}
+              sharePct={fastMode ? null : sharePercent(e.is_dir ? dirShown : e.size, sectionTotal)}
               scanExcluded={e.is_dir && isScanExcluded(rel)}
               canPyRun={canPyRun}
               canShRun={canShRun}
-              runSlot={runSlot}
               isRunning={isRunning}
               runLocked={runLocked}
               isCompiling={isCompiling}
@@ -3171,7 +3307,7 @@ export function FileTree({
               syncAnyBusy={!!syncProgress}
               syncThisBusy={syncProgress?.rel === rel}
               remoteListing={remoteListing}
-              remarkCount={remarksEnabled && projectId && !e.is_dir ? (remarkCounts?.[rel] ?? 0) : null}
+              remarkCount={remarksEnabled && projectId && !e.is_dir ? (remarkCounts?.[rel] ?? 0) : 0}
               ctrlHeld={ctrlHeld}
               moveTargetAttrs={moveTargetAttrs}
               rows={rowActions}
@@ -3185,27 +3321,30 @@ export function FileTree({
               <>
                 <button
                   type="button"
-                  className="file-tree-section-divider file-tree-hidden-toggle file-tree-docs-toggle"
+                  className="sp-head file-tree-section-head file-tree-docs-toggle"
                   aria-expanded={scaffoldExpanded}
                   onClick={toggleScaffold}
                   title={t(scaffoldExpanded ? "fileTree.collapseScaffold" : "fileTree.expandScaffold")}
                 >
-                  <span className="file-tree-hidden-caret">{scaffoldExpanded ? "▾" : "▸"}</span>
-                  {docsGroup.summary ? t("fileTree.docsSection") : t("fileTree.scaffoldSection", { count: docsGroup.files.length })}
-                  {docsGroup.summary && (
-                    <span className="file-docs-summary">
+                  <SectionCaret open={scaffoldExpanded} />
+                  <span>{t("fileTree.docsSection")}</span>
+                  {docsGroup.summary ? (
+                    <span className="sp-head-meta file-docs-summary">
                       {t("fileTree.docsSummary", { present: docsGroup.summary.present, total: docsGroup.summary.total })}
                       {docsGroup.summary.templates > 0 && ` · ${t(
                         docsGroup.summary.templates === 1 ? "fileTree.docsTemplatesOne" : "fileTree.docsTemplatesMany",
                         { count: docsGroup.summary.templates },
                       )}`}
                     </span>
+                  ) : (
+                    <span className="sp-count">{docsGroup.files.length}</span>
                   )}
                   <UntestedTag id="fileTree.docsSection" />
                   {renderGroupTotal(
                     groupSizes.standard,
                     groupSizes.standardPartial,
                     sizeTitle(t, groupSizes.standard, groupSizes.standardIgnored, t("fileTree.totalSizeScaffold")),
+                    "sp-head-end",
                   )}
                 </button>
                 {scaffoldExpanded && (() => {
@@ -3223,31 +3362,42 @@ export function FileTree({
                 })()}
                 {scaffoldExpanded && projectId && agentMemory.length > 0 && (
                   <>
+                    {/* A sub-head of the docs group: a row of the list (its
+                        caret in the action column, its name on the names'
+                        line), not another section head. */}
                     <button
                       type="button"
-                      className="file-tree-memory-toggle"
+                      className="file-entry file-grid file-tree-memory-toggle"
                       aria-expanded={memoryExpanded}
                       onClick={() => setMemoryExpanded((v) => !v)}
                       title={t("fileTree.agentMemoryTitle")}
                     >
-                      <span className="file-tree-hidden-caret">{memoryExpanded ? "▾" : "▸"}</span>
-                      {t("fileTree.agentMemory", { count: agentMemory.length })}
-                      <UntestedTag id="fileTree.agentMemory" />
+                      <span className="sp-row-state file-state" />
+                      <span className="sp-row-act file-act"><SectionCaret open={memoryExpanded} /></span>
+                      <span className="sp-row-main file-main">
+                        <span className="file-name">{t("fileTree.agentMemoryHead")}</span>
+                        <span className="sp-count">{agentMemory.length}</span>
+                        <UntestedTag id="fileTree.agentMemory" />
+                      </span>
                     </button>
                     {memoryExpanded && agentMemory.map((m) => (
                       <button
                         type="button"
                         key={`${m.home}:${m.cli}:${m.name}`}
-                        className="file-entry doc-memory"
+                        className="file-entry file-grid doc-memory"
                         title={t("fileTree.memoryOpenTitle", { name: m.name })}
                         onClick={() => setMemoryPreview(m)}
                       >
-                        <span className="file-icon"><FileIcon ext=".md" isDir={false} /></span>
-                        <span className="file-name">{m.name}</span>
-                        <span className="file-doc-badge">
-                          {AGENT_MEMORY_CLI_NAME[m.cli]}{m.home === "local" ? ` · ${t("fileTree.memoryLocal")}` : ""}
+                        <span className="sp-row-state file-state" />
+                        <span className="sp-row-act file-act" />
+                        <span className="sp-row-main file-main">
+                          <span className="file-icon"><FileIcon ext=".md" isDir={false} /></span>
+                          <span className="file-name">{m.name}</span>
+                          <span className="file-doc-badge">
+                            {AGENT_MEMORY_CLI_NAME[m.cli]}{m.home === "local" ? ` · ${t("fileTree.memoryLocal")}` : ""}
+                          </span>
                         </span>
-                        <span className="file-size size-small">{fmtSize(m.bytes)}</span>
+                        <span className="file-size">{fmtSize(m.bytes)}</span>
                       </button>
                     ))}
                   </>
@@ -3259,7 +3409,7 @@ export function FileTree({
               <>
                 <button
                   type="button"
-                  className="file-tree-section-divider file-tree-hidden-toggle"
+                  className="sp-head file-tree-section-head"
                   aria-expanded={gitignoredExpanded}
                   onClick={() => setGitignoredExpanded((v) => {
                     const next = !v;
@@ -3268,12 +3418,14 @@ export function FileTree({
                   })}
                   title={t(gitignoredExpanded ? "fileTree.collapseGitignored" : "fileTree.expandGitignored")}
                 >
-                  <span className="file-tree-hidden-caret">{gitignoredExpanded ? "▾" : "▸"}</span>
-                  {t("fileTree.gitignoredSection", { count: gitignored.length })}
+                  <SectionCaret open={gitignoredExpanded} />
+                  <span>{t("fileTree.gitignoredHead")}</span>
+                  <span className="sp-count">{gitignored.length}</span>
                   {renderGroupTotal(
                     groupSizes.gitignored,
                     groupSizes.gitignoredPartial,
                     t("fileTree.totalSizeGitignored"),
+                    "sp-head-end",
                   )}
                 </button>
                 {gitignoredExpanded && rows.gitignored.map((e) => renderEntry(e, false, true))}
@@ -3283,7 +3435,7 @@ export function FileTree({
               <>
                 <button
                   type="button"
-                  className="file-tree-section-divider file-tree-hidden-toggle"
+                  className="sp-head file-tree-section-head"
                   aria-expanded={hiddenExtExpanded}
                   onClick={() => setHiddenExtExpanded((v) => {
                     const next = !v;
@@ -3292,12 +3444,14 @@ export function FileTree({
                   })}
                   title={t(hiddenExtExpanded ? "fileTree.collapseHiddenExt" : "fileTree.expandHiddenExt")}
                 >
-                  <span className="file-tree-hidden-caret">{hiddenExtExpanded ? "▾" : "▸"}</span>
-                  {t("fileTree.hiddenExtSection", { count: hiddenExt.length })}
+                  <SectionCaret open={hiddenExtExpanded} />
+                  <span>{t("fileTree.hiddenExtHead")}</span>
+                  <span className="sp-count">{hiddenExt.length}</span>
                   {renderGroupTotal(
                     groupSizes.hiddenExt,
                     groupSizes.hiddenExtPartial,
                     t("fileTree.totalSizeHiddenExt"),
+                    "sp-head-end",
                   )}
                 </button>
                 {hiddenExtExpanded && rows.hiddenExt.map((e) => renderEntry(e, false, false, true))}
@@ -3310,7 +3464,7 @@ export function FileTree({
               // bounded, and a "show all" would hand back the freeze it prevents.
               <button
                 type="button"
-                className="file-tree-section-divider file-tree-more"
+                className="btn-quiet file-tree-more"
                 onClick={() => setRowCap((n) => n + ROW_CAP_STEP)}
                 title={t("fileTree.showMoreTitle", {
                   shown: orderedVisible.length,

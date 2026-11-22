@@ -95,11 +95,11 @@ async function renderPanel() {
 }
 
 /** A toolbar button by its glyph, or — for the drawn search icon, which has
- *  no text — by its label. The search fold and the ↻ re-list both live in
- *  the panel's action row (below the view tabs), not in a row of the tree's
- *  own. */
+ *  no text — by its label. The search fold and the ↻ re-list are the host's
+ *  actions at the end of the Files view's one toolbar row (the tree's
+ *  breadcrumb row), not in a row of their own. */
 function toolbarBtn(glyph: string): HTMLButtonElement {
-  const toolbar = document.querySelector(".side-panel-actions");
+  const toolbar = document.querySelector(".file-tree-toolbar .sp-toolbar-end");
   expect(toolbar).toBeTruthy();
   const btn = [...toolbar!.querySelectorAll("button")].find((b) =>
     glyph === "🔍"
@@ -298,7 +298,7 @@ describe("in-tree project search", () => {
     });
   });
 
-  it("a remote-source listing shows the switch-to-Local hint instead of the box", async () => {
+  it("a remote-source listing shows the switch-to-Local hint instead of the box, once search is asked for", async () => {
     const remoteProject = {
       ...PROJECT,
       remote: { host: "h", user: "u", remote_path: "/srv/p1" },
@@ -308,6 +308,9 @@ describe("in-tree project search", () => {
     useFileSourcePrefStore.setState({ byProject: { p1: "remote" }, byViewer: {} });
 
     await renderPanel();
+    // Closed, the hint spends no row: it answers the toolbar's search button.
+    expect(document.querySelector(".file-tree-search-remote-hint")).toBeNull();
+    fireEvent.click(toolbarBtn("🔍"));
     expect(document.querySelector(".file-tree-search-input")).toBeNull();
     const hint = document.querySelector(".file-tree-search-remote-hint");
     expect(hint).toBeTruthy();

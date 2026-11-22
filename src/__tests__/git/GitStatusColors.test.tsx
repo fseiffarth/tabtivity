@@ -1,8 +1,9 @@
 /**
  * Tests for git status color bars:
- * - STATUS_COLOR mapping (untracked/modified=danger, staged=warning,
- *   unpushed=success, ignored=muted — theme TOKENS, never hardcoded hexes,
- *   so the light themes' own palettes apply; see lib/theme/gitColors)
+ * - STATUS_COLOR mapping (untracked=secondary text, modified=warning,
+ *   staged=info, unpushed=success, ignored=muted — theme TOKENS, never
+ *   hardcoded hexes, so the light themes' own palettes apply; never the danger
+ *   token, which is for errors and destructive actions; see lib/theme/gitColors)
  * - SidePanel git action buttons have correct color bars
  * - Hovering a button shows the relevant staged/unpushed list
  */
@@ -78,16 +79,16 @@ function setupInvoke({
 }
 
 describe("STATUS_COLOR", () => {
-  it("untracked is the danger token", () => {
-    expect(STATUS_COLOR.untracked).toBe("var(--danger)");
+  it("untracked is the secondary-text token", () => {
+    expect(STATUS_COLOR.untracked).toBe("var(--text-secondary)");
   });
 
-  it("modified is the danger token", () => {
-    expect(STATUS_COLOR.modified).toBe("var(--danger)");
+  it("modified is the warning token", () => {
+    expect(STATUS_COLOR.modified).toBe("var(--warning)");
   });
 
-  it("staged is the warning token", () => {
-    expect(STATUS_COLOR.staged).toBe("var(--warning)");
+  it("staged is the info token, not the accent", () => {
+    expect(STATUS_COLOR.staged).toBe("var(--info)");
   });
 
   it("unpushed is the success token", () => {
@@ -101,6 +102,12 @@ describe("STATUS_COLOR", () => {
   it("never hardcodes a hex — the light themes define their own palette", () => {
     for (const color of Object.values(STATUS_COLOR)) {
       expect(color).toMatch(/^var\(--[a-z-]+\)$/);
+    }
+  });
+
+  it("never paints ordinary git state red", () => {
+    for (const color of Object.values(STATUS_COLOR)) {
+      expect(color).not.toBe("var(--danger)");
     }
   });
 });
@@ -125,11 +132,11 @@ describe("git action button bars", () => {
     return result!;
   }
 
-  it("Add button has the danger status dot", async () => {
+  it("Add button has the modified (warning) status dot", async () => {
     setupInvoke({ untracked: 1 });
     await renderOpenPanel();
     const bar = await screen.findByTestId("add-bar");
-    expect(bar.style.background).toBe("var(--danger)");
+    expect(bar.style.background).toBe("var(--warning)");
   });
 
   it("flags the Git button with the next pending action colour", async () => {
@@ -140,14 +147,14 @@ describe("git action button bars", () => {
       button.querySelector(".toolbar-btn-flag"),
     );
     expect(flag).not.toBeNull();
-    expect((flag as HTMLElement).style.backgroundColor).toBe("var(--warning)");
+    expect((flag as HTMLElement).style.backgroundColor).toBe("var(--info)");
   });
 
-  it("Commit button has the warning status dot", async () => {
+  it("Commit button has the staged (info) status dot", async () => {
     setupInvoke({ staged: 1 });
     await renderOpenPanel();
     const bar = await screen.findByTestId("commit-bar");
-    expect(bar.style.background).toBe("var(--warning)");
+    expect(bar.style.background).toBe("var(--info)");
   });
 
   it("Push button has the success status dot when remote present and commits ahead", async () => {

@@ -185,7 +185,9 @@ describe("file tree folder sizes", () => {
       render(<SidePanel open={true} />);
     });
 
-    expect(await screen.findByText("gitignored (1)")).toBeTruthy();
+    const head = (await screen.findByText("Gitignored")).closest("button") as HTMLElement;
+    expect(head.classList.contains("sp-head")).toBe(true);
+    expect(head.querySelector(".sp-count")?.textContent).toBe("1");
     expect(screen.queryByText("cache")).toBeNull();
   });
 
