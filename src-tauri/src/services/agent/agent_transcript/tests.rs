@@ -273,12 +273,12 @@ fn two_waiting_claude_questions_come_last_in_the_order_they_were_asked() {
 fn a_subagent_files_questions_are_never_waiting() {
     let line = probe_ask("toolu_S", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z").replace("\"isSidechain\":false", "\"isSidechain\":true");
     let lines: Vec<&str> = line.lines().collect();
-    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, true);
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, true, None);
     assert!(entries.iter().all(|e| e.questions.is_empty()), "{entries:?}");
     // The same call in the session's own file does wait.
     let own = probe_ask("toolu_S", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z");
     let lines: Vec<&str> = own.lines().collect();
-    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, false);
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, false, None);
     assert_eq!(entries.len(), 1);
     assert!(entries[0].blocking);
 }
@@ -382,9 +382,9 @@ fn a_rejected_call_a_new_prompt_or_an_interrupt_ends_the_wait() {
 fn waiting_tools_skip_a_subagent_file_odd_names_and_are_bounded() {
     let call = tool_call("toolu_S", "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
     let lines: Vec<&str> = call.lines().collect();
-    let (_, _, sidechain) = parse_entries(&lines, TranscriptKind::Claude, true);
+    let (_, _, sidechain) = parse_entries(&lines, TranscriptKind::Claude, true, None);
     assert!(sidechain.tools.is_empty());
-    let (_, _, own) = parse_entries(&lines, TranscriptKind::Claude, false);
+    let (_, _, own) = parse_entries(&lines, TranscriptKind::Claude, false, None);
     assert_eq!(own.tools.len(), 1);
 
     let mut text = probe_prompt("go");
@@ -422,7 +422,7 @@ fn a_tail_of_unique_tool_calls_and_asks_is_walked_in_linear_time() {
         }
         let lines: Vec<&str> = text.lines().collect();
         let started = std::time::Instant::now();
-        let (entries, _, shell_calls) = parse_entries(&lines, TranscriptKind::Claude, false);
+        let (entries, _, shell_calls) = parse_entries(&lines, TranscriptKind::Claude, false, None);
         (started.elapsed(), entries, shell_calls)
     };
     let (small, ..) = run(30_000);
@@ -1549,6 +1549,32 @@ fn a_claude_background_shell_runs_while_its_output_is_held_open_and_no_notificat
 }
 
 #[test]
+fn codex_recovers_only_an_interrupted_turns_missing_prompt_from_its_own_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = dir.path().join(".codex");
+    std::fs::create_dir(&codex).unwrap();
+    std::fs::write(codex.join("history.jsonl"), [
+        r#"{"session_id":"other","ts":10,"text":"another tab"}"#,
+        r#"{"session_id":"ours","ts":10,"text":"first @image.png"}"#,
+        r#"{"session_id":"ours","ts":11,"text":"continue"}"#,
+        r#"{"session_id":"ours","ts":12,"text":"ambiguous"}"#,
+        r#"{"session_id":"ours","ts":12,"text":"also ambiguous"}"#,
+    ].join("\n")).unwrap();
+    let lines = [
+        r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}"#,
+        r#"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"one","started_at":10}}"#,
+        r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"two"}}"#,
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}"#,
+        r#"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"two","started_at":11}}"#,
+        r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"three"}}"#,
+        r#"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"three","started_at":12}}"#,
+    ];
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Codex, false, Some((dir.path(), "ours")));
+    let texts: Vec<_> = entries.iter().map(|entry| entry.text.as_str()).collect();
+    assert_eq!(texts, ["first @image.png", "interrupted", "continue", "interrupted", "interrupted"]);
+}
+
+#[test]
 fn a_codex_subagent_is_placed_when_its_thread_was_created() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state_5.sqlite");
@@ -1577,7 +1603,7 @@ fn a_codex_subagent_is_placed_when_its_thread_was_created() {
     )
     .unwrap();
     let stores = [db.clone()];
-    let read = read_transcript_in(&path, TranscriptKind::Codex, &Spawns::Codex { stores: &stores, thread: "root" }, false, None, DEFAULT_LIMIT).unwrap();
+    let read = read_transcript_in(&path, TranscriptKind::Codex, &Spawns::Codex { stores: &stores, home: dir.path(), thread: "root" }, false, None, DEFAULT_LIMIT).unwrap();
     // 1789680030000 ms is 2026-09-17T21:20:30Z: after the prompt, before the answer.
     assert_eq!(kinds(&read), vec![("prompt", "audit deps"), ("agent", "Check the lockfile"), ("answer", "Asked Kepler.")]);
     assert_eq!(read.entries[1].role.as_deref(), Some("explorer · Kepler"));
