@@ -29,12 +29,34 @@
   - [x] 🤖 Automated test (`DiffNotes.test.ts`, `ReaderDiffNotes.test.tsx`)
   - [ ] 🖐️ Manual QA: in a Claude tab with a few edits open Diffs; click the **+**
     on an added range (Shift+click extends) and on a deleted line in two files,
-    in split, then unified; **Add to draft**: the Chat composer holds the prompt
+    in split, then unified; **Add to draft**: the field under Diffs holds the prompt
     (file:lines, the quoted diff, your note) and the notes are gone; nothing was
     sent. Check the **+** button over the first line-number gutter and the note
     box on a horizontally scrolled diff on the real paint path; **C** inside
     Diffs starts a note on the cursor card's first changed line. Repeat on a
     subagent's Diffs.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] **The Chat's input field docked under Diffs and Data** (implemented
+  2026-11-22, never live; frontend only). Plan `docs/agent_input_dock_plan.md`,
+  handoff `docs/agent_input_dock_handoff.md`; pill `terminal.reader.dock`.
+  - [x] 🤖 Automated test (`ReaderInputDock.test.tsx`, `TerminalReaderToolbar.test.tsx`,
+    `TerminalReaderChanges.test.tsx`, `ReaderDiffNotes.test.tsx`, `TerminalReaderView.test.tsx`)
+  - [ ] 🖐️ Manual QA: agent tab → Diffs: a one-line field under the diff cards;
+    click it: facts row and chips appear, Plan toggles and the dock stays open;
+    type, switch to Chat: same draft. Send from Diffs: the view stays, a status
+    line shows working and Stop. A diff note's **Add to draft**: Diffs stays,
+    the field opens. Data: the same field; `/` opens the slash menu over the
+    file viewer, not under it; Terminal: no field. A permission ask while in
+    Diffs: status line, disabled field, **Answer in Chat** switches with the
+    keyboard on the question's rows. Steering inside Diffs: Space opens the
+    docked field, Esc returns to the Diffs cursor, S/F still scroll the diffs.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

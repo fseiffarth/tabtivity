@@ -352,8 +352,11 @@ conversation shows Claude's own estimate in dollars instead.
 **Diffs** lists the files the conversation changed, newest first. Click the **+**
 in the gutter of a diff line (Shift+click another line of the same hunk for a
 range) to write the agent a note; **Add to draft** in the header puts all your
-notes, each with the lines it is about, into the Chat's text box for you to
-read, edit and send. Nothing is sent for you. With the experimental per-turn
+notes, each with the lines it is about, into the text box under Diffs for you
+to read, edit and send. Nothing is sent for you. The chat's text box stays
+under Diffs and Files as one line, holding the same draft as in Chat; click it
+and it opens with its chips, and a line over it says when the agent is working
+(with Stop) or asks a question (**Answer in Chat**). With the experimental per-turn
 checkpoints on, you can also put the files back to before one of your prompts
 (see `checkpoints`).
 
