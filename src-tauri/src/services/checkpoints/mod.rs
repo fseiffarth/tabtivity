@@ -1,4 +1,4 @@
-//! Per-turn checkpoints (`docs/turn_checkpoints_plan.md`,
+//! Per-turn checkpoints (`docs/done/turn_checkpoints_plan.md`,
 //! `docs/context/checkpoints.md`): a snapshot of an agent tab's folder as each
 //! turn begins and ends, and a way to put files back.
 //!

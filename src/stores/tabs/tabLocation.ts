@@ -94,7 +94,7 @@ export function effectiveTabLocation(
   opts?: {
     /** The owning project lives only on its host (`isHostPinned`: a VM,
      *  `docs/vm_projects_plan.md`, or a remote-only project,
-     *  `docs/remote_only_projects_plan.md`), so locality is PINNED to the
+     *  `docs/done/remote_only_projects_plan.md`), so locality is PINNED to the
      *  host — the agents-default-local rule below is precisely the escape
      *  those projects forbid, and any stored `location: "local"` (e.g. a
      *  persisted layout an in-VM agent could have written) is overridden,

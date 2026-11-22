@@ -2967,7 +2967,7 @@ pub async fn ollama_context_plan() -> OllamaContextPlan {
 /// last request (Ollama's default: 5 minutes). A request can ask for its own,
 /// but agents talk to Ollama through `/v1`, which cannot — so an idle local
 /// OpenCode tab's model was gone after 5 minutes, and with it the prompt Ollama
-/// had already read (`docs/cli_caching_plan.md` phase 5).
+/// had already read (`docs/done/cli_caching_plan.md` phase 5).
 const KEEP_ALIVE_VAR: &str = "OLLAMA_KEEP_ALIVE";
 
 /// The values the setting may hold; anything else (a hand edit) is unset.

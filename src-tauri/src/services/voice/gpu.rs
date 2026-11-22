@@ -1,4 +1,4 @@
-//! Where whisper runs (docs/voice_gpu_plan.md): the device a load really got,
+//! Where whisper runs (docs/done/voice_gpu_plan.md): the device a load really got,
 //! which whisper only tells its log, and the guard that keeps a GPU that took
 //! the app down from doing it twice.
 //!

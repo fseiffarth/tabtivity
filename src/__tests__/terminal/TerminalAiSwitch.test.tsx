@@ -1,6 +1,6 @@
 /**
  * The AI switch in a real agent pane (`lib/aiSwitch.ts`,
- * `docs/ai_switch_plan.md`): a spawn the backend refuses with `ai_off` is not
+ * `docs/done/ai_switch_plan.md`): a spawn the backend refuses with `ai_off` is not
  * a failed tab — it says so, waits, and spawns itself once the switch goes
  * back on; while AI is off the pane wears the "AI is off" pill. The settings
  * store is the real one, as the side panel's ⏻ writes it.

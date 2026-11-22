@@ -4,7 +4,7 @@ import { splitDiffRows } from "../viewers/diffRows";
 
 /**
  * Notes a user leaves on lines of the Reader's Diffs tab, and the one prompt
- * they are turned into (`docs/diff_notes_plan.md`). Pure: the store that holds
+ * they are turned into (`docs/done/diff_notes_plan.md`). Pure: the store that holds
  * them is `stores/agents/diffNotes`, the UI `TerminalReaderChanges`.
  */
 

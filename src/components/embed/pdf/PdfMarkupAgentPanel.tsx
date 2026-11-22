@@ -1,5 +1,5 @@
 /**
- * The desktop markup mode's agent panel (`docs/markup_notes_style_plan.md`):
+ * The desktop markup mode's agent panel (`docs/done/markup_notes_style_plan.md`):
  * everything the agent's round says, behind the send header's **Agent**
  * badge, opened by it only — the round's pill, a dialog the target tab waits
  * on, the agent's questions (`PdfMarkupQuestions`), its ✓ groups and Approve

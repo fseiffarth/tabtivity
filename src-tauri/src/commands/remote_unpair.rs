@@ -1,4 +1,4 @@
-//! Remote → Remote-only conversion (`docs/remote_only_projects_plan.md` E8):
+//! Remote → Remote-only conversion (`docs/done/remote_only_projects_plan.md` E8):
 //! a plain Remote project stops keeping its local mirror. The reverse
 //! (Remote-only → Remote) is `set_remote_mirror_dir` with `keepLocalCopy`.
 //!

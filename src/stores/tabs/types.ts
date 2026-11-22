@@ -459,7 +459,7 @@ export interface TabEntry {
   // anything is spawned (see TabPane's HostSessionHold).
   hostSessionPaused?: boolean;
   // Runtime only: the agent tab's process was ended to free memory and the
-  // tab kept (`stores/agents/agentTabStop`, plan `docs/agent_tab_stop_plan.md`).
+  // tab kept (`stores/agents/agentTabStop`, plan `docs/done/agent_tab_stop_plan.md`).
   // Nothing is spawned for it (`PaneSlot` draws `StoppedPane`); shown again it
   // respawns on its resume args. Never saved, never copied by a duplicate or
   // kept by the closed-tab record.

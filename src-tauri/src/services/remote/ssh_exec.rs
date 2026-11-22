@@ -1057,7 +1057,7 @@ pub fn ssh_control_check_args(remote: &RemoteSpec) -> Result<Vec<String>, String
 //
 // The phone reaches a remote-host tab's tmux session through the desktop's
 // ControlMaster for that host and nothing else
-// (`docs/mobile_remote_host_tabs_plan.md`): it never opens a connection and
+// (`docs/done/mobile_remote_host_tabs_plan.md`): it never opens a connection and
 // never prompts. Everything below is pure argv/string building, compiled and
 // tested on every OS; only [`master_alive`] spawns.
 

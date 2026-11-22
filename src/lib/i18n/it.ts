@@ -8470,7 +8470,7 @@ export const dict: Dict = {
   "fileTree.unignoreFromGitignore": "Mostra da .gitignore",
   "fileTree.setDefaultAppEllipsis": "Imposta app predefinita…",
 
-  // Mail — the embedded IMAP/SMTP client (docs/mail_client_plan_a.md,
+  // Mail — the embedded IMAP/SMTP client (docs/done/mail_client_plan_a.md,
   // docs/mail_client_plan_b.md). Behind the `mail_client` experimental flag.
   // Browser — the in-app browser (#61).
   "newTabMenu.browser": "Browser",
@@ -12283,7 +12283,7 @@ export const dict: Dict = {
   "mobile.project.restarting": "Riavvio in corso perché il telefono possa aprirla…",
   "mobile.project.restartFailed": "La scheda non è tornata disponibile sul computer. Riprova o aprila lì.",
   "mobile.assistant.startFailed": "La chat non è partita. La finestra del computer è aperta?",
-  // ── Phone Home + project screen redesign (docs/mobile_home_redesign_plan.md) ──
+  // ── Phone Home + project screen redesign (docs/done/mobile_home_redesign_plan.md) ──
   "mobile.home.needsYou": "Ti aspetta",
   "mobile.home.needsShowAll": "Mostra tutte ({count})",
   "mobile.home.glance": "Agenti a colpo d'occhio",

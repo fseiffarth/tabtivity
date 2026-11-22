@@ -1,5 +1,5 @@
 /**
- * Local → Remote-only (`docs/remote_only_projects_plan.md` D7): the Extend
+ * Local → Remote-only (`docs/done/remote_only_projects_plan.md` D7): the Extend
  * dialog's "Keep a local copy" switch. Off, the project is extended as usual
  * (lockstep carries the history up) and `onExtended(false)` hands it to the
  * pill's Stop-keeping check; the big-folders prompt is skipped, since nothing

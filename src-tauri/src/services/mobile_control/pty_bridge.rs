@@ -163,7 +163,7 @@ impl TerminalRegistry {
     }
 }
 
-/// What a phone's terminal attaches to (`docs/mobile_remote_host_tabs_plan.md`).
+/// What a phone's terminal attaches to (`docs/done/mobile_remote_host_tabs_plan.md`).
 /// The viewer registry is keyed by the session name either way.
 #[derive(Debug, Clone)]
 pub enum AttachTarget {

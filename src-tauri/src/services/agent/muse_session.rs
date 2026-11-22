@@ -17,7 +17,7 @@
 //! takes, and by the Resume menu for the one it takes a tab onto. At each
 //! spawn where the hook is registered, a host-only launch note
 //! (`live_sessions/<uid>.muse`) says the tab ran with it. The rule
-//! ([`resolve`], `docs/agent_tab_resume_plan.md` decision 6):
+//! ([`resolve`], `docs/done/agent_tab_resume_plan.md` decision 6):
 //!
 //! - noted at an earlier spawn, and the record names a session of the folder:
 //!   `resume <id>` — the record is the tab's, whatever began since;

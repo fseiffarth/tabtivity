@@ -1,5 +1,5 @@
 /**
- * Remote ⇄ Remote-only from the pill's Edit group (`docs/remote_only_projects_plan.md`
+ * Remote ⇄ Remote-only from the pill's Edit group (`docs/done/remote_only_projects_plan.md`
  * E8/F9). "Stop keeping a local copy…" previews what lives only in the mirror and
  * keeps the confirm disarmed while anything does (local tabs included); once clean
  * it sends the preview's fingerprint and names the folder the mirror is kept at. A

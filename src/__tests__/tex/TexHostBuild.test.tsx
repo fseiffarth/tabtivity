@@ -1,6 +1,6 @@
 /**
  * Viewers of a host-pinned project (a VM or remote-only project,
- * `isHostPinned`; `docs/remote_only_projects_plan.md` D6/F5):
+ * `isHostPinned`; `docs/done/remote_only_projects_plan.md` D6/F5):
  *  - TeX Compile builds on the host in the background (`compile_tex_host`,
  *    never `compile_tex`), opens no tab of its own, and opens the PDF tab from
  *    the build's answer;

@@ -58,7 +58,7 @@ pub fn windows_closed_with_main<'a>(labels: impl IntoIterator<Item = &'a str>) -
 }
 
 /// What is being presented, for the privacy curtain
-/// (`docs/privacy_curtain_plan.md`): `None` while no presentation window
+/// (`docs/done/privacy_curtain_plan.md`): `None` while no presentation window
 /// (`present-*`) is open, else `"deck"` when a deck audience window is among
 /// them and `"pdf"` when only PDF present windows (`present-pdf-*`) are.
 ///

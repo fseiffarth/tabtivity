@@ -1,5 +1,5 @@
 /**
- * The stop sweep (`AgentTabStopHost`, `docs/agent_tab_stop_plan.md` §6): with
+ * The stop sweep (`AgentTabStopHost`, `docs/done/agent_tab_stop_plan.md` §6): with
  * fake timers and a mocked backend, it stops the least recently used tabs
  * past the cap, idle tabs and — while memory is low — the least recently used
  * whatever their idle time; it never stops a tab the backend says has no

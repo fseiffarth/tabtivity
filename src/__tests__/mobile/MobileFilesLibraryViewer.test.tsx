@@ -1,5 +1,5 @@
 /**
- * The files library and the viewer laid over it (`docs/phone_files_browsing_plan.md`,
+ * The files library and the viewer laid over it (`docs/done/phone_files_browsing_plan.md`,
  * batch A): the list stays mounted under an open file and keeps its scroll
  * place per folder, Escape over a viewer is Back, refusals are said, a file
  * the phone cannot draw (or one past the desktop's cap) is a card rather than

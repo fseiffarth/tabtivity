@@ -1,6 +1,6 @@
 /**
  * The side panel's Apps view is honest about what a project switch hides
- * (docs/wayland_app_parking_plan.md, Phase 3): under Wayland on a desktop that
+ * (docs/done/wayland_app_parking_plan.md, Phase 3): under Wayland on a desktop that
  * parks (GNOME on the `x11` backend), a row with no window id — not an
  * XWayland window — says it stays on screen; a desktop that parks nothing says
  * so once for the list; an older backend or the browser client (`{}`) gets

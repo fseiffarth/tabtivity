@@ -2178,7 +2178,7 @@ export function SettingsDialog({
               }
             />
 
-            {/* Stopping idle agent tabs (docs/agent_tab_stop_plan.md): read by
+            {/* Stopping idle agent tabs (docs/done/agent_tab_stop_plan.md): read by
                 `AgentTabStopHost` through `lib/agents/agentTabStop`'s readers;
                 unset means the default, 0 switches a trigger off. */}
             <SettingRow

@@ -1,4 +1,4 @@
-//! Revival without restart (`docs/mcp_reattach_plan.md`, Phase 2): a local
+//! Revival without restart (`docs/done/mcp_reattach_plan.md`, Phase 2): a local
 //! agent that outlived a crash in its tmux session keeps the MCP tokens it was
 //! started with, and this module lets the restarted listener honour some of
 //! them again instead of flagging the tab stale.

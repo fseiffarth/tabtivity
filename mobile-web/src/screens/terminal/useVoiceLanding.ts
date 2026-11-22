@@ -1,4 +1,4 @@
-// The other half of a spoken jump (docs/voice_nav_mode_plan.md, decisions 5–6):
+// The other half of a spoken jump (docs/done/voice_nav_mode_plan.md, decisions 5–6):
 // the screen a jump opened takes the note the jump left (`voiceNav.ts`), says
 // where the reader landed — their last prompt there, then the agent's answer to
 // it, through the same reading cursor any answer is read with — and then opens

@@ -8935,7 +8935,7 @@ export const enSource = {
   "browser.errorGeneric": "The page could not be opened. {detail}",
   "browser.liveBlocked": "A live page window was stopped from going to {url}.",
 
-  // Mail — the embedded IMAP/SMTP client (docs/mail_client_plan_a.md,
+  // Mail — the embedded IMAP/SMTP client (docs/done/mail_client_plan_a.md,
   // docs/mail_client_plan_b.md). Behind the `mail_client` experimental flag.
   // ── Print preview (lib/viewers/print.ts) ─────────────────────────────────
   // The dialog is DOM-built outside React, so it reads these through
@@ -12378,7 +12378,7 @@ export const enSource = {
   "mobile.project.restarting": "Restarting it so the phone can open it…",
   "mobile.project.restartFailed": "The tab did not come back on the desktop. Try again, or open it there.",
   "mobile.assistant.startFailed": "The chat did not start. Is the desktop window open?",
-  // ── Phone Home + project screen redesign (docs/mobile_home_redesign_plan.md) ──
+  // ── Phone Home + project screen redesign (docs/done/mobile_home_redesign_plan.md) ──
   "mobile.home.needsYou": "Needs you",
   "mobile.home.needsShowAll": "Show all {count}",
   "mobile.home.glance": "Agents at a glance",

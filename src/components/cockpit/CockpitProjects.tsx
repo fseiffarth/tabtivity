@@ -272,7 +272,7 @@ function NotOpenLine({ cards }: { cards: ProjectCard[] }) {
 
 /**
  * The Projects view (`docs/desktop_cockpit_plan.md`, View 2; compact rows per
- * `docs/cockpit_declutter_plan.md`): a ~34 px row per open project, grouped by
+ * `docs/done/cockpit_declutter_plan.md`): a ~34 px row per open project, grouped by
  * box under *All*, and the projects that are not open folded into one line per
  * box. It probes nothing: git dots, remote lamps and sync states are the
  * stores' own readings, time worked is the timer's committed figure, push

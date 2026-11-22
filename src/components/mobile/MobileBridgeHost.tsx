@@ -522,7 +522,7 @@ function assistantPhoneOpen(): boolean {
   return experimentalEnabled(settings, "assistant") && settings?.[MOBILE_HOST_KEY]?.assistant_access !== false;
 }
 
-/** The chat assistant as a phone scope (`docs/assistant_plan.md`, decision 12).
+/** The chat assistant as a phone scope (`docs/done/assistant_plan.md`, decision 12).
  * No project and no folder the phone may use: `cwd` is empty on purpose, so
  * the project-shaped paths that need one (a shell, an inbox, a worktree)
  * answer `project_ineligible` for it, and `create` takes its own branch. */

@@ -5,7 +5,7 @@ import { forgetAgentTabMarks, noteAgentPaneShown, noteAgentTabStarted } from "..
 import { noteAgentTabUsed, wakeAgentTab } from "../../stores/agents/agentTabStop";
 
 /**
- * The pane layer's part in stopping agent tabs (`docs/agent_tab_stop_plan.md`
+ * The pane layer's part in stopping agent tabs (`docs/done/agent_tab_stop_plan.md`
  * §3–§5), for one `PaneSlot`. Returns whether the tab is stopped, so the slot
  * renders `StoppedPane` in place of its `TabPane`.
  *

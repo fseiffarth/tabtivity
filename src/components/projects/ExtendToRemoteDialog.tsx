@@ -45,7 +45,7 @@ import { CloseIcon } from "../common/icons/Icon";
  * not by this project), though a saved password for that host target is
  * picked up automatically since the keychain is keyed by host, not project.
  *
- * **Local → Remote-only** (`docs/remote_only_projects_plan.md` D7) is this
+ * **Local → Remote-only** (`docs/done/remote_only_projects_plan.md` D7) is this
  * dialog with "Keep a local copy" off (`initialKeepLocalCopy={false}` from the
  * pill's "Make remote only…"): the project is extended exactly as above —
  * lockstep carries its committed history to the empty host folder — and

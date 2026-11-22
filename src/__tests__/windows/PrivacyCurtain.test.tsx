@@ -1,5 +1,5 @@
 /**
- * The privacy curtain (docs/privacy_curtain_plan.md): presenting covers every
+ * The privacy curtain (docs/done/privacy_curtain_plan.md): presenting covers every
  * other app window; only the user's Show click (or the shortcut) lifts it, per
  * window; nothing behind it takes keys; a deck presenter stays visible.
  */

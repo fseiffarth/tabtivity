@@ -1,6 +1,6 @@
 /**
  * Steering between windows (the cross-window protocol of
- * `docs/steering_popout_plan.md`): one window steers at a time, and steering
+ * `docs/done/steering_popout_plan.md`): one window steers at a time, and steering
  * follows the keyboard. A popout's Main window key (Home / 0) and its main-only
  * keys hand over to the main window; J walks the popouts only (Up stops at the
  * title bar); and a window that did not get the keyboard never announces, so

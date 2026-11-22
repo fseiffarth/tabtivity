@@ -4624,7 +4624,7 @@ select.file-viewer-run-args-input {
 .file-viewer-pdf-markup-note-colors {
   margin: 4px 0;
 }
-/* ── The markup dock (`PdfMarkupDock`, docs/markup_notes_style_plan.md) ──
+/* ── The markup dock (`PdfMarkupDock`, docs/done/markup_notes_style_plan.md) ──
    A `.context-menu` surface (the floating recipe paints it) held over the
    pages instead of portaled: absolute in the scroll wrap, clear of the page
    rail and the agent panel (`--dock-inset-*`, measured by the dock). Size and

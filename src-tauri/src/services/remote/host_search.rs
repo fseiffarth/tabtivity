@@ -1,5 +1,5 @@
 //! Content search and quick open on a remote-only project's host
-//! (`docs/remote_only_projects_plan.md`, E6a).
+//! (`docs/done/remote_only_projects_plan.md`, E6a).
 //!
 //! A remote-only project has no local tree, so `commands::search::project_search`
 //! and `commands::fs::list_project_paths` answer from the host: one bounded

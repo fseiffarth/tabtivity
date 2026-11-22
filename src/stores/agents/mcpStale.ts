@@ -11,7 +11,7 @@ import { relaunch, runsLocally, type UndoClearResult } from "./agentClearUndo";
 
 /**
  * Local agent tabs whose Tabtivity tools went dead on a reattach
- * (docs/mcp_reattach_plan.md, Phase 1 step 6).
+ * (docs/done/mcp_reattach_plan.md, Phase 1 step 6).
  *
  * A local agent tab that rejoins its surviving tmux session after a crash or a
  * restart keeps the agent process the earlier run started, and with it that

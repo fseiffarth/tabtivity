@@ -1,5 +1,5 @@
 /**
- * Root's Needs-you rail (`docs/cockpit_root_merge_plan.md`, M8): a 40 px icon rail of the live-store groups beside the
+ * Root's Needs-you rail (`docs/done/cockpit_root_merge_plan.md`, M8): a 40 px icon rail of the live-store groups beside the
  * console; a click opens the real rail (with the groups that need a read),
  * scrolled to that group; the fold is remembered per machine; a mouse press
  * never moves the focus off a terminal; a picked row goes to its tab.

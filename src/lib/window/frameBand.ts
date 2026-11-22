@@ -1,7 +1,7 @@
 import { createContext, useContext, useLayoutEffect, useState, type RefObject } from "react";
 
 /**
- * The root window's width bands (`docs/cockpit_root_merge_plan.md`, decision 8).
+ * The root window's width bands (`docs/done/cockpit_root_merge_plan.md`, decision 8).
  * The breakpoints are on the **frame's** width (the window is movable, resizable
  * and remembered, so the viewport says nothing about it):
  *

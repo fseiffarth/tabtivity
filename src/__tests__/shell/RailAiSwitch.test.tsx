@@ -1,5 +1,5 @@
 /**
- * The side panel's AI switch (`lib/aiSwitch.ts`, `docs/ai_switch_plan.md`):
+ * The side panel's AI switch (`lib/aiSwitch.ts`, `docs/done/ai_switch_plan.md`):
  * the ⏻ on the edge rail writes `ai_off` through `patch_settings` and
  * shows the state it reads back; `whenAiOn` is what an agent tab refused at
  * spawn waits on before it starts.

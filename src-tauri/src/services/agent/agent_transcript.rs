@@ -428,7 +428,7 @@ pub struct TranscriptUsage {
 /// the next message writes to the cache again once the time has run out.
 /// Claude says the lifetime per request (`usage.cache_creation`: 1 h for a
 /// subscription's main conversation, 5 min on an API key); Codex's is
-/// OpenAI's 30 minutes. See `docs/cli_caching_plan.md` phase 3.
+/// OpenAI's 30 minutes. See `docs/done/cli_caching_plan.md` phase 3.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptCache {

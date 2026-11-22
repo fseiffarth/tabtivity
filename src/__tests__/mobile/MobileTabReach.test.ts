@@ -70,7 +70,7 @@ describe("the shared locality table, over a project of each host", () => {
 /** The whole table (project type x tab kind x location), read by the sidecar's
  * `the_project_host_table_matches_the_windows` too: the host word, whether the
  * phone reaches the tab here, whether its list may hold it (a remote project's
- * host tab too, `docs/mobile_remote_host_tabs_plan.md`) and the create
+ * host tab too, `docs/done/mobile_remote_host_tabs_plan.md`) and the create
  * verdict (of a project with a folder). */
 describe("the shared project-host table", () => {
   for (const row of hostTable) {

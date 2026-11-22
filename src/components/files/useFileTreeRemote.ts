@@ -32,7 +32,7 @@ export function useFileTreeRemote({
   // button below routes through it. Null for a local (non-remote) project.
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
   // A host-pinned project (a VM, or a remote project with no local copy —
-  // `docs/remote_only_projects_plan.md`) has no mirror: no mirror root, no Local
+  // `docs/done/remote_only_projects_plan.md`) has no mirror: no mirror root, no Local
   // side and no sync overlay, whatever source a caller passed.
   const hostPinned = isHostPinned(project);
   const mirrorRoot = useMemo(() => {

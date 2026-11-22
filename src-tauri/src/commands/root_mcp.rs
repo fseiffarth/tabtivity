@@ -700,7 +700,7 @@ async fn reattach_heartbeat() {
 /// An agent that outlives a crash in its tmux session keeps this port in its
 /// MCP URLs, so binding it again keeps them pointing at this program rather
 /// than at whatever took the port meanwhile. The tokens are not remembered
-/// (`docs/mcp_reattach_plan.md`): such an agent's tools stay refused until it
+/// (`docs/done/mcp_reattach_plan.md`): such an agent's tools stay refused until it
 /// is reconnected.
 fn port_file() -> std::path::PathBuf {
     storage::state_dir().join("root_mcp").join("port")
@@ -1841,7 +1841,7 @@ mod security_tests {
         assert_eq!(admit(request(&token, body()), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::UNAUTHORIZED));
     }
 
-    // ── the stable port and the grant probe (docs/mcp_reattach_plan.md) ─────
+    // ── the stable port and the grant probe (docs/done/mcp_reattach_plan.md) ─────
 
     /// The remembered port is bound again when it is free. The port is
     /// freed before the bind, so a test running in parallel can take it in

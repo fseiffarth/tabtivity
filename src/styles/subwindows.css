@@ -4778,7 +4778,7 @@ button.terminal-reader-option:hover:not(:disabled) {
 }
 .terminal-reader-code-actions button { color: inherit; cursor: var(--cur-pointer, pointer); }
 
-/* Per-turn checkpoints (docs/turn_checkpoints_plan.md): layout only. The
+/* Per-turn checkpoints (docs/done/turn_checkpoints_plan.md): layout only. The
    dialog wears the shared `project-dialog` frame; the buttons are the shared
    `.settings-btn` / `.btn-primary` / `.btn-quiet`. */
 .checkpoint-restore .checkpoint-restore-body { display: flex; flex-direction: column; gap: var(--space-3); }

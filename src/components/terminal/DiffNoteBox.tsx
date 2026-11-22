@@ -3,7 +3,7 @@ import { useT } from "../../lib/i18n";
 import { PencilIcon, TrashIcon } from "../common/icons/Icon";
 
 /**
- * The note UI under the lines of a Diffs card (`docs/diff_notes_plan.md`): the
+ * The note UI under the lines of a Diffs card (`docs/done/diff_notes_plan.md`): the
  * box a note is written or edited in, and a saved note's row. The notes
  * themselves live in `stores/agents/diffNotes`; the lines they sit under are
  * `TerminalReaderChanges`'s.

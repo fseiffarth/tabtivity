@@ -2,7 +2,7 @@
 //! primary host, under the record's `remote_path`, read-only.
 //!
 //! The phone reaches the host only through the desktop's ControlMaster for it,
-//! as its host tabs do (`docs/mobile_remote_host_tabs_plan.md`): an SFTP
+//! as its host tabs do (`docs/done/mobile_remote_host_tabs_plan.md`): an SFTP
 //! subsystem over `ssh_exec::host_mux_sftp_args`, which cannot dial, resolve or
 //! prompt. No master — the desktop is not connected to that host — is
 //! `host_offline`, never a connection of the phone's own.

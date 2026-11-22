@@ -10,7 +10,7 @@ import { mobileTmuxReadiness } from "../lib/terminal/mobileTmuxReady";
 
 /**
  * The **Tabby scope** in the tabs store: the chats of the assistant
- * (`docs/assistant_plan.md`), one agent tab each, in `tabsByScope.assistant`.
+ * (`docs/done/assistant_plan.md`), one agent tab each, in `tabsByScope.assistant`.
  *
  * Like the root console's scope (`stores/rootOverlay`) it is reached as an
  * overlay and never switched to: opening it must not change `activeId` or the

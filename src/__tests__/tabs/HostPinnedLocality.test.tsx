@@ -1,5 +1,5 @@
 /**
- * The host pin (`isHostPinned`, `docs/remote_only_projects_plan.md` F1): a VM
+ * The host pin (`isHostPinned`, `docs/done/remote_only_projects_plan.md` F1): a VM
  * or remote-only project has no local copy, so its tabs run only on its hosts.
  * The predicate, the one refusal mapper, and the locality controls that read
  * it — the badge says ☁, its menu has no Local (mirror) row, and the file

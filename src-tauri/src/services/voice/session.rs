@@ -247,7 +247,7 @@ impl Pacing {
         min_gap: Duration::from_millis(300),
         max_gap: Duration::from_millis(700),
         // A run over this much audio takes about 1.5 s on the CPU's `small`
-        // model, about 0.2 s on a GPU (docs/voice_gpu_plan.md).
+        // model, about 0.2 s on a GPU (docs/done/voice_gpu_plan.md).
         commit_tail: 6 * RATE as usize,
     };
 

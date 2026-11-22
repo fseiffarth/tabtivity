@@ -4,7 +4,7 @@
  * only gate on the project itself; inside it, the phone's tabs are those with a
  * local tmux session, plus a remote project's tabs on its host, which the
  * sidecar reaches over the desktop's SSH master
- * (`docs/mobile_remote_host_tabs_plan.md`). Every per-tab handler answers
+ * (`docs/done/mobile_remote_host_tabs_plan.md`). Every per-tab handler answers
  * `tab_not_found` for the others, and `create` follows the sidecar's verdict
  * (`not_attachable`): a phone tab always starts on this machine.
  */

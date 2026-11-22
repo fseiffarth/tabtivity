@@ -240,7 +240,7 @@ function PaneSlotImpl({
     hold: held,
     identity: spawnIdentity,
   });
-  // A stopped agent tab (`docs/agent_tab_stop_plan.md`): its process is gone,
+  // A stopped agent tab (`docs/done/agent_tab_stop_plan.md`): its process is gone,
   // so it never sleeps — it renders `StoppedPane` below, and wakes the render
   // it is shown (the hook also reports the pane's on-screen state to the stop
   // sweep and kills a parked PTY when a sleeping pane is stopped).

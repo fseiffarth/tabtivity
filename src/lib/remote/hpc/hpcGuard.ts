@@ -21,7 +21,7 @@
 
 import { useHpcGuardStore, type HpcGuardKind } from "../../../stores/remote/hpc/hpcGuardPrompt";
 import { envName } from "../../brand";
-// Static (§6 of docs/performance_plan.md). These used to be `await import()`s
+// Static (§6 of docs/done/performance_plan.md). These used to be `await import()`s
 // inside `guardLoginNodeRun` to dodge a cycle through the dialog's store, but
 // none of these modules imports this one back any more, and every caller of
 // this module (TerminalView, FileTree, the Python runner) is in the startup

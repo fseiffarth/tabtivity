@@ -1,6 +1,6 @@
 /**
  * Tab messaging's window surface (`services::tabs_mcp`,
- * `docs/tab_messaging_mcp_plan.md` step 6–7): the cockpit's Messages fold
+ * `docs/done/tab_messaging_mcp_plan.md` step 6–7): the cockpit's Messages fold
  * shows agent-written text as plain text, Deliver queues exactly the host's
  * notice through the scheduler's idle gate, nothing is listed while the pane
  * is hidden, the hover card counts unread, and the Manage CLIs switch

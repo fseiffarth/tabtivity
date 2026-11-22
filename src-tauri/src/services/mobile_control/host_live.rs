@@ -1,5 +1,5 @@
 //! Whether a remote project's host tabs can be reached from the phone
-//! (`docs/mobile_remote_host_tabs_plan.md`).
+//! (`docs/done/mobile_remote_host_tabs_plan.md`).
 //!
 //! A tab that runs on a remote host keeps its tmux session there, and the
 //! phone reaches it only through the desktop's ControlMaster for that host —

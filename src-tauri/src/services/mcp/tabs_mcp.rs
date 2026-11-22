@@ -1,6 +1,6 @@
 //! **Tab messaging** — `tabs_list` / `tabs_send` / `tabs_inbox`, served to a
 //! local project-agent tab as the server `<slug>-tabs` on `/mcp/tabs`
-//! (`Caller::Tabs`). Plan and decisions: `docs/tab_messaging_mcp_plan.md`.
+//! (`Caller::Tabs`). Plan and decisions: `docs/done/tab_messaging_mcp_plan.md`.
 //!
 //! Agent tabs of one project already share its folder; this lane gives them a
 //! small mailbox the host routes outside their fences, for every registry CLI.

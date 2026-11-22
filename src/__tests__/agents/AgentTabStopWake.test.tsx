@@ -1,5 +1,5 @@
 /**
- * The wake paths into a stopped agent tab (`docs/agent_tab_stop_plan.md` §4):
+ * The wake paths into a stopped agent tab (`docs/done/agent_tab_stop_plan.md` §4):
  * a due scheduled prompt wakes it and is delivered on a later tick once its
  * input registers — never before — and the phone opening it wakes it.
  */

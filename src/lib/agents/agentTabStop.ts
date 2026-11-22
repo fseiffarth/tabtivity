@@ -1,5 +1,5 @@
 /**
- * Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the pure half.
+ * Stopping idle agent tabs (`docs/done/agent_tab_stop_plan.md`): the pure half.
  * A stopped tab keeps its place, its label and its conversation; its process
  * is ended and the tab respawns with its CLI's resume when it is shown again.
  * The settings readers say when the sweep (`AgentTabStopHost`) stops a tab,

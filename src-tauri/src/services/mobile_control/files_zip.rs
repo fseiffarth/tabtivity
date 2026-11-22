@@ -1,4 +1,4 @@
-//! **Download as zip** (`docs/phone_files_browsing_plan.md`, L10): one folder
+//! **Download as zip** (`docs/done/phone_files_browsing_plan.md`, L10): one folder
 //! of this computer's side of a project, as a stored (uncompressed) zip
 //! streamed to the phone. Read-only, like the listing it mirrors.
 //!

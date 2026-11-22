@@ -1,6 +1,6 @@
 //! Would a respawn resume the tab's own conversation? The check the window's
 //! stop sweep asks before it ends an idle agent tab's process
-//! (`docs/agent_tab_stop_plan.md` §5.1, `src/stores/agents/agentTabStop.ts`):
+//! (`docs/done/agent_tab_stop_plan.md` §5.1, `src/stores/agents/agentTabStop.ts`):
 //! a stopped tab comes back on its restore args, and each CLI's spawn-time
 //! resolver (`agent_session::resolve_agent_session`) turns those into a resume
 //! of the tab's recorded conversation only while that record exists and the

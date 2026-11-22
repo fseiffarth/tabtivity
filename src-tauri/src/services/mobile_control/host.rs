@@ -4886,7 +4886,7 @@ fn note_chat_file(state_dir: &std::path::Path, project: &super::discovery::Resol
 /// A tab that runs on its remote project's host has nothing on this machine
 /// for a route to act on — its inbox, a sign-in, a desktop switch to it — so
 /// such a route answers `409 tab_on_host` and the phone hides the control
-/// (`docs/mobile_remote_host_tabs_plan.md`).
+/// (`docs/done/mobile_remote_host_tabs_plan.md`).
 fn not_on_host(tab: &ResolvedTab) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if tab.place.on_host() {
         return Err(api_error(StatusCode::CONFLICT, "tab_on_host"));
@@ -4930,7 +4930,7 @@ fn creatable(
 }
 
 /// The chat assistant's scope takes no schedules and no collected prompts
-/// (`docs/assistant_plan.md`: a chat is typed into, never scheduled, and its
+/// (`docs/done/assistant_plan.md`: a chat is typed into, never scheduled, and its
 /// words stay in the CLI's transcript): `project_id` is the raw scope id of a
 /// tab or scope the catalog resolved, which is `assistant` for no other scope.
 fn no_schedules_here(project_id: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {

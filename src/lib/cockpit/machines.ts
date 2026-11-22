@@ -1,7 +1,7 @@
 import type { ConnState } from "../../stores/remote/remoteStatus";
 
 /**
- * The Machines view's machine list model (`docs/cockpit_declutter_plan.md`): one
+ * The Machines view's machine list model (`docs/done/cockpit_declutter_plan.md`): one
  * row per machine. A project's hosts (the primary and its compute hosts) and the
  * global machines merge, keyed by host name. Pure; the caller reads the stores
  * (the lamps are theirs, nothing is probed here).

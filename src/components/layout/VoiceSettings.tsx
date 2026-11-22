@@ -38,7 +38,7 @@ const PAUSES = [1000, 1500, 2000, 3000] as const;
  * otherwise); headset mode, in which talking over the voice
  * stops it; the pause after which hands-free sends; and whether speech may
  * use the GPU, with what the last dictation really ran on
- * (docs/voice_gpu_plan.md).
+ * (docs/done/voice_gpu_plan.md).
  */
 export function VoiceSettings() {
   const t = useT();

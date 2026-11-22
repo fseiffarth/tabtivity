@@ -1,5 +1,5 @@
 /**
- * Stopped agent tabs, the pane layer (`docs/agent_tab_stop_plan.md` §3–§4):
+ * Stopped agent tabs, the pane layer (`docs/done/agent_tab_stop_plan.md` §3–§4):
  * a stopped tab's slot renders `StoppedPane` — no `TabPane`, so nothing
  * spawns — a sleeping pane stopped has its parked PTY killed by the slot, and
  * a stopped tab shown wakes on its resume args in the same commit.

@@ -5,7 +5,7 @@ import { readableScreen, type ReadableBufferLike } from "../../mobile-web/src/te
 import { mergeSelectRows, readSelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
 
 /**
- * The chat assistant's shared frontend constants (`docs/assistant_plan.md`).
+ * The chat assistant's shared frontend constants (`docs/done/assistant_plan.md`).
  * The user-facing name is `BRAND.assistant` / the `{assistant}` placeholder
  * (`lib/brand.ts`); code identifiers say `assistant`, never the name.
  */

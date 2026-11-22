@@ -1,5 +1,5 @@
 /**
- * The merged window's shell (`docs/cockpit_root_merge_plan.md`): one window, one
+ * The merged window's shell (`docs/done/cockpit_root_merge_plan.md`): one window, one
  * store, five views. It opens on a view, the strip of views is always there,
  * Escape and the backdrop close it, only the shown view mounts, `show()`
  * always means Root, and the header badge is derived from the stores.

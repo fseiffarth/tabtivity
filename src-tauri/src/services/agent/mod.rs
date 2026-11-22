@@ -46,7 +46,7 @@ pub mod agent_registry;
 // branch chip).
 pub mod agent_relocate;
 // Whether a respawn would resume an agent tab's own conversation: the stop
-// sweep's check before it ends an idle tab (docs/agent_tab_stop_plan.md).
+// sweep's check before it ends an idle tab (docs/done/agent_tab_stop_plan.md).
 pub mod agent_resume_pinned;
 pub mod agent_session;
 pub mod agent_shim;
@@ -67,7 +67,7 @@ pub mod agent_versions;
 // the fallback login of every Claude tab with no shared login, local and remote.
 pub mod claude_token;
 // One overview of the CLIs in use: plan, account, usage windows
-// (docs/cli_overview_plan.md).
+// (docs/done/cli_overview_plan.md).
 pub mod cli_overview;
 pub mod codex_bind;
 // Codex's release package, fetched ahead of its installer with no deadline and
@@ -98,7 +98,7 @@ pub mod agent_artifacts;
 pub mod google_chat;
 // Change notifications for the transcripts the desktop Reader shows.
 pub mod transcript_watch;
-// The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
+// The chat assistant's profiles, system prompt and chat folder (docs/done/assistant_plan.md).
 pub mod assistant;
 // Whether a chat has had an `@` attachment: the backend's own record, read by the web lane.
 pub mod assistant_attach;

@@ -692,7 +692,7 @@ pub fn home_share_dir() -> std::path::PathBuf {
 /// and it is in no project list".
 pub const ROOT_SCOPE: &str = "root";
 
-/// The scope id of the chat assistant's tabs (`docs/assistant_plan.md`): a
+/// The scope id of the chat assistant's tabs (`docs/done/assistant_plan.md`): a
 /// scope of its own, neither root nor a project. Its session state is
 /// `<state_dir>/sessions/assistant/` and its agent home `agent-homes/assistant`
 /// (`project_key` is the identity on it). Unlike root its backend

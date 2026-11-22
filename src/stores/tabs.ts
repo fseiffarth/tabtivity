@@ -3894,7 +3894,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // double as PTY ids, so always mint a fresh one on restore.
     const keyMap = new Map<string, string>();
     const scope = targetScope ?? get().scope;
-    // Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): with the cap
+    // Stopping idle agent tabs (`docs/done/agent_tab_stop_plan.md`): with the cap
     // on, every agent tab that may ever be stopped comes back stopped, so
     // nothing spawns for it; the shown ones wake at once (`PaneSlot`), and the
     // stop sweep's restore wake starts the most recently used up to the cap.

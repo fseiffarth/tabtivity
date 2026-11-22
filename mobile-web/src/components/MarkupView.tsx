@@ -2050,7 +2050,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** While marking (not Annotate), the round's pill, the ticks and the
    * agent's question card wait behind the head's **Agent** badge — a sheet
    * over the palette, opened by the badge only, never by itself
-   * (`docs/markup_notes_style_plan.md`). Reading, they show as before. */
+   * (`docs/done/markup_notes_style_plan.md`). Reading, they show as before. */
   const agentTucked = marking && !annotating;
   const agentCount = asks.reduce((sum, ask) => sum + ask.questions.length, 0) + tickedGroups.length;
   /** The ✓ badges and `?` pins draw on the pages only while the agent's
