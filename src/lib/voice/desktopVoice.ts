@@ -200,7 +200,9 @@ export function appLanguage(code: string | undefined): Language | undefined {
  * only, deduplicated, at most five; unset or empty is the UI language and English. */
 export function detectLangs(stored: readonly string[] | undefined, uiLanguage: Language): Language[] {
   const picked: Language[] = [];
-  for (const code of stored ?? []) {
+  // The settings file is hand-editable: anything but a list counts as unset.
+  for (const code of Array.isArray(stored) ? stored : []) {
+    if (typeof code !== "string") continue;
     const language = appLanguage(code);
     if (language && !picked.includes(language)) picked.push(language);
   }

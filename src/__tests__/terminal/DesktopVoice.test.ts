@@ -216,6 +216,10 @@ describe("voice settings and messages", () => {
     expect(detectLangs([], "en")).toEqual(["en"]);
     expect(detectLangs(["fr", "nl", "fr", "it"], "de")).toEqual(["fr", "it"]);
     expect(detectLangs(["nl"], "es")).toEqual(["es", "en"]);
+    // A hand-edited settings file: not a list, or not strings in it.
+    expect(detectLangs(5 as unknown as string[], "de")).toEqual(["de", "en"]);
+    expect(detectLangs("de" as unknown as string[], "fr")).toEqual(["fr", "en"]);
+    expect(detectLangs([3, "it"] as unknown as string[], "de")).toEqual(["it"]);
     expect(appLanguage("nl")).toBeUndefined();
     expect(appLanguage("de")).toBe("de");
   });
