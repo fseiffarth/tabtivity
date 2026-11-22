@@ -12,6 +12,7 @@ import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStr
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useReaderChatsStore } from "../../lib/agents/agentChats";
+import { useDiffNotesStore } from "../../stores/agents/diffNotes";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1", launchedAt: 1000 };
@@ -178,6 +179,34 @@ describe("the Reader's Changes panel", () => {
     // Over the chat, Esc still goes back.
     fireEvent.keyDown(host.querySelector<HTMLElement>(".terminal-reader")!, { key: "Escape" });
     expect(useReaderChatsStore.getState().byPty["p:agent-1"]).toBeUndefined();
+  });
+
+  it("closes a dialog the Diffs panel opened on Esc, keeping an earlier chat", async () => {
+    const chats = [
+      { id: "c-now", title: "the work at hand", updated: Date.now(), current: true },
+      { id: "c-1", title: "fix the parser", updated: Date.now() - 86_400_000, current: false },
+    ];
+    useReaderChatsStore.getState().browse("p:agent-1", chats[1], chats);
+    const note = (id: string) => ({ id, path: "src/a.rs", side: "new" as const, from: 1, to: 1, quote: ["+y"], text: `note ${id}`, at: 1, card: "k", hunk: 0, lines: [0] });
+    useDiffNotesStore.setState({ byTab: { "p:agent-1": [note("n1"), note("n2")] } });
+    try {
+      reader(host, true);
+      const clear = await waitFor(() => {
+        const found = [...host.querySelectorAll<HTMLButtonElement>(".terminal-changes-notes button")].find((b) => b.textContent === "Clear");
+        expect(found).toBeDefined();
+        return found!;
+      });
+      fireEvent.click(clear);
+      const dialog = await screen.findByRole("dialog");
+      // Portaled out of the panel's DOM, but React bubbles its keys through
+      // the panel into the Reader: the dialog's Esc, not the chat's Back.
+      fireEvent.keyDown(dialog, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useReaderChatsStore.getState().byPty["p:agent-1"]?.chat.id).toBe("c-1");
+      expect(useDiffNotesStore.getState().byTab["p:agent-1"]).toHaveLength(2);
+    } finally {
+      useDiffNotesStore.setState({ byTab: {} });
+    }
   });
 
   it("is switched from the prompt strip, chat shown or not", () => {

@@ -2667,8 +2667,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const onRegionKey = (event: KeyboardEvent) => {
     if (!browsed || event.key !== "Escape") return;
     // Diffs and Data sit inside the Reader: Esc in a note box, the file
-    // viewer or the panel itself is theirs, never the earlier chat's Back.
-    if ((event.target as Element).closest?.(".terminal-changes")) return;
+    // viewer or the panel itself is theirs, never the earlier chat's Back;
+    // so is one in a dialog they portal out (React still bubbles it here).
+    const target = event.target as Element;
+    if (target.closest?.(".terminal-changes")) return;
+    if (panelShown && !regionRef.current?.contains(target)) return;
     event.preventDefault();
     if (openStep) subagentUp();
     else chatBack();
