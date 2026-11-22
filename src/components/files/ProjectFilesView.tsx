@@ -2980,22 +2980,24 @@ export function ProjectFilesView({
       )}
 
       {view === "sessions" && (
-        <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
+        <div className="side-panel-scroll sp-list-view sessions-view" style={{ flex: 1, overflowY: "auto" }}>
           {!remoteBlocked && (
-            <label
-              className="tmux-scope-toggle"
-              title={t("projectFilesView.tmuxScopeOff") + t("projectFilesView.tmuxScopeOn")}
-            >
-              <input
-                type="checkbox"
-                checked={showAllSessions}
-                onChange={(e) => setShowAllSessions(e.target.checked)}
-              />
-              {t("projectFilesView.allHostSessions")}
-            </label>
+            <div className="sp-toolbar">
+              <label
+                className="tmux-scope-toggle"
+                title={t("projectFilesView.tmuxScopeOff") + t("projectFilesView.tmuxScopeOn")}
+              >
+                <input
+                  type="checkbox"
+                  checked={showAllSessions}
+                  onChange={(e) => setShowAllSessions(e.target.checked)}
+                />
+                {t("projectFilesView.allHostSessions")}
+              </label>
+            </div>
           )}
           {sessionRows.length === 0 ? (
-            <div className="side-panel-orange-empty">
+            <p className="sp-note">
               {t(
                 remoteBlocked
                   ? "projectFilesView.connectToListSessions"
@@ -3003,7 +3005,7 @@ export function ProjectFilesView({
                     ? "projectFilesView.noSessionsOnHosts"
                     : "projectFilesView.noSessionsForProject",
               )}
-            </div>
+            </p>
           ) : (
             sessionGroups.map(({ hostId, hostLabel, rows: hostRows, kindGroups }) => (
               <section
@@ -3011,70 +3013,86 @@ export function ProjectFilesView({
                 key={hostId}
                 aria-label={t("projectFilesView.persistentSessionsOnHostAria", { host: hostLabel })}
               >
-                <div className="tmux-machine-group-title">
+                {/* The machine is the group's head, its bulk kills at the end. */}
+                <div className="sp-head tmux-machine-head">
                   <span className="tmux-machine-group-name">{hostLabel}</span>
+                  <span className="sp-count">{hostRows.length}</span>
                   <UntestedTag id="projectFilesView.8" />
-                  <button
-                    type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.killClosedSessionsTitle")}
-                    aria-label={t("projectFilesView.killClosedSessionsAria", { host: hostLabel })}
-                    disabled={!hostRows.some((r) => isClosedSession(hostId, r.session))}
-                    onClick={() =>
-                      void killHostSessions(
-                        hostId,
-                        hostLabel,
-                        hostRows.filter((r) => isClosedSession(hostId, r.session)),
-                        true,
-                      )
-                    }
-                  >
-                    {t("projectFilesView.killClosedSessions")}
-                  </button>
-                  <button
-                    type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.killAllSessionsTitle")}
-                    aria-label={t("projectFilesView.killAllSessionsAria", { host: hostLabel })}
-                    onClick={() => void killHostSessions(hostId, hostLabel, hostRows, false)}
-                  >
-                    {t("projectFilesView.killAllSessions")}
-                  </button>
+                  <span className="sp-head-end tmux-machine-actions">
+                    <button
+                      type="button"
+                      className="btn-quiet is-danger"
+                      title={t("projectFilesView.killClosedSessionsTitle")}
+                      aria-label={t("projectFilesView.killClosedSessionsAria", { host: hostLabel })}
+                      disabled={!hostRows.some((r) => isClosedSession(hostId, r.session))}
+                      onClick={() =>
+                        void killHostSessions(
+                          hostId,
+                          hostLabel,
+                          hostRows.filter((r) => isClosedSession(hostId, r.session)),
+                          true,
+                        )
+                      }
+                    >
+                      {t("projectFilesView.killClosedSessions")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-quiet is-danger"
+                      title={t("projectFilesView.killAllSessionsTitle")}
+                      aria-label={t("projectFilesView.killAllSessionsAria", { host: hostLabel })}
+                      onClick={() => void killHostSessions(hostId, hostLabel, hostRows, false)}
+                    >
+                      {t("projectFilesView.killAllSessions")}
+                    </button>
+                  </span>
                 </div>
                 {kindGroups.map(({ kind, rows }) => (
                   <div className="tmux-kind-group" key={kind}>
-                    <div className="tmux-kind-group-title">{t(SESSION_KIND_LABEL[kind])}</div>
+                    <div className="sp-head tmux-kind-head">
+                      <span>{t(SESSION_KIND_LABEL[kind])}</span>
+                      <span className="sp-count">{rows.length}</span>
+                    </div>
                     {rows.map(({ session: s }) => {
                       const owned = sessionOwners.has(`${hostId} ${s.name}`);
                       return (
                         <div
                           key={`${hostId} ${s.name}`}
-                          className="orange-file-row"
+                          className="sp-row sp-row--two orange-file-row"
                           onMouseEnter={(e) => handleSessionRowMouseEnter(e, hostId, s.name)}
                           onMouseLeave={handleSessionRowMouseLeave}
                         >
+                          <span className="sp-row-state tmux-attached" aria-hidden="true">
+                            {s.attached ? <DotIcon /> : <RingIcon />}
+                          </span>
+                          <span className="sp-row-act" />
                           <button
                             type="button"
-                            className="orange-file-name"
+                            className="sp-row-main orange-file-name"
                             title={t(
                               owned ? "projectFilesView.revealTabRunning" : "projectFilesView.attachTo",
                               { name: s.name },
                             )}
                             onClick={() => void openSession(hostId, s.name)}
                           >
-                            <span className="orange-file-dot" aria-hidden="true">
-                              {s.attached ? <DotIcon /> : <RingIcon />}
+                            <span className="sp-row-text">
+                              <span className="sp-row-name tmux-session-label">{sessionDisplayName(t, s.name)}</span>
+                              <span className="sp-row-sub">
+                                <span className={`sp-status${s.working ? " sp-status--running" : ""}`}>
+                                  {s.working
+                                    ? s.currentCommand
+                                      ? t("projectFilesView.tooltipWorking", { command: s.currentCommand })
+                                      : t("projectFilesView.workingTitle")
+                                    : t("projectFilesView.tooltipIdle")}
+                                </span>
+                                {owned && <span className="tmux-session-meta">{t("projectFilesView.openMeta")}</span>}
+                              </span>
                             </span>
-                            {s.working && (
-                              <span className="tmux-work-dot" aria-hidden="true" title={t("projectFilesView.workingTitle")} />
-                            )}
-                            <span className="tmux-session-label">{sessionDisplayName(t, s.name)}</span>
-                            {owned && <span className="tmux-session-meta">{t("projectFilesView.openMeta")}</span>}
                           </button>
-                          <div className="orange-file-actions">
+                          <div className="sp-row-meta orange-file-actions">
                             <button
                               type="button"
-                              className="orange-file-act"
+                              className="btn-quiet"
                               title={t("projectFilesView.renameSessionTitle")}
                               onClick={() => void renameSession(hostId, s.name)}
                             >
@@ -3082,7 +3100,7 @@ export function ProjectFilesView({
                             </button>
                             <button
                               type="button"
-                              className="orange-file-act"
+                              className="btn-quiet is-danger tmux-kill"
                               title={t("projectFilesView.killSessionTitle")}
                               aria-label={t("projectFilesView.killSessionAria", { name: s.name })}
                               onClick={() => void killSession(hostId, s.name)}

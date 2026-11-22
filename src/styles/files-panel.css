@@ -1871,6 +1871,63 @@
   letter-spacing: 0;
 }
 
+/* Sessions: one machine per section, its head carrying the bulk kills, then
+   an Agents / Shells / Other sub-head per kind. The card frame the machine
+   group wore is gone: heads and air separate the groups now. */
+.sessions-view .tmux-machine-group {
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.sessions-view .tmux-machine-head {
+  color: var(--text-primary);
+}
+
+.sessions-view .tmux-machine-group-name {
+  flex: 0 1 auto;
+}
+
+.sessions-view .tmux-machine-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.sessions-view .tmux-kind-head {
+  margin-top: 2px;
+  min-height: 24px;
+  padding-left: calc(var(--space-3) + 22px);
+  font-weight: 500;
+}
+
+.sessions-view .tmux-machine-group .sp-row.orange-file-row,
+.sessions-view .tmux-kind-group:not(:last-child) .sp-row.orange-file-row:last-child {
+  border-bottom: 0;
+}
+
+.sessions-view .tmux-attached {
+  color: var(--text-muted);
+}
+
+.sessions-view .sp-toolbar .tmux-scope-toggle {
+  padding: 0;
+}
+
+.sessions-view .sp-row-sub .tmux-session-meta {
+  margin-left: 0;
+}
+.sessions-view .sp-row-sub .tmux-session-meta::before {
+  content: " · ";
+}
+
+.sessions-view .tmux-kill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-1);
+}
+
 /* ── The browser desktop client (hosted plan P2) ─────────────────────────── */
 /* The one "connection lost" banner, mounted outside the app's root. */
 .server-link-banner {
