@@ -2,7 +2,8 @@
  * The phone's Terminal screen talks to the desktop on two channels: the
  * terminal socket the tests drive (a `FakeWebSocket`), and a handful of HTTP
  * requests it makes on its own — the composer's status chip, the Focus view's
- * transcript, the Commit chip's uncommitted count, the outbox, PDF-markup
+ * transcript, the Commit chip's uncommitted count, the local model's next-prompt
+ * suggestion, the outbox, PDF-markup
  * questions, the model sheet's remembered rows, and the fire-and-forget
  * reports of a sent prompt and of a model list read. Tests about the socket answer those as an unreachable
  * desktop would, with the network error a browser gives, so the screen takes
@@ -13,7 +14,7 @@ import { act } from "@testing-library/react";
 import { vi } from "vitest";
 import { unmockedFetch } from "./testGuards";
 
-const SIDE_READS = /^\/api\/v1\/tabs\/[^/?]+\/(status|transcript|uncommitted|outbox|markup\/questions|model-rows)(\?|$)/;
+const SIDE_READS = /^\/api\/v1\/tabs\/[^/?]+\/(status|transcript|uncommitted|outbox|markup\/questions|model-rows|next-prompt)(\?|$)/;
 const PROMPT_REPORT = /^\/api\/v1\/tabs\/[^/?]+\/(prompt|model-rows)$/;
 
 function urlOf(input: RequestInfo | URL): string {

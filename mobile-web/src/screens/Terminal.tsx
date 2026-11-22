@@ -58,6 +58,7 @@ import {
   type TabLocations,
   type AssistantModels,
   deleteInboxFile,
+  getNextPrompt,
 } from "../api";
 import { describeFailure } from "../connection";
 import { readDraft } from "../drafts";
@@ -71,6 +72,7 @@ import { liveModelPick } from "../terminal/modelRows";
 import { type TerminalControl } from "../terminal/protocol";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { readPromptSuggestion } from "../terminal/promptSuggestion";
+import { NEXT_PROMPT_CLAUDE_SETTLE_MS, NEXT_PROMPT_SETTLE_MS, useNextPrompt, usePageShown, useWorkEndKey } from "../terminal/nextPrompt";
 import { readLiveQuestion } from "../terminal/liveDialog";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
@@ -2119,10 +2121,31 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * sent, and only once per suggestion — so the reader edits it or sends it as
    * they would take it with Tab in the CLI. `liveQuestion` is the chat's alone;
    * in the Terminal view a dialog on screen is no box, so it reads as "". */
-  const promptSuggestion = useMemo(
+  const screenSuggestion = useMemo(
     () => (tab.kind === "agent" && !liveQuestion && !liveBusy ? readPromptSuggestion(liveScreen, agentLabel) : ""),
     [tab.kind, liveQuestion, liveBusy, liveScreen, agentLabel],
   );
+  /** Where the CLI draws none (any but Claude, or a Claude turn it skipped
+   * one on), the desktop's local model's guess (`terminal/nextPrompt.ts`):
+   * asked once per ended turn, the turn fed to it ahead while the agent works
+   * and the stored session moves (Chat view: Terminal reads none) — not on a
+   * local-model tab, whose turn holds the GPU. A field holding only the
+   * suggestion still counts as empty. */
+  const pageShown = usePageShown();
+  const idleTurn = useWorkEndKey(liveBusy);
+  const localSuggestion = useNextPrompt({
+    // Not before the CLI has drawn its input box: an unpainted screen reads idle.
+    enabled: tab.kind === "agent" && !cloudTab && connected && cliReady && pageShown && !subagentTarget,
+    working: liveBusy,
+    turnKey: liveQuestion ? null : idleTurn,
+    progress: transcript?.version,
+    canWarm: () => tab.local_model !== true,
+    settleMs: agentKey === "claude" ? NEXT_PROMPT_CLAUDE_SETTLE_MS : NEXT_PROMPT_SETTLE_MS,
+    screenSuggestion,
+    composerEmpty: !draft || draft === suggestionRef.current.filled,
+    ask: (phase) => getNextPrompt(tab.id, phase),
+  });
+  const promptSuggestion = screenSuggestion || localSuggestion;
   const suggestionOffered = promptSuggestion && connected && !subagentTarget && pending.length === 0 && !editing ? promptSuggestion : "";
   useEffect(() => {
     const state = suggestionRef.current;
@@ -2147,6 +2170,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setDraft(suggestionOffered);
   }, [promptSuggestion, suggestionOffered]);
   const suggested = !!draft && draft === suggestionRef.current.filled;
+  /** What the field holds untouched is the local model's, not Claude's. */
+  const suggestedLocal = suggested && !screenSuggestion && draft === localSuggestion;
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
@@ -3070,7 +3095,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {/* An untouched suggestion reads greyed in the field itself, as the
             CLI dims it; the first edit makes it the reader's own text. */}
         <div className="composer-field">
-          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t("terminal.reader.suggestion") : undefined} value={fieldDraft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => {
+          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t(suggestedLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion") : undefined} value={fieldDraft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => {
             tabbyGate.clear();
             // The guess after the draft is the recognizer's, not the reader's.
             setDraft(draftFromField(event.target.value, draft, voiceHeard.interim));
@@ -3086,7 +3111,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           }} />
           {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-          {suggested && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
+          {suggested && !suggestedLocal && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
+          {suggestedLocal && isUntested("agents.localNextPrompt") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
           {fieldDraft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
           {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={() => {
             // A tap ends spoken navigation, whatever else it does. A stop reads the
