@@ -183,14 +183,26 @@ describe("the composer docked under Diffs and Data", () => {
     expect(box().value.startsWith("/plan")).toBe(true);
   });
 
-  it("opens on a press on a chip, whose click still lands", async () => {
+  it("keeps resting under a press on one of its buttons, and opens on the click", async () => {
     render(<Pane host={host} start="changes" />);
     await diffsShown();
+    // A button of the dock stands in for the resting line's mic (no speech
+    // engine here): opened under the press it would move from under the
+    // pointer, and the click would never land.
     const plan = within(dock()).getByRole("button", { name: /^Plan/ });
     act(() => { fireEvent.pointerDown(plan); });
-    expect(isOpen()).toBe(true);
+    expect(isOpen()).toBe(false);
+    act(() => { fireEvent.pointerUp(plan); });
+    expect(isOpen()).toBe(false);
     fireEvent.click(plan);
     expect(box().value.startsWith("/plan")).toBe(true);
+    expect(isOpen()).toBe(true);
+  });
+
+  it("still opens on a press in the resting field itself", async () => {
+    render(<Pane host={host} start="changes" />);
+    await diffsShown();
+    act(() => { fireEvent.pointerDown(box()); });
     expect(isOpen()).toBe(true);
   });
 
@@ -278,7 +290,9 @@ describe("the composer docked under Diffs and Data", () => {
       expect(found?.textContent).toContain("The agent asks a question");
       return found!;
     });
-    expect(line.textContent).toContain("Messages wait until it is answered");
+    // One clipped line of the draft shows in the locked field: the line says it is kept.
+    await waitFor(() => expect(line.textContent).toContain("Your draft is kept until it is answered"));
+    expect(line.textContent).not.toContain("Messages wait until it is answered");
     expect(box().disabled).toBe(true);
     expect(box().placeholder).toBe("Answer the agent's question first");
     expect(box().value).toBe("kept for later");
@@ -288,6 +302,14 @@ describe("the composer docked under Diffs and Data", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(10); });
     expect(host.querySelector(".terminal-changes")).toBeNull();
     expect((document.activeElement as HTMLElement | null)?.classList.contains("terminal-reader-option")).toBe(true);
+  });
+
+  it("says messages wait when a question locks an empty field", async () => {
+    working(ASKING);
+    render(<Pane host={host} start="changes" />);
+    await diffsShown();
+    await waitFor(() => expect(status()?.textContent).toContain("Messages wait until it is answered"));
+    expect(status()?.textContent).not.toContain("Your draft is kept");
   });
 
   it("is the earlier chat's read-only foot under Diffs: no field, no line", async () => {

@@ -186,3 +186,27 @@ tests, pass) and `TerminalReaderChanges.test.tsx` (8 tests, pass);
 ca855ae67 HEAD` clean; `scripts/brand-check.sh` pass. Not run: `npm run
 build` (type-check), `npm run lint`, the full `npm test`, the Rust gates (no
 Rust changed).
+
+## Follow-up, 2026-11-22: the flagged items
+
+Fixed in the main loop after the run, on the user's "fix now":
+
+- **Mic in the resting line.** A press on a button while the dock rests no
+  longer opens it (`engageDock`); the button's click does (`onClick` on
+  `.terminal-reader-dock`), so the click lands before anything moves.
+- **Draft kept under a question.** The status line says "Your draft is kept
+  until it is answered" (`terminal.reader.dockQuestionDraft`, five
+  dictionaries) instead of "Messages wait…" while the locked field holds one
+  (`ReaderDockStatus` `draftKept`, from the Reader's `composerEmpty`).
+- **Double steering outline.** A `.terminal-sign-in` nested in another draws
+  none (`subwindows.css`, beside the `data-steer-region="card"` rule).
+- **Overlapping pills.** The dock's pill joins the suggestion's in one span;
+  the suggestion's pill is not drawn at rest, where it sat on Send.
+- **Help wording.** `docs/help/agent-clis.md` calls the tab Data.
+
+Checked: `tsc` clean; ReaderInputDock (13), ReaderNextPrompt,
+TerminalReaderView, TerminalReaderToolbar, TerminalReaderChanges and the i18n
+parity test pass (138); eslint on the touched files shows the one warning
+develop has; brand-check passes. Not run: the full gates. Still open: the
+34 px resting line against the theme's line height, and everything on a real
+paint path (never run live).

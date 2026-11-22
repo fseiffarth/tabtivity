@@ -8,8 +8,10 @@ import { useT } from "../../lib/i18n";
  * locked until it is answered, which happens in Chat). Plain values in, so
  * the Reader decides what it shows.
  */
-export function ReaderDockStatus({ kind, line, facts, queued = 0, onStop, onAnswerInChat }: {
+export function ReaderDockStatus({ kind, line, facts, queued = 0, draftKept = false, onStop, onAnswerInChat }: {
   kind: "working" | "question";
+  /** Question: the locked field holds a draft, of which one line shows. */
+  draftKept?: boolean;
   /** Working: the working row's words (`Opus is working…`). */
   line?: string;
   /** Working: elapsed time and tokens, already joined. */
@@ -26,7 +28,7 @@ export function ReaderDockStatus({ kind, line, facts, queued = 0, onStop, onAnsw
     return (
       <div className="terminal-reader-dock-status question" role="status">
         <strong>{t("terminal.reader.dockQuestion")}</strong>
-        <small>{t("terminal.reader.dockQuestionHint")}</small>
+        <small>{t(draftKept ? "terminal.reader.dockQuestionDraft" : "terminal.reader.dockQuestionHint")}</small>
         {onAnswerInChat && (
           <button type="button" className="terminal-reader-chat-resume" onClick={onAnswerInChat}>
             {t("terminal.reader.dockAnswerInChat")}

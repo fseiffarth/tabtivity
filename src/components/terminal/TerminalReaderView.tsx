@@ -1440,11 +1440,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
         />
-        {shownSuggestion && !draft && <span className="terminal-reader-suggestion-tag">
+        {/* One corner, one row of pills: the suggestion's (not at rest, where
+            the short placeholder stands for it) with the dock's beside it. */}
+        {shownSuggestion && !draft && !resting ? <span className="terminal-reader-suggestion-tag">
           {!suggestionLocal && <UntestedTag id="terminal.reader.promptSuggestion" />}
           {suggestionLocal && <UntestedTag id="agents.localNextPrompt" />}
-        </span>}
-        {docked && <span className="terminal-reader-dock-tag"><UntestedTag id="terminal.reader.dock" /></span>}
+          {docked && <UntestedTag id="terminal.reader.dock" />}
+        </span> : docked && <span className="terminal-reader-dock-tag"><UntestedTag id="terminal.reader.dock" /></span>}
         {voice.button}
         <button
           type="button"
@@ -1670,6 +1672,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       };
       window.addEventListener("pointerup", release, true);
       window.addEventListener("pointercancel", release, true);
+      // A press on a button of the resting line (the mic) must not open the
+      // dock under it: opened, the button stands elsewhere, the release lands
+      // on the box and the click is lost. Its click engages the dock instead.
+      if (!dockOpen && event.target instanceof Element && event.target.closest("button")) return;
     }
     setDockEngaged(true);
   };
@@ -3188,7 +3194,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       {/* Under a panel only, one line on what the chat would show: the agent
           at work (Chat's working row) or asking. A question outranks work. */}
       {panelShown && !browsed && (questionOpen ? (
-        <ReaderDockStatus kind="question" onAnswerInChat={onShowChat ? answerInChat : undefined} />
+        <ReaderDockStatus kind="question" draftKept={!composerEmpty} onAnswerInChat={onShowChat ? answerInChat : undefined} />
       ) : openStep ? subagentWorking && (
         <ReaderDockStatus
           kind="working"
@@ -3207,7 +3213,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       ))}
       {/* The dock: no box of its own (`display: contents`), only where a press
           or focus inside it engages it (`engageDock`). */}
-      <div className="terminal-reader-dock" onPointerDown={engageDock} onFocus={engageDock} onBlur={leaveDock}>
+      <div className="terminal-reader-dock" onPointerDown={engageDock} onClick={engageDock} onFocus={engageDock} onBlur={leaveDock}>
       {/* No facts row in a Tabby chat: the view's own model dropdown says enough. */}
       {tab && !browsed && scope !== ASSISTANT_SCOPE && (
         <TerminalReaderFacts

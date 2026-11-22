@@ -6230,6 +6230,7 @@ export const dict: Dict = {
   "terminal.reader.dockBlocked": "Erst die Frage des Agenten beantworten",
   "terminal.reader.dockQuestion": "Der Agent stellt eine Frage",
   "terminal.reader.dockQuestionHint": "Nachrichten warten, bis sie beantwortet ist",
+  "terminal.reader.dockQuestionDraft": "Der Entwurf bleibt erhalten, bis sie beantwortet ist",
   "terminal.reader.dockAnswerInChat": "Im Chat antworten",
   "terminal.reader.dockQueued": "{count} in der Warteschlange",
   "terminal.reader.suggestion": "Claude schlägt vor",

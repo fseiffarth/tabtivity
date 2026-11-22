@@ -1381,6 +1381,10 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   outline: 3px solid var(--accent);
   outline-offset: -3px;
 }
+/* Diffs and Data stand inside the Reader, which wears the outline for them. */
+html[data-steer-region="card"] .subwindow.focused .terminal-sign-in .terminal-sign-in {
+  outline: none;
+}
 
 /* Floating label following the pointer during a tab drag. */
 .tab-drag-ghost {

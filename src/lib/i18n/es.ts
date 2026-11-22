@@ -6204,6 +6204,7 @@ export const dict: Dict = {
   "terminal.reader.dockBlocked": "Responde primero a la pregunta del agente",
   "terminal.reader.dockQuestion": "El agente hace una pregunta",
   "terminal.reader.dockQuestionHint": "Los mensajes esperan hasta que se responda",
+  "terminal.reader.dockQuestionDraft": "El borrador se conserva hasta que se responda",
   "terminal.reader.dockAnswerInChat": "Responder en el chat",
   "terminal.reader.dockQueued": "{count} en cola",
   "terminal.reader.suggestion": "Claude sugiere",

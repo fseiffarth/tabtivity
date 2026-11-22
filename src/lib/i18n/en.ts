@@ -6403,6 +6403,7 @@ export const enSource = {
   "terminal.reader.dockBlocked": "Answer the agent's question first",
   "terminal.reader.dockQuestion": "The agent asks a question",
   "terminal.reader.dockQuestionHint": "Messages wait until it is answered",
+  "terminal.reader.dockQuestionDraft": "Your draft is kept until it is answered",
   "terminal.reader.dockAnswerInChat": "Answer in Chat",
   "terminal.reader.dockQueued": "{count} queued",
   "terminal.reader.suggestion": "Claude suggests",
