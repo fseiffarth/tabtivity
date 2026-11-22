@@ -219,8 +219,9 @@ export function TerminalPromptStrip({
       panelRef.current?.focus({ preventScroll: true });
     }
   };
-  /** Over the chat: the picked prompt into its text box (at the caret), to
-   * send again or edit; the box takes the keyboard. */
+  /** Over Chat, Diffs or Data: the picked prompt into the Reader's text box
+   * (at the caret), to send again or edit; the box takes the keyboard and
+   * the view stays. */
   const reuse = () => {
     if (!current) return;
     setOpen(false);

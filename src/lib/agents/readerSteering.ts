@@ -117,7 +117,7 @@ export function openQuestionField(id: string, index: number): boolean {
   return true;
 }
 
-/** Shows pane `id`'s Chat composer for steering's Prompt key (it stands aside
+/** Shows pane `id`'s Reader composer (under Chat, Diffs or Data) for steering's Prompt key (it stands aside
  *  under steering otherwise), its text led with `lead`; the composer brings
  *  steering back on `level` once the prompt is sent or Esc pressed. False when
  *  it cannot take the prompt now. */
@@ -125,12 +125,13 @@ export type ReaderComposerOpen = (level: SteeringBaseLevel, lead?: SteeringAgent
 
 const composers = new Map<string, ReaderComposerOpen>();
 
-/** Register pane `id`'s Chat composer, while it is shown and can take text. */
+/** Register pane `id`'s Reader composer while it is shown (Chat, or docked
+ *  under Diffs or Data) and can take text. */
 export function registerReaderComposer(id: string, open: ReaderComposerOpen): () => void {
   return register(composers, id, open);
 }
 
-/** Shows pane `id`'s Chat composer for steering; false when the pane has none
+/** Shows pane `id`'s Reader composer for steering; false when the pane has none
  *  on show (Terminal view, another CLI) — the prompt box then. A starting CLI
  *  or a question up still answers: the composer takes the text, sent by hand once it can go. */
 export function openReaderComposer(id: string, level: SteeringBaseLevel, lead?: SteeringAgentCommand): boolean {

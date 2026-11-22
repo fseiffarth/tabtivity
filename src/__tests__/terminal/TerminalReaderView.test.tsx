@@ -566,6 +566,35 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it("opens the field docked under Diffs for steering's Prompt key, and gives the keys back on Esc", async () => {
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? transcript
+      : command === "agent_tab_changes" ? { available: true, version: "c0", truncated: false, changes: [] } : []));
+    act(() => useKeyboardSteeringStore.getState().enter("scroll"));
+    try {
+      render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused={false} changesOpen />);
+      await screen.findByText("No file changes in this conversation yet.");
+      expect(screen.queryByRole("textbox")).toBeNull();
+      let opened = false;
+      act(() => {
+        opened = openReaderComposer("p:agent-1", "scroll");
+        if (opened) useKeyboardSteeringStore.getState().handOff("prompt");
+      });
+      expect(opened).toBe(true);
+      const box = screen.getByRole("textbox");
+      expect(document.activeElement).toBe(box);
+      const root = host.querySelector(".terminal-reader")!;
+      expect(root.classList.contains("dock-open")).toBe(true);
+      expect(root.querySelector(".terminal-changes")).not.toBeNull();
+      fireEvent.keyDown(box, { key: "Escape" });
+      expect(screen.queryByRole("textbox")).toBeNull();
+      const steering = useKeyboardSteeringStore.getState();
+      expect(steering.active).toBe(true);
+      expect(steering.level).toBe("scroll");
+    } finally {
+      act(() => useKeyboardSteeringStore.getState().exit());
+    }
+  });
+
   it("answers steering's Prompt key while a new chat's CLI is starting, keeping the text until it is up", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     // No input box yet: the CLI is still starting.

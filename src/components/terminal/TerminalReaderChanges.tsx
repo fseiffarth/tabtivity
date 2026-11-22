@@ -580,8 +580,9 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
     }
   };
   const prompt = useMemo(() => buildDiffNotesPrompt(allNotes, t), [allNotes, t]);
-  /** Into the Chat's text box (which takes the Reader to Chat itself), never
-   * typed into the terminal or sent. Only the notes that fit go; the rest stay. */
+  /** Into the Reader's text box docked under this panel (which opens and
+   * takes the keyboard; the view stays Diffs), never typed into the terminal
+   * or sent. Only the notes that fit go; the rest stay. */
   const addToDraft = () => {
     if (!insertIntoReader(ptyId, prompt.text)) {
       setNoteNotice(t("diffNotes.noComposer"));
