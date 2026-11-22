@@ -8246,6 +8246,8 @@ export const dict: Dict = {
   "projectFilesView.tooltipAttached": "Angehängt",
   "projectFilesView.tooltipOpenInTab": "In einem Tab geöffnet",
   "projectFilesView.workspacesNote": "Arbeitsbereiche — Daten hier werden bei Ablauf gelöscht",
+  "projectFilesView.jobsQueue": "Warteschlange",
+  "projectFilesView.jobsQueueMeta": "{running} laufen · {pending} warten",
   "projectFilesView.pullLogsTitle": "Die Job-Logs von {dir} in das logs/-Verzeichnis des Spiegels kopieren",
   "projectFilesView.pullLogsDialogTitle": "Logs kopieren",
   "projectFilesView.pullLogs": "Logs abrufen",

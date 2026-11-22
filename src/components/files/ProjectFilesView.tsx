@@ -86,6 +86,7 @@ import {
   slurmCancel,
   slurmJobOut,
   openLogTab,
+  SLURM_STATE_CODE,
   type SlurmJob,
 } from "../../lib/remote/hpc/slurm";
 import { useHpcJobsStore } from "../../stores/remote/hpc/hpcJobs";
@@ -114,7 +115,7 @@ import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
 import { SideViewKey } from "./SideViewKey";
 import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, ArrowUpRightIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
-import { ArrowLeftIcon, PlusIcon } from "../common/icons/Icon";
+import { ArrowLeftIcon, EyeIcon, PlusIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -3179,55 +3180,121 @@ export function ProjectFilesView({
       })()}
 
       {view === "jobs" && (
-        <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
-          <div className="side-panel-jobs-head">
+        <div className="side-panel-scroll sp-list-view jobs-view" style={{ flex: 1, overflowY: "auto" }}>
+          <div className="sp-toolbar">
             <UntestedTag id="projectFilesView.6" />
+            {wsRows.length > 0 && project?.hpc?.logs_dir && (
+              <span className="sp-toolbar-end">
+                <button
+                  type="button"
+                  className="toolbar-btn toolbar-btn--sm"
+                  title={t("projectFilesView.pullLogsTitle", { dir: project.hpc.logs_dir })}
+                  onClick={() => void pullProjectLogs()}
+                >
+                  <ArrowDownIcon /> {t("projectFilesView.pullLogs")}
+                </button>
+              </span>
+            )}
           </div>
-          {wsRows.length > 0 && (
-            <>
-              <div className="side-panel-orange-note">
-                {t("projectFilesView.workspacesNote")}
-                {project?.hpc?.logs_dir && (
+          {/* The queue first: it is what moves (polled every 7 s); the
+              workspaces below change in days. */}
+          <div className="sp-head jobs-head">
+            <span>{t("projectFilesView.jobsQueue")}</span>
+            {jobRows.length > 0 && (
+              <span className="sp-head-meta">
+                {t("projectFilesView.jobsQueueMeta", {
+                  running: jobRows.filter((j) => j.state === "RUNNING").length,
+                  pending: jobRows.filter((j) => j.state === "PENDING").length,
+                })}
+              </span>
+            )}
+          </div>
+          {jobRows.length === 0 ? (
+            <p className="sp-note">
+              {t(
+                remoteBlocked
+                  ? "projectFilesView.connectToListJobs"
+                  : "projectFilesView.noQueuedJobs",
+              )}
+            </p>
+          ) : (
+            jobRows.map((j) => {
+              const code = SLURM_STATE_CODE[j.state] ?? j.state.slice(0, 2);
+              const color = j.state === "RUNNING" ? "var(--success)"
+                : j.state === "PENDING" ? "var(--warning)"
+                : j.state === "FAILED" ? "var(--danger)"
+                : undefined;
+              return (
+                <div key={j.id} className="sp-row sp-row--two orange-file-row" title={`${j.id} ${j.name}`}>
+                  <span className="sp-row-state">
+                    <span className="sp-chip jobs-state-chip" title={j.state} style={color ? { color } : undefined}>{code}</span>
+                  </span>
+                  <span className="sp-row-act">
+                    <button
+                      type="button"
+                      className="btn-quiet jobs-icon-btn"
+                      title={t("projectFilesView.watchJobTitle", { id: j.id })}
+                      aria-label={t("projectFilesView.watch")}
+                      onClick={() => void watchJob(j.id, j.name)}
+                    >
+                      <EyeIcon />
+                    </button>
+                  </span>
                   <button
                     type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.pullLogsTitle", { dir: project.hpc.logs_dir })}
-                    onClick={() => void pullProjectLogs()}
+                    className="sp-row-main orange-file-name"
+                    title={t("projectFilesView.watchJobTitle", { id: j.id })}
+                    onClick={() => void watchJob(j.id, j.name)}
                   >
-                    {t("projectFilesView.pullLogs")}
+                    <span className="sp-row-text">
+                      <span className="sp-row-name">{j.name || j.id}</span>
+                      <span className="sp-row-sub">
+                        {j.id} · {j.state}
+                        {j.nodes ? ` · ${j.nodes} node${j.nodes === "1" ? "" : "s"}` : ""}
+                        {j.reason && j.reason !== "(None)" ? ` · ${j.reason}` : ""}
+                      </span>
+                    </span>
                   </button>
-                )}
+                  <span className="sp-row-meta">
+                    {j.time}
+                    <button
+                      type="button"
+                      className="btn-quiet is-danger jobs-icon-btn"
+                      title={t("projectFilesView.cancelJobTitle")}
+                      aria-label={t("projectFilesView.cancelJobAria", { id: j.id })}
+                      onClick={() => void cancelJob(j.id, j.name)}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </span>
+                </div>
+              );
+            })
+          )}
+          {wsRows.length > 0 && (
+            <>
+              <div className="sp-head jobs-head">
+                <span>{t("projectFilesView.workspacesNote")}</span>
               </div>
               {wsRows.map((ws) => {
                 const here = projectWs?.id === ws.id && projectWs?.path === ws.path;
+                const sub = [here ? t("projectFilesView.thisProject") : "", ws.filesystem ?? ""].filter(Boolean).join(" · ");
                 return (
-                  <div key={`${ws.filesystem ?? ""}/${ws.id}`} className="orange-file-row" title={ws.path}>
-                    <span className="orange-file-name" style={{ cursor: "var(--cur-default, default)" }}>
-                      <span className="orange-file-dot" aria-hidden="true">{here ? <DotIcon /> : <RingIcon />}</span>
-                      {ws.id}
-                      <span className={`tmux-session-meta hpc-ws-remaining tone-${expiryTone(ws)}`}>
-                        {[
-                          here ? t("projectFilesView.thisProject") : "",
-                          ws.filesystem ?? "",
-                          remainingLabel(ws),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                  <div key={`${ws.filesystem ?? ""}/${ws.id}`} className={`sp-row${sub ? " sp-row--two" : ""} orange-file-row`} title={ws.path}>
+                    <span className="sp-row-state jobs-ws-here" aria-hidden="true">{here ? <DotIcon /> : <RingIcon />}</span>
+                    <span className="sp-row-act" />
+                    <span className="sp-row-main">
+                      <span className="sp-row-text">
+                        <span className="sp-row-name">{ws.id}</span>
+                        {sub && <span className="sp-row-sub">{sub}</span>}
                       </span>
                     </span>
-                    <div className="orange-file-actions">
-                      <button
-                        type="button"
-                        className="orange-file-act"
-                        title={t("projectFilesView.extendWorkspaceTitle")}
-                        onClick={() => void extendWs(ws)}
-                      >
-                        {t("projectFilesView.extend")}
-                      </button>
+                    <span className="sp-row-meta">
+                      <span className={`hpc-ws-remaining tone-${expiryTone(ws)}`}>{remainingLabel(ws)}</span>
                       {!here && project?.remote && (
                         <button
                           type="button"
-                          className="orange-file-act"
+                          className="btn-quiet"
                           disabled={wsBusy}
                           title={t("projectFilesView.moveHereTitle")}
                           onClick={() => void moveProjectTo(ws)}
@@ -3235,65 +3302,22 @@ export function ProjectFilesView({
                           {t("projectFilesView.moveHere")}
                         </button>
                       )}
-                    </div>
+                      <button
+                        type="button"
+                        className="btn-quiet"
+                        title={t("projectFilesView.extendWorkspaceTitle")}
+                        onClick={() => void extendWs(ws)}
+                      >
+                        {t("projectFilesView.extend")}
+                      </button>
+                    </span>
                   </div>
                 );
               })}
             </>
           )}
-          {jobRows.length === 0 ? (
-            <div className="side-panel-orange-empty">
-              {t(
-                remoteBlocked
-                  ? "projectFilesView.connectToListJobs"
-                  : "projectFilesView.noQueuedJobs",
-              )}
-            </div>
-          ) : (
-            jobRows.map((j) => (
-              <div key={j.id} className="orange-file-row" title={`${j.id} ${j.name}`}>
-                <button
-                  type="button"
-                  className="orange-file-name"
-                  title={t("projectFilesView.watchJobTitle", { id: j.id })}
-                  onClick={() => void watchJob(j.id, j.name)}
-                >
-                  <span className="orange-file-dot" aria-hidden="true">
-                    {j.state === "RUNNING" ? <DotIcon /> : <RingIcon />}
-                  </span>
-                  {j.name || j.id}
-                  <span className="tmux-session-meta">
-                    {j.id} · {j.state}
-                    {j.time ? ` · ${j.time}` : ""}
-                    {j.nodes ? ` · ${j.nodes} node${j.nodes === "1" ? "" : "s"}` : ""}
-                    {j.reason && j.reason !== "(None)" ? ` · ${j.reason}` : ""}
-                  </span>
-                </button>
-                <div className="orange-file-actions">
-                  <button
-                    type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.watchJobTitle", { id: j.id })}
-                    onClick={() => void watchJob(j.id, j.name)}
-                  >
-                    {t("projectFilesView.watch")}
-                  </button>
-                  <button
-                    type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.cancelJobTitle")}
-                    aria-label={t("projectFilesView.cancelJobAria", { id: j.id })}
-                    onClick={() => void cancelJob(j.id, j.name)}
-                  >
-                    <CloseIcon />
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
         </div>
       )}
-
       {view === "files" && (
         <ProjectFilesPane
           scope={scope}

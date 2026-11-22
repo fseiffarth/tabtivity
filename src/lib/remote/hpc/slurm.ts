@@ -52,6 +52,26 @@ export interface SlurmJob {
   reason: string;
 }
 
+/** squeue's short state codes for the long names `slurm_queue` reports, for
+ *  the Jobs view's state chip. A state not listed shows its first two letters. */
+export const SLURM_STATE_CODE: Record<string, string> = {
+  RUNNING: "R",
+  PENDING: "PD",
+  COMPLETING: "CG",
+  CONFIGURING: "CF",
+  SUSPENDED: "S",
+  STOPPED: "ST",
+  REQUEUED: "RQ",
+  RESIZING: "RS",
+  COMPLETED: "CD",
+  CANCELLED: "CA",
+  FAILED: "F",
+  TIMEOUT: "TO",
+  NODE_FAIL: "NF",
+  PREEMPTED: "PR",
+  OUT_OF_MEMORY: "OOM",
+};
+
 // ── Invoke wrappers ──────────────────────────────────────────────────────────
 
 /** Is SLURM available on the project's host? Lets the UI hide itself off-HPC. */

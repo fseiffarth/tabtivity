@@ -8599,6 +8599,8 @@ export const enSource = {
   "projectFilesView.tooltipAttached": "Attached",
   "projectFilesView.tooltipOpenInTab": "Open in a tab",
   "projectFilesView.workspacesNote": "Workspaces — data here is deleted at expiry",
+  "projectFilesView.jobsQueue": "Queue",
+  "projectFilesView.jobsQueueMeta": "{running} running · {pending} pending",
   "projectFilesView.pullLogsTitle": "Copy the job logs from {dir} into the mirror's logs/",
   "projectFilesView.pullLogsDialogTitle": "Copy logs",
   "projectFilesView.pullLogs": "Pull logs",

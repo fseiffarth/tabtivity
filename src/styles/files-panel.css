@@ -1928,6 +1928,31 @@
   padding: 0 var(--space-1);
 }
 
+/* Jobs: the queue, then the workspaces. A job's state is a squeue code on
+   the chip (R, PD), its elapsed time the row's meta. */
+.jobs-view .jobs-state-chip {
+  width: auto;
+  min-width: 16px;
+  padding: 0 2px;
+}
+
+.jobs-view .jobs-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--space-1);
+}
+
+.jobs-view .jobs-ws-here {
+  color: var(--text-muted);
+}
+
+.jobs-view .sp-toolbar .toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 /* ── The browser desktop client (hosted plan P2) ─────────────────────────── */
 /* The one "connection lost" banner, mounted outside the app's root. */
 .server-link-banner {

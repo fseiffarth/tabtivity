@@ -8240,6 +8240,8 @@ export const dict: Dict = {
   "projectFilesView.tooltipAttached": "Collegata",
   "projectFilesView.tooltipOpenInTab": "Aperta in una scheda",
   "projectFilesView.workspacesNote": "Spazi di lavoro — i dati qui vengono eliminati alla scadenza",
+  "projectFilesView.jobsQueue": "Coda",
+  "projectFilesView.jobsQueueMeta": "{running} in esecuzione · {pending} in attesa",
   "projectFilesView.pullLogsTitle": "Copia i log dei job da {dir} nella cartella logs/ del mirror",
   "projectFilesView.pullLogsDialogTitle": "Copia i log",
   "projectFilesView.pullLogs": "Recupera i log",
