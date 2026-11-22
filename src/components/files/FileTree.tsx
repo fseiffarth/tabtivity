@@ -355,7 +355,7 @@ function describeListError(
   return t("fileTree.errOpenFolder");
 }
 
-interface FileRowProps {
+export interface FileRowProps {
   entry: FileEntry;
   /** Gitignored / hidden-ending section member (dimmed). */
   scaffold: boolean;
@@ -408,7 +408,7 @@ interface FileRowProps {
  * is a primitive, the entry, or one of the tree's two stable objects, so only
  * the rows whose own inputs changed render.
  */
-const FileRow = React.memo(function FileRow({
+export const FileRow = React.memo(function FileRow({
   entry: e,
   scaffold,
   doc,
@@ -442,24 +442,11 @@ const FileRow = React.memo(function FileRow({
   const t = useT();
   const canRun = canShRun || canPyRun;
 
-  /** What the sync state puts in the action slot, or null when it has nothing
-   *  to say (in sync, not auto) — the slot then goes to the run button or the
-   *  remark count. `none` → pull/push button; `localnew` → push; `amber` → the
-   *  diff button (a file) or the diverged mark (a folder); auto + green → the
-   *  quiet auto-sync mark; excluded → the grey ✕ ahead of all of them. */
-  function syncAction(): React.ReactNode {
-    if (!syncTracked) return null;
-    if (pathExcluded) {
-      return (
-        <span
-          className="file-sync-excluded"
-          title={t("fileTree.excludedFromByteSync")}
-          aria-label={t("fileTree.excludedFromByteSync")}
-        >
-          <CloseIcon />
-        </span>
-      );
-    }
+  /** The sync BUTTON for the action slot, or null when the sync state asks
+   *  nothing of the user. `none` → pull/push; `localnew` → push; `amber` on a
+   *  file → the diff button. An excluded path has no sync action at all. */
+  function syncButton(): React.ReactNode {
+    if (!syncTracked || pathExcluded) return null;
     if (syncState === "none") {
       return (
         <button
@@ -520,7 +507,25 @@ const FileRow = React.memo(function FileRow({
         </button>
       );
     }
-    if (syncState === "amber") {
+    return null;
+  }
+
+  /** A sync MARK that says something the user should see but cannot press:
+   *  the grey ✕ of an excluded path, the diverged mark of a folder. */
+  function syncMark(): React.ReactNode {
+    if (!syncTracked) return null;
+    if (pathExcluded) {
+      return (
+        <span
+          className="file-sync-excluded"
+          title={t("fileTree.excludedFromByteSync")}
+          aria-label={t("fileTree.excludedFromByteSync")}
+        >
+          <CloseIcon />
+        </span>
+      );
+    }
+    if (syncState === "amber" && e.is_dir) {
       return (
         <span
           className="file-sync-dir-diverged"
@@ -531,27 +536,31 @@ const FileRow = React.memo(function FileRow({
         </span>
       );
     }
-    // Auto-sync indicator (non-interactive): only when the slot has no action
-    // button. Amber auto paths still show the diff mark (needs resolving).
-    if (autoSync && syncState === "green") {
-      return (
-        <span
-          className="file-autosync-icon"
-          title={t("fileTree.autoSyncing")}
-          aria-label={t("fileTree.autoSyncing")}
-        >
-          <RefreshIcon />
-        </span>
-      );
-    }
     return null;
+  }
+
+  /** The quiet auto-sync indicator: only when the slot has nothing else. Amber
+   *  auto paths show the diff mark instead (needs resolving). */
+  function autoSyncMark(): React.ReactNode {
+    if (!syncTracked || pathExcluded || !autoSync || syncState !== "green") return null;
+    return (
+      <span
+        className="file-autosync-icon"
+        title={t("fileTree.autoSyncing")}
+        aria-label={t("fileTree.autoSyncing")}
+      >
+        <RefreshIcon />
+      </span>
+    );
   }
 
   // Column 2 is ONE slot that every row reserves, folders and files alike (the
   // old per-feature gutters were each reserved on some rows only, which is what
   // set file icons one slot right of folder icons). Its contents by priority:
-  // the sync action, then run (or the compile spinner), then the remark count.
-  const act = syncAction() ?? (isCompiling ? (
+  // a sync button, then run (or the compile spinner), then a sync mark, the
+  // remark count, and last the quiet auto-sync indicator. A passive mark never
+  // takes the slot from a control: an auto-synced script keeps its Run button.
+  const run = isCompiling ? (
     <span
       className="file-run-btn running"
       title={t("fileTree.compilingNameEllipsis", { name: e.name })}
@@ -582,11 +591,12 @@ const FileRow = React.memo(function FileRow({
     >
       <PlayIcon />
     </button>
-  ) : remarkCount ? (
+  ) : null;
+  const act = syncButton() ?? run ?? syncMark() ?? (remarkCount ? (
     <span className="sp-count file-remark-count">
       {remarkCount}
     </span>
-  ) : null);
+  ) : null) ?? autoSyncMark();
 
   const gitWord = ignored ? STATUS_WORD_KEY.ignored : status ? STATUS_WORD_KEY[status] : undefined;
   const shownBytes = e.is_dir ? dirShown : e.size;
