@@ -116,6 +116,9 @@ pub mod net_usage;
 // The Ollama client: endpoint, listener owner gate, bounded HTTP, capability
 // and locality reads (moved down from `commands::ollama`, S5).
 pub mod ollama_client;
+// The loopback-only + no-cloud-model gate of the local-model jobs whose input
+// is private (the mail assistant, the agent next-prompt suggestion).
+pub mod ollama_local;
 // The local-model coding agents and the launch lines a local-model tab runs.
 pub mod local_drivers;
 pub mod openvpn;
