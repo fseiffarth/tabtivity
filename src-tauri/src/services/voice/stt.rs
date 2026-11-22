@@ -77,6 +77,9 @@ mod imp {
     use whisper_rs_sys as sys;
 
     use super::super::gpu::{self, CpuReason, VoiceDevice};
+    use super::super::lang::{self, LangPicker};
+    use super::super::phantom;
+    use super::super::vad::RATE;
     use super::super::session::{SessionConfig, Transcriber, Transcript};
     use super::super::VoiceError;
     use super::Factory;
@@ -217,6 +220,18 @@ mod imp {
         Ok((ctx, state, device))
     }
 
+    /// One language's params, built once per session and cloned per run:
+    /// each setter leaks a C string, and the language/prompt setters panic
+    /// on a NUL. `FullParams` is a shallow copy, so nothing is freed twice.
+    struct LangParams {
+        /// Whisper's code, `None` for open detection (`auto`).
+        code: Option<&'static str>,
+        /// Whisper's language id, for reading `lang_detect`'s vector.
+        id: Option<i32>,
+        final_params: FullParams<'static, 'static>,
+        partial_params: FullParams<'static, 'static>,
+    }
+
     pub struct Whisper {
         ctx: Arc<WhisperContext>,
         state: WhisperState,
@@ -224,14 +239,20 @@ mod imp {
         /// On the GPU with no run finished yet: the next one is under the
         /// crash guard (`gpu.rs`), the driver's first real work.
         unproven: bool,
-        /// Built once per session and cloned per run: each setter leaks a
-        /// C string, and the language/prompt setters panic on a NUL.
-        final_params: FullParams<'static, 'static>,
-        partial_params: FullParams<'static, 'static>,
+        /// One entry per candidate language; a session without candidates
+        /// has one (its language, or open detection for `auto`).
+        langs: Vec<LangParams>,
+        /// Whether the request had candidates: only then a final can lock
+        /// and `voice:lang` goes out.
+        candidates: bool,
+        /// Which of `langs` to use, and when it is locked (`lang.rs`).
+        picker: LangPicker,
+        threads: i32,
+        prompt: Option<String>,
         vad: Option<WhisperVadContext>,
         /// The flag the abort callback reads, kept alive as long as the
         /// params that point at it.
-        _cancel: Arc<AtomicBool>,
+        cancel: Arc<AtomicBool>,
     }
 
     /// whisper.cpp's abort callback: true stops the run between steps.
@@ -269,54 +290,49 @@ mod imp {
             let (ctx, state, device) = open_on_device(factory)?;
             let unproven = matches!(device, VoiceDevice::Gpu { .. });
             let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8) as i32;
-            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_n_threads(threads);
-            // `None` is whisper's "auto": detect, then decode. Never
-            // `set_detect_language(true)`: that means detect ONLY, and `full`
-            // returns before it decodes anything (empty text every time).
-            // `FullParams::new` starts on "en", so `None` must be set.
-            params.set_language(whisper_lang(&config.lang)?);
-            if let Some(prompt) = config.prompt.as_deref().filter(|p| !p.contains('\0')) {
-                params.set_initial_prompt(prompt);
-            }
-            params.set_no_context(true);
-            params.set_suppress_nst(true);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_special(false);
-            params.set_print_timestamps(false);
-            // SAFETY: the callback only reads the AtomicBool behind the
-            // pointer, which `Whisper::_cancel` keeps alive with the params.
-            unsafe {
-                params.set_abort_callback(Some(abort_when_set));
-                params.set_abort_callback_user_data(Arc::as_ptr(&cancel) as *mut std::ffi::c_void);
-            }
-            let mut partial_params = params.clone();
-            partial_params.set_temperature_inc(0.0);
-            partial_params.set_single_segment(true);
+            let langs: Vec<LangParams> = candidate_codes(config)?
+                .into_iter()
+                .map(|code| lang_params(code, threads, config.prompt.as_deref(), &cancel))
+                .collect();
+            let start = config
+                .fallback
+                .as_deref()
+                .and_then(|f| whisper_lang(f).ok().flatten())
+                .and_then(|f| langs.iter().position(|l| l.code == Some(f)))
+                .unwrap_or(0);
+            let picker = LangPicker::new(langs.len(), start);
             let vad = factory
                 .vad_model
                 .as_deref()
                 .and_then(Path::to_str)
                 .and_then(|p| WhisperVadContext::new(p, WhisperVadContextParams::default()).ok());
-            Ok(Self { ctx, state, device, unproven, final_params: params, partial_params, vad, _cancel: cancel })
+            let candidates = !config.langs.is_empty();
+            Ok(Self { ctx, state, device, unproven, langs, candidates, picker, threads, prompt: config.prompt.clone(), vad, cancel })
         }
-    }
 
-    impl Transcriber for Whisper {
-        fn transcribe(&mut self, audio: &[f32], partial: bool) -> Result<Transcript, VoiceError> {
-            let params = if partial { self.partial_params.clone() } else { self.final_params.clone() };
+        /// Runs `body` under the GPU crash guard while the device is
+        /// unproven. The guard's outcome is the whole body's, so a detect
+        /// pass and the run after it share one `arm`/`disarm`.
+        fn guarded<T>(&mut self, body: impl FnOnce(&mut Self) -> Result<T, VoiceError>) -> Result<T, VoiceError> {
             let guarded = self.unproven;
             if guarded {
                 gpu::arm();
             }
-            let outcome = self.state.full(params, audio);
+            let outcome = body(self);
             if guarded {
                 gpu::disarm();
                 // A run cancelled early proved nothing.
                 self.unproven = outcome.is_err();
             }
-            outcome.map_err(|_| VoiceError::ModelFailed)?;
+            outcome
+        }
+
+        /// One decode of `audio` in candidate `index`'s language.
+        fn run(&mut self, audio: &[f32], partial: bool, index: usize) -> Result<Transcript, VoiceError> {
+            let entry = &self.langs[index];
+            let params = if partial { entry.partial_params.clone() } else { entry.final_params.clone() };
+            let code = entry.code;
+            self.state.full(params, audio).map_err(|_| VoiceError::ModelFailed)?;
             let mut text = String::new();
             let mut no_speech: f32 = 0.0;
             for segment in self.state.as_iter() {
@@ -325,7 +341,102 @@ mod imp {
                 }
                 no_speech = no_speech.max(segment.no_speech_probability());
             }
-            Ok(Transcript { text: text.trim().to_string(), no_speech })
+            // Open detection reports what whisper heard.
+            let lang = code.or_else(|| whisper_rs::get_lang_str(self.state.full_lang_id_from_state()));
+            Ok(Transcript { text: text.trim().to_string(), no_speech, lang, locked: false })
+        }
+
+        /// The best candidate for `audio` and its renormalised probability;
+        /// `None` when the mel or the detection fails (the caller falls back).
+        fn detect(&mut self, audio: &[f32]) -> Option<(usize, f32)> {
+            let ids: Vec<i32> = self.langs.iter().filter_map(|l| l.id).collect();
+            if ids.len() != self.langs.len() {
+                return None;
+            }
+            let threads = self.threads as usize;
+            self.state.pcm_to_mel(audio, threads).ok()?;
+            let (_, probs) = self.state.lang_detect(0, threads).ok()?;
+            Some(lang::pick(&probs, &ids))
+        }
+    }
+
+    /// Whisper's codes for the session's languages: the candidates, deduplicated
+    /// after whisper's own aliasing, else the one `lang` (`None`: open detection).
+    fn candidate_codes(config: &SessionConfig) -> Result<Vec<Option<&'static str>>, VoiceError> {
+        if config.langs.is_empty() {
+            return Ok(vec![whisper_lang(&config.lang)?]);
+        }
+        let mut codes: Vec<Option<&'static str>> = Vec::new();
+        for lang in &config.langs {
+            // `auto` is no candidate: it would turn the pick into a guess.
+            let code = whisper_lang(lang)?.ok_or(VoiceError::BadArgument)?;
+            if !codes.contains(&Some(code)) {
+                codes.push(Some(code));
+            }
+        }
+        Ok(codes)
+    }
+
+    fn lang_params(code: Option<&'static str>, threads: i32, prompt: Option<&str>, cancel: &Arc<AtomicBool>) -> LangParams {
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_n_threads(threads);
+        // `None` is whisper's "auto": detect, then decode. Never
+        // `set_detect_language(true)`: that means detect ONLY, and `full`
+        // returns before it decodes anything (empty text every time).
+        // `FullParams::new` starts on "en", so `None` must be set.
+        params.set_language(code);
+        if let Some(prompt) = prompt.filter(|p| !p.contains('\0')) {
+            params.set_initial_prompt(prompt);
+        }
+        params.set_no_context(true);
+        params.set_suppress_nst(true);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_special(false);
+        params.set_print_timestamps(false);
+        // SAFETY: the callback only reads the AtomicBool behind the
+        // pointer, which `Whisper::cancel` keeps alive with the params.
+        unsafe {
+            params.set_abort_callback(Some(abort_when_set));
+            params.set_abort_callback_user_data(Arc::as_ptr(cancel) as *mut std::ffi::c_void);
+        }
+        let mut partial_params = params.clone();
+        partial_params.set_temperature_inc(0.0);
+        partial_params.set_single_segment(true);
+        let id = code.and_then(whisper_rs::get_lang_id);
+        LangParams { code, id, final_params: params, partial_params }
+    }
+
+    impl Transcriber for Whisper {
+        /// A partial, a seam prefix or any run that must not detect: the
+        /// locked language, else the last pick, else the start language.
+        fn transcribe(&mut self, audio: &[f32], partial: bool) -> Result<Transcript, VoiceError> {
+            let index = self.picker.current();
+            self.guarded(|me| me.run(audio, partial, index))
+        }
+
+        /// A final detects among the candidates until the session locks.
+        fn transcribe_final(&mut self, audio: &[f32]) -> Result<Transcript, VoiceError> {
+            let detects = self.picker.needs_detect();
+            let (mut transcript, used, p) = self.guarded(|me| {
+                let (index, p) = if detects {
+                    me.detect(audio).unwrap_or((me.picker.current(), 0.0))
+                } else {
+                    (me.picker.current(), 0.0)
+                };
+                // `lang_detect` cannot be aborted: a final that came due or
+                // an aborted session is noticed here, before `full`.
+                if detects && me.cancel.load(Ordering::SeqCst) {
+                    return Err(VoiceError::ModelFailed);
+                }
+                me.run(audio, false, index).map(|t| (t, index, p))
+            })?;
+            if self.candidates {
+                let kept = phantom::keep(&transcript.text, transcript.no_speech, self.prompt.as_deref()).is_some();
+                let speech_ms = audio.len() * 1000 / RATE as usize;
+                transcript.locked = self.picker.finished(used, p, speech_ms, kept);
+            }
+            Ok(transcript)
         }
 
         fn confirm_speech(&mut self, audio: &[f32]) -> bool {
@@ -356,6 +467,20 @@ mod imp {
             assert_eq!(whisper_lang("de-DE"), Ok(Some("de")));
             assert_eq!(whisper_lang("en"), Ok(Some("en")));
             assert_eq!(whisper_lang("xx"), Err(VoiceError::BadArgument));
+        }
+
+        #[test]
+        fn the_candidates_become_whispers_codes() {
+            if !super::super::super::cpu::supported() {
+                return;
+            }
+            let with = |langs: &[&str]| SessionConfig { langs: langs.iter().map(|l| l.to_string()).collect(), ..test_config("auto") };
+            assert_eq!(candidate_codes(&with(&["de", "en"])), Ok(vec![Some("de"), Some("en")]));
+            assert_eq!(candidate_codes(&with(&["de", "de"])), Ok(vec![Some("de")]));
+            assert_eq!(candidate_codes(&with(&["de", "auto"])), Err(VoiceError::BadArgument));
+            assert_eq!(candidate_codes(&with(&["de", "xx"])), Err(VoiceError::BadArgument));
+            assert_eq!(candidate_codes(&test_config("de-DE")), Ok(vec![Some("de")]));
+            assert_eq!(candidate_codes(&test_config("auto")), Ok(vec![None]));
         }
 
         /// The speech clip a real-model test transcribes: `VOICE_TEST_WAV`, a
@@ -393,6 +518,8 @@ mod imp {
                 owner: super::super::super::Owner::Tab { client: app_core::ClientId::new("main"), key: "t".into() },
                 mode: super::super::super::session::ListenMode::Dictate,
                 lang: lang.into(),
+                langs: Vec::new(),
+                fallback: None,
                 end_silence_ms: 700,
                 headset: false,
                 prompt: None,
@@ -416,8 +543,65 @@ mod imp {
             let mut whisper = Whisper::load(&factory, &test_config("auto"), Arc::new(AtomicBool::new(false)))
                 .expect("the model loads");
             let said = whisper.transcribe(&audio, false).expect("a run");
-            eprintln!("open detection heard {:?}", said.text);
+            eprintln!("open detection heard {:?} ({:?})", said.text, said.lang);
             assert!(!said.text.is_empty(), "open detection decodes");
+        }
+
+        /// Step 4's numbers (docs/voice_language_detection_plan.md), by hand:
+        /// `VOICE_TEST_MODEL=<ggml file>[:<another>] VOICE_TEST_WAVS=<dir>
+        /// cargo test -p tabtivity --lib -- --ignored --nocapture
+        /// language_detection_numbers`. The directory (outside the repo) holds
+        /// short clips (2-4 s) named `<lang>_<anything>.wav`, such as
+        /// `de_open.wav` and `en_hello.wav`; `VOICE_TEST_LANGS` (default
+        /// `de,en`) is the candidate list. For each model and clip it prints
+        /// what open detection heard, then the candidate pick, its p, and
+        /// whether the final locked: the numbers that set `LOCK_MIN_SPEECH_MS`
+        /// and `LOCK_MIN_P`. Asserts only that every candidate run decodes.
+        #[test]
+        #[ignore = "needs model files and speech clips"]
+        fn language_detection_numbers() {
+            let models: Vec<PathBuf> =
+                std::env::split_paths(&std::env::var_os("VOICE_TEST_MODEL").expect("VOICE_TEST_MODEL")).collect();
+            let dir = PathBuf::from(std::env::var("VOICE_TEST_WAVS").expect("VOICE_TEST_WAVS"));
+            let langs: Vec<String> = std::env::var("VOICE_TEST_LANGS")
+                .unwrap_or_else(|_| "de,en".into())
+                .split(',')
+                .map(str::to_string)
+                .collect();
+            let mut clips: Vec<PathBuf> = std::fs::read_dir(&dir)
+                .expect("VOICE_TEST_WAVS is a directory")
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "wav"))
+                .collect();
+            clips.sort();
+            assert!(!clips.is_empty(), "no .wav clips in {}", dir.display());
+            for model in models {
+                for clip in &clips {
+                    let name = clip.file_name().unwrap().to_string_lossy().into_owned();
+                    let audio = test_wav(clip);
+                    let factory = Factory { model: model.clone(), vad_model: None, gpu: false };
+                    let cancel = Arc::new(AtomicBool::new(false));
+
+                    let mut open = Whisper::load(&factory, &test_config("auto"), cancel.clone()).expect("open load");
+                    let heard = open.transcribe_final(&audio).expect("an open run");
+                    let mut config = test_config("auto");
+                    config.langs = langs.clone();
+                    let mut chosen = Whisper::load(&factory, &config, cancel).expect("candidate load");
+                    let (index, p) = chosen.detect(&audio).unwrap_or((usize::MAX, 0.0));
+                    let pick = chosen.langs.get(index).and_then(|l| l.code);
+                    let last = chosen.transcribe_final(&audio).expect("a candidate run");
+                    eprintln!(
+                        "{} {name} ({} ms): open {:?} {:?} | pick {pick:?} p {p:.2} locked {} {:?}",
+                        model.file_name().unwrap().to_string_lossy(),
+                        audio.len() * 1000 / RATE as usize,
+                        heard.lang,
+                        heard.text,
+                        last.locked,
+                        last.text,
+                    );
+                    assert!(!last.text.is_empty(), "{name}: the candidate run decodes");
+                }
+            }
         }
 
         /// By hand, with a real model: `VOICE_TEST_MODEL=<ggml file> cargo test
