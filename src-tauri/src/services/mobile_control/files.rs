@@ -137,6 +137,31 @@ pub fn hidden(name: &str) -> bool {
     name == ".git" || crate::brand::is_project_dir(name) || name.starts_with(".env")
 }
 
+/// The names among `names` (rows of the folder `rel`) that the desktop side
+/// panel folds into its "Hidden by extension" group: the project's
+/// `panel_hidden_endings` match the name's end, any case, unless
+/// `panel_shown_paths` names the row. The same match as the desktop's
+/// `isHiddenByEnding` (`src/lib/viewers/fileUtils.ts`), so the phone's Hidden
+/// fold holds what the panel's does.
+pub fn hidden_by_ending<'a>(endings: &[String], shown: &[String], rel: &str, names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let rule = |path: &str| path.trim().trim_matches('/').to_lowercase();
+    let endings: Vec<String> = endings.iter().map(|ending| ending.trim().to_lowercase()).filter(|ending| !ending.is_empty()).collect();
+    if endings.is_empty() {
+        return Vec::new();
+    }
+    let shown: HashSet<String> = shown.iter().map(|path| rule(path)).collect();
+    let rel = rel.trim_matches('/');
+    names
+        .into_iter()
+        .filter(|name| {
+            let lower = name.to_lowercase();
+            endings.iter().any(|ending| lower.ends_with(ending.as_str()))
+                && !shown.contains(&rule(&if rel.is_empty() { (*name).to_string() } else { format!("{rel}/{name}") }))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 /// A leaf the browser lists and resolves. The same test both ways, so nothing
 /// is listed that could not be opened again.
 pub(super) fn valid_segment(name: &str) -> bool {
@@ -1057,6 +1082,19 @@ mod tests {
     use super::*;
 
     const KEY: &[u8] = b"host-key-for-tests-0123456789abcdef";
+
+    /// The desktop's hidden endings fold the same rows on the phone: any case,
+    /// blank endings dropped, a shown path kept out, matched per folder.
+    #[test]
+    fn hidden_endings_pick_the_rows_the_side_panel_folds() {
+        let strings = |items: &[&str]| items.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+        let endings = strings(&[".KiCad_PRL", " ", "-backups"]);
+        let names = ["board.kicad_prl", "board.kicad_pcb", "board-backups", "keep.kicad_prl"];
+        assert_eq!(hidden_by_ending(&endings, &[], "", names), ["board.kicad_prl", "board-backups", "keep.kicad_prl"]);
+        assert_eq!(hidden_by_ending(&endings, &strings(&["/Panel/keep.kicad_prl/"]), "panel", names), ["board.kicad_prl", "board-backups"]);
+        assert_eq!(hidden_by_ending(&endings, &strings(&["keep.kicad_prl"]), "panel", names).len(), 3);
+        assert!(hidden_by_ending(&strings(&["", "  "]), &[], "", names).is_empty());
+    }
 
     /// A token sealed by an older build's host still opens after a rename
     /// (and is counted); one sealed now opens without a second try; a token

@@ -8145,6 +8145,21 @@ fn has_host_files(project: &super::discovery::ResolvedProject) -> bool {
         && project.primary_host.as_ref().is_some_and(|spec| host_files::root_of(spec).is_some())
 }
 
+/// The rows of a listing the desktop side panel folds under "Hidden by
+/// extension" — the project's `panel_hidden_endings` on its trusted
+/// `projects.json` entry, never the in-folder `project.json` — as the names
+/// the phone folds into its Hidden section. None where the registry has no
+/// such project (a box) or cannot be read.
+fn hidden_ext_of(raw_id: &str, rel: &str, names: &[String]) -> Vec<String> {
+    let Ok(entry) = crate::services::remote::project_entry(raw_id) else { return Vec::new() };
+    let list = |key: &str| -> Vec<String> {
+        entry.extra.get(key).and_then(|value| value.as_array())
+            .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    };
+    files::hidden_by_ending(&list("panel_hidden_endings"), &list("panel_shown_paths"), rel, names.iter().map(String::as_str))
+}
+
 /// Whether a file-browser request asks for the remote side (`?on=host`).
 fn on_host_side(query: &HashMap<String, String>) -> bool {
     query.get("on").is_some_and(|side| side == "host")
@@ -8221,7 +8236,8 @@ fn files_rel(
 /// **Upload here** may write into this folder (`project_files_upload`): the
 /// switch is on and no segment of the folder starts with a dot. `remarks`
 /// says whether the reader may write remarks into a PDF of it
-/// (`project_files_remarks`).
+/// (`project_files_remarks`). `hidden_ext` names the rows the desktop side
+/// panel hides by ending (`hidden_ext_of`), which the phone folds away.
 ///
 /// `&on=host` lists the remote side instead: the project's tree on its
 /// primary host (`host_files`), with host-side tokens and never `uploads`.
@@ -8245,10 +8261,14 @@ async fn project_files_list(
             Err(error) => return error,
         };
         let key = state.auth.lock_ok().host_key().to_vec();
+        let (rule_id, rule_rel) = (raw_id.clone(), rel.clone());
         return match state.host_files.list(&spec, known, rel, key, raw_id).await {
             // Read-only: Upload here never writes to the host.
             Ok(listing) => {
+                let names: Vec<String> = listing.entries.iter().map(|entry| entry.name.clone()).collect();
+                let hidden_ext = deadline::local(move || Ok(hidden_ext_of(&rule_id, &rule_rel, &names))).await.unwrap_or_default();
                 let mut answer = json!(listing);
+                answer["hidden_ext"] = json!(hidden_ext);
                 answer["uploads"] = json!(false);
                 answer["remarks"] = json!(false);
                 (StatusCode::OK, Json(answer))
@@ -8272,10 +8292,17 @@ async fn project_files_list(
     let docs_root = rel.is_empty().then(|| root.clone());
     // A directory walk that opens every kept file to type it: off the
     // executor, under the local deadline (a stalled mount answers `timeout`).
-    let listed = deadline::local(move || files::list(&root, &rel, &key, &raw_id)).await;
+    let listed = deadline::local(move || {
+        let listing = files::list(&root, &rel, &key, &raw_id)?;
+        let names: Vec<String> = listing.entries.iter().map(|entry| entry.name.clone()).collect();
+        let hidden_ext = hidden_ext_of(&raw_id, &rel, &names);
+        Ok((listing, hidden_ext))
+    })
+    .await;
     match listed {
-        Ok(listing) => {
+        Ok((listing, hidden_ext)) => {
             let mut answer = json!(listing);
+            answer["hidden_ext"] = json!(hidden_ext);
             if let Some(root) = docs_root {
                 if let Ok(docs) = deadline::local(move || Ok(project_docs::status(&root))).await {
                     answer["docs"] = json!(docs);
