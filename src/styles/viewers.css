@@ -7146,13 +7146,25 @@ select.file-viewer-run-args-input {
 }
 .file-remark-slot { display:inline-flex; width:18px; min-width:18px; justify-content:center; }
 .file-remark-count { min-width:14px; height:14px; padding:0 3px; border-radius:7px; background:var(--accent); color:var(--accent-contrast); font-size: var(--text-xs); line-height:14px; text-align:center; }
-.project-remarks-pane { flex:1; min-height:0; overflow:auto; padding:8px; color:var(--text-primary); }
-.project-remarks-walk { display:flex; align-items:center; gap:6px; position:sticky; top:0; z-index:1; padding:4px; background:var(--bg-panel); }
-.project-remarks-group h3 { margin:12px 0 5px; font-size:11px; color:var(--text-secondary); }
-.project-remark-row { display:grid; grid-template-columns:auto auto minmax(80px,1fr) auto auto auto; gap:5px; align-items:start; padding:6px 2px; border-bottom:1px solid var(--border-color); }
-.project-remark-row.missing { opacity:.55; }
-.project-remark-target { font:inherit; color:var(--accent); border:0; background:none; padding:0; }
-.project-remark-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+/* The Remarks view (files/RemarksPane): the kit's toolbar (walker, counts,
+   Open REMARKS.md), one `.sp-head` per file with its "+", and kit rows — done
+   box, go-to, the remark (it wraps: a remark can run to several lines) over
+   its line, then the row's quiet actions. */
+.project-remarks-pane { flex:1; min-height:0; display:flex; flex-direction:column; color:var(--text-primary); }
+.project-remarks-list { flex:1; min-height:0; overflow-y:auto; padding-bottom: var(--space-2); }
+.project-remarks-position { min-width: 36px; text-align:center; font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.project-remarks-walk .sp-toolbar-meta { margin-left: 6px; }
+.project-remarks-file { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family: var(--font-mono); font-weight:400; color: var(--text-primary); }
+.project-remark-row { align-items:start; padding-top: var(--space-1); padding-bottom: var(--space-1); }
+.project-remark-row > .sp-row-state,
+.project-remark-row > .sp-row-act { min-height: 20px; }
+.project-remark-row input[type="checkbox"] { margin:0; }
+.project-remark-go { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; padding:0; }
+.project-remark-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height: 20px; }
+.project-remark-row.done .project-remark-text { color: var(--text-muted); }
+.project-remark-row.missing .project-remark-sub { color: var(--warning); }
+.project-remark-actions { gap:0; }
+.project-remark-actions .btn-quiet { display:inline-flex; align-items:center; padding: var(--space-1); }
 /* Dev build's Todo view (files/DevTodoView): todo groups folding into rendered markdown. */
 .dev-todo-view { flex:1; min-height:0; overflow-y:auto; padding:6px; color:var(--text-primary); }
 .dev-todo-head { display:flex; align-items:center; gap:6px; padding:2px 2px 6px; }
