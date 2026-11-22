@@ -1,4 +1,4 @@
-import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type SyntheticEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type SyntheticEvent, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import { wrapStep } from "../../lib/wrapStep";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -1625,10 +1625,31 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The press or focus that engaged the dock, which its own document
    * listener below must not take for one elsewhere. */
   const dockEvent = useRef<Event | null>(null);
+  /** A press that started in the dock is still down: the field losing focus
+   * to nowhere then is WebKit's press on a button, not the dock left. */
+  const dockPressed = useRef(false);
   const engageDock = (event: SyntheticEvent) => {
     if (!panelShown) return;
     dockEvent.current = event.nativeEvent;
+    if (event.type === "pointerdown") {
+      dockPressed.current = true;
+      const release = () => {
+        dockPressed.current = false;
+        window.removeEventListener("pointerup", release, true);
+        window.removeEventListener("pointercancel", release, true);
+      };
+      window.addEventListener("pointerup", release, true);
+      window.addEventListener("pointercancel", release, true);
+    }
     setDockEngaged(true);
+  };
+  /** Focus gone to nowhere (steering's Prompt key handed the field back, the
+   * box locked or hidden) with no press in the dock: nothing holds it open.
+   * Not the window losing focus: the field still has it, and gets it back. */
+  const leaveDock = (event: ReactFocusEvent) => {
+    if (!panelShown || event.relatedTarget !== null || dockPressed.current) return;
+    if (document.activeElement === event.target) return;
+    setDockEngaged(false);
   };
   useEffect(() => {
     if (!panelShown) setDockEngaged(false);
@@ -3093,7 +3114,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       ))}
       {/* The dock: no box of its own (`display: contents`), only where a press
           or focus inside it engages it (`engageDock`). */}
-      <div className="terminal-reader-dock" onPointerDown={engageDock} onFocus={engageDock}>
+      <div className="terminal-reader-dock" onPointerDown={engageDock} onFocus={engageDock} onBlur={leaveDock}>
       {/* No facts row in a Tabby chat: the view's own model dropdown says enough. */}
       {tab && !browsed && scope !== ASSISTANT_SCOPE && (
         <TerminalReaderFacts

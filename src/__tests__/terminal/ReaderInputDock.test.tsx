@@ -19,6 +19,8 @@ vi.mock("../../components/embed/FileViewerPane", () => ({ FileViewerPane: ({ pat
 import type { Terminal } from "@xterm/xterm";
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";
 import { useReaderChatsStore } from "../../lib/agents/agentChats";
+import { openReaderComposer } from "../../lib/agents/readerSteering";
+import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { setReaderDraft } from "../../lib/agents/readerDrafts";
 import { clearSentPrompts, noteSentPrompt } from "../../lib/agents/sentPrompts";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
@@ -135,6 +137,50 @@ describe("the composer docked under Diffs and Data", () => {
     expect(isOpen()).toBe(false);
     act(() => { fireEvent.pointerDown(box()); });
     expect(isOpen()).toBe(true);
+  });
+
+  it("rests again once steering's Prompt key has handed the field back", async () => {
+    render(<Pane host={host} start="changes" />);
+    await diffsShown();
+    act(() => useKeyboardSteeringStore.getState().enter("scroll"));
+    try {
+      act(() => {
+        expect(openReaderComposer(ID, "scroll")).toBe(true);
+        useKeyboardSteeringStore.getState().handOff("prompt");
+      });
+      expect(document.activeElement).toBe(box());
+      expect(isOpen()).toBe(true);
+      act(() => { fireEvent.keyDown(box(), { key: "Escape" }); });
+      // Nothing holds the field now: no facts row over the Diffs cursor.
+      expect(dock().querySelector("textarea")).toBeNull();
+      expect(isOpen()).toBe(false);
+      act(() => useKeyboardSteeringStore.getState().exit());
+      expect(box().value).toBe("");
+      expect(isOpen()).toBe(false);
+    } finally {
+      act(() => useKeyboardSteeringStore.getState().exit());
+    }
+  });
+
+  it("keeps the dock open while a press in it, or the window, takes the field's focus away", async () => {
+    render(<Pane host={host} start="changes" />);
+    await diffsShown();
+    act(() => box().focus());
+    expect(isOpen()).toBe(true);
+    // The window losing focus: the field keeps it.
+    act(() => { fireEvent.focusOut(box()); });
+    expect(isOpen()).toBe(true);
+    // WebKit focuses no button on a click: the press on a chip blurs the field
+    // to nowhere before the click lands.
+    const plan = within(dock()).getByRole("button", { name: /^Plan/ });
+    act(() => {
+      fireEvent.pointerDown(plan);
+      box().blur();
+    });
+    expect(isOpen()).toBe(true);
+    act(() => { fireEvent.pointerUp(plan); });
+    fireEvent.click(plan);
+    expect(box().value.startsWith("/plan")).toBe(true);
   });
 
   it("opens on a press on a chip, whose click still lands", async () => {
