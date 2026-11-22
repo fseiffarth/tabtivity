@@ -19,12 +19,12 @@ import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupBack, type MarkupNewTab, type MarkupTarget } from "../components/OutboxViewer";
 import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
-import { SentFilesIndex, type SentFile } from "../components/SentFilesIndex";
+import { SentFileHold, SentFilesIndex, useSentFileMenu, type SentFile } from "../components/SentFilesIndex";
 import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
-import { Fragment, memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useContext, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   ANY_FILE_ACCEPT,
@@ -57,6 +57,7 @@ import {
   type TabWorktrees,
   type TabLocations,
   type AssistantModels,
+  deleteInboxFile,
 } from "../api";
 import { describeFailure } from "../connection";
 import { readDraft } from "../drafts";
@@ -111,7 +112,7 @@ import { isPermissionDialog, permissionSubject, permissionSubjectLabel } from ".
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, pendingPrompt, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
-import { inboxInPlace, inboxLeaves, inboxSegments, withoutInboxReferences } from "../terminal/inboxRefs";
+import { inboxInPlace, inboxLeaves, inboxSegments, markInboxGone, withoutInboxReferences } from "../terminal/inboxRefs";
 import { type ClearMark } from "../terminal/clearedSession";
 import { readHeld } from "../terminal/heldPrompts";
 import { ageLabel } from "../terminal/fileLabels";
@@ -315,6 +316,9 @@ const awayMarkups = new Map<string, MarkupBack>();
  * where they stand instead (`inboxSegments`). Both follow from the text
  * alone, so a shown bubble keeps its shape. */
 function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers; inbox?: ChatInbox }) {
+  // A hold on one of the files asks Save, Share or Delete (the chat's menu).
+  const held = useContext(SentFileHold);
+  const onHold = held ? (file: OutboxFile) => held({ file, from: "phone" }) : undefined;
   const leaves = useMemo(() => inbox ? inboxLeaves(text) : [], [inbox, text]);
   const segments = useMemo(() => leaves.length > 0 ? inboxSegments(text) : [], [leaves, text]);
   if (!inbox || leaves.length === 0) return <PromptText text={text} links={links} />;
@@ -323,11 +327,11 @@ function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers;
     const first = segments.findIndex((segment) => segment.kind === "files");
     return <>{segments.map((segment, i) => segment.kind === "words"
       ? <PromptText key={i} text={segment.text} links={links} />
-      : <InboxAlbum key={i} tabId={inbox.tabId} leaves={segment.leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} tag={i === first ? undefined : null} />)}</>;
+      : <InboxAlbum key={i} tabId={inbox.tabId} leaves={segment.leaves} files={inbox.files} onOpen={inbox.onOpen} onHold={onHold} onSettle={inbox.onSettle} tag={i === first ? undefined : null} />)}</>;
   }
   const words = withoutInboxReferences(text);
   return <>
-    <InboxAlbum tabId={inbox.tabId} leaves={leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} />
+    <InboxAlbum tabId={inbox.tabId} leaves={leaves} files={inbox.files} onOpen={inbox.onOpen} onHold={onHold} onSettle={inbox.onSettle} />
     {words && <PromptText text={words} links={links} />}
   </>;
 }
@@ -2197,6 +2201,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (row.from === "changed" || row.from === "named") openProjectFile(row.file);
     else openSentFile(row);
   }, [openProjectFile, openSentFile]);
+  /** A hold's Delete, on a card in the chat or in its Files list: a file the
+   * agent sent goes as the gallery's 🗑 takes it; one the phone sent leaves
+   * the project inbox, and its card says it is gone. */
+  const removeChatFile = useCallback(async ({ file, from }: SentFile) => {
+    if (from === "agent") return removeOutbox(file);
+    if (from !== "phone") return;
+    await deleteInboxFile(tab.id, file.name);
+    markInboxGone(tab.id, file.name);
+    setInboxOpen((open) => open?.name === file.name ? null : open);
+  }, [removeOutbox, tab.id]);
+  const fileMenu = useSentFileMenu({ tabId: tab.id, project, onRemove: removeChatFile });
   const answerLinks = useViewableNamed(namedFiles, viewableFile);
   /** What this tab sent is its own post in the chat; an answer naming the
    * project file it was copied from does not draw it again. */
@@ -2815,7 +2830,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}
-            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={openChatIndex === "files"} onToggle={() => toggleChatIndex("files")} onOpen={openChatFile} />}
+            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={openChatIndex === "files"} onToggle={() => toggleChatIndex("files")} onOpen={openChatFile} onRemove={removeChatFile} />}
             {chatLinks.length > 0 && <ChatLinksIndex links={chatLinks} open={openChatIndex === "links"} onToggle={() => toggleChatIndex("links")} onOpen={askIndexLink} />}
           </div>}
           {sessionFocus && openStep
@@ -2846,7 +2861,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} onOpenArtifact={setArtifactTarget} />
+                  <SentFileHold.Provider value={fileMenu.hold}><TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} onOpenArtifact={setArtifactTarget} /></SentFileHold.Provider>
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
@@ -2885,14 +2900,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                       until the desktop types it in: not taken yet. */}
                   {/* Both act on the CLI's whole queue, so every queued bubble
                       carries the same pair. */}
-                  {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox}
+                  {queuedShown && <SentFileHold.Provider value={fileMenu.hold}><TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox}
                     queuedActions={agentAtWork && !editing && queueReadable && <div className="transcript-queued-actions">
                       {sendNowOffered && <button type="button" disabled={!connected || sendNowWaiting} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>}
                       {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
                       <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
                       {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
                       {queueCli !== "claude" && isUntested("mobile.chat.queuedActionsOther") && <em>{t("mobile.focus.untested")}</em>}
-                    </div>} />}
+                    </div>} /></SentFileHold.Provider>}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
             ? <div className="readable-empty"><strong>{t("mobile.focus.waitingOutput")}</strong><span>{t("mobile.focus.waitingOutputHint")}</span></div>
@@ -3298,6 +3313,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     />}
     {/* The viewer covers the phone; the gallery stays chosen behind it, so
         closing the file lands back on the grid. */}
+    {fileMenu.sheet}
     {gallery && (!outboxOpen || markupAway !== null) && <OutboxGallery scope={outboxScope} files={tabOutbox} tabOnly onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
     {/* A markup view's Chat tucks its viewer away (`markupAway`) without
         unmounting it; the host is always there, so the switch never remounts. */}

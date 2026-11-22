@@ -7406,6 +7406,39 @@ async fn inbox_file(
     response
 }
 
+/// `DELETE /api/v1/tabs/{tab_id}/inbox/{name}` — drop one file the phone sent
+/// into this tab's project inbox (a hold on its card in the chat → Delete).
+/// The same guards as an outbox delete (`outbox_delete`): the session and the
+/// exact origin, and only a leaf `inbox::read` would serve is removed.
+async fn inbox_delete(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let root = match inbox_root(&state, &phone, &tab_id) {
+        Ok(root) => root,
+        Err(error) => return error,
+    };
+    if !inbox::valid_stored_name(&name) {
+        return api_error(StatusCode::NOT_FOUND, "file_not_found");
+    }
+    let removed = tokio::task::spawn_blocking(move || inbox::remove(&root, &name))
+        .await
+        .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    match removed {
+        Ok(()) => (StatusCode::OK, Json(json!({ "removed": true }))),
+        Err(outbox::OutboxError::Io(_)) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "delete_failed"),
+        Err(error) => outbox_error(error),
+    }
+}
+
 /// How long the phone may keep an inbox picture (`inbox_file`) or a
 /// versioned outbox one (`outbox_bytes`): this device only, a day.
 const INBOX_FILE_CACHE: &str = "private, max-age=86400, immutable";
@@ -9061,7 +9094,7 @@ fn router(state: HostState) -> Router {
             "/api/v1/tabs/{tab_id}/inbox",
             get(inbox_described).merge(post(inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
         )
-        .route("/api/v1/tabs/{tab_id}/inbox/{name}", get(inbox_file))
+        .route("/api/v1/tabs/{tab_id}/inbox/{name}", get(inbox_file).delete(inbox_delete))
         .route(
             "/api/v1/projects/{project_id}/inbox",
             post(project_inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)),

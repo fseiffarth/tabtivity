@@ -1576,6 +1576,13 @@ export function inboxFileUrl(tabId: string, name: string, download = false): str
   return `/api/v1/tabs/${encodeURIComponent(tabId)}/inbox/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
 }
 
+/** `DELETE …/inbox/{name}` — drop one file the phone sent into the tab's
+ * project inbox (a hold on its card → Delete). Only a leaf the inbox would
+ * serve goes; the route carries the exact-origin check. */
+export async function deleteInboxFile(tabId: string, name: string): Promise<void> {
+  await api<{ removed: boolean }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/inbox/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
 /** `GET …/inbox?names=` — the files among `names` (inbox leaves) the tab's
  * project inbox holds, typed by their bytes on the desktop, in the order
  * asked; a leaf that is gone is simply missing from the answer. */

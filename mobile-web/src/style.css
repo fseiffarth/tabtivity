@@ -1186,6 +1186,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-group + .subagent-index-group { margin-top:6px; }
 .sent-index-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:6px; margin:0; padding:0; list-style:none; }
 .sent-index-list li { min-width:0; }
+.sent-index-list button, .sent-index-list a, .outbox-post-picture, .outbox-post-file { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
 .sent-index-list button, .sent-index-list a { display:grid; gap:3px; width:100%; padding:4px 4px 6px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; text-decoration:none; }
 .sent-index-group .sent-index-list :is(button,a) { border-color:color-mix(in srgb,var(--group) 35%,#2c3a55); }
 .sent-index-thumb { display:grid; place-items:center; width:100%; aspect-ratio:1; overflow:hidden; border-radius:6px; background:#2b2f45; color:#b9c4e0; font-size:1.15rem; font-weight:700; }

@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { viewerFileUrl, type OutboxFile } from "../api";
 import { answerLeaves } from "../terminal/chatFiles";
 import { InboxAlbum, openableFile, type InboxSource } from "./InboxPreview";
+import { SentFileHold } from "./SentFilesIndex";
 
 /** What the chat draws the files its answers name from (`useNamedFiles`). */
 export interface AnswerFiles {
@@ -27,11 +28,13 @@ export interface AnswerFiles {
  * lands after the answer is on screen and a shown bubble never changes.
  *
  * Nothing is copied: this is the project file itself, opened through the 📁
- * library's door like the Diffs view's rows.
+ * library's door like the Diffs view's rows. A hold asks Save or Share
+ * (`SentFileHold`); a project file is never deleted from here.
  */
 export function AnswerAlbum({ text, files }: { text: string; files: AnswerFiles }) {
   const t = useT();
   const { project, named, sent, open, settle } = files;
+  const held = useContext(SentFileHold);
   const leaves = useMemo(() => answerLeaves(text, named, sent), [text, named, sent]);
   const source = useMemo<InboxSource>(() => ({
     scope: { files: project },
@@ -42,6 +45,6 @@ export function AnswerAlbum({ text, files }: { text: string; files: AnswerFiles 
   if (leaves.length === 0) return null;
   const tag = isUntested("mobile.chat.answerFiles") ? <small className="outbox-post-meta"><em>{t("mobile.outbox.untested")}</em></small> : null;
   return <div className="readable-turn agent outbox-post">
-    <InboxAlbum source={source} leaves={leaves} files={named} onOpen={open} onSettle={settle} tag={tag} />
+    <InboxAlbum source={source} leaves={leaves} files={named} onOpen={open} onHold={held ? (file) => held({ file, from: "named" }) : undefined} onSettle={settle} tag={tag} />
   </div>;
 }
