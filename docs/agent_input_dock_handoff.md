@@ -95,3 +95,94 @@ under Diffs). `git diff --check ca855ae67..HEAD` clean;
 - The resting line's exact height (34 px) against the theme's `--text-md` line
   height was not seen on the real paint path; a draft line could be clipped by
   a pixel. Check on WebKitGTK.
+
+## Final review
+
+Reviewer: the range `ca855ae67..c7a163fd7` read commit by commit against the
+plan; fixes on top. Nothing was run live.
+
+### Fixed
+
+- `b0b130525` **The dock stayed open once steering's Prompt key handed the
+  field back.** `dockEngaged` was cleared only by a press or focus landing
+  elsewhere. Esc or Enter in a Prompt-key field (`backToSteering` blurs the
+  box), the box locking for a question, or the composer hiding for steering
+  all lose focus to nowhere, so the dock stayed `dock-open`: the facts row
+  drawn over the Diffs cursor, and the empty dock open again when steering
+  let go. Now a blur to nowhere (`onBlur` on `.terminal-reader-dock`,
+  `relatedTarget === null`) ends the engagement, except while a press that
+  began in the dock is still down (WebKit blurs the field under a chip's
+  press: D3 holds) or the window, not the page, lost focus (the field is still
+  `activeElement`). Tests in `ReaderInputDock.test.tsx`: "rests again once
+  steering's Prompt key has handed the field back" (failed before the fix) and
+  "keeps the dock open while a press in it, or the window, takes the field's
+  focus away" (guards the exceptions).
+- `3eee89407` **Esc in a dialog from Diffs/Data, with an earlier chat browsed,
+  ran the chat's Back and kept the dialog open.** S1 made the panels React
+  children of the root, so a dialog they portal out (Diffs' Clear-notes
+  confirm, `useDialogs`) bubbles its keydown into `onRegionKey`; its target is
+  outside `.terminal-changes`, so H3's check missed it, and `preventDefault`
+  stopped `useModalFocus` closing the dialog. While a panel is shown, a key
+  from outside the root's DOM is now the panel's. Chat without a panel is
+  unchanged. Test: `TerminalReaderChanges.test.tsx` "closes a dialog the Diffs
+  panel opened on Esc, keeping an earlier chat" (failed before the fix).
+- `c58da06e6` `docs/filemap_frontend.md` `DiffNoteBox` row still said Add to
+  draft "reveals Chat itself".
+
+### Flagged for user
+
+- **Likely bug, not fixed (touches D3, needs paint):** a click on the mic in
+  the *resting* line probably does not start dictation. The pointerdown
+  engages the dock (D3), which opens on that press; the mic moves from
+  `right 36px / bottom 6px` in a 34 px line with 8 px strip padding to the
+  card composer's `right 42px / bottom 12px` with 18 px padding: its centre
+  moves ~16 px up and ~10 px left, off the pointer. The pointerup then lands on
+  the textarea, the click goes to their common ancestor, and the mic's
+  `onClick` never runs; a second click works. Possible fix: a pointerdown on a
+  button in the resting line records the event (so it is not "elsewhere") but
+  does not engage; the mic's listening (`composerBusy`) then opens the dock
+  after the click. Check on WebKitGTK first.
+- Cosmetic: under Diffs/Data steering's `card` region outline
+  (`.subwindow.focused .terminal-sign-in`) now draws twice, on the Reader root
+  and on the panel inside it (both carry `terminal-sign-in`).
+- Cosmetic: with the dock open, an empty field and Claude's suggestion shown,
+  the dock pill and the suggestion pill sit at the same spot (both
+  `top: 4px; right: 12px`).
+- `docs/help/agent-clis.md` says "under Diffs and Files"; the UI tab is
+  "Data", but that page already calls the view **Files** elsewhere, so it was
+  left as is.
+- Side effect of the blur fix: after picking from a facts-row menu with an
+  empty field, the dock rests again (nothing holds it: no focus, no draft),
+  where before it stayed open until the next press elsewhere.
+
+### Checked and sound
+
+Chat unchanged in focus (composer focus effect, `focusReaderView`), `hidden`
+only `!shown`, `panel-open`/`dock-open` classes; Tabby/`readerAlways` and
+attach-only views never get a panel; browsed and subagent states (foot,
+placeholders, status line values per D8, Stop only with `live.working`);
+`composerBusy` reported only on change (no per-keystroke render of the view);
+height effect at rest vs open and a kept blocked draft; every
+`insertIntoReader` caller (drop, paste, diff notes, prompt strip, checkpoint
+restore, selection menu) with `onReveal`/`acceptInserts` gone; inserts in a
+hidden pane or Terminal (no composer registered, falls back as before);
+`terminalScroll` `readerList`; CSS specificity of the resting rules over the
+`card-composer` ones, no selector reaching panel content, upward menus
+(z 2/1) over the panel (z 0), no new animation, theme tokens only,
+`.terminal-reader[hidden]`; i18n keys in all five dictionaries; the pill and
+its register row; the todo item's format; brand.
+
+Not checked: anything on a real paint path (positions, clipping of the 34 px
+line), WebView2/WKWebView focus behaviour, the phone.
+
+### Gates after the review fixes
+
+The full gates were **not** rerun after these fixes: the user said to skip
+them (a `gates-job.sh` run was started and left unfinished). Run here:
+`vitest` on `ReaderInputDock.test.tsx`, `TerminalReaderView.test.tsx`,
+`TerminalReaderToolbar.test.tsx`, `ReaderDiffNotes.test.tsx` (4 files, 112
+tests, pass) and `TerminalReaderChanges.test.tsx` (8 tests, pass);
+`git diff --check ca855ae67..HEAD` clean; `scripts/privacy-check.sh
+ca855ae67 HEAD` clean; `scripts/brand-check.sh` pass. Not run: `npm run
+build` (type-check), `npm run lint`, the full `npm test`, the Rust gates (no
+Rust changed).
