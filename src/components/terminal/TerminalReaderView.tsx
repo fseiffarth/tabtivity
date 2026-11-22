@@ -1631,7 +1631,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, scope, tab?.key, tab?.sessionId, modelKnown]);
   const workingLine = workingModel ? t("terminal.reader.workingModel", { model: workingModel }) : t("terminal.reader.working");
-  const typeIntoPane = useCallback((keys: string[]) => typePaneKeys(ptyId, keys), [ptyId]);
+  const typeIntoPane = useCallback((keys: string[], canWrite?: (key: string) => boolean) =>
+    typePaneKeys(ptyId, keys, undefined, canWrite), [ptyId]);
   const signInItem = AGENT_ITEMS.find((item) => item.cmd === tab?.cmd);
   const loginCommand = signInItem ? signInCommand(agentFamily(signInItem.cmd)) : null;
   const canLogIn = scope !== ASSISTANT_SCOPE && !!signInItem && (!!loginCommand || (localOnly && !!cwd));

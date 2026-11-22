@@ -1384,14 +1384,14 @@ describe("the Reader's live rows", () => {
     expect(host.querySelector(".terminal-reader-facts")!.textContent).not.toContain("remote-projects");
   });
 
-  it("shows the effort the transcript records and changes it with /effort, or Codex's /model", async () => {
+  it("shows the effort Claude's transcript records and changes it with /effort", async () => {
     submitCommand.mockClear();
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, effort: "medium" } : []));
     term = fakeTerminal([">", "⏵⏵ accept edits on (shift+tab to cycle)"]);
     registerTerminal("p:agent-1", term);
-    const view = reader(host);
+    reader(host);
     await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
     // No busy row has named it: the transcript does.
     await act(async () => { fireEvent.click(await screen.findByRole("button", { name: /medium effort/ })); });
@@ -1400,15 +1400,58 @@ describe("the Reader's live rows", () => {
     expect(submitCommand).toHaveBeenCalledWith("st-1", "/effort xhigh");
     expect(screen.queryByRole("dialog", { name: "Reasoning effort" })).toBeNull();
     expect(screen.getByRole("button", { name: /xhigh effort/ })).toBeTruthy();
-    view.unmount();
+  });
 
-    // Codex sets it on its /model picker's next step.
+  it("opens Codex's reasoning levels for the current model from the effort chip", async () => {
     submitCommand.mockClear();
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    const idle = ["›", "gpt-5.6-sol medium · ~/p"];
+    const models = (highlightCurrent: boolean) => [
+      "  Select Model and Effort", "", "",
+      `${highlightCurrent ? " " : "›"} 1. GPT-6-Astra   Frontier intelligence for demanding work`,
+      `${highlightCurrent ? "›" : " "} 2. GPT-5.6-Sol (current)   Reliable agentic workhorse`,
+      "", "  enter select · esc back",
+    ];
+    const levels = [
+      "  Select Reasoning Level for GPT-5.6-Sol", "", "",
+      "  1. Low   Lightweight reasoning", "› 2. Medium (current)   Balanced reasoning", "  3. High   Deeper reasoning",
+      "", "  enter default · s session · esc back",
+    ];
+    const rows = [...idle];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
     reader(host);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
     await act(async () => { fireEvent.click(await screen.findByRole("button", { name: /medium effort/ })); });
     expect(submitCommand).toHaveBeenCalledWith("st-1", "/model");
+
+    const redraw = (key: string) => {
+      if (key === "\u001b[B") rows.splice(0, rows.length, ...models(true));
+      if (key === "\r") rows.splice(0, rows.length, ...levels);
+      if (key === "\u001b") rows.splice(0, rows.length, ...(rows[0] === levels[0] ? models(true) : idle));
+    };
+    onWritten.add(redraw);
+    try {
+      rows.splice(0, rows.length, ...models(false));
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(screen.queryByRole("dialog", { name: "Select Model and Effort" })).toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      const list = screen.getByRole("dialog", { name: "Select Reasoning Level for GPT-5.6-Sol" });
+      expect(within(list).getByRole("button", { name: /High/ })).toBeTruthy();
+      expect(written).toEqual(["\u001b[B", "\r"]);
+
+      fireEvent.keyDown(list, { key: "Escape" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(written.slice(2)).toEqual(["\u001b", "\u001b"]);
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "gpt-5.6-sol" })); });
+      rows.splice(0, rows.length, ...models(true));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(screen.getByRole("dialog", { name: "Select Model and Effort" })).toBeTruthy();
+      expect(written).toHaveLength(4);
+    } finally {
+      onWritten.delete(redraw);
+    }
   });
 
   it("switches the mode from its list by walking Shift+Tab until the session shows it", async () => {
