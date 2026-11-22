@@ -1047,11 +1047,11 @@ export function matchStartWord(utterance: string, lang: Language): { rest: strin
   return { rest: after ? source.text.slice(after.start).trim() : "" };
 }
 
-/** The runs of words that follow the start word in a `voice.navigate` phrase
+/** The runs of words that follow the start word in a phrase of `key`
  * ("{assistant} navigate" → ["navigate"]). */
-function navigateRuns(lang: Language): string[][] {
+function startPhraseRuns(lang: Language, key: "voice.navigate" | "voice.help"): string[][] {
   const target = norms(translate(lang, "voice.startWord"), lang).join("");
-  return splitTemplates(translate(lang, "voice.navigate")).map((phrase) => {
+  return splitTemplates(translate(lang, key)).map((phrase) => {
     const tokens = norms(phrase, lang);
     let joined = "";
     for (let index = 0; index < tokens.length; index++) {
@@ -1062,12 +1062,21 @@ function navigateRuns(lang: Language): string[][] {
   }).filter((run) => run.length > 0);
 }
 
-/** "Tabby navigate …": opens navigation mode. The start word, then the
+function navigateRuns(lang: Language): string[][] {
+  return startPhraseRuns(lang, "voice.navigate");
+}
+
+/** "Tabby navigate …": opens navigation mode — in `lang` or else in
+ * English, as help and an edit are. The start word, then the
  * navigate word (`voice.navigate`, exact); `rest` is what follows, as heard —
  * a command said in the same breath, or empty. `null` for anything else,
  * including "navigate" with no start word and "tabby" in a sentence. Call it
  * on a whole, settled utterance, never on one still growing. */
 export function matchNavigate(utterance: string, lang: Language): { rest: string } | null {
+  return navigateIn(utterance, lang) ?? (lang !== "en" ? navigateIn(utterance, "en") : null);
+}
+
+function navigateIn(utterance: string, lang: Language): { rest: string } | null {
   const source = words(utterance, lang);
   const skip = startWordLength(source.tokens, lang);
   if (!skip) return null;
@@ -1081,18 +1090,50 @@ export function matchNavigate(utterance: string, lang: Language): { rest: string
 
 /** Whether `utterance` is, so far, the beginning of a "Tabby navigate" — only
  * the start word, or it and the start of the navigate word ("Tabby", "Tabby
- * nav"), or the whole navigate phrase and anything after it. While it is, the
+ * nav"), or the whole navigate phrase and anything after it, in `lang` or
+ * else in English. While it is, the
  * words are held back from the draft until the utterance settles and shows
  * whether it was a command. */
 export function mayNavigate(utterance: string, lang: Language): boolean {
-  const source = words(utterance, lang);
-  const skip = startWordLength(source.tokens, lang);
-  if (!skip) return false;
-  const heard = source.tokens.slice(skip).map((token) => token.norm);
-  if (!heard.length) return true;
-  return navigateRuns(lang).some((run) => {
-    if (heard.length > run.length) return run.every((word, index) => heard[index] === word);
-    return heard.every((word, index) => (index < heard.length - 1 ? word === run[index] : run[index].startsWith(word)));
+  return [lang, ...(lang === "en" ? [] : ["en" as Language])].some((spoken) => {
+    const source = words(utterance, spoken);
+    const skip = startWordLength(source.tokens, spoken);
+    if (!skip) return false;
+    const heard = source.tokens.slice(skip).map((token) => token.norm);
+    if (!heard.length) return true;
+    return navigateRuns(spoken).some((run) => {
+      if (heard.length > run.length) return run.every((word, index) => heard[index] === word);
+      return heard.every((word, index) => (index < heard.length - 1 ? word === run[index] : run[index].startsWith(word)));
+    });
+  });
+}
+
+/** "Tabby help" (`voice.help`): the start word, then a help phrase, whole,
+ * polite words aside — in `lang` or else in English, as an edit is. With
+ * `bare` the start word may be left out: in navigation mode every utterance
+ * is a command, so "help" alone asks. */
+export function matchHelp(utterance: string, lang: Language, opts: { bare?: boolean } = {}): boolean {
+  const heardIn = (spoken: Language) => {
+    const source = words(utterance, spoken);
+    const skip = startWordLength(source.tokens, spoken);
+    if (!skip && !opts.bare) return false;
+    const heard = withoutPolite(source.tokens.slice(skip), spoken).map((token) => token.norm).join(" ");
+    return heard !== "" && startPhraseRuns(spoken, "voice.help").some((run) => run.join(" ") === heard);
+  };
+  return heardIn(lang) || (lang !== "en" && heardIn("en"));
+}
+
+/** Whether `utterance` may still turn out a "Tabby help" (`mayNavigate`'s
+ * rule, over the help phrases): held back from the draft until it settles. */
+export function mayAskHelp(utterance: string, lang: Language): boolean {
+  return [lang, ...(lang === "en" ? [] : ["en" as Language])].some((spoken) => {
+    const source = words(utterance, spoken);
+    const skip = startWordLength(source.tokens, spoken);
+    if (!skip) return false;
+    const heard = withoutPolite(source.tokens.slice(skip), spoken).map((token) => token.norm);
+    if (!heard.length) return true;
+    return startPhraseRuns(spoken, "voice.help").some((run) => heard.length <= run.length
+      && heard.every((word, index) => (index < heard.length - 1 ? word === run[index] : run[index].startsWith(word))));
   });
 }
 

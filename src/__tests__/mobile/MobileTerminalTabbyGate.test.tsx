@@ -249,15 +249,15 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
 
   it("starts nothing with hands-free off: the start word is dictation, \"go Tabby\" has no cue", async () => {
     const speech = await dictate(false);
-    await say(speech, [`${T} navigate`, true]);
-    expect(box().value).toBe(`${T} navigate`);
-    await say(speech, [`${T} navigate`, true], ["fix the login go Tabby", true]);
+    await say(speech, [`${T} add a test`, true]);
+    expect(box().value).toBe(`${T} add a test`);
+    await say(speech, [`${T} add a test`, true], ["fix the login go Tabby", true]);
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     expect(sentText()).toContain("fix the login");
     expect(chime.calls).toBe(0);
     expect(screen.queryByText(cue)).toBeNull();
     // Mic still open, nothing gated: talk lands as it always did.
-    await say(speech, [`${T} navigate`, true], ["fix the login go Tabby", true], ["plain talk", true]);
+    await say(speech, [`${T} add a test`, true], ["fix the login go Tabby", true], ["plain talk", true]);
     expect(box().value).toBe("plain talk");
   });
 

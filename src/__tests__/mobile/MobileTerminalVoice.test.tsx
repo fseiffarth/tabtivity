@@ -252,31 +252,33 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     await act(async () => {});
     const speech = FakeRecognition.instances[0];
     const heard: string[] = [];
-    const say = (transcript: string) => {
+    /** One utterance, final; an edit is held until the quiet settles it. */
+    const say = async (transcript: string) => {
       heard.push(transcript);
       const results: Record<string, unknown> = { length: heard.length };
       heard.forEach((text, index) => { results[index] = { 0: { transcript: text }, isFinal: true, length: 1 }; });
       act(() => speech.onresult?.({ resultIndex: heard.length - 1, results } as unknown as MobileSpeechRecognitionResultEvent));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
     };
     const draft = () => (screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value;
 
-    say("fix the login");
-    say("and the logout");
+    await say("fix the login");
+    await say("and the logout");
     expect(draft()).toBe("fix the login and the logout");
-    say("Tabby, scratch that.");
+    await say("Tabby, scratch that.");
     expect(draft()).toBe("fix the login");
     expect(composerStatus().textContent).toContain("Removed “and the logout”");
-    say("Tabby replace login with sign-in");
+    await say("Tabby replace login with sign-in");
     expect(draft()).toBe("fix the sign-in");
-    say("Tabby plan");
+    await say("Tabby plan");
     expect(draft()).toBe("/plan fix the sign-in");
-    say("Tabby scratch that");
+    await say("Tabby scratch that");
     expect(draft()).toBe("fix the sign-in");
     // Nothing was typed into the pane, and the mic still listens.
     expect(FakeWebSocket.instances[0].sent.filter((value) => ArrayBuffer.isView(value))).toHaveLength(0);
     expect(screen.getByRole("button", { name: "Stop dictation" })).toBeTruthy();
     // Not a whole edit phrase: dictation, word for word.
-    say("Tabby, plan the refactor");
+    await say("Tabby, plan the refactor");
     expect(draft()).toBe("fix the sign-in Tabby, plan the refactor");
   });
 

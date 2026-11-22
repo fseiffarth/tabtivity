@@ -2403,7 +2403,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     },
   });
   startVoiceRef.current = startVoice;
-  /** "{assistant} navigate": spoken navigation, in hands-free's open mic. */
+  /** "{assistant} navigate" and "{assistant} help": spoken navigation, in any open mic. */
   const nav = useVoiceNav({
     tab, project: projectOfTab, openTab, openProject, setOpen: setNavOpen, utterances: utteranceHooks, tabbyGate,
     handsFreeOn: handsFreeRef, guard: handsFreeGuard, voiceOpen, recognition, endDictation, startVoiceRef,
@@ -2414,6 +2414,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     sessionFocus, startVoiceRef, hasDraft: () => draftRef.current.trim() !== "",
   });
   const navLine = voiceFailure ? null : nav.line ?? landingLine;
+  /** A line's own register row ("Tabby help"), else navigation's. */
+  const navUntested = navLine?.untested ? isUntested(navLine.untested) : isUntested("mobile.voice.navigate");
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language || note.params ? { ...note.params, ...(note.language ? { language: note.language } : {}) } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
@@ -2422,7 +2424,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The Tabby gate's line: the cue after a spoken send, or the wait for a
    * prompt after the start word alone. */
   const tabbyLine = handsFree && listening && tabbyGate.line
-    ? t(tabbyGate.line === "cue" ? "mobile.voice.tabbyCue" : "mobile.voice.tabbyListening")
+    ? t(tabbyGate.line === "cue" ? "voice.gate.cue" : "voice.gate.listening")
     : "";
   const voiceLine = voiceProblem ? sayVoice(voiceProblem)
     : voicePreview ? t("mobile.voice.heard", { text: voicePreview })
@@ -2963,7 +2965,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </>}
     </div>
     <div className="terminal-controls">
-      {tab.kind === "agent" && navLine && voiceStrip(navLine, isUntested("mobile.voice.navigate"), isUntested("mobile.voice.navigate"))}
+      {tab.kind === "agent" && navLine && voiceStrip(navLine, navUntested, navUntested)}
       {/* The hands-free status line carries no untested mark; its button does. */}
       {tab.kind === "agent" && !navLine && handsFreeLine && voiceStrip(handsFreeLine, isUntested("mobile.voice.handsFree"), false)}
       {tab.kind === "agent" && !navLine && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || isUntested("mobile.voice.draftEdits") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}

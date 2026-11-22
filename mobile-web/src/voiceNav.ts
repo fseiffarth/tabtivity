@@ -9,13 +9,13 @@
 // unchanged): the project and tab ids of `GET /api/v1/projects`,
 // `/projects/{id}` and `/activity`.
 import { sortAgentTabs } from "../../shared/agentSort";
+import { landingFromTurns, promptForVoice } from "../../shared/voiceNav";
 import { BUILTIN_AGENT_ALIASES, type VoiceListItem } from "../../src/lib/voice/voiceCommands";
 import { lastPrompt } from "./agentPrompts";
 import { type ActivityTab, type ProjectDetail, type ProjectRow, type SessionTranscript, type TabRow } from "./api";
 import { lastWorkedAt } from "./components/AgentModeMarks";
 import { needsYouGroups } from "./needsYouGroups";
 import { type SeenDone } from "./seenDone";
-import { withoutInboxReferences } from "./terminal/inboxRefs";
 import { transcriptTurns } from "./terminal/transcriptTurns";
 
 // ---------------------------------------------------------------- lists
@@ -165,15 +165,7 @@ export function takeLanding(tabId: string, now: number = Date.now()): Landing | 
 
 // ---------------------------------------------------------------- the lines read at a landing
 
-/** The prompt cut to its first sentences for the voice: a long prompt is not
- * read out whole. */
-export function promptForVoice(text: string, maxSentences = 2, maxChars = 280): string {
-  const flat = text.replace(/\s+/gu, " ").trim();
-  const sentences = flat.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/gu) ?? [flat];
-  let out = sentences.slice(0, maxSentences).map((sentence) => sentence.trim()).join(" ");
-  if (out.length > maxChars) out = `${out.slice(0, maxChars).replace(/\s+\S*$/u, "")}…`;
-  return out;
-}
+export { promptForVoice };
 
 /** What a landing reads, decided from what the new screen holds:
  * - `prompt`: the reader's last prompt there; `answered` says whether the
@@ -194,18 +186,9 @@ export function landingRead(tab: TabRow, transcript: SessionTranscript | null, s
   // nothing to read; one that failed to read, or has not answered, falls back.
   if (transcript && !transcript.available && transcript.reason !== "read_failed") return { kind: "where" };
   if (transcript?.available) {
-    const turns = transcriptTurns(transcript.entries);
-    let at = -1;
-    for (let index = turns.length - 1; index >= 0 && at < 0; index -= 1) {
-      if (turns[index].kind === "prompt" && !turns[index].command) at = index;
-    }
-    if (at < 0) return { kind: "where" };
-    let sinceKey: string | null = null;
-    for (let index = at - 1; index >= 0 && sinceKey === null; index -= 1) {
-      if (turns[index].kind === "answer") sinceKey = turns[index].key;
-    }
-    const text = promptForVoice(withoutInboxReferences(turns[at].text) || turns[at].text);
-    return { kind: "prompt", text, answered: turns.slice(at + 1).some((turn) => turn.kind === "answer"), sinceKey };
+    const found = landingFromTurns(transcriptTurns(transcript.entries));
+    if (!found) return { kind: "where" };
+    return { kind: "prompt", text: found.text, answered: found.answers.length > 0, sinceKey: found.sinceKey };
   }
   const asked = lastPrompt(tab);
   return asked ? { kind: "fallback", text: promptForVoice(asked.text) } : { kind: "where" };

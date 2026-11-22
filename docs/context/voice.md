@@ -227,12 +227,19 @@ native app.
 
 ## Spoken navigation on the phone (docs/done/voice_nav_mode_plan.md)
 
-Inside the Focus mic, hands-free only. The dictation hook reads **utterances**,
-not deltas (`voiceInput.ts` `stepUtterances`: Android finalizes one utterance
-several times as it grows), so "starts with Tabby" and "Tabby navigate" are
-judged on a settled utterance; `useVoiceInput`'s `dispatch` is the one ordered
-route a held utterance takes (navigation mode → "Tabby navigate" → [spoken
-draft edits] → the Tabby gate → hands-free's guard and `pick` → dictation).
+Inside the Focus mic, hands-free or a plain tap (a plain tap used to type
+"Tabby navigate" into the box; 2026-11-22 the user chose any mic). The
+dictation hook reads **utterances** on every mic, not deltas (`voiceInput.ts`
+`stepUtterances`: Android finalizes one utterance several times as it grows),
+so "starts with Tabby" and "Tabby navigate" are judged on a settled
+utterance; only the Tabby gate, the send guard and `pick` stay hands-free's.
+`useVoiceInput`'s `dispatch` is the one ordered route a held utterance takes
+(navigation mode → "Tabby navigate" / "Tabby help" → [spoken draft edits] →
+the Tabby gate → hands-free's guard and `pick` → dictation). "Tabby help"
+(`voice.help`) says what can be said where it is — the draft's commands, or
+in the mode ("help" alone) the navigation ones — with the mic closed, since
+the recognizer would hear it. A jump's landing read stays hands-free's: a
+plain tap only opens the tab.
 `useVoiceNav` is the mode: it sets `utterances.capture` (nothing heard is
 typed, the send guard is kept out), matches each utterance with
 `match(..., { requireCommandWord: false })` against lists built from rows the

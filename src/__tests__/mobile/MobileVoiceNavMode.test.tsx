@@ -317,12 +317,97 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     });
   });
 
-  it("ignores the navigate phrase with hands-free off", async () => {
-    localStorage.setItem(storageKey("mobile.focusHandsFree"), "0");
-    await start();
-    await hear(`${T} navigate`);
-    expect(screen.queryByText(/^Navigation:/)).toBeNull();
-    expect(box().value).toBe(`${T} navigate`);
+  describe("with hands-free off (a plain tap on the mic)", () => {
+    beforeEach(() => { localStorage.setItem(storageKey("mobile.focusHandsFree"), "0"); });
+
+    it("opens on the navigate phrase, nothing typed, and still types plain words", async () => {
+      await start();
+      await hear("fix the login");
+      expect(box().value).toBe("fix the login");
+      await hear(`${T} navigate`);
+      expect(screen.getByText(/^Navigation: say a project/)).toBeTruthy();
+      expect(chime.calls).toBe(1);
+      expect(box().value).toBe("fix the login");
+    });
+
+    it("goes somewhere in one breath", async () => {
+      await start();
+      await hear(`${T} navigate go to project Beta`);
+      await advance(0);
+      expect(said()).toEqual(["Project Beta?"]);
+      expect(box().value).toBe("");
+    });
+
+    it("goes back to dictating, no start word needed, when it leaves", async () => {
+      await start();
+      await hear(`${T} navigate`);
+      await hear("never mind");
+      expect(screen.getByText("Navigation closed")).toBeTruthy();
+      await hear("add a test");
+      expect(box().value).toBe("add a test");
+    });
+
+    it("still edits the draft by voice", async () => {
+      await start();
+      await hear("fix the login");
+      await hear("and the logout");
+      await hear(`${T} scratch that`);
+      expect(box().value).toBe("fix the login");
+    });
+  });
+
+  describe(`"${T} help"`, () => {
+    it("says what a draft takes with the mic closed, types nothing, then listens again", async () => {
+      await start();
+      await hear("fix the login");
+      await hear(`${T} help`);
+      await advance(0);
+      expect(said()).toHaveLength(1);
+      expect(said()[0]).toMatch(/scratch that/);
+      expect(said()[0]).toMatch(/navigate/);
+      expect(micOpen()).toBe(false);
+      expect(box().value).toBe("fix the login");
+      await lineSaid();
+      expect(micOpen()).toBe(true);
+      // The line stays to be read, and is not typed.
+      expect(screen.getByText(/scratch that/)).toBeTruthy();
+      await hear("and the logout");
+      expect(box().value).toBe("fix the login and the logout");
+    });
+
+    it("works with hands-free off", async () => {
+      localStorage.setItem(storageKey("mobile.focusHandsFree"), "0");
+      await start();
+      await hear(`${T} what can I say`);
+      await advance(0);
+      expect(said()[0]).toMatch(/scratch that/);
+      expect(box().value).toBe("");
+      await lineSaid();
+      expect(micOpen()).toBe(true);
+    });
+
+    it("never sends the draft while it is said", async () => {
+      await start();
+      await hear("fix the login");
+      await hear(`${T} help`);
+      await advance(0);
+      await advance(6_000);
+      expect(box().value).toBe("fix the login");
+      expect(FakeWebSocket.instances[0].sent.filter((value) => ArrayBuffer.isView(value as ArrayBufferView))).toHaveLength(0);
+    });
+
+    it("says the navigation commands in navigation mode, and stays open", async () => {
+      await start();
+      await hear(`${T} navigate`);
+      await hear("help");
+      await advance(0);
+      expect(said()).toHaveLength(1);
+      expect(said()[0]).toMatch(/done tab/);
+      await lineSaid();
+      await hear("go to project Beta");
+      await advance(0);
+      expect(said().slice(-1)).toEqual(["Project Beta?"]);
+    });
   });
 
   describe("a project", () => {

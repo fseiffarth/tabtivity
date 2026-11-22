@@ -391,8 +391,7 @@ export function dictationPreview(progress: DictationProgress, interim: string): 
 /** No result for this long and the live utterance is whole: a command is
  * matched on it only then, never on one still growing. */
 export const UTTERANCE_SETTLE_MS = 800;
-/** After a bare start word, the next utterance is the prompt for this long. */
-export const GATE_WINDOW_MS = 10_000;
+export { GATE_WINDOW_MS } from "../../shared/voice";
 
 /** What the utterance layer needs to know of the start word, in the spoken
  * language (built from `matchStartWord` / `mayNavigate`, which read the
