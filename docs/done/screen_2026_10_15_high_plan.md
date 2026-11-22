@@ -3,7 +3,7 @@
 Status: implemented and landed on develop 2026-10-15; never run live
 (plan review at the end; per-step results in the handoff). Source: `docs/whole_project_screen_2026_10_15.md` § "High — fix
 first" (12 items, screened at `dd5ede60`; line numbers drift — find by
-anchor). Handoff: `docs/screen_2026_10_15_high_handoff.md`.
+anchor). Handoff: `docs/done/screen_2026_10_15_high_handoff.md`.
 
 ## Why
 

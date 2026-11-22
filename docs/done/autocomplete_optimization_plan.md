@@ -519,4 +519,4 @@ commit and a fresh one continues in the same worktree. Each writes its own
 handoff in the main checkout, `docs/autocomplete_optimization_handoff_backend.md`
 and `…_frontend.md`: commits, choices, gate result, test counts, anything
 flagged for the user. The merge joins them into
-`docs/autocomplete_optimization_handoff.md`.
+`docs/done/autocomplete_optimization_handoff.md`.

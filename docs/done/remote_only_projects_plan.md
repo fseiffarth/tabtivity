@@ -541,7 +541,7 @@ E7. **Mobile control.** `project_host` stays `Remote` for remote-only (the
    `tab_is_local` / `runs_on_this_machine` pin like the VM. `launch_place`
    returns `NotAttachable` for a local kind. `mobile_root` → `None` (`folder:
    false`). `primary_host` and `machines` are filled, so the 📁 library's host
-   side and phone-started host agents work (`docs/mobile_remote_host_tabs_plan.md`).
+   side and phone-started host agents work (`docs/done/mobile_remote_host_tabs_plan.md`).
    `headless.rs` never chooses `LocalMirror`. `ProjectRecord` reads
    `remote.remote_only` (falling back to `remote.vm`) so the pin is the
    backend's `is_remote_only`, decided from the record, never from a path.
@@ -914,7 +914,7 @@ when its implementer has finished and take freed slots; they count toward the
 The hot shared files are i18n (`en.ts`), `untested.ts`, `command_class` +
 `commandClasses.ts`, `commands/projects.rs` (A1, A3, A5, A7, A12 each touch a
 different function) and the filemaps. Parallel implementers list their
-i18n/register/command-class edits in `docs/remote_only_projects_handoff.md`,
+i18n/register/command-class edits in `docs/done/remote_only_projects_handoff.md`,
 and the main agent applies them once at merge and regenerates
 `commandClasses.ts` once. The final review covers the whole range:
 cross-step integration, i18n keys, `UntestedTag` rows, filemap rows,

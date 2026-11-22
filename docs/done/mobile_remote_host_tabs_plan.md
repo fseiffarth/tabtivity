@@ -391,7 +391,7 @@ rather than spending a sixth, and records progress in the handoff file so a
 respawn can resume. Suggested order inside R: 1 → 2 → 4 → 3 → 5 → 6.
 Worktrees `.claude/worktrees/mobile-host-r` and `.claude/worktrees/mobile-host-w`
 (hardlinked `node_modules`), branches `mobile-host-r` / `mobile-host-w`;
-handoff `docs/mobile_remote_host_tabs_handoff.md`.
+handoff `docs/done/mobile_remote_host_tabs_handoff.md`.
 
 Disjointness: R touches no TS and no fixture; W touches no Rust. The one
 shared artefact is `projectHostReach.fixture.json`: **W owns it** (adds

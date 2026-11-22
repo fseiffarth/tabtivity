@@ -6,7 +6,7 @@ Part of one run with `docs/reader_diffs_steering_plan.md` (the **umbrella**: the
 shared mechanism, Agent steps, Organisation, Base dependency, blocking
 questions). This plan owns the **Links section** (agent step A1) and **steering
 inside the Files view** (agent step A5). Handoff log:
-`docs/reader_steering_handoff.md`.
+`docs/done/reader_steering_handoff.md`.
 
 ## Why
 

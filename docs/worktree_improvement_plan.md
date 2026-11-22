@@ -425,7 +425,7 @@ Highest value first:
 ## Docs to reconcile
 
 `todo/group-e-worktree.md:4` says #23 is `[DONE]`, while `docs/Features.md:74` and
-`docs/REVIEW.md:321` still list "Git worktrees (#23)" under **Open / not
+`docs/done/REVIEW.md:321` still list "Git worktrees (#23)" under **Open / not
 started**. Given B1, "done" is the wrong label in either direction — Phase 0 is
 what makes it true.
 

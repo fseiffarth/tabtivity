@@ -9,10 +9,10 @@ handoffs it names (each has a **Resume** section at the top).
 | Part | Branch | Worktree (`.claude/worktrees/…`) | Commits | State |
 |---|---|---|---|---|
 | Integration (A+B merged onto develop `6e36fd30`) | `diff-integration` | `diff-integration` | `ed80c593` A, `760f3df8` B, `bd882a47` merge fixes, + this doc | build green, lint clean on changed files, viewers/terminal/i18n vitest 1344/1345 (the 1 = `TerminalAiSwitch` timeout, 4/4 alone). Full suite not run. |
-| A — parser, word marks, theme tokens | `worktree-agent-a17b139159945edc0` | `agent-a17b139159945edc0` | `157ad310` | done; handoff `docs/diff_viewer_handoff_A.md` |
-| B — split view, change nav, file index, folds | `worktree-agent-ac84388c94ef34606` | `agent-ac84388c94ef34606` | `9da1bd52` | done; handoff `docs/diff_viewer_handoff_B.md` |
-| C — loading hook, bug fixes, big-diff caps, states | `worktree-agent-ae9230fc338dc223d` | `agent-ae9230fc338dc223d` | `ef30df5b` (wip), `495b38f1` docs | **wip**: build/full vitest/cargo test/backend:stale not run; handoff `docs/diff_viewer_handoff_C.md` |
-| D — sync resolver times + "Hand to an agent" export | `worktree-agent-abf751677bf453196` | `agent-abf751677bf453196` | `801cea67`, `a29e3a33` (wip) | **wip**: full build, `cargo test --workspace`, `core_dispatch` test, backend:stale not run; handoff `docs/sync_resolver_handoff_D.md` |
+| A — parser, word marks, theme tokens | `worktree-agent-a17b139159945edc0` | `agent-a17b139159945edc0` | `157ad310` | done; handoff `docs/done/diff_viewer_handoff_A.md` |
+| B — split view, change nav, file index, folds | `worktree-agent-ac84388c94ef34606` | `agent-ac84388c94ef34606` | `9da1bd52` | done; handoff `docs/done/diff_viewer_handoff_B.md` |
+| C — loading hook, bug fixes, big-diff caps, states | `worktree-agent-ae9230fc338dc223d` | `agent-ae9230fc338dc223d` | `ef30df5b` (wip), `495b38f1` docs | **wip**: build/full vitest/cargo test/backend:stale not run; handoff `docs/done/diff_viewer_handoff_C.md` |
+| D — sync resolver times + "Hand to an agent" export | `worktree-agent-abf751677bf453196` | `agent-abf751677bf453196` | `801cea67`, `a29e3a33` (wip) | **wip**: full build, `cargo test --workspace`, `core_dispatch` test, backend:stale not run; handoff `docs/done/sync_resolver_handoff_D.md` |
 
 **All four agent branches start from `origin/main` (`b07d96c9`), not
 develop** — the worktree isolation branched from the default branch. Land

@@ -4265,8 +4265,8 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
   `MobileTabReach.test.ts` (`lists` column of `projectHostReach.fixture.json`),
   `MobileEveryProjectType.test.tsx`, `MobileHostTabs.test.tsx`,
   `MobileTerminalInbox.test.tsx`; the sidecar half on its own branch; ⚠️ never
-  run live). Plan `docs/mobile_remote_host_tabs_plan.md`, handoff
-  `docs/mobile_remote_host_tabs_handoff.md`. A remote project's tabs that run
+  run live). Plan `docs/done/mobile_remote_host_tabs_plan.md`, handoff
+  `docs/done/mobile_remote_host_tabs_handoff.md`. A remote project's tabs that run
   on its host or a worker are listed with an "on host" chip and attached
   through the desktop's own SSH ControlMaster (never a new connection, never a
   prompt); unreachable while the desktop is not connected. Untested id
@@ -4515,7 +4515,7 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     - [ ] ❌ Doesn't work on macOS
 
 - [ ] **31cp — Phone / iPad file browsing: bugs and small items** (2026-11-03;
-  `docs/phone_files_browsing_plan.md`). Phase 3: the user picked L2–L7, L10, L12
+  `docs/done/phone_files_browsing_plan.md`). Phase 3: the user picked L2–L7, L10, L12
   (batches D–F); L1, L8, L9, L11 stay parked (L1 and L11 reverse decisions 4 and 2
   of the files-library plan).
   - [x] Batch A (phone): B1 Esc runs Back (keeps an open markup note), B2 no-preview

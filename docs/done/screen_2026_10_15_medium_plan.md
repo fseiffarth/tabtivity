@@ -2,11 +2,11 @@
 
 Status: implemented and landed on develop 2026-10-16; never run live (plan
 review and decision change at the end; per-step results in the handoff). Source:
-`docs/whole_project_screen_2026_10_15.md` § "Medium — worth a batch each"
+`docs/done/whole_project_screen_2026_10_15.md` § "Medium — worth a batch each"
 (screened at `dd5ede60`; line numbers drift — find by anchor; the anchors
 below were re-checked at `cb98acf9`, i.e. develop + the High follow-up round
-`screen-high-int2`). Handoff: `docs/screen_2026_10_15_medium_handoff.md`.
-Follows `docs/screen_2026_10_15_high_plan.md` (landed). The High follow-up
+`screen-high-int2`). Handoff: `docs/done/screen_2026_10_15_medium_handoff.md`.
+Follows `docs/done/screen_2026_10_15_high_plan.md` (landed). The High follow-up
 round (agent_tasks `extra`, client ssh allow-list, root login paste bar,
 pre-push rollback) **has landed on develop (`2f0569c5`)**; branch every
 implementer from develop at or after it — it touched `git_peer.rs`,

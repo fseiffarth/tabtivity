@@ -51,7 +51,7 @@ Open, for the user to judge:
 
 ## Autocomplete optimization — backend handoff
 
-Plan: `docs/autocomplete_optimization_plan.md` (steps B1–B12), in the main
+Plan: `docs/done/autocomplete_optimization_plan.md` (steps B1–B12), in the main
 checkout. This handoff lives in the worktree (untracked, never committed):
 the harness refused writes to the main checkout from this agent.
 
@@ -656,7 +656,7 @@ predates the current build (expected; nothing here was run live).
 
 ## Autocomplete optimization — frontend handoff
 
-Plan: `docs/autocomplete_optimization_plan.md` (main checkout), steps A1–A10. Commit order: A4, A10,
+Plan: `docs/done/autocomplete_optimization_plan.md` (main checkout), steps A1–A10. Commit order: A4, A10,
 A3, A2, A1, A7, A5, A6 (two), A8, A9.
 
 This file lives uncommitted in the worktree: the agent's isolation refused a

@@ -2,7 +2,7 @@
 
 Gaps 74–104 of `docs/threat_model.md` ("Gaps found 2026-11-04"). Evidence, line
 numbers (as of `b3abe5ba`) and each reviewer's suggested fix are in
-`docs/threat_recheck_2026_11_04_handoff.md`. Scope chosen by the user on
+`docs/done/threat_recheck_2026_11_04_handoff.md`. Scope chosen by the user on
 2026-11-05: **all 31 gaps**, run with the plan → plan review → implementer and
 reviewer batches → final review routine (at most five subagents). The decisions
 below are fixed: reviewers may not undo them.
@@ -132,7 +132,7 @@ drop the three obsolete `zip` ignores (RUSTSEC-2026-0367/-0368/-0369) from
 ## Rules for every step
 
 - Each gap's evidence (file:line as of `b3abe5ba`), unverified points and the
-  reviewer's fix are in `docs/threat_recheck_2026_11_04_handoff.md` under the report
+  reviewer's fix are in `docs/done/threat_recheck_2026_11_04_handoff.md` under the report
   item the threat-model row names (e.g. gap 74 → C1 and D1). Line numbers drift:
   find the code by name.
 - AGENTS.md binds: no app launch; `hardened_git_command_in` for git; i18n for every

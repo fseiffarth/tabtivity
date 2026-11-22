@@ -2,7 +2,7 @@
 
 Status: implementation in progress (plan 2026-10-06, revised after two
 reviews the same day; agent steps in §11, handoff in
-`docs/performance_handoff.md`). Findings come from five read-only code audits (frontend render
+`docs/done/performance_handoff.md`). Findings come from five read-only code audits (frontend render
 cost; backend hot paths; startup, IPC and bundle; existing perf debt +
 terminal/viewer paths; many open tabs + PDF viewers), then a correctness
 review against the tree and a priority review. Nothing was measured live —

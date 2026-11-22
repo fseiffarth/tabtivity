@@ -5,7 +5,7 @@ log: `docs/cockpit_root_merge_handoff.md`; the user settled the eight Open decis
 below on 2026-11-04). Written as a plan, reviewed 2026-11-04. The
 user asked only to "merge the cockpit with the root"; what that means below is
 read from the code (develop). Visual and interaction design is
-`docs/cockpit_root_merge_design.md`; this plan covers architecture, ownership,
+`docs/done/cockpit_root_merge_design.md`; this plan covers architecture, ownership,
 state, gates and steps, and its steps cover that layout **with the recommended
 option of every Open decision taken** (the last section of each step, and
 "If the user picks otherwise", say what changes under the others). The review's
@@ -452,7 +452,7 @@ one after I1 (the store and shell rewrite is the risky part), one final over the
 whole range (covers I2-I4). Never more than one agent at a time.
 Each implementer commits green **per A-step** inside its run (so a reviewer or a
 continuation can bisect), and if it runs low on context it stops at a green
-commit, writes `docs/cockpit_root_merge_handoff.md`, and a fresh agent
+commit, writes `docs/done/cockpit_root_merge_handoff.md`, and a fresh agent
 continues the same implementer step in the same worktree. Cost of fewer
 agents: I1 is ~3 agent-days of work in one run, so a continuation there is
 likely; the wall-clock is longer than the parallel A4 || A5 || A6 batch.
@@ -580,7 +580,7 @@ No Fixed decision was undone; two were refined (CenterPanel's wake rule, the
 ## Follow-up round (user's answers, 2026-11-05)
 
 The merge landed on develop (70c25a3a..5ec871f3, never run live; build log and
-flags in `docs/cockpit_root_merge_handoff.md`). The user answered the nine
+flags in `docs/done/cockpit_root_merge_handoff.md`). The user answered the nine
 flagged items. **Not implemented yet.**
 
 | # | Item | Decision |

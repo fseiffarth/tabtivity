@@ -6,7 +6,7 @@ develop's cockpit declutter landed meanwhile; its machine list
 (`CockpitMachineList`) is the Machines view's list. The user asked to merge
 mail, to-do and calendar into the cockpit, and then models, machines and agents
 too, "but leave the option to add them as separate icons into the main rail".
-Builds on `docs/cockpit_root_merge_plan.md` (the cockpit and the root console
+Builds on `docs/done/cockpit_root_merge_plan.md` (the cockpit and the root console
 are one window) and `docs/context/cockpit.md` / `docs/context/root_console.md`
 ("Views"). Read those first. This plan only says what changes.
 

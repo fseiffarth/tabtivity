@@ -8,7 +8,7 @@ here is live-verified; every changed screen wears an untested pill with a row
 in `src/lib/untested.ts`.
 
 Why: Home and the project screen moved to the calm system in October/November
-(`docs/mobile_home_redesign_plan.md`, `docs/mobile_pwa_design_plan.md`: large
+(`docs/done/mobile_home_redesign_plan.md`, `docs/done/mobile_pwa_design_plan.md`: large
 title, inset groups with hairline rows, icon chrome). The design pass left the
 Mail / To-do / Calendar interiors out of scope, so they still draw every
 element as its own bordered box: a six-line rules banner on Mail, seven

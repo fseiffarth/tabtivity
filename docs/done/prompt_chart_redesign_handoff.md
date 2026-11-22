@@ -1,7 +1,7 @@
 # Prompt chart redesign: handoff from implementer A (steps 1-5)
 
 Branch `prompt-chart-redesign` (worktree `.claude/worktrees/agent-a40cba7d0f34f1d42`),
-started from `develop` at `4cf65018d`. Plan: `docs/prompt_chart_redesign_plan.md`.
+started from `develop` at `4cf65018d`. Plan: `docs/done/prompt_chart_redesign_plan.md`.
 Nothing here was run live; every claim below is from tests, `tsc`, lint and
 reading the CSS.
 

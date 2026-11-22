@@ -2,8 +2,8 @@
 
 Status: **plan only** (2026-10-29). Nothing is built. Code sites were checked
 against `develop` at ab935481, which includes the remote-only work
-(`docs/remote_only_projects_plan.md`, handoff
-`docs/remote_only_projects_handoff.md` A12 + Final review).
+(`docs/done/remote_only_projects_plan.md`, handoff
+`docs/done/remote_only_projects_handoff.md` A12 + Final review).
 
 ## Why
 

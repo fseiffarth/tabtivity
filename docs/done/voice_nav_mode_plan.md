@@ -12,7 +12,7 @@ as planned for later. It reuses what that plan already landed: the matcher
 
 Base: the "go on keeps listening" change (a spoken "go on" sends and leaves the
 mic open; hands-free holds the turn's answers until nothing is dictated, then
-closes the mic to read them). Handoff: `docs/voice_nav_mode_handoff.md` (`docs/phone_voice_handoff.md` is the sibling plan's).
+closes the mic to read them). Handoff: `docs/done/voice_nav_mode_handoff.md` (`docs/phone_voice_handoff.md` is the sibling plan's).
 
 ## Why
 

@@ -571,7 +571,7 @@ section).
   A shorter heartbeat would help it at the cost of more writes.
 * **Residual of the race fix**: a session from a pre-stamp build (no stamp)
   that loses the listing race is stamped by the attach.
-* The plan file `docs/mcp_reattach_plan.md` still says "Nothing implemented".
+* The plan file `docs/done/mcp_reattach_plan.md` still says "Nothing implemented".
 
 ## R3: Phase 2 security verification
 

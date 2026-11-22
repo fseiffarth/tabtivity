@@ -4,7 +4,7 @@ Branch `rename`, worktree `.claude/worktrees/rename`. The plan is the untracked
 `docs/rename_plan.md` (never `git add` it). The new name is no longer secret
 (the user removed its denylist entry on purpose): it may appear in tracked
 files and commit messages. Read
-`docs/rename_phase1_handoff.md` first for the brand modules' conventions, and
+`docs/done/rename_phase1_handoff.md` first for the brand modules' conventions, and
 `docs/context/brand_migration.md` for why the engine is shaped as it is.
 
 **The brand is unchanged and so is behaviour.** While the current and the old

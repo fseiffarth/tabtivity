@@ -2,7 +2,7 @@
 
 Branch `worktree-agent-a69fd7785e5bb7c54`, based on develop `214933ab5`.
 Items H3 (+ bundle `state/` filter), H4, H5, H6, H8 of
-`docs/screen_2026_11_12_fix_plan.md`. Never run live.
+`docs/done/screen_2026_11_12_fix_plan.md`. Never run live.
 
 ## Commits
 

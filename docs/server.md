@@ -25,7 +25,7 @@ Read this first; keep it current when a decision or an open point changes.
 - **One agent-API-key path built (2026-10-10, #2389).** Admin keys, a
   server user's own key and the desktop's own key all reach agents through
   `api_proxy`; limits in billed tokens; one "runs on" control per CLI.
-  `docs/agent_key_path_plan.md` (steps 1–5, `1db2a95a..`).
+  `docs/done/agent_key_path_plan.md` (steps 1–5, `1db2a95a..`).
 - **Markup questions on a server built (2026-10-11, #2390).** The daemon
   serves the markup MCP lane itself (it has no window), so a server user's
   agents get `markup_ask`/`markup_done` and the browser client and phone
@@ -133,7 +133,7 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
   tokens per UTC month (the broker's); the desktop's USD figure stays only
   as an estimate. Mistral Vibe admin keys are dropped (no base-URL
   variable). A keyed container spawn fails, naming the way out. Built
-  2026-10-10 (`docs/agent_key_path_plan.md`).
+  2026-10-10 (`docs/done/agent_key_path_plan.md`).
 
 **Secrets and mail**
 - Same-user unfenced processes can read the vault key; accepted and
@@ -172,7 +172,7 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 
 1. **Two agent-API-key systems (#2389): settled and built 2026-10-10.**
    One path (`api_proxy`) for every key, one budget unit (billed tokens),
-   one credential choice per CLI — `docs/agent_key_path_plan.md`. Left as
+   one credential choice per CLI — `docs/done/agent_key_path_plan.md`. Left as
    a known residual: a daemon restart drops every proxy token, so a keyed
    agent in a tmux tab that outlived it must be restarted. Never run live.
 2. **The merge (#2386).** `develop` → `hosted` done 2026-10-07 (39

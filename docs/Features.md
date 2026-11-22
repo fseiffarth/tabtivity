@@ -4,7 +4,7 @@ A manual-QA matrix for the current **Tauri 2 + React + TypeScript** Tabtivity
 (the former Python/GTK `app/` implementation and its `plan_*.md` / `tests/`
 files are gone — ignore any older snapshot that references them).
 
-Ground truth for this list: `docs/REVIEW.md` (the three-reviewer code review)
+Ground truth for this list: `docs/done/REVIEW.md` (the three-reviewer code review)
 and `TODO.md`. Per that review, **all automated tests pass but no feature has
 been live-QA'd** — filling in this matrix is the single biggest gap between
 "code-complete" and "shippable."

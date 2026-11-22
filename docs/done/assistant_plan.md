@@ -696,7 +696,7 @@ Hot shared files (`i18n.ts`, filemaps, `command_class` + `commandClasses.ts`,
 most 5 subagents at once; at most 2 cargo-heavy at once (S1/S2 reviewers; the
 parallel implementers run only the tests of their own module until the wave
 ends). If the steps are renamed, update the headings of
-`docs/assistant_handoff.md` (it still lists S0-S5).
+`docs/done/assistant_handoff.md` (it still lists S0-S5).
 
 ```
 S0 ─ S0b ─┬─ S1a ─┐
@@ -855,5 +855,5 @@ pinning table) and the pinning table rows are untouched.
    (accepted, Risks).
 10. Codex `-s read-only` is a mode flag. Resolved after A0: dropped (fixed
     decision 13).
-11. `docs/assistant_handoff.md` keeps S0-S5 headings; the main agent renames
+11. `docs/done/assistant_handoff.md` keeps S0-S5 headings; the main agent renames
     them if the split is adopted.

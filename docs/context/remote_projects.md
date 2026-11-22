@@ -21,8 +21,8 @@ A remote project created with *Keep a local copy* off has **no local tree at
 all**: the file panel and viewers read over SFTP, every tab, run and build runs
 on the host, git runs on the host, nothing is synced. Tabtivity keeps only
 cockpit state (the registry entry, `project.json`, `sessions/<id>/`, time,
-notes). Plan and step-by-step record: `docs/remote_only_projects_plan.md`,
-`docs/remote_only_projects_handoff.md`.
+notes). Plan and step-by-step record: `docs/done/remote_only_projects_plan.md`,
+`docs/done/remote_only_projects_handoff.md`.
 
 - **One posture, VMs included.** A VM project was already mirrorless, but by
   five unrelated signals. The posture now has a name and a VM is *remote-only +

@@ -12,7 +12,7 @@ of either run is live-verified.
 "Continue the threat recheck" means the open items below, in this order. Ask
 the user only the decision an item names. Saying "continue" is the user's
 go-ahead for the subagents the plan → implement → review routine spawns
-(handoff: `docs/threat_recheck_2026_10_08_handoff.md`, append new sections
+(handoff: `docs/done/threat_recheck_2026_10_08_handoff.md`, append new sections
 there), in a worktree under `.claude/worktrees/`.
 
 1. **Landed on develop `eacfa41a` (2026-10-13, not pushed).** Merge with
@@ -186,7 +186,7 @@ fixed row in `docs/threat_model.md` marked.
 ## Run 2026-10-08 — fixed decisions and agent steps
 
 Branch `threat/1008` in `.claude/worktrees/threat1008`; handoff
-`docs/threat_recheck_2026_10_08_handoff.md`. This run does plan steps 1, 2,
+`docs/done/threat_recheck_2026_10_08_handoff.md`. This run does plan steps 1, 2,
 3, 6, 8, 13 and 14. Steps 4, 5, 7, 9, 10, 11 and 12 wait for their
 decisions and are out of scope.
 
@@ -582,7 +582,7 @@ dropped. List it under "Flagged for user" in the handoff.
 ## Run 2026-10-12 — fixed decisions and agent steps
 
 Branch `threat/1012` in `.claude/worktrees/threat1012`, from develop
-`5d82c988`. Handoff: `docs/threat_recheck_2026_10_08_handoff.md`, new
+`5d82c988`. Handoff: `docs/done/threat_recheck_2026_10_08_handoff.md`, new
 sections under "Run 2026-10-12". This run does plan steps 4, 5, 7, 9, 10, 11
 and 12. Another session's uncommitted CodeQL fixes sit in the main checkout
 (39 files, `fs.rs`, `git_ci.rs`, `agent_fence.rs`, `root_mcp.rs`,

@@ -45,7 +45,7 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    The desktop's phone button and Settings → Mobile rows say this per type
    (`mobile.hostReach.*`, pill `mobile-every-project-type`).
 
-   **Remote-host tabs** (`docs/mobile_remote_host_tabs_plan.md`). A remote
+   **Remote-host tabs** (`docs/done/mobile_remote_host_tabs_plan.md`). A remote
    (not VM) project's tab that runs on its host — `location` `"remote"`,
    `"host:<id>"` (a worker its record still names) or a location-less shell —
    is listed too (`discovery::host_of_tab`, one rule with the refresher's

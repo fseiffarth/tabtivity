@@ -29,10 +29,10 @@ below; gap 71 (high) was fixed at once.
 On 2026-11-04 five read-only reviews (agents/credentials, phone, remote/sync,
 perimeter/viewers/voice/supply chain, mail/calendar/MCP) re-checked the code since
 those passes against `b3abe5ba`: no fixed gap regressed; new gaps 74–104 are below
-(three medium, none high; all 31 fixed 2026-11-05/06 by `docs/threat_recheck_2026_11_04_plan.md`, none live-verified), gaps 57, 65–71 got status notes, and
+(three medium, none high; all 31 fixed 2026-11-05/06 by `docs/done/threat_recheck_2026_11_04_plan.md`, none live-verified), gaps 57, 65–71 got status notes, and
 rows the new code made stale carry a dated **2026-11-04** note or new rows (remote-only
 projects, bundle import, moving a tab between machines, desktop voice, the phone's
-new writes, among others). Raw reports: `docs/threat_recheck_2026_11_04_handoff.md`.
+new writes, among others). Raw reports: `docs/done/threat_recheck_2026_11_04_handoff.md`.
 On 2026-11-12 a targeted source review of new features since `b3abe5ba`, at
 `214933ab5` plus the separately identified worktree edits, found gaps 105–109:
 two medium, three low. It used 165 passing focused Linux unit tests
@@ -100,7 +100,7 @@ is yours: running something is running something, same as in any terminal.
 ## Gaps found 2026-10-08 (open)
 
 Recheck of HEAD `16182b63` by six read-only reviewers. Evidence, line numbers
-and the fix steps are in `docs/threat_recheck_2026_10_08_plan.md`; the last
+and the fix steps are in `docs/done/threat_recheck_2026_10_08_plan.md`; the last
 column names the plan step. No todo entries are filed yet. No earlier gap
 regressed.
 
@@ -233,10 +233,10 @@ D window perimeter, IPC, viewers, desktop voice, Apps view, supply chain; E mail
 calendar, MCP lanes, git-push MCP) over the code since `ff9f83ab`, the phone since
 `0ce3cfd1` and mail since `9bbbb4e2`. Code read only; nothing built, run or live-checked.
 The raw reports, with evidence, unverified points and what each reviewer did not read,
-are in `docs/threat_recheck_2026_11_04_handoff.md`; the last column names the report
+are in `docs/done/threat_recheck_2026_11_04_handoff.md`; the last column names the report
 item. No earlier fixed gap regressed (rows 3, 10, 12, 18, 19, 21, 25–27, 34, 35, 42–47,
 49–60, 62–64 and 71 were re-read in the new code). All 31 were fixed by
-`docs/threat_recheck_2026_11_04_plan.md` (steps built 2026-11-05/06, none live-verified); each row
+`docs/done/threat_recheck_2026_11_04_plan.md` (steps built 2026-11-05/06, none live-verified); each row
 says what it was and what it leaves open.
 
 | # | Gap | You do | Report |

@@ -12,9 +12,9 @@ Two plans, one run:
   view (Chat / Diffs / Files / Terminal), the **shared mechanism** (binding scope
   `inside`, `src/lib/agents/readerSteering.ts`), native steering inside Diffs.
   Also owns **Agent steps**, **Organisation**, **Base dependency**.
-- `docs/reader_files_steering_plan.md`: a Links section in the Reader's Files
+- `docs/done/reader_files_steering_plan.md`: a Links section in the Reader's Files
   view, and native steering inside Files, written on this doc's mechanism.
-- Handoff log (skeleton): `docs/reader_steering_handoff.md`.
+- Handoff log (skeleton): `docs/done/reader_steering_handoff.md`.
 
 Order: Links section first (no steering), then the shared mechanism + view
 cycle, then Diffs-inside and Files-inside in parallel.
@@ -331,7 +331,7 @@ hooks), four parts:
 Plan sections in this doc are S1–S9; in the Files plan F1–F8. Each agent starts
 with `git checkout -B <branch> develop`, implements only its step, runs
 `scripts/gates.sh` (in the background), commits green, and fills its section of
-`docs/reader_steering_handoff.md`.
+`docs/done/reader_steering_handoff.md`.
 
 | Agent step | Plan sections | Files (large ones in bold) | Est. |
 |---|---|---|---|

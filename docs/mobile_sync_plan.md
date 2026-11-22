@@ -8,7 +8,7 @@ window's existing connection pool and the existing `sync_*` / `git_peer_*`
 commands; the phone gets no new power the desktop does not already have.
 
 Related: `docs/mobile_every_project_type_plan.md` (phase 1 put remote
-projects on the phone, mirror only) and `docs/mobile_remote_projects_plan.md`
+projects on the phone, mirror only) and `docs/done/mobile_remote_projects_plan.md`
 (remote tabs; its R6 "read-only host browsing" is replaced by P3 here, which
 goes through the window instead of the sidecar).
 

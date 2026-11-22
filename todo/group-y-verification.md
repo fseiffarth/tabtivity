@@ -305,7 +305,7 @@ missing capability — is the project's dominant risk.
        - [ ] ❌ Doesn't work on macOS
 
 168. **Release A of the rename (Eldrun → Tabtivity): the upgrade has never run
-     live.** The flip is on the `rename` branch (`docs/rename_phase3_handoff.md`);
+     live.** The flip is on the `rename` branch (`docs/done/rename_phase3_handoff.md`);
      the migrator's launch steps passed against a *copy* of a real install
      (`scripts/brand-copy-run.sh`), nothing else was run. Before merging to
      `develop`: the post-commit hook freezes every commit there into the dev

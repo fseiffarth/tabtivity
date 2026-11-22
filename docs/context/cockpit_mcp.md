@@ -5,7 +5,7 @@
 `tab_set_verification`, `tab_request_attention` and `tab_add_milestone` on `/mcp/cockpit` as its own `Caller::Cockpit` token
 lane. Existing help, markup, schedule, git, root and
 web lanes keep their authorities and routes. These lanes share a listener,
-not a token. Design: `docs/cockpit_mcp_plan.md`.
+not a token. Design: `docs/done/cockpit_mcp_plan.md`.
 
 `tab_rename` changes the caller's own display label. The host
 resolves its tmux session — or, for a spawn no session host carries (Windows

@@ -747,7 +747,7 @@ credentials** panel. Users opt in per CLI (§5.2).
     - The keeper caps connections per caller uid (4) and each exchange at
       2 s; it remembers earlier keys as fingerprints only, so a rotated key
       in a login file is never adopted as the user's own.
-  - *Superseded (user, 2026-10-10, #2389 — `docs/agent_key_path_plan.md`):*
+  - *Superseded (user, 2026-10-10, #2389 — `docs/done/agent_key_path_plan.md`):*
     the administrator's key reaches agents only through each user's
     daemon's **API proxy**, the desktop's own-key path: a proxy token + base
     URL in the agent, the key (or the broker token) added by the proxy. The

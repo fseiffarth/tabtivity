@@ -31,7 +31,7 @@ These are local counters only: no document text, paths or reference contents.
 
 **Agent tokens are derived, not counted** (`services::token_stats`,
 `usage_token_stats`, plan in `docs/done/token_stats_plan.md`, caching follow-ups in
-`docs/cli_caching_plan.md`). Claude, Codex, OpenCode, Gemini CLI and Copilot
+`docs/done/cli_caching_plan.md`). Claude, Codex, OpenCode, Gemini CLI and Copilot
 CLI already write per-message usage into each agent home, so the recap's Tokens section reads
 those records (fresh in, cache write, cache read, output; a Codex SQLite
 `total` with no split when a thread has no rollout) as
@@ -71,7 +71,7 @@ command answers `partial` and the frontend asks again a few times (capped),
 never polling. CLIs Eldrun cannot read show as "not reported", never `0`; no
 cost figures.
 
-**The CLI overview** (`services::cli_overview`, `docs/cli_overview_plan.md`)
+**The CLI overview** (`services::cli_overview`, `docs/done/cli_overview_plan.md`)
 is read, never counted or stored: per CLI its plan (off Tabtivity's login
 store copies — only the plan fields leave the module, never a token), Claude's
 windows from the `agent_usage` panel and Codex's from the newest rollout that

@@ -2763,7 +2763,7 @@ Range reviewed: `ccea64d7..7f764e41` (f637fa9d, 84cd8be0, 39686cac, handoff
   queue (monitors you may watch from another window), and file auto-reload
   (would stop live PDF preview beside an external editor). Say if any of
   them should pause unfocused.
-- `docs/performance_plan.md` in the main checkout is identical to the
+- `docs/done/performance_plan.md` in the main checkout is identical to the
   branch's (no diff); the branch's is kept. `scripts/perf-numbers.sh` and
   `docs/performance_numbers.md` are now on the branch — the main checkout's
   untracked copies will collide on landing (delete them first, or take the
@@ -3040,7 +3040,7 @@ The run was paused by the user after S6's implementer and partway through
 S6's reviewer; a second S6 reviewer finished the review on 2026-10-08.
 Everything is on branch `perf` in worktree
 `.claude/worktrees/perf`; the main checkout is untouched (its
-`docs/performance_plan.md`, `docs/performance_numbers.md` and
+`docs/done/performance_plan.md`, `docs/performance_numbers.md` and
 `scripts/perf-numbers.sh` are untracked copies/tools; S12 put the latter two
 on the branch, so delete or overwrite the main checkout's copies when landing).
 
@@ -3152,6 +3152,6 @@ on the branch, so delete or overwrite the main checkout's copies when landing).
   `until grep -q …` wait loop gets rewritten to `rtk grep -q` by the shell
   hook — avoid wait loops on marker files; under machine load ≈60–90 a few
   timing tests (`PdfZoomRaster`, `api_usage`) flake — rerun alone.
-- Baseline numbers are at the top of `docs/performance_plan.md`; take
+- Baseline numbers are at the top of `docs/done/performance_plan.md`; take
   `scripts/perf-numbers.sh after-<step>` from the main checkout after each
   dev build (stopwatch lines still unfilled).

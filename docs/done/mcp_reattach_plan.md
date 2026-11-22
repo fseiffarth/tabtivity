@@ -262,7 +262,7 @@ with independent reviewers on the token and authentication work. At most 2
 agents run at once (another session's agents are building too). Every
 agent works in its own `isolation: "worktree"` and first runs
 `git reset --hard <base>` (a worktree starts at origin/main). Each agent
-commits green and appends to `docs/mcp_reattach_handoff.md`.
+commits green and appends to `docs/done/mcp_reattach_handoff.md`.
 
 | Agent step | Plan sections | Main files | Base |
 |---|---|---|---|

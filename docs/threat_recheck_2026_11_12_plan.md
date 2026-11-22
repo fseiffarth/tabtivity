@@ -19,8 +19,8 @@ instructions from earlier threat-recheck plans.
 - Existing analysis: `docs/threat_model.md`, including its tier definitions,
   legend and gaps 1–104.
 - Last broad review: `b3abe5ba`, 2026-11-04. Evidence and previous fix decisions:
-  `docs/threat_recheck_2026_11_04_handoff.md` and
-  `docs/threat_recheck_2026_11_04_plan.md`.
+  `docs/done/threat_recheck_2026_11_04_handoff.md` and
+  `docs/done/threat_recheck_2026_11_04_plan.md`.
 - Previous fix completion: `1416bba3`, 2026-11-06, as recorded in that plan.
 - Inventory endpoint: `214933ab5fd36cac71836cb26f2acd52c65ccb43` on `develop`.
   Use `b3abe5ba..214933ab5` for the initial feature inventory, not just commits

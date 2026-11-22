@@ -628,7 +628,7 @@ Commit: `fdaf7c48` "fix(hooks): bump commit from a private index; drop the priva
 - The diff check is against HEAD, which is what the bump commits on — the
   hook already bumps HEAD regardless of which ref is pushed (unchanged).
 - `pages.yml`'s `screenshots/**` path trigger is kept (the svg lives there).
-- History docs mentioning `eldrun-current.png` (`docs/rename_phase3_handoff.md`,
+- History docs mentioning `eldrun-current.png` (`docs/done/rename_phase3_handoff.md`,
   `docs/root_cleanup_plan.md`) and `scripts/brand-flip.sh` /
   `rename-codemods/prose-pass.sh` comments left as history.
 - shellcheck is not installed here — not run. `bash -n` on both scripts OK.

@@ -111,7 +111,7 @@ D4. **A window enters steering only when it has the keyboard**, and announces
     handover never ends steering in the source by itself: the source leaves
     when it hears the target's announcement. A focus move the window manager
     refused therefore leaves steering where the keyboard still is, the same
-    rule `docs/steering_gaps_plan.md` §2 set for J.
+    rule `docs/done/steering_gaps_plan.md` §2 set for J.
 D5. **Every arrival in a window lands on its tabs level**: the chord, J, the
     `mainWindow` key, a main-only key (which then runs its action).
     A status jump lands on the target tab.
@@ -237,7 +237,7 @@ without a rebase.
 Organisation (user, 2026-11-11: "use opus subagent to implement"): one Opus
 implementer, steps 1–6 in order, one commit per step, in a worktree reset to
 `develop` HEAD (not `origin/main`), with the handoff log
-`docs/steering_popout_handoff.md`. The implementer builds on what `develop`
+`docs/done/steering_popout_handoff.md`. The implementer builds on what `develop`
 HEAD does and never reads or writes the main checkout's working files. The
 main agent lands the range. As landed (user: "when done land it on develop"):
 fast-forward, with the other session's still-uncommitted edits merged onto

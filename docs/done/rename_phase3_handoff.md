@@ -2,8 +2,8 @@
 
 Branch `rename`, worktree `.claude/worktrees/rename`. The plan is the untracked
 `docs/rename_plan.md` (never `git add` it). Earlier phases:
-`docs/rename_phase1_handoff.md` (the brand modules' conventions),
-`docs/rename_phase2_handoff.md` (the migrator), `docs/context/brand_migration.md`
+`docs/done/rename_phase1_handoff.md` (the brand modules' conventions),
+`docs/done/rename_phase2_handoff.md` (the migrator), `docs/context/brand_migration.md`
 (why it is shaped as it is).
 
 **The app is now Tabtivity** (slug `tabtivity`, prefix `TABTIVITY_`); the old

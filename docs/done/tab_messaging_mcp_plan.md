@@ -272,7 +272,7 @@ the pane is hidden; the settings switch round-trips; pills present.
 **Shape (user's choice, 2026-11-14):** two Opus implementers in series, then
 one separate Opus reviewer. This replaces the parallel-track shape drafted
 earlier. All work sits on one branch based on `develop`'s HEAD; the main agent
-cherry-picks onto `develop`. Handoff file: `docs/tab_messaging_mcp_handoff.md`.
+cherry-picks onto `develop`. Handoff file: `docs/done/tab_messaging_mcp_handoff.md`.
 
 | Agent | Plan steps | Main files |
 |---|---|---|

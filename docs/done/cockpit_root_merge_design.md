@@ -5,7 +5,7 @@ build log is `docs/cockpit_root_merge_handoff.md`. Architecture, ownership,
 steps and gates are in `docs/cockpit_root_merge_plan.md`; this document is the
 layout and behaviour the plan defers to. Written 2026-11-04 on develop.
 Reviewed 2026-11-04: every choice that differs from the plan is now one of the
-plan's **Open decisions** (`docs/cockpit_root_merge_plan.md`); recommendations
+plan's **Open decisions** (`docs/done/cockpit_root_merge_plan.md`); recommendations
 below that differ from the plan's are marked "Reviewer" or listed in the
 reconciliation table at the end. Layout A is the shape the plan's steps build.
 
@@ -266,7 +266,7 @@ decisions; the list is kept as the design's own notes.
 ## Where design and plan disagree
 
 Resolved by the review: each real choice is now an **Open decision** in
-`docs/cockpit_root_merge_plan.md` (the user decides; the recommended option is
+`docs/done/cockpit_root_merge_plan.md` (the user decides; the recommended option is
 first). Pointer table only; the plan holds the options and trade-offs.
 
 | Topic | Plan's Open decision |

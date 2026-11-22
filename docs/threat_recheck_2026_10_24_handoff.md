@@ -23,7 +23,7 @@ Since then ~460 commits and ~29k inserted lines in `src-tauri/src` alone.
 
 - `docs/threat_model.md` — the model. Tiers 0–4, gap rows 1–41, hardening
   backlog. Lines are long; read only the rows in your area (`rg -n`).
-- `docs/threat_recheck_2026_10_08_plan.md` — last run. Read lines 1–110
+- `docs/done/threat_recheck_2026_10_08_plan.md` — last run. Read lines 1–110
   (resume state + open follow-ups) and 1120–1152 ("Decisions", "Not
   reviewed"). The handoff file next to it is 335 KB: never read it whole,
   `rg -n` only.

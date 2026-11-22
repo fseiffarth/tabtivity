@@ -1852,7 +1852,7 @@ docs, not live.
 
 "Reads the project's `AGENTS.md`" (new projects scaffold no `CLAUDE.md` /
 `GEMINI.md` pointer; re-check yes/no per CLI on update, table in
-`docs/scaffold_files_plan.md` §3a). Two CLIs do not by default, so
+`docs/done/scaffold_files_plan.md` §3a). Two CLIs do not by default, so
 `agent_hint::register_in_home` sets it in Tabtivity's own agent homes, after
 the global layer: **Gemini** `~/.gemini/settings.json` `context.fileName`
 (string or array; `["GEMINI.md","AGENTS.md"]` union, the user's entries kept,

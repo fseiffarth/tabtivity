@@ -123,8 +123,8 @@
 
 22. **GNOME (X11 and Wayland) parks launched apps on the workspace to the right
     (2026-10-26, ✅ Built · 🧪 Untested).** Plan:
-    `docs/wayland_app_parking_plan.md`, handoff
-    `docs/wayland_app_parking_handoff.md`. Launches carry a marker
+    `docs/done/wayland_app_parking_plan.md`, handoff
+    `docs/done/wayland_app_parking_handoff.md`. Launches carry a marker
     (`TABTIVITY_LAUNCH_ID`) so a row outlives its launcher and finds its
     XWayland window late; GNOME runs on the `x11` backend (desktop 0 = active
     project, desktop 1 = parked) and sets/restores its workspace gsettings;

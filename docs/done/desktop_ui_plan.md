@@ -9,7 +9,7 @@ token system, the icon mapping). Nothing here is live-verified; every
 behaviour change wears an `UntestedTag` row when implemented.
 
 Goal (user): make the desktop app's UI more modern and more user-friendly.
-Counterpart of the phone pass (`docs/mobile_pwa_design_plan.md`): same
+Counterpart of the phone pass (`docs/done/mobile_pwa_design_plan.md`): same
 direction — "one system, calm chrome, colour only for state" — applied to
 `src/`.
 

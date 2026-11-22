@@ -28,7 +28,7 @@ the note UI and the prompt it builds. It is a frontend-only change.
 Decided here:
 
 2. **Desktop Reader Diffs tab only** in phase 1, in both the *Agent's edits*
-   view and, once `docs/turn_checkpoints_plan.md` lands, its *Since
+   view and, once `docs/done/turn_checkpoints_plan.md` lands, its *Since
    checkpoint* view (the same `ChangeCard`). The phone's `ChatChanges` and
    the shared `DiffView` (git panel diffs, which has no agent tab to target)
    come later.

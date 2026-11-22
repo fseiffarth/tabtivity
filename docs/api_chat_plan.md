@@ -1290,7 +1290,7 @@ Not fixed, with reason:
 
 ## #2389 notes (2026-10-10, branch `hosted`)
 
-One key path for desktop and server (`docs/agent_key_path_plan.md`):
+One key path for desktop and server (`docs/done/agent_key_path_plan.md`):
 
 - **C3's limit is in billed tokens now**, the key broker's unit
   (`keys_wire::billed_tokens`: input, cache writes, output in full, cache

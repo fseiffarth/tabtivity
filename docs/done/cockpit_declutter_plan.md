@@ -4,13 +4,13 @@ Status: **plan** (2026-11-06). The user found the cockpit window (Now,
 Projects, Tonight, Usage) "very crowded" and approved a redesign. Mockups: design canvas
 https://claude.ai/artifact/BP72ZyPEaJ5GvmUR3nSnNU (one artboard per view).
 Design background: `docs/context/cockpit.md`; file rows: `docs/filemap_frontend.md`
-(grep `cockpit`). Handoff: `docs/cockpit_declutter_handoff.md`.
+(grep `cockpit`). Handoff: `docs/done/cockpit_declutter_handoff.md`.
 
 This is a layout and density pass. No new backend reads, no new stores, no
 new commands. Every view still renders what it renders today; it just renders
 less of it at once, in fewer boxes.
 
-**Sibling plan:** `docs/cockpit_apps_merge_plan.md` (plan only, another session)
+**Sibling plan:** `docs/done/cockpit_apps_merge_plan.md` (plan only, another session)
 dissolves Usage into Agents / Models / Machines views (its S2). This plan
 therefore builds Usage's machine list as its **own component**
 (`CockpitMachineList`) so S2 can move it into the Machines view unchanged.

@@ -141,7 +141,7 @@ client gets its own size under any policy.
 A reattach (`new-session -A` finding the session alive) ignores the new command
 and `-e` env: the agent keeps the MCP URLs and tokens it was **started** with,
 and tokens live only in the starting process's memory. After a crash they belong
-to nobody. `docs/mcp_reattach_plan.md` is the design; this is how the tmux side
+to nobody. `docs/done/mcp_reattach_plan.md` is the design; this is how the tmux side
 works.
 
 - **The stamp.** A session `launch_prep::prepare` finds absent is created with a

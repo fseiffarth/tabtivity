@@ -528,7 +528,7 @@ previous step's result; the main agent lands each step before the next.
   per platform; needs hardware for the auth path.
 - Reader shell line on macOS (`agent_transcript::running_outputs`, libproc
   fd listing): new FFI that cannot be compiled here.
-- `ui_priority` twins: measure first per `docs/performance_plan.md`.
+- `ui_priority` twins: measure first per `docs/done/performance_plan.md`.
 - NSIS old-install removal + WebView2/WebKit data copy for the rename
   upgrade (`todo/group-y-verification.md` 168): paths unknown, needs hardware.
 - macOS ssh-link counters via `nettop` (31f): CSV shape unconfirmed.

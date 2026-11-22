@@ -370,7 +370,7 @@ new one at `/exit`, and is refused.
 
 ### Muse: a hook that has to find its tab
 
-`services::muse_session` (2026-11-16, plan `docs/agent_tab_resume_plan.md`
+`services::muse_session` (2026-11-16, plan `docs/done/agent_tab_resume_plan.md`
 B; probed offline on 1.3.0 and 1.4.15, never live). Muse's settings take
 Claude-shaped hooks from 1.3.0 on, so each home's
 `.config/muse/settings.json` lists one script (`muse_session/hook.rs`) on
@@ -575,7 +575,7 @@ session from any cwd — verified live — so the cwd decides where the agent
 
 ## Stopped tabs
 
-Plan: `docs/agent_tab_stop_plan.md` (decisions at its end). A **stopped**
+Plan: `docs/done/agent_tab_stop_plan.md` (decisions at its end). A **stopped**
 agent tab keeps its place, label and conversation; its process is ended and it
 respawns on its restore args (`resumeArgsOf`) when shown. The same resume a
 restart does, per tab. `TabEntry.stopped` is runtime only; `lastUsedAt` is
@@ -657,7 +657,7 @@ every place a log can be has to be probed:
 
 Code: `agent/agent_cli_handoff.rs` (backend), `CliHandoffDialog.tsx` +
 `CliHandoffMenuItem.tsx` + `lib/agents/cliHandoff.ts` (frontend); plan and
-history in `docs/cli_session_handoff_plan.md`.
+history in `docs/done/cli_session_handoff_plan.md`.
 
 - The dialog opens from a limit notice (`TerminalLimitHandoff`) or the tab
   menu. Both start a *new* tab on the chosen CLI through `newAgentTabForDraft`,

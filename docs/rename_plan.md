@@ -270,7 +270,7 @@ below gives each of these its own step.
 - Also build the deb/NSIS old-package replacement and the shim alias.
 
 ### Phase 3: release A — the flip to Tabtivity
-Done (`docs/rename_phase3_handoff.md`); `scripts/brand-flip.sh` was deleted afterwards.
+Done (`docs/done/rename_phase3_handoff.md`); `scripts/brand-flip.sh` was deleted afterwards.
 - Gate: the domains and GitHub org are registered, and the trademark search is
   clean (see "Name"). Phase 2 has been run against a copy of a real state dir.
 - Add `scripts/brand-flip.sh <Display> <slug>` and run it as

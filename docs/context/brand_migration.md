@@ -6,8 +6,8 @@ same — inert, so that the rename itself was one commit that changed names and
 no behaviour — and has been live since the flip (release A): the app is now
 Tabtivity, and the old name is the one in `brand::LEGACY`.
 
-Status of each kind of thing: `docs/rename_phase2_handoff.md`; what the flip
-changed and what it left: `docs/rename_phase3_handoff.md`.
+Status of each kind of thing: `docs/done/rename_phase2_handoff.md`; what the flip
+changed and what it left: `docs/done/rename_phase3_handoff.md`.
 
 ## The no-op guarantee
 
