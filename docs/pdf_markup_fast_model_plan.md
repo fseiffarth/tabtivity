@@ -1,5 +1,7 @@
 # Markup quick fixes on a fast model — plan
 
+> **Status (screened against code 2026-11-22):** NOT-STARTED. No `MARKUP_FAST_MODEL_LINE` or fast-model switch exists in `mobile-web/src/markupInstruction.ts`, `src/lib/viewers/pdfMarkup.ts` or `schema/settings.rs`; only the plan's "What already exists" parts are there (`pdf_markup_subagents`, `PdfMarkupModel.tsx`, which is now committed). F2 stays deferred.
+
 User request (2026-10-12): in Mark up, send different marks of the same
 document to different agents — easy text changes to a small model (Haiku),
 the rest to the main one.

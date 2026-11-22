@@ -1,5 +1,5 @@
 //! The stamp a local agent session carries about the MCP grant it was started
-//! with, and the verdict a reattach draws from it (`docs/mcp_reattach_plan.md`).
+//! with, and the verdict a reattach draws from it (`docs/done/mcp_reattach_plan.md`).
 //!
 //! A local agent runs in its own tmux session. After a crash the session lives
 //! on and the next launch only *reattaches* it (`tmux new-session -A`): the

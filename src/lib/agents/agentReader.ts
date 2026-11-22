@@ -51,13 +51,17 @@ export function readerAgent(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" |
 }
 
 /** The agents whose transcript is read for a tab that runs on a remote
- * project's host: the others' stores cannot be named without the session
- * hook, which records on the host (`services::remote_transcript`). */
-const HOST_READER_AGENTS = new Set(["claude"]);
+ * project's host, found there without the session hook (which records only
+ * here) and copied over (`services::remote_transcript`): Claude by its
+ * running sessions' records, Codex, Antigravity and Muse by what the tab's
+ * process holds open in the host's `/proc`, Copilot by its sessions' `inuse`
+ * locks and their process's environment, OpenCode as the newest session of
+ * the tab's folder in a snapshot of the host's store. */
+const HOST_READER_AGENTS = new Set(["claude", "codex", "agy", "muse", "copilot", "opencode"]);
 
 /** Whether `tab` can be shown as a Reader: an agent tab whose CLI keeps a
  * transcript Tabtivity reads — a local-model tab only when OpenCode drives it,
- * a tab on a remote host (`onHost`) only when Claude runs in it. */
+ * a tab on a remote host (`onHost`) only for `HOST_READER_AGENTS`. */
 export function readerOffered(
   tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch"> | undefined,
   onHost = false,
@@ -116,6 +120,8 @@ export function readerReasonKey(transcript: SessionTranscript | null): Translati
     case "unsupported": return "terminal.reader.unsupported";
     case "no_session": return "terminal.reader.noSession";
     case "no_transcript": return "terminal.reader.missing";
+    // A host OpenCode tab's first copy of the host's store is still running.
+    case "syncing": return "terminal.reader.syncing";
     default: return "terminal.reader.unreadable";
   }
 }

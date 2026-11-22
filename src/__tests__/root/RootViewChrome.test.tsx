@@ -1,5 +1,5 @@
 /**
- * The Root view's chrome (`docs/cockpit_root_merge_plan.md`, M3): the root tab strip, + menu, ⚿ badge
+ * The Root view's chrome (`docs/done/cockpit_root_merge_plan.md`, M3): the root tab strip, + menu, ⚿ badge
  * and ◫ toggle sit in a sub-bar under the title bar (a split layout drops it),
  * the Root tab carries a lamp (amber count while a root agent asks, the working
  * ring while one works), and the empty card starts the default agent in Root.

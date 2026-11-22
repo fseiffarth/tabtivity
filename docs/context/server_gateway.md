@@ -1,7 +1,7 @@
 # Server gateway, per-user daemons, admin helper
 
 *Design rationale for hosted plan P3, P3b and P5's key broker and OIDC (`docs/tabtivity_hosted_plan.md` §3.1,
-§4, §5.1, §5.4, §6.7, §6.8, §8), as built on branch `hosted`. Nothing here has run
+§4, §5.1, §5.4, §6.7, §6.8, §8), as built (merged into `develop` 2026-10-11). Nothing here has run
 on a real server yet; the live steps are in `docs/hosted_handoff.md` § P3.*
 
 ## Shape

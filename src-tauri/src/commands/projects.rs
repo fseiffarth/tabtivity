@@ -4352,7 +4352,7 @@ pub struct CreateProjectRequest {
     #[serde(default)]
     pub remote: Option<RemoteSpec>,
     /// The new remote project keeps **no local copy** (Remote-only,
-    /// `docs/remote_only_projects_plan.md`): no mirror, every tab and git on the
+    /// `docs/done/remote_only_projects_plan.md`): no mirror, every tab and git on the
     /// host. The one way the renderer asks for the posture: a `remote_only` sent
     /// inside `remote` is dropped ([`strip_renderer_posture`]), and only the
     /// backend writes the spec field ([`apply_requested_posture`]). Ignored
@@ -4382,7 +4382,7 @@ pub async fn create_project(req: CreateProjectRequest) -> Result<ProjectEntry, S
 /// A renderer-sent spec never carries the posture: `remote_only` is the
 /// backend's to write (from a request's top-level `remoteOnly`, or a
 /// conversion), so one arriving inside `remote` is dropped before anything
-/// stores it (`docs/remote_only_projects_plan.md`, engine rule 1).
+/// stores it (`docs/done/remote_only_projects_plan.md`, engine rule 1).
 fn strip_renderer_posture(remote: Option<&mut RemoteSpec>) {
     if let Some(remote) = remote {
         remote.remote_only = None;
@@ -4574,7 +4574,7 @@ fn create_claimed_project(
     // (`docs/vm_projects_plan.md`, "Sync posture"): remote-only by default,
     // zero agent-written bytes on the host, a mirror only ever by explicit
     // later opt-in. None for a remote-only project too: it keeps no local copy
-    // at all (`docs/remote_only_projects_plan.md`), and its scaffold and repo
+    // at all (`docs/done/remote_only_projects_plan.md`), and its scaffold and repo
     // are made on the host by `remote_project_init_host` after the first connect.
     let mirror = if plan.mirror {
         req.remote.as_ref().map(|_| {
@@ -4761,7 +4761,7 @@ pub struct ImportProjectRequest {
     #[serde(default)]
     pub remote: Option<RemoteSpec>,
     /// The new remote project keeps **no local copy** (Remote-only,
-    /// `docs/remote_only_projects_plan.md`): no mirror, every tab and git on the
+    /// `docs/done/remote_only_projects_plan.md`): no mirror, every tab and git on the
     /// host. The one way the renderer asks for the posture: a `remote_only` sent
     /// inside `remote` is dropped ([`strip_renderer_posture`]), and only the
     /// backend writes the spec field ([`apply_requested_posture`]). Ignored
@@ -5106,7 +5106,7 @@ fn downgrade_project_git_label(project: &mut Project) {
 }
 
 /// Set up a new **remote-only** project's folder on its host
-/// (`docs/remote_only_projects_plan.md`, E6b): `mkdir -p` the root, write the
+/// (`docs/done/remote_only_projects_plan.md`, E6b): `mkdir -p` the root, write the
 /// scaffold there when `scaffold` (create-new over SFTP, nothing already there
 /// is touched: `services::remote_scaffold`), and when `git`, `git init` it and
 /// make the scaffold commit (hardened, hooks off). If the host repo cannot be

@@ -1,6 +1,8 @@
 # Remote project sync on the phone — Plan
 
-Status: **proposed, 2026-10-23. Nothing here is built.** Gives a paired phone
+> **Status (screened against code 2026-11-22):** PARTIAL (P4 only, in a smaller form). Built: a Diverged sheet for remote projects (`mobile-web/src/screens/DivergedSheet.tsx`, `services/mobile_control/diverged.rs`, `previewDiverged` / resolve in `mobile-web/src/api.ts`), commit `58ba6e6ef`; its resolve actions sit behind the existing `project_sync` host switch (Settings → Mobile, default off, `schema/settings.rs`) and the window re-checks every file. Not built: P0 desktop fixes, P1 `/sync/state` lamp and Connect, P2 Sync all / Push all with jobs, P3 Local | Remote in Files with sync badges (remote browsing exists separately, `ee7be547c`), P5 git lockstep and Large folders on the phone. Not live-tested.
+
+Proposed 2026-10-23. Gives a paired phone
 the sync controls the desktop side panel has for a remote (SSH) project:
 connection state, Sync all / Push all, per-file and per-folder sync, the
 Diverged list and the git lockstep bar. Every action rides the desktop
@@ -8,7 +10,7 @@ window's existing connection pool and the existing `sync_*` / `git_peer_*`
 commands; the phone gets no new power the desktop does not already have.
 
 Related: `docs/mobile_every_project_type_plan.md` (phase 1 put remote
-projects on the phone, mirror only) and `docs/mobile_remote_projects_plan.md`
+projects on the phone, mirror only) and `docs/done/mobile_remote_projects_plan.md`
 (remote tabs; its R6 "read-only host browsing" is replaced by P3 here, which
 goes through the window instead of the sidecar).
 
@@ -105,7 +107,7 @@ Line numbers are from 2026-10-23; verify before relying on them.
 ## Decisions to confirm
 
 1. **Connect from the phone.**
-   - (a) *Never* (matches `mobile_remote_projects_plan.md` decision 2): the
+   - (a) *Never* (matches `done/mobile_remote_projects_plan.md` decision 2): the
      phone shows the lamp and "Connect on the desktop".
    - (b) *Promptless only*: the phone's Connect uses the eligibility rule
      the desktop's silent auto-connect uses (`stores/projects.ts`
@@ -305,7 +307,7 @@ Connect and Measure host show an extra "this is an HPC host" line
 Per-block merge (`CompareView`) on the phone; worker-host sync toggles
 (`RemoteMachinesWindow`); "Download to…" outside the mirror; box scopes;
 container and VM projects; OpenVPN; any headless sync without a window;
-remote tabs (`mobile_remote_projects_plan.md`).
+remote tabs (`done/mobile_remote_projects_plan.md`).
 
 ## Strings, untested tags, docs
 

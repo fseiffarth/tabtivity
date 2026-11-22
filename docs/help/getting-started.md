@@ -60,5 +60,5 @@ is the shortest path from a fresh install to a working agent tab.
 
 Linux (X11 and KDE Wayland) is the primary platform. Other Wayland desktops
 work with reduced window management. Windows builds are alpha: no agent
-agent sandbox and no tmux session persistence. macOS builds compile and pass
+sandbox and no tmux session persistence. macOS builds compile and pass
 tests in CI but are not yet exercised on real hardware.

@@ -1,6 +1,6 @@
 /**
  * The Tabby scope in the tabs store and the pane layer (S4a,
- * `docs/assistant_plan.md`): the chats are agent tabs of `tabsByScope.assistant`,
+ * `docs/done/assistant_plan.md`): the chats are agent tabs of `tabsByScope.assistant`,
  * restored lazily from `sessions/assistant/`, persisted with no project file,
  * mounted when the backend makes one (`workspace:patch` `created`), spawned from
  * their `assistant` launch alone, and never the panel's scope or a project.

@@ -39,7 +39,7 @@ correctness/UX work atop the same layout model #42 detaches.*
     (`attachGroup` with the resolved edge/center target) — released outside the main
     window or on Escape, the popout stays floating. A plain (non-Ctrl) tab-bar drag
     still hands off to the WM for a native window move.
-    Code review: `docs/group_l_42_detach_review_code.md`.
+    Code review: `docs/done/group_l_42_detach_review_code.md`.
     *Files: `src/stores/detached.ts`, `src/stores/tabs.ts`,
     `src/components/layout/DetachedApp.tsx` / `DetachedCenterPanel.tsx` /
     `AppShell.tsx`, `src/components/tabs/TabBar.tsx`,
@@ -517,8 +517,8 @@ correctness/UX work atop the same layout model #42 detaches.*
 213k. **Live-QA steering inside popout windows.** ✅ Implemented · 🧪
     Awaiting live QA (2026-11-11). Steering runs in a popout on its own
     subwindows and tabs, and hands over between windows (one steers at a time,
-    steering follows the keyboard). Plan: `docs/steering_popout_plan.md`;
-    handoff log: `docs/steering_popout_handoff.md`. Verify, after the dev build
+    steering follows the keyboard). Plan: `docs/done/steering_popout_plan.md`;
+    handoff log: `docs/done/steering_popout_handoff.md`. Verify, after the dev build
     with these commits: (1) pop a subwindow with two tabs out, click into it,
     Shift+Space: the bar is at the popout's bottom, the active tab outlined, the
     main window shows nothing; (2) S/F switch its tabs, D goes inside the
@@ -1167,8 +1167,8 @@ correctness/UX work atop the same layout model #42 detaches.*
 - [ ] **Cockpit + root console: one window (2026-11-04, ✅ Built · 🧪 Untested).**
   The cockpit's four views and the root console are views of one window (no
   longer an experiment since the follow-up round, F2).
-  Plan `docs/cockpit_root_merge_plan.md`, design `docs/cockpit_root_merge_design.md`,
-  log `docs/cockpit_root_merge_handoff.md` (Click-through). Pills: `cockpit.*`,
+  Plan `docs/done/cockpit_root_merge_plan.md`, design `docs/done/cockpit_root_merge_design.md`,
+  log `docs/done/cockpit_root_merge_handoff.md` (Click-through). Pills: `cockpit.*`,
   `rootConsole.*`, `overlayApprovals.button`; clear them with `npm run untested`
   once confirmed. *Files: `src/components/layout/{RootOverlay,RootView}.tsx`,
   `src/components/cockpit/*`, `src/lib/window/{floatingFrame,frameBand}.ts`,

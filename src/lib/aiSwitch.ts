@@ -1,5 +1,5 @@
 /**
- * The AI switch (`docs/ai_switch_plan.md`): the side panel's ⏻ sets
+ * The AI switch (`docs/done/ai_switch_plan.md`): the side panel's ⏻ sets
  * `Settings.ai_off`, which stops every new AI use machine-wide. The backend
  * enforces it (`services::ai_switch`: agent spawns, input to agents,
  * completions, mail AI, the phone); the window reads the same setting to

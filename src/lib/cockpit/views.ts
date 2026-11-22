@@ -3,7 +3,7 @@
  * filter and selection state) and `stores/rootOverlay` (which view the shared
  * window shows) can both name them without importing each other.
  *
- * Eleven views in four groups (`VIEW_GROUPS`): the cockpit's own three, the
+ * Ten views in four groups (`VIEW_GROUPS`): the cockpit's own three, the
  * cross-project apps (mail, calendar, to-do), the machine's system pages
  * (agents, models, machines) and Root, the root console proper. Only the shown
  * one is mounted (mail's unsent composers excepted, `MailView`).

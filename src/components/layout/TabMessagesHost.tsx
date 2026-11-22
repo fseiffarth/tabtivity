@@ -8,7 +8,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 
 /**
- * Tab messaging's per-project idle wake (`docs/tab_messaging_mcp_plan.md`,
+ * Tab messaging's per-project idle wake (`docs/done/tab_messaging_mcp_plan.md`,
  * step 7; off by default, `tab_messages_wake`). On every `tabs-mcp-changed`
  * it asks the backend's claim for each opted-in project and queues what the
  * claim returns: the host's fixed notice, for each tab with a new unread

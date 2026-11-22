@@ -1712,14 +1712,14 @@ untested tag until a VM has actually booted on this machine).
       files — a multi-gigabyte tree is a long modal with a counter and no way
       out but closing the window.
 
-### G.27 — Remote-only projects (`docs/remote_only_projects_plan.md`)
+### G.27 — Remote-only projects (`docs/done/remote_only_projects_plan.md`)
 
 Implemented 2026-10-29 on the `ro-*` branches (A1–A13, A12 the
 conversion), **nothing live-tested**. A remote project created
 with **Keep a local copy** off has no mirror: tabs, git, search and TeX builds
 run on the host, files are read over SFTP, nothing syncs. A VM project is
 remote-only + boot. Rationale: `docs/context/remote_projects.md` § Remote-only;
-step record: `docs/remote_only_projects_handoff.md`.
+step record: `docs/done/remote_only_projects_handoff.md`.
 
 - [x] 🤖 Automated tests (A1, engine contract) — `local_copy_in_resolves_per_posture`
   (`services/remote.rs`), the spec round-trip, the run-host and agent-move
@@ -1887,6 +1887,20 @@ step record: `docs/remote_only_projects_handoff.md`.
   nothing unpushed: it becomes remote-only, and the mirror folder is kept at
   the path the dialog reports (a default-location mirror moved out as
   `<name> (local copy)`).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — pill → **Make remote only…** on a local git project: the Extend dialog
+  opens with Keep a local copy off; after Move to host and the connect, the
+  Stop keeping check opens by itself, re-checks until lockstep has the history
+  on the host, names git-ignored files, and the confirm makes the project
+  remote-only with the old folder kept where it was. Untested pills
+  `pill.makeRemoteOnly`, `extendRemote.remoteOnly`.
   - [ ] ✅ Works on Linux (X11)
   - [ ] ❌ Doesn't work on Linux (X11)
   - [ ] ✅ Works on Linux (Wayland)

@@ -762,4 +762,29 @@ describe("card view (#yaml-grid)", () => {
     expect(screen.queryByText("Item 1")).toBeNull();
     expect(screen.queryByText("#0")).toBeNull();
   });
+
+  it("edits a block scalar on a card as lines, as the tree does", async () => {
+    // A single-line input drops the line breaks of the value it is handed, so
+    // typing into one flattened the block. The cards use the tree's value cell.
+    onDisk = "job:\n  env:\n    a: 1\n  script: |\n    echo one\n    echo two\n";
+    vi.resetModules();
+    const { FileViewerPane } = await import("../../components/embed/FileViewerPane");
+    await act(async () => {
+      render(<FileViewerPane viewer="yaml" path="/p/job.yaml" projectId="proj" />);
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Cards" }));
+    });
+    const openDocument = await screen.findByRole("button", { name: "Open document" }, { timeout: 15_000 });
+    await act(async () => {
+      fireEvent.click(openDocument);
+    });
+    const script = (await screen.findByLabelText("Value of script")) as HTMLTextAreaElement;
+    expect(script.tagName).toBe("TEXTAREA");
+    await act(async () => {
+      fireEvent.change(script, { target: { value: script.value.replace("two", "three") } });
+      fireEvent.blur(script);
+    });
+    expect(await saveAndRead()).toContain("  script: |\n    echo one\n    echo three\n");
+  });
 });

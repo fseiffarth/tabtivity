@@ -74,9 +74,9 @@ files or settings, and cannot change anything.
 
 ## Turn it on or off
 
-It is on by default. The switch is on the **Ask Tabtivity** page of the How to
-start introduction (Settings → General → Hints & onboarding → How to start).
-Turning it off stops it for newly opened tabs; the setting is `help_mcp` in
+It is on by default. The switch, **Offer Tabtivity's help to agent tabs**, is on
+the **Ask Tabtivity** page of the How to start introduction (gear menu → How to
+start) and under **Settings → Agents → Tabtivity tools**. Turning it off stops it for newly opened tabs; the setting is `help_mcp` in
 `settings.json`.
 
 ## Topics

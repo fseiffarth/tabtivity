@@ -1,6 +1,6 @@
 # Lossless project rename — plan
 
-Status: plan only (2026-10-06). Nothing below is implemented.
+> **Status (screened against code 2026-11-22):** NOT-STARTED (the engine). No `services::relocate`, `services::agent_history_move` or `project_rename_preview` exists. Only the older baseline is in code: `rename_project_dir` (`commands/projects.rs`, with `plan_dir_rename`, registry/`project.json`/worktree re-point; tested in `src/__tests__/projects/ProjectFolderRename.test.ts`), which this plan wants to extend. Its Phase M companion (`docs/rename_plan.md`) is also unbuilt. Not live-tested.
 
 ## Goal
 Any project can get a new name and a new folder name without losing

@@ -1,4 +1,4 @@
-//! Remote → Remote-only conversion (`docs/remote_only_projects_plan.md` E8):
+//! Remote → Remote-only conversion (`docs/done/remote_only_projects_plan.md` E8):
 //! a plain Remote project stops keeping its local mirror. The reverse
 //! (Remote-only → Remote) is `set_remote_mirror_dir` with `keepLocalCopy`.
 //!
@@ -55,6 +55,11 @@ pub struct UnpairPreview {
     /// `git status --porcelain` entries in the mirror (tracked changes and
     /// untracked files): work that exists only in this folder.
     pub uncommitted: u64,
+    /// Files and folders git ignores in the mirror (a wholly ignored folder
+    /// counts once): lockstep never carried them to the host, so they stay
+    /// only in the kept folder. Shown, never a blocker; `None` when git could
+    /// not say.
+    pub ignored: Option<u64>,
     /// Byte-synced files edited in the mirror since their last transfer.
     pub unpushed_sync_edits: u64,
     /// Saved tabs of the project that run on this computer (an agent or shell
@@ -199,6 +204,17 @@ pub fn porcelain_z_entries(out: &[u8]) -> u64 {
         }
     }
     n
+}
+
+/// [`UnpairPreview::ignored`]: `git ls-files --others --ignored
+/// --exclude-standard --directory -z` over the mirror, `None` on any failure.
+fn ignored_entries(local: &Peer) -> Option<u64> {
+    let out = local
+        .run(&["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"])
+        .ok()?;
+    out.status
+        .success()
+        .then(|| out.stdout.split(|b| *b == 0).filter(|f| !f.is_empty()).count() as u64)
 }
 
 /// The tips whose commits must already be on the host: every branch, a
@@ -410,6 +426,7 @@ fn preview_blocking(project_id: &str) -> Result<UnpairPreview, String> {
             }
             porcelain = out.stdout;
             preview.uncommitted = porcelain_z_entries(&porcelain);
+            preview.ignored = ignored_entries(&local);
         }
         let manifest = remote_sync::load_manifest(project_id)?;
         preview.unpushed_sync_edits = unpushed_sync_edits(&manifest, &mirror);
@@ -782,6 +799,25 @@ mod tests {
         assert!(out.moved && out.move_error.is_none(), "{:?}", out.move_error);
         assert_eq!(std::fs::read_to_string(dest.join("notes.txt")).unwrap(), "mine");
         assert!(!mirror.exists());
+    }
+
+    #[test]
+    fn ignored_entries_count_a_wholly_ignored_folder_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let init = std::process::Command::new("git").args(["init", "-q"]).current_dir(repo).status();
+        if !init.is_ok_and(|s| s.success()) {
+            eprintln!("no usable git here; skipped");
+            return;
+        }
+        std::fs::write(repo.join(".gitignore"), ".env\ndata/\n").unwrap();
+        std::fs::write(repo.join(".env"), "TOKEN=x").unwrap();
+        std::fs::create_dir_all(repo.join("data").join("raw")).unwrap();
+        std::fs::write(repo.join("data").join("raw").join("a.csv"), "1").unwrap();
+        std::fs::write(repo.join("data").join("b.csv"), "2").unwrap();
+        std::fs::write(repo.join("tracked.txt"), "t").unwrap();
+        assert_eq!(ignored_entries(&Peer::Local(repo.to_path_buf())), Some(2));
+        assert_eq!(ignored_entries(&Peer::Local(repo.join("missing"))), None);
     }
 
     #[test]

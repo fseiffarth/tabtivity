@@ -1,5 +1,10 @@
 # Tabtivity — Code Review
 
+> **Status (screened against code 2026-11-22):** PARTIAL (2026-06-18 review, line refs stale). Fixed: 4.2 (legacy `git_token` migrated by `services/git/git_hosting.rs`),
+> 4.3 (`detect_mime` removed), 1.4 (`storage::uuid_v4` uses `getrandom`), 2.1 (Ollama via `app_core::rt::try_blocking`), 1.2
+> (`services/fs_confine.rs`). **Still open: 1.1** — `src/components/files/ProjectFilesSettings.tsx:640` invokes
+> `clear_project_session`, which no backend registers (debug-only button does nothing). Not live-tested unless the doc/todo says so.
+
 Date: 2026-06-18
 Scope: full `src/` (React/TS) and `src-tauri/src/` (Rust) tree.
 Reviewer: automated deep review (bugs, runtime performance, duplication,

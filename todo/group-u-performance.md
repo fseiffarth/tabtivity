@@ -1073,17 +1073,17 @@ screen is not.*
 
 ---
 
-*Performance run (`docs/performance_plan.md`, branch `perf`, 2026-10-07…09).
+*Performance run (`docs/done/performance_plan.md`, branch `perf`, 2026-10-07…09).
 One item per agent step; each 🖐️ box is one live click-through from that
-step's section of `docs/performance_handoff.md`. All of it needs a frozen
+step's section of `docs/done/performance_handoff.md`. All of it needs a frozen
 dev build of the branch after landing (`npm run backend:stale` owed for the
 backend steps). Nothing here was run live.*
 
 2400. **Perf run S1: state writes off the GTK thread, the agent-auth keeper,
     `/proc` quick wins.** ✅ Done on branch `perf` (S1 in
-    `docs/performance_handoff.md`), code-complete and **live-unverified**. §7.1,
+    `docs/done/performance_handoff.md`), code-complete and **live-unverified**. §7.1,
     §7.3, §7.2 quick wins. Backend changed.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S1.1) — Rename and reorder tabs while an agent
@@ -1141,9 +1141,9 @@ backend steps). Nothing here was run live.*
 
 2401. **Perf run S2: PDF zoom without re-rasterising per wheel tick, no page
     rebuild on each switch, one reload per TeX build.** ✅ Done on branch `perf`
-    (S2 in `docs/performance_handoff.md`), code-complete and
+    (S2 in `docs/done/performance_handoff.md`), code-complete and
     **live-unverified**. §4.1, §4.2, §4.4.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S2.1) — Open a dense PDF, Ctrl+wheel five notches
@@ -1197,9 +1197,9 @@ backend steps). Nothing here was run live.*
 
 2402. **Perf run S3: viewer scroll no longer rewrites the session; a PDF hidden
     5 min releases its document.** ✅ Done on branch `perf` (S3 in
-    `docs/performance_handoff.md`), code-complete and **live-unverified**. §3.1,
+    `docs/done/performance_handoff.md`), code-complete and **live-unverified**. §3.1,
     §4.3.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S3.1) — Open a long PDF, scroll to the middle, wait 6
@@ -1264,9 +1264,9 @@ backend steps). Nothing here was run live.*
 
 2403. **Perf run S4: terminal activity without per-chunk work or standing
     clocks; lazy xterm construction.** ✅ Done on branch `perf` (S4 in
-    `docs/performance_handoff.md`), code-complete and **live-unverified**. §3.2,
+    `docs/done/performance_handoff.md`), code-complete and **live-unverified**. §3.2,
     §5.2.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S4.1) — Open a project with a shell tab and an agent
@@ -1329,9 +1329,9 @@ backend steps). Nothing here was run live.*
 
 2404. **Perf run S5: a hidden terminal's replay is trimmed with its modes kept;
     activity digests are batched.** ✅ Done on branch `perf` (S5 in
-    `docs/performance_handoff.md`), code-complete and **live-unverified**.
+    `docs/done/performance_handoff.md`), code-complete and **live-unverified**.
     §3.2b, §7.6. Backend changed.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S5.1) — Start an agent in a tab, let it work for a few
@@ -1406,9 +1406,9 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2405. **Perf run S6: the per-tab work is memoised (pane layer, tab bar, file
-    tree rows).** ✅ Done on branch `perf` (S6 in `docs/performance_handoff.md`),
+    tree rows).** ✅ Done on branch `perf` (S6 in `docs/done/performance_handoff.md`),
     code-complete and **live-unverified**. §5.1.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S6.1) — Open a project with many tabs (a dozen is
@@ -1471,10 +1471,10 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2406. **Perf run S7: header pollers, git dots and the launch chain cost less.**
-    ✅ Done on branch `perf` (S7 in `docs/performance_handoff.md`), code-complete
+    ✅ Done on branch `perf` (S7 in `docs/done/performance_handoff.md`), code-complete
     and **live-unverified**. §3.3 first three sites, §3.4, §3.5. Backend
     changed.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S7.1) — Header idle: `pidstat -p $(pgrep -f tabtivity
@@ -1557,12 +1557,12 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2407. **Perf run S8: rarely used panes and overlays load on first use; thin
-    LTO.** ✅ Done on branch `perf` (S8 in `docs/performance_handoff.md`),
+    LTO.** ✅ Done on branch `perf` (S8 in `docs/done/performance_handoff.md`),
     code-complete and **live-unverified**. §6. Backend build profile changed.
     Setup: On a frozen dev build of this branch (after landing). Each item: it
     opens as before; at most a blink of the loading box on the very first open,
     never a blank or broken pane; devtools console free of chunk-load errors.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S8.1) — Launch: main window comes up as before
@@ -1645,11 +1645,11 @@ backend steps). Nothing here was run live.*
 
 2408. **Perf run S9: sleeping tabs — viewer kinds unload after a while hidden
     (Settings → Performance).** ✅ Done on branch `perf` (S9 in
-    `docs/performance_handoff.md`), code-complete and **live-unverified**. §5.3
+    `docs/done/performance_handoff.md`), code-complete and **live-unverified**. §5.3
     pane layer, §4.5 stub. Untested pill `settings.sleepTabs`. Setup: On a
     frozen dev build of this branch (after landing). To see it quickly set
     Settings → Performance → "Unload hidden tabs after" → 5 min.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S9.1) — Settings → Performance: the new row shows "10
@@ -1732,11 +1732,11 @@ backend steps). Nothing here was run live.*
 
 2409. **Perf run S10: sleeping tabs — terminal and agent tabs unload their
     xterm, the program keeps running.** ✅ Done on branch `perf` (S10 in
-    `docs/performance_handoff.md`), code-complete and **live-unverified**. §5.3
+    `docs/done/performance_handoff.md`), code-complete and **live-unverified**. §5.3
     terminal kinds. Untested pill `settings.sleepTabs`. Backend changed. Setup:
     On a frozen dev build of this branch (after landing), Settings → Performance
     → "Unload hidden tabs after" → 5 min.
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S10.1) — Open a shell tab, run `seq 1 200`, then
@@ -1827,10 +1827,10 @@ backend steps). Nothing here was run live.*
 
 2410. **Perf run S11: one shared process table; the Reader follows transcript
     writes instead of polling; quieter remote standing load.** ✅ Done on branch
-    `perf` (S11 in `docs/performance_handoff.md`), code-complete and
+    `perf` (S11 in `docs/done/performance_handoff.md`), code-complete and
     **live-unverified**. §7.2, §7.5, §7.7. Backend changed. Setup: On a frozen
     dev build of this branch (after landing):
-    - [x] 🤖 Automated test — the step's gates in `docs/performance_handoff.md`
+    - [x] 🤖 Automated test — the step's gates in `docs/done/performance_handoff.md`
       (vitest + cargo, all green but the known `MobileHeldPromptStore` date
       pair)
     - [ ] 🖐️ Manual test (S11.1) — Open a Claude tab in Reader view, send a
@@ -1922,7 +1922,7 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2411. **Perf run S12: UI polls stop while the window is unfocused or hidden.** ✅
-    Done on branch `perf` (S12 in `docs/performance_handoff.md`), code-complete
+    Done on branch `perf` (S12 in `docs/done/performance_handoff.md`), code-complete
     and **live-unverified**. `lib/usePoll` (`startPoll`/`usePoll`): a poll stops
     while its window is blurred or hidden, its pane hidden or its gate off,
     catches up once on return, never overlaps runs, and widens ×3 under Energy
@@ -2035,7 +2035,7 @@ backend steps). Nothing here was run live.*
       - [ ] ❌ Doesn't work on macOS
 
 2412. **Earlier perf work (2026-10-01 cluster) — verify it live.** ✅ Done
-    2026-10-01 on `develop`, never given QA boxes (`docs/performance_plan.md`
+    2026-10-01 on `develop`, never given QA boxes (`docs/done/performance_plan.md`
     §8): rtkit nice −10, the settled `/proc` walk, synchronous `/proc` commands
     off the GTK thread, renderer release for long-hidden terminals, the PTY
     output batcher, visible-only streaming, blur quiescence. No UI of their own,
@@ -2150,7 +2150,7 @@ backend steps). Nothing here was run live.*
     - [ ] Implement
 
 2414. **Perf run S13: follow-up fixes from the final review.** ✅ Done on
-    branch `perf` (S13 in `docs/performance_handoff.md`), code-complete and
+    branch `perf` (S13 in `docs/done/performance_handoff.md`), code-complete and
     **live-unverified**. A TeX workspace's other panes (a child `.tex`, a
     graphic, a PDF in the centre) keep their position in the workspace tab
     (`viewerState.texPanes`, at most 32 files); the deck presenter closes the

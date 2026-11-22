@@ -67,8 +67,10 @@ Settings → Voice can turn it off; if the app ever stops while the GPU is worki
 on speech, dictation stays on the processor until you choose **Try the GPU
 again** there.
 
-On Linux the system voice is speech-dispatcher; if none answers, read-aloud
-says it is unavailable.
+Settings → Voice → **Natural voice** reads answers with a neural voice (Piper)
+that runs on this computer, once it is installed for the read-aloud language;
+otherwise the system voice reads. On Linux the system voice is speech-dispatcher;
+if none answers, read-aloud says it is unavailable.
 
 ## Hands-free (experimental)
 

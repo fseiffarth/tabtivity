@@ -2967,7 +2967,7 @@ pub async fn ollama_context_plan() -> OllamaContextPlan {
 /// last request (Ollama's default: 5 minutes). A request can ask for its own,
 /// but agents talk to Ollama through `/v1`, which cannot — so an idle local
 /// OpenCode tab's model was gone after 5 minutes, and with it the prompt Ollama
-/// had already read (`docs/cli_caching_plan.md` phase 5).
+/// had already read (`docs/done/cli_caching_plan.md` phase 5).
 const KEEP_ALIVE_VAR: &str = "OLLAMA_KEEP_ALIVE";
 
 /// The values the setting may hold; anything else (a hand edit) is unset.
@@ -3180,7 +3180,8 @@ fn is_mid_sentence(prefix: &str) -> bool {
     }
 }
 
-/// Prose needs chat instructions even when the loaded model supports FIM.
+/// Natural-language text: sentence stops, and on the chat prompt (a model
+/// without `insert`) the keep-the-language-and-markup instruction.
 fn is_completion_prose(language: &str) -> bool {
     matches!(language.to_ascii_lowercase().as_str(), "" | "text" | "plain" | "txt" | "markdown" | "md" | "mdx" | "tex" | "latex" | "rst")
 }
@@ -3879,10 +3880,11 @@ fn sample_candidate(body: &mut serde_json::Value, candidate: u32) {
 }
 
 /// Whether a request goes the FIM way first (plan, fixed decision 1): a model
-/// with `insert` always does for code; prose stays on chat so its language and
-/// markup instructions apply. Pure.
-fn uses_fim(language: &str, insert: bool) -> bool {
-    insert && !is_completion_prose(language)
+/// with `insert` always does, prose included. On the chat prompt a small FIM
+/// model (qwen2.5-coder 1.5b) answers a TeX abstract with the `\end{abstract}`
+/// after the caret; through FIM it continues the sentence. Pure.
+fn uses_fim(insert: bool) -> bool {
+    insert
 }
 
 /// What one attempt sends: the endpoint, the body, the bytes of references it
@@ -4025,7 +4027,7 @@ pub async fn complete_text(
         let suffix = truncate_chars(&suffix, 4096);
         let prose = is_completion_prose(&language);
         let sentence = mode == CompletionMode::Sentence && trailing_comment_intent(&prefix, &language).is_none();
-        let fim = uses_fim(&language, insert == Some(true));
+        let fim = uses_fim(insert == Some(true));
         let automatic = trigger.as_deref() == Some("auto");
         for use_fim in if fim { vec![true, false] } else { vec![false] } {
             let CompletionPlan { endpoint, mut body, reference_bytes, references_dropped } = completion_plan(

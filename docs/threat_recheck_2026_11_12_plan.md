@@ -1,5 +1,8 @@
 # Threat analysis extension — new features, 2026-11-12
 
+> **Status (screened against code 2026-11-22):** REFERENCE (the review method; its output is the handoff). The review ran: findings are gaps 105–114 in `docs/threat_model.md`. 105–111 are fixed in code (`ViewBudget` in `src/lib/viewers/tensorboard.ts`, `print_mcp` `claim`/`State::Printing`, `services/sync_handoff.rs`, `agent_privacy::recheck_spawn_in`, `binaryFilesPaths` in `src/lib/viewers/diff.ts`); 112 and 113 remain open; 114's plain-text paste case was closed by `5d8906dfe`. "Plan only" below describes the plan at writing. Not live-verified.
+
+
 ## Status and authorization
 
 **Plan only. No review findings, implementation changes or fixes are authorized
@@ -19,8 +22,8 @@ instructions from earlier threat-recheck plans.
 - Existing analysis: `docs/threat_model.md`, including its tier definitions,
   legend and gaps 1–104.
 - Last broad review: `b3abe5ba`, 2026-11-04. Evidence and previous fix decisions:
-  `docs/threat_recheck_2026_11_04_handoff.md` and
-  `docs/threat_recheck_2026_11_04_plan.md`.
+  `docs/done/threat_recheck_2026_11_04_handoff.md` and
+  `docs/done/threat_recheck_2026_11_04_plan.md`.
 - Previous fix completion: `1416bba3`, 2026-11-06, as recorded in that plan.
 - Inventory endpoint: `214933ab5fd36cac71836cb26f2acd52c65ccb43` on `develop`.
   Use `b3abe5ba..214933ab5` for the initial feature inventory, not just commits

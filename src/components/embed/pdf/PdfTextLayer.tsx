@@ -27,6 +27,11 @@
  * what makes always-on affordable at all — the cost is one text read per page the
  * reader actually scrolls to, which is what Ctrl+F already pays.
  *
+ * **Selecting is pdf.js's viewer behaviour, not the bare layer's.** The spans alone
+ * make a drag jump to the page's end at every gap between words — the whole of a
+ * LaTeX page — so the `endOfContent` block and the selection tracking pdf.js keeps in
+ * its viewer are ported in `textSelection.ts` and attached once the spans are in.
+ *
  * **Zoom costs nothing.** pdf.js lays the spans out in the page's own units and
  * multiplies by `--total-scale-factor` in CSS, so a zoom is one custom property away and
  * the text content is never re-read. That is the same bargain the link boxes and the
@@ -35,6 +40,7 @@
 import { useEffect, useRef } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import { attachTextSelection, TEXT_LAYER_CLASS } from "./textSelection";
 
 export function PdfTextLayer({
   doc,
@@ -56,6 +62,7 @@ export function PdfTextLayer({
     if (!container) return;
     let cancelled = false;
     let layer: { cancel: () => void } | null = null;
+    let detach: (() => void) | null = null;
     void (async () => {
       try {
         const page = await doc.getPage(pageNumber);
@@ -64,6 +71,7 @@ export function PdfTextLayer({
           scale: 1,
           rotation: (((page.rotate + rot) % 360) + 360) % 360,
         });
+        container.style.setProperty("--user-unit", String(page.userUnit ?? 1));
         const source = await page.getTextContent();
         if (cancelled || !ref.current) return;
         // Built at scale 1 with the zoom carried by `--scale-factor` (set below):
@@ -76,6 +84,10 @@ export function PdfTextLayer({
         });
         layer = built;
         await built.render();
+        if (cancelled) return;
+        // What makes a drag across the spans select like text rather than jump to
+        // the page's end at every gap between words (`textSelection.ts`).
+        detach = attachTextSelection(container);
       } catch {
         /* A page whose text cannot be read simply offers no selection — the same
            best-effort footing the link and remark reads stand on. */
@@ -84,6 +96,7 @@ export function PdfTextLayer({
     return () => {
       cancelled = true;
       layer?.cancel();
+      detach?.();
       // pdf.js appends into the container and never clears it, so a re-render (a
       // turned page, a different document) would stack a second set of spans on the
       // first and every selection would come back doubled.
@@ -94,12 +107,9 @@ export function PdfTextLayer({
   return (
     <div
       ref={ref}
-      className="file-viewer-pdf-text-layer"
-      // The zoom, as the custom properties pdf.js's own layout arithmetic reads —
-      // `--total-scale-factor` sizes every span's font (pdf.js 5+), `--scale-factor`
-      // is the older name. A React style is the right home for them: they change on
-      // every zoom step, while the spans inside are built once.
-      style={{ "--scale-factor": scale, "--total-scale-factor": scale } as React.CSSProperties}
+      className={TEXT_LAYER_CLASS}
+      // Zoom changes in CSS while the page's text runs stay mounted.
+      style={{ "--scale-factor": scale } as React.CSSProperties}
     />
   );
 }

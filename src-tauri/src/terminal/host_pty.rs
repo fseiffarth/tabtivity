@@ -217,7 +217,7 @@ where
         created,
         master: Box::new(HostMaster(handle.clone())),
         reader: Box::new(OutputReader { rx: out_rx, pending: Vec::new(), pos: 0 }),
-        writer: Box::new(InputWriter(input_tx)),
+        writer: Box::new(InputWriter { tx: input_tx, shared: handle.shared.clone() }),
         child: Box::new(HostChild(handle.clone())),
         handle,
     })
@@ -236,11 +236,19 @@ async fn pump<IO>(
     let (mut rd, mut wr) = attached.into_split();
     let reading = shared.clone();
     let mut reader = tokio::spawn(async move {
+        // The reader dropped while a handle lives is no end: its output is
+        // dropped and the stream runs on until every handle is gone (the
+        // writer half sees that). Ending here instead made the stream's life
+        // hang on whether output — the attach's own snapshot — came before
+        // or after the drop.
+        let mut out = Some(out);
         loop {
             match rd.next().await {
                 Ok(Some(StreamEvent::Output(bytes))) => {
-                    if out.send(bytes).await.is_err() {
-                        break;
+                    if let Some(tx) = &out {
+                        if tx.send(bytes).await.is_err() {
+                            out = None;
+                        }
                     }
                 }
                 // The repaint's bytes follow as output.
@@ -356,20 +364,29 @@ impl Read for OutputReader {
 /// Bounded: a write past [`INPUT_CAP`] chunks in flight waits. From a plain
 /// thread it blocks; on a multi-thread runtime's worker it waits in
 /// `block_in_place`; on a current-thread runtime it answers `WouldBlock`.
-struct InputWriter(mpsc::Sender<Vec<u8>>);
+/// Once the stream says it ended, a write is refused: `pump` stops its input
+/// half only after the end is published, and a write in that gap would
+/// otherwise be queued for a session that is gone.
+struct InputWriter {
+    tx: mpsc::Sender<Vec<u8>>,
+    shared: Arc<Shared>,
+}
 
 impl InputWriter {
     fn send(&self, bytes: Vec<u8>) -> io::Result<()> {
         use tokio::sync::mpsc::error::TrySendError;
-        let bytes = match self.0.try_send(bytes) {
+        if self.shared.lock().ended {
+            return Err(closed());
+        }
+        let bytes = match self.tx.try_send(bytes) {
             Ok(()) => return Ok(()),
             Err(TrySendError::Closed(_)) => return Err(closed()),
             Err(TrySendError::Full(bytes)) => bytes,
         };
         let sent = match tokio::runtime::Handle::try_current() {
-            Err(_) => self.0.blocking_send(bytes),
+            Err(_) => self.tx.blocking_send(bytes),
             Ok(rt) if rt.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-                tokio::task::block_in_place(|| self.0.blocking_send(bytes))
+                tokio::task::block_in_place(|| self.tx.blocking_send(bytes))
             }
             Ok(_) => return Err(io::Error::new(io::ErrorKind::WouldBlock, "the session stream's input is full")),
         };

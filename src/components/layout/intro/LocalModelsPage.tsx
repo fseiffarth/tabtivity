@@ -543,7 +543,7 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
         </IntroStep>
 
         <IntroStep num={6} title={t("intro.models.step6Title")}>
-          <div className="settings-help">{t("intro.models.step6Body", { modifier: modifierLabel(), altRight: chordLabel({ key: "ArrowRight", alt: true }) })}</div>
+          <div className="settings-help">{t("intro.models.step6Body", { modifier: modifierLabel(), ctrlRight: chordLabel({ key: "ArrowRight", ctrl: true }), altRight: chordLabel({ key: "ArrowRight", alt: true }) })}</div>
         </IntroStep>
       </IntroSteps>
 

@@ -1,6 +1,6 @@
 //! The CLI overview: per agent CLI, the plan its login names and the usage
 //! windows it last reported — the side panel's CLIs view and the phone's CLIs
-//! section (`docs/cli_overview_plan.md`).
+//! section (`docs/done/cli_overview_plan.md`).
 //!
 //! Everything here is read, never asked for: the plan comes off Tabtivity's
 //! own login store (`agent_auth`), which holds the one copy of each CLI's

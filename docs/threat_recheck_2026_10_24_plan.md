@@ -1,9 +1,8 @@
 # Threat-model recheck 2026-10-24 — findings and fix plan
 
-Status: **steps 1–26 implemented, none live-verified (gap 51 mitigated, not
-fixed); step 27 (docs) done.** See "Implementation notes / deviations" below.
-A phone-only follow-up (2026-10-26, gaps 65–70, no high, nothing fixed yet) is
-under "Phone analysis" near the end.
+> **Status (screened against code 2026-11-22):** PARTIAL (fixes landed). Steps 1–26 are in code (gaps 42–64 read "Fixed, not live-verified" in `docs/threat_model.md`; 51 is mitigated, not fixed). The "Phone analysis" section's steps P1–P6 were only partly built: gap 65 was fixed 2026-11-17; 66–70 stay open (low). Not live-tested.
+
+
 Three read-only reviewers (A, B, C)
 re-checked `docs/threat_model.md` against the code at `21eadf64`, then
 cross-reviewed each other's drafts at `ff9f83ab`. The last recheck landed at

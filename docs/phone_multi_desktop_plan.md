@@ -1,6 +1,8 @@
 # One phone, several desktops — plan
 
-Status: planned 2026-11-14; Phases 0–2 and a minimal Phase 3 built, never live. TODO: `todo/group-h-crossplatform.md`
+> **Status (screened against code 2026-11-22):** PARTIAL. Phases 0-2 and the minimal Phase 3 are in code: `mobile_control/linked.rs`, `src/components/mobile/LinkedDesktops.tsx` (Settings → Mobile), the per-port cookie, `mobile-web/src/shell/` (`DesktopShell`, `DesktopFrame`, `linkedDesktops`, `frameBridge`, plus `frameGuard.ts` / `FrameGuardCard.tsx` which closed the clickjacking gap named in Phase 5), switcher commit `bb964b68b`; register rows `mobile.shell.switcher`, `.framedDesktop`, `.frameGuard`. Not built: Phase 4 (push relay through the home: no `/api/v1/relay`), the picker lamps / badges and deep links listed as out of scope in the handoff. Not live-tested.
+
+Plan text: planned 2026-11-14. TODO: `todo/group-h-crossplatform.md`
 31cs (this plan), 31ct (Phase 0's cookie bug). One installed phone app (the
 "home": the desktop it was installed from) switches between several running
 Tabtivity desktops, one on screen at a time. Access model this extends:

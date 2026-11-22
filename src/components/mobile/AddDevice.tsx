@@ -6,6 +6,7 @@ import {
   useMobileHostStatusStore,
   type MobileHostRuntimeStatus,
 } from "../../stores/mobileHostStatus";
+import { pairedIdsNow, usePhoneShareStore, watchPairing } from "../../stores/phoneShare";
 
 /** A one-time pairing code with the private address a phone opens to use it. */
 export interface Pairing {
@@ -45,11 +46,17 @@ async function requestPairing(): Promise<Pairing> {
 
 /** The Add device flow's state, shared by the header Mobile menu and Settings.
  *  A code is dropped when it expires: one still on screen after it stopped
- *  working is worse than none. */
+ *  working is worse than none. It is dropped too once its phone has paired
+ *  (`watchPairing`, which then asks which projects that phone reaches). */
 export function useAddDevice() {
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pairedSeq = usePhoneShareStore((s) => s.pairedSeq);
+
+  useEffect(() => {
+    if (pairedSeq > 0) setPairing(null);
+  }, [pairedSeq]);
 
   useEffect(() => {
     if (!pairing) return;
@@ -67,7 +74,12 @@ export function useAddDevice() {
     setError(null);
     setPairing(null);
     try {
-      setPairing(await requestPairing());
+      // The phones paired before the code exists: the first id beyond them is
+      // the one this code paired.
+      const known = await pairedIdsNow();
+      const next = await requestPairing();
+      setPairing(next);
+      if (known) watchPairing(known, next.expiresAt);
     } catch (reason) {
       setError(String(reason));
     } finally {

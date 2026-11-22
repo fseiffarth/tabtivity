@@ -2,8 +2,8 @@
 
 Agent tabs of one local project leave each other short plain-text messages
 through a mailbox Tabtivity routes outside their fences. Plan and the user's
-decisions: `docs/tab_messaging_mcp_plan.md`; build notes:
-`docs/tab_messaging_mcp_handoff.md`.
+decisions: `docs/done/tab_messaging_mcp_plan.md`; build notes:
+`docs/done/tab_messaging_mcp_handoff.md`.
 
 Tools on `/mcp/tabs` (`Caller::Tabs`, server `<slug>-tabs`,
 `services::tabs_mcp`; `tabtivity-mcp call tabs …` for CLIs without a wired

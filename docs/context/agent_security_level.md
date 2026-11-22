@@ -1,6 +1,6 @@
 # Global agent security level — proposed plan
 
-Status: design only; no implementation has been made.
+Status: design only; no implementation has been made (checked against code 2026-11-22: no `agent_security_level` setting exists).
 
 ## Intent and levels
 
@@ -68,7 +68,7 @@ unavailable, refusal is required rather than silently weakening the level.
 
 Put the selector in Settings with all five names and a short description of
 what each stage permits. Show that existing detailed controls remain active
-within the ceiling. Put all display strings in `src/lib/i18n.ts`, and register
+within the ceiling. Put all display strings in `src/lib/i18n/` (English in `en.ts`), and register
 an `UntestedTag` for the new, not-live-verified control.
 
 Test settings migration and JSON round trips; every launch and resume path;

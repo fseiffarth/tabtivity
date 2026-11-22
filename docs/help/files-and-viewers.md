@@ -70,11 +70,12 @@ image pan come back when you reopen the file or restart Tabtivity.
 | LaTeX | `.tex` | A workspace tab per document — see `latex-and-presenter` |
 | PDF | `.pdf` | Zoom, find, contents, arrange pages, black out text, mark up, print — see `pdf-and-markup` |
 | Presentation deck | `.eldeck.json` | Slides over a PDF or LaTeX base (experimental) |
-| Images | `.png`, `.jpg`, `.webp`, `.bmp`, … | Zoom to the cursor, pan, **✎ Annotate** |
+| Images | `.png`, `.jpg`, `.webp`, `.bmp`, … | Zoom to the cursor, pan, **✎ Annotate**, **Mark up** |
 | Animated GIF | `.gif` | Play/pause, step frames, scrub, speed, loop |
 | Table | `.csv`, `.tsv` | Edit cells and headers, add/delete rows, filter, sort, resize columns |
 | Jupyter notebook | `.ipynb` | Read-only: cells and their outputs |
-| Diff / patch | `.diff`, `.patch` | Coloured additions and deletions |
+| Diff / patch | `.diff`, `.patch` | Coloured additions and deletions, word-level highlights within a changed line, folded unchanged stretches and next/previous-change keys |
+| TensorBoard | `events.out.tfevents.*` files, or a folder of them | Training curves (scalars) drawn by Tabtivity itself, one chart per tag, with smoothing and a tag filter; refreshes while a run writes. No TensorBoard server needed |
 | OpenDocument text | `.odt` | Read-only |
 | Spreadsheet | `.xlsx`, `.xls`, `.xlsm` | Read-only grid with a sheet picker, sort and filter |
 | SQLite | `.db`, `.sqlite`, `.sqlite3` | Read-only table list and rows |
@@ -109,6 +110,10 @@ read-only instead of guessing. **Source** always opens the full text editor.
 **✎ Annotate** in the image viewer adds pen, rectangle, arrow and text marks
 with colour and width controls, undo and clear. Saving flattens them into a
 copy (`<name>-annotated.png`), or overwrites a `.png` if you choose.
+
+**Mark up**, beside it, works as on a PDF: draw on the picture, then **Submit**
+to send it to an agent tab of the project (see `pdf-and-markup`). It is absent
+where there is nothing to send to, such as remote projects and popouts.
 
 ## Autocomplete and spell check
 

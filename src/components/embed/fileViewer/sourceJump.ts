@@ -1,3 +1,4 @@
+import type { PdfWordPhrase } from "../../../lib/viewers/tex/reverseWord";
 import { emit, listen } from "@tauri-apps/api/event";
 import { useTabsStore, type TabEntry } from "../../../stores/tabs";
 import { tabsOnScreen } from "../../../stores/rootOverlay";
@@ -19,6 +20,7 @@ interface SourceJumpEnvelope {
   input: string;
   line: number;
   column: number;
+  phrase?: PdfWordPhrase;
   /** The main `.tex` that produces the PDF (the clicked source's root). Used to
    *  route the opened source into the subwindow that already holds that main
    *  `.tex`. Absent, or unmatched in the receiving window (its tab isn't open
@@ -113,19 +115,17 @@ function isTexSource(path: string): boolean {
  * instead of switching the center to it.
  */
 function routeSourceJump(
-  input: string,
-  line: number,
-  column: number,
-  root: string | undefined,
+  jump: SourceJumpEnvelope,
   fallback: () => void,
 ) {
+  const { input, line, column, anchorPath, phrase } = jump;
   if (!isTexSource(input)) {
     fallback();
     return;
   }
-  focusTexWorkspaceForSource(input, root)
+  focusTexWorkspaceForSource(input, anchorPath)
     .then((handled) => {
-      if (handled) useEditorJumpStore.getState().requestJump(input, line, column);
+      if (handled) useEditorJumpStore.getState().requestJump(input, line, column, phrase);
       else fallback();
     })
     .catch(() => fallback());
@@ -138,23 +138,22 @@ function routeSourceJump(
  *  that already holds that main `.tex` (resolved to its tab here, so the group
  *  lookup runs in the window that owns the layout) rather than in whichever group
  *  happens to be focused. */
-function openStandaloneSourceTab(input: string, line: number, column: number, anchorPath?: string) {
+function openStandaloneSourceTab({ input, line, column, anchorPath, phrase }: SourceJumpEnvelope) {
   const dir = dirname(input) || "/";
   const label = basename(input);
   const linkingTabKey = anchorPath ? tabKeyForPath(anchorPath) : undefined;
   openLinkedFile(linkingTabKey, dir, { path: input, viewer: viewerForPath(input), label });
-  useEditorJumpStore.getState().requestJump(input, line, column);
+  useEditorJumpStore.getState().requestJump(input, line, column, phrase);
 }
 
 /** Handle a reverse-search jump in THIS window: into an open TeX workspace when
  *  one owns the source, else open/focus the standalone source tab. The local half
  *  of {@link jumpToSource}, and what {@link listenSourceJump} runs for a jump
  *  broadcast from a detached PDF window. */
-function applySourceJump(input: string, line: number, column: number, anchorPath?: string) {
+function applySourceJump(jump: SourceJumpEnvelope) {
+  const { input, anchorPath } = jump;
   alignFileTabSide(input, anchorPath);
-  routeSourceJump(input, line, column, anchorPath, () =>
-    openStandaloneSourceTab(input, line, column, anchorPath),
-  );
+  routeSourceJump(jump, () => openStandaloneSourceTab(jump));
 }
 
 /**
@@ -183,23 +182,23 @@ function applySourceJump(input: string, line: number, column: number, anchorPath
  * subwindow that already holds that main `.tex`, rather than whichever group
  * happens to be focused.
  */
-export function jumpToSource(input: string, line: number, column = 0, anchorPath?: string) {
+export function jumpToSource(input: string, line: number, column = 0, anchorPath?: string, phrase?: PdfWordPhrase) {
   // An open tab of this file showing the other side of a remote project is
   // switched to this side first, so the routing below lands on it.
   alignFileTabSide(input, anchorPath);
   // A `.tex` source owned by an open workspace is centered there first (in this
   // window, or wherever the workspace lives — the store write reaches it); only a
   // source no workspace owns falls through to the standalone routing below.
-  routeSourceJump(input, line, column, anchorPath, () =>
-    jumpToStandaloneSource(input, line, column, anchorPath),
-  );
+  const jump = { input, line, column, anchorPath, phrase };
+  routeSourceJump(jump, () => jumpToStandaloneSource(jump));
 }
 
 /** The standalone (non-workspace) reverse-search routing: scroll an already-open
  *  editor, open/focus the source tab here, or delegate to the main window. */
-function jumpToStandaloneSource(input: string, line: number, column: number, anchorPath?: string) {
+function jumpToStandaloneSource(jump: SourceJumpEnvelope) {
+  const { input, line, column, phrase } = jump;
   if (hasMountedEditor(input)) {
-    useEditorJumpStore.getState().requestJump(input, line, column);
+    useEditorJumpStore.getState().requestJump(input, line, column, phrase);
     return;
   }
   const viewer = viewerForPath(input);
@@ -207,12 +206,12 @@ function jumpToStandaloneSource(input: string, line: number, column: number, anc
     .getState()
     .tabs.some((t) => t.kind === "embed" && t.viewer === viewer && t.embedPath === input);
   if (hasTab || isMainWindow()) {
-    openStandaloneSourceTab(input, line, column, anchorPath);
+    openStandaloneSourceTab(jump);
     return;
   }
   // Detached window without the source tab: ask the main window to handle it.
   try {
-    emit(SOURCE_JUMP_EVENT, { input, line, column, anchorPath } satisfies SourceJumpEnvelope)
+    emit(SOURCE_JUMP_EVENT, jump)
       .catch(() => {});
   } catch {
     /* no Tauri event bus available */
@@ -231,8 +230,7 @@ export async function listenSourceJump(): Promise<() => void> {
     // Registered once at startup and hands back its unlisten — not a component lifecycle.
     // eslint-disable-next-line no-restricted-syntax
     return await listen<SourceJumpEnvelope>(SOURCE_JUMP_EVENT, (ev) => {
-      const { input, line, column, anchorPath } = ev.payload;
-      applySourceJump(input, line, column, anchorPath);
+      applySourceJump(ev.payload);
     });
   } catch {
     return () => {};

@@ -1,5 +1,7 @@
 # Question detection — handoff
 
+> **Status (screened against code 2026-11-22):** Log of `docs/question_detection_plan.md` (S0-S5, final review, follow-ups of 11-18); all on develop (`waiting_question_entry`, `askedQuestion.ts`, the Reader/phone merge). Open: the "Flagged for user" items and the live click-through; other CLIs not started. Not live-tested.
+
 Plan: `docs/question_detection_plan.md`. Each agent edits only its own section
 (use the Edit tool on this file in the **main checkout**,
 `docs/question_detection_handoff.md`).

@@ -1,5 +1,8 @@
 # Git lane: pull requests and the CI autopilot — agents open PRs and fix red CI
 
+> **Status (screened against code 2026-11-22):** NOT-STARTED. `services/mcp/git_push_mcp.rs` still offers only `git_push_status`, `git_push`, `git_push_cancel`, `git_release`, `ci_runs`, `ci_run`, `ci_security_alerts`; no `pr_list`/`pr_view`/`pr_create`/`pr_comment`/`ci_watch` anywhere in `src-tauri/src`. The user's decisions (2026-11-19) stand. Not live-tested.
+
+
 Status: plan only, nothing implemented (2026-11-19). The user's decisions are
 recorded under "Decisions" at the end. Builds on the agent git lane
 (`docs/context/git_push_mcp.md`, `services::mcp::git_push_mcp`, CI reads in

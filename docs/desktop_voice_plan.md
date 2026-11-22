@@ -1,13 +1,6 @@
 # Desktop voice: dictation, read-aloud and hands-free in the Chat
 
-Status: plan (2026-10-21; reviewed and amended 2026-10-22 and, before
-Batch A, 2026-10-23). Step 0 partly done 2026-10-22: build, API and CI probes
-recorded under step 0; the host's audio probes (`scripts/voice-probe/`) are
-still for the user to run. Both of step 0's decisions are made (2026-10-23).
-Step 1 and steps 2a/2b built; steps 3 and 2c built; steps 4, 5 and 6 built
-2026-10-25 on `feat/voice-hands-free` and landed on `develop` 2026-10-28
-(the phone loop moved into `screens/terminal/useHandsFree.ts` after the
-Terminal split; none run live). Next: the test gate.
+> **Status (screened against code 2026-11-22):** PARTIAL. Built: steps 1-6 and the later steps 7-8 — `shared/voice.ts`, `src-tauri/src/services/voice/` (capture, vad, stt, session, tts, ssip, models, gpu, piper), `src/lib/voice/`, `ReaderVoice.tsx` / `useLiveDictation.ts`, the phone loop in `mobile-web/src/screens/terminal/useHandsFree.ts`, Piper (4b3bf94a5) and the GPU (a79e5a8ca); `docs/context/voice.md` and `docs/help/talking-to-an-agent.md` are step 6's docs. Still open: step 9 (desktop hands-free navigation, `docs/voice_navigation_plan.md`), step 10 (the phone as mic, `docs/mobile_speech_plan.md`), the host audio probes in `scripts/voice-probe/`, echo cancellation, and the live test gate. Not live-tested.
 
 Order of work: **phase 1** (steps 0–6) ships with the OS voice, then the user
 tests it live. **Phase 2** (Piper, step 7) happens only if that test finds
@@ -144,7 +137,7 @@ Defaults chosen here (an implementer may not change them; the user may):
   German and English on the CPU. The catalog also offers `base` q5_1 (~60 MB,
   fast and rough) and `large-v3-turbo` q5_0 (~550 MB, best; measured 14 s for an
   11 s clip on the CPU, 1.1 s on the GPU, not the 2–4 s first estimated).
-  The GPU backend landed as step 8: `docs/voice_gpu_plan.md`.
+  The GPU backend landed as step 8: `docs/done/voice_gpu_plan.md`.
 - **Commands are `Client` class.** The microphone and speakers belong to the
   machine the user sits at (`services::command_class`). A browser client hides
   the mic button.
@@ -305,7 +298,7 @@ cmake-rs setting `CMAKE_OSX_ARCHITECTURES`, with `GGML_NATIVE=OFF` now set.
   `set_detect_language(bool)`. `WhisperContext`, `WhisperState` and
   `WhisperVadContext` are `Send + Sync`.
 - Features: default empty = CPU only; `vulkan`/`metal` are step 8's
-  (`docs/voice_gpu_plan.md`, turned on through `whisper-rs-sys`);
+  (`docs/done/voice_gpu_plan.md`, turned on through `whisper-rs-sys`);
   `cuda`/`openmp` stay off.
 
 **`tts` 0.26.3** (Windows/macOS only, as planned: on Linux it would link
@@ -902,7 +895,7 @@ user, not on macOS); echo cancellation and the Chat install card are open
 ### 8. GPU and more voices
 
 - Done: a GPU backend for whisper.cpp, Vulkan on Linux/Windows, Metal on macOS
-  (`docs/voice_gpu_plan.md`).
+  (`docs/done/voice_gpu_plan.md`).
 - More voices per language and a speaking rate that follows the Settings
   slider, for whichever engines exist by then.
 

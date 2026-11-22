@@ -41,7 +41,7 @@ export function useEditorJump(path: string) {
     return () => unregisterEditor(path);
   }, [path]);
   return {
-    gotoLine: req ? { line: req.line, column: req.column, nonce: req.nonce } : undefined,
+    gotoLine: req ?? undefined,
     onGotoApplied,
   };
 }

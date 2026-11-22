@@ -1,5 +1,8 @@
 # Phone hands-free voice — implementer handoff
 
+> **Status (screened against code 2026-11-22):** REFERENCE (log of `docs/phone_voice_plan.md`: S0, S1, S2, S6 and their reviews landed; see that plan's status for the steps still open). Not live-tested.
+
+
 Plan: `docs/phone_voice_plan.md`. Each agent step appends its section: what
 landed, the interfaces it exposed, its hot-file additions, what it left open.
 

@@ -1,3 +1,4 @@
+import type { PdfWordPhrase } from "../../../lib/viewers/tex/reverseWord";
 import { createContext, useContext } from "react";
 
 /**
@@ -21,7 +22,7 @@ export interface TexPdfHost {
   showPdf: (pdf: string) => boolean;
   /** Show the source `input` in the host's pane, caret at `line`/`column`
    *  (1-based; column 0 = the line's start). */
-  showSource: (input: string, line: number, column: number) => boolean;
+  showSource: (input: string, line: number, column: number, phrase?: PdfWordPhrase) => boolean;
 }
 
 export const TexPdfHostContext = createContext<TexPdfHost | null>(null);

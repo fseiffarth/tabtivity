@@ -1,5 +1,5 @@
 /**
- * The restore half of stopping agent tabs (`docs/agent_tab_stop_plan.md` §6):
+ * The restore half of stopping agent tabs (`docs/done/agent_tab_stop_plan.md` §6):
  * with the cap on, a layout load brings every agent tab no static guard holds
  * for back stopped — nothing spawns for it — and notes it for the restore
  * wake; root, a Host session, Gemini and an auto-continuing tab come back

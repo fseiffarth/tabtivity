@@ -1,3 +1,4 @@
+import type { PdfWordPhrase } from "../../lib/viewers/tex/reverseWord";
 import { create } from "zustand";
 import { broadcast, listenOtherWindows } from "../../lib/window/crossWindow";
 
@@ -24,6 +25,7 @@ export interface JumpRequest {
    *  rows, `\ref` jumps and code links name one). */
   column: number;
   nonce: number;
+  phrase?: PdfWordPhrase;
 }
 
 /** Tauri event carrying an editor jump across the main/detached window boundary. */
@@ -35,30 +37,30 @@ interface EditorJumpStore {
    *  `column`. `column` 0 means "line start".
    *  Applies locally AND broadcasts so an editor hosted in another (detached)
    *  window scrolls too (#42). */
-  requestJump: (path: string, line: number, column?: number) => void;
+  requestJump: (path: string, line: number, column?: number, phrase?: PdfWordPhrase) => void;
   /** Record a jump in THIS window's store (the local half of requestJump, and
    *  what `listenEditorJump` calls for a jump broadcast from another window). */
-  applyJump: (path: string, line: number, column?: number) => void;
+  applyJump: (path: string, line: number, column?: number, phrase?: PdfWordPhrase) => void;
   /** Clear the pending request for `path` once the editor has applied it. */
   consume: (path: string) => void;
 }
 
 export const useEditorJumpStore = create<EditorJumpStore>((set, get) => ({
   requestsByPath: {},
-  applyJump: (path, line, column = 0) =>
+  applyJump: (path, line, column = 0, phrase) =>
     set((s) => {
       const prev = s.requestsByPath[path];
       return {
         requestsByPath: {
           ...s.requestsByPath,
-          [path]: { line, column, nonce: (prev?.nonce ?? 0) + 1 },
+          [path]: { line, column, phrase, nonce: (prev?.nonce ?? 0) + 1 },
         },
       };
     }),
-  requestJump: (path, line, column = 0) => {
-    get().applyJump(path, line, column);
+  requestJump: (path, line, column = 0, phrase) => {
+    get().applyJump(path, line, column, phrase);
     // In case the editor is popped out into another window (#42).
-    broadcast(EDITOR_JUMP_EVENT, { path, line, column });
+    broadcast(EDITOR_JUMP_EVENT, { path, line, column, phrase });
   },
   consume: (path) =>
     set((s) => {
@@ -78,9 +80,9 @@ export const useEditorJumpStore = create<EditorJumpStore>((set, get) => ({
  * a Tauri context.
  */
 export function listenEditorJump(): Promise<() => void> {
-  return listenOtherWindows<{ path: string; line: number; column: number }>(
+  return listenOtherWindows<{ path: string; line: number; column: number; phrase?: PdfWordPhrase }>(
     EDITOR_JUMP_EVENT,
-    ({ path, line, column }) => useEditorJumpStore.getState().applyJump(path, line, column),
+    ({ path, line, column, phrase }) => useEditorJumpStore.getState().applyJump(path, line, column, phrase),
   );
 }
 

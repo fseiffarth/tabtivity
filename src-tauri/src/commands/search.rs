@@ -11,7 +11,7 @@
 //!
 //! A remote-only project has no local tree: its search runs on the host, one
 //! bounded `grep` over the pooled SSH master (`services::remote::host_search`,
-//! `docs/remote_only_projects_plan.md` E6a), parsed into the same
+//! `docs/done/remote_only_projects_plan.md` E6a), parsed into the same
 //! [`SearchMatch`]. A plain Remote project keeps searching its mirror (the
 //! frontend passes the mirror as `project_dir`).
 

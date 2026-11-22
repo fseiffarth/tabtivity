@@ -2,7 +2,7 @@
  * The markup dock's six slots as both views draw them — the desktop's
  * `PdfMarkupDock` and the phone's palette (`MarkupView`): each slot's icon
  * and name, the eraser's and the lasso's modes, and the Proof slot's marks
- * (`docs/markup_notes_style_plan.md`). Pure drawing and keys, no state.
+ * (`docs/done/markup_notes_style_plan.md`). Pure drawing and keys, no state.
  */
 import type { ReactNode } from "react";
 import type { TranslationKey } from "../../../src/lib/i18n";

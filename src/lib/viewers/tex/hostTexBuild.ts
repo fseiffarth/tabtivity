@@ -1,6 +1,6 @@
 /**
  * The TeX Compile of a file on a remote host: any file of a host-pinned project
- * (VM, remote-only; `docs/remote_only_projects_plan.md` D6) and a remote
+ * (VM, remote-only; `docs/done/remote_only_projects_plan.md` D6) and a remote
  * project's file read from its Remote side. There is no local tree for
  * `compile_tex` to build in, so `TexView` calls `compile_tex_host`, which runs
  * latexmk on the host over SSH in the background and answers like a local

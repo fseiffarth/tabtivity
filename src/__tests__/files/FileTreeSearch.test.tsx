@@ -10,7 +10,7 @@
  *   search box (its backends walk the local path);
  * - a host-pinned project searches its host: the project directory plus a
  *   project-relative `relRoot`, and one `confirmed` retry after the HPC
- *   question (`docs/remote_only_projects_plan.md`, E6a/F4).
+ *   question (`docs/done/remote_only_projects_plan.md`, E6a/F4).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";

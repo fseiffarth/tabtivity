@@ -1,5 +1,7 @@
 # Containerised Live Pages — Plan
 
+> **Status (screened against code 2026-11-22):** NOT-STARTED. No container, nested-display (`Xephyr`/`cage`) or `DisplayServer` code exists; `browser_open_live` (`src/lib/browser.ts`, `services/browser_engine.rs`) is still the in-process live-page window behind the `browser_live_pages` opt-in (`schema/settings.rs`). The plan's own go/no-go question (keep live pages or delete them) is undecided. Not live-tested.
+
 > **Scope: this replaces the live-page window and nothing else.** Reader mode
 > (`browser_reader_fetch` → `mail_sanitize` → `sandbox=""` frame) is untouched
 > and remains the default surface. Everything here is about the *other* half of

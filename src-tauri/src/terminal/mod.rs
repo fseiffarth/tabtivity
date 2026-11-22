@@ -1266,6 +1266,12 @@ impl IntoPtyMaster for Box<dyn PtyMaster> {
     }
 }
 
+#[derive(Clone)]
+pub enum DropTarget {
+    Local(std::path::PathBuf),
+    Remote(Box<crate::schema::project::RemoteSpec>),
+}
+
 struct PtyEntry {
     master: Box<dyn PtyMaster>,
     input_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
@@ -1273,9 +1279,8 @@ struct PtyEntry {
     dead: Arc<AtomicBool>,
     crash_times: Vec<Instant>,
     meta: PtyMeta,
-    /// The local folder the process works in (`PreparedLaunch::drop_dir`),
-    /// where a file dropped onto the tab lands; `None` for a remote tab.
-    drop_dir: Option<String>,
+    /// The destination recorded for this spawn.
+    drop_dir: Option<DropTarget>,
     /// The process is an AI (`PreparedLaunch::ai`): its input obeys the AI
     /// switch (`services::ai_switch`).
     ai: bool,
@@ -1623,7 +1628,7 @@ impl PtyRegistry {
     }
 
     /// Record where a file dropped onto the live tab `id` lands.
-    pub fn set_drop_dir(&mut self, id: &str, dir: Option<String>) {
+    pub fn set_drop_dir(&mut self, id: &str, dir: Option<DropTarget>) {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.drop_dir = dir;
         }
@@ -1652,9 +1657,9 @@ impl PtyRegistry {
             .collect()
     }
 
-    /// `None` when no such tab is live; `Some(None)` for a remote one.
-    pub fn drop_dir(&self, id: &str) -> Option<Option<String>> {
-        self.entries.get(id).map(|e| e.drop_dir.clone())
+    /// A live tab with a recorded destination.
+    pub fn drop_dir(&self, id: &str) -> Option<DropTarget> {
+        self.entries.get(id).and_then(|e| e.drop_dir.clone())
     }
 
     pub fn input_sender(&self, id: &str) -> Option<tokio::sync::mpsc::Sender<Vec<u8>>> {

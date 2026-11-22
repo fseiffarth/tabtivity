@@ -1,13 +1,8 @@
 # Rename Eldrun → Tabtivity — plan
 
-Status (2026-11-14): Phases 0–4 are done (release A is live; the repo is renamed).
-Phase M and Phase 5 (release B) are open. The one-shot tooling
-(`scripts/brand-flip.sh`, `scripts/rename-codemods/`, the old-name dev
-launchers) is deleted, so the plan's mentions of it below are history. The rest
-of this file keeps the original plan wording. Third revision, 2026-10-01: changed
-from "keep old names forever" to a **full replacement** in two releases (see
-"Approach"). The two earlier code reviews built the inventory below; their
-notes are under "History" at the end. Name chosen 2026-10-01 (see "Name").
+> **Status (screened against code 2026-11-22):** PARTIAL. Phases 0-4 are done (release A live, repo renamed): `src-core/src/brand.rs` (`crate::brand`, `brand::PAIR`, `LEGACY_*`), `src/lib/brand.ts`, `scripts/lib/brand.sh`, `scripts/brand-check.sh`, `src-tauri/src/services/brand_migration/`. Phase M is still plan only: no `home-move`/`home_move_*` step or command exists; `~/eldrun` is still read through `resolve_named_dir` and counted as legacy hit `home-tree` (`paths.rs`). Phase 5 (release B) is open: the `LEGACY_*` constants, dual reads and `scripts/brand-copy-run.sh` are all still in code. The one-shot tooling (`brand-flip.sh`, `rename-codemods/`, old-name dev launchers) is deleted, so mentions of it below are history. Not live-tested.
+
+Third revision, 2026-10-01: changed from "keep old names forever" to a **full replacement** in two releases (see "Approach"). The two earlier code reviews built the inventory below; their notes are under "History" at the end. Name chosen 2026-10-01 (see "Name").
 
 ## Name
 
@@ -270,7 +265,7 @@ below gives each of these its own step.
 - Also build the deb/NSIS old-package replacement and the shim alias.
 
 ### Phase 3: release A — the flip to Tabtivity
-Done (`docs/rename_phase3_handoff.md`); `scripts/brand-flip.sh` was deleted afterwards.
+Done (`docs/done/rename_phase3_handoff.md`); `scripts/brand-flip.sh` was deleted afterwards.
 - Gate: the domains and GitHub org are registered, and the trademark search is
   clean (see "Name"). Phase 2 has been run against a copy of a real state dir.
 - Add `scripts/brand-flip.sh <Display> <slug>` and run it as

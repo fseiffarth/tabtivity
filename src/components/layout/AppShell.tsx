@@ -48,6 +48,7 @@ import { ShortcutHelpOverlay } from "./ShortcutHelpOverlay";
 import { RemoteConnectDialog } from "../projects/RemoteConnectDialog";
 import { GlobalMachineMonitorDialogHost } from "../monitoring/GlobalMachineMonitorDialog";
 import { BigFolderDialogHost } from "../projects/BigFolderExcludeDialog";
+import { PhoneShareDialogHost } from "../mobile/PhoneShareDialog";
 import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
@@ -1501,6 +1502,7 @@ export function AppShell() {
           above does: the project that asked may not be the active one by the time
           its census (local walk + one host `du`) comes back. */}
       <BigFolderDialogHost />
+      <PhoneShareDialogHost />
       {/* Box editor (#41): rename / member list / explicit dissolve. */}
       <BoxEditorHost />
       {/* Same reason as the alarm below: lockstep/sync can delete a file from the local
@@ -1552,7 +1554,7 @@ export function AppShell() {
           it lands on top of the dialog that started the install or the login.
           Its host also persists the root scope and merges the rows a root agent
           wrote through Tabtivity's MCP tools — both while closed. It is also the
-          cockpit's window (`docs/cockpit_root_merge_plan.md`, `docs/cockpit_apps_merge_plan.md`):
+          cockpit's window (`docs/done/cockpit_root_merge_plan.md`, `docs/done/cockpit_apps_merge_plan.md`):
           Now, Projects, Tonight, Mail, Calendar, To-do, Agents, Models and
           Machines are views of this one surface. */}
       <RootOverlayHost />

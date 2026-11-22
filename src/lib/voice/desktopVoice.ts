@@ -107,7 +107,7 @@ export interface VoiceStatus {
 /** `services::voice::gpu::CpuReason`. */
 export type VoiceCpuReason = "not-built" | "no-gpu" | "off" | "crashed";
 
-/** Where whisper really runs (`services::voice::gpu`, docs/voice_gpu_plan.md):
+/** Where whisper really runs (`services::voice::gpu`, docs/done/voice_gpu_plan.md):
  * what a load got, never what the setting asked for. */
 export type VoiceDevice = { kind: "gpu"; name: string | null } | { kind: "cpu"; reason: VoiceCpuReason };
 

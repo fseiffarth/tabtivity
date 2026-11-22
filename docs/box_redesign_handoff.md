@@ -1,5 +1,7 @@
 # Box redesign — handoff
 
+> **Status (screened against code 2026-11-22):** ARCHIVE candidate (AS1–AS6 and the final review landed on `develop` as `2dff17a2`; the `ee0657bf` and other branch shas in the body belong to the pre-merge worktree). Evidence: `src/stores/boxSlice.ts`, `BoxMemberChecklist.tsx`, `TabMemberChip.tsx`, `useBoxAccordion.ts`, `BoxPatch.order` in `commands/boxes.rs`. The "Flagged for user" lists are live-QA items; phone parity (step 14) and "Open beside" (step 15) were never part of this run. Not live-tested.
+
 Plan: `docs/box_redesign_plan.md`. One section per agent step; each agent
 appends to its own section only (worktree copies are merged by the main agent).
 

@@ -791,7 +791,7 @@ pub async fn list_project_paths(
     app_core::rt::try_blocking("fs", move || list_project_paths_blocking(project_dir)).await
 }
 
-/// The host half of [`list_project_paths`] (`docs/remote_only_projects_plan.md`
+/// The host half of [`list_project_paths`] (`docs/done/remote_only_projects_plan.md`
 /// E6a): one bounded `find` over the pooled master, files only (`is_dir:
 /// false` — every caller drops folders), capped at
 /// `host_search::MAX_HOST_PATHS`. Refused while disconnected (never dials) and,

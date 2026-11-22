@@ -1,5 +1,8 @@
 # Keyboard steering on the phone: handoff between implementers
 
+> **Status (screened against code 2026-11-22):** REFERENCE (log of the built plan `docs/mobile_steering_plan.md`; I1-I3, review and fixes all landed, see that plan's status for what is open). Code: `mobile-web/src/steering/`. Not live-tested.
+
+
 Plan: `docs/mobile_steering_plan.md`. Each implementer appends a section. Do not push.
 
 ## I1: keys, state, DOM helpers, strings

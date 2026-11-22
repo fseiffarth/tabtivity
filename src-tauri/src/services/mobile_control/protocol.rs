@@ -121,7 +121,7 @@ pub struct CreateTabRequest {
     /// sign-in rides with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<String>,
-    /// A chat of the assistant scope (`docs/assistant_plan.md`, decision 12):
+    /// A chat of the assistant scope (`docs/done/assistant_plan.md`, decision 12):
     /// the opaque launch id `launch-options` listed, which stands for a CLI
     /// and, for a local one, a model. The scope takes this and nothing else —
     /// no agent, mode, worktree, cloud, sign-in or local-model field rides
@@ -2538,7 +2538,7 @@ pub enum TerminalEvent {
     /// tab), `host_offline` (a remote-host tab whose host the desktop no
     /// longer holds an ssh master for — also the upgrade's `409`, beside the
     /// routes' `409 tab_on_host` for what would act on this machine;
-    /// `docs/mobile_remote_host_tabs_plan.md`), `session_gone` (a host tab's
+    /// `docs/done/mobile_remote_host_tabs_plan.md`), `session_gone` (a host tab's
     /// attach found no session on the host: `pty_bridge::attach_end_reason`),
     /// and the frame refusals
     /// (`input_frame_too_large`, `invalid_terminal_control`,

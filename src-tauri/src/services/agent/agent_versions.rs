@@ -68,7 +68,7 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
     ("opencode", &["--version"]),
     // "2.1.319 (Claude Code)"
     ("claude", &["--version"]),
-    // "codex-cli 0.170.0"
+    // "codex-cli 0.171.0"
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
@@ -128,32 +128,32 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "claude",
-        version: "2.1.327",
+        version: "2.1.330",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
         agent: "codex",
-        version: "0.170.0",
+        version: "0.171.0",
         surface: "§1.2 — mobile mode lines and Shift+Tab (agentModes.ts)",
     },
     Verified {
         agent: "codex",
-        version: "0.170.0",
+        version: "0.171.0",
         surface: "§1.2 — decision lamp: title repaints, numbered approval rows",
     },
     Verified {
         agent: "codex",
-        version: "0.170.0",
+        version: "0.171.0",
         surface: "§1.2 — the two-step /model sheet read off the screen",
     },
     Verified {
         agent: "codex",
-        version: "0.170.0",
+        version: "0.171.0",
         surface: "§1.2 — resume writer lock: a second writer refused, a killed one released",
     },
     Verified {
         agent: "antigravity",
-        version: "1.5.11",
+        version: "1.5.14",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
@@ -163,12 +163,12 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "muse",
-        version: "1.4.23",
+        version: "1.4.25",
         surface: "§1.5 — launcher's no-update switch, --model/--reasoning-effort, login file, the ⟩ menu lamp",
     },
     Verified {
         agent: "vibe",
-        version: "3.1.3",
+        version: "3.1.4",
         surface: "§1.5 — hooks.toml session hooks, --resume <id> and the unified store, VIBE_ACTIVE_MODEL, .vibe/AGENTS.md",
     },
 ];
@@ -833,13 +833,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
-        let (state, stale) = drift("codex", Some("0.170.0"));
+        let (state, stale) = drift("codex", Some("0.171.0"));
         assert_eq!(state, DriftState::Match);
         assert!(stale.is_empty());
-        let (state, stale) = drift("codex", Some("0.170.1"));
+        let (state, stale) = drift("codex", Some("0.171.1"));
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
-        assert!(stale.iter().all(|note| note.version == "0.170.0" && note.direction == Direction::Newer));
+        assert!(stale.iter().all(|note| note.version == "0.171.0" && note.direction == Direction::Newer));
     }
 
     #[test]
@@ -851,11 +851,11 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.327")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.330")).0, DriftState::Match);
         // A recipe with no recorded check — the honest answer is "nobody has
         // verified this", not a tick.
         assert_eq!(drift_in(&[], "muse", Some("1.3.0")).0, DriftState::Unverified);
-        // Muse's first check was 1.4.15 (now 1.4.23); the 1.3.0 many still run is older.
+        // Muse's first check was 1.4.15 (now 1.4.25); the 1.3.0 many still run is older.
         let (state, stale) = drift("muse", Some("1.3.0"));
         assert_eq!(state, DriftState::Moved);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));

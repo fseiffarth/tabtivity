@@ -12,5 +12,5 @@ pub mod markup_mcp;
 pub mod print_mcp;
 // Messages between the agent tabs of one project (`/mcp/tabs`).
 pub mod tabs_mcp;
-// The chat assistant's guarded web lane (docs/assistant_plan.md, A2).
+// The chat assistant's guarded web lane (docs/done/assistant_plan.md, A2).
 pub mod web_lane;

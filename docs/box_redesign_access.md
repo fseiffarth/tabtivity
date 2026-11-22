@@ -1,5 +1,7 @@
 # Box redesign — access & switching lens
 
+> **Status (screened against code 2026-11-22):** REFERENCE (design lens, superseded by the merged plan `docs/box_redesign_plan.md`). The steps it proposes landed on `develop` as `2dff17a2` (see the plan's status); the "today" sections describe the code of 2026-11-03, before the redesign, and are now historical. Not live-tested.
+
 Scope: how a user finds a box, enters it, sees where they are, moves between
 boxes and member projects, and leaves. Creating boxes / membership editing and
 the arrangement of tabs inside a box belong to the two other designs; only the

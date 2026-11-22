@@ -1537,7 +1537,7 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     `AGENTS.md`'s Project docs, named in the agent scaffold-fill prompt as
     the map to keep working, and in `STANDARD_PROJECT_FILES` so the tree
     sorts it with the other standard docs. Never overwritten when present.
-    *Superseded 2026-11-13 (`docs/scaffold_files_plan.md`): `PROJECT.md` is no
+    *Superseded 2026-11-13 (`docs/done/scaffold_files_plan.md`): `PROJECT.md` is no
     longer scaffolded; it is created on demand from the Project docs group.*
     - [x] 🤖 Automated test (scaffold tests in `commands/projects.rs`)
     - [ ] 🖐️ Manual test — create a new project and check `PROJECT.md`

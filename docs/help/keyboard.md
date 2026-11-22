@@ -20,6 +20,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 | Super (Linux, when the desktop leaves it to the window) or F9 | Show/hide the side panels. To bind a lone Super tap yourself (Linux only), press and release Super while capturing |
 | Esc | Leave a pane's in-app fullscreen (dialogs always close on Esc) |
 | Ctrl + / − / 0 | Zoom the interface in / out / reset — in an agent tab its font, in an editor its text |
+| Ctrl+Shift+Alt+H | Cover every window (the privacy curtain); again, in a covered window, shows that one |
 
 ## Navigation
 
@@ -27,7 +28,9 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 |---|---|
 | AltGr+Tab / AltGr+Shift+Tab | Next / previous project (AltGr = the right Alt key) — from a focused terminal too; Alt+Shift+→ / ← work as well, and are the default on macOS |
 | Ctrl+Shift+PageDown / PageUp | Next / previous box |
+| Ctrl+K | The command palette (left to a focused terminal or text field, where Ctrl+K is the shell's or the prompt's own) |
 | Ctrl+Shift+R | Open / close the root console |
+| Ctrl+Shift+S | The root console with a shell at the project's root — from a focused terminal too |
 | Ctrl+Shift+A | Search tabs: every project's tabs in one list (the command palette on `@`) — from a focused terminal too |
 | Shift+Space | Enter Tabtivity navigation |
 | F1 | Shortcut help |
@@ -91,11 +94,12 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | D / ↓ | Back down a level |
 | 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option opens the Chat view's field, or on the Terminal view moves the highlight there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |
 | K / L | On an agent tab whose Chat shows prompts still queued behind a busy turn: **K** Send now (a Claude tab sends the queue into the turn with Claude's own Ctrl+X Ctrl+S, so a running command moves to the background; the other CLIs stop the turn so the queue goes at once; steering stays on), **L** Cancel and edit (takes the queued prompts back into the text box and hands you the keyboard). Shown only while the bubbles' buttons are |
-| N / M | New shell / System Monitor tab (projects: new project / mail) |
+| N / O | New shell / System Monitor tab (on the projects level N is a new project) |
+| M / C / T / U | Mail / calendar / to-do board / the cockpit's Now view, from the projects or any tab bar |
 | + | The new-tab menu, walked with E/D; **/** types into its search |
 | , | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the wheel, their digit (1–9, 0) opens one at once |
 | V | Toggle the pane's file viewer |
-| Tab / Shift+Tab | On an agent tab with a view strip: the next / previous view, Chat → Diffs → Files → Terminal (wraps; views with nothing to show are skipped). Works on the subwindow, tab and Inside levels and keeps the level |
+| Tab / Shift+Tab | On an agent tab with a view strip: the next / previous view, Chat → Diffs → Data → Terminal (wraps; views with nothing to show are skipped). Works on the subwindow, tab and Inside levels and keeps the level |
 | W | Close the active tab: it asks first; W again (or Y, Enter) closes, Esc keeps it |
 | A | Walk the card over the active tab (Undo clear, a sign-in link) |
 | G | On an agent tab whose Chat lists subagents: open its Subagents list and walk it — E D move, Enter opens a subagent's conversation and the highlight moves to its bar (‹ back, ‹ › previous / next); with one already open, G lands on its bar. Esc closes the list |
@@ -121,7 +125,7 @@ asking puts you back on the tab level.
 | D / ↓ | Back to the live end (the newest message) | Jump to the end |
 | E / ↑ | Back to the tabs; the terminal returns to its live end | Back to the tabs; the document keeps its place |
 
-The Diffs and Files views have their own keys Inside:
+The Diffs and Data views have their own keys Inside:
 
 Inside an agent tab's **Diffs** view (D from the tab level while it shows), a
 highlighted card is the cursor:
@@ -164,7 +168,7 @@ that view from anywhere in the panel (the tabs show their number) and land in
 its list. Enter on a file opens it and takes you to its tab — a panel that B
 opened closes; Shift+Enter opens it and stays in the panel.
 
-Inside an agent's Reader **Files** view (Tab to it, then D) the files and then
+Inside an agent's Reader **Data** view (Tab to it, then D) the files and then
 the links are one list: E D move the highlight (E on the first row goes back to
 the tabs), Shift+E / Shift+D jump to the other section, S F scroll the shown
 file half a screen (Shift: a whole one), **O** opens the highlighted file as a
@@ -202,7 +206,7 @@ digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
 
 Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
 rebound in the same settings page under *Inside Tabtivity navigation*, one list per
-level (*Inside a view* holds the letters that act once you are inside a Diffs or Files
+level (*Inside a view* holds the letters that act once you are inside a Diffs or Data
 view: fold, layout, open, other view, next new, add a note). A letter can mean one thing on the
 projects level and another inside a pane; the bar, the caps and the cheat sheet always show the keys you have.
 

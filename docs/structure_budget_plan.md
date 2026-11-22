@@ -1,6 +1,9 @@
 # Structure budget — plan
 
-Status: plan only (2026-10-26), reviewed by two plan reviewers the same day.
+> **Status (screened against code 2026-11-22):** NOT-STARTED. No size-budget gate (no script under `scripts/`, nothing in `scripts/gates.sh` or `ci-cd.yml`), no import-boundary
+> gate, no dead-code report and no `CONTRIBUTING.md`. The file-split work it builds on landed (`docs/code_screen_plan.md` S5/S7). Not live-tested unless the doc/todo says so.
+
+History: plan only (2026-10-26), reviewed by two plan reviewers the same day.
 Revised 2026-11-14, not re-reviewed: step 4 is an import-boundary gate
 instead of per-add-on Cargo features; raising a baseline number needs the
 user's say-so; a new plan declares core or add-on; the numbers are

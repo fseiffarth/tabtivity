@@ -131,7 +131,7 @@ export function ClaudeRemoteControlNotice() {
 /** Gemini CLI's prompt caching depends on how it signs in (its
  *  `docs/cli/token-caching.md`): a Google account gets none, a Gemini API key
  *  gets Google's implicit caching. Only says so and where the switch is —
- *  the user flips it, Tabtivity never does (`docs/cli_caching_plan.md` phase 4). */
+ *  the user flips it, Tabtivity never does (`docs/done/cli_caching_plan.md` phase 4). */
 export function GeminiCachingNotice() {
   const t = useT();
   return (

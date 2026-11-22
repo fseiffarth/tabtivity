@@ -1,5 +1,5 @@
 /**
- * The **privacy curtain** (`docs/privacy_curtain_plan.md`): while a PDF or deck
+ * The **privacy curtain** (`docs/done/privacy_curtain_plan.md`): while a PDF or deck
  * is presented, every other app window is covered, so picking the wrong window
  * or the wrong screen in a call's share picker shares a blank panel.
  *

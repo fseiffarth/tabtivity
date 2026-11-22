@@ -1,6 +1,6 @@
 /**
  * The file panel of a host-pinned project (`isHostPinned`: a VM, or a remote
- * project created without a local copy — `docs/remote_only_projects_plan.md`,
+ * project created without a local copy — `docs/done/remote_only_projects_plan.md`,
  * F4). The host is the only tree, so:
  * - no Local/Remote switch, no Diverged view, no ⧉, no whole-tree sync row and
  *   no per-row sync slots;

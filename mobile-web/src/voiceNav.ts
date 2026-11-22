@@ -1,4 +1,4 @@
-// What spoken navigation (docs/voice_nav_mode_plan.md) works with: the lists
+// What spoken navigation (docs/done/voice_nav_mode_plan.md) works with: the lists
 // the matcher resolves names against, the choice of a tab, the three queues
 // ("the waiting / working / done tab", across projects) with their cursor, and
 // the one-shot landing a jump leaves for the screen it opens. Pure functions

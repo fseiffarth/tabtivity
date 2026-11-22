@@ -6,7 +6,7 @@
  * viewer (`localStorage`), a convenience only: an unreadable or missing
  * record is the defaults.
  *
- * The dock shows six tools (`DOCK_TOOLS`, `docs/markup_notes_style_plan.md`):
+ * The dock shows six tools (`DOCK_TOOLS`, `docs/done/markup_notes_style_plan.md`):
  * pen, highlighter, eraser, lasso (`select`), text and Proof — the box, the
  * text marks and the stamps behind one slot (`PROOF_PICKS`).
  *

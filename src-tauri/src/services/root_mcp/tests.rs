@@ -3774,7 +3774,7 @@ fn a_cockpit_binding_without_a_session_name_finds_its_tab_by_launch_uid() {
     }
 }
 
-// ── reattach: a running agent keeps its grant (docs/mcp_reattach_plan.md) ──
+// ── reattach: a running agent keeps its grant (docs/done/mcp_reattach_plan.md) ──
 
 fn lane_identity(tab: &str, caller: Caller) -> Identity {
     Identity { tab: tab.into(), caller, project: Some("p".into()), schedule_target: None, push: None, endpoint: None, model: None }

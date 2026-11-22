@@ -14,8 +14,8 @@ pages: **General**, **Workspace & apps**, **Agents**, **Remote & mobile** and
 | Group | Pages |
 |---|---|
 | General | General (theme, language), Layout, Clock, Hints & onboarding, Keyboard Shortcuts, Updates, Feature Guide |
-| Workspace & apps | Global Apps, File Type Apps, Downloads, Browser, Calendar, Usage stats, Archived Projects, Repair Project Scaffold |
-| Agents | Manage CLIs, Ollama Models, PDF markup, Root console and MCPs |
+| Workspace & apps | Global Apps, File Type Apps, Downloads, Browser, Mail, Calendar, Usage stats, Archived Projects, Repair Project Scaffold |
+| Agents | Manage CLIs, Ollama Models, PDF markup, Root console and MCPs, Tabby (the chat assistant), Voice |
 | Remote & mobile | Remote features, Git Hosting, Remote Connections, VPN Auto-Connect, Virtual machines, Mobile |
 | System | Power & performance, Resource monitor, Experimental |
 
@@ -32,8 +32,11 @@ theme, accent, colours and corners) to **Load** later.
 
 - **Language**: English, Deutsch, Español, Français or Italiano. Text not yet
   translated shows in English.
-- **Layout → Window zoom** scales the whole interface; the minimum subwindow
-  width and height decide when a split gets too small.
+- **Layout → Window zoom** scales the whole interface. Each detached window
+  is listed under it and follows the main window ("Same as main window")
+  unless you give it a zoom of its own; Ctrl 0 in a detached window clears
+  that. The minimum subwindow width and height decide when a split gets too
+  small.
 - **Clock**: seconds, and a 24-hour clock (unset, it follows your system).
 
 ## Power & performance
@@ -70,13 +73,14 @@ status indicators.
 ## Experimental
 
 **Settings → System → Experimental** holds features still in progress; each
-stays off until you tick it: **Mail client**, **In-app browser**, **Deck
-presenter**, **Python Run/Debug in the code viewer**, **GitHub Copilot
-autocomplete**, **Markdown link graph**, **Project file remarks**, **WebGL
-terminal renderer** (faster terminals; turn off on flicker or missing text)
-and **GPU compositing** (smoother scrolling after a restart; turn off on
+stays off until you tick it: **Per-turn checkpoints**, **In-app browser**,
+**Deck presenter**, **Python Run/Debug in the code viewer**, **GitHub Copilot
+autocomplete**, **Hands-free voice in the Chat**, **Markdown link graph**,
+**Project file remarks**, **WebGL terminal renderer** (faster terminals; turn
+off on flicker or missing text; not on Windows, where it is always on) and
+**GPU compositing** (smoother scrolling after a restart; turn off on
 flicker or crashes). **Debug mode** only adds developer actions to project
-settings.
+settings. The **Mail client** switch is on the **Mail** page.
 
 ## Updates
 

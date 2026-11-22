@@ -1044,7 +1044,7 @@ pub async fn fetch_document_image(raw: &str) -> Result<DocumentImage, String> {
 /// (`HTTP(S)_PROXY`). Only a URL the user typed on this machine does. A
 /// proxy resolves the name itself, past the address check and the pin of
 /// [`resolve_hop`], so an address a model, a document (a markdown image) or a
-/// remote client chose never uses one (`docs/assistant_plan.md`, decision 15;
+/// remote client chose never uses one (`docs/done/assistant_plan.md`, decision 15;
 /// threat-model gap 63). A machine that reaches the internet only through a
 /// proxy therefore loads no remote markdown images.
 fn honours_proxy_env(origin: FetchOrigin) -> bool {

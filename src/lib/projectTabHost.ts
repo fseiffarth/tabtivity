@@ -27,7 +27,7 @@ export type HostPinProject = {
 
 /** Tabs and files of this project live only on its host: a VM project, or a
  *  remote project created without a local copy
- *  (`docs/remote_only_projects_plan.md`). No mirror, locality pinned. The TS
+ *  (`docs/done/remote_only_projects_plan.md`). No mirror, locality pinned. The TS
  *  twin of `RemoteSpec::is_remote_only` (the spec's `vm` or `remote_only`;
  *  a VM stays pinned even with `remote_only: false`), OR'd with the VM
  *  record so a VM is pinned however its spec reads. */
@@ -116,7 +116,7 @@ export function phoneReachesTab(
  * and every tab of a remote (not VM) project, remote-only included, since a
  * tab that runs on the project's host is reached over the desktop's own SSH
  * connection
- * (`docs/mobile_remote_host_tabs_plan.md`). The catalog's listing rule at
+ * (`docs/done/mobile_remote_host_tabs_plan.md`). The catalog's listing rule at
  * table level: the sidecar narrows further (tmux name, `persist_sessions`,
  * kind, the host's master alive), and the window only acts on tmux names the
  * sidecar resolved from its catalog, so listing more here is harmless.

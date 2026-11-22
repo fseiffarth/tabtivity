@@ -1,6 +1,6 @@
 /**
  * The desktop markup mode's send header under the PDF toolbar
- * (`usePdfMarkup`, `docs/markup_notes_style_plan.md`): the agent tab a Submit
+ * (`usePdfMarkup`, `docs/done/markup_notes_style_plan.md`): the agent tab a Submit
  * goes to, its model chip, Go to tab, the **Agent** badge that opens the
  * agent panel (`PdfMarkupAgentPanel`: the round, the agent's questions and
  * ticks, Reload, Apply, Undo round), Submit and Done — with only what a

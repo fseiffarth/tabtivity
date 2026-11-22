@@ -381,11 +381,6 @@ describe("TeX workspace — center switching + SyncTeX", () => {
     const { tabKey, useTabsStore } = await renderWorkspace();
     await screen.findByRole("button", { name: /compile/i });
 
-    // Watch the jump channel: the child editor mounted by the center switch
-    // consumes the request almost immediately, so spy rather than race the value.
-    const { useEditorJumpStore } = await import("../../stores/viewers/editorJump");
-    const jumpSpy = vi.spyOn(useEditorJumpStore.getState(), "requestJump");
-
     // A standalone PDF tab's reverse-click calls the module `jumpToSource`; for a
     // `.tex` source owned by an open workspace it focuses that workspace and
     // switches its center to the source instead of opening a scattered tab.
@@ -400,7 +395,8 @@ describe("TeX workspace — center switching + SyncTeX", () => {
         useTabsStore.getState().tabs.find((t) => t.key === tabKey)?.viewerState?.texActivePath,
       ).toBe(CHILD),
     );
-    expect(jumpSpy).toHaveBeenCalledWith(CHILD, 2, 1);
+    const editor = await screen.findByDisplayValue(/child body/) as HTMLTextAreaElement;
+    await waitFor(() => expect(editor.selectionStart).toBe(CHILD_SRC.indexOf("child")));
     expect(useTabsStore.getState().tabs).toHaveLength(1);
   });
 
@@ -668,17 +664,15 @@ describe("TeX workspace — center switching + SyncTeX", () => {
     });
     await screen.findByRole("button", { name: /chap\.tex/i });
 
-    const { useEditorJumpStore } = await import("../../stores/viewers/editorJump");
-    const jumpSpy = vi.spyOn(useEditorJumpStore.getState(), "requestJump");
-
     await act(async () => {
-      jumpToSource(CHILD, 2, 1, MAIN);
+      jumpToSource(CHILD, 2, 0, MAIN, { words: ["child", "body"], index: 1 });
     });
 
     // The center switched to the producing child — its body is on screen — and
     // the caret jump reached it, with the store still holding no tab at all.
     await waitFor(() => expect(screen.getByDisplayValue(/child body/)).toBeTruthy());
-    expect(jumpSpy).toHaveBeenCalledWith(CHILD, 2, 1);
+    const editor = await screen.findByDisplayValue(/child body/) as HTMLTextAreaElement;
+    await waitFor(() => expect(editor.selectionStart).toBe(CHILD_SRC.indexOf("body")));
     expect(useTabsStore.getState().tabs.find((t) => t.key === "detached-tex")).toBeUndefined();
   });
 

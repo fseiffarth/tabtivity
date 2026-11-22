@@ -145,8 +145,8 @@ export function inlineGhostTail(draft: string, at: number, ghost: string,
 }
 
 /** Languages where the text around the caret is natural language. They prefer
- * the `autocomplete_prose` role (an instruct model on the chat path) over the
- * code role (typically a fill-in-the-middle coder model). */
+ * the `autocomplete_prose` role over the code role; whichever model serves,
+ * one with `insert` completes through fill-in-the-middle, prose included. */
 export function isProseLang(lang: string): boolean {
   return lang === "plain" || lang === "markdown" || lang === "tex";
 }

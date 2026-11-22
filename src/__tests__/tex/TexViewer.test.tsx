@@ -100,6 +100,25 @@ describe("TexView", () => {
     expect(mockInvoke).not.toHaveBeenCalledWith("compile_tex", expect.anything());
   });
 
+  it("places the caret on the clicked occurrence in the live TeX paragraph", async () => {
+    setupInvoke(false);
+    await renderTexView();
+    const editor = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(editor.value).toBe(TEX_SOURCE));
+    const draft = "The first word. % hidden word\nHere is the \\emph{word} you clicked.\nLast row.";
+    fireEvent.change(editor, { target: { value: draft } });
+    const { useEditorJumpStore } = await import("../../stores/viewers/editorJump");
+    act(() => useEditorJumpStore.getState().requestJump("/p/paper.tex", 3, 0, {
+      words: ["the", "word", "you", "clicked"], index: 1,
+    }));
+    expect(editor.selectionStart).toBe(draft.indexOf("{word}") + 1);
+    expect(editor.selectionEnd).toBe(editor.selectionStart);
+    act(() => useEditorJumpStore.getState().requestJump("/p/paper.tex", 3, 0, {
+      words: ["unmatched"], index: 0,
+    }));
+    expect(editor.selectionStart).toBe(draft.indexOf("Last row"));
+  });
+
   it("accepts the highlighted TeX completion with Enter", async () => {
     setupInvoke(false);
     await renderTexView();

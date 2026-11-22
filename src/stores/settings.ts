@@ -59,8 +59,8 @@ let settingsRefresh: Promise<void> = Promise.resolve();
  *  is a refresh signal rather than an authoritative snapshot: IPC replies from
  *  concurrent writers can arrive out of order, so each heap rereads the latest
  *  file through the serialized queue above. Per-document appliers (theme,
- *  language, zoom) keep their dedicated events because a popout must NOT inherit
- *  the main window's zoom or repaint a theme it already applied. */
+ *  language) keep their dedicated events. DetachedApp derives zoom from this
+ *  store and its local override. */
 export async function listenSettingsChanged(): Promise<() => void> {
   return listen<Settings>(SETTINGS_CHANGED_EVENT, (e) => {
     settingsRefresh = settingsRefresh
@@ -407,11 +407,7 @@ export function refreshCursors() {
  *  overlays (menus, dropdowns, hover popovers) that a CSS `zoom` misses on
  *  WebKitGTK.
  *
- *  Zoom is **per window**, not global: each OS window (the main window and every
- *  detached popout, #42) is its own webview and holds its own zoom. `ui_zoom`
- *  persists the MAIN window's value; a popout persists its own alongside its
- *  bounds (see `DetachedGroup.zoom`). So bumping one window's zoom never rescales
- *  another, and each window restores at the zoom it was left at. */
+ *  Detached windows follow `ui_zoom` unless their layout entry holds a zoom override. */
 export const MIN_UI_ZOOM = 0.5;
 export const MAX_UI_ZOOM = 3;
 
@@ -456,7 +452,7 @@ interface SettingsStore {
   loaded: boolean;
   /** Load settings and apply theme. `skipZoom` suppresses applying the persisted
    *  `ui_zoom` to this window's webview — used by a detached popout, which owns
-   *  its OWN zoom (restored from its seed) rather than the main window's. */
+   *  the effective zoom calculation, including its optional override. */
   load: (opts?: { skipZoom?: boolean }) => Promise<void>;
   setTheme: (theme: Theme) => Promise<void>;
   setLanguage: (lang: Language) => Promise<void>;
@@ -582,7 +578,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     applyCursor(settings.ui_cursor);
     applyLanguage(settings.language);
     // `ui_zoom` is the MAIN window's own zoom. A popout skips it and applies its
-    // own persisted zoom from its seed instead (zoom is per window, not global).
+    // effective zoom from the shared setting and its persisted override.
     if (!opts?.skipZoom) applyZoom(settings.ui_zoom);
     set({ settings, loaded: true });
   },

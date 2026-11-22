@@ -1,6 +1,6 @@
 # HPC workspaces in Tabtivity — the layout, and the plan around it
 
-Status: Phases 0, 1 and 2 implemented (untested on a cluster); Phase 3 proposed.
+> **Status (screened against code 2026-11-22):** PARTIAL. Phases 0–2 are built: `commands/hpc_ws.rs` (`hpc_ws_available/_list/_allocate/_extend/_link/_anchor/_pull_logs/_move_root`, registered in `lib.rs`), `src/lib/remote/hpc/hpcWorkspace.ts` (`shouldWarnExpiry`), the Workspace step in `HpcPipelineWizard.tsx`, the expiry banner in `ProjectFilesView.tsx`. Phase 3 (prefix mapping in `join_remote`, `services/remote/remote_sync.rs`) is not started; there is no `hpc_ws_release` command (the `_release` named under Phase 0 was never added). The companion `docs/quirky-knitting-umbrella` named below does not exist in the tree. Not live-tested on a cluster.
 Companion to `docs/quirky-knitting-umbrella` (the SLURM pipeline) and TODO group
 G #86.
 

@@ -17,7 +17,7 @@
 //! takes, and by the Resume menu for the one it takes a tab onto. At each
 //! spawn where the hook is registered, a host-only launch note
 //! (`live_sessions/<uid>.muse`) says the tab ran with it. The rule
-//! ([`resolve`], `docs/agent_tab_resume_plan.md` decision 6):
+//! ([`resolve`], `docs/done/agent_tab_resume_plan.md` decision 6):
 //!
 //! - noted at an earlier spawn, and the record names a session of the folder:
 //!   `resume <id>` — the record is the tab's, whatever began since;
@@ -301,6 +301,15 @@ pub fn transcript(home: &Path, directory: &str, since: Option<i64>, own: Option<
 pub fn chat(home: &Path, directory: &str, id: &str, version: Option<&str>, limit: usize) -> AgentTranscript {
     folder_session(home, directory, id)
         .and_then(|session| read(&session, "chat", version, limit))
+        .unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
+}
+
+/// The chat of session `id`, read from the copy of a remote host's
+/// `session.jsonl` that `services::remote::remote_transcript` keeps in `dir`.
+/// Which session is the tab's was decided there.
+pub(crate) fn copy_transcript(dir: &Path, id: &str, version: Option<&str>, limit: usize) -> AgentTranscript {
+    HomeDir::open_existing(dir, "")
+        .and_then(|dir| read(&Session { id: id.to_string(), dir }, "host", version, limit))
         .unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
 }
 

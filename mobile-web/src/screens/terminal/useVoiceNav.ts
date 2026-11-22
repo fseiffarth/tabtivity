@@ -1,4 +1,4 @@
-// Spoken navigation (docs/voice_nav_mode_plan.md), inside the Focus screen's
+// Spoken navigation (docs/done/voice_nav_mode_plan.md), inside the Focus screen's
 // open mic while Hands-free is on: "{assistant} navigate" opens a mode in which
 // each settled utterance is a command — go to a project (asked back first), to
 // the working / done / waiting tab across projects, to a tab by name or number

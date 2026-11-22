@@ -1,6 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockRejectedValue(new Error("Not available in this test")) }));
+vi.mock("@tauri-apps/api/event", { spy: true });
+import { emit } from "@tauri-apps/api/event";
+import { useTabsStore } from "../../stores/tabs";
+import { detachedSetZoomEvent } from "../../stores/detached";
 import { SettingsDialog } from "../../components/layout/SettingsPanel";
 import { useSettingsStore } from "../../stores/settings";
 import { SETTINGS_ANCHORS } from "../../components/layout/settingsUi";
@@ -130,6 +134,33 @@ describe("settings category navigation", () => {
     await act(async () => { fireEvent.click(screen.getByRole("option", { name: "Mobile" })); });
     expect(document.getElementById(SETTINGS_ANCHORS.mobile)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Back/ })).toBeNull();
+  });
+
+  it("sets zoom for the selected detached window and keeps its sibling and main zoom", async () => {
+    const original = useTabsStore.getState();
+    const windows = ["Notes", "Editor"].map((name) => ({
+      id: name, label: `detached-test-${name}`, zoom: 1,
+      subtree: { type: "group" as const, id: name, name, tabKeys: [], activeKey: null },
+    }));
+    vi.mocked(emit).mockResolvedValue(undefined);
+    try {
+      useSettingsStore.setState({ settings: { ui_zoom: 1.5 } });
+      useTabsStore.setState({ detachedGroupsByScope: { [original.scope]: windows } });
+      await act(async () => { render(<SettingsDialog initialAnchor="settings-anchor-layout" onClose={() => {}} />); });
+      fireEvent.click(screen.getByRole("button", { name: "Detached window 2 · Editor" }));
+      fireEvent.click(screen.getByRole("option", { name: "125%" }));
+      expect(emit).toHaveBeenCalledWith(detachedSetZoomEvent(windows[1].label), 1.25);
+      expect(useTabsStore.getState().detachedGroupsByScope[original.scope].map((w) => w.zoom)).toEqual([1, 1.25]);
+      fireEvent.click(screen.getByRole("button", { name: "Detached window 2 · Editor" }));
+      fireEvent.click(screen.getByRole("option", { name: "Same as main window" }));
+      expect(emit).toHaveBeenLastCalledWith(detachedSetZoomEvent(windows[1].label), null);
+      expect(useTabsStore.getState().detachedGroupsByScope[original.scope][1].zoom).toBeUndefined();
+      expect(useSettingsStore.getState().settings?.ui_zoom).toBe(1.5);
+    } finally {
+      cleanup();
+      useTabsStore.setState({ detachedGroupsByScope: original.detachedGroupsByScope });
+      vi.mocked(emit).mockRestore();
+    }
   });
 
   it("searches the entries by the labels of the settings on their page", async () => {

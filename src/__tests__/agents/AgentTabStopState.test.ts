@@ -1,5 +1,5 @@
 /**
- * The stopped state's place on a tab (`docs/agent_tab_stop_plan.md` §2):
+ * The stopped state's place on a tab (`docs/done/agent_tab_stop_plan.md` §2):
  * `stopped` is runtime only — never saved, never copied — and `lastUsedAt` is
  * saved and validated on the way back in.
  */

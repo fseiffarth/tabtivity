@@ -7,7 +7,8 @@
  * anchored to), unsent drafts, held prompts and what the files library
  * remembers (favorites, recents, folder colours, file cards and the folders it
  * stood in, all by file and folder name), and the slash commands typed into the
- * composer (with their arguments), in IndexedDB and localStorage — and the
+ * composer (with their arguments), the Projects list's group names, in
+ * IndexedDB and localStorage — and the
  * desktop switcher's list of linked desktops and their names (`shell/`).
  *
  * Never for an offline or timed-out phone: that one is still paired, and only
@@ -22,6 +23,7 @@ import { forgetSlashCommands } from "./slashCommands";
 import { forgetHeld } from "./terminal/heldPrompts";
 import { forgetCovers } from "./thumbs";
 import { forgetLinkedDesktops } from "./shell/linkedDesktops";
+import { forgetProjectSorting } from "./projectGroups";
 
 export async function forgetDeviceData(): Promise<void> {
   forgetLastPlace();
@@ -30,5 +32,6 @@ export async function forgetDeviceData(): Promise<void> {
   forgetFiles();
   forgetSlashCommands();
   forgetLinkedDesktops();
+  forgetProjectSorting();
   await Promise.allSettled([forgetCovers(), forgetLayers()]);
 }

@@ -1433,15 +1433,13 @@ select.file-viewer-run-args-input {
    the plain body colour, so a value reads as a value and doesn't disappear into
    the surrounding text. */
 .yaml-val-string { color: var(--success); }
-.yaml-val-other { color: var(--success); }
 /* The achromatic pair takes the code viewer's palette (see the plain
    `dark`/`light` .tok-* block): its accent-secondary is a grey, which would
    leave booleans indistinguishable from keys. Both split them the way their
    tokens do — yellow numbers, purple booleans, green strings. */
 :is([data-theme="dark"], [data-theme="light"]) .yaml-val-number { color: var(--doc-yellow); }
 :is([data-theme="dark"], [data-theme="light"]) .yaml-val-boolean { color: var(--doc-purple); }
-:is([data-theme="dark"], [data-theme="light"]) .yaml-val-string,
-:is([data-theme="dark"], [data-theme="light"]) .yaml-val-other { color: var(--doc-green); }
+:is([data-theme="dark"], [data-theme="light"]) .yaml-val-string { color: var(--doc-green); }
 
 .yaml-value-locked {
   color: var(--text-muted);
@@ -1619,21 +1617,26 @@ select.file-viewer-run-args-input {
   margin-top: 4px;
 }
 
-/* YAML card grid (#yaml-grid) — the recursive, tree-like card view. The document is
-   one centred top card (or a row of them for a root list); every nested collection
-   is a card whose own nested collections are subcards in a grid below it, folding
-   from the header. Monospace like the tree so values read as data; it reuses the
-   tree's value colours (.yaml-val-*) and its .yaml-value-input / .yaml-add / .yaml-act
-   primitives, and each field edit splices the file text (see YamlGrid.tsx). */
+/* YAML card view (#yaml-grid) — a drill navigation. One card is the "main" one;
+   the view stacks the levels leading to it (each a grid of sibling cards, the one
+   on the path highlighted) and ends with the main card's own nested collections.
+   Monospace like the tree so values read as data; it reuses the tree's value
+   colours (.yaml-val-*) and its .yaml-value-input / .yaml-add / .yaml-act
+   primitives, and each field edit splices the file text (see YamlGrid.tsx).
+   The guide-line colours mirror .yaml-tree's, so the drill's nesting rails match
+   the tree — read by `.yaml-level + .yaml-level` below. */
 .yaml-cards {
   padding: 8px 12px 24px;
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 12px;
   color: var(--text-primary);
+  --yaml-guide-0: color-mix(in srgb, var(--accent) 55%, transparent);
+  --yaml-guide-1: color-mix(in srgb, #a887e8 55%, transparent);
+  --yaml-guide-2: color-mix(in srgb, #4fc1a6 55%, transparent);
+  --yaml-guide-3: color-mix(in srgb, #d9a05b 55%, transparent);
 }
 
-/* A thin bar carrying only the untested tag today — a home for future view controls
-   (expand/collapse all, density). */
+/* The bar above the levels: the breadcrumb of the drill, and the untested tag. */
 .yaml-cards-bar {
   display: flex;
   align-items: center;
@@ -1651,17 +1654,9 @@ select.file-viewer-run-args-input {
   overflow: hidden;
 }
 
-/* The guide-line colours (mirrors .yaml-tree's), so the drill's nesting rails
-   match the tree — read by `.yaml-level + .yaml-level` below. */
-.yaml-cards {
-  --yaml-guide-0: color-mix(in srgb, var(--accent) 55%, transparent);
-  --yaml-guide-1: color-mix(in srgb, #a887e8 55%, transparent);
-  --yaml-guide-2: color-mix(in srgb, #4fc1a6 55%, transparent);
-  --yaml-guide-3: color-mix(in srgb, #d9a05b 55%, transparent);
-}
-
-/* The card header names the collection (its key or list index) + a folding toggle,
-   a flow badge, a key/item count, and the delete — chrome tinted apart from the body. */
+/* The card header: the reorder grip, the card's title (which opens it as the main
+   card when it nests anything), a flow badge, a key/item count, and the delete —
+   chrome tinted apart from the body. */
 .yaml-card-head {
   display: flex;
   align-items: center;
@@ -1671,7 +1666,7 @@ select.file-viewer-run-args-input {
   border-bottom: 1px solid var(--border-color);
 }
 
-/* The whole "caret + title" is one click target that folds the card. */
+/* The title is one click target that opens the card as the drill's main card. */
 .yaml-card-toggle {
   display: flex;
   align-items: center;
@@ -1754,17 +1749,7 @@ select.file-viewer-run-args-input {
 .yaml-card-field .yaml-value-input {
   display: block;
   width: 100%;
-  border-color: transparent;
   padding: 2px 4px;
-}
-
-.yaml-card-field .yaml-value-input:hover:not(:focus) {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.yaml-card-field .yaml-value-input:focus {
-  background: var(--bg-panel);
-  border-color: var(--accent);
 }
 
 .yaml-card-field .yaml-value-locked {
@@ -1780,15 +1765,12 @@ select.file-viewer-run-args-input {
   padding: 6px 4px 0;
 }
 
-/* Drag-to-reorder (pointer-based, like the tree's grip): the grip appears on the
-   card header's hover but keeps its width always, so no header shifts when it does. */
-.yaml-card-grip {
-  flex: none;
-  cursor: var(--cur-grab, grab);
-  opacity: 0;
-  touch-action: none; /* the pointer drag owns the gesture, not the scroller */
+.yaml-card-add .yaml-key-input {
+  width: 100%;
 }
 
+/* Drag-to-reorder (pointer-based, like the tree's grip): the grip appears on the
+   card header's hover but keeps its width always, so no header shifts when it does. */
 .yaml-card-head:hover .yaml-card-grip,
 .yaml-card-grip:focus-visible {
   opacity: 1;
@@ -4642,7 +4624,7 @@ select.file-viewer-run-args-input {
 .file-viewer-pdf-markup-note-colors {
   margin: 4px 0;
 }
-/* ── The markup dock (`PdfMarkupDock`, docs/markup_notes_style_plan.md) ──
+/* ── The markup dock (`PdfMarkupDock`, docs/done/markup_notes_style_plan.md) ──
    A `.context-menu` surface (the floating recipe paints it) held over the
    pages instead of portaled: absolute in the scroll wrap, clear of the page
    rail and the agent panel (`--dock-inset-*`, measured by the dock). Size and
@@ -5686,6 +5668,17 @@ select.file-viewer-run-args-input {
   forced-color-adjust: none;
   transform-origin: 0 0;
   caret-color: CanvasText;
+  /* pdf.js measures every run's width with canvas text metrics and stretches the
+     span to it (`--scale-x`); an inherited spacing would widen the span past the
+     glyphs it is meant to cover. */
+  letter-spacing: normal;
+  word-spacing: normal;
+  color-scheme: only light;
+  /* Selectable itself, as pdf.js's layer is (it inherits the page's default): with
+     the app root's `user-select: none` only the spans were, so a drag begun in the
+     leading between two lines — no span there — started no selection at all. */
+  -webkit-user-select: text;
+  user-select: text;
   /* Over the canvas, under every overlay: it is the page's own words. */
   z-index: 1;
 }
@@ -5725,6 +5718,10 @@ select.file-viewer-run-args-input {
    drag selects whatever the misplaced boxes happen to overlap. `--min-font-size` is
    the engine's minimum font size, measured and set on the container by pdf.js. */
 .file-viewer-pdf-text-layer {
+  /* pdf.js sets the unrotated layer dimensions using these rounding steps. */
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit, 1));
   --min-font-size: 1;
   --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
   --min-font-size-inv: calc(1 / var(--min-font-size));
@@ -5738,9 +5735,28 @@ select.file-viewer-run-args-input {
   --rotate: 0deg;
   transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 }
-.file-viewer-pdf-text-layer span.markedContent {
+/* pdf.js 5+ wraps tagged content (`/MC` runs, which tagged-PDF LaTeX writes) in
+   these; they must not be boxes of their own, or the spans inside measure their
+   percentage positions against a zero-height span instead of the page. */
+.file-viewer-pdf-text-layer .markedContent {
+  display: contents;
+}
+/* The block after the spans that a selection lands on when the pointer is over a
+   gap (`textSelection.ts`). At rest it sits below the page and is nothing; while a
+   selection is being made it covers the layer, under the spans, so a drag through
+   the space between two words or lines no longer snaps the selection to the top or
+   bottom of the page. */
+.file-viewer-pdf-text-layer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: var(--cur-default, default);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.file-viewer-pdf-text-layer.selecting .endOfContent {
   top: 0;
-  height: 0;
 }
 /* A figure's alt text is not text on the page; it must not join a selection. */
 .file-viewer-pdf-text-layer span[role="img"] {

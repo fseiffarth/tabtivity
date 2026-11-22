@@ -8,7 +8,7 @@ answered is the "Push" section below.
 Nothing here has run against a real CalDAV server. The parsers, the merge, the
 push gate and the resource serializer are fixture- and unit-tested; the
 transport's hop and origin rules are tested against an in-process fake
-(`services::caldav::tests::fake`), but it has never spoken to a real server.
+(`services::calendar::caldav::tests::fake`), but it has never spoken to a real server.
 
 ## The one distinction the whole design rests on
 
@@ -33,7 +33,7 @@ CalDAV-backed.
 So the feature is built on **identity, not replacement**. A CalDAV resource has
 a URL the server hands back unchanged next time; it is stored as `caldav_href`
 in the row's `extra` flatten, and `merge_caldav_calendar_at`
-(`commands/calendar.rs`) reconciles on it:
+(`services/calendar/calendar_store.rs`) reconciles on it:
 
 | Case | Event | Task |
 |------|-------|------|
@@ -95,7 +95,7 @@ a row came from.
 ## Credentials, and the things that are not new
 
 No fourth credential mechanism: same OS keychain, same
-`services::remote_credentials`, same opt-in-default-off, same `true | null`
+`services::remote::remote_credentials`, same opt-in-default-off, same `true | null`
 (never bare `false`) remember argument, same "unreadable is not absence"
 tri-state, same `SavePasswordRow` off `useSavedCredentialSource`. The key is
 `caldav:<user>@<host>` — **server target, not Tabtivity account id**, matching
@@ -173,7 +173,7 @@ next request. Now:
   unsubscribing from it); its sync fails visibly instead.
 
 The test seam for all of this is `Dav::send`: under `cfg(test)` a thread-local
-fake answers requests in-process (`services::caldav::tests::fake`), because with
+fake answers requests in-process (`services::calendar::caldav::tests::fake`), because with
 `https_only` a plain-HTTP mock server cannot be reached and the crate has no
 TLS fixtures.
 

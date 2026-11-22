@@ -12,7 +12,9 @@ to-do board, project overview and (if you allow it) mail drafts.
 ## Open it
 
 **Ctrl+Shift+R** (Cmd+Shift+R on macOS), or the ✦ entry, opens the root
-console as a floating window over whatever is open. Its tabs live in
+console as a floating window over whatever is open. It is the **Root** view of
+the Cockpit window, which also holds the Now, Projects, Tonight, Mail, Calendar,
+To-do, Agents, Models and Machines views. Its tabs live in
 Tabtivity's root folder (`~/tabtivity/root/`), independent of any project.
 Closing the window ends nothing; one-click installs open their terminal tab
 here.
@@ -67,15 +69,15 @@ either.
 
 ## Approving what an agent proposes
 
-Waiting changes appear in the **✓ Approvals** pill of the mail, calendar or
-board window (each lists its own), grouped as Mail, Calendar, To-do board.
+Waiting changes appear in the **✓ Approvals** pill of the Mail, Calendar or
+To-do view (each lists its own), grouped as Mail, Calendar, To-do board.
 **Approve**, **Reject**, or **Approve all**; an applied change can be undone.
 A change proposed by an agent that has read outside mail is marked so. Review
 guards writes only — an agent can still tell its provider what it read.
 
 ## Docking an agent beside mail, the calendar or the board
 
-In those windows **Ctrl+1** (or ✦ in the title bar) docks your default
+In those views **Ctrl+1** (or ✦ in the title bar) docks your default
 root-console agent in a column on the right, **Ctrl+2 … Ctrl+9** the others,
 so you can watch its changes land. Details in `mail-calendar`.
 

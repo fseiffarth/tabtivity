@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Take the four numbers docs/performance_plan.md §1 asks for, from outside the
+# Take the four numbers docs/done/performance_plan.md §1 asks for, from outside the
 # running app, and append them to docs/performance_numbers.md so an agent can
 # read them. Run from a host shell (not from an agent tab: the fence hides
 # host processes) while the app is running with the usual tab set, idle.

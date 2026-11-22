@@ -1,3 +1,4 @@
+import { locateSourceWord, type PdfWordPhrase } from "../../../lib/viewers/tex/reverseWord";
 import { isTabKey } from "../../../lib/shortcuts/keyNames";
 import { lineStarts, indexedLine } from "../lineIndex";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -6,7 +7,7 @@ import { loadOllamaModel } from "../../../lib/agents/localDrivers";
 import { UntestedTag } from "../../common/UntestedTag";
 import { CompletionCache, caretAtLineEnd, completionLineLength, completionModels, completionWindow, editKind, inlineGhostTail, typeThrough, type CompletionGhost, type EditKind } from "../../../lib/viewers/completion/autocomplete";
 import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollamaCompletionProvider";
-import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
+import { CopilotCompletionProvider, CopilotFeedback, copilotFailureReason, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
 import { completionContext, ReferenceReads } from "../../../lib/viewers/completion/completionContext";
 import { CompletionOffers, startCompletionTiming } from "../../../lib/viewers/completion/completionTimings";
@@ -128,8 +129,7 @@ export function LinkOpenHint({
 
 // #45 automatic autocomplete: the idle time after the last keystroke before a
 // suggestion is requested is the user's choice per provider in the AI menu
-// (`autocomplete_delay_ms`); `acDelayMs` holds the defaults (600 ms local,
-// 200 ms Copilot, whose default trigger stays "on request").
+// (`autocomplete_delay_ms`); `acDelayMs` holds the default (200 ms for both).
 
 // Dictionary spell check (the Hunspell `spell_check` command): idle time after
 // the last keystroke before the draft is re-checked. A lookup, not a model call.
@@ -261,7 +261,7 @@ export function CodeEditor({
   onFollowLink?: (caret: number) => void;
   /** SyncTeX reverse-search target: move the caret to (1-based) `line`/`column`
    *  (`column` 0 = line start) and scroll it into view whenever `nonce` changes. */
-  gotoLine?: { line: number; column?: number; nonce: number };
+  gotoLine?: { line: number; column?: number; nonce: number; phrase?: PdfWordPhrase };
   /** Called once a `gotoLine` request has been applied, so the caller can clear
    *  it (consume the editorJump request). */
   onGotoApplied?: () => void;
@@ -1764,30 +1764,34 @@ export function CodeEditor({
     const el = textareaRef.current;
     if (!el) return;
     const text = draftRef.current;
-    const lineStart = lineStartOffset(text, gotoLine.line);
+    const word = gotoLine.phrase && locateSourceWord(text, gotoLine.line, gotoLine.phrase);
+    const line = word?.line ?? gotoLine.line;
+    const column = word?.column ?? gotoLine.column;
+    const lineStart = lineStartOffset(text, line);
     let offset = lineStart;
-    if (gotoLine.column && gotoLine.column > 1) {
+    if (column && column > 1) {
       const nl = text.indexOf("\n", lineStart);
       const lineEnd = nl === -1 ? text.length : nl;
-      offset = Math.min(lineStart + (gotoLine.column - 1), lineEnd);
+      offset = Math.min(lineStart + (column - 1), lineEnd);
     }
     el.focus();
     el.selectionStart = el.selectionEnd = offset;
     // Light the target line in the gutter straight away: assigning selectionStart
     // fires no `select` event, so `emitCaret` never runs and the caret-line
     // highlight would otherwise stay on wherever the cursor last was.
-    setCaretLine(gotoLine.line);
+    setCaretLine(line);
     // Centre the target line's visual top. `lineTop` accounts for the gutter's
     // 10px padding and, under soft-wrap (the LaTeX editor), the measured per-line
     // wrapped heights — so a target below several wrapped lines lands centred
     // instead of drifting up a row per wrap, which the old (line-1)·lineHeight
     // math got wrong for exactly the wide-prose files reverse search runs on.
-    const target = lineTop(gotoLine.line) - el.clientHeight / 2 + effectiveLineHeight / 2;
+    const rowTop = word && wrap ? textareaCaretMirrorOffsets(el, offset).top : lineTop(line);
+    const target = rowTop - el.clientHeight / 2 + effectiveLineHeight / 2;
     el.scrollTop = Math.max(0, target);
     syncScroll();
     // A band across the whole landed-on line, so a jump (a PDF Ctrl+click, an
     // error row) says where it went: the gutter tint alone is easy to miss.
-    setJumpFlash({ line: gotoLine.line, nonce: gotoLine.nonce });
+    setJumpFlash({ line, nonce: gotoLine.nonce });
     onGotoApplied?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gotoLine?.nonce, loaded]);
@@ -1959,25 +1963,27 @@ export function CodeEditor({
       acOffers.end();
       setSuggestion(null);
       const reason = String(e);
-      if (reason.includes("copilot_cancelled") || reason.includes("copilot_stale_document")) {
+      // Copilot says why it failed, for an automatic request too: with
+      // suggestions on while typing, a silent failure reads as "does nothing".
+      const copilotFailure = providerId === "copilot" ? copilotFailureReason(e) : undefined;
+      if (copilotFailure === null) {
         timing.outcome = "cancelled";
         setAcStatus(null);
         return;
       }
       countRequest("error");
+      if (copilotFailure) {
+        setAcStatus(t(copilotFailure.key, copilotFailure.code ? { code: copilotFailure.code } : undefined));
+        return;
+      }
       const missing = /role_not_loaded:(.+)$/.exec(reason)?.[1];
       if (missing) {
         setAcStatus(null);
         setAcRoleMissing(missing);
         return;
       }
-      // Sign-in and setup problems would otherwise be invisible with automatic
-      // suggestions on, so those two are shown even for an automatic request.
-      const setup = reason.includes("copilot_not_signed_in") ? "fileViewer.copilotNotSignedIn"
-        : reason.includes("copilot_not_installed") ? "fileViewer.copilotNotInstalled" : null;
-      setAcStatus(setup ? t(setup) : auto ? null : t(reason.includes("not_running")
-        ? "fileViewer.autocompleteUnavailable"
-        : acCopilot ? "fileViewer.copilotFailed" : "fileViewer.autocompleteFailed"));
+      setAcStatus(auto ? null : t(reason.includes("not_running")
+        ? "fileViewer.autocompleteUnavailable" : "fileViewer.autocompleteFailed"));
     } finally {
       settle();
       ctl.abort();
@@ -2004,9 +2010,9 @@ export function CodeEditor({
   // change; the cleanup clears the prior timer, so only an idle pause fires it.
   // Skipped while a suggestion is already showing or the \ref/\cite dropdown is
   // open. The focus/caret/context guards live in `requestCompletion`.
-  // On request only ("manual", Copilot's default) skips all of this: one
+  // On request only ("manual", a tab's opt-in) skips all of this: one
   // Ctrl+Space, one request.
-  const acAuto = effectiveAcTrigger(autocomplete?.trigger, acCopilot) === "auto";
+  const acAuto = effectiveAcTrigger(autocomplete?.trigger) === "auto";
   const acDelay = useSettingsStore((s) => acDelayMs(s.settings?.autocomplete_delay_ms, acCopilot));
   useEffect(() => {
     if (!autocomplete?.enabled || !acAuto || !loaded || !acVisible) return;

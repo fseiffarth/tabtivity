@@ -6,7 +6,7 @@
    between files without checking the cascade. */
 
 /* ── Mail client ─────────────────────────────────────────────────────────────
-   The embedded IMAP/SMTP tab (docs/mail_client_plan_a.md §1 row 13). Everything
+   The embedded IMAP/SMTP tab (docs/done/mail_client_plan_a.md §1 row 13). Everything
    here is built from the theme tokens (--text-primary / --bg-panel / --accent),
    so the pane inherits every theme rather than carrying its own palette.
 

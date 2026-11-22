@@ -1,5 +1,5 @@
 /**
- * F3 (`docs/cockpit_followup_handoff.md`): under 820 px Now's detail pane
+ * F3 (`docs/done/cockpit_followup_handoff.md`): under 820 px Now's detail pane
  * unmounts, and the Reader's composer with it. Its unsent text must still be
  * there when the pane is back, whether the window went wide -> narrow -> wide
  * or the user stepped list -> detail -> list -> detail. The draft is the

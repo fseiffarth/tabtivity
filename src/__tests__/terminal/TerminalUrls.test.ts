@@ -131,6 +131,12 @@ describe("isSignInUrl", () => {
     expect(isSignInUrl("https://github.com/login/device")).toBe(true);
   });
 
+  it("knows Claude Code's short sign-in link (2.1.330: an opaque query, no client_id)", () => {
+    expect(isSignInUrl("https://claude.ai/oauth/authorize?z-9BPEhwHUOJnCnjF5gRJZP4IsQH6dIjlW_Zu6CnqQti0")).toBe(true);
+    // The path alone, with nothing to authorize, is a docs link.
+    expect(isSignInUrl("https://example.com/oauth/authorize")).toBe(false);
+  });
+
   it("knows every link the phone's sign-in sheet knows (one shared rule)", () => {
     // Qwen's device page carries its code; Cursor's polling page a challenge.
     expect(isSignInUrl("https://chat.qwen.ai/authorize?user_code=K7QX-P2MD&client=qwen-code")).toBe(true);
@@ -157,6 +163,12 @@ describe("isSignInUrl", () => {
 describe("findSignInRequest", () => {
   it("finds the link and the paste-the-code prompt under it", () => {
     expect(findSignInRequest(at(AGY_ROWS), COLS, 0, AGY_ROWS.length - 1)).toEqual({ url: AGY_URL, wantsCode: true });
+  });
+
+  it("asks for Claude Code's code back under its short link (2.1.330, 80 columns)", () => {
+    const short = "https://claude.ai/oauth/authorize?z-9BPEhwHUOJnCnjF5gRJZP4IsQH6dIjlW_Zu6CnqQti0";
+    const rows = [row("If the browser didn't open, visit:"), row(short), row("Paste code here if prompted >")];
+    expect(findSignInRequest(at(rows), COLS, 0, 2)).toEqual({ url: short, wantsCode: true });
   });
 
   it("asks for no code when the program does not", () => {

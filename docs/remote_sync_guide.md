@@ -3,13 +3,16 @@
 The working guide to keeping a remote (SSH) project's **local mirror** and its
 **host tree** in step. `docs/context/git_sync.md` records *why* the design is
 what it is; this document says *what happens*, in what order, and what to do
-when the UI goes amber, orange or red. Code: `src-tauri/src/services/
-{remote_sync,sync_auto,sync_pool,sync_task,git_peer,local_loss,worker_sync}.rs` and
+when the UI goes amber, orange or red. Code: `src-tauri/src/services/remote/
+{remote_sync,sync_auto,sync_pool,sync_task,sync_op,sync_take_newer,worker_sync}.rs`,
+`services/git/git_peer.rs`, `services/local_loss.rs` and
 `src-tauri/src/commands/{sync,git_peer}.rs`; UI: `src/stores/remote/sync.ts`,
 `src/components/files/{FileTree,ProjectFilesView,ProjectFilesPane}.tsx`,
 `src/components/files/GitHistory.tsx` (the Lockstep bar).
 
 ## 1. The two trees and the two transports
+
+This is the **Remote** kind. A **Remote-only** project has no mirror and runs neither engine (git, files and tabs live on the host); a Remote project becomes one with the pill's *Stop keeping a local copy…* and back with *Keep a local copy…* (`commands/remote_unpair.rs`); a Local project with *Make remote only…*.
 
 A remote project has two real working trees:
 
@@ -176,8 +179,8 @@ and is resolved one at a time, with the same checks before each; one whose
 marker was turned off or excluded in the meantime is left alone.
 
 Deletions are not propagated in the background: a file deleted on one side
-sits orange until you finish the deletion from the diverged list (*apply
-delete*) or restore it from the other side.
+sits orange until you finish the deletion from the diverged list (its
+*Delete* button) or restore it from the other side.
 
 ### 2.5 Manual transfers and the confirmation
 
@@ -227,7 +230,7 @@ From the *± diverged* list or the row's context menu:
   open it byte-compares both sides and self-resolves an identical pair.
 - **Take host** for one or all: a confirmed pull.
 - **Keep local** for one or all: a confirmed force push.
-- **Apply delete** when one side is gone: propagates the deletion, after
+- **Delete** when one side is gone: propagates the deletion, after
   re-verifying live that the side is positively absent.
 
 **Take the newer copy automatically** (checkbox at the top of the diverged
@@ -247,7 +250,7 @@ machines' clocks.
 ### 3.1 Enabling and pairing
 
 Lockstep is **on by default** for a new git-backed remote project
-(`create_project`, `extend_project_to_remote`) and toggled from the *⇄ Lockstep*
+(`create_project`, `extend_project_to_remote`) and toggled from the *⇄ Git sync*
 button in the Git panel (`git_peer_set_enabled`). State lives in
 `<state_dir>/remote-projects/<id>/git_peer.json`.
 

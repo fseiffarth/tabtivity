@@ -50,7 +50,7 @@ Plain `voice` is the CPU. `voice-vulkan` (Linux, Windows) and `voice-metal`
 `glslc` at build time and links the loader. Bundles and the dev build turn them
 on (`scripts/lib/voice_gpu.sh`). Both sit on `whisper-rs-sys`, not `whisper-rs`,
 whose `vulkan` feature fails to compile where bindgen falls back to the bundled
-bindings. Measurements and open risks: `docs/voice_gpu_plan.md`.
+bindings. Measurements and open risks: `docs/done/voice_gpu_plan.md`.
 
 On Windows, `voice-vulkan` needs a target dir of about 22 characters or fewer.
 whisper.cpp's shader generator is a nested cmake project, and MSBuild's file
@@ -195,7 +195,7 @@ the line interrupts. The screen must stay on and the page open — Android
 takes the mic from a hidden page — so working from a pocket would need a
 native app.
 
-## Spoken navigation on the phone (docs/voice_nav_mode_plan.md)
+## Spoken navigation on the phone (docs/done/voice_nav_mode_plan.md)
 
 Inside the Focus mic, hands-free only. The dictation hook reads **utterances**,
 not deltas (`voiceInput.ts` `stepUtterances`: Android finalizes one utterance

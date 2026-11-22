@@ -14,7 +14,7 @@
  * 2. Field names are snake_case because they are serde-serialized Rust structs
  *    verbatim. Do not camelCase them on this side.
  *
- * Design rationale lives in `docs/mail_client_plan_a.md` (integration, store,
+ * Design rationale lives in `docs/done/mail_client_plan_a.md` (integration, store,
  * credentials) and `docs/mail_client_plan_b.md` (threat model, sanitizer,
  * transport, attachment rules).
  */

@@ -866,7 +866,7 @@ fn roots_cover_plain_multi_box_and_box_scope() {
     assert!(compute_fence_roots(&boxes, &projects, "box:ghost", false).is_none());
 }
 
-/// A remote-only member (`docs/remote_only_projects_plan.md`, E5) has no
+/// A remote-only member (`docs/done/remote_only_projects_plan.md`, E5) has no
 /// local tree: a `local_only` tab of it gets no roots (refused, never the
 /// stale `mirror` nor the default path), and as a box sibling, an attach
 /// root or a root-fence read-only path it contributes nothing — its
@@ -1287,7 +1287,7 @@ fn add_dir_flags_are_agent_specific_and_idempotent() {
     assert!(!runs_subcommand(&[]));
 }
 
-// ── the assistant scope (docs/assistant_plan.md, S1b) ───────────────────
+// ── the assistant scope (docs/done/assistant_plan.md, S1b) ───────────────────
 
 fn planted(id: &str, dir: &str) -> (BoxesList, ProjectsList) {
     let boxes: BoxesList =

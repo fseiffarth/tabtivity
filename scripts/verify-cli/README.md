@@ -68,7 +68,9 @@ gives its usage.
   `UserPromptSubmit` for whether each Enter submitted. `model.py <label> <bin>
   [expand]` walks the `/model` picker at 120×40 and 80×24 with arrows and
   Esc only (no turn); `expand` opens the folded `More models` row first. These need the login
-  and make small paid haiku turns.
+  and make small paid haiku turns. `login.sh <label> <bin>` needs none: it
+  draws `claude auth login`'s sign-in link in a scratch HOME at 120, 80 and 42
+  columns for the frame replay's `signIn` (2.1.330 shortened the link).
   Binaries come from the agent install's `.local/share/claude/versions/<v>`.
   `turn_hooks.py <label> <bin> <port> [case…]` needs no login: a scratch
   HOME, `stub_anthropic.py`, a dumping hook on every turn-relevant event. It
@@ -93,7 +95,15 @@ gives its usage.
   (`plugin` entry file, `bash`, `task`). `tabby.py` checks the
   assistant's tool pin, read from `assistant.rs`. `resume.py` covers
   `--session`, `--continue` and the warm-up `run`. `db.py` reads the session
-  database. The app's own store reader runs over a run's database with
+  database. `remote_store.py <label> <bin> <port> [turns]` runs one tab-like
+  OpenCode with no plugin, as on a remote host, and prints what the host-side
+  reader (`remote_transcript/opencode.rs`) relies on: the processes carrying the
+  launch id and the one holding the db, its start on the host clock against the
+  session's `time_created`, the WAL's restarts and valid frames per turn (its
+  file size is not its length), and db+WAL snapshots taken mid-turn. While it runs,
+  `VERIFY_OPENCODE_HOME=<its home> cargo test -p tabtivity --lib
+  verify_cli_follows_a_live_store -- --ignored --nocapture` follows it with the
+  app's snapshot code. The app's own store reader runs over a run's database with
   `VERIFY_OPENCODE_DB=<home>/.local/share/opencode/opencode.db
   VERIFY_OPENCODE_DIR=<home>/work VERIFY_OPENCODE_SESSION=<live record>
   cargo test -p tabtivity --no-default-features --lib verify_cli_reads_a_captured_store -- --ignored --nocapture`
@@ -124,6 +134,11 @@ gives its usage.
   prompts behind it and opens `/model` over them (`busy`, `queued`,
   `queued_model`), for the phone's footer read beside `Press up to edit queued
   messages`; run it at 44 and 56 columns.
+  `remote.py <label> <bin> <port>` reads one tab's and a second tab's store
+  the way the remote-host Chat can (over SFTP: `/proc`, never a command): the
+  processes carrying the tab's launch id, the `presence/<id>.lock` they hold,
+  the database and WAL across turns, a copy taken while a turn writes, the WAL
+  salts across a checkpoint, a subagent and `/clear`.
   A pinned build: the updater manifest (`agent_latest::Source::Manifest`)
   names the tarball and its sha512.
 - **Codex** (`codex/`): `writer_lock.py <label> <bin> [model]` opens a
@@ -148,6 +163,11 @@ gives its usage.
   (`rollout-events.txt`). Give the
   work folder its own `git init`, or the trust question offers to trust
   the enclosing repo.
+  `rollout_fd.py <label> <bin> <port> [variant…]` checks what the remote-host
+  Chat leans on: which process holds a thread's rollout open (`/proc/<pid>/fd`)
+  and whose launch id its environment carries — two tabs on one `CODEX_HOME`,
+  in-process (`--no-daemon`, `-c features.daemon_auto_start=false`) and under
+  the shared app-server daemon, through a turn and `/new`.
   `async_question.py <label> <bin> <port> [model]` (same home, model
   `gpt-6.1-sol` by default: the GPT-6 family's tools, `request_user_input_async`
   and `clock.sleep` among them, ride as an `additional_tools` input item, which
@@ -172,6 +192,13 @@ gives its usage.
   after each step and that the nested run moves neither record. It sets
   made-up tab variables, which the hooks write only into the scratch home.
   The session store is `scripts/copilot-events-probe.py` (`COPILOT_BIN=<bin>`).
+  `remote_store.py <label> <bin> [port] [case…]` is what a Copilot tab leaves
+  on a remote host for the desktop Chat (`remote_transcript/copilot.rs`): the
+  session folder and its `inuse.<pid>.lock`, `open-sessions-state.json`, the
+  log only growing through `/compact` and `/new`, a nested `copilot -p`'s
+  marker, the store with `COPILOT_HOME` unset and with `XDG_*` set, and a
+  second launch on the same `--session-id` (cases `pinned`, `unpinned`,
+  `homeonly`, `nested`, `resume`).
   Get a binary without installing it: `npm pack @github/copilot-linux-x64@<v>`,
   unpack, `package/copilot`.
 
@@ -200,6 +227,11 @@ gives its usage.
   names and prints, per step, which fired with which fields: a turn, a `!`
   shell escape, a `muse exec` from it, `/compact`, `/clear`, `/exit`, a
   `resume` with an Esc, Ctrl+C and a `!` under `--approval-mode untrusted`.
+  `remote.py <label> <bin>` runs two tabs of one folder and prints what the
+  remote-host Chat can read over SFTP (`/proc`, never a command): the
+  processes carrying each tab's launch id, the `session.jsonl` they hold
+  open (and across `/clear` and `resume <id>`), the log's `route_facts` pid,
+  and the log's growth while a turn writes.
   `turns.py shared` checks one command on all the app's events. Fetch a binary from the public
   channel manifest (checklist §1.5, Meta Muse Code). Run the binary, not the
   launcher, and drive other checks with `tui.py … -- <bin> --provider echo`,

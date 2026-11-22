@@ -1,8 +1,7 @@
 # Mobile dictation on the desktop's ears — Whisper behind the phone's microphone
 
-Status: plan, 2026-09-20. Nothing here is built. The groundwork that *is*
-built (the recognizer kept alive through pauses, wake lock, level meter) lives
-in `mobile-web/src/voiceSession.ts`.
+> **Status (screened against code 2026-11-22):** NOT-STARTED. No `/api/v1/speech` route, `services::speech` or `mobile-web/src/voiceCapture.ts` exists; the phone still dictates through the browser's Web Speech API (`mobile-web/src/voiceSession.ts`, `voiceInput.ts`). Its desktop counterpart in the desktop plan is step 10, also open.
+
 
 ---
 

@@ -1,4 +1,4 @@
-//! The AI switch (`docs/ai_switch_plan.md`): one machine-wide flag,
+//! The AI switch (`docs/done/ai_switch_plan.md`): one machine-wide flag,
 //! `Settings.ai_off`, set by the side panel's power button. While AI is off,
 //! nothing starts new AI work — no agent spawn, no input typed into an agent,
 //! no scheduled prompt, completion or mail AI call. Agents already running

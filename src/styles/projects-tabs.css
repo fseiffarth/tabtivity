@@ -1900,7 +1900,7 @@
   opacity: 0.7;
 }
 
-/* A stopped agent tab (docs/agent_tab_stop_plan.md): its process was ended to
+/* A stopped agent tab (docs/done/agent_tab_stop_plan.md): its process was ended to
    free memory and it resumes when shown. The label dims further and a small
    pause mark, two static bars, sits before it. Static: nothing animates. */
 .tab.stopped .tab-label {

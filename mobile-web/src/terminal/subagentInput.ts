@@ -53,7 +53,12 @@ export interface AgentListRow {
   task: string;
 }
 
-const ROW = /^(❯)?[\s│├└─]*([●◯])\s+(\S.*)$/u;
+const ROW = /^(❯)?[\s│├└─]*([●◯○])\s+(\S.*)$/u;
+/** The rows the list prints in place of the agents it has no room for: past
+ * five, `↓ 3 more` under the slice shown (and `↑ 2 more` over it once the
+ * cursor has scrolled it). Not agents — but rows of the list, so the box above
+ * is still looked for from over them. */
+const MORE_ROW = /^\s*[↑↓]\s+\d+\s+more\s*$/u;
 
 /** The text of the bottom `count` rows of an xterm buffer, as drawn. */
 export function bufferRows(
@@ -70,17 +75,24 @@ export function bufferRows(
 /** The agent list at the bottom of the screen, `main` first; null when the
  * bottom of the screen is anything else (a dialog, a picker, no agents). */
 export function readAgentList(rows: readonly string[]): AgentListRow[] | null {
+  return scanAgentList(rows)?.list ?? null;
+}
+
+/** `readAgentList`, with the row its `● main` is on: the list's `more` rows
+ * are rows of it too, so its length is not where it begins. */
+export function scanAgentList(rows: readonly string[]): { list: AgentListRow[]; start: number } | null {
   let end = rows.length;
   while (end > 0 && !rows[end - 1].trim()) end -= 1;
   const list: AgentListRow[] = [];
   for (let index = end - 1; index >= 0; index -= 1) {
+    if (MORE_ROW.test(rows[index])) continue;
     const match = ROW.exec(rows[index]);
     if (!match) return null;
     const rest = match[3].trimEnd();
     const row = { cursor: !!match[1], viewed: match[2] === "●" };
     if (rest === "main") {
       list.unshift({ ...row, main: true, kind: "", task: "" });
-      return list;
+      return { list, start: index };
     }
     const [kind = "", task = ""] = rest.split(/\s{2,}/u);
     list.unshift({ ...row, main: false, kind, task });

@@ -1,5 +1,8 @@
 # Git workflow for projects in Tabtivity
 
+> **Status (screened against code 2026-11-22):** PARTIAL, mostly built on 2026-11-18 (`50e609274`, `a0dcc3867`, `38d3305ff`). §1: "Publish branch to {destination}" (`projectFilesView.publishBranchTo`) and track/publish backend. §2: `commands/git_pull.rs` `reviewed_refs` pins fetch/preview/apply to the reviewed commit IDs; `GitPullPanel` reuses the fetch receipt. §3: per-file stage/unstage in `GitChangeTree.tsx` (`git_add_path` `unstage`), per-checkout drafts. §4: push-rejection recovery landed; the per-step commit/peer/hosting completion display and the "Delivery" performance measurements were not individually verified. Not live-tested.
+
+
 A project owner should be able to open a repository, choose what goes into a commit, and get that commit onto the intended branch using the project’s Git view. The first change to ship is first-push support for a new branch. The next is making the repository used for a network operation consistent from preview through execution.
 
 ## Current workflow

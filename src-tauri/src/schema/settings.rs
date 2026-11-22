@@ -574,7 +574,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_project_policies: Option<HashMap<String, CompletionProjectPolicy>>,
     /// The editor's automatic-trigger idle delay per completion provider, in
-    /// milliseconds. Frontend logic only (missing: 600 local, 200 Copilot);
+    /// milliseconds. Frontend logic only (missing: 200 for both);
     /// named here so it round-trips. Not a Copilot policy: changing it stops
     /// no server (`commands::settings::copilot_invalidated`).
     #[serde(default, deserialize_with = "lenient_autocomplete_delays", skip_serializing_if = "Option::is_none")]
@@ -733,7 +733,7 @@ pub struct Settings {
     /// `ai_off` means off until switched back on (`ai_switch::off_now`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_off_until: Option<u64>,
-    /// The privacy curtain (`docs/privacy_curtain_plan.md`): while a PDF or deck
+    /// The privacy curtain (`docs/done/privacy_curtain_plan.md`): while a PDF or deck
     /// is presented, the other app windows are covered and capture-protected.
     /// Unset is on; `false` leaves only the manual shortcut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -839,7 +839,7 @@ pub struct Settings {
     pub turn_checkpoints: Option<bool>,
     /// EXPERIMENTAL, default ON (`ON_BY_DEFAULT` in `src/lib/experimental.ts`:
     /// unset is on, an explicit `false` turns it off). The chat assistant
-    /// (`docs/assistant_plan.md`,
+    /// (`docs/done/assistant_plan.md`,
     /// `services::assistant`): chats in a scope of its own that reach the web
     /// and nothing else. Read via [`Settings::assistant_enabled`]; the
     /// commands, the spawn and the web lane refuse while it is off.
@@ -1066,7 +1066,7 @@ pub struct Settings {
     /// frontend type declares it and it round-trips as written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_tabs_after_min: Option<u32>,
-    /// Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the most agent
+    /// Stopping idle agent tabs (`docs/done/agent_tab_stop_plan.md`): the most agent
     /// tabs with a running process before the least recently used are stopped
     /// (kept as a tab, resumed when shown). Absent → 30, `0` → off. Read
     /// entirely on the frontend (`src/lib/agents/agentTabStop.ts`); a named

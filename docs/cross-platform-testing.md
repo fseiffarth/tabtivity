@@ -1,5 +1,7 @@
 # Tabtivity cross-platform test checklist
 
+> **Status (screened against code 2026-11-22):** REFERENCE (a manual test checklist, not a plan; every box is a live-QA item and stays unticked until a tester runs it). Entry-point names match `src/lib/i18n/en.ts` ("Models & agents", "Manage CLIs"). Not live-tested.
+
 Use a separate copy for each OS/build. Start with sections 1–4: they cover the
 CLI download/install buttons, Ollama installation/upgrades, and local model pulls.
 An unchecked box means **not tested**. Check a box only when its expected result

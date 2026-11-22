@@ -2535,7 +2535,7 @@ pub fn run() {
             commands::presenter::presenter_next_monitor,
             commands::presenter::presenter_inhibit_sleep,
             commands::presenter::presenter_release_sleep,
-            // The privacy curtain (docs/privacy_curtain_plan.md)
+            // The privacy curtain (docs/done/privacy_curtain_plan.md)
             commands::presenter::presenting_state,
             commands::presenter::privacy_curtain_set,
             commands::workspace::network_conn_type,

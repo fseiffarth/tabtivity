@@ -1,16 +1,8 @@
 # PDF markup mode — review and improvement plan
 
-> **Status (2026-10-25): items 1, 2 and most of 3 are implemented** (not
-> live-verified): 1 — the round is bound to the tab its last prompt went to
-> (`roundTarget` in `usePdfMarkup.ts`); 2 — a custom instruction in an `apply`
-> round that fell back to `list` gets `LIST_FALLBACK_GUARD` appended
-> (`mobile_control/markup.rs`); 3 — `PdfMarkupLayer` mounts only on `near`
-> pages, and box/arrow/stamp/area drags repaint from a cached copy of the
-> committed marks. Not done: memoizing `edit`/`PdfPageCanvas` (item 3's last
-> point; the repaint cost is already gone, only React reconciliation of the
-> near pages is left), items 4–7 and the smaller items. Line numbers are
-> from `develop` at `9be78e95` (v0.2.29) and will drift; grep for the named
-> symbol before acting on one.
+> **Status (screened against code 2026-11-22):** PARTIAL. Items 1 (`roundTarget` in `usePdfMarkup.ts`), 2 (`LIST_FALLBACK_GUARD`, `mobile_control/markup.rs`) and most of 3 (`PdfMarkupLayer` mounts on `near` pages only, drags repaint from a cached copy) are in code; memoizing `edit`/`PdfPageCanvas` is not. Items 4 to 7 are not: the prompt still has no arrow direction or marks overflow file, `markupGate` still hides the button for remote projects and popouts (`src/lib/viewers/pdfMarkup.ts`), the desktop with no agent tab still says "Open an agent tab in this project to send", Undo and ticks still do not survive closing the view, and the shared round hook (item 7) was only partly taken by `docs/markup_refactor_plan.md` (shared `mobile-web/src/markup/submitState.ts`). The desktop strip described in places is now the dock plus Agent panel (`docs/done/markup_notes_style_plan.md`). Not live-tested.
+
+> Line numbers below are from `develop` at `9be78e95` (v0.2.29) and have drifted; grep for the named symbol before acting on one.
 
 Two independent read-only passes (same brief, no shared context) over the
 phone (`mobile-web/src/components/MarkupView.tsx`, `mobile-web/src/markup/`),

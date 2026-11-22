@@ -1,5 +1,7 @@
 # Phone access for every project type: handoff
 
+> **Status (screened against code 2026-11-22):** Phase 1 steps A1-B* are on develop (handoff final review `11c2f9b9`; see the plan's status line). Container/VM tab reach is still open. Not live-tested.
+
 Plan: `docs/mobile_every_project_type_plan.md`. Worktree
 `.claude/worktrees/mobile-every-type`, branch `mobile-every-type`. One section
 per agent step; later agents append theirs.

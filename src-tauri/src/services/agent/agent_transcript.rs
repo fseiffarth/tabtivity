@@ -428,7 +428,7 @@ pub struct TranscriptUsage {
 /// the next message writes to the cache again once the time has run out.
 /// Claude says the lifetime per request (`usage.cache_creation`: 1 h for a
 /// subscription's main conversation, 5 min on an API key); Codex's is
-/// OpenAI's 30 minutes. See `docs/cli_caching_plan.md` phase 3.
+/// OpenAI's 30 minutes. See `docs/done/cli_caching_plan.md` phase 3.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptCache {
@@ -1027,6 +1027,13 @@ fn codex_transcript_at(
     let rollout = codex_rollout(project_id, &child)?;
     let spawns = Spawns::Codex { stores: &stores, thread: &child.id };
     read_transcript_in(&rollout, TranscriptKind::Codex, &spawns, false, version, limit)
+}
+
+/// A host Codex tab's rollout, from its local copy `main`
+/// (`services::remote_transcript::codex`). Its spawned threads are listed in
+/// the host's state store, which is not copied: no subagent cards.
+pub(crate) fn codex_host_transcript_at(main: &Path, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+    read_transcript_in(main, TranscriptKind::Codex, &Spawns::None, false, version, limit)
 }
 
 /// A spawned thread's rollout: the path its row names, taken only when it is

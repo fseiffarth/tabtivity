@@ -33,6 +33,7 @@ import {
   applyRenameToTabs,
   applyLocationToTabs,
   detachedSeedEvent,
+  detachedSetZoomEvent,
   detachedStatusEvent,
   mintDetachedSplitIds,
   type DetachedEdit,
@@ -137,17 +138,13 @@ export function DetachedApp({ param }: Props) {
   // names; undefined for a local project (no locality axis).
   const [remoteInfo, setRemoteInfo] = useState<DetachedRemoteInfo | undefined>(undefined);
 
-  // This popout's OWN per-window zoom. Restored from the first seed (persisted on
-  // the main window's detached entry), then owned locally — Ctrl +/- adjusts it
-  // and streams the change back for persistence. Held in a ref so the keydown
-  // listener binds once. `zoomSeeded` guards apply-on-seed to the FIRST seed, so a
-  // later re-seed (an edit, a tab docked in) can't revert the live zoom.
-  const zoomRef = useRef(1);
+  // The first seed restores the override. Later tab edits can reseed the tree.
   const zoomSeeded = useRef(false);
+  const [zoomOverride, setZoomOverride] = useState<number | null>(null);
+  const mainZoom = useSettingsStore((s) => s.settings?.ui_zoom);
+  const effectiveZoom = clampZoom(zoomOverride ?? mainZoom);
+  useEffect(() => applyZoom(effectiveZoom), [effectiveZoom]);
 
-  // Theme injection (same as the main shell), but nothing project-switch-aware.
-  // `skipZoom` so we DON'T inherit the main window's `ui_zoom` — a popout owns its
-  // own zoom (applied from its seed below), which is what makes zoom per-window.
   useEffect(() => {
     void loadSettings({ skipZoom: true });
   }, [loadSettings]);
@@ -239,17 +236,19 @@ export function DetachedApp({ param }: Props) {
   // that from a stray one.
   useEffect(() => startStrayFullscreenGuard(getCurrentWindow()), []);
 
+  useTauriListener(
+    () => listen<number | null>(detachedSetZoomEvent(label), ({ payload }) => {
+      zoomSeeded.current = true;
+      setZoomOverride(payload);
+    }),
+    [label],
+  );
+
   // Per-window zoom via Ctrl +/- / Ctrl+0, handled before any editable-target
   // guard (like F11) so it works from a focused terminal too — the browser-zoom
   // convention. Scales THIS window's webview only and streams the new value back
   // to the main window so it persists on this popout's detached entry.
   useEffect(() => {
-    const applyAndPersist = (z: number) => {
-      const next = clampZoom(z);
-      zoomRef.current = next;
-      applyZoom(next);
-      void emit(DETACHED_ZOOM, { scope: param.scope, groupId: param.groupId, zoom: next });
-    };
     const onKeyDown = (e: KeyboardEvent) => {
       // Agent panes consume Ctrl +/- for their own font zoom and stopPropagation,
       // so those never reach here — this only fires for the rest of the window.
@@ -259,11 +258,14 @@ export function DetachedApp({ param }: Props) {
       );
       if (!zoom) return;
       e.preventDefault();
-      applyAndPersist(zoom === "reset" ? 1 : stepZoom(zoomRef.current, zoom === "in" ? 1 : -1));
+      const next = zoom === "reset" ? null : stepZoom(effectiveZoom, zoom === "in" ? 1 : -1);
+      zoomSeeded.current = true;
+      setZoomOverride(next);
+      void emit(DETACHED_ZOOM, { scope: param.scope, groupId: param.groupId, zoom: next });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [param.scope, param.groupId]);
+  }, [param.scope, param.groupId, effectiveZoom]);
 
   // Ctrl+Shift+T — reopen the last closed agent tab into THIS popout. The
   // closed list lives in the main window, so this only asks (DETACHED_REOPEN).
@@ -402,16 +404,9 @@ export function DetachedApp({ param }: Props) {
     const unlistenSeed = subscribeTauri(() => listen<DetachedSeed>(detachedSeedEvent(label), (ev) => {
       seeded = true;
       if (timer) clearTimeout(timer);
-      // Restore this popout's own zoom on the FIRST seed only (later re-seeds must
-      // not clobber a live zoom the user has since changed). A popout that has its
-      // OWN persisted zoom uses it; a brand-new popout with none inherits the main
-      // window's current `ui_zoom` at birth (so a 4K user's popouts aren't tiny)
-      // and then diverges the moment it's adjusted. Undefined on both ⇒ 100%.
       if (!zoomSeeded.current) {
         zoomSeeded.current = true;
-        const mainZoom = useSettingsStore.getState().settings?.ui_zoom;
-        zoomRef.current = clampZoom(ev.payload.zoom ?? mainZoom);
-        applyZoom(zoomRef.current);
+        setZoomOverride(ev.payload.zoom ?? null);
       }
       // Register each seeded tab's viewerState BEFORE rendering, so a viewer pane
       // mounting this frame recovers its per-tab scroll/zoom + #45 autocomplete/

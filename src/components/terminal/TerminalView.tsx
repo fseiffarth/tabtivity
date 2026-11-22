@@ -2801,7 +2801,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             else setPanelPicked("files");
           } } : undefined,
           cwd,
-          onHost: readerOnHost,
+          onHost: readerOnHost ? readerAgent : undefined,
         } : undefined}
       />
     )}

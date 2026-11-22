@@ -1,5 +1,7 @@
 # PdfViewer split — plan
 
+> **Status (screened against code 2026-11-22):** PARTIAL. Phases 1 to 3 are done as each phase's own status line says: `pdf/PdfThumb|PdfPageCanvas|PdfOutlinePane|zoomAnchor|reloadSettle` and the hooks `usePdfPresent|Metadata|Outline|TextSelection|Find|PageJump|Links|ReverseSearch|Notes|Print`, `usePageTransfer` exist; `PdfViewer.tsx` is 2,697 lines (plan: about 2,300). `usePageArrangement` and `usePdfSave` were deliberately not made. Phase 4 (document load, viewport) is not started, as recommended. Later PDF work added `textSelection.ts` and `clickedWord.ts` beside them. Not live-tested.
+
 Simplify `src/components/embed/pdf/PdfViewer.tsx` (5,537 lines on
 2026-11-14) by moving its parts into their own files and pulling
 `PdfCanvas`'s feature clusters out into hooks, the way `usePdfMarkup.ts` already

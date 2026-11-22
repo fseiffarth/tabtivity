@@ -1728,7 +1728,7 @@ fn export_refuses_vm_projects() {
     });
 }
 
-/// A remote-only project (`docs/remote_only_projects_plan.md`, E5) has no
+/// A remote-only project (`docs/done/remote_only_projects_plan.md`, E5) has no
 /// local copy: the preview measures none (a stale `mirror` included), asking
 /// for this machine's tree is refused before anything is written, and a bundle
 /// without a tree imports remote-only again with no mirror folder minted. The

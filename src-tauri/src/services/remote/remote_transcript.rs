@@ -33,8 +33,10 @@
 //! `.meta.json` with each read of the conversation (it ties an `Agent` call
 //! to the subagent it spawned: the call's card gets its handle), and a
 //! subagent's own conversation (or a `Workflow` run's journal) only when that
-//! subagent is opened ([`copy_subagents`]). Other CLIs keep stores Tabtivity cannot name without a hook (Codex
-//! mints its thread id itself) and answer `unsupported`.
+//! subagent is opened ([`copy_subagents`]).
+//!
+//! Other CLIs: each has its own module (`codex`, …), which finds and copies
+//! that CLI's store; one that cannot answers `unsupported`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,6 +49,16 @@ use crate::services::agent_session::is_uuid_shaped;
 use crate::services::agent_transcript::AgentTranscript;
 use crate::services::remote::RemotePoolState;
 use crate::services::sftp::SyncKind;
+
+// One module per CLI other than Claude: how that CLI's store is found on the
+// host and copied here ([`host_tab_transcript`] dispatches to them).
+mod agy;
+mod codex;
+mod copilot;
+/// What a tab's CLI holds open on the host (`agy`, `muse`).
+mod holders;
+mod muse;
+mod opencode;
 
 /// How often a Reader's read asks the host whether the transcript grew.
 const CHECK_EVERY: Duration = Duration::from_millis(1500);
@@ -133,12 +145,24 @@ pub fn claude_slug(cwd: &str) -> String {
     cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
 }
 
-/// Where the local copy of the host transcript `launch_id` lives.
-fn mirror_file(project_id: &str, host_id: &str, launch_id: &str) -> PathBuf {
+/// The folder local copies of `host_id`'s conversations live in, in the
+/// project's session folder. Each CLI's module names its own files below it
+/// (Claude's `<launch id>.jsonl`; another CLI uses its own prefix).
+fn host_dir(project_id: &str, host_id: &str) -> PathBuf {
     crate::storage::project_session_dir(project_id)
         .join("host-transcripts")
         .join(crate::storage::project_key(host_id))
-        .join(format!("{launch_id}.jsonl"))
+}
+
+/// Where the local copy of the host transcript `launch_id` lives.
+fn mirror_file(project_id: &str, host_id: &str, launch_id: &str) -> PathBuf {
+    host_dir(project_id, host_id).join(format!("{launch_id}.jsonl"))
+}
+
+/// How often a host is asked whether a conversation grew: less often on a
+/// host the user called careful or tagged HPC.
+fn check_every(spec: &crate::schema::project::RemoteSpec) -> Duration {
+    if crate::services::hpc_mode::is_careful_host(spec) { CAREFUL_CHECK_EVERY } else { CHECK_EVERY }
 }
 
 /// What [`host_tab_copy`] holds of a host tab's conversation.
@@ -151,15 +175,68 @@ pub enum HostCopy {
     At(PathBuf),
 }
 
-/// The conversation of the `agent` tab with launch id `launch_id` that runs on
-/// `host_id` of the remote project `project_id`, read as
+/// One agent tab that runs on a remote project's host, as a read of its
+/// conversation names it: what every CLI's host read below is handed.
+pub struct HostTab<'a> {
+    pub pool: &'a RemotePoolState,
+    pub project_id: &'a str,
+    /// `primary` or a worker id.
+    pub host_id: &'a str,
+    /// The tab's launch id (`TAB_UID` in its CLI's environment on the host).
+    pub launch_id: &'a str,
+    /// The folder the tab runs in on the host, when the caller knows it.
+    pub tab_dir: Option<&'a str>,
+    /// The tab's launch moment (epoch ms) when it was opened fresh rather
+    /// than restored: a conversation found by folder must be newer.
+    pub since: Option<i64>,
+}
+
+/// The conversation of the `agent` tab `tab` that runs on its remote
+/// project's host, read as
 /// [`crate::services::agent_transcript::agent_session_transcript`] reads a
-/// local tab's. `None` when `project_id` names no remote project (or no such
-/// host): the tab then runs here after all, and the local read answers.
-#[allow(clippy::too_many_arguments)]
+/// local tab's. `None` when the tab's project names no remote project (or no
+/// such host): the tab then runs here after all, and the local read answers.
+/// Each CLI's store is found and copied by its own module below.
 pub async fn host_tab_transcript(
-    pool: &RemotePoolState,
+    tab: &HostTab<'_>,
     agent: &str,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+) -> Option<AgentTranscript> {
+    crate::services::remote::remote_target_for_host(tab.project_id, tab.host_id)?;
+    if subagent.is_some_and(|token| !crate::services::agent_transcript::is_subagent_token(token)) {
+        return Some(AgentTranscript::unavailable("no_subagent"));
+    }
+    Some(match agent {
+        "claude" => claude_host_transcript(tab, subagent, version, limit).await,
+        "codex" => codex::host_transcript(tab, subagent, version, limit).await,
+        "opencode" => opencode::host_transcript(tab, subagent, version, limit).await,
+        "copilot" => copilot::host_transcript(tab, subagent, version, limit).await,
+        "agy" => agy::host_transcript(tab, subagent, version, limit).await,
+        "muse" => muse::host_transcript(tab, subagent, version, limit).await,
+        _ => AgentTranscript::unavailable("unsupported"),
+    })
+}
+
+/// [`host_tab_transcript`] of a Claude tab.
+async fn claude_host_transcript(
+    tab: &HostTab<'_>,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+) -> AgentTranscript {
+    let Some(read) = claude_host_read(tab.pool, tab.project_id, tab.host_id, tab.launch_id, subagent, version, limit).await else {
+        return AgentTranscript::unavailable("disconnected");
+    };
+    read
+}
+
+/// [`claude_host_transcript`]'s read; `None` only when the project names no
+/// remote host (checked by the caller first).
+#[allow(clippy::too_many_arguments)]
+async fn claude_host_read(
+    pool: &RemotePoolState,
     project_id: &str,
     host_id: &str,
     launch_id: &str,
@@ -167,10 +244,7 @@ pub async fn host_tab_transcript(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
-    crate::services::remote::remote_target_for_host(project_id, host_id)?;
-    if subagent.is_some_and(|token| !crate::services::agent_transcript::is_subagent_token(token)) {
-        return Some(AgentTranscript::unavailable("no_subagent"));
-    }
+    let agent = "claude";
     let local = match host_tab_copy(pool, agent, project_id, host_id, launch_id).await? {
         HostCopy::Unavailable(reason) => return Some(AgentTranscript::unavailable(reason)),
         // Claude writes its file with the first turn: a session started under
@@ -209,7 +283,7 @@ async fn copy_subagents(
     let Some(target) = crate::services::remote::remote_target_for_host(project_id, host_id) else {
         return;
     };
-    let every = if crate::services::hpc_mode::is_careful_host(&target.spec) { CAREFUL_CHECK_EVERY } else { CHECK_EVERY };
+    let every = check_every(&target.spec);
     let mut mirrors = MIRRORS.lock().await;
     let Some(mirror) = mirrors.get_mut(&mirror_key(project_id, host_id, launch_id)) else {
         return;
@@ -367,6 +441,9 @@ pub async fn host_tab_copy(
     launch_id: &str,
 ) -> Option<HostCopy> {
     let target = crate::services::remote::remote_target_for_host(project_id, host_id)?;
+    if agent == "codex" {
+        return Some(codex::host_copy(pool, project_id, host_id, launch_id).await);
+    }
     if agent != "claude" {
         return Some(HostCopy::Unavailable("unsupported"));
     }
@@ -374,7 +451,7 @@ pub async fn host_tab_copy(
         return Some(HostCopy::Unavailable("no_session"));
     }
     let local = mirror_file(project_id, host_id, launch_id);
-    let every = if crate::services::hpc_mode::is_careful_host(&target.spec) { CAREFUL_CHECK_EVERY } else { CHECK_EVERY };
+    let every = check_every(&target.spec);
     let mut mirrors = MIRRORS.lock().await;
     let mirror = mirrors.entry(mirror_key(project_id, host_id, launch_id)).or_default();
     let fresh = mirror.checked.is_some_and(|at| at.elapsed() < every);
@@ -409,6 +486,8 @@ fn mirror_key(project_id: &str, host_id: &str, launch_id: &str) -> String {
 /// (`services::agent_host_move`), so the next read finds it afresh.
 pub async fn forget(project_id: &str, host_id: &str, launch_id: &str) {
     MIRRORS.lock().await.remove(&mirror_key(project_id, host_id, launch_id));
+    agy::forget(project_id, host_id, launch_id);
+    muse::forget(project_id, host_id, launch_id);
 }
 
 /// The session the tab launched as `launch_id` runs on the host now, and the

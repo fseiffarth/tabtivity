@@ -1,6 +1,6 @@
 # Pi and Cline as local-model drivers — plan
 
-Status: implemented 2026-10-06 (steps 0a, 0b, 1, 2, 4; step 3 deferred to todo), uncommitted, never live
+> **Status (screened against code 2026-11-22):** Steps 0a, 0b, 1, 2, 4 are in code (`d9edfa935`): Pi's `@earendil-works/pi-coding-agent` in `agent_registry.rs`, receive-only local-model homes in `agent_auth.rs`, `pi` and `cline` rows in `LOCAL_DRIVERS`. `LOCAL_DRIVERS` now lives in `services/local_drivers.rs`, not `commands/ollama.rs` as the body says. Step 3 (Codex extra-args forwarding, `forwards_args`) was never built. Not live-tested unless the doc/todo says so.
 
 ## Why
 

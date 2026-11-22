@@ -1,5 +1,5 @@
 # The cargo feature that puts speech on the GPU on this machine, for the local
-# builds (docs/voice_gpu_plan.md). Prints nothing where it cannot be built: that
+# builds (docs/done/voice_gpu_plan.md). Prints nothing where it cannot be built: that
 # build still works, its Chat just says CPU, and a warning says why. CI names
 # its feature itself (.github/workflows/ci-cd.yml).
 voice_gpu_feature() {

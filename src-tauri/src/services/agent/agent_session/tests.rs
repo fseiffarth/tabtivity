@@ -2275,8 +2275,8 @@ fn a_broken_windows_path_trust_key_is_repaired() {
     assert_eq!(repair_codex_state_headers(&fixed), None);
     assert_eq!(codex_hook_state_in(&fixed, cfg, cmd), CodexHookState::Enabled);
     // Trust repairs it on the way, and registration on every spawn.
-    let trusted = trust_codex_hooks_in(&broken, &[cfg.to_string()], cmd).unwrap();
-    assert!(!trusted.contains("[hooks.state.\"C:"), "{trusted}");
+    let repaired = trust_codex_hooks_in(&broken, &[cfg.to_string()], cmd).unwrap();
+    assert!(!repaired.contains("[hooks.state.\"C:"), "{repaired}");
     assert!(!registered_codex_config(cmd, &broken).contains("[hooks.state.\"C:"));
     // A valid escaped basic-string key is left alone and read unescaped.
     let escaped = format!("[hooks.state.\"{}:x:0:0\"]\nenabled = true\n", cfg.replace('\\', "\\\\"));
@@ -2301,9 +2301,9 @@ fn a_duplicate_trust_table_after_codex_s_literal_key_is_dropped() {
     assert!(fixed.contains(&format!("[hooks.state.'{cfg}:session_start:0:0']\ntrusted_hash = \"{hash}\"\n\n[tui]\nx = 1\n")));
     assert_eq!(codex_hook_state_in(&fixed, cfg, cmd), CodexHookState::Enabled);
     // Trust now finds Codex's literal-key table and updates it in place.
-    let trusted = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).unwrap();
-    assert_eq!(trusted.matches(":session_start:0:0").count(), 1, "{trusted}");
-    assert_eq!(trust_codex_hooks_in(&trusted, &[cfg.to_string()], cmd), None);
+    let updated = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).unwrap();
+    assert_eq!(updated.matches(":session_start:0:0").count(), 1, "{updated}");
+    assert_eq!(trust_codex_hooks_in(&updated, &[cfg.to_string()], cmd), None);
 }
 
 #[test]

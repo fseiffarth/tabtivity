@@ -652,8 +652,8 @@ export interface Settings {
   /** Missing provider retains Ollama; prose keeps its existing Ollama role. */
   code_completion_provider?: "ollama" | "copilot";
   /** The automatic autocomplete trigger's idle delay per provider, in ms; one
-   *  of 100/200/400/600/1200. Missing or another value: the default (600 for a
-   *  local model, 200 for Copilot). Machine-wide, every tab of that provider. */
+   *  of 100/200/400/600/1200. Missing or another value: the default (200 for
+   *  both). Machine-wide, every tab of that provider. */
   autocomplete_delay_ms?: { ollama?: number; copilot?: number };
   /** Experimental entry point; this alone never authorizes cloud context. */
   copilot_completion?: boolean;
@@ -824,7 +824,7 @@ export interface Settings {
   project_remarks?: boolean;
   /** EXPERIMENTAL, default OFF. The chat assistant: chats in a scope of its
    *  own that can search and read the web and see nothing else
-   *  (`docs/assistant_plan.md`). The backend reads the same flag
+   *  (`docs/done/assistant_plan.md`). The backend reads the same flag
    *  (`Settings::assistant_enabled`) and refuses its commands, the spawn and
    *  the web lane while it is off. */
   assistant?: boolean;
@@ -917,7 +917,7 @@ export interface Settings {
    *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
    *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
   sleep_tabs_after_min?: number;
-  /** Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the most agent
+  /** Stopping idle agent tabs (`docs/done/agent_tab_stop_plan.md`): the most agent
    *  tabs with a running process before the least recently used are stopped
    *  (kept, resumed when shown). Unset → 30; `0` → off. Read through
    *  `stopAgentTabsCap` (`lib/agents/agentTabStop`). */
@@ -1200,7 +1200,7 @@ export interface RemoteSpec {
    *  forward. Written by the backend at creation/boot, never user-set. What a
    *  VM-aware surface (the pill glyph, the spawn guard) dispatches on. */
   vm?: boolean;
-  /** Remote-only project (`docs/remote_only_projects_plan.md`): no local
+  /** Remote-only project (`docs/done/remote_only_projects_plan.md`): no local
    *  mirror; files, tabs and git all live on the host. Written by the backend
    *  at creation (or a conversion), read-only to the renderer. Absent = `vm`
    *  (a VM is remote-only). Read it through `isHostPinned`, never directly. */
@@ -1707,13 +1707,16 @@ export interface HostInitReport {
 }
 
 /** `remote_unpair_mirror_preview`'s answer: what "Stop keeping a local copy"
- *  would leave behind (`docs/remote_only_projects_plan.md` E8). Every count
+ *  would leave behind (`docs/done/remote_only_projects_plan.md` E8). Every count
  *  blocks the conversion; `stoppedWorkers` is only named. */
 export interface UnpairPreview {
   lockstepEnabled: boolean;
   mirrorIsRepo: boolean;
   commitsNotOnHost: number;
   uncommitted: number;
+  /** Git-ignored files/folders in the mirror (never on the host through
+   *  lockstep); `null` when git could not say. Absent from older backends. */
+  ignored?: number | null;
   unpushedSyncEdits: number;
   localTabs: number;
   stoppedWorkers: string[];

@@ -637,7 +637,7 @@ html[data-steer-region="header"] .app-header.is-autohide {
   opacity: 0.7;
 }
 
-/* The privacy curtain (components/layout/PrivacyCurtain, docs/privacy_curtain_plan.md).
+/* The privacy curtain (components/layout/PrivacyCurtain, docs/done/privacy_curtain_plan.md).
    `cover`: an opaque panel over the window; everything else stops painting.
    No blur, ever: blurred text can still be read, and a blur over live
    terminals is repainted every frame on WebKitGTK's software path. */

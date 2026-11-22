@@ -44,14 +44,29 @@ import { CloseIcon } from "../common/icons/Icon";
  * machine's own connection is a separate pooled session keyed by its own id,
  * not by this project), though a saved password for that host target is
  * picked up automatically since the keychain is keyed by host, not project.
+ *
+ * **Local → Remote-only** (`docs/done/remote_only_projects_plan.md` D7) is this
+ * dialog with "Keep a local copy" off (`initialKeepLocalCopy={false}` from the
+ * pill's "Make remote only…"): the project is extended exactly as above —
+ * lockstep carries its committed history to the empty host folder — and
+ * `onExtended(false)` hands it to the pill, which opens the Stop-keeping check
+ * (`StopLocalCopyDialog`) once the host is connected. That check refuses while
+ * anything still lives only here, so the switch never strands work. Without
+ * git nothing would reach the host on its own, so the switch is locked on.
  */
 export function ExtendToRemoteDialog({
   project,
   initialMachine,
+  initialKeepLocalCopy = true,
+  onExtended,
   onClose,
 }: {
   project: ProjectEntry;
   initialMachine?: DroppedGlobalMachine;
+  /** Off: the user asked for a remote-only project (Local → Remote-only). */
+  initialKeepLocalCopy?: boolean;
+  /** After a successful extend, before `onClose`: whether the local copy stays. */
+  onExtended?: (keepLocalCopy: boolean) => void;
   onClose: () => void;
 }) {
   const t = useT();
@@ -65,6 +80,11 @@ export function ExtendToRemoteDialog({
   const hostFolderName = hostFolder === null ? safeName : hostFolder.trim();
   const hostFolderProblem = hostFolderNameProblem(hostFolderName);
   const extendProjectToRemote = useProjectsStore((s) => s.extendProjectToRemote);
+  // Only a git project's files reach the host on their own (lockstep, which
+  // extend turns on for it — the backend's `git_backed` rule).
+  const usesGit = !!project.git_type && project.git_type !== "none";
+  const [keepLocalCopyOn, setKeepLocalCopy] = useState(initialKeepLocalCopy);
+  const keepLocalCopy = keepLocalCopyOn || !usesGit;
 
   const remote = useRemoteSession({ kind: "new" });
   const {
@@ -208,7 +228,10 @@ export function ExtendToRemoteDialog({
       // `.venv`, a build dir, a data drop) should never cross. The prompt walks
       // the local side straight away and fills in the host column when the
       // connect above lands.
-      useBigFoldersStore.getState().openOnce(project.id);
+      // Remote-only: those folders never cross anyway (nothing syncs once the
+      // copy is dropped), so the prompt would ask about nothing.
+      if (keepLocalCopy) useBigFoldersStore.getState().openOnce(project.id);
+      onExtended?.(keepLocalCopy);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -230,7 +253,7 @@ export function ExtendToRemoteDialog({
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
-          <h2>{t("extendRemote.title", { name: project.name })}</h2>
+          <h2>{t(keepLocalCopy ? "extendRemote.title" : "extendRemote.titleRemoteOnly", { name: project.name })}</h2>
           <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
@@ -241,7 +264,7 @@ export function ExtendToRemoteDialog({
               {t("extendRemote.attachMid")}
             </>
           ) : (
-            t("extendRemote.attachGeneric")
+            t(keepLocalCopy ? "extendRemote.attachGeneric" : "extendRemote.attachRemoteOnly")
           )}
         </p>
 
@@ -326,11 +349,36 @@ export function ExtendToRemoteDialog({
           </label>
         )}
 
+        {/* Local → Remote-only: the same switch as the new-project dialog's. */}
+        {step === "details" && (
+          <label className={`toggle-card${keepLocalCopy ? " is-on" : ""}`}>
+            <span className="toggle-card-body">
+              <span className="toggle-card-title">
+                {t("projectDialog.keepLocalCopyTitle")} <UntestedTag id="extendRemote.remoteOnly" />
+              </span>
+              <span className="toggle-card-desc">
+                {t(usesGit ? "extendRemote.keepLocalCopyDesc" : "extendRemote.keepLocalCopyNoGit")}
+              </span>
+            </span>
+            <span className="eld-switch">
+              <input
+                type="checkbox"
+                checked={keepLocalCopy}
+                disabled={busy || !usesGit}
+                onChange={(e) => setKeepLocalCopy(e.target.checked)}
+              />
+              <span className="eld-switch-track" aria-hidden="true" />
+            </span>
+          </label>
+        )}
+
         {step === "details" && (
           <div className="project-dialog-path extend-summary">
-            <span>{t("extendRemote.summaryLede")}</span>
+            <span>{t(keepLocalCopy ? "extendRemote.summaryLede" : "extendRemote.summaryLedeRemoteOnly")}</span>
             <div className="extend-path-row">
-              <span className="extend-path-label">{t("extendRemote.local")}</span>
+              <span className="extend-path-label">
+                {t(keepLocalCopy ? "extendRemote.local" : "extendRemote.localKept")}
+              </span>
               <code className="extend-remote-path">{localPath}</code>
             </div>
             <div className="extend-path-row">
@@ -362,7 +410,9 @@ export function ExtendToRemoteDialog({
               disabled={busy || !remoteReady || !!hostFolderProblem}
               title={t(remoteReady ? "extendRemote.readyTitle" : "extendRemote.notReadyTitle")}
             >
-              {busy ? t("extendRemote.extending") : t("extendRemote.extendToRemote")}
+              {busy
+                ? t("extendRemote.extending")
+                : t(keepLocalCopy ? "extendRemote.extendToRemote" : "extendRemote.moveToHost")}
             </button>
           )}
         </div>

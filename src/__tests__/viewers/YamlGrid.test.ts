@@ -1,24 +1,23 @@
 /**
- * The YAML grid model (#yaml-grid) — the pure detection + layout that turns a
- * collection of like-shaped records into rows × columns.
+ * The YAML card-view model (#yaml-grid) — the pure structure behind the drill.
  *
- * The load-bearing properties pinned here: a grid is only offered for genuinely
- * tabular data (a flat config map is not a grid); columns are the union of the
- * records' keys; a missing key is an editable empty cell, not a hidden one; and —
- * because the grid is a view on the text like the tree — every edit it delegates
- * to `lib/viewers/yaml` leaves the file's comments and untouched bytes intact.
+ * The load-bearing properties pinned here: cards are only offered for a file that
+ * nests a collection (a flat config map has nothing to card); the drill's levels
+ * follow the path to the focused card and fall back to the overview for a focus
+ * the file no longer holds; and — because the cards are a view on the text like
+ * the tree — every edit they delegate to `lib/viewers/yaml` leaves the file's
+ * comments and untouched bytes intact.
  */
 import { describe, it, expect } from "vitest";
-import { parseYaml, setValue, addChild, deleteNode, literalFor } from "../../lib/viewers/yaml";
+import { parseYaml, setValue, addChild, deleteNode, childLiteral } from "../../lib/viewers/yaml";
 import {
-  parseGridDoc,
-  gridModelFor,
-  gridCandidates,
-  hasGrid,
-  hasCards,
+  buildIndex,
+  buildLevels,
+  docHasCards,
   isContainer,
-  cellKind,
-  nestedLabel,
+  recordName,
+  subcardsOf,
+  topCards,
 } from "../../lib/viewers/yamlGrid";
 
 const LIST_OF_MAPS = `# services
@@ -47,70 +46,9 @@ debug: false
 port: 8080
 `;
 
-describe("grid detection", () => {
-  it("finds a list of mappings and unions its keys as columns", () => {
-    const { candidates } = parseGridDoc(LIST_OF_MAPS);
-    expect(candidates).toHaveLength(1);
-    const model = gridModelFor(candidates[0]);
-    expect(model.shape).toBe("seq");
-    // First-seen order across all rows: name, port, enabled.
-    expect(model.columns).toEqual(["name", "port", "enabled"]);
-    expect(model.rows).toHaveLength(3);
-    expect(model.rows.map((r) => r.header)).toEqual(["0", "1", "2"]);
-  });
+const hasCards = (text: string) => docHasCards(parseYaml(text));
 
-  it("aligns cells to columns, leaving a missing key null", () => {
-    const model = gridModelFor(parseGridDoc(LIST_OF_MAPS).candidates[0]);
-    const db = model.rows[1]; // { name: db, port: 5432 } — no `enabled`
-    expect(db.cells[0]?.value).toBe("db");
-    expect(db.cells[1]?.value).toBe("5432");
-    expect(db.cells[2]).toBeNull(); // missing → empty cell
-  });
-
-  it("finds a map of mappings, headed by the outer key", () => {
-    const { candidates } = parseGridDoc(MAP_OF_MAPS);
-    const model = gridModelFor(candidates[0]);
-    expect(model.shape).toBe("map");
-    expect(model.label).toBe("hosts");
-    expect(model.columns).toEqual(["ip", "role"]);
-    expect(model.rows.map((r) => r.header)).toEqual(["alpha", "beta"]);
-  });
-
-  it("does NOT treat a flat config map as a grid", () => {
-    expect(hasGrid(FLAT_CONFIG)).toBe(false);
-    expect(gridCandidates(parseYaml(FLAT_CONFIG))).toHaveLength(0);
-  });
-
-  it("ranks multiple tabular regions largest first", () => {
-    const text = `small:
-  a: {x: 1, y: 2}
-  b: {x: 3, y: 4}
-big:
-  - id: 1
-    a: 1
-    b: 2
-    c: 3
-  - id: 2
-    a: 4
-    b: 5
-    c: 6
-  - id: 3
-    a: 7
-    b: 8
-    c: 9
-`;
-    const cands = gridCandidates(parseYaml(text));
-    expect(cands.length).toBeGreaterThanOrEqual(2);
-    // `big` (3×4) outranks `small` (2×2).
-    expect(gridModelFor(cands[0]).label).toBe("big");
-  });
-
-  it("reports no candidates for an unparseable file", () => {
-    expect(hasGrid("\tbad: indent")).toBe(false);
-  });
-});
-
-describe("card view gate (hasCards)", () => {
+describe("card view gate (docHasCards)", () => {
   it("shows cards when a collection nests another", () => {
     expect(hasCards(LIST_OF_MAPS)).toBe(true); // list of mappings
     expect(hasCards(MAP_OF_MAPS)).toBe(true); // map of mappings
@@ -135,52 +73,78 @@ describe("card view gate (hasCards)", () => {
   });
 });
 
-describe("cell kinds", () => {
-  it("classifies scalar, empty, nested and locked cells", () => {
-    const text = `- name: web
-  meta: {a: 1}
-- name: db
-`;
-    const model = gridModelFor(parseGridDoc(text).candidates[0]);
-    // columns: name, meta
-    const web = model.rows[0];
-    const db = model.rows[1];
-    expect(cellKind(web.cells[0], web.map)).toBe("scalar"); // name: web
-    expect(cellKind(web.cells[1], web.map)).toBe("nested"); // meta: {a: 1}
-    expect(cellKind(db.cells[1], db.map)).toBe("empty"); // db has no meta
-    expect(nestedLabel(web.cells[1]!)).toBe("{ 1 }");
+describe("the drill", () => {
+  it("tops a root list with a card per item, a root map with one card", () => {
+    expect(topCards(parseYaml(LIST_OF_MAPS))).toHaveLength(3);
+    const doc = parseYaml(MAP_OF_MAPS);
+    expect(topCards(doc)).toEqual([doc.docs[0]]);
+  });
+
+  it("shows only the overview when nothing is focused", () => {
+    const doc = parseYaml(LIST_OF_MAPS);
+    const levels = buildLevels(doc, null, buildIndex(doc));
+    expect(levels).toHaveLength(1);
+    expect(levels[0].selected).toBeNull();
+    // A lone root list is the top level's parent, so its cards reorder.
+    expect(levels[0].parent).toBe(doc.docs[0]);
+  });
+
+  it("walks one level per step down to the focused card and shows its children", () => {
+    const doc = parseYaml(MAP_OF_MAPS);
+    const root = doc.docs[0];
+    const hosts = root.children[0];
+    const levels = buildLevels(doc, hosts.id, buildIndex(doc));
+    // document → hosts → hosts' own children (alpha, beta), nothing highlighted.
+    expect(levels.map((l) => l.selected?.id ?? null)).toEqual([root.id, hosts.id, null]);
+    expect(levels[2].cards).toEqual(subcardsOf(hosts));
+    expect(levels[2].parent).toBe(hosts);
+    // A lone root map is not reorderable at the top.
+    expect(levels[0].parent).toBeNull();
+  });
+
+  it("falls back to the overview for a focus the file no longer holds", () => {
+    const doc = parseYaml(MAP_OF_MAPS);
+    const levels = buildLevels(doc, "no-such-node", buildIndex(doc));
+    expect(levels).toHaveLength(1);
+    expect(levels[0].selected).toBeNull();
+  });
+
+  it("names a record by its first name-ish field", () => {
+    const [web] = topCards(parseYaml(LIST_OF_MAPS));
+    expect(recordName(web)).toBe("web");
+    const anonymous = topCards(parseYaml("- port: 1\n  nested: {a: 1}\n"))[0];
+    expect(recordName(anonymous)).toBeNull();
   });
 });
 
-describe("grid edits are text splices (view on the text)", () => {
-  it("edits a scalar cell, keeping the file's comment and other bytes", () => {
+describe("card edits are text splices (view on the text)", () => {
+  it("edits a scalar field, keeping the file's comment and other bytes", () => {
     const doc = parseYaml(LIST_OF_MAPS);
-    const model = gridModelFor(gridCandidates(doc)[0]);
-    const portCell = model.rows[0].cells[1]!; // web.port = 8080
-    const next = setValue(LIST_OF_MAPS, doc, portCell, "9090");
+    const port = topCards(doc)[0].children[1]; // web.port = 8080
+    const next = setValue(LIST_OF_MAPS, doc, port, "9090");
     expect(next).toContain("port: 9090");
     expect(next).toContain("# services"); // the comment survives
-    expect(next).toContain("name: db"); // untouched rows survive
+    expect(next).toContain("name: db"); // untouched cards survive
     expect(next).not.toContain("port: 8080");
   });
 
-  it("fills a missing cell by adding the key to that row's mapping", () => {
+  it("adds a field to one card's mapping only", () => {
     const doc = parseYaml(LIST_OF_MAPS);
-    const model = gridModelFor(gridCandidates(doc)[0]);
-    const db = model.rows[1]; // no `enabled`
-    const next = addChild(LIST_OF_MAPS, doc, db.map!, "key", "enabled", literalFor("text", "true", false));
-    const reparsed = gridModelFor(gridCandidates(parseYaml(next))[0]);
-    expect(reparsed.rows[1].cells[2]?.value).toBe("true");
-    // The other rows are unchanged.
-    expect(reparsed.rows[0].cells[2]?.value).toBe("true");
-    expect(reparsed.rows[2].cells[2]?.value).toBe("false");
+    const db = topCards(doc)[1]; // no `enabled`
+    const next = addChild(LIST_OF_MAPS, doc, db, "key", "enabled", childLiteral(doc, db, "text", "true"));
+    const cards = topCards(parseYaml(next));
+    expect(cards[1].children.map((c) => c.key)).toEqual(["name", "port", "enabled"]);
+    // The picked type is the type the file gets: text `true` is written quoted.
+    expect(cards[1].children[2].value).toBe("true");
+    expect(next).toContain('enabled: "true"');
+    // The other cards are unchanged.
+    expect(cards[0].children).toHaveLength(3);
+    expect(cards[2].children).toHaveLength(3);
   });
 
-  it("deletes a whole row", () => {
+  it("deletes a whole card", () => {
     const doc = parseYaml(LIST_OF_MAPS);
-    const model = gridModelFor(gridCandidates(doc)[0]);
-    const next = deleteNode(LIST_OF_MAPS, model.rows[1].map!); // drop `db`
-    const reparsed = gridModelFor(gridCandidates(parseYaml(next))[0]);
-    expect(reparsed.rows.map((r) => r.cells[0]?.value)).toEqual(["web", "cache"]);
+    const next = deleteNode(LIST_OF_MAPS, topCards(doc)[1]); // drop `db`
+    expect(topCards(parseYaml(next)).map(recordName)).toEqual(["web", "cache"]);
   });
 });

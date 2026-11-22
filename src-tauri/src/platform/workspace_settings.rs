@@ -1,5 +1,5 @@
 //! The desktop workspace settings the `x11` backend takes over while it runs,
-//! and gives back on quit (`docs/wayland_app_parking_plan.md` Phase 2).
+//! and gives back on quit (`docs/done/wayland_app_parking_plan.md` Phase 2).
 //!
 //! Parking needs a second workspace that stays put: Cinnamon (Muffin) and
 //! GNOME (Mutter) keep the count, the names and whether workspaces come and go

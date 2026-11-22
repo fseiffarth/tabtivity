@@ -1,8 +1,8 @@
 # The desktop UI system
 
-What the desktop pass (`docs/desktop_ui_plan.md`, 2026-11-01) settled, so the
+What the desktop pass (`docs/done/desktop_ui_plan.md`, 2026-11-01) settled, so the
 next change reads it instead of reinventing it. The phone has its own sheet
-(`docs/mobile_pwa_design_plan.md`) in the same direction: one system, calm
+(`docs/done/mobile_pwa_design_plan.md`) in the same direction: one system, calm
 chrome, colour only for state.
 
 ## Type

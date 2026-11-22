@@ -1,5 +1,7 @@
 # Markup refactor — plan
 
+> **Status (screened against code 2026-11-22):** PARTIAL. Steps A to G are in code (shared `submitState.ts` helpers, `useSealedPdfFrame.ts` / `useFrameRenderQueue.ts`, `useStableList`, E's hot-path work). Step H (`useMarkupHost` in `PdfViewer`/`ImageView`) is still not built (no such symbol in `src/`), and `queueHeldPrompt` was skipped on purpose. The PdfViewer split H waited on is committed (`docs/pdf_viewer_split_plan.md`). Never run live.
+
 The larger half of the markup `/simplify` pass. The small half landed as
 `70df7dc10` ("share the duplicated markup code, drop dead code, cut hot-path
 work"): the shared helpers in `mobile-web/src/markup/` (`paintLayer`,
