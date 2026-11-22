@@ -271,10 +271,11 @@ mod imp {
             let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8) as i32;
             let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
             params.set_n_threads(threads);
-            match whisper_lang(&config.lang)? {
-                Some(lang) => params.set_language(Some(lang)),
-                None => params.set_detect_language(true),
-            }
+            // `None` is whisper's "auto": detect, then decode. Never
+            // `set_detect_language(true)`: that means detect ONLY, and `full`
+            // returns before it decodes anything (empty text every time).
+            // `FullParams::new` starts on "en", so `None` must be set.
+            params.set_language(whisper_lang(&config.lang)?);
             if let Some(prompt) = config.prompt.as_deref().filter(|p| !p.contains('\0')) {
                 params.set_initial_prompt(prompt);
             }
@@ -355,6 +356,68 @@ mod imp {
             assert_eq!(whisper_lang("de-DE"), Ok(Some("de")));
             assert_eq!(whisper_lang("en"), Ok(Some("en")));
             assert_eq!(whisper_lang("xx"), Err(VoiceError::BadArgument));
+        }
+
+        /// The speech clip a real-model test transcribes: `VOICE_TEST_WAV`, a
+        /// 16-bit PCM WAV (any rate or channel count) kept outside the repo.
+        fn test_wav(path: &Path) -> Vec<f32> {
+            let bytes = std::fs::read(path).expect("VOICE_TEST_WAV is readable");
+            assert!(bytes.len() > 44 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE", "a RIFF/WAVE file");
+            let (mut rate, mut channels, mut bits) = (16_000u32, 1u16, 16u16);
+            let mut at = 12;
+            while at + 8 <= bytes.len() {
+                let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+                let body = &bytes[at + 8..(at + 8 + size).min(bytes.len())];
+                match &bytes[at..at + 4] {
+                    b"fmt " => {
+                        channels = u16::from_le_bytes(body[2..4].try_into().unwrap());
+                        rate = u32::from_le_bytes(body[4..8].try_into().unwrap());
+                        bits = u16::from_le_bytes(body[14..16].try_into().unwrap());
+                    }
+                    b"data" => {
+                        assert_eq!(bits, 16, "16-bit PCM");
+                        let pcm: Vec<f32> =
+                            body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0).collect();
+                        return super::super::super::resample::Resampler::new(rate, channels).push(&pcm);
+                    }
+                    _ => {}
+                }
+                at += 8 + size + (size & 1);
+            }
+            panic!("no data chunk in the WAV");
+        }
+
+        fn test_config(lang: &str) -> SessionConfig {
+            SessionConfig {
+                session: 1,
+                owner: super::super::super::Owner::Tab { client: app_core::ClientId::new("main"), key: "t".into() },
+                mode: super::super::super::session::ListenMode::Dictate,
+                lang: lang.into(),
+                end_silence_ms: 700,
+                headset: false,
+                prompt: None,
+                barge_in: || {},
+                pacing: super::super::super::session::Pacing::LIVE,
+            }
+        }
+
+        /// By hand, with a real model and a speech clip: `VOICE_TEST_MODEL=<ggml
+        /// file> VOICE_TEST_WAV=<clip.wav> cargo test -p tabtivity --lib --
+        /// --ignored --nocapture open_detection_returns_text`. `lang: "auto"`
+        /// ("Let the model guess") must decode, not only detect: it once came
+        /// back empty every time.
+        #[test]
+        #[ignore = "needs a model file and a speech clip"]
+        fn open_detection_returns_text() {
+            let model = PathBuf::from(std::env::var("VOICE_TEST_MODEL").expect("VOICE_TEST_MODEL"));
+            let wav = PathBuf::from(std::env::var("VOICE_TEST_WAV").expect("VOICE_TEST_WAV"));
+            let audio = test_wav(&wav);
+            let factory = Factory { model, vad_model: None, gpu: false };
+            let mut whisper = Whisper::load(&factory, &test_config("auto"), Arc::new(AtomicBool::new(false)))
+                .expect("the model loads");
+            let said = whisper.transcribe(&audio, false).expect("a run");
+            eprintln!("open detection heard {:?}", said.text);
+            assert!(!said.text.is_empty(), "open detection decodes");
         }
 
         /// By hand, with a real model: `VOICE_TEST_MODEL=<ggml file> cargo test
