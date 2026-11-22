@@ -5122,6 +5122,15 @@ button.terminal-reader-option:hover:not(:disabled) {
   gap: 6px;
 }
 
+/* Settings → Voice: the candidate languages of "detect", one checkbox each. */
+.settings-voice-langs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 12px;
+}
+
 /* Keep command copying outside the code block's horizontal scroll area. */
 .terminal-reader-code-block { position: relative; padding-top: 30px; }
 .terminal-reader-code-actions {

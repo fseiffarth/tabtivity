@@ -130,6 +130,7 @@ Search settings also offers Copy link beside each result. Prefer those links or 
 | voice | Hands-free pause | tabtivity://settings/voice/settings.voice.pause |
 | voice | Speech model | tabtivity://settings/voice/settings.voice.model |
 | voice | Speech language | tabtivity://settings/voice/settings.voice.lang |
+| voice | Languages to pick from | tabtivity://settings/voice/settings.voice.detectLangs |
 | voice | Read-aloud speed | tabtivity://settings/voice/settings.voice.rate |
 | voice | Natural voice | tabtivity://settings/voice/settings.voice.natural |
 | voice | Headset mode | tabtivity://settings/voice/settings.voice.headset |
