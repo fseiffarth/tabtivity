@@ -88,6 +88,36 @@ swamped. The final stays one run over the whole segment (a seam is not a
 sentence end). Plain dictate keeps its 700 ms closing pause: shorter would
 split sentences at thinking pauses, and the field already shows the words.
 
+## The speech language (`lang.rs`)
+
+`lang: "auto"` is whisper's open detection, per segment:
+`FullParams::set_language(None)`. Never `set_detect_language(true)`, which
+means *detect only* and returns no text (that was the "Let the model guess"
+bug, fixed 2026-11-22).
+
+With `langs` (at most 5 whisper codes, from the `voice_detect_langs` setting)
+a session picks among those languages instead of whisper's ~99, since an open
+pick on a short phrase drifts to a neighbour (German to Dutch).
+- **Who detects:** only a `Job::Final` (`Transcriber::transcribe_final`) runs
+  `pcm_to_mel` + `lang_detect` and takes the best candidate's renormalised
+  probability (`lang::pick`). Partials and seam prefixes use the locked
+  language, else the last kept pick, else the fallback.
+- **The lock:** `LangPicker` (worker side) locks on the first kept final with
+  at least 1500 ms of audio and p >= 0.6. Later finals don't detect: the lock
+  holds for the session, and the renderer's picker is the way out. One
+  candidate is locked from the start.
+- **Events:** `voice:final` carries `lang` when transcribed. `voice:lang
+  { session, lang }` goes out once, just before the final that locked,
+  candidate sessions only.
+- **Params:** built once per candidate, because each setter leaks a C string.
+- **Cancel:** `lang_detect` cannot be aborted, so `cancel` is checked after
+  it.
+- **The renderer:** the voice-command matcher and read-aloud follow the
+  locked language. Read-aloud keeps it per tab, in memory.
+
+The phone cannot detect: the browser's recognizer has to be told one language
+up front. Plan: `docs/voice_language_detection_plan.md`.
+
 ## One listener per machine
 
 The mic belongs to one Chat tab at a time (`voice::ACTIVE`); a new start
