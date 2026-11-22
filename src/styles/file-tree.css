@@ -810,43 +810,70 @@
 .downloads-resize:hover {
   background: var(--accent-soft);
 }
-.downloads-header {
+.downloads-header,
+.downloads-section--line {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
-  border-bottom: 1px solid var(--border-color);
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 0 var(--space-2) 0 var(--space-3);
 }
-.downloads-title {
+.downloads-header {
+  border-bottom: 1px solid var(--border-subtle);
+}
+/* The empty form: the label, what the window holds, the picker, refresh —
+   one line instead of the ~190 px resizable section. */
+.downloads-section--line {
+  flex-wrap: wrap;
+}
+.downloads-title,
+.downloads-line-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
-.downloads-windows {
-  display: flex;
-  gap: 2px;
-  margin-left: auto;
-}
-.downloads-win-btn {
-  font-size: var(--text-sm);
-  padding: 1px 6px;
-  height: 20px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+.downloads-line-toggle {
+  height: 24px;
+  padding: 0;
+  border: none;
   background: transparent;
-  color: var(--text-secondary, var(--text-primary));
+  font-family: inherit;
   cursor: var(--cur-pointer, pointer);
 }
-.downloads-win-btn.active {
-  color: var(--accent);
-  border-color: var(--accent);
+.downloads-line-toggle:hover {
+  color: var(--text-primary);
+}
+.downloads-line-toggle svg:first-child {
+  width: 12px;
+  height: 12px;
+}
+.downloads-line-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.downloads-header .downloads-windows {
+  margin-left: auto;
+}
+/* The window picker is the shared `.seg`, at the toolbar's size. */
+.downloads-windows.seg > button {
+  height: 20px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
 }
 .downloads-target {
   font-size: var(--text-sm);
   color: var(--text-muted, var(--text-secondary));
-  padding: 2px var(--space-2);
-  border-bottom: 1px solid var(--border-color);
+  padding: 2px var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -869,12 +896,24 @@
   font-size: var(--text-sm);
   color: var(--text-muted, var(--text-secondary));
   white-space: nowrap;
-  margin-left: 6px;
 }
 .downloads-copied {
-  color: var(--accent);
+  display: inline-flex;
+  color: var(--success);
   font-size: var(--text-md);
-  margin-left: 4px;
+}
+.dl-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+}
+/* A download row has no share bar: the size · time meta ends the row. */
+.downloads-row.file-grid {
+  grid-template-columns: 16px 20px minmax(0, 1fr) auto;
+  grid-template-areas: "state act main size";
 }
 
 /* Only EMBEDDABLE files can be dragged onto a subwindow's tab bar (Group K).
