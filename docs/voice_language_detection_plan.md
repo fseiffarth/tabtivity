@@ -1,7 +1,9 @@
 # Desktop dictation: detecting the speech language — plan
 
-> **Status: in progress** (2026-11-22): implementing with subagents (Organisation below). Desktop (whisper) only;
-> the phone is out of scope (below).
+> **Status: landed on develop (2026-11-22, ..a8590fa0f), never live.** Gates skipped
+> at the user's request after partial runs; real-model tests and step 4's
+> numbers not run (no model in the fence). Handoff:
+> `docs/voice_language_detection_handoff.md`.
 
 ## Why
 
