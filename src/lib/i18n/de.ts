@@ -6266,6 +6266,7 @@ export const dict: Dict = {
   "terminal.reader.completion": "Vorgeschlagene Fortsetzung: {text} — Tab oder → übernimmt sie",
   "terminal.reader.suggestionSourceClaude": "Claude",
   "terminal.reader.suggestionSourceLocal": "Lokales Modell",
+  "terminal.reader.suggestedBy": "Vorschlag von",
   "terminal.reader.suggestionByModel": "Vorgeschlagen vom lokalen Modell {model}",
   "terminal.reader.suggestionPlaceholder": "{text}   ⇥ Tab oder → übernimmt es",
   "terminal.reader.subagentPlaceholder": "Nachricht an diesen Subagenten — Enter sendet, Umschalt+Enter für eine neue Zeile, ↑ für frühere Nachrichten",

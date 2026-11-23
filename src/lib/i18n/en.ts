@@ -6436,6 +6436,7 @@ export const enSource = {
   "terminal.reader.completion": "Suggested continuation: {text} — Tab or → to take it",
   "terminal.reader.suggestionSourceClaude": "Claude",
   "terminal.reader.suggestionSourceLocal": "Local model",
+  "terminal.reader.suggestedBy": "Suggested by",
   "terminal.reader.suggestionByModel": "Suggested by the local model {model}",
   "terminal.reader.suggestionPlaceholder": "{text}   ⇥ Tab or → to use it",
   "terminal.reader.subagentPlaceholder": "Message this subagent — Enter sends, Shift+Enter for a new line, ↑ for earlier messages",

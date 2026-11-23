@@ -1539,8 +1539,9 @@ function ReaderComposer({ scope, tabKey, tabRef, cwd, remoteHost, ptyId, cli, su
           onPaste={onComposerPaste}
         />
         {completion.text && <PromptGhost box={composerRef} typed={draft} rest={completion.text} />}
-        {/* One corner, one row of pills: the suggestion's (not at rest, where
-            the short placeholder stands for it) with the dock's beside it. */}
+        {/* One corner, one row of pills: who wrote the suggestion or the
+            draft's completion (not at rest, where the short placeholder
+            stands for it) with the dock's beside it. */}
         {shownSuggestion && !draft && !resting ? <span className="terminal-reader-suggestion-tag">
           <SuggestionSourceChip local={suggestionLocal} model={suggestionModel} />
           {!suggestionLocal && <UntestedTag id="terminal.reader.promptSuggestion" />}
@@ -1548,6 +1549,7 @@ function ReaderComposer({ scope, tabKey, tabRef, cwd, remoteHost, ptyId, cli, su
           {docked && <UntestedTag id="terminal.reader.dock" />}
           {docked && sideChat && <UntestedTag id="terminal.reader.sideChat" />}
         </span> : completion.text ? <span className="terminal-reader-suggestion-tag">
+          <SuggestionSourceChip local={completion.local} model={completion.model} />
           <UntestedTag id="agents.promptAutocomplete" />
           {docked && <UntestedTag id="terminal.reader.dock" />}
           {docked && sideChat && <UntestedTag id="terminal.reader.sideChat" />}

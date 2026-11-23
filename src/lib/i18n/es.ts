@@ -6240,6 +6240,7 @@ export const dict: Dict = {
   "terminal.reader.completion": "Continuación sugerida: {text} — Tab o → para tomarla",
   "terminal.reader.suggestionSourceClaude": "Claude",
   "terminal.reader.suggestionSourceLocal": "Modelo local",
+  "terminal.reader.suggestedBy": "Sugerido por",
   "terminal.reader.suggestionByModel": "Sugerido por el modelo local {model}",
   "terminal.reader.suggestionPlaceholder": "{text}   ⇥ Tab o → para usarlo",
   "terminal.reader.subagentPlaceholder": "Mensaje a este subagente — Intro envía, Mayús+Intro para una nueva línea, ↑ para mensajes anteriores",

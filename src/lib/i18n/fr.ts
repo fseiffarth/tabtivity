@@ -6242,6 +6242,7 @@ export const dict: Dict = {
   "terminal.reader.completion": "Suite suggérée : {text} — Tab ou → pour la prendre",
   "terminal.reader.suggestionSourceClaude": "Claude",
   "terminal.reader.suggestionSourceLocal": "Modèle local",
+  "terminal.reader.suggestedBy": "Suggéré par",
   "terminal.reader.suggestionByModel": "Suggéré par le modèle local {model}",
   "terminal.reader.suggestionPlaceholder": "{text}   ⇥ Tab ou → pour l'utiliser",
   "terminal.reader.subagentPlaceholder": "Message à ce sous-agent — Entrée envoie, Maj+Entrée pour une nouvelle ligne, ↑ pour les messages précédents",

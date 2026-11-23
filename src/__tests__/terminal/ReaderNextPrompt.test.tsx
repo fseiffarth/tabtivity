@@ -59,9 +59,11 @@ describe("the Reader composer and the local model's suggestion", () => {
     const box = await composer(host);
     await waitFor(() => expect(box.placeholder).toContain("run the tests"));
     expect(box.getAttribute("aria-label")).toBe("Local model suggests: run the tests");
-    // The chip names the model that wrote it.
+    // The chip names the model that wrote it, as the suggestion's author, not
+    // the tab's model.
     const chip = host.querySelector(".suggestion-source-chip");
-    expect(chip?.textContent).toContain("qwen3:4b");
+    expect(chip?.querySelector(".suggestion-source-by")?.textContent).toBe("Suggested by");
+    expect(chip?.querySelector(".suggestion-source-name")?.textContent).toBe("qwen3:4b");
     expect(chip?.getAttribute("title")).toBe("Suggested by the local model qwen3:4b");
     expect(asks()).toHaveLength(1);
     expect(asks()[0][1]).toEqual(expect.objectContaining({ agent: "codex", sessionId: "launch-1", phase: "final" }));
@@ -89,6 +91,8 @@ describe("the Reader composer and the local model's suggestion", () => {
     });
     expect(rest?.closest(".prompt-ghost")?.querySelector(".prompt-ghost-typed")?.textContent).toBe("fix the lint");
     expect(box.getAttribute("aria-description")).toContain("and update the changelog");
+    // The completion's author keeps the corner while the draft is typed.
+    expect(host.querySelector(".suggestion-source-chip")?.textContent).toContain("Suggested byqwen3:4b");
     const completes = asks().filter(([, args]) => args.phase === "complete");
     expect(completes).toHaveLength(1);
     expect(completes[0][1]).toEqual(expect.objectContaining({ agent: "codex", sessionId: "launch-1", draft: "fix the lint" }));
