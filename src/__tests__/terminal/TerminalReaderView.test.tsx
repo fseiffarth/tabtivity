@@ -106,13 +106,53 @@ describe("the agent pane's Reader", () => {
     await screen.findByText("fix the parser");
     expect(host.querySelector(".terminal-reader-turn.user")?.textContent).toContain("fix the parser");
     expect(host.querySelector(".terminal-reader-turn.agent strong")?.textContent).toBe("two");
-    expect(host.querySelector(".terminal-reader-command")?.textContent).toBe("/model opus");
+    expect(host.querySelector(".terminal-reader-command-text")?.textContent).toBe("Model: opus");
     expect(screen.getByRole("button", { name: "Show earlier turns" })).toBeTruthy();
     expect(invoke).toHaveBeenCalledWith("agent_tab_transcript", expect.objectContaining({
       agent: "claude", projectId: "p", sessionId: "launch-1", tabDir: "/p", since: 1000, version: null,
     }));
     // A long session that never spawned a subagent has no "Subagents (0)".
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
+  });
+
+  it("shows the final model and effort as readable settings without command syntax", async () => {
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? {
+      ...transcript,
+      entries: [
+        { kind: "prompt", text: "/model", setting: "Fable 5.2", at: "2026-09-30T08:00:00Z" },
+        { kind: "prompt", text: "/model", setting: "Opus 5.5", at: "2026-09-30T08:01:00Z" },
+        { kind: "prompt", text: "/model", setting: "Fable 5.2", at: "2026-09-30T08:02:00Z" },
+        { kind: "prompt", text: "/effort high", setting: "high", at: "2026-09-30T08:03:00Z" },
+      ],
+    } : []));
+    reader(host);
+    await screen.findByText("Model: Fable 5.2 · Effort: high");
+    const rows = host.querySelectorAll(".terminal-reader-command");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].getAttribute("data-prompt")).toBe("/effort high");
+  });
+
+  it("separates lasting settings from each individual action", async () => {
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? {
+      ...transcript,
+      entries: [
+        { kind: "prompt", text: "/model", setting: "Fable 5.2", at: "2026-09-30T08:00:00Z" },
+        { kind: "prompt", text: "/compact", at: "2026-09-30T08:01:00Z" },
+        { kind: "prompt", text: "/compact", at: "2026-09-30T08:02:00Z" },
+        { kind: "prompt", text: "/effort high", at: "2026-09-30T08:03:00Z" },
+      ],
+    } : []));
+    reader(host);
+    await screen.findAllByText("compact");
+    const rows = host.querySelectorAll(".terminal-reader-command");
+    expect(rows).toHaveLength(4);
+    expect(rows[0].classList.contains("session-setting")).toBe(true);
+    expect(rows[0].querySelector(".terminal-reader-command-kind")?.textContent).toBe("Session");
+    expect(rows[1].classList.contains("single-action")).toBe(true);
+    expect(rows[1].querySelector(".terminal-reader-command-kind")?.textContent).toBe("Once");
+    expect(rows[1].querySelector(".terminal-reader-time")).not.toBeNull();
+    expect(rows[2].classList.contains("single-action")).toBe(true);
+    expect(rows[3].classList.contains("session-setting")).toBe(true);
   });
 
   it("keeps an unrecognized terminal screen folded and removes it once input returns", async () => {

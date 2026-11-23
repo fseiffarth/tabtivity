@@ -108,7 +108,7 @@ import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
-import { COMMAND_SEPARATOR, commandArgsInline, commandLabel, commandRuns, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { COMMAND_SEPARATOR, commandArgsInline, commandRuns, commandSettingKey, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordedRun, recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
@@ -554,6 +554,15 @@ const PromptText = memo(function PromptText({ text, unlinked = false }: { text: 
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
+/** The chat's setting row uses readable labels; command text stays intact
+ * in the transcript and in data-prompt for restoring it to the composer. */
+function readerCommandLabel(command: NonNullable<TranscriptTurn["command"]>, t: ReturnType<typeof useT>): string {
+  const name = command.name === "/model" || command.name === "/models" ? t("terminal.reader.model")
+    : command.name === "/effort" ? t("terminal.reader.effortUnknown") : command.name.slice(1);
+  const value = command.setting || (commandArgsInline(command.args) ? command.args : "");
+  return value ? `${name}: ${value}` : name;
+}
+
 /** What a subagent's card or list row opens: its handle and what it says. */
 type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">;
 
@@ -625,9 +634,15 @@ const Turn = memo(function Turn({ turn, lead, cutLabel, planLabel, interruptedLa
   }
   if (turn.command) {
     const inline = commandArgsInline(turn.command.args);
+    const setting = commandSettingKey(turn.command) !== null;
     return <>
-      <div className="terminal-reader-command" role="separator" data-prompt={turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}>
-        <span>{lead ? `${lead}${COMMAND_SEPARATOR}${commandLabel(turn.command)}` : commandLabel(turn.command)}</span>
+      <div className={`terminal-reader-command ${setting ? "session-setting" : "single-action"}`} role="separator" data-prompt={turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}>
+        <span className="terminal-reader-command-body">
+          <small className="terminal-reader-command-kind" title={t(setting ? "terminal.reader.commandSessionHint" : "terminal.reader.commandOnceHint")}>{t(setting ? "terminal.reader.commandSession" : "terminal.reader.commandOnce")}</small>
+          <span className="terminal-reader-command-text">{lead ? `${lead}${COMMAND_SEPARATOR}${readerCommandLabel(turn.command, t)}` : readerCommandLabel(turn.command, t)}</span>
+          {!setting && time}
+          <UntestedTag id="terminal.reader.commandKinds" />
+        </span>
       </div>
       {/* A `/design @inbox-picture` prompt's picture shows as in any prompt. */}
       {!inline && <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"}>
@@ -2381,7 +2396,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   });
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
   // Slash commands sent one after another share one rule.
-  const runs = useMemo(() => commandRuns(turns, openers), [turns, openers]);
+  const runs = useMemo(() => commandRuns(turns, openers, (command) => readerCommandLabel(command, t)), [turns, openers, t]);
 
   // Voice (docs/desktop_voice_plan.md step 4): read-aloud speaks the session's
   // working row as a turn begins and its new answer once the turn ends; hands-free (experimental) loops the mic
