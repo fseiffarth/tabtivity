@@ -199,6 +199,11 @@ export function getActivity(signal?: AbortSignal): Promise<ActivityList> {
   return api<ActivityList>("/api/v1/activity", { signal });
 }
 
+/** How often a screen that lists a project's tabs reads `getProjectDetail`
+ * again while the page is visible: the project screen's cards, and the tabs
+ * rail beside a tablet's chat (`ChatTabsRail`) at the same cadence. */
+export const PROJECT_DETAIL_POLL = 5_000;
+
 /** `GET /api/v1/projects/{id}` — the project's row, tabs, agents and file sides. */
 export function getProjectDetail(projectId: string, signal?: AbortSignal): Promise<ProjectDetail> {
   return api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(projectId)}`, signal ? { signal } : undefined);

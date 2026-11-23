@@ -2601,6 +2601,28 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
      Send, a soft shadow in place of the rim (the rim returns on focus). */
   .terminal-screen.agent-tab[data-view="focus"] .prompt-composer { margin:6px 16px max(14px,env(safe-area-inset-bottom)); padding:8px 8px 8px 16px; border:0; border-radius:28px; background:#1a1d2b; box-shadow:var(--soft); }
   .terminal-screen.agent-tab[data-view="focus"] .prompt-composer:focus-within { box-shadow:var(--soft),0 0 0 2px #7c6cff; }
+
+  /* The project's tabs (`ChatTabsRail`), upright: one row of chips under the
+     header (`data-rail="strip"`) that scrolls sideways; the chat and the
+     composer keep their rows under it. Chips carry no shadow, which the
+     scrolling row would clip. */
+  .terminal-screen[data-rail="strip"] { grid-template-rows:auto auto minmax(0,1fr) auto; }
+  .terminal-screen[data-rail="strip"] > header { grid-row:1; }
+  .terminal-screen[data-rail="strip"] > .chat-strip { grid-row:2; }
+  .terminal-screen[data-rail="strip"] > .terminal-body { grid-row:3; }
+  .terminal-screen[data-rail="strip"] > .terminal-controls { grid-row:4; }
+  .chat-strip { display:flex; align-items:center; gap:4px; min-width:0; padding:0 12px 8px 0; }
+  .chat-strip > .untested { flex:0 0 auto; margin:0; }
+  .chat-strip-list { display:flex; flex:1 1 auto; gap:8px; min-width:0; padding:0 12px; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none; }
+  .chat-strip-list::-webkit-scrollbar { display:none; }
+  .chat-strip-chip { --ring:0 0 0 0 transparent; --stripe:0 0 0 0 transparent; display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; height:var(--hit); padding:0 14px 0 10px; border:0; border-radius:999px; background:#1a1d2b; color:#e7e9f2; font-size:var(--fs-sub); font-weight:600; box-shadow:var(--ring),var(--stripe); }
+  .chat-strip-chip.is-current { background:#2e2b48; color:#e9e4ff; }
+  .chat-strip-chip.in-plan { --ring:inset 0 0 0 1.5px #7b6ee0; }
+  .chat-strip-chip.in-goal { --ring:inset 0 0 0 1.5px #4fb3c0; }
+  .chat-strip-chip.has-tab-color { --stripe:inset 0 -3px 0 var(--tab-color); }
+  .chat-strip-label { max-width:22ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chat-strip-chip > .agent-status { flex:0 0 auto; padding:2px 5px; font-size:.72rem; line-height:1; }
+  .chat-strip-chip > .tab-card-status { justify-content:center; width:22px; height:22px; padding:0; }
 }
 
 /* Split: a landscape tablet. */
@@ -2641,6 +2663,55 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
   .terminal-screen[data-files-docked] { padding-right:424px; }
   .terminal-screen[data-files-docked] .files-library:not(.files-split) { inset:12px 12px 12px auto; z-index:11; width:400px; padding:0; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); overflow:hidden; }
   .terminal-screen[data-files-docked] .focus-menu { right:434px; }
+
+  /* The Chat view's column: 700px here, with at least 24px to either side (the
+     composer's own 16px margin stands inside the controls' 8px); upright it
+     stays 660px. */
+  .terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(24px,calc((100% - 700px) / 2)); }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-pinned-prompt { right:max(24px,calc((100% - 700px) / 2)); max-width:min(520px,calc(100% - 48px)); }
+  .terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(8px,calc((100% - 700px) / 2)); }
+
+  /* The project's tabs beside the chat (`ChatTabsRail`, `data-rail` on main):
+     a floating panel 12px off the window's left edge and foot, under the
+     header, which spans both columns; the chat (any view) is centred in the
+     rest. Folded, and always under 1120px (the script decides that), it is a
+     64px column of tiles. */
+  .terminal-screen[data-rail="open"] { grid-template-columns:220px minmax(0,1fr); }
+  .terminal-screen[data-rail="folded"] { grid-template-columns:76px minmax(0,1fr); }
+  .terminal-screen[data-rail] > header { grid-column:1 / -1; grid-row:1; }
+  .terminal-screen[data-rail] > .chat-rail { grid-column:1; grid-row:2 / span 2; }
+  .terminal-screen[data-rail] > .terminal-body { grid-column:2; grid-row:2; }
+  .terminal-screen[data-rail] > .terminal-controls { grid-column:2; grid-row:3; }
+  .chat-rail { display:flex; flex-direction:column; min-height:0; margin:0 0 12px 12px; overflow:hidden; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); }
+  .chat-rail-head { display:flex; align-items:center; gap:6px; min-height:var(--hit); padding:8px 8px 4px 16px; }
+  .chat-rail-head > .untested { margin:0; }
+  .chat-rail-title { flex:1 1 auto; margin:0; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:650; }
+  .chat-rail-fold { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; border-radius:999px; background:transparent; color:#e7e9f2; }
+  .chat-rail-fold svg { width:20px; height:20px; }
+  .chat-rail-fold[aria-pressed="true"] { background:#2b2650; color:#e9e4ff; }
+  .chat-rail-list { display:grid; flex:1 1 auto; align-content:start; gap:2px; min-height:0; margin:0; padding:0 8px 8px; overflow-y:auto; overscroll-behavior:contain; list-style:none; }
+  .chat-rail-row { --ring:0 0 0 0 transparent; --stripe:0 0 0 0 transparent; display:flex; align-items:flex-start; gap:10px; width:100%; min-height:var(--hit); padding:10px 10px 10px 12px; border:0; border-radius:16px; background:transparent; color:#e7e9f2; text-align:left; box-shadow:var(--ring),var(--stripe); }
+  .chat-rail-row.is-current { background:#2e2b48; }
+  .chat-rail-row.in-plan { --ring:inset 0 0 0 1.5px #7b6ee0; }
+  .chat-rail-row.in-goal { --ring:inset 0 0 0 1.5px #4fb3c0; }
+  .chat-rail-row.has-tab-color { --stripe:inset 4px 0 0 var(--tab-color); }
+  .chat-rail-mark { display:grid; place-items:center; flex:0 0 auto; width:22px; height:22px; margin-top:1px; color:var(--ink-muted); }
+  .chat-rail-mark > .agent-status { justify-content:center; width:22px; height:22px; padding:0; font-size:.72rem; line-height:1; }
+  .chat-rail-text { display:grid; flex:1 1 auto; gap:3px; min-width:0; }
+  .chat-rail-label { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; font-size:var(--fs-sub); font-weight:600; line-height:1.25; }
+  .chat-rail-sub { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; min-width:0; color:var(--ink-muted); font-size:var(--fs-foot); }
+  .chat-rail-what { min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chat-rail-what + .chat-rail-state::before { content:"· "; }
+  .chat-rail-sub > .agent-status { padding:2px 5px; font-size:.72rem; line-height:1; }
+  /* Folded: a 48px tile per tab, the initial (a prompt for a shell) with the
+     state on its corner; a question tints the tile as the asking pill. */
+  .chat-rail.folded .chat-rail-head { flex-direction:column; padding:8px 0 4px; }
+  .chat-rail.folded .chat-rail-list { justify-items:center; gap:8px; padding:4px 0 8px; }
+  .chat-rail.folded .chat-rail-row { width:auto; min-height:0; padding:0; border-radius:14px; background:transparent; }
+  .chat-rail-tile { position:relative; display:grid; place-items:center; width:48px; height:48px; border-radius:14px; background:#2e2b48; color:#bcb0ff; font-size:var(--fs-body); font-weight:700; line-height:1; }
+  .chat-rail-tile.asking { background:#493b1d; color:#ffd36b; }
+  .chat-rail-row.is-current > .chat-rail-tile { box-shadow:inset 0 0 0 2px #7c6cff; }
+  .chat-rail-tile > .agent-status { position:absolute; top:-4px; right:-4px; justify-content:center; width:18px; height:18px; padding:0; border-radius:5px; font-size:.6rem; line-height:1; }
 
   /* Home's assistant button stays on the list panel (x 12 to 332) just over the
      tray, instead of floating over the project beside it. */

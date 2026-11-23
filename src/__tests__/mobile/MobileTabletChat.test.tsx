@@ -390,9 +390,14 @@ describe(`${BRAND.display} Mobile tablet queue pill`, () => {
 describe("the tablet chat stylesheet", () => {
   const block = CSS.slice(CSS.indexOf(`@media ${TABLET_QUERY} {`));
 
-  it("centres only the Chat view at 660px, caps the prompt bubble at 520px and leaves the colours to the theme rules", () => {
-    expect(block).toContain('.terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(14px,calc((100% - 660px) / 2)); }');
-    expect(block).toContain('.terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(0px,calc((100% - 660px) / 2)); }');
+  it("centres only the Chat view, at 660px upright and 700px (24px sides at least) in landscape, caps the prompt bubble at 520px and leaves the colours to the theme rules", () => {
+    const portrait = block.slice(0, block.indexOf(`@media ${SPLIT_QUERY} {`));
+    const split = CSS.slice(CSS.indexOf(`@media ${SPLIT_QUERY} {`));
+    expect(portrait).toContain('.terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(14px,calc((100% - 660px) / 2)); }');
+    expect(portrait).toContain('.terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(0px,calc((100% - 660px) / 2)); }');
+    expect(split).toContain('.terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(24px,calc((100% - 700px) / 2)); }');
+    expect(split).toContain('.terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(8px,calc((100% - 700px) / 2)); }');
+    expect(split).toContain('.terminal-screen.agent-tab[data-view="focus"] .readable-pinned-prompt { right:max(24px,calc((100% - 700px) / 2));');
     const bubble = /\.readable-turn\.user:not\(\.with-files\) \{([^}]*)\}/.exec(block)?.[1] ?? "";
     expect(bubble).toContain("max-width:min(88%,520px)");
     expect(bubble).not.toMatch(/background|border:|box-shadow|color/);

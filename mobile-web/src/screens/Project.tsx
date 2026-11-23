@@ -5,7 +5,7 @@ import { ArchiveIcon, BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, archiveTab, clearOutbox, closeTab, restoreArchivedTab, deleteOutboxFile, getProjectDetail, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ArchivedTabRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type ViewerScope } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, archiveTab, clearOutbox, closeTab, restoreArchivedTab, deleteOutboxFile, getProjectDetail, PROJECT_DETAIL_POLL, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ArchivedTabRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type ViewerScope } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, readFlag, writeChoice, writeFlag, type MobileFlag } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -447,7 +447,7 @@ export function Project({ id, back, splitList, terminal }: {
   useEffect(() => {
     // A 1.5s poll is a full catalog load plus a desktop round trip, 40 times a
     // minute, and it ran while the phone's screen was off.
-    return startVisiblePoll(() => load(), 5_000).stop;
+    return startVisiblePoll(() => load(), PROJECT_DETAIL_POLL).stop;
   }, [load]);
   /** Reads the outbox now and every `OUTBOX_POLL` while the page is visible;
    * coming back to the page reads it at once. A listing that could not be

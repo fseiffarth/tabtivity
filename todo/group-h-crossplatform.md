@@ -4663,6 +4663,40 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cu — iPad chat in three columns: the project's tabs beside the chat**
+  (2026-11-23; `docs/ipad_chat_columns_plan.md`, handoff
+  `docs/ipad_chat_columns_handoff.md`). Step 1 (tabs rail + portrait strip)
+  code-complete, `MobileChatRail.test.tsx`, untested id `mobile.chatRail`;
+  ⚠️ never seen on an iPad; PWA rebuild (`npm run mobile:bundle`) needed. Step 2
+  (session overview pane, `mobile.chatOverview`) follows.
+  - [ ] 🖐️ iPad in landscape, an agent tab of a project with three or more tabs:
+    a rail on the left under the header ("Tabs · n"), rows in the desktop's
+    order with the state mark, the name, the model and state underneath, the
+    asking pill on a question, a coloured tab's stripe, the current tab
+    highlighted, an unavailable tab dimmed; the chat is centred beside it (a
+    700 px column). Tap another row → that tab opens, its rail the same; tap
+    the current row → nothing. Fold → 48 px tiles (initial, a prompt glyph for
+    a shell, the state on the corner, a question tints the tile); reopen the
+    app → still folded; unfold. In Split View or Stage Manager under 1120 px
+    the rail stays folded and has no fold button. Let another tab finish on the
+    desktop → its mark changes within ~5 s. Switch Chat → Terminal and Diffs:
+    the rail stays. A project with one tab and Tabby's chat: no rail.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
+  - [ ] 🖐️ iPad upright: one row of chips under the header, the current chip
+    scrolled into view, long names cut at ~22 characters, a question chip with
+    its pill; swipe the row sideways; tap a chip → that tab. Turn the iPad
+    with a half-typed draft: the draft, the scroll and the connection survive,
+    rail ↔ strip swap.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
+  - [ ] 🖐️ Phone, upright and on its side: the chat is exactly as before (no
+    rail, no strip, no new gap under the header).
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS
+    - [ ] ❌ Doesn't work on iOS
+
 - [ ] **31cq — Root off the phone's project list: logo door, per-phone opt-in** (2026-11-04;
   ✅ code-complete, `the_root_scope_is_off_for_every_phone_until_the_list_names_it`,
   `MobileHome`, `MobilePairedDeviceAccess`, `MobileRootPhonePicker` tests; ⚠️ never seen

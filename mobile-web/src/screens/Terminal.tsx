@@ -24,6 +24,9 @@ import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
+import { ChatTabsRail } from "../components/ChatTabsRail";
+import { RAIL_WIDE_QUERY, railLayout, railOffered, rememberRailTabs, rememberedRailTabs, sameRailTabs } from "../chatRail";
+import { useVisiblePoll } from "../visiblePoll";
 import { Fragment, memo, useContext, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -40,6 +43,7 @@ import {
   refreshProjectFile,
   sentName,
   getProjectDetail,
+  PROJECT_DETAIL_POLL,
   getTabWorktrees,
   moveTabWorktree,
   getTabLocations,
@@ -1269,6 +1273,33 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (tier === "split") setFilesOpen((open) => open || readFlag("chatFilesPane"));
     else if (was === "split" && !document.querySelector(".markup-host.away, .markup-host .outbox-viewer")) setFilesOpen(false);
   }, [tier]);
+  /** The project's tabs, for the rail beside a landscape tablet's chat and
+   * the strip under a portrait one's header (`ChatTabsRail`): read with the
+   * project's detail below, and while the rail is on screen at the project
+   * screen's cadence. The last list of the project stands in until then. */
+  const [railTabs, setRailTabs] = useState<readonly TabRow[] | null>(() => rememberedRailTabs(project));
+  const takeRailTabs = useCallback((tabs: readonly TabRow[] | undefined) => {
+    if (!project || !Array.isArray(tabs)) return;
+    rememberRailTabs(project, tabs);
+    setRailTabs((current) => sameRailTabs(current, tabs) ? current : tabs);
+  }, [project]);
+  /** The rail folded to its tiles: the stored preference (`chatRailFolded`),
+   * and under 1120 px always, without writing the preference. */
+  const [railFoldPref, setRailFoldPref] = useState(() => readFlag("chatRailFolded"));
+  const railFoldRef = useRef(railFoldPref);
+  railFoldRef.current = railFoldPref;
+  const toggleRailFold = useCallback(() => {
+    const next = !railFoldRef.current;
+    writeFlag("chatRailFolded", next);
+    setRailFoldPref(next);
+  }, []);
+  const railForced = !useMediaQuery(RAIL_WIDE_QUERY);
+  const railShown = tablet && !!openTab && railOffered(project, railTabs);
+  /** `main`'s `data-rail`, which the stylesheet's grid reads. */
+  const railAt = railLayout(tier, railShown, railFoldPref || railForced);
+  const openTabRef = useRef(openTab);
+  openTabRef.current = openTab;
+  const openRailTab = useCallback((row: TabRow) => openTabRef.current?.(row), []);
   /** The queue's sheet (a tablet's header pill): the moves the queued bubbles carry. */
   const [queueSheet, setQueueSheet] = useState(false);
   /** Turns asked for; grows with "Show earlier turns". */
@@ -2037,6 +2068,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           setFilesSides({ here: !!detail.files, host: !!detail.host_files, hostLabel: detail.host_label });
           setProjectName(detail.project?.label ?? null);
           setDesktopImagesOff(detail.desktop_images === false);
+          takeRailTabs(detail.tabs);
         })
         .catch(() => {});
     };
@@ -2046,7 +2078,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       controller.abort();
       document.removeEventListener("visibilitychange", read);
     };
-  }, [project]);
+  }, [project, takeRailTabs]);
+  // The other tabs' states, kept current while the rail is on screen: the
+  // project screen's poll at its cadence. Opening the chat and coming back to
+  // the page are the read above.
+  useVisiblePoll((signal) => project && getProjectDetail(project, signal).then((detail) => {
+    if (!signal.aborted) takeRailTabs(detail.tabs);
+  }), PROJECT_DETAIL_POLL, { enabled: railShown, immediate: false, catchUp: false }, [project]);
   const filesSwipe = filesLabel !== null && view === "focus";
   /** The drawer is on screen (what `filesOpen` asks, once the project allows it). */
   const filesShown = filesOpen && !!project && filesLabel !== null;
@@ -2709,7 +2747,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (view !== choice) chooseView(choice);
   };
   const worktreeCaption = tab.kind !== "agent" && tab.worktree ? [t("terminal.reader.worktree", { name: tab.worktree.label })] : [];
-  return <main className={`terminal-screen ${tab.kind}-tab`} data-view={view} data-files-docked={filesDocked && markupAway === null ? "" : undefined} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
+  return <main className={`terminal-screen ${tab.kind}-tab`} data-view={view} data-files-docked={filesDocked && markupAway === null ? "" : undefined} data-rail={railAt} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
         ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} model={{
           label: assistantModels?.models.find((model) => model.id === assistantModels.current)?.label ?? modelChip,
@@ -2753,7 +2791,19 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         aria-label={tablet && !diffsShown ? t("mobile.focus.outputView") : undefined}
         onClick={() => setFocusMenu((open) => !open)}
       >{!tablet || diffsShown ? t(diffsShown ? "terminal.reader.changes" : view === "terminal" ? "mobile.focus.terminal" : focusLabel) : null}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
-    {focusMenu && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
+    {/* The project's tabs: a rail beside the chat in landscape, a strip of
+        chips under the header upright. A sibling of the body, so a turn of
+        the iPad redraws it alone. */}
+    {railShown && railTabs && <ChatTabsRail
+      variant={splitTier ? "rail" : "strip"}
+      tabs={railTabs}
+      currentId={tab.id}
+      folded={railFoldPref}
+      forceFolded={railForced}
+      onFold={toggleRailFold}
+      onOpen={openRailTab}
+    />}
+    {focusMenu &&<div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
       <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
         {/* Chat / Diffs / Terminal, in the desktop's order. Chat is the stored
             session only: dimmed, saying why, for an agent with none. */}

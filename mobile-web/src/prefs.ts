@@ -52,8 +52,10 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
 // `chatFilesPane` is the files pane a landscape tablet's chat docks beside the
 // transcript: open or closed as this device left it, off unset. `splitListHidden`
 // folds Home's project list away beside an open project on a landscape tablet,
-// so the project takes the whole window; off unset.
-export type MobileFlag = "chatFilesPane" | "splitListHidden" | "projectsGrid" | "projectsBoxes" | "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "homeHintHold" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintSteering" | "hintsOff" | "focusHandsFree" | "voiceBrief";
+// so the project takes the whole window; off unset. `chatRailFolded` folds the
+// project's tabs rail beside a landscape tablet's chat (`ChatTabsRail`) to its
+// 64 px tiles; off unset.
+export type MobileFlag = "chatFilesPane" | "chatRailFolded" | "splitListHidden" | "projectsGrid" | "projectsBoxes" | "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "homeHintHold" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintSteering" | "hintsOff" | "focusHandsFree" | "voiceBrief";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
