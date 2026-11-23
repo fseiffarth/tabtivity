@@ -463,6 +463,30 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     expect(modelPickKeys(read!, read!.options[0], "OpenCode")).toEqual([CLEAR, "Big Pickle OpenCode Zen", "\r"]);
   });
 
+  it("reads the flat free list between the wrapped subtitle and the selected model's details", () => {
+    const page = readOpenCodePicker(lines(
+      "     Free models                  esc",
+      "     Connect a provider for access to", "     more models", "", "     Search", "",
+      " ┃   Tidepool Alpha Free", "     Big Pickle", "", "     Text · 1M · Reasoning",
+    ));
+    expect(page?.options.map(({ label, description }) => [label, description])).toEqual([
+      ["Tidepool Alpha Free", "Free"], ["Big Pickle", "Free"],
+    ]);
+    expect(isOpenCodeModelList("OpenCode", page?.title)).toBe(true);
+  });
+
+  it("reads the first provider directly under the 2.4 search header and the square current marker", () => {
+    const page = readOpenCodePicker([
+      ...lines("     Search models                esc", ""), heading("     Ollama (local)"),
+      ...lines(" ┃ ▪ stub", "", "     OpenAI", "     GPT-6.2 Astra", "", "     connect          favorite ctrl+f"),
+    ]);
+    expect(page?.options.map(({ label, description }) => [label, description])).toEqual([
+      ["stub", "Ollama (local)"], ["GPT-6.2 Astra", "OpenAI"],
+    ]);
+    expect(page?.current).toBe(0);
+    expect(isOpenCodeModelList("OpenCode", page?.title)).toBe(true);
+  });
+
   it("tells a heading at a frame's top from the highlighted row, which is bold too", () => {
     const read = readOpenCodePicker([
       ...lines("  Select model                                                 esc", "", "  Search", ""),
@@ -677,6 +701,21 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
 
   it("is no picker for a conversation that only mentions one", () => {
     expect(readOpenCodePicker(lines("  I opened   Select model to check", "", "  Search", "  Big Pickle"))).toBeNull();
+  });
+
+  it("answers the filterless variant picker from its cursor, even after it leaves the current variant", () => {
+    const rows = [
+      "     Select variant                                 esc", "",
+      "   ▪ Default", "     low", " ┃   medium", "     high", "", "  ┃  Ask anything…",
+    ];
+    const page = readOpenCodeModelPage({ length: rows.length, getLine: (at) => ({ translateToString: () => rows[at] }) });
+    const send = vi.fn();
+    const walk = new OpenCodePickerWalk(send);
+    walk.read(page);
+    expect(walk.prompt()?.options.map(({ label }) => label)).toEqual(["Default", "low", "medium", "high"]);
+    expect(walk.prompt()?.options[0].keys).toEqual(["\u001b[A", "\u001b[A", "\r"]);
+    expect(walk.prompt()?.options[3].keys).toEqual(["\u001b[B", "\r"]);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("stops at the picker's key hints rather than listing them", () => {
