@@ -1762,6 +1762,7 @@ export function ProjectFilesView({
         className={`toolbar-btn toolbar-btn--sm toolbar-btn--icon${searchOpen ? " active" : ""}`}
         aria-pressed={searchOpen}
         aria-expanded={searchOpen}
+        data-steering-search-toggle
         onClick={() => setSearchOpen((v) => !v)}
         title={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
         aria-label={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
@@ -2322,6 +2323,7 @@ export function ProjectFilesView({
                 onChange={(e) => setCommitMsg(e.target.value)}
                 rows={7}
                 className="git-commit-input"
+                data-steering-field
               />
             )}
             {commitMsg !== null ? (

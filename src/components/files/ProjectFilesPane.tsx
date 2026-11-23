@@ -1139,6 +1139,7 @@ export function ProjectFilesPane({
             <input
               type="text"
               className="file-tree-search-input"
+              data-steering-search
               value={boxQuery}
               autoFocus
               disabled={!searchable}

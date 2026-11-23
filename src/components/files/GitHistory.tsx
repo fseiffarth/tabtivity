@@ -1701,6 +1701,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
         <input
           type="search"
           className="git-worktree-input"
+          data-steering-search
           placeholder={t("gitHistory.searchPlaceholder")}
           aria-label={t("gitHistory.searchPlaceholder")}
           value={query}

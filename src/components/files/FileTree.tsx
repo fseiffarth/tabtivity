@@ -2971,6 +2971,7 @@ export function FileTree({
                 <input
                   type="text"
                   className="file-tree-search-input"
+                  data-steering-search
                   value={search}
                   autoFocus
                   placeholder={
