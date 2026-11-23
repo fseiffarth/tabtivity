@@ -1964,7 +1964,8 @@ span.files-close { background:transparent; }
 .composer-thumb-progress { position:absolute; left:50%; top:50%; width:20px; height:20px; margin:-10px 0 0 -10px; border:2px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; animation:composer-thumb-spin .9s linear infinite; }
 @keyframes composer-thumb-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .composer-thumb-progress { animation:none; } }
-.composer-thumb button { position:absolute; top:3px; right:3px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:0; background:rgba(8,10,16,.65); color:#fff; font-size:.65rem; line-height:1; }
+.composer-thumb-remove { position:absolute; top:3px; right:3px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:0; background:rgba(8,10,16,.65); color:#fff; font-size:.65rem; line-height:1; }
+.composer-thumb-view { position:absolute; inset:0; padding:0; border:0; border-radius:0; background:transparent; -webkit-touch-callout:none; user-select:none; -webkit-user-select:none; }
 .composer-attachments-note { flex:1 1 120px; min-width:0; color:#a69fd4; font-size:.72rem; }
 .composer-attachments-note em { font-style:normal; opacity:.8; }
 /* What the agent sent this tab, as a sheet of its own: the button beside the
@@ -2339,9 +2340,9 @@ span.files-close { background:transparent; }
 /* The composer's own field and the bare controls inside a rounded box stay plain. */
 .terminal-screen .prompt-composer textarea,.mobile-schedule-form input.markup-ask-dial { border:0; }
 /* Borderless pieces: only rounded. */
-:where(.terminal-view-switch,.terminal-view-switch button,.tool-segment,.tool-segment button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb button) { --r:var(--r-sm); }
+:where(.terminal-view-switch,.terminal-view-switch button,.tool-segment,.tool-segment button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb-remove) { --r:var(--r-sm); }
 :where(.focus-menu button,.composer-bar .send-icon,.voice-feedback,.last-sent,.inbox-upload,.sign-in-notice,.composer-thumb,.usage-notes li,.question-tabs.stepped button,.link-sheet-target,.local-models-list .local-model-info,.sign-in-tick,.new-tab-agents .agent-create > button:first-child,.list-skeleton > i) { --r:var(--r-md); }
-.terminal-view-switch,.terminal-view-switch button,.tool-segment,.tool-segment button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb button,.list-skeleton > i,
+.terminal-view-switch,.terminal-view-switch button,.tool-segment,.tool-segment button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb-remove,.list-skeleton > i,
 .focus-menu button,.composer-bar .send-icon,.voice-feedback,.last-sent,.inbox-upload,.sign-in-notice,.composer-thumb,.usage-notes li,.question-tabs.stepped button,.link-sheet-target,.local-models-list .local-model-info,.sign-in-tick,.new-tab-agents .agent-create > button:first-child {
   border-radius:var(--r);
 }

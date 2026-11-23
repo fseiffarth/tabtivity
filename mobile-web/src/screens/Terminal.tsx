@@ -3159,11 +3159,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           const known = leaf === undefined ? undefined : inboxFiles.get(leaf);
           const picture = upload.preview ?? (known && known.kind.startsWith("image/") ? inboxFileUrl(tab.id, known.name) : undefined);
           return <ComposerThumb key={upload.id} name={upload.name} picture={picture} kind={known?.kind} sending={leaf === undefined}
-            onRemove={leaf === undefined ? undefined : () => dismissUpload(upload.id)} removeLabel={t("mobile.inbox.detach", { name: upload.name })} />;
+            onRemove={leaf === undefined ? undefined : () => dismissUpload(upload.id)} removeLabel={t("mobile.inbox.detach", { name: upload.name })}
+            onView={known ? () => chatInbox.onOpen(known) : undefined} viewLabel={t("mobile.inbox.holdToView", { name: upload.name })} />;
         })}
         <small className="composer-attachments-note" role="status">
           {t(!uploading ? "mobile.inbox.attached" : uploads.some((upload) => uploadInFlight(upload) && upload.source === "desktop") ? "mobile.inbox.copyingNote" : "mobile.inbox.sendingNote")}
-          {(isUntested("mobile.composer.attachHeld") || isUntested("mobile.composer.thumbnails")) && <> · <em>{t("mobile.focus.untested")}</em></>}
+          {!uploading && <> · {t("mobile.inbox.holdToViewHint")}</>}
+          {(isUntested("mobile.composer.attachHeld") || isUntested("mobile.composer.thumbnails") || isUntested("mobile.composer.holdToView")) && <> · <em>{t("mobile.focus.untested")}</em></>}
         </small>
       </div>}
       {signIn && !signInSheet && signIn.url !== hiddenSignIn && <div className="sign-in-notice" role="status">
