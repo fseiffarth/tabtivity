@@ -1,5 +1,6 @@
 import { findGroupOfTab, findTabByKey, useTabsStore, type TabEntry } from "../../../stores/tabs";
 import { openTabInScope } from "../../../lib/tabs/tabScopeContext";
+import { isFileTab } from "../../../lib/tabs/fileTab";
 import { useLinkRoutingStore } from "../../../stores/linkRouting";
 import { useEditorJumpStore } from "../../../stores/viewers/editorJump";
 import { splitLineHint } from "../../../lib/viewers/markdown";
@@ -25,15 +26,12 @@ export function openLinkedFile(
   },
 ) {
   const store = useTabsStore.getState();
-  // A `.tex` editor tab that healed into a workspace (`FileViewerPane`) is
-  // still this file's tab: matching only `viewer: "tex"` answered every later
-  // open of that document with one more copy.
+  // `isFileTab` also takes a `.tex` editor tab that healed into a workspace as
+  // this file's tab; a git-pull view is one per pair of tips.
   const sameFile = (t: TabEntry) =>
-    t.kind === "embed" &&
-    t.embedPath === resolved.path &&
+    isFileTab(t, resolved.path, resolved.viewer) &&
     t.gitPullTips?.local_oid === resolved.gitPullTips?.local_oid &&
-    t.gitPullTips?.incoming_oid === resolved.gitPullTips?.incoming_oid &&
-    (t.viewer === resolved.viewer || (resolved.viewer === "tex" && t.viewer === "texworkspace"));
+    t.gitPullTips?.incoming_oid === resolved.gitPullTips?.incoming_oid;
   const tab = {
     label: resolved.label,
     cmd: "",

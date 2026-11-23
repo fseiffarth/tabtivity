@@ -112,12 +112,13 @@ pub fn list_dir_local(project_dir: &str, rel_path: &str) -> Result<Vec<FileEntry
     };
 
     enforce_confinement(&root, &target)?;
+    let shown_dir = listing_dir_as_given(project_dir, rel_path).unwrap_or_else(|| target.clone());
 
     let entries = fs::read_dir(&target).map_err(|e| e.to_string())?;
 
     let mut result: Vec<FileEntry> = Vec::new();
     for entry in entries.flatten() {
-        let path = entry.path();
+        let path = shown_dir.join(entry.file_name());
         let meta = match entry.metadata() {
             Ok(m) => m,
             Err(_) => continue,
@@ -131,6 +132,28 @@ pub fn list_dir_local(project_dir: &str, rel_path: &str) -> Result<Vec<FileEntry
     }
     result.sort_by_cached_key(|entry| (!entry.is_dir, entry.name.to_lowercase()));
     Ok(result)
+}
+
+/// The folder `list_dir_local` spells its entries under: the project folder as
+/// the frontend gave it, joined with `rel_path`, not the canonical folder it
+/// read. Through a symlinked folder the two differ, and every other opener of a
+/// file (a search result, an agent's link, the command palette) joins onto the
+/// folder as given, so a tab opened from the tree was not found again by them,
+/// nor theirs from the tree: the same file opened twice. `None` (use the
+/// canonical folder) for a relative project folder, an absolute `rel_path`, or
+/// a `..` in it, whose lexical reading may not be the folder that was read.
+fn listing_dir_as_given(project_dir: &str, rel_path: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let base = Path::new(project_dir);
+    let rel = Path::new(rel_path);
+    if !base.is_absolute()
+        || rel
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        return None;
+    }
+    Some(normalize_lexical(&base.join(rel)))
 }
 
 /// The most path-shaped words one `resolve_text_paths` call looks up.

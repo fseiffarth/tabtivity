@@ -318,6 +318,7 @@ stores stay at the top. No `index.ts` barrels.
 | `tabs/commitDrop.ts` / `tabs/commitFileDrop.ts` | Apply a tab/file drag-drop into the layout tree. |
 | `tabs/dragGeometry.ts` | Drop-zone/split geometry math for tab drags. |
 | `lib/tabs/tabScopeContext.ts` | `TabScopeContext` (the root console provides `ROOT_SCOPE`) + `openTabInScope`: tabs a view opens land in that scope, not the active one — file-tree opens, diffs, compiled PDFs, Files-tab "Open in a new tab", TeX workspace. Null elsewhere = old `addTab` path. |
+| `lib/tabs/fileTab.ts` | `isFileTab` / `fileTabMatcher`: the one "is this file already open" test (viewer + `samePath`) every open, link and drop path shares, so a differently spelled path focuses or moves the open tab instead of adding a copy. |
 | `lib/tabs/tabCloseGuard.ts` | Per-heap `(scope, tabKey) → guard` registry + `PaneUnsavedContext`: `closeTabInScope` asks the tab's guard before a close that would lose unsaved work (autosave off). |
 | `tabs/paneTabContext.ts` | `PaneTabContext` (`TabPane` provides the tab it renders) + `usePaneTab(scope, key)`: the store's entry, else the handed one — a popout's tabs store is empty, so the prompt strip, Chat and Diffs read their tab through this. |
 | `tabs/TabCloseGuard.tsx` | Wraps embed/projectfiles panes: collects `useEditableFile` buffers, asks Save / Discard / Cancel (`useDialogs().chooseOption`). Tests: `TabCloseUnsaved.test.tsx`. |

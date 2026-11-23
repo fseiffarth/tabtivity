@@ -5,9 +5,10 @@ import { createPortal } from "react-dom";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { invokeTrusted } from "../../lib/execTrust";
-import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { useTabsStore } from "../../stores/tabs";
 import { FileDropContext } from "./fileDropContext";
 import { openTabInScope, useTabScope } from "../../lib/tabs/tabScopeContext";
+import { fileTabMatcher } from "../../lib/tabs/fileTab";
 import { openFileEntry, openTrainingRuns } from "../../lib/files/openFileEntry";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
 import { HOST_OS } from "../../lib/platform";
@@ -1687,8 +1688,7 @@ export function FileTree({
       embedPath: entry.path,
       viewer: "diff" as const,
     };
-    const sameDiff = (t: TabEntry) =>
-      t.kind === "embed" && t.viewer === "diff" && t.embedPath === entry.path;
+    const sameDiff = fileTabMatcher(entry.path, "diff");
     if (tabScope) {
       openTabInScope(tabScope, tab, sameDiff, { replace: true });
       return;
@@ -1728,8 +1728,7 @@ export function FileTree({
       fileDrop.openTab(tab);
       return;
     }
-    const sameMerge = (t: TabEntry) =>
-      t.kind === "embed" && t.viewer === "syncmerge" && t.embedPath === abs;
+    const sameMerge = fileTabMatcher(abs, "syncmerge");
     if (tabScope) {
       openTabInScope(tabScope, tab, sameMerge);
       return;
@@ -2472,8 +2471,7 @@ export function FileTree({
       embedPath: pdfPath,
       viewer: "pdf" as const,
     };
-    const samePdf = (t: TabEntry) =>
-      t.kind === "embed" && t.viewer === "pdf" && t.embedPath === pdfPath;
+    const samePdf = fileTabMatcher(pdfPath, "pdf");
     if (tabScope) {
       openTabInScope(tabScope, tab, samePdf, { replace: true });
       return;
