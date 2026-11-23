@@ -508,6 +508,28 @@ export function DetachedApp({ param }: Props) {
     };
   }, [label, param.scope, param.groupId]);
 
+  // Ask the backend for the first-paint size nudge once the seeded content has
+  // actually produced a frame (two rAFs: one to reach the next frame, one so
+  // that frame has been presented). The backend's own nudge runs on a timer at
+  // creation, which a busy renderer — a large PDF parsing here — misses, and the
+  // window then stays blank until a click. Once per renderer: a later reseed
+  // paints into a surface that already exists.
+  const firstPaintAsked = useRef(false);
+  const hasGroup = group !== null;
+  useEffect(() => {
+    if (!hasGroup || firstPaintAsked.current) return;
+    firstPaintAsked.current = true;
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        void invoke("detached_first_paint").catch(() => {});
+      });
+    });
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [hasGroup]);
+
   // Apply an edit locally AND stream it to the main window so its
   // `detachedGroupsByScope` entry stays in sync. Held in a ref as well, so the
   // store seam installed below (which binds once) always reaches the current one.

@@ -79,6 +79,7 @@ export function adaptClientCommand(client: WsClient, cmd: string, args: Args): P
     case "sync_detached_scope":
     case "detached_retire_ack":
     case "detached_retire_ready":
+    case "detached_first_paint":
     case "detached_window_frontmost":
     case "detached_window_is_parked":
       return Promise.resolve(null);

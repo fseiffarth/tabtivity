@@ -549,42 +549,73 @@ fn restart_bounds(
 ///   toggles WebView2's visibility, which forces the first composite. The resize
 ///   nudge is kept as a belt-and-suspenders kick.
 fn spawn_first_paint_nudge(app: AppHandle, label: String) {
-    let (nudge_app, nudge_label) = (app, label);
     std::thread::spawn(move || {
-        // Marshal every window op onto the main (UI) thread. Tauri window methods
-        // are `Send` so they compile from a worker thread, but on Windows calling
-        // show()/set_focus()/set_size() off the thread that owns the HWND is
-        // unreliable — it can no-op the repaint or deadlock against the event loop
-        // — so dispatch through `run_on_main_thread`.
-        let kick = |app: AppHandle, label: String, reveal: bool| {
-            let app_main = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                if let Some(w) = app_main.get_webview_window(&label) {
-                    #[cfg(target_os = "windows")]
-                    if reveal {
-                        // Built hidden on Windows; toggling visibility forces
-                        // WebView2's first composite (a fresh runtime-created
-                        // window otherwise shows a blank white surface until it is
-                        // shown/focused).
-                        let _ = w.show();
-                        let _ = w.set_focus();
-                    }
-                    if let Ok(sz) = w.inner_size() {
-                        // A real ±1px size change forces the compositor to allocate
-                        // and paint the surface (WebKitGTK's second webview is an
-                        // unpainted BLACK GL surface until a genuine OS resize).
-                        let delta: i32 = if reveal { 1 } else { -1 };
-                        let next = (sz.width as i32 + delta).max(1) as u32;
-                        let _ = w.set_size(PhysicalSize::new(next, sz.height));
-                    }
-                }
-            });
-        };
         std::thread::sleep(std::time::Duration::from_millis(250));
-        kick(nudge_app.clone(), nudge_label.clone(), true);
+        kick_size(&app, &label, true, true);
         // A short gap so the grow then restore aren't coalesced into a no-op.
         std::thread::sleep(std::time::Duration::from_millis(50));
-        kick(nudge_app, nudge_label, false);
+        kick_size(&app, &label, false, false);
+    });
+}
+
+/// One half of the ±1px first-paint nudge, run on the main (UI) thread. Tauri
+/// window methods are `Send` so they compile from a worker thread, but on
+/// Windows calling show()/set_focus()/set_size() off the thread that owns the
+/// HWND is unreliable — it can no-op the repaint or deadlock against the event
+/// loop — so dispatch through `run_on_main_thread`. `reveal` (Windows only)
+/// also shows and focuses the window, which was built hidden.
+fn kick_size(app: &AppHandle, label: &str, grow: bool, reveal: bool) {
+    let app_main = app.clone();
+    let label = label.to_string();
+    let _ = app.run_on_main_thread(move || {
+        let Some(w) = app_main.get_webview_window(&label) else { return };
+        #[cfg(target_os = "windows")]
+        if reveal {
+            // Toggling visibility forces WebView2's first composite (a fresh
+            // runtime-created window otherwise shows a blank white surface
+            // until it is shown/focused).
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = reveal;
+        if let Ok(sz) = w.inner_size() {
+            // A real ±1px size change forces the compositor to allocate and
+            // paint the surface (WebKitGTK's second webview is an unpainted GL
+            // surface until a genuine OS resize).
+            let delta: i32 = if grow { 1 } else { -1 };
+            let next = (sz.width as i32 + delta).max(1) as u32;
+            let _ = w.set_size(PhysicalSize::new(next, sz.height));
+        }
+    });
+}
+
+/// A popout's renderer has drawn its first seeded frame: nudge its size now.
+///
+/// The creation-time nudge fires on a fixed 250 ms timer. A popout whose
+/// renderer is still busy then — a large PDF parsing in it, a main window
+/// stalled seeding it — takes both size changes before it has a frame to
+/// present, they coalesce into nothing, and the window stays a blank white or
+/// black surface until a click repaints it. This one comes from the renderer
+/// itself, once it has rendered, so it cannot be early. Resize only: no
+/// show/focus, so a respawned popout never takes focus by it. Skipped while
+/// a Wayland placement hop is running — its fullscreen round trip and size
+/// restore are genuine resizes already, and a size change mid-hop would be
+/// read as the landing. Bound to the calling window's own label.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn detached_first_paint(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    win_registry: State<'_, WindowRegistryState>,
+) {
+    let label = window.label().to_string();
+    if !label.starts_with("detached-") || win_registry.lock_ok().is_detached_placing(&label) {
+        return;
+    }
+    std::thread::spawn(move || {
+        kick_size(&app, &label, true, false);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        kick_size(&app, &label, false, false);
     });
 }
 
