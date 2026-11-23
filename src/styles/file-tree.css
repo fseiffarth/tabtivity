@@ -822,9 +822,19 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 /* The empty form: the label, what the window holds, the picker, refresh —
-   one line instead of the ~190 px resizable section. */
+   one line instead of the ~190 px resizable section. It also carries
+   `.downloads-section` (a column), so the row is said here: without it the
+   four parts stacked as a centred column. The status gives way first (basis
+   0, ellipsis); only a panel too narrow for the rest wraps. */
 .downloads-section--line {
+  flex-direction: row;
   flex-wrap: wrap;
+}
+.downloads-section--line .downloads-line-status {
+  flex: 1 1 0;
+}
+.downloads-section--line .downloads-windows {
+  margin-left: auto;
 }
 .downloads-title,
 .downloads-line-toggle {
