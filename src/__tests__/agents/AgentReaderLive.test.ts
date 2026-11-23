@@ -547,6 +547,50 @@ describe("the desktop Reader's live screen", () => {
     expect(idle.working).toBeNull();
   });
 
+  // Claude Code 2.1.330's whole screen in auto mode with a status line, as
+  // verify-cli captured it at 100x34 (host and path made neutral). Since 2.1.326
+  // the footer under the box ends in `esc to interrupt` while a turn runs —
+  // a busy row with no numbers, below the spinner that has them.
+  const RULE = "─".repeat(100);
+  const claudeScreen = (above: string[], box: string, footer: string) => plainBuffer([
+    "❯ reply with the word done",
+    "",
+    ...above,
+    `${" ".repeat(80)}◐ medium · /effort`,
+    RULE,
+    `❯\u00a0${box}`,
+    RULE,
+    "  user@host:~/project (develop) · Opus 5.5",
+    footer,
+  ]);
+
+  it("reads the spinner's timer and tokens under Claude 2.1.326+'s busy footer", () => {
+    const busy = readReaderLive(claudeScreen(
+      ["● Running 1 shell command…", "", "✢ Smooshing… (3s · ↓ 17 tokens)"],
+      "",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status · esc to interrupt · ← 1 age…",
+    ), "Claude", 100);
+    expect(busy.question).toBeNull();
+    expect(busy.working).toEqual({ elapsed: "3s", tokens: "17" });
+    expect(busy.status?.mode).toBe("auto");
+
+    // Before the spinner prints its timer the footer alone says it works.
+    const starting = readReaderLive(claudeScreen(
+      ["✶ Percolating… "],
+      "",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status · esc to interrupt · ← 1 agent",
+    ), "Claude", 100);
+    expect(starting.working).toEqual({ elapsed: undefined, tokens: undefined });
+
+    // Finished: the footer drops the hint and the spinner became `Baked for`.
+    const idle = readReaderLive(claudeScreen(
+      ["● done", "✻ Baked for 1s · done 1:31"],
+      "",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status",
+    ), "Claude", 100);
+    expect(idle.working).toBeNull();
+  });
+
   it("calls a screen it cannot read stray, and nothing it reads or a blank one", () => {
     const busy = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
     const idle = ["> fix it", "", "⏺ Done.", "", "> ", "  ? for shortcuts"];

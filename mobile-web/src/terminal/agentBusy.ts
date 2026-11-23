@@ -83,8 +83,13 @@ export function busyRow(text: string): boolean {
   return BUSY_HINT.test(text) || CLAUDE_SPINNER.test(text);
 }
 
-/** The busy row's facts, or `null` when no row says the agent is working. */
+/** The busy row's facts, or `null` when no row says the agent is working.
+ * The lowest busy row says it works; the facts come from the lowest one that
+ * prints any. Claude Code 2.1.326+ in auto mode ends its footer, below the
+ * box, with `· esc to interrupt ·`; that row has no numbers, and the spinner
+ * above it has them. */
 export function agentWork(lines: readonly { text: string }[]): WorkFacts | null {
+  let first: WorkFacts | null = null;
   for (let index = lines.length - 1; index >= 0 && index >= lines.length - BUSY_WINDOW; index -= 1) {
     const text = lines[index].text;
     if (!busyRow(text)) continue;
@@ -92,9 +97,11 @@ export function agentWork(lines: readonly { text: string }[]): WorkFacts | null 
     const elapsed = ELAPSED.exec(inside)?.[1];
     const tokens = TOKENS.exec(inside)?.[1].replace(/\s+/u, "");
     const effort = EFFORT.exec(text)?.[1].toLowerCase();
-    return effort ? { elapsed, tokens, effort } : { elapsed, tokens };
+    const facts = effort ? { elapsed, tokens, effort } : { elapsed, tokens };
+    if (elapsed || tokens || effort) return facts;
+    first ??= facts;
   }
-  return null;
+  return first;
 }
 
 export function agentWorking(lines: readonly { text: string }[]): boolean {
