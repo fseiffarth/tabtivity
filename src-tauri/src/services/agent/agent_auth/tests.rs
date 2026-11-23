@@ -1213,3 +1213,97 @@ fn fence_env_is_per_cli_and_never_overrides_the_users_value() {
     assert_eq!(env["PYTHON_KEYRING_BACKEND"], "keyring.backends.fail.Keyring");
     assert!(fence_env("claude").is_empty());
 }
+
+/// A Claude login as its credentials file holds it, with made-up tokens.
+fn claude_login(tag: &str) -> String {
+    format!(r#"{{"claudeAiOauth":{{"accessToken":"at-{tag}","refreshToken":"rt-{tag}","expiresAt":1}}}}"#)
+}
+
+/// What Claude leaves of a login whose refresh token was refused.
+const CLAUDE_ENDED: &str = r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0,"scopes":["user:inference"]}}"#;
+const CLAUDE_CREDS: &str = ".claude/.credentials.json";
+
+/// Two scope homes holding one settled Claude login.
+fn claude_homes(state: &Path) -> (PathBuf, PathBuf) {
+    let a = crate::services::agent_home::scope_home_in(state, "a");
+    let b = crate::services::agent_home::scope_home_in(state, "b");
+    std::fs::create_dir_all(a.join(".claude")).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(a.join(CLAUDE_CREDS), claude_login("0")).unwrap();
+    reconcile_all_in(state);
+    assert_eq!(std::fs::read_to_string(b.join(CLAUDE_CREDS)).unwrap(), claude_login("0"));
+    (a, b)
+}
+
+#[test]
+fn a_claude_login_is_live_only_while_a_token_can_still_run() {
+    let now = 1_000_000;
+    let live = |json: &str| claude_login_live(json.as_bytes(), now);
+    assert!(live(&claude_login("0")), "a refresh token with no end date");
+    assert!(live(r#"{"claudeAiOauth":{"accessToken":"x"}}"#), "an access token with no expiry");
+    assert!(live(r#"{"claudeAiOauth":{"accessToken":"x","refreshToken":"r","expiresAt":1,"refreshTokenExpiresAt":1000001}}"#));
+    assert!(live(r#"{"claudeAiOauth":{"accessToken":"x","expiresAt":1000001,"refreshToken":"r","refreshTokenExpiresAt":1}}"#));
+    assert!(live("not json"), "only a record that says so is over");
+    assert!(live("[]"));
+
+    assert!(!live(CLAUDE_ENDED));
+    assert!(claude_login_ended(CLAUDE_ENDED.as_bytes()));
+    assert!(!live(r#"{"claudeAiOauth":{"accessToken":"x","expiresAt":1,"refreshToken":"r","refreshTokenExpiresAt":999999}}"#), "both ran out");
+    assert!(!live(r#"{"claudeAiOauth":{"accessToken":"x","expiresAt":1}}"#), "expired, nothing to refresh with");
+    assert!(!live(r#"{"mcpOAuth":{"s":{"accessToken":"m"}}}"#), "MCP tokens are no Claude login");
+    assert!(!live("{}"));
+    for login in [claude_login("0").as_str(), "{}", "not json", r#"{"mcpOAuth":{}}"#] {
+        assert!(!claude_login_ended(login.as_bytes()), "{login}");
+    }
+}
+
+/// Two homes refresh the one login within a keeper pass: the second is
+/// refused (its refresh token was rotated away) and Claude ends its copy.
+/// That is the end of the *old* login — the store keeps the fresh one and
+/// puts it over the ended copy, whichever home the pass reads first.
+#[test]
+fn an_ended_copy_of_an_older_claude_login_never_replaces_the_fresh_one() {
+    for refreshed_first in [true, false] {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let (a, b) = claude_homes(state);
+        let (winner, loser) = if refreshed_first { (&a, &b) } else { (&b, &a) };
+        write_in_place(&winner.join(CLAUDE_CREDS), &claude_login("1"));
+        write_in_place(&loser.join(CLAUDE_CREDS), CLAUDE_ENDED);
+        reconcile_all_in(state);
+        let store = store_of(state, "claude", CLAUDE_CREDS);
+        for file in [store, a.join(CLAUDE_CREDS), b.join(CLAUDE_CREDS)] {
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), claude_login("1"), "{}", file.display());
+        }
+        assert!(signed_in_in(state, "claude"));
+        // Steady state.
+        reconcile_all_in(state);
+        assert_eq!(std::fs::read_to_string(loser.join(CLAUDE_CREDS)).unwrap(), claude_login("1"));
+    }
+}
+
+/// The store's own login ended (a tab on exactly that login was refused):
+/// the store takes it, stops counting as signed in — which is when
+/// `claude_token` hands out the saved token — and a later `/login` in any
+/// tab is a login again.
+#[test]
+fn the_end_of_the_stores_own_claude_login_signs_the_store_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path();
+    let (a, b) = claude_homes(state);
+    assert!(signed_in_in(state, "claude"));
+    write_in_place(&b.join(CLAUDE_CREDS), CLAUDE_ENDED);
+    reconcile_all_in(state);
+    let store = store_of(state, "claude", CLAUDE_CREDS);
+    assert_eq!(std::fs::read_to_string(&store).unwrap(), CLAUDE_ENDED);
+    assert_eq!(std::fs::read_to_string(a.join(CLAUDE_CREDS)).unwrap(), CLAUDE_ENDED);
+    assert!(!signed_in_in(state, "claude"), "an ended login is no login");
+    let row = status_in(state, tmp.path()).into_iter().find(|s| s.id == "claude").unwrap();
+    assert!(!row.signed_in);
+
+    write_in_place(&a.join(CLAUDE_CREDS), &claude_login("2"));
+    reconcile_all_in(state);
+    assert_eq!(std::fs::read_to_string(&store).unwrap(), claude_login("2"));
+    assert_eq!(std::fs::read_to_string(b.join(CLAUDE_CREDS)).unwrap(), claude_login("2"));
+    assert!(signed_in_in(state, "claude"));
+}

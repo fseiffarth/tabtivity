@@ -235,6 +235,51 @@ pub fn claude_account_in_home(home: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The `claudeAiOauth` record of a parsed Claude credentials file and
+/// whether each of its tokens is there: `(record, access, refresh)`.
+fn claude_oauth(file: &serde_json::Value) -> Option<(&serde_json::Map<String, serde_json::Value>, bool, bool)> {
+    let oauth = file.get("claudeAiOauth")?.as_object()?;
+    let holds = |key: &str| oauth.get(key).and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty());
+    Some((oauth, holds("accessToken"), holds("refreshToken")))
+}
+
+/// Whether `bytes` are a Claude login that Claude itself ended. Once its
+/// refresh token is refused (`invalid_grant`), Claude rewrites the record in
+/// place with both tokens empty and `expiresAt: 0` (checked on 2.1.330): the
+/// file stays, non-empty, and holds nothing.
+pub fn claude_login_ended(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .is_ok_and(|file| claude_oauth(&file).is_some_and(|(_, access, refresh)| !access && !refresh))
+}
+
+/// Whether `bytes`, a Claude credentials file, hold a login Claude can still
+/// run on at `now_ms` (epoch milliseconds, the file's own unit): a refresh
+/// token that has not run out (`refreshTokenExpiresAt`), or an access token
+/// that has not (`expiresAt`; none = no expiry). False for an ended record
+/// ([`claude_login_ended`]) and for a file with no `claudeAiOauth` at all (a
+/// `/logout` keeps the file for its MCP tokens). Bytes that are not a JSON
+/// object count as a login: only a record that says so itself is called over.
+pub fn claude_login_live(bytes: &[u8], now_ms: u64) -> bool {
+    let Ok(file) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return true;
+    };
+    if !file.is_object() {
+        return true;
+    }
+    let Some((oauth, access, refresh)) = claude_oauth(&file) else {
+        return false;
+    };
+    let ahead = |key: &str| oauth.get(key).and_then(|v| v.as_f64()).is_none_or(|at| at > now_ms as f64);
+    (refresh && ahead("refreshTokenExpiresAt")) || (access && ahead("expiresAt"))
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn read_sidecar(dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(dir.join(name))
         .ok()
@@ -465,6 +510,25 @@ fn write_blocked(store_dir: &Path, blocked: &Blocked) {
     }
 }
 
+/// Whether `bytes`, an ended Claude login a tab left in `home`
+/// ([`claude_login_ended`]), is the end of an *older* login than the one in
+/// `stored`. Every scope home refreshes on its own copy of the one login, and
+/// a refresh rotates the refresh token: a tab that refreshes on the copy
+/// another home has just rotated away is refused, and Claude ends that copy.
+/// The store's login (the other home's fresh one) is still good then —
+/// adopted, the ended record would be placed over it in every home and sign
+/// every Claude tab out. Only the end of the very login the store holds (what
+/// it last placed in that home) is the store's to take.
+fn ended_behind_the_store(store_dir: &Path, store: &Path, home: &Path, stored: Option<&[u8]>, bytes: &[u8]) -> bool {
+    let Some(stored) = stored.filter(|s| !claude_login_ended(s)) else {
+        return false;
+    };
+    let Some(leaf) = store.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    claude_login_ended(bytes) && read_placed(store_dir, home, leaf).as_deref() != Some(crate::digest::sha256_hex(stored).as_str())
+}
+
 /// Adopt `bytes`, which a tab wrote into `home`, into `store`, unless they
 /// switch the account. Returns whether the store now holds them.
 fn adopt(cli: &str, store_dir: &Path, store: &Path, home: &Path, bytes: &[u8]) -> bool {
@@ -489,7 +553,12 @@ fn adopt(cli: &str, store_dir: &Path, store: &Path, home: &Path, bytes: &[u8]) -
         write_blocked(store_dir, &Blocked { command: Some(field), ..Blocked::default() });
         return false;
     }
-    let Adoption { bytes: taken, refused } = adoption_of(cli, content(std::fs::read(store).ok()).as_deref(), bytes);
+    let stored = content(std::fs::read(store).ok());
+    if cli == "claude" && ended_behind_the_store(store_dir, store, home, stored.as_deref(), bytes) {
+        eprintln!("agent_auth: claude: a tab ended a login the store has moved past; not adopted");
+        return false;
+    }
+    let Adoption { bytes: taken, refused } = adoption_of(cli, stored.as_deref(), bytes);
     let Some(taken) = taken else {
         if let Some(field) = refused {
             eprintln!("agent_auth: {cli}: a tab's login brings more than a token refresh at {field}; not adopted");
@@ -1010,11 +1079,17 @@ pub struct WellknownHome {
     pub origins: Vec<String>,
 }
 
-/// Whether the store holds a login for `cli` under `paths` (a row's `signed_in`).
+/// Whether the store holds a login for `cli` under `paths` (a row's
+/// `signed_in`). Claude's file outlives its login ([`claude_login_live`]), so
+/// that one is read: an ended or run-out login is not a login, and
+/// `claude_token` hands out the saved token instead.
 fn store_holds_login(state_dir: &Path, cli: &str, paths: &[AuthPath]) -> bool {
     paths.iter().any(|p| {
         let s = store_path_in(state_dir, cli, p);
         match p.kind {
+            AuthKind::File if cli == "claude" => {
+                content(std::fs::read(&s).ok()).is_some_and(|bytes| claude_login_live(&bytes, now_ms()))
+            }
             AuthKind::File => std::fs::metadata(&s).is_ok_and(|m| m.len() > 0),
             AuthKind::Dir(names) => !store_dir_logins(&s, names).is_empty(),
         }

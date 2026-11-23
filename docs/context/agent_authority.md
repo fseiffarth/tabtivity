@@ -470,7 +470,26 @@ inference-only — Claude refuses Remote Control and Claude in Chrome on it —
 so a full login always wins, and a token spawn gets no `--remote-control`.
 Unlike an API key it reaches the agent process, as the shared credentials
 file already does. Remote tabs get it over ssh's `SendEnv` channel, used only
-by a host without its own `~/.claude/.credentials.json`.
+by a host whose own `~/.claude/.credentials.json` holds no token.
+
+"No shared login" is read from the file, not from its presence (2026-11-23).
+Claude ends a login whose refresh token was refused by rewriting the record
+in place with both tokens empty (`expiresAt: 0`; checked on 2.1.330), so the
+file stays and holds nothing: `agent_auth::claude_login_live` calls that, a
+record whose tokens have both run out, and a file with no `claudeAiOauth`
+no login — the Agents view shows it signed out and the token goes to the
+next Claude spawn. Until then an ended record counted as a login and the
+token was never handed out. The same day the keeper stopped spreading such a
+record: every scope home refreshes on its own copy (Claude's refresh lock is
+per home), a refresh rotates the refresh token, and a tab that refreshed
+within a keeper pass of another home's refresh was refused and ended its
+copy — which the keeper adopted and placed over the fresh login in every
+home, signing every Claude tab out. An ended copy is now adopted only when
+it ends the login the store holds (the bytes it last placed in that home,
+`ended_behind_the_store`); otherwise the store's login goes back over it.
+The token is in a tab's environment from its start, so a tab already running
+when the login really ends still shows "Login expired" until it is opened
+again.
 
 Provider API keys (`services::agent_api_keys`, `docs/api_chat_plan.md` Parts
 A and C) take the same keychain route: one key per provider under

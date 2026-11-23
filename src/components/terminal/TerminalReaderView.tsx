@@ -41,7 +41,7 @@ import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
 import { agentTabLabel, useAgentModelsStore, useAgentTabModelTag } from "../../stores/agents/agentModels";
-import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
+import { relaunch, runsLocally, useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -1562,6 +1562,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * open as the session's do; nothing live — the screen's dialogs, the working
  * row, sending prompts — is drawn under it, since none of that is its.
  */
+/** Per pane, the expired-login answer its tab was last restarted on the saved
+ * Claude token for (`continueOnToken`): the restart leaves that answer the
+ * newest one, and a remounted Reader must not offer it again. */
+const continuedOnToken = new Map<string, string>();
+
 export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, filesOpen = false, probeChanges = false, onChangesKnown, onShowChat, onShowFiles, onFilesKnown, onOpenUrl, navigationSlot, actionSlot }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
@@ -2391,6 +2396,53 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     }, target).catch(() => {});
   }, [shown, visible, ptyId]);
   const turns = useMemo(() => transcriptTurns(levelEntries), [levelEntries]);
+  // The newest answer is the CLI saying its login is over: Sign in is offered
+  // on it, and for a local Claude tab with a saved long-lived token
+  // (`services::claude_token`) going on on that token. Claude reads the token
+  // at its start, so the tab is relaunched on its resume args; the backend
+  // hands the token to that spawn. Asked only once the chat says so.
+  const lastTurn = turns[turns.length - 1];
+  const loginOver = !browsed && !openStep && lastTurn?.kind === "answer"
+    && readSignedOut(lastTurn.text.split(/\r?\n/u).map((text) => ({ text })));
+  const loginOverAt = loginOver && lastTurn ? `${ptyId}:${lastTurn.key}:${lastTurn.stamp ?? ""}` : null;
+  const tokenTab = !!loginOverAt && scope !== ASSISTANT_SCOPE && tab?.kind === "agent" && tab.cmd === "claude" && runsLocally(scope, tab);
+  const [tokenReady, setTokenReady] = useState(false);
+  useEffect(() => {
+    if (!tokenTab) {
+      setTokenReady(false);
+      return;
+    }
+    let current = true;
+    invoke<{ inUse?: boolean } | null>("claude_token_status").then(
+      (status) => {
+        if (current) setTokenReady(!!status?.inUse);
+      },
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [tokenTab]);
+  const [continuing, setContinuing] = useState(false);
+  const [continuedAt, setContinuedAt] = useState(() => continuedOnToken.get(ptyId) ?? null);
+  const continueOnToken = () => {
+    if (continuing || !tab || !loginOverAt) return;
+    setContinuing(true);
+    void relaunch(scope, tab)
+      .then((result) => {
+        if (result !== "undone") {
+          useProjectsStore.setState({ switchToast: t("terminal.reader.continueOnTokenFailed") });
+          return;
+        }
+        // The relaunch adds nothing to the conversation: the same answer
+        // stays the newest one, and must not offer the restart again.
+        continuedOnToken.set(ptyId, loginOverAt);
+        setContinuedAt(loginOverAt);
+        useProjectsStore.setState({ switchToast: t("terminal.reader.continueOnTokenDone") });
+      })
+      .finally(() => setContinuing(false));
+  };
+  const offerToken = tokenReady && !!loginOverAt && continuedAt !== loginOverAt;
   // The files the phone sent into the project inbox, drawn in their prompts'
   // bubbles as on the phone (`ReaderInbox`).
   const promptTexts = useMemo(() => turns.filter((turn) => turn.kind === "prompt").map((turn) => turn.text), [turns]);
@@ -3100,12 +3152,19 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                   asyncSending={turn.asking && asyncAsk.sending === turn.key}
                   atWork={turn.kind === "agent" && subagentAtWork(turn, openStep ? subagentWorking : sessionBusy)}
                   restore={turn.kind === "prompt" ? checkpoints.restoreFor(turn.stamp) : undefined} action={
-                  !browsed && !openStep && canLogIn
-                  && index === turns.length - 1 && turn.kind === "answer"
-                  && readSignedOut(turn.text.split(/\r?\n/u).map((text) => ({ text }))) ? (
-                    <button type="button" className="terminal-reader-stop" disabled={loggingIn || !!live.working || !!live.question || pending.length > 0} onClick={logIn}>
-                      {t("mobile.signIn.open")} <UntestedTag id="terminal.reader.loginExpired" />
-                    </button>
+                  loginOver && index === turns.length - 1 && (canLogIn || offerToken) ? (
+                    <>
+                      {offerToken && (
+                        <button type="button" className="terminal-reader-stop" disabled={continuing || loggingIn || !!live.working || !!live.question || pending.length > 0} onClick={continueOnToken}>
+                          {t("terminal.reader.continueOnToken")} <UntestedTag id="terminal.reader.continueOnToken" />
+                        </button>
+                      )}
+                      {canLogIn && (
+                        <button type="button" className="terminal-reader-stop" disabled={continuing || loggingIn || !!live.working || !!live.question || pending.length > 0} onClick={logIn}>
+                          {t("mobile.signIn.open")} <UntestedTag id="terminal.reader.loginExpired" />
+                        </button>
+                      )}
+                    </>
                   ) : undefined
                 } />}
               </Fragment>

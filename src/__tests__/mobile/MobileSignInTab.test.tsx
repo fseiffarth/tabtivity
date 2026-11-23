@@ -41,6 +41,11 @@ describe("reading a session's login state", () => {
     expect(readSignedOut(rows("How would you like to authenticate for this project?"))).toBe(true);
     // Antigravity 1.3.3's expired or revoked login, read out of its binary.
     expect(readSignedOut(rows("> fix the build", "Authentication expired. Please log back in."))).toBe(true);
+    // Claude 2.1.32x's other "<reason> · Please run /login" messages, read out of its binary.
+    expect(readSignedOut(rows("● Login reached its time limit · Please run /login"))).toBe(true);
+    expect(readSignedOut(rows("OAuth token revoked · Please run /login"))).toBe(true);
+    // A reason Claude has not used yet still counts through the shared tail.
+    expect(readSignedOut(rows("Subscription paused · Please run /login"))).toBe(true);
   });
 
   it("lets go once the sign-in went through, and ignores what scrolled away", () => {
