@@ -120,14 +120,19 @@ const chipDiagBus = {
 };
 function chipDiagNote(line: string) {
   const bus = chipDiagBus;
-  const run = bus.run ?? (bus.run = { t0: performance.now(), lines: [], timer: 0 });
+  let run = bus.run;
+  if (!run) {
+    // A fixed window from the first note, not a quiet gap: a revert that lands
+    // seconds later (a remount, a late state write) must still be inside it.
+    const fresh = { t0: performance.now(), lines: [] as string[], timer: 0 };
+    fresh.timer = window.setTimeout(() => {
+      bus.last = fresh.lines;
+      bus.run = null;
+      for (const sub of bus.subs) sub(fresh.lines);
+    }, 5000);
+    run = bus.run = fresh;
+  }
   run.lines.push(`+${Math.round(performance.now() - run.t0)}ms ${line}`);
-  window.clearTimeout(run.timer);
-  run.timer = window.setTimeout(() => {
-    bus.last = run.lines;
-    bus.run = null;
-    for (const sub of bus.subs) sub(run.lines);
-  }, 600);
 }
 function chipDiagEvent(ev: Event): string {
   let id = chipDiagBus.eventIds.get(ev);
@@ -668,7 +673,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const regFilterKey = `${regSource}|${regCapabilities.join(",")}|${regDownload}|${sortBy}`;
 
   // ── TEMP diagnostic: filter chips that toggle back in the cockpit window ──
-  // Records, for ~0.6 s after a chip click, every native click the document
+  // Records, for 5 s after a chip click, every native click the document
   // sees on a chip, every run of a chip's handler (same event ids, so a
   // handler run twice for one event shows) and every filter-state change, each
   // tagged with this panel instance's id (a remount shows as a new id). The
@@ -1629,7 +1634,10 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                 type="button"
                 className={regSource === src ? "active" : ""}
                 aria-pressed={regSource === src}
-                onClick={() => setRegSource(src)}
+                onClick={(e) => {
+                  diagChip(`source/${src}`, e.nativeEvent);
+                  setRegSource(src);
+                }}
               >
                 {t(`ollama.source.${src}`)}
               </button>
@@ -1682,7 +1690,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       {chipDiag.length > 0 && (
         <div className="ollama-chip-diag">
           <div className="ollama-chip-diag-head">
-            {t("ollama.chipDiag")}
+            {t("ollama.chipDiag")} · panel={diagPanelId.current}
             <button type="button" className="ollama-action-btn" onClick={() => setChipDiag([])}>
               {t("common.close")}
             </button>
