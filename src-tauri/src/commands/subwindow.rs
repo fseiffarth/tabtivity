@@ -133,6 +133,7 @@ pub fn release_detached_entry(reg: &mut WindowRegistry, label: &str) -> Option<u
     // leaves a stale bounds entry a reused label could later pick up (#42).
     reg.detached_bounds.remove(label);
     reg.detached_minimized.remove(label);
+    reg.detached_paint_owed.remove(label);
     reg.detached_parking.forget(label);
     // A handshake still in flight has nothing left to retire, and the label's
     // next window must announce its own readiness.
@@ -598,10 +599,13 @@ fn kick_size(app: &AppHandle, label: &str, grow: bool, reveal: bool) {
 /// present, they coalesce into nothing, and the window stays a blank white or
 /// black surface until a click repaints it. This one comes from the renderer
 /// itself, once it has rendered, so it cannot be early. Resize only: no
-/// show/focus, so a respawned popout never takes focus by it. Skipped while
-/// a Wayland placement hop is running — its fullscreen round trip and size
-/// restore are genuine resizes already, and a size change mid-hop would be
-/// read as the landing. Bound to the calling window's own label.
+/// show/focus, so a respawned popout never takes focus by it. Asked while a
+/// Wayland placement hop is running, it is owed and paid as the hop ends
+/// (`mark_placing`): a size change mid-hop would be read as the landing, and
+/// dropping it instead left a popout whose content was drawn during the hop
+/// blank — the hop's own resizes come before that content. Also asked by
+/// content that paints well after the first frame (a PDF's first page).
+/// Bound to the calling window's own label.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn detached_first_paint(
     app: AppHandle,
@@ -609,9 +613,21 @@ pub fn detached_first_paint(
     win_registry: State<'_, WindowRegistryState>,
 ) {
     let label = window.label().to_string();
-    if !label.starts_with("detached-") || win_registry.lock_ok().is_detached_placing(&label) {
+    if !label.starts_with("detached-") {
         return;
     }
+    {
+        let mut reg = win_registry.lock_ok();
+        if reg.is_detached_placing(&label) {
+            reg.detached_paint_owed.insert(label);
+            return;
+        }
+    }
+    spawn_resize_nudge(app, label);
+}
+
+/// The ±1px resize nudge alone (no show/focus), off the calling thread.
+fn spawn_resize_nudge(app: AppHandle, label: String) {
     std::thread::spawn(move || {
         kick_size(&app, &label, true, false);
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1795,11 +1811,19 @@ fn emit_retire_withdrawn(app: &AppHandle, label: &str) {
 /// starts and clears it where the hop ends.
 #[cfg(target_os = "linux")]
 fn mark_placing(app: &AppHandle, label: &str, placing: bool) {
-    let reg = app.state::<WindowRegistryState>();
-    let mut reg = reg.lock_ok();
-    // A window released meanwhile (destroyed mid-hop) has no placement left to mark.
-    if placing || reg.windows.contains_key(label) {
-        reg.set_detached_placing(label, placing);
+    let owed = {
+        let reg = app.state::<WindowRegistryState>();
+        let mut reg = reg.lock_ok();
+        // A window released meanwhile (destroyed mid-hop) has no placement left to mark.
+        let live = reg.windows.contains_key(label);
+        if placing || live {
+            reg.set_detached_placing(label, placing);
+        }
+        // A first-paint nudge the renderer asked for mid-hop is paid now.
+        !placing && reg.detached_paint_owed.remove(label) && live
+    };
+    if owed {
+        spawn_resize_nudge(app.clone(), label.to_string());
     }
 }
 

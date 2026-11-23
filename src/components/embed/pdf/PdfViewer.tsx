@@ -98,6 +98,7 @@ import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidd
 import { isTabInPopout, useTabsStore } from "../../../stores/tabs";
 import { splitSubPaneKey } from "../../../stores/tabs/viewerState";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
+import { askPopoutRepaint } from "../../../lib/window/popoutRepaint";
 import { ArrowUpRightIcon, CloseIcon, CommentIcon, PencilIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 import { RELOAD_RETRY_MS, RELOAD_MAX_RETRIES, settledFileSize } from "./reloadSettle";
@@ -469,6 +470,16 @@ function PdfCanvas({
   const scrollRef = useRef<HTMLDivElement>(null);
   // Proportional scroll-link to a paired subwindow (no-op unless linked).
   const reportScrollSync = useScrollSync(groupId, scrollRef);
+  // In a popout, the first page put up asks for the window's repaint nudge: a
+  // large PDF paints its first page well after the popout's own first frame
+  // (which asked already), and WebKitGTK may not show it until a genuine resize.
+  // Once per viewer; a no-op outside a popout.
+  const popoutRepaintAsked = useRef(false);
+  const onPagePainted = useCallback(() => {
+    if (popoutRepaintAsked.current) return;
+    popoutRepaintAsked.current = true;
+    askPopoutRepaint();
+  }, []);
   const contentRef = useRef<HTMLDivElement>(null);
   // True once the first document load has run, so only that load restores the
   // session-persisted scroll/zoom (#viewerpos); later reloads behave as before.
@@ -2526,6 +2537,7 @@ function PdfCanvas({
                     scale={scale}
                     cssSize={pageSizes?.[i]}
                     onSize={(size) => correctPageSize(i, size)}
+                    onPainted={onPagePainted}
                     // SyncTeX only means anything for pages of the file itself: a
                     // page merged in from another PDF has no line in this source.
                     // Wired whether or not a map exists: without one the click
