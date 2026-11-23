@@ -60,6 +60,7 @@ use super::{
     project_docs,
     pty_bridge::{self, TerminalRegistry},
     remarks,
+    request_body,
     scheduler,
     serve,
     shell_mask,
@@ -1338,7 +1339,7 @@ async fn new_project(State(state): State<HostState>, headers: HeaderMap, body: B
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(request) = serde_json::from_slice::<NewProjectBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<NewProjectBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let create = state.spawner.new_project.clone();
@@ -1701,7 +1702,7 @@ async fn create_tab(
     // Parsed only after the request is authenticated and same-origin: as a
     // `Json<T>` extractor this ran first, so an unauthenticated caller got a
     // 422 naming the fields of the desktop-bridge protocol.
-    let Ok(mut request) = serde_json::from_slice::<CreateTabRequest>(&body) else {
+    let Ok(mut request) = request_body::parse_json::<CreateTabRequest>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     // `like_tab` names a tmux session, which only the sidecar may: the tab
@@ -2040,7 +2041,7 @@ async fn reopen_tab(
     let request = if body.is_empty() {
         ReopenTabRequest::default()
     } else {
-        match serde_json::from_slice::<ReopenTabRequest>(&body) {
+        match request_body::parse_json::<ReopenTabRequest>(&body) {
             Ok(request) => request,
             Err(_) => return api_error(StatusCode::BAD_REQUEST, "invalid_request"),
         }
@@ -2451,7 +2452,7 @@ async fn diverged_preview(
     if !diverged::sync_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "sync_off");
     }
-    let Ok(preview_body) = serde_json::from_slice::<DivergedPreviewBody>(&body) else {
+    let Ok(preview_body) = request_body::parse_json::<DivergedPreviewBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Some(op) = preview_body.previewed_op() else {
@@ -2518,7 +2519,7 @@ async fn diverged_resolve(
     if !diverged::sync_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "sync_off");
     }
-    let Ok(DivergedResolveBody { op, files, token }) = serde_json::from_slice(&body) else {
+    let Ok(DivergedResolveBody { op, files, token }) = request_body::parse_json(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let paths = match diverged_paths(&state, &raw_id, &files) {
@@ -2859,7 +2860,7 @@ async fn alerts_resolve(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(request) = serde_json::from_slice::<AlertResolveBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<AlertResolveBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if request.alert_id.is_empty() || request.alert_id.len() > 128 {
@@ -2959,7 +2960,7 @@ async fn push_put(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(request) = serde_json::from_slice::<PushBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<PushBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let stored = state
@@ -3041,7 +3042,7 @@ async fn secrets_challenge(State(state): State<HostState>, headers: HeaderMap, b
     if crate::services::server::vault::vault().is_none() {
         return api_error(StatusCode::NOT_FOUND, "not_a_server");
     }
-    let Ok(request) = serde_json::from_slice::<SecretsChallengeBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<SecretsChallengeBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     match state.auth.lock_ok().action_challenge(&device_id, &request.action) {
@@ -3063,7 +3064,7 @@ struct SignedActionBody {
 /// The pairing key's signature over an action nonce (user decision
 /// 2026-10-03): a session cookie alone is refused with `signature_required`.
 fn check_signed_action(state: &HostState, device_id: &str, action: &str, body: &[u8]) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    let request = serde_json::from_slice::<SignedActionBody>(body).map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
+    let request = request_body::parse_json::<SignedActionBody>(body).map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
     let (Some(nonce), Some(signature)) = (request.nonce, request.signature) else {
         return Err(api_error(StatusCode::FORBIDDEN, "signature_required"));
     };
@@ -3107,7 +3108,7 @@ async fn secrets_enrol(State(state): State<HostState>, headers: HeaderMap, body:
     let Some(vault) = crate::services::server::vault::vault() else {
         return api_error(StatusCode::NOT_FOUND, "not_a_server");
     };
-    let Ok(request) = serde_json::from_slice::<SecretsEnrolBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<SecretsEnrolBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let keys = {
@@ -3198,7 +3199,7 @@ async fn secrets_recover(State(state): State<HostState>, headers: HeaderMap, bod
     let Some(vault) = crate::services::server::vault::vault() else {
         return api_error(StatusCode::NOT_FOUND, "not_a_server");
     };
-    let Ok(request) = serde_json::from_slice::<SecretsRecoverBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<SecretsRecoverBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let code = zeroize::Zeroizing::new(request.code);
@@ -3237,7 +3238,7 @@ async fn secrets_unlock_finish(State(state): State<HostState>, headers: HeaderMa
     let Some(vault) = crate::services::server::vault::vault() else {
         return api_error(StatusCode::NOT_FOUND, "not_a_server");
     };
-    let Ok(request) = serde_json::from_slice::<SecretsFinishBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<SecretsFinishBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let keys = state.auth.lock_ok().secrets_device_keys();
@@ -3401,7 +3402,7 @@ async fn calendar_mutate(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(action) = serde_json::from_slice::<CalendarAction>(&body) else {
+    let Ok(action) = request_body::parse_json::<CalendarAction>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Some(month) = query.month.filter(|value| valid_calendar_month(value)) else {
@@ -3471,7 +3472,7 @@ async fn todo_mutate(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(action) = serde_json::from_slice::<TodoAction>(&body) else {
+    let Ok(action) = request_body::parse_json::<TodoAction>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let valid = match &action {
@@ -3718,7 +3719,7 @@ async fn local_models_mutate(
     if local_models_closed(&state, &headers) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
-    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&body) else {
+    let Ok(body) = request_body::parse_json::<serde_json::Value>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let action = match local_models::parse_action(&body) {
@@ -3830,7 +3831,7 @@ async fn mail_mark(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(mark) = serde_json::from_slice::<MailMarkBody>(&body) else {
+    let Ok(mark) = request_body::parse_json::<MailMarkBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !valid_mail_id(&folder_id) || !valid_mail_id(&message_id) || mark.offset > 100_000 {
@@ -3865,7 +3866,7 @@ async fn mail_reply(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(reply) = serde_json::from_slice::<MailReplyBody>(&body) else {
+    let Ok(reply) = request_body::parse_json::<MailReplyBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !valid_mail_id(&folder_id) || !valid_mail_id(&message_id) || reply.offset > 100_000 {
@@ -3943,7 +3944,7 @@ async fn rename_tab(
     struct RenameBody {
         label: String,
     }
-    let Ok(request) = serde_json::from_slice::<RenameBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<RenameBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Some(label) = clean_tab_label(&request.label) else {
@@ -4026,7 +4027,7 @@ async fn color_tab(
         #[serde(default)]
         color: Option<String>,
     }
-    let Ok(request) = serde_json::from_slice::<ColorBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<ColorBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Ok(color) = clean_tab_color(request.color.as_deref()) else {
@@ -4106,7 +4107,7 @@ async fn sent_prompt(
     struct PromptBody {
         message: String,
     }
-    let Ok(request) = serde_json::from_slice::<PromptBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<PromptBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let message = request.message.trim();
@@ -4171,7 +4172,7 @@ fn held_message(body: &Bytes) -> Result<String, (StatusCode, Json<serde_json::Va
     struct HeldBody {
         message: String,
     }
-    let Ok(request) = serde_json::from_slice::<HeldBody>(body) else {
+    let Ok(request) = request_body::parse_json::<HeldBody>(body) else {
         return Err(api_error(StatusCode::BAD_REQUEST, "invalid_request"));
     };
     let message = request.message.trim();
@@ -4355,7 +4356,7 @@ async fn sign_in_callback(
     struct CallbackBody {
         url: String,
     }
-    let Ok(request) = serde_json::from_slice::<CallbackBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<CallbackBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     // The listener is on this machine; a host tab's CLI waits on the host's.
@@ -4402,7 +4403,7 @@ async fn sign_in_tab(
         alternate: bool,
         idempotency_key: String,
     }
-    let Ok(body) = serde_json::from_slice::<SignInBody>(&body) else {
+    let Ok(body) = request_body::parse_json::<SignInBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if body.idempotency_key.len() < 16 || body.idempotency_key.len() > 128 {
@@ -4476,7 +4477,7 @@ async fn teleport_tab(
         session: String,
         idempotency_key: String,
     }
-    let Ok(body) = serde_json::from_slice::<TeleportBody>(&body) else {
+    let Ok(body) = request_body::parse_json::<TeleportBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if body.idempotency_key.len() < 16
@@ -4548,7 +4549,7 @@ async fn order_tab(
         anchor: String,
         place: TabPlace,
     }
-    let Ok(request) = serde_json::from_slice::<OrderBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<OrderBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if request.anchor == tab_id {
@@ -5213,7 +5214,7 @@ async fn tab_complete_prompt(
     struct CompleteBody {
         draft: String,
     }
-    let Ok(request) = serde_json::from_slice::<CompleteBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<CompleteBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     next_prompt_for(&state, &phone, &tab_id, Phase::Complete, Some(request.draft)).await
@@ -5781,7 +5782,7 @@ async fn schedule_create(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(schedule) = serde_json::from_slice::<MobileScheduleInput>(&body) else {
+    let Ok(schedule) = request_body::parse_json::<MobileScheduleInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let (status, body) =
@@ -5809,7 +5810,7 @@ async fn schedule_update(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(schedule) = serde_json::from_slice::<MobileScheduleInput>(&body) else {
+    let Ok(schedule) = request_body::parse_json::<MobileScheduleInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     schedule_mutation(
@@ -6019,7 +6020,7 @@ async fn prompt_create(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(prompt) = serde_json::from_slice::<MobilePromptInput>(&body) else {
+    let Ok(prompt) = request_body::parse_json::<MobilePromptInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let (status, body) =
@@ -6044,7 +6045,7 @@ async fn prompt_update(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(prompt) = serde_json::from_slice::<MobilePromptInput>(&body) else {
+    let Ok(prompt) = request_body::parse_json::<MobilePromptInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     prompt_mutation(
@@ -6087,7 +6088,7 @@ async fn prompt_send(
     if let Err(error) = ai_off_guard(&state) {
         return error;
     }
-    let Ok(send) = serde_json::from_slice::<PromptSendBody>(&body) else {
+    let Ok(send) = request_body::parse_json::<PromptSendBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     // The tab is resolved here, before the generic mutation path, so a tab id
@@ -6289,7 +6290,7 @@ async fn move_tab_worktree(
     if let Err(error) = ai_off_guard(&state) {
         return error;
     }
-    let Ok(MoveWorktreeBody { worktree }) = serde_json::from_slice::<MoveWorktreeBody>(&body) else {
+    let Ok(MoveWorktreeBody { worktree }) = request_body::parse_json::<MoveWorktreeBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if worktree.is_empty() || worktree.len() > 128 {
@@ -6411,7 +6412,7 @@ async fn move_tab_location(
     if let Err(error) = ai_off_guard(&state) {
         return error;
     }
-    let Ok(MoveLocationBody { location: asked }) = serde_json::from_slice::<MoveLocationBody>(&body) else {
+    let Ok(MoveLocationBody { location: asked }) = request_body::parse_json::<MoveLocationBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Ok(snapshot) = catalog(&state, &phone) else {
@@ -6551,7 +6552,7 @@ async fn remember_model_rows(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(rows) = serde_json::from_slice::<crate::services::model_rows::Rows>(&body) else {
+    let Ok(rows) = request_body::parse_json::<crate::services::model_rows::Rows>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let (cli, source, scope) = match model_rows_cli(&state, &phone, &tab_id) {
@@ -6593,7 +6594,7 @@ async fn switch_assistant_model(
     if let Err(error) = ai_off_guard(&state) {
         return error;
     }
-    let Ok(SwitchModelBody { model }) = serde_json::from_slice::<SwitchModelBody>(&body) else {
+    let Ok(SwitchModelBody { model }) = request_body::parse_json::<SwitchModelBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if model.is_empty() || model.len() > 128 || !crate::services::local_drivers::model_name_ok(&model) {
@@ -7051,7 +7052,7 @@ async fn attach_desktop_image(
     if !desktop_images_open(&state.config.state_dir) {
         return desktop_image_error("desktop_images_off");
     }
-    let Ok(request) = serde_json::from_slice::<AttachDesktopImageBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<AttachDesktopImageBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !desktop_images::valid_id(&request.image_id) {
@@ -7617,7 +7618,7 @@ async fn markup_submit(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(request) = serde_json::from_slice::<markup::MarkupRequest>(&body) else {
+    let Ok(request) = request_body::parse_json::<markup::MarkupRequest>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, markup::MarkupError::Invalid.code());
     };
     if let Err(error) = markup::validate(&request) {
@@ -8184,7 +8185,7 @@ async fn markup_answer(
         ask_id: String,
         answers: Vec<super::protocol::MobileMarkupAnswer>,
     }
-    let Ok(request) = serde_json::from_slice::<AnswerBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<AnswerBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !valid_ask_id(&request.ask_id) {
@@ -8242,7 +8243,7 @@ async fn markup_dismiss(
     struct DismissBody {
         ask_id: String,
     }
-    let Ok(request) = serde_json::from_slice::<DismissBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<DismissBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !valid_ask_id(&request.ask_id) {
@@ -9001,7 +9002,7 @@ async fn project_files_remarks(
         Ok(rel) => rel,
         Err(error) => return error,
     };
-    let Ok(request) = serde_json::from_slice::<remarks::RemarksRequest>(&body) else {
+    let Ok(request) = request_body::parse_json::<remarks::RemarksRequest>(&body) else {
         return remarks_error(remarks::RemarksError::Invalid);
     };
     let key = state.auth.lock_ok().host_key().to_vec();
