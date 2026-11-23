@@ -3719,7 +3719,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   flex: 1 1 auto;
   min-height: 0;
 }
-.terminal-reader.panel-open > :is(.terminal-reader-subagent-bar, .terminal-reader-subagent-index, .terminal-reader-stream) {
+.terminal-reader.panel-open > :is(.terminal-reader-subagent-bar, .terminal-reader-subagent-index, .terminal-reader-stream-anchor) {
   display: none;
 }
 /* The composer docked under the panel (`.terminal-reader-dock`, no box of its
@@ -3787,6 +3787,93 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   right: 64px;
   transform: translateY(-50%);
 }
+/* The chat's place and its own element (`TerminalReaderView` streamHost):
+   neither draws a box, so the stream is the Reader's flex item wherever the
+   host sits — here, or in the side panel's slot. */
+.terminal-reader-stream-anchor,
+.terminal-reader-stream-host { display: contents; }
+/* The docked line's switch for the chat in the side panel: left of the mic
+   (or of Send without one), the mic's quiet round button. */
+.terminal-reader-side-chat {
+  position: absolute;
+  right: 36px;
+  bottom: 7px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-side-chat svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.terminal-reader-side-chat:hover { color: var(--text-primary); background: var(--bg-hover); }
+.terminal-reader-side-chat.on { color: var(--accent); }
+.terminal-reader-input.with-mic .terminal-reader-side-chat { right: 60px; }
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-side-chat { bottom: 6px; }
+.terminal-reader-input:has(> .terminal-reader-side-chat) textarea { padding-right: 72px; }
+.terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) textarea,
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) textarea {
+  padding-right: 96px;
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) .terminal-reader-dock-tag {
+  right: 88px;
+}
+/* The side panel's cover holding the chat (`ReaderSideChat`): over the
+   panel's view, under its resize sash (z-index 30); the Reader's ground and
+   ink, a narrower column of bubbles. */
+.reader-side-chat {
+  --prompt-strip-h: 36px;
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-main));
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+}
+.reader-side-chat-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+  background: var(--bg-side-panel);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.reader-side-chat-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.reader-side-chat-back { flex: none; }
+.reader-side-chat-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.reader-side-chat-body .terminal-reader-turns { padding: 10px; }
+.reader-side-chat-body .terminal-reader-turn { max-width: 94%; }
 .terminal-changes-body { display: flex; flex: 1; min-height: 0; }
 .terminal-changes-body > .terminal-changes-files {
   width: clamp(160px, 22%, 260px);

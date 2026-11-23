@@ -950,6 +950,12 @@ export interface Settings {
    *  the pointer rests on the edge rail and closes on mouse-leave, with no reflow.
    *  Unset → off. */
   side_panel_auto_hide?: boolean;
+  /** An agent tab's Reader on Diffs or Data draws its chat in the side panel
+   *  (opened over its own view while it does) instead of the one status line
+   *  over the docked composer. The switch is a button in that composer's line
+   *  (`stores/agents/readerSideChat`). Unset → off. Rides in the backend's
+   *  `extra` catch-all. */
+  reader_side_chat?: boolean;
   /** @deprecated Read-only fallback for {@link Settings.side_panel_open}; nothing
    *  writes it any more (it rides in the backend's `extra` catch-all). */
   side_panel_pinned?: boolean;

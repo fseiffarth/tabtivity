@@ -344,6 +344,9 @@ export interface ProjectFilesViewProps {
   resizeHandle?: React.ReactNode;
   pin?: React.ReactNode;
   hidden?: React.ReactNode;
+  /** Panel-only: drawn over the whole viewer, which stays mounted under it
+   *  (the Reader's chat beside Diffs or Data, `ReaderSideChat`). */
+  cover?: React.ReactNode;
   /** Panel-only bottom frame chrome, rendered outside the scrollable viewer. */
   footer?: React.ReactNode;
 
@@ -387,6 +390,7 @@ export function ProjectFilesView({
   resizeHandle,
   pin,
   hidden,
+  cover,
   footer,
   compact,
   view: hostView,
@@ -1851,6 +1855,7 @@ export function ProjectFilesView({
       {...importDrop.handlers}
     >
       {resizeHandle}
+      {cover}
       {importDrop.conflictModal}
       {dialogs}
       {/* Compact (docked subwindow) viewer: only the project-name/tags/source-

@@ -114,6 +114,7 @@ import { useTimerStore } from "../../stores/timer";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { flushUsage } from "../../stores/usage";
+import { useReaderSideChatStore } from "../../stores/agents/readerSideChat";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { PrivacyCurtain } from "./PrivacyCurtain";
 import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
@@ -1076,8 +1077,12 @@ export function AppShell() {
     },
   });
 
+  // An agent tab's Reader on Diffs or Data with its chat switch on holds the
+  // panel open for its chat (`ReaderSideChat`), without touching the setting:
+  // when it lets go, the panel is closed or open as it was.
+  const sideChatHeld = useReaderSideChatStore((s) => s.claims.length > 0);
   const revealPanel =
-    panelTarget && !panelsHidden && (autoHide ? panelOpen : openSetting);
+    panelTarget && !panelsHidden && (sideChatHeld || (autoHide ? panelOpen : openSetting));
   // Docked: the open panel pushes the workspace aside. Auto-hide's overlay never does.
   const docked = revealPanel && !autoHide;
   const panelView = viewByScope?.[sidePanelViewKey(activeId, scope)] ?? lastPanelView;
