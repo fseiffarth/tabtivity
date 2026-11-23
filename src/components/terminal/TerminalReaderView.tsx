@@ -294,6 +294,7 @@ function LiveQuestion({ ptyId, live, subject, answered, failure, busy, onAnswer,
       {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
       {question.body && <UntestedTag id="agents.opencode.notice" />}
       {question.readOnly && <UntestedTag id="terminal.reader.questionWaiting" />}
+      {question.byNumber && <UntestedTag id="terminal.reader.questionByNumber" />}
       {subject && (
         <p className="terminal-reader-question-subject">
           <small>{t(permissionSubjectLabel(subject.kind), { tool: subject.tool })} <UntestedTag id="terminal.reader.permissionSubject" /></small>

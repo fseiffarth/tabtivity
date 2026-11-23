@@ -63,6 +63,10 @@ export interface SelectPrompt {
   /** The card is drawn from the waiting entry before the screen shows the
    * dialog: nothing can be sent from it, `options` carry no screen rows. */
   readOnly?: true;
+  /** The card is drawn from the waiting entry with no dialog read off the
+   * screen, and each row answers by its number key (`keys`): a one-question,
+   * single-choice Claude ask under an asking lamp (`withWaitingEntry`). */
+  byNumber?: true;
   /** Navigation read from a CLI whose headers have no status glyphs. */
   navigation?: { tabs: QuestionTab[]; focus: number | null; submit: boolean; keys: QuestionStepKeys };
   options: SelectOption[];

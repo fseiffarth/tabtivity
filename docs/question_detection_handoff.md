@@ -446,3 +446,17 @@ Not run (time/load). Only: new vitest file 3 passed, eslint 0 errors (1 pre-exis
   like option labels and answers do today. Say so if you want them masked.
 
 ## Flagged for main
+
+## 2026-11-23: entry card answers by number (desktop)
+
+The user's Chat view kept a one-question ask grey (read-only entry card) for
+77 s while the terminal showed the dialog. Not reproduced: the exact dialog
+(Claude 2.1.330, stub model) reads as a clickable card in tmux frames and as
+a raw byte stream replayed into xterm, fullscreen TUI or not, at 80–170
+columns, after long tool output, after a focus-out. Fix by the user's choice:
+`liveCardGate.answerableByNumber` makes the desktop entry card of a
+one-question single-choice ask answerable, each row sending its digit
+(2.1.330 answers and submits on the digit; probed). Several questions and
+multi-select stay read-only. The phone is unchanged (no live lamp to gate a
+blind key on). Probes: `tmp/rawprobe/` (gitignored). If it recurs, get the Terminal view's screen at that moment:
+the reader's miss itself is still unexplained.
