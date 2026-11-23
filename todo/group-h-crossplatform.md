@@ -4714,6 +4714,16 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     one muted line and Project files.
     - [ ] ✅ Works on iPadOS (home-screen app)
     - [ ] ❌ Doesn't work on iPadOS
+  - [ ] 🖐️ iPad in landscape, a file from the chat (a sent picture's post, a
+    row of the overview's Files, a changed file, a PDF): it opens in the pane
+    (480 px) under "‹ Overview", the chat beside it still scrolls and takes
+    typing (arrow keys and Escape in the composer leave the file alone), the
+    rail folded; a PDF reads there; Mark up → full screen as before, its Chat
+    button → back to the chat with the overview beside it; ‹ Overview → the
+    file closes, the rail unfolds. Turn the iPad with a file open: upright it
+    covers the chat as before, back in landscape it is in the pane again.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
   - [ ] 🖐️ iPad upright and a phone: the header still has the queue and
     sent-files pills and the files button opens the drawer; the chips stay
     over the transcript. Turn the iPad mid-draft with the pane open: draft,

@@ -1979,6 +1979,9 @@ span.files-close { background:transparent; }
    the host box stays, so hiding never remounts the viewer. */
 .markup-host { display:contents; }
 .markup-host.away { display:none; }
+/* A chat viewer's host, which a landscape iPad places in the pane beside the
+   chat (`data-overview="file"`); anywhere else it is no box at all. */
+.pane-file { display:contents; }
 .outbox-viewer { position:fixed; inset:0; z-index:13; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); background:rgba(4,5,9,.97); color:#e6e9f2; }
 /* A file the viewer cannot draw, or one past the desktop's cap: named, centred. */
 .outbox-no-preview { display:grid; align-content:center; justify-items:center; gap:8px; min-height:0; padding:24px 20px calc(24px + env(safe-area-inset-bottom)); overflow:auto; text-align:center; }
@@ -2675,6 +2678,10 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
   .terminal-screen[data-overview] > .chat-overview { grid-column:-2 / -1; grid-row:2 / span 2; }
   .terminal-screen[data-overview="library"] .files-library:not(.files-split) { position:relative; inset:auto; z-index:1; grid-column:-2 / -1; grid-row:2 / span 2; min-height:0; width:auto; margin:0 12px 12px 0; padding:0; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); overflow:hidden; }
   .terminal-screen[data-overview="library"] > .chat-overview ~ .markup-host .files-library:not(.files-split) { margin-top:var(--overview-head); border-radius:0 0 var(--r-panel) var(--r-panel); background:transparent; box-shadow:none; }
+  /* A file opened from the chat: its viewer under the overview's head, in the
+     pane's column (a library it covered is put out of sight meanwhile). */
+  .terminal-screen[data-overview="file"] > .pane-file > .outbox-viewer.paned { position:relative; inset:auto; z-index:1; grid-column:-2 / -1; grid-row:2 / span 2; min-height:0; margin:var(--overview-head) 12px 12px 0; border-radius:0 0 var(--r-panel) var(--r-panel); background:transparent; overflow:hidden; }
+  .terminal-screen[data-overview="file"] .files-library:not(.files-split) { display:none; }
   .chat-overview { display:flex; flex-direction:column; min-height:0; margin:0 12px 12px 0; overflow:hidden; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); }
   .chat-overview-head { display:flex; flex:0 0 auto; align-items:center; gap:6px; box-sizing:border-box; height:var(--overview-head); padding:8px 12px 4px 16px; }
   .chat-overview-head > .untested { margin:0; }

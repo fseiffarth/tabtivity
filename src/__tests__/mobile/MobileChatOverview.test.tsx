@@ -186,12 +186,51 @@ describe(`${BRAND.display} Mobile session overview beside the iPad chat`, () => 
     expect(screen.getByRole("dialog", { name: "Files from the agent" }).classList.contains("outbox-gallery")).toBe(true);
   });
 
-  it("opens a file row in the chat's own viewer", async () => {
-    stubWindow("split");
+  it("opens a file in the pane, not over the chat, the rail folded meanwhile; ‹ Overview returns", async () => {
+    const window_ = stubWindow("split");
     await openChat();
     const files = within(overview() as HTMLElement).getByRole("region", { name: "Files (5)" });
     fireEvent.click(within(files).getByRole("button", { name: "Open plot-5.png · From the agent" }));
-    expect(screen.getByRole("dialog", { name: "plot-5.png" }).classList.contains("outbox-viewer")).toBe(true);
+    const viewer = screen.getByRole("dialog", { name: "plot-5.png" });
+    expect(viewer.classList.contains("paned")).toBe(true);
+    expect(viewer.getAttribute("aria-modal")).toBe("false");
+    expect(viewer.parentElement?.classList.contains("pane-file")).toBe(true);
+    expect(main().getAttribute("data-overview")).toBe("file");
+    expect((overview() as HTMLElement).querySelector(".chat-overview-body")).toBeNull();
+    expect(main().getAttribute("data-rail")).toBe("folded");
+    expect(localStorage.getItem(storageKey("mobile.chatRailFolded"))).toBeNull();
+
+    // The chat stays usable beside it: its keys stay the chat's.
+    const field = screen.getByRole("textbox", { name: "Message agent" });
+    field.focus();
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "plot-5.png" })).toBe(viewer);
+
+    // Upright the same viewer covers the chat, as ever; back in landscape it is paned again.
+    window_.set("tablet");
+    expect(screen.getByRole("dialog", { name: "plot-5.png" })).toBe(viewer);
+    expect(viewer.classList.contains("paned")).toBe(false);
+    expect(main().hasAttribute("data-overview")).toBe(false);
+    window_.set("split");
+    expect(viewer.classList.contains("paned")).toBe(true);
+
+    fireEvent.click(within(overview() as HTMLElement).getByRole("button", { name: "Back to the session overview" }));
+    expect(screen.queryByRole("dialog", { name: "plot-5.png" })).toBeNull();
+    expect(main().getAttribute("data-overview")).toBe("overview");
+    expect(main().getAttribute("data-rail")).toBe("open");
+  });
+
+  it("opens a post's file in the pane even while it is closed, and closes with it", async () => {
+    stubWindow("split");
+    await openChat();
+    fireEvent.click(paneButton());
+    expect(overview()).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: "Open plot-5.png" })[0]);
+    expect(main().getAttribute("data-overview")).toBe("file");
+    fireEvent.click(within(overview() as HTMLElement).getByRole("button", { name: "Back to the session overview" }));
+    expect(overview()).toBeNull();
+    expect(main().hasAttribute("data-overview")).toBe(false);
+    expect(readFlag("chatOverviewPane")).toBe(false);
   });
 
   it("hides the transcript's chips while it is open and gives them back when it closes, counting the running subagents on its button", async () => {
@@ -370,6 +409,9 @@ describe("the session overview stylesheet", () => {
     expect(split).toContain(".terminal-screen[data-overview] > header { grid-column:1 / -1; grid-row:1; }");
     expect(split).toContain(".terminal-screen[data-overview] > .chat-overview { grid-column:-2 / -1; grid-row:2 / span 2; }");
     expect(split).toMatch(/\.chat-overview \{[^}]*margin:0 12px 12px 0;[^}]*border-radius:var\(--r-panel\);[^}]*background:#1a1d2b;[^}]*box-shadow:var\(--soft\)/);
+    // A file opened from the chat: under the pane's head, in its column, not modal over the chat.
+    expect(split).toMatch(/\[data-overview="file"\] > \.pane-file > \.outbox-viewer\.paned \{[^}]*position:relative;[^}]*grid-column:-2 \/ -1;[^}]*margin:var\(--overview-head\) 12px 12px 0/);
+    expect(CSS).toContain(".pane-file { display:contents; }");
     expect(portrait).not.toContain("chat-overview");
     expect(portrait).not.toContain("data-overview");
   });

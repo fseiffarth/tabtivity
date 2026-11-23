@@ -1529,12 +1529,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }, [sessionFocus, transcript, pending, chatPosts, namedFiles, atBottom, subToken, subagentEntries]);
   useOutboxPoll({ tab, bare, setOutbox, setGallery, setOutboxOpen, setInboxOpen });
   useLimitsPoll({ tab, setLimitsNow, rememberLimits });
+  /** A file opened from the chat (a post, the overview, a transcript link,
+   * the markup banner) stands in a landscape agent chat's pane, not over the
+   * chat (`data-overview="file"`); Mark up still takes the whole screen. */
+  const filePaned = splitTier && overviewPane && markupAway === null && (outboxOpen !== null || inboxOpen !== null || askedFile !== null);
   const {
     openOutbox, renderPost, chatInbox, inboxScope, openSentFile, removeOutbox, removeAllOutbox,
   } = useOutboxViewers({
     tab, readableHost, atBottomRef, setOutbox, outboxScope, gallery, setGallery, outboxOpen,
     setOutboxOpen, inboxOpen, setInboxOpen, askedFile, markupAway, setMarkupAway, filesOpen,
-    inboxFiles, tabOutbox,
+    inboxFiles, tabOutbox, paned: filePaned,
   });
   const { visibleChunks, hiddenLines, showEarlier } = useEarlierOutput({
     readableHost, earlier, revealed, setRevealed, revealAnchor,
@@ -2125,8 +2129,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * the pane is open. While a markup view is tucked away its hosts, the
    * library's too, are hidden (`.markup-host.away`): an agent's pane shows
    * the overview meanwhile, any other tab's chat keeps its whole width. */
-  const paneAt: OverviewMode | undefined = filesDocked && markupAway === null ? "library"
+  const paneAt: OverviewMode | undefined = filePaned ? "file"
+    : filesDocked && markupAway === null ? "library"
     : overviewOffered && paneOpen ? "overview" : undefined;
+  /** The pane's way back: from a file, past the library it may have covered. */
+  const paneBack = useCallback(() => {
+    if (filePaned) {
+      setOutboxOpen(null);
+      setInboxOpen(null);
+      setAskedFile(null);
+    }
+    closeFiles();
+  }, [filePaned, closeFiles]);
   /** Wider than the overview: the tabs rail folds meanwhile, without writing
    * its preference. */
   const paneWide = paneAt !== undefined && paneAt !== "overview";
@@ -2866,7 +2880,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         way back, the library standing under its head. */}
     {overviewOffered && paneAt !== undefined && <ChatOverview
       mode={paneAt}
-      onBack={closeFiles}
+      onBack={paneBack}
       tabId={tab.id}
       project={project}
       agents={sessionAgents}
@@ -3477,14 +3491,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     {gallery && (!outboxOpen || markupAway !== null) && <OutboxGallery scope={outboxScope} files={tabOutbox} tabOnly onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
     {/* A markup view's Chat tucks its viewer away (`markupAway`) without
         unmounting it; the host is always there, so the switch never remounts. */}
-    {outboxOpen && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
+    {/* In a landscape agent chat these viewers stand in the pane (`paned`,
+        `pane-file`: the stylesheet places them in its column). */}
+    {outboxOpen && <div className={markupAway === null ? "markup-host pane-file" : "markup-host away pane-file"}><BackNest off={markupAway !== null}>
       <OutboxViewer key={`${tab.id}/${outboxOpen.name}`} scope={outboxScope} file={outboxOpen} pictures={outboxPictures} onStep={setOutboxOpen} onClose={() => setOutboxOpen(null)} markup={markupFor}
-        newTab={markupNewTab} />
+        newTab={markupNewTab} paned={filePaned} />
     </BackNest></div>}
     {/* What the reader sent is only looked at: no Mark up, no stepping. */}
-    {inboxOpen && (!outboxOpen || markupAway !== null) && <OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} />}
-    {askedFile && (askedFile.scope ?? askedScope) && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
-      <OutboxViewer key={`asked/${askedFile.file.ref ?? askedFile.file.name}`} scope={(askedFile.scope ?? askedScope)!} file={askedFile.file} onClose={() => setAskedFile(null)} startMarking={askedFile.marking}
+    {inboxOpen && (!outboxOpen || markupAway !== null) && <div className="pane-file"><OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} paned={filePaned} /></div>}
+    {askedFile && (askedFile.scope ?? askedScope) && <div className={markupAway === null ? "markup-host pane-file" : "markup-host away pane-file"}><BackNest off={markupAway !== null}>
+      <OutboxViewer key={`asked/${askedFile.file.ref ?? askedFile.file.name}`} scope={(askedFile.scope ?? askedScope)!} file={askedFile.file} onClose={() => setAskedFile(null)} startMarking={askedFile.marking} paned={filePaned}
         markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
     </BackNest></div>}
     {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>

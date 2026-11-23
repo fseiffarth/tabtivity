@@ -175,9 +175,10 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
    * **Mark up**); without it the reader opens as the phone's "PDFs open in"
    * says. */
   startMarking?: boolean;
-  /** Shown beside the files library's folder on a wide screen (`files-split`)
-   * rather than over it: not modal, and drawn in the pane's part of the
-   * screen. Marking up still takes the whole screen. */
+  /** Shown beside the files library's folder on a wide screen (`files-split`),
+   * or in the pane beside a landscape iPad's chat (`Terminal`), rather than
+   * over it: not modal, and drawn in the pane's part of the screen. Marking
+   * up still takes the whole screen. */
   paned?: boolean;
 }) {
   const t = useT();
@@ -259,6 +260,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     const onKey = (event: KeyboardEvent) => {
       // Beside the files library, arrows walking its list are the list's.
       if (event.defaultPrevented) return;
+      // Beside a field (the chat's composer, the library's search), its caret's.
+      if (paned && event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]")) return;
       const target = event.key === "ArrowLeft" ? previous : event.key === "ArrowRight" ? next : null;
       if (!target) return;
       event.preventDefault();
@@ -266,7 +269,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onStep, marking, previous, next]);
+  }, [onStep, marking, previous, next, paned]);
   useEffect(() => {
     // Warm the neighbours once this picture is in, so a step lands on a
     // picture rather than a blank while it loads over the phone's radio.

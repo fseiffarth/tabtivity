@@ -256,7 +256,8 @@ describe(`${BRAND.display} Mobile chat on a tablet`, () => {
     writeFlag("chatFilesPane", true);
     stubTierWindow("split");
     const file = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
-    render(<Terminal tab={{ id: "tab", label: "Claude", kind: "agent", available: true, viewer_busy: false }} project="p1" back={() => {}} markupBack={{ scope: { tab: "tab" }, file }} />);
+    // A tab of its own: a tucked-away view outlives the screen per tab (`awayMarkups`).
+    render(<Terminal tab={{ id: "tab-marked", label: "Claude", kind: "agent", available: true, viewer_busy: false }} project="p1" back={() => {}} markupBack={{ scope: { tab: "tab-marked" }, file }} />);
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
     expect(document.querySelector(".markup-away-notice")).toBeTruthy();
     // The overview is no markup host: it stays beside the chat.
