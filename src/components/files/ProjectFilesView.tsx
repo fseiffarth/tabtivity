@@ -2281,19 +2281,19 @@ export function ProjectFilesView({
             changes={!activeBox && gitStatus?.is_repo && projectDir && active && !remoteBlocked && (
               <div className="git-change-groups">
                 {gitCanAdd && (
-                  <GitChangeGroup key={gitContextKey + "unstaged"} title={t("gitChangeTree.groupUnstaged")}
+                  <GitChangeGroup key={gitContextKey + "unstaged"} contextKey={gitContextKey} title={t("gitChangeTree.groupUnstaged")}
                     meta={String(gitStatus.unstaged + gitStatus.untracked)}
                     projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="unstaged" refreshKey={gitChangesKey}
                     disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
                 )}
                 {gitCanCommit && (
-                  <GitChangeGroup key={gitContextKey + "staged"} title={t("gitChangeTree.groupStaged")}
+                  <GitChangeGroup key={gitContextKey + "staged"} contextKey={gitContextKey} title={t("gitChangeTree.groupStaged")}
                     meta={String(gitStatus.staged)}
                     projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="staged" refreshKey={gitChangesKey}
                     disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
                 )}
                 {gitCanPush && canReviewOutgoing && (
-                  <GitChangeGroup key={gitContextKey + "unpushed"}
+                  <GitChangeGroup key={gitContextKey + "unpushed"} contextKey={gitContextKey}
                     title={networkBranch?.upstream
                       ? t("gitChangeTree.groupOutgoingTo", { destination: networkBranch.upstream })
                       : t("gitChangeTree.groupOutgoing")}

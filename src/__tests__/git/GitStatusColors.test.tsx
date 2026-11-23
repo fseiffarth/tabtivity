@@ -5,7 +5,7 @@
  *   hardcoded hexes, so the light themes' own palettes apply; never the danger
  *   token, which is for errors and destructive actions; see lib/theme/gitColors)
  * - SidePanel git action buttons have correct color bars
- * - Hovering a button shows the relevant staged/unpushed list
+ * - Expanding a change group shows its files and line stats
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, within } from "@testing-library/react";
@@ -192,6 +192,7 @@ describe("git action button bars", () => {
 describe("git change groups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     // The panel seeds its git bar and tree from module-level snapshots so a
     // reveal paints instantly (lib/projects/fileViewSnapshots). Every case here renders
     // the SAME project, so without a reset each one would start seeded from the
@@ -209,11 +210,12 @@ describe("git change groups", () => {
     return result!;
   }
 
-  const group = (title: RegExp) =>
-    screen.findByRole("button", { name: title }).then((head) => head.closest("section") as HTMLElement);
+  async function openGroup(title: RegExp) {
+    const head = await screen.findByRole("button", { name: title });
+    await userEvent.setup().click(head);
+    return head.closest("section") as HTMLElement;
+  }
 
-  // The trees were popovers behind a caret on each footer button until
-  // 2026-11-22; they are inline now, so no click opens them.
   it("lists the Add files inline under Not staged, with +/- stats", async () => {
     setupInvoke({
       untracked: 1,
@@ -226,7 +228,7 @@ describe("git change groups", () => {
       },
     });
     await renderOpenPanel();
-    const section = await group(/^Not staged/);
+    const section = await openGroup(/^Not staged/);
     await within(section).findByText("changed.ts");
     expect(section.textContent).toContain("new.ts");
     expect(section.textContent).toContain("+12");
@@ -242,7 +244,7 @@ describe("git change groups", () => {
       changeStats: { staged: [{ path: "staged.ts", added: 7, deleted: 1, binary: false }] },
     });
     await renderOpenPanel();
-    const section = await group(/^Staged/);
+    const section = await openGroup(/^Staged/);
     await within(section).findByText("staged.ts");
     expect(section.textContent).toContain("+7");
     expect(mockInvoke).toHaveBeenCalledWith("git_change_stats", { projectDir: expect.any(String), scope: "staged" });
@@ -264,6 +266,8 @@ describe("git change groups", () => {
       },
     });
     await renderOpenPanel();
+    await openGroup(/^Not staged/);
+    await openGroup(/^Staged/);
     const chipOf = async (name: string) =>
       (await screen.findByText(name)).closest(".sp-row")!.querySelector(".sp-chip")!;
     expect((await chipOf("edited.ts")).textContent).toBe("M");
@@ -271,22 +275,33 @@ describe("git change groups", () => {
     expect((await chipOf("ready.ts")).textContent).toBe("S");
   });
 
-  it("clicking a group's head folds it", async () => {
-    const user = userEvent.setup();
+  it("starts collapsed, then remembers opening and closing across panel mounts", async () => {
     setupInvoke({ staged: 1, changeStats: { staged: [{ path: "staged.ts", added: 1, deleted: 0, binary: false }] } });
-    await renderOpenPanel();
-    await screen.findByText("staged.ts");
-    const head = screen.getByRole("button", { name: /^Staged/ });
-    expect(head.getAttribute("aria-expanded")).toBe("true");
-    await user.click(head);
+    const first = await renderOpenPanel();
+    const head = await screen.findByRole("button", { name: /^Staged/ });
     expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "git_change_stats")).toBe(false);
+    await userEvent.setup().click(head);
+    await screen.findByText("staged.ts");
+    first.unmount();
+
+    const second = await renderOpenPanel();
+    await screen.findByText("staged.ts");
+    const reopened = screen.getByRole("button", { name: /^Staged/ });
+    expect(reopened.getAttribute("aria-expanded")).toBe("true");
+    await userEvent.setup().click(reopened);
+    expect(screen.queryByText("staged.ts")).toBeNull();
+    second.unmount();
+
+    await renderOpenPanel();
+    expect((await screen.findByRole("button", { name: /^Staged/ })).getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText("staged.ts")).toBeNull();
   });
 
   it("shows 'No changes' when the scope is empty", async () => {
     setupInvoke({ staged: 1, changeStats: { staged: [] } });
     await renderOpenPanel();
-    const section = await group(/^Staged/);
+    const section = await openGroup(/^Staged/);
     await within(section).findByText("No changes");
   });
 });

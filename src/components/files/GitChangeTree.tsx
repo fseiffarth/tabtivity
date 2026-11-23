@@ -5,6 +5,7 @@ import { useT } from "../../lib/i18n";
 import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, DiffIcon, FolderIcon, PageIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
+import { GitFoldSection } from "./GitFoldSection";
 
 export interface FileChange {
   path: string;
@@ -386,16 +387,11 @@ export function GitChangeTree({ projectDir, scope, worktree, onChanged, disabled
  * folding `.sp-head` over its `GitChangeTree`. A folded group does not read its
  * list at all, so folding is also how to keep a huge one off the git refresh.
  */
-export function GitChangeGroup({ title, meta, ...tree }: Props & { title: string; meta?: string }) {
-  const [open, setOpen] = useState(true);
+export function GitChangeGroup({ title, meta, contextKey, ...tree }: Props & { title: string; meta?: string; contextKey: string }) {
   return (
-    <section className="git-change-group" data-scope={tree.scope}>
-      <button type="button" className="sp-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
-        <span>{title}</span>
-        {meta && <span className="sp-head-meta">{meta}</span>}
-      </button>
-      {open && <GitChangeTree {...tree} />}
-    </section>
+    <GitFoldSection className="git-change-group" data-scope={tree.scope} title={title} meta={meta}
+      preferenceKey={`gitChangeGroup.open.${tree.scope}.${contextKey}`} untested={<UntestedTag id="gitChangeGroup.fold" />}>
+      <GitChangeTree {...tree} />
+    </GitFoldSection>
   );
 }

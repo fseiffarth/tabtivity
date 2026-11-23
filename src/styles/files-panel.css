@@ -1491,13 +1491,20 @@
   flex-direction: column;
 }
 
-/* The section's head is a `.sp-head`; its controls keep their own weight. */
 .git-worktree-header .toolbar-btn {
   font-weight: 400;
 }
 
 .git-worktree-spacer {
   flex: 1;
+}
+
+.git-worktree-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 var(--space-3);
 }
 
 /* Host / Mirror — only rendered for a remote project, where there really are two

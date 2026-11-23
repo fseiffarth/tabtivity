@@ -13,6 +13,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { GitMergeBar, GitPullPanel, type FetchReceipt, type MergeState } from "./GitPullPanel";
+import { GitFoldSection } from "./GitFoldSection";
 import { ArrowDownIcon, BranchIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LockIcon, RefreshIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
@@ -394,7 +395,7 @@ const GRAPH_MODE_KEY = storageKey("gitHistoryGraph");
  * many and stop there, which silently truncated any repo with a longer history;
  * it now pages the rest in as the bottom of the list comes into view.
  */
-const COMMIT_PAGE = 100;
+const COMMIT_PAGE = 20;
 
 /** Most matches one commit search returns. */
 const SEARCH_LIMIT = 200;
@@ -670,24 +671,27 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
     }
   }, [projectDir, gitArgs, connected]);
 
-  // Page the next chunk in when the end of the list comes into view. `root: null`
-  // because the scroller is an ancestor (the side panel's body), and an observer
-  // against the viewport already accounts for every clipping ancestor — which is
-  // also what keeps it quiet in a hidden pane. Re-armed on each page: an observer
-  // reports a *change*, so a sentinel still on screen after the new rows mount
-  // would never fire again and the list would stall one page in.
+  const searchActive = query.trim() !== "" && results !== null;
+
+  // Load another page when scrolling brings the button into view. If it already
+  // fits when the page opens, leave the button available for an explicit click.
+  // The viewport observer also accounts for clipping by the panel's scroller.
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || !hasMore || !autoPage || typeof IntersectionObserver === "undefined") return;
+    let wasOutside = false;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) loadMore();
+        for (const entry of entries) {
+          if (entry.intersectionRatio < 1) wasOutside = true;
+          else if (wasOutside) loadMore();
+        }
       },
-      { rootMargin: "200px" },
+      { threshold: 1 },
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [hasMore, autoPage, loadMore, commits.length]);
+  }, [hasMore, autoPage, loadMore, commits.length, searchActive]);
 
   // Load git-lockstep status + subscribe to backend status pushes (#28n).
   useEffect(() => {
@@ -1144,7 +1148,6 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
 
   // While a search is active the list shows its matches instead of the paged
   // history, without the graph (filtered rows lose their parents).
-  const searchActive = query.trim() !== "" && results !== null;
   const shown = searchActive ? results : commits;
 
   const selectedWorktree = worktreeSelection?.path
@@ -1392,11 +1395,8 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
       {changes}
 
       {(localBranches.length > 0 || remoteBranches.length > 0) && (
-        <div className="git-worktree-section">
-          <div className="sp-head git-worktree-header">
-            <span>{t("gitHistory.branches")}</span>
-            <span className="sp-head-meta">{localBranches.length}</span>
-          </div>
+        <GitFoldSection className="git-worktree-section" title={t("gitHistory.branches")} meta={localBranches.length}
+          preferenceKey={`gitHistory.branchesOpen.${projectDir}`} untested={<UntestedTag id="gitHistory.foldSections" />}>
           <div className="git-branch-list">
           {localBranches.map((b) => {
             const occupied = worktrees.find((wt) => wt.branch === b.name && wt.path !== selectedWorktree?.path);
@@ -1463,13 +1463,12 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
             </button>
           ))}
           </div>
-        </div>
+        </GitFoldSection>
       )}
 
-      <div className="git-worktree-section">
-        <div className="sp-head git-worktree-header">
-          <span>{t("gitHistory.worktrees")}</span>
-          {worktrees.length > 0 && <span className="sp-head-meta">{worktrees.length}</span>}
+      <GitFoldSection className="git-worktree-section" title={t("gitHistory.worktrees")} meta={worktrees.length || undefined}
+        preferenceKey={`gitHistory.worktreesOpen.${projectDir}`} untested={<UntestedTag id="gitHistory.foldSections" />}>
+        <div className="git-worktree-actions">
           <UntestedTag id="gitHistory.1" />
           {remote && !hostPinned && (
             // #23 I2: two repos, two answers. `git_publish`'s "Publish from"
@@ -1493,7 +1492,6 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
               ]}
             />
           )}
-          <span className="git-worktree-spacer" />
           {worktrees.some((w) => w.is_prunable) && (
             <button
               className="toolbar-btn"
@@ -1691,7 +1689,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
             )}
           </div>
         )}
-      </div>
+      </GitFoldSection>
 
       {error && <ErrorNote className="file-tree-error" error={error} />}
       {loading && commits.length === 0 && <div className="file-tree-loading">{t("common.loading")}</div>}
