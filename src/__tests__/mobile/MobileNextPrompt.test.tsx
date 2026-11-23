@@ -107,7 +107,7 @@ const SUGGESTION = "run the tests";
 
 /** The phases the route was asked for, in order. */
 let asked: string[] = [];
-let answer: () => unknown = () => ({ text: SUGGESTION, status: "ok" });
+let answer: () => unknown = () => ({ text: SUGGESTION, status: "ok", model: "qwen3:4b" });
 
 describe("Mobile composer — the local model's next-prompt suggestion", () => {
   beforeEach(() => {
@@ -116,7 +116,7 @@ describe("Mobile composer — the local model's next-prompt suggestion", () => {
     FakeWebSocket.instances = [];
     FakeWebSocket.sent = [];
     asked = [];
-    answer = () => ({ text: SUGGESTION, status: "ok" });
+    answer = () => ({ text: SUGGESTION, status: "ok", model: "qwen3:4b" });
     localStorage.clear();
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("fetch", vi.fn((url: string) => {
@@ -147,6 +147,7 @@ describe("Mobile composer — the local model's next-prompt suggestion", () => {
     await wait(NEXT_PROMPT_SETTLE_MS);
     expect(field().value).toBe(SUGGESTION);
     expect(field().getAttribute("aria-description")).toBe("Local model suggests");
+    expect(document.querySelector(".composer-suggested-by")?.firstChild?.textContent).toBe("qwen3:4b");
     expect(asked).toEqual(["final"]);
     expect(FakeWebSocket.sent).toEqual([]);
     // Repainted, the same turn is not asked again.

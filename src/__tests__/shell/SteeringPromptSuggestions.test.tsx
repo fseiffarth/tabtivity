@@ -144,6 +144,7 @@ describe("steering prompt box suggestions", () => {
     try {
       const input = openBox();
       expect(input.placeholder).toContain("run the tests");
+      expect(document.querySelector(".suggestion-source-chip .suggestion-source-name")?.textContent).toBe("Claude");
       fireEvent.keyDown(input, { key: "Tab" });
       expect(box()?.value).toBe("run the tests");
       expect(writeMock).not.toHaveBeenCalled();
@@ -171,6 +172,8 @@ describe("steering prompt box suggestions", () => {
       const input = openBox({ key: "t9", label: "Codex", cmd: "codex", cwd: "/p", kind: "agent", scheduleTargetId: "target", sessionId: "s-1" } as TabEntry);
       await vi.waitFor(() => expect(box()?.placeholder).toContain("run the tests"));
       expect(input.getAttribute("aria-label")).toContain("Local model suggests");
+      // No model named (an older backend): the chip says "Local model".
+      expect(document.querySelector(".suggestion-source-chip .suggestion-source-name")?.textContent).toBe("Local model");
       expect(invokeMock).toHaveBeenCalledWith("agent_next_prompt", expect.objectContaining({ agent: "codex", sessionId: "s-1", phase: "final" }));
       fireEvent.keyDown(input, { key: "Tab" });
       expect(box()?.value).toBe("run the tests");

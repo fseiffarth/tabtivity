@@ -70,6 +70,7 @@ import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
 import { UntestedTag } from "../common/UntestedTag";
+import { SuggestionSourceChip } from "./SuggestionSourceChip";
 import { ReaderAnswerAlbum, ReaderAnswerFilesContext, useReaderAnswerFiles } from "./ReaderAnswerFiles";
 import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
@@ -727,7 +728,7 @@ function withoutTakenBack(entries: TranscriptEntry[], text: string | null): Tran
   return [...entries.slice(0, at), ...entries.slice(at + 1)];
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, docked, resting, onBusy, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, docked, resting, onBusy, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, suggestionModel = "", onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -761,6 +762,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   suggestion: string;
   /** `suggestion` is the local model's. */
   suggestionLocal?: boolean;
+  /** The local model that wrote it ("" when the backend names none). */
+  suggestionModel?: string;
   /** Told whether the draft is empty, on every change of it: the local
    * model's suggestion is dropped at the first keystroke. */
   onDraftEmpty?: (empty: boolean) => void;
@@ -1475,6 +1478,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         {/* One corner, one row of pills: the suggestion's (not at rest, where
             the short placeholder stands for it) with the dock's beside it. */}
         {shownSuggestion && !draft && !resting ? <span className="terminal-reader-suggestion-tag">
+          <SuggestionSourceChip local={suggestionLocal} model={suggestionModel} />
           {!suggestionLocal && <UntestedTag id="terminal.reader.promptSuggestion" />}
           {suggestionLocal && <UntestedTag id="agents.localNextPrompt" />}
           {docked && <UntestedTag id="terminal.reader.dock" />}
@@ -2041,7 +2045,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     screenSuggestion: live.suggestion,
     composerEmpty,
   });
-  const shownSuggestion = picking ? "" : live.suggestion || localSuggestion;
+  const shownSuggestion = picking ? "" : live.suggestion || localSuggestion.text;
   const pathContext = usePathLinkContext(projectId, tabDir, localOnly);
   const pathContextRef = useRef(pathContext);
   pathContextRef.current = pathContext;
@@ -3306,6 +3310,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         inputBlocked={inputBlocked}
         suggestion={shownSuggestion}
         suggestionLocal={!shownLive.suggestion && !!shownSuggestion}
+        suggestionModel={localSuggestion.model}
         onDraftEmpty={setComposerEmpty}
         chipSlot={actionSlot || scope === ASSISTANT_SCOPE ? null : chipSlot}
         actionSlot={actionSlot}

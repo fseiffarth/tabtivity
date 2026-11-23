@@ -2214,13 +2214,15 @@ pub enum DesktopResponse {
     AgentTranscript {
         transcript: crate::services::agent_transcript::AgentTranscript,
     },
-    /// Answers [`DesktopRequest::AgentNextPrompt`]: the suggestion's text and
-    /// its `services::next_prompt::Status` word (`outcome`, since `status`
-    /// names this response).
+    /// Answers [`DesktopRequest::AgentNextPrompt`]: the suggestion's text, its
+    /// `services::next_prompt::Status` word (`outcome`, since `status` names
+    /// this response) and the model that wrote it (the phone's chip).
     AgentNextPrompt {
         #[serde(default)]
         text: Option<String>,
         outcome: String,
+        #[serde(default)]
+        model: Option<String>,
     },
     /// Acknowledges a [`DesktopRequest::TabSeen`], [`DesktopRequest::TabInput`]
     /// or [`DesktopRequest::TabPrompt`] — and a delivered

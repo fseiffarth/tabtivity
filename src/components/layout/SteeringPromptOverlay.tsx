@@ -3,6 +3,7 @@ import { wrapStep } from "../../lib/wrapStep";
 import { DialogShell } from "../common/PromptDialogs";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
+import { SuggestionSourceChip } from "../terminal/SuggestionSourceChip";
 import { ReaderSlashMenu, slashMenuKey } from "../terminal/ReaderSlashMenu";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import {
@@ -239,7 +240,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     screenSuggestion: suggestion,
     composerEmpty: !value,
   });
-  const offered = suggestion || localSuggestion;
+  const offered = suggestion || localSuggestion.text;
   /** Claude's suggestion (or the local model's) while the box is empty, as
    * Claude's own CLI shows it: the placeholder, taken into the box by Tab or
    * →, so the user still sends, edits or ignores it. */
@@ -585,6 +586,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         {(agent !== target.tab.label || model) && (
           <span className="steering-prompt-agent">{[agent !== target.tab.label ? agent : "", model].filter(Boolean).join(" · ")}</span>
         )}
+        {shownSuggestion && <SuggestionSourceChip local={suggestionLocal} model={localSuggestion.model} />}
         <UntestedTag id="steering.agentPrompt" />
         <UntestedTag id="steering.promptPaste" />
         <UntestedTag id="steering.promptAltGr" />

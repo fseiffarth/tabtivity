@@ -52,7 +52,7 @@ const asked = () => vi.mocked(invoke).mock.calls.filter(([command]) => command =
 describe("Mobile bridge — the local-model next prompt", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockImplementation((command: string) => {
-      if (command === "agent_next_prompt") return Promise.resolve({ text: "Run the whole suite", turnKey: "k", status: "ok" });
+      if (command === "agent_next_prompt") return Promise.resolve({ text: "Run the whole suite", turnKey: "k", status: "ok", model: "qwen3:4b" });
       if (command === "list_agents" || command === "agent_schedules_list") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
@@ -65,9 +65,9 @@ describe("Mobile bridge — the local-model next prompt", () => {
   });
   afterEach(() => cleanup());
 
-  it("asks with the Reader's own arguments and answers text and outcome", async () => {
+  it("asks with the Reader's own arguments and answers text, outcome and model", async () => {
     const response = await ask({ type: "agent_next_prompt", request_id: "n1", project_id: paper.id, tmux_session: CODEX_TMUX, phase: "final" });
-    expect(response).toEqual({ status: "agent_next_prompt", text: "Run the whole suite", outcome: "ok" });
+    expect(response).toEqual({ status: "agent_next_prompt", text: "Run the whole suite", outcome: "ok", model: "qwen3:4b" });
     expect(asked()).toHaveLength(1);
     expect(asked()[0][1]).toEqual(nextPromptArgs(paper.id, codex, "/projects/paper", undefined, "final"));
   });

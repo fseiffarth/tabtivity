@@ -27,13 +27,25 @@ import { useEffect, useRef, useState } from "react";
 export type NextPromptPhase = "warm" | "final";
 
 /** The backend's answer (desktop `agent_next_prompt`; the phone's route
- * leaves out `turnKey`). Every failure is a status, never an error. */
+ * leaves out `turnKey`). Every failure is a status, never an error. `model`
+ * names the local model that wrote `text` (absent from an older backend). */
 export interface NextPromptAnswer {
   text: string | null;
   turnKey?: string | null;
   status: "ok" | "warmed" | "skipped" | "busy" | "not_running" | "no_model" | "refused" | "unavailable";
   reason?: string;
+  model?: string | null;
 }
+
+/** The local model's suggestion as a composer shows it: the line and the
+ * model that wrote it ("" each when none; `model` "" too from a backend that
+ * names none). */
+export interface NextPromptShown {
+  text: string;
+  model: string;
+}
+
+const NONE_SHOWN: NextPromptShown = { text: "", model: "" };
 
 /** The gap between warm-ups while the agent works. */
 export const NEXT_PROMPT_WARM_MS = 3_000;
@@ -83,6 +95,21 @@ export function cleanNextPrompt(text: string | null | undefined): string {
   const line = out.replace(BIDI, "").replace(/\s+/gu, " ").trim().replace(/^["'“”‘’`]+|["'“”‘’`]+$/gu, "").trim();
   if (!line || /^none\.?$/iu.test(line)) return "";
   return line.length > NEXT_PROMPT_MAX_CHARS ? `${line.slice(0, NEXT_PROMPT_MAX_CHARS - 1).trimEnd()}…` : line;
+}
+
+/** The longest model name a "suggested by" chip shows. */
+export const NEXT_PROMPT_MAX_MODEL_CHARS = 80;
+
+/** A model name as the chip shows it: one inert line, capped; "" for none. */
+export function cleanModelName(name: string | null | undefined): string {
+  if (!name) return "";
+  let plain = "";
+  for (const char of name) {
+    const code = char.codePointAt(0) ?? 0;
+    plain += code < 0x20 || (code >= 0x7f && code <= 0x9f) ? " " : char;
+  }
+  const line = plain.replace(BIDI, "").replace(/[\u200b-\u200f\ufeff]/gu, "").replace(/\s+/gu, " ").trim();
+  return line.length > NEXT_PROMPT_MAX_MODEL_CHARS ? line.slice(0, NEXT_PROMPT_MAX_MODEL_CHARS).trimEnd() : line;
 }
 
 /** The turn key of a surface that does not read the transcript for it
@@ -135,10 +162,11 @@ export interface NextPromptInput {
   ask: (phase: NextPromptPhase) => Promise<NextPromptAnswer | null>;
 }
 
-/** The local model's suggestion for the ended turn, "" while there is none
- * to show (see the module doc). Callers show `screenSuggestion || this`. */
-export function useNextPrompt({ enabled, working, turnKey, progress, canWarm, settleMs, screenSuggestion, composerEmpty, ask }: NextPromptInput): string {
-  const [shown, setShown] = useState<{ turn: string; text: string } | null>(null);
+/** The local model's suggestion for the ended turn and the model that wrote
+ * it, `text` "" while there is none to show (see the module doc). Callers
+ * show `screenSuggestion || text`. */
+export function useNextPrompt({ enabled, working, turnKey, progress, canWarm, settleMs, screenSuggestion, composerEmpty, ask }: NextPromptInput): NextPromptShown {
+  const [shown, setShown] = useState<{ turn: string; text: string; model: string } | null>(null);
   const askRef = useRef(ask);
   askRef.current = ask;
   const canWarmRef = useRef(canWarm);
@@ -184,7 +212,7 @@ export function useNextPrompt({ enabled, working, turnKey, progress, canWarm, se
         }
         if (answer?.status !== "ok") return;
         const text = cleanNextPrompt(answer.text);
-        setShown(text ? { turn, text } : null);
+        setShown(text ? { turn, text, model: cleanModelName(answer.model) } : null);
       });
     };
     let timer = setTimeout(() => run(0), settleMs);
@@ -216,5 +244,7 @@ export function useNextPrompt({ enabled, working, turnKey, progress, canWarm, se
   }, [warmOn]);
   useEffect(() => () => clearTimeout(warmTimer.current), []);
 
-  return shown && enabled && !working && shown.turn === turnKey && composerEmpty && !screenSuggestion ? shown.text : "";
+  return shown && enabled && !working && shown.turn === turnKey && composerEmpty && !screenSuggestion
+    ? { text: shown.text, model: shown.model }
+    : NONE_SHOWN;
 }

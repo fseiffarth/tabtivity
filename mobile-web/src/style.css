@@ -1407,6 +1407,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* Claude's one suggestion: the `/` menu's look, as tall as its text, which wraps. */
 .prompt-composer textarea.suggested { color:#9fa4b6 !important; -webkit-text-fill-color:#9fa4b6; font-style:italic; }
 .composer-suggested-untested { align-self:center; flex:none; font-size:.7em; opacity:.7; }
+/* Who wrote the untouched suggestion in the field: Claude or the local model's name. */
+.composer-suggested-by { align-self:center; flex:none; max-width:9em; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; padding:2px 7px; border-radius:6px; font-size:.72em; font-weight:500; color:#a9a6c4; background:rgba(255,255,255,.07); }
+.composer-suggested-by em { margin-left:4px; font-size:.9em; opacity:.7; }
 .slash-forget { flex:0 0 auto; width:32px; height:32px; padding:0; border:0; border-radius:0; background:transparent; color:#767a8b; }
 .composer-dictate { color:#dcd6ff; background:transparent; }
 .composer-dictate.listening { color:#fff; background:#7a3151; box-shadow:0 0 0 2px rgba(227,107,154,.22); }

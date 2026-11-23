@@ -5166,9 +5166,9 @@ const NEXT_PROMPT_LIMIT: usize = 400;
 /// (`services::next_prompt`), for the phone's composer. With the window open
 /// the window answers it (`DesktopRequest::AgentNextPrompt`, one run per turn
 /// for both screens); with none, the CLI's own transcript is read off the tab
-/// record and the loopback Ollama run happens here, cached per turn. Answers only `text`
-/// and `status` — no turn key, no id, no path — and always a status, never an
-/// error, once the tab resolves.
+/// record and the loopback Ollama run happens here, cached per turn. Answers only `text`,
+/// `status` and the `model` that wrote the text — no turn key, no id, no path —
+/// and always a status, never an error, once the tab resolves.
 async fn tab_next_prompt(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5187,7 +5187,15 @@ async fn tab_next_prompt(
         Ok(target) => target,
         Err(error) => return error,
     };
-    let answer = |prompt: NextPrompt| (StatusCode::OK, Json(json!({ "text": prompt.text, "status": prompt.status })));
+    let answer = |prompt: NextPrompt| {
+        // Credited only beside text, as one inert capped line.
+        let model = prompt.text.as_ref().and(prompt.model.as_deref()).and_then(next_prompt::clean_model);
+        let mut body = json!({ "text": prompt.text, "status": prompt.status });
+        if let Some(model) = model {
+            body["model"] = json!(model);
+        }
+        (StatusCode::OK, Json(body))
+    };
     if phase == Phase::Warm && tab.local_model {
         return answer(NextPrompt::status(Status::Skipped));
     }
@@ -5207,12 +5215,12 @@ async fn tab_next_prompt(
     .await;
     if !desktop_down(&response) {
         return match response {
-            Ok(DesktopResponse::AgentNextPrompt { text, outcome }) => {
+            Ok(DesktopResponse::AgentNextPrompt { text, outcome, model }) => {
                 // Only a status word the engine knows crosses; the text is the
                 // engine's cleaned line, capped again here.
                 let status = serde_json::from_value::<Status>(json!(outcome)).unwrap_or(Status::Unavailable);
                 let text = text.and_then(|line| next_prompt::clean(&line));
-                answer(NextPrompt { text, ..NextPrompt::status(status) })
+                answer(NextPrompt { text, model, ..NextPrompt::status(status) })
             }
             Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found" => api_error(StatusCode::NOT_FOUND, &code),
             _ => answer(NextPrompt::status(Status::Unavailable)),

@@ -7,6 +7,7 @@ import {
   useWorkEndKey,
   type NextPromptAnswer,
   type NextPromptPhase,
+  type NextPromptShown,
 } from "../../../mobile-web/src/terminal/nextPrompt";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
 import { useActivityStore } from "../../stores/activity";
@@ -62,7 +63,7 @@ export function nextPromptArgs(
   return { agent, projectId, tabDir, since, sessionId, localModel, remoteHost: remoteHost ?? null, phase };
 }
 
-export { useWorkEndKey };
+export { useWorkEndKey, type NextPromptShown };
 
 export interface LocalNextPromptInput {
   scope: string;
@@ -82,8 +83,9 @@ export interface LocalNextPromptInput {
   composerEmpty: boolean;
 }
 
-/** The local model's suggestion for `tab`'s ended turn ("" when none). */
-export function useLocalNextPrompt({ scope, tab, cwd, remoteHost, visible, working, turnKey, progress, warm = true, screenSuggestion, composerEmpty }: LocalNextPromptInput): string {
+/** The local model's suggestion for `tab`'s ended turn and the model that
+ * wrote it (`text` "" when none). */
+export function useLocalNextPrompt({ scope, tab, cwd, remoteHost, visible, working, turnKey, progress, warm = true, screenSuggestion, composerEmpty }: LocalNextPromptInput): NextPromptShown {
   const paneVisible = usePaneVisible();
   const ident = useRef({ scope, tab, cwd, remoteHost });
   ident.current = { scope, tab, cwd, remoteHost };

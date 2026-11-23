@@ -4224,12 +4224,32 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
-/* The untested pill of Claude's suggestion, dimmed in the empty box as its
-   placeholder: top right, clear of Send and the mic. */
+/* Who wrote the suggestion dimmed in the empty box (and its untested pills):
+   top right, clear of Send and the mic. */
 .terminal-reader-suggestion-tag {
   position: absolute;
   top: 4px;
   right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* "Suggested by": a reader chip that only labels — no hover, no pointer. */
+.terminal-reader-chip.suggestion-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  cursor: var(--cur-default, default);
+  pointer-events: auto;
+}
+.terminal-reader-chip.suggestion-source-chip:hover { color: var(--text-muted); background: var(--bg-subtle); }
+.terminal-reader-chip.suggestion-source-chip .untested-tag { margin-left: 0; }
+.suggestion-source-name {
+  max-width: 200px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 /* The phone composer's Send (`.send-icon` in mobile-web): a paper plane in
    an accent disc, faded while there is nothing to send. */

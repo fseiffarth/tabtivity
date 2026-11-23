@@ -361,7 +361,7 @@ type DesktopResponse =
   | { status: "agent_status"; report: MobileAgentStatus }
   | { status: "agent_transcript"; transcript: MobileAgentTranscript }
   /** `outcome` is `services::next_prompt::Status`'s word; `status` names the response. */
-  | { status: "agent_next_prompt"; text: string | null; outcome: string }
+  | { status: "agent_next_prompt"; text: string | null; outcome: string; model?: string | null }
   | { status: "seen" }
   | { status: "held"; held_id: string }
   | { status: "desktop_images"; images: DesktopImage[] }
@@ -3059,8 +3059,8 @@ async function agentNextPromptFor(projectId: string, tmuxSession: string, phase:
   }
   const args = nextPromptArgs(scope.id, tab, scope.cwd, hostTabId(tab, scope.project), phase);
   if (!args) return { status: "agent_next_prompt", text: null, outcome: "skipped" };
-  const answer = await invoke<{ text: string | null; status: string }>("agent_next_prompt", args).catch(() => null);
-  return { status: "agent_next_prompt", text: answer?.text ?? null, outcome: answer?.status ?? "unavailable" };
+  const answer = await invoke<{ text: string | null; status: string; model?: string | null }>("agent_next_prompt", args).catch(() => null);
+  return { status: "agent_next_prompt", text: answer?.text ?? null, outcome: answer?.status ?? "unavailable", model: answer?.model ?? null };
 }
 
 /** The agents whose transcript `services::agent_transcript` reads; any other

@@ -173,6 +173,8 @@ fn a_final_run_answers_once_per_turn_and_a_warm_run_writes_one_token() {
     let first = suggest_with(&settings, &ask(key, Phase::Final), &t, &backend);
     assert_eq!(first.status, Status::Ok, "{first:?}");
     assert_eq!(first.text.as_deref(), Some("Run the whole suite"));
+    assert_eq!(first.model.as_deref(), Some("llama3"), "the chip names the model that wrote it");
+    assert_eq!(warm.model, None);
     let second = suggest_with(&settings, &ask(key, Phase::Final), &t, &backend);
     assert_eq!(second, first);
 
@@ -308,10 +310,17 @@ fn the_role_wins_over_the_default_model() {
 
 #[test]
 fn the_answer_serializes_to_the_contract() {
-    let answer = NextPrompt { text: None, turn_key: Some("k".into()), status: Status::NotRunning, reason: None };
+    let answer = NextPrompt { text: None, turn_key: Some("k".into()), status: Status::NotRunning, reason: None, model: None };
     assert_eq!(serde_json::to_value(&answer).unwrap(), serde_json::json!({ "text": null, "turnKey": "k", "status": "not_running" }));
     let refused = NextPrompt::refused(Status::NoModel, "why".into());
     assert_eq!(serde_json::to_value(&refused).unwrap(), serde_json::json!({ "text": null, "turnKey": null, "status": "no_model", "reason": "why" }));
+    let ok = NextPrompt::answered(Some("Run it".into()), "qwen3:4b", "k");
+    assert_eq!(
+        serde_json::to_value(&ok).unwrap(),
+        serde_json::json!({ "text": "Run it", "turnKey": "k", "status": "ok", "model": "qwen3:4b" })
+    );
+    // The model said NONE: nothing to credit.
+    assert_eq!(NextPrompt::answered(None, "qwen3:4b", "k").model, None);
 }
 
 /// A tab Tabtivity mints no launch id for (a local-model tab, OpenCode,
@@ -415,4 +424,12 @@ fn a_final_ends_a_warm_up_in_flight_instead_of_waiting_behind_it() {
     assert_eq!(final_answer.status, Status::Ok, "{final_answer:?}");
     assert_eq!(final_answer.text.as_deref(), Some("Run the whole suite"));
     assert!(waited < Duration::from_secs(2), "the final waited {waited:?} behind the warm-up");
+}
+
+#[test]
+fn a_model_name_crosses_as_one_inert_capped_line() {
+    assert_eq!(clean_model(" qwen3:4b ").as_deref(), Some("qwen3:4b"));
+    assert_eq!(clean_model("a\nb\u{202e}c\u{1b}[31m").as_deref(), Some("a b c"));
+    assert_eq!(clean_model(&"m".repeat(300)).map(|m| m.chars().count()), Some(MAX_MODEL_CHARS));
+    assert_eq!(clean_model(" \u{200b} "), None);
 }

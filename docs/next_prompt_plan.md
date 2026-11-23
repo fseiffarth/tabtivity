@@ -158,6 +158,7 @@ type NextPrompt = {
   turnKey: string | null;   // id of the turn's last entry the answer was built from
   status: "ok" | "warmed" | "skipped" | "busy" | "not_running" | "no_model" | "refused" | "unavailable";
   reason?: string;          // human text for refused/no_model, never shown as an error bubble
+  model?: string;           // the model that wrote `text` (ok with text only): the "suggested by" chip
 };
 ```
 
@@ -170,7 +171,8 @@ type NextPrompt = {
 - Ollama down / no model / remote host / cloud model never throw: a status.
 
 Phone route `GET /api/v1/tabs/{tab_id}/next-prompt?phase=warm|final` →
-`{ "text": string | null, "status": … }` (no `turnKey`, ids or paths), the tab
+`{ "text": string | null, "status": …, "model"?: string }` (no `turnKey`, ids
+or paths; `model` beside text only, one inert capped line), the tab
 resolved like `/api/v1/tabs/{tab_id}/transcript`.
 
 Frontend side: the desktop skips `warm` while any local-model agent tab is

@@ -2145,7 +2145,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     composerEmpty: !draft || draft === suggestionRef.current.filled,
     ask: (phase) => getNextPrompt(tab.id, phase),
   });
-  const promptSuggestion = screenSuggestion || localSuggestion;
+  const promptSuggestion = screenSuggestion || localSuggestion.text;
   const suggestionOffered = promptSuggestion && connected && !subagentTarget && pending.length === 0 && !editing ? promptSuggestion : "";
   useEffect(() => {
     const state = suggestionRef.current;
@@ -2171,7 +2171,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }, [promptSuggestion, suggestionOffered]);
   const suggested = !!draft && draft === suggestionRef.current.filled;
   /** What the field holds untouched is the local model's, not Claude's. */
-  const suggestedLocal = suggested && !screenSuggestion && draft === localSuggestion;
+  const suggestedLocal = suggested && !screenSuggestion && draft === localSuggestion.text;
+  /** Who wrote what the field holds untouched: Claude, or the local model by
+   * name ("Local model" from a backend that names none). */
+  const suggestedBy = !suggested ? "" : suggestedLocal
+    ? localSuggestion.model || t("terminal.reader.suggestionSourceLocal")
+    : t("terminal.reader.suggestionSourceClaude");
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
@@ -3113,6 +3118,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           }} />
           {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+          {suggestedBy && <span className="composer-suggested-by" title={suggestedLocal && localSuggestion.model ? t("terminal.reader.suggestionByModel", { model: localSuggestion.model }) : t(suggestedLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion")}>
+            {suggestedBy}{isUntested("agents.nextPromptSource") && <em>{t("mobile.focus.untested")}</em>}
+          </span>}
           {suggested && !suggestedLocal && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
           {suggestedLocal && isUntested("agents.localNextPrompt") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
           {fieldDraft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}

@@ -153,7 +153,8 @@ pub enum Status {
     Unavailable,
 }
 
-/// The answer the command returns; the phone route passes `text` and `status` only.
+/// The answer the command returns; the phone route passes `text`, `status`
+/// and `model` only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NextPrompt {
@@ -162,11 +163,20 @@ pub struct NextPrompt {
     pub status: Status,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The model that wrote `text` (an `ok` answer with text only): the
+    /// composers' "suggested by" chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl NextPrompt {
     pub fn status(status: Status) -> Self {
-        Self { text: None, turn_key: None, status, reason: None }
+        Self { text: None, turn_key: None, status, reason: None, model: None }
+    }
+    /// An `ok` answer: `text`, and the model that wrote it when there is text.
+    fn answered(text: Option<String>, model: &str, turn_key: &str) -> Self {
+        let model = text.as_ref().map(|_| model.to_string());
+        Self { text, model, ..Self::keyed(Status::Ok, turn_key) }
     }
     fn keyed(status: Status, turn_key: &str) -> Self {
         Self { turn_key: Some(turn_key.to_string()), ..Self::status(status) }
@@ -430,6 +440,16 @@ pub fn clean(output: &str) -> Option<String> {
     Some(capped.trim_end().to_string()).filter(|s| !s.is_empty())
 }
 
+/// Longest model name a "suggested by" chip carries, in characters.
+pub const MAX_MODEL_CHARS: usize = 80;
+
+/// A model name as it may cross to a client: one inert line ([`inert`]),
+/// capped; `None` for nothing left.
+pub fn clean_model(name: &str) -> Option<String> {
+    let line: String = inert(&strip_ansi(name)).chars().take(MAX_MODEL_CHARS).collect();
+    Some(line.trim_end().to_string()).filter(|s| !s.is_empty())
+}
+
 /// `text` with its ANSI escape sequences removed: CSI (`ESC [` … final byte,
 /// and the one-byte C1 form), OSC (`ESC ]` … BEL or ST) and two-byte escapes.
 fn strip_ansi(text: &str) -> String {
@@ -490,8 +510,8 @@ fn inert(line: &str) -> String {
 #[derive(Default)]
 struct Session {
     prompt: Option<TurnPrompt>,
-    /// The newest final answer: its turn key and text.
-    answered: Option<(String, Option<String>)>,
+    /// The newest final answer: its turn key, text and the model that wrote it.
+    answered: Option<(String, Option<String>, String)>,
     last_warm: Option<Instant>,
 }
 
@@ -678,8 +698,8 @@ pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &Agen
     };
     match ask.phase {
         Phase::Final => {
-            if let Some((answered, text)) = state.answered.as_ref().filter(|(answered, _)| *answered == key) {
-                return NextPrompt { text: text.clone(), ..NextPrompt::keyed(Status::Ok, answered) };
+            if let Some((answered, text, by)) = state.answered.as_ref().filter(|(answered, ..)| *answered == key) {
+                return NextPrompt::answered(text.clone(), by, answered);
             }
         }
         Phase::Warm => {
@@ -733,8 +753,8 @@ pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &Agen
         return NextPrompt::keyed(Status::Unavailable, &key);
     };
     let text = clean(&content);
-    state.answered = Some((key.clone(), text.clone()));
-    NextPrompt { text, ..NextPrompt::keyed(Status::Ok, &key) }
+    state.answered = Some((key.clone(), text.clone(), model.clone()));
+    NextPrompt::answered(text, &model, &key)
 }
 
 /// The `/api/chat` body. A warm-up and the final run differ only in

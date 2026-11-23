@@ -16,6 +16,7 @@ import {
   NEXT_PROMPT_RETRY_MS,
   NEXT_PROMPT_SETTLE_MS,
   NEXT_PROMPT_WARM_MS,
+  cleanModelName,
   cleanNextPrompt,
   useNextPrompt,
   type NextPromptAnswer,
@@ -28,7 +29,7 @@ import { useTabsStore, type TabEntry } from "../../stores/tabs";
 
 const invokeMock = vi.mocked(invoke);
 
-const ok = (text: string | null): NextPromptAnswer => ({ text, status: "ok", turnKey: "e1" });
+const ok = (text: string | null, model?: string | null): NextPromptAnswer => ({ text, status: "ok", turnKey: "e1", model });
 
 /** `useNextPrompt` with `ask` recorded; `props` overrides the idle defaults. */
 function setup(props: Partial<NextPromptInput> = {}, answer: (phase: NextPromptPhase) => Promise<NextPromptAnswer | null> = () => Promise.resolve(ok("run the tests"))) {
@@ -77,22 +78,43 @@ describe("cleanNextPrompt", () => {
   });
 });
 
+describe("cleanModelName", () => {
+  it("keeps the chip's model name one inert, capped line", () => {
+    expect(cleanModelName(" qwen3:4b ")).toBe("qwen3:4b");
+    expect(cleanModelName("a\nb\u202ec\u200b")).toBe("a bc");
+    expect(cleanModelName("m".repeat(300)).length).toBe(80);
+    expect(cleanModelName(null)).toBe("");
+  });
+});
+
 describe("useNextPrompt — final", () => {
+  it("names the model that wrote the suggestion, and none from an older backend", async () => {
+    const named = setup({}, () => Promise.resolve(ok("run the tests", "qwen3:4b")));
+    await advance(NEXT_PROMPT_SETTLE_MS);
+    expect(named.hook.result.current).toEqual({ text: "run the tests", model: "qwen3:4b" });
+    named.hook.unmount();
+    const older = setup();
+    await advance(NEXT_PROMPT_SETTLE_MS);
+    expect(older.hook.result.current).toEqual({ text: "run the tests", model: "" });
+    older.update({ composerEmpty: false });
+    expect(older.hook.result.current).toEqual({ text: "", model: "" });
+  });
+
   it("asks once per ended turn after the settle, and shows the text", async () => {
     const { hook, phases, update } = setup();
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
     await advance(NEXT_PROMPT_SETTLE_MS - 1);
     expect(phases()).toEqual([]);
     await advance(1);
     expect(phases()).toEqual(["final"]);
-    expect(hook.result.current).toBe("run the tests");
+    expect(hook.result.current.text).toBe("run the tests");
     // A re-render of the same turn asks nothing more.
     update({ progress: 1 });
     await advance(5_000);
     expect(phases()).toEqual(["final"]);
     // The next turn is asked again.
     update({ working: true, turnKey: null });
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
     update({ working: false, turnKey: "turn-2" });
     await advance(NEXT_PROMPT_SETTLE_MS);
     expect(phases().filter((phase) => phase === "final")).toHaveLength(2);
@@ -101,13 +123,13 @@ describe("useNextPrompt — final", () => {
   it("shows nothing for a status other than ok, or a NONE", async () => {
     const { hook } = setup({}, () => Promise.resolve({ text: null, status: "not_running" }));
     await advance(NEXT_PROMPT_SETTLE_MS);
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
     const none = setup({}, () => Promise.resolve(ok("NONE")));
     await advance(NEXT_PROMPT_SETTLE_MS);
-    expect(none.hook.result.current).toBe("");
+    expect(none.hook.result.current.text).toBe("");
     const failed = setup({}, () => Promise.reject(new Error("no command")));
     await advance(NEXT_PROMPT_SETTLE_MS);
-    expect(failed.hook.result.current).toBe("");
+    expect(failed.hook.result.current.text).toBe("");
   });
 
   it("asks a skipped final again, a few times, for a transcript that had not caught up with the turn's end", async () => {
@@ -115,10 +137,10 @@ describe("useNextPrompt — final", () => {
     const { hook, phases } = setup({}, () => Promise.resolve(answers.shift() ?? ok("commit it")));
     await advance(NEXT_PROMPT_SETTLE_MS);
     expect(phases()).toEqual(["final"]);
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
     await advance(NEXT_PROMPT_RETRY_MS * 2);
     expect(phases()).toEqual(["final", "final", "final"]);
-    expect(hook.result.current).toBe("commit it");
+    expect(hook.result.current.text).toBe("commit it");
     // Never more than the bound, however often it is skipped.
     const skipped = setup({}, () => Promise.resolve({ text: null, status: "skipped" }));
     await advance(NEXT_PROMPT_SETTLE_MS + NEXT_PROMPT_RETRY_MS * (NEXT_PROMPT_FINAL_RETRIES + 3));
@@ -130,13 +152,13 @@ describe("useNextPrompt — final", () => {
     await advance(NEXT_PROMPT_CLAUDE_SETTLE_MS - 100);
     expect(phases()).toEqual([]);
     await advance(100);
-    expect(hook.result.current).toBe("run the tests");
+    expect(hook.result.current.text).toBe("run the tests");
     update({ screenSuggestion: "commit this" });
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
     // Gone again, the turn stays dropped: Claude's own won it.
     update({ screenSuggestion: "" });
     await advance(5_000);
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
     expect(phases()).toEqual(["final"]);
   });
 
@@ -151,12 +173,12 @@ describe("useNextPrompt — final", () => {
   it("drops on the first keystroke and does not come back for that turn", async () => {
     const { hook, phases, update } = setup();
     await advance(NEXT_PROMPT_SETTLE_MS);
-    expect(hook.result.current).toBe("run the tests");
+    expect(hook.result.current.text).toBe("run the tests");
     update({ composerEmpty: false });
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
     update({ composerEmpty: true });
     await advance(5_000);
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
     expect(phases()).toEqual(["final"]);
   });
 
@@ -175,7 +197,7 @@ describe("useNextPrompt — final", () => {
     update({ working: true, turnKey: null });
     await act(async () => resolve(ok("stale")));
     update({ working: false, turnKey: "turn-2" });
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
   });
 
   it("a hidden pane asks nothing, and hiding drops what is shown", async () => {
@@ -187,9 +209,9 @@ describe("useNextPrompt — final", () => {
 
     const { hook, update } = setup();
     await advance(NEXT_PROMPT_SETTLE_MS);
-    expect(hook.result.current).toBe("run the tests");
+    expect(hook.result.current.text).toBe("run the tests");
     update({ enabled: false });
-    expect(hook.result.current).toBe("");
+    expect(hook.result.current.text).toBe("");
   });
 });
 
@@ -300,7 +322,7 @@ describe("desktop: lib/agents/nextPrompt", () => {
     update({ working: false, turnKey: "turn-1" });
     await advance(NEXT_PROMPT_SETTLE_MS);
     expect(phases()).toEqual(["warm", "final"]);
-    expect(hook.result.current).toBe("run the tests");
+    expect(hook.result.current.text).toBe("run the tests");
   });
 
   it("does not warm while any local-model tab works, nor for a local-model tab itself", async () => {

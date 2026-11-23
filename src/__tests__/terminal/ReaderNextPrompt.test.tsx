@@ -44,7 +44,7 @@ describe("the Reader composer and the local model's suggestion", () => {
     sendSteeringPrompt.mockReset();
     invoke.mockImplementation((command: string) => Promise.resolve(
       command === "agent_tab_transcript" ? { available: true, version: "v1", entries: ENDED }
-      : command === "agent_next_prompt" ? { text: "run the tests", turnKey: "e2", status: "ok" }
+      : command === "agent_next_prompt" ? { text: "run the tests", turnKey: "e2", status: "ok", model: "qwen3:4b" }
       : []));
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));
     useAgentReaderStore.setState({ byAgent: {} });
@@ -58,6 +58,10 @@ describe("the Reader composer and the local model's suggestion", () => {
     const box = await composer(host);
     await waitFor(() => expect(box.placeholder).toContain("run the tests"));
     expect(box.getAttribute("aria-label")).toBe("Local model suggests: run the tests");
+    // The chip names the model that wrote it.
+    const chip = host.querySelector(".suggestion-source-chip");
+    expect(chip?.textContent).toContain("qwen3:4b");
+    expect(chip?.getAttribute("title")).toBe("Suggested by the local model qwen3:4b");
     expect(asks()).toHaveLength(1);
     expect(asks()[0][1]).toEqual(expect.objectContaining({ agent: "codex", sessionId: "launch-1", phase: "final" }));
     fireEvent.keyDown(box, { key: "Tab" });
