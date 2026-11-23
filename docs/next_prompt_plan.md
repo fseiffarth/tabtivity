@@ -26,6 +26,15 @@ Tabtivity already reads for the Chat view (`agent_tab_transcript`).
   of its own at turn end (its suggestions off, or it skipped one). Claude's own,
   when present, always wins.
 
+- **D5 Prompt autocomplete (2026-11-23):** the same model also completes a
+  prompt while it is typed, in all three composers: dim text after the caret
+  in the Chat composer and steering's prompt box (Tab or → takes it), a
+  tappable strip over the phone's field.
+- **D6 Trigger (2026-11-23):** automatic after a short typing pause, with its
+  own switch beside the Suggestions role, on by default
+  (`Settings.prompt_autocomplete`); the switch leaves D1's suggestion alone.
+  As built: `docs/context/agent_reader.md`, "Prompt autocomplete".
+
 ## Rules this has to keep
 
 - **Never leaves the machine.** Same endpoint rules as the mail assistant:

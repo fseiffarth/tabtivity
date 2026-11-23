@@ -536,6 +536,38 @@ function LmToggle({
 /** What the model IS, as plain text with dot separators (never pills): the
  *  caveat leads — it is the one thing worth finding down a list — then the
  *  dimensions, where it runs, and the capabilities Ollama reported. */
+/** The switch beside the Suggestions role, on the model that serves it (the
+ * role's, else the default model; never an Ollama cloud model, which the
+ * role refuses): whether that model also completes a prompt while it is
+ * typed (`Settings.prompt_autocomplete`, on unless false). `chip` draws it
+ * as the menu's role chip. */
+function PromptAutocompleteToggle({ m, roles, activeModel, chip = false, t }: {
+  m: LocalModelInfo;
+  roles: Record<string, string>;
+  activeModel: string | null | undefined;
+  chip?: boolean;
+  t: TFn;
+}) {
+  const on = useSettingsStore((s) => s.settings?.prompt_autocomplete !== false);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  if (m.remote === true || (roles.suggest || activeModel) !== m.name) return null;
+  const label = t("localModel.completeChip");
+  const title = t(on ? "localModel.completeOnTitle" : "localModel.completeOffTitle");
+  const flip = () => void updateSettings({ prompt_autocomplete: !on });
+  return (
+    <>
+      {chip ? (
+        <button type="button" className={`local-model-role-chip${on ? " on" : ""}`} title={title} aria-pressed={on} onClick={flip}>
+          {label}
+        </button>
+      ) : (
+        <LmToggle label={label} title={title} on={on} onClick={flip} />
+      )}
+      <UntestedTag id="agents.promptAutocomplete" />
+    </>
+  );
+}
+
 function ModelFacts({ m, t, resident }: { m: LocalModelInfo; t: TFn; resident: boolean }) {
   return (
     <div className="lm-facts">
@@ -661,6 +693,7 @@ export function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: Models
               />
             );
           })}
+          <PromptAutocompleteToggle m={m} roles={roles} activeModel={activeModel} t={t} />
           {m.remote && <UntestedTag id="localModelMenu.mailCloud" />}
         </div>
       </div>
@@ -1494,6 +1527,7 @@ export function LocalModelsSection({
                       </button>
                     );
                   })}
+                  <PromptAutocompleteToggle m={m} roles={roles} activeModel={activeModel} chip t={t} />
                   {m.remote && <UntestedTag id="localModelMenu.mailCloud" />}
                   <button
                     type="button"

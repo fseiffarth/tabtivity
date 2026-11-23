@@ -64,6 +64,7 @@ import {
   type TabLocations,
   type AssistantModels,
   deleteInboxFile,
+  completePrompt,
   getNextPrompt,
 } from "../api";
 import { describeFailure } from "../connection";
@@ -78,7 +79,7 @@ import { liveModelPick } from "../terminal/modelRows";
 import { type TerminalControl } from "../terminal/protocol";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { readPromptSuggestion } from "../terminal/promptSuggestion";
-import { NEXT_PROMPT_CLAUDE_SETTLE_MS, NEXT_PROMPT_SETTLE_MS, useNextPrompt, usePageShown, useWorkEndKey } from "../terminal/nextPrompt";
+import { NEXT_PROMPT_CLAUDE_SETTLE_MS, NEXT_PROMPT_SETTLE_MS, useNextPrompt, usePageShown, usePromptCompletion, useWorkEndKey } from "../terminal/nextPrompt";
 import { readLiveQuestion } from "../terminal/liveDialog";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
@@ -2272,6 +2273,23 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const suggestedBy = !suggested ? "" : suggestedLocal
     ? localSuggestion.model || t("terminal.reader.suggestionSourceLocal")
     : t("terminal.reader.suggestionSourceClaude");
+  /** How the prompt being typed goes on, by the desktop's local model
+   * (`usePromptCompletion`, `POST …/next-prompt`): a strip over the field
+   * that a tap appends to the draft — a phone has no Tab. Not for a field
+   * that still holds the untouched suggestion, the `/` menu, a prompt being
+   * edited, a subagent's box, while the mic writes, or while a local-model
+   * tab's own turn holds the GPU. */
+  const completion = usePromptCompletion({
+    enabled: tab.kind === "agent" && !cloudTab && connected && cliReady && pageShown && !subagentTarget && !suggested
+      && !editing && !listening && slashMenu.length === 0 && !(tab.local_model === true && liveBusy),
+    draft,
+    atEnd: true,
+    complete: (text) => completePrompt(tab.id, text),
+  });
+  /** The strip's words: the continuation, led by the word it finishes. */
+  const completionShown = !completion.text ? ""
+    : /^\s/u.test(completion.text) ? completion.text.trimStart()
+    : `${/\S*$/u.exec(draft)?.[0] ?? ""}${completion.text}`;
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
@@ -3241,6 +3259,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             {suggestion.used && <button className="slash-forget" onPointerDown={(event) => event.preventDefault()} onClick={() => forgetSlash(suggestion.line)} aria-label={t("mobile.slash.forget", { command: suggestion.line })} title={t("mobile.slash.forget", { command: suggestion.line })}><CloseIcon size="1em" /></button>}
           </div>)}
         </div>}
+        {/* How the local model thinks the draft goes on: a tap appends it.
+            Pointer-down is held back so the keyboard stays up. */}
+        {completionShown && <button className="composer-complete" onPointerDown={(event) => event.preventDefault()} onClick={() => setDraft(draft + completion.text)} aria-label={t("mobile.composer.completeTake", { text: completionShown })} title={completion.model ? t("terminal.reader.suggestionByModel", { model: completion.model }) : undefined}>
+          <span className="composer-complete-text">… {completionShown}</span>
+          {isUntested("agents.promptAutocomplete") && <em>{t("mobile.focus.untested")}</em>}
+        </button>}
         {/* An untouched suggestion reads greyed in the field itself, as the
             CLI dims it; the first edit makes it the reader's own text. */}
         <div className="composer-field">

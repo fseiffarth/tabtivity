@@ -212,3 +212,46 @@ Fixes are on `worktree-agent-a1322a530e76ea652`. Each has a regression test.
   warnings` clean, tsc clean, eslint on the changed files clean, the 5
   next-prompt / bridge vitest files (37) passed. Not run: the full gate set,
   the other two clippy variants, `cargo test --workspace`. Never live.
+
+## Prompt autocomplete (main agent, 2026-11-23, user decisions D5/D6)
+
+Uncommitted at the time of writing. Phase `complete` on the same command
+(`agent_next_prompt`, new optional `draft`) and a POST on the phone route.
+
+**Choices**
+- The reply must begin with the draft's last words, and is checked. Probed
+  against the local Ollama 0.40.17 (`nemotron-3.5-bolt:e4b`, `think:false`;
+  `qwen2.5-coder:1.5b`): a pre-filled assistant message was continued in 2 of
+  5 drafts and restarted in the others; "reply with a line that begins with
+  exactly <last ≤60 chars>" began with them in 12 of 12, 0.4–1.6 s each with
+  the turn cached.
+- Same model as the suggestion (Suggestions role), so the turn's KV cache is
+  shared; no chip of its own. The switch is a setting, not a role.
+- A draft needs one finished word; a `/command`, a blank last line and a
+  draft past 2000 chars are skipped on both sides before anything is sent.
+- Typing along the offered suggestion (Claude's too) keeps its rest as the
+  dim text, with no model run.
+
+**Checks** (2026-11-23, whole tree with other sessions' edits in it) brand,
+whitespace, lint, the three clippy runs and `npm run build` pass. Vitest
+`--changed`: 9974 passed, 1 failed — `i18n.test.ts` on four
+`terminal.reader.command…` keys of another session's, not this change's.
+`cargo test -p tabtivity -p app-serverd` (6423 lib tests) and the
+no-default-features lib + `server_secrets` (6214) pass, run by hand because
+the gate script stops at the first failure. New tests: 5 in
+`next_prompt/tests.rs`, 1 route test, `AgentPromptCompletion.test.tsx` (11),
+2 in `ReaderNextPrompt`, 1 in `SteeringPromptSuggestions`, 2 in
+`MobileNextPrompt`, 2 in `MobileBridgeNextPrompt`.
+
+**Flagged for user**
+1. Never live. The dim text is a layer over the textarea: its wrapping
+   against the real box (WebKitGTK, the card composer, a long draft that
+   scrolls) is the first thing to look at.
+2. Completion quality is the model's: the 4B model wrote "commit this with
+   the mess update tests…" for "commit this with the mess". A reply that does
+   not begin with the draft's words is dropped, a poor one that does is shown.
+3. Each typing pause is one model run (the newest ends the older). A
+   completion is not held back for a cloud-model agent's turn, only while a
+   local-model agent tab works.
+4. The chip row shows the switch only on the model that serves suggestions
+   (the role's, else the default model).

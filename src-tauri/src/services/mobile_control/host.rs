@@ -5175,19 +5175,71 @@ async fn tab_next_prompt(
     Path(tab_id): Path<String>,
     Query(query): Query<NextPromptQuery>,
 ) -> impl IntoResponse {
-    use crate::services::next_prompt::{self, Ask, NextPrompt, Phase, Status};
+    use crate::services::next_prompt::Phase;
     let phone = match authenticate(&headers, &state) {
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Some(phase) = Phase::parse(query.phase.as_deref().unwrap_or("final")) else {
+    // `complete` carries a draft: it is the POST's alone.
+    let Some(phase) = Phase::parse(query.phase.as_deref().unwrap_or("final")).filter(|phase| *phase != Phase::Complete) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_phase");
     };
-    let (project_id, tab) = match agent_tab(&state, &phone, &tab_id) {
+    next_prompt_for(&state, &phone, &tab_id, phase, None).await
+}
+
+/// `POST /api/v1/tabs/{tab_id}/next-prompt` `{ "draft": "…" }` — how the
+/// prompt being typed in the phone's composer goes on, by the same local
+/// model (`services::next_prompt`, `complete`): `text` is what to append,
+/// one inert capped line. Answered like the GET (through the window when it
+/// is open), and like it only with `text`, `status` and `model`. The draft
+/// goes to the loopback Ollama and nowhere else; one past the engine's
+/// bound is `skipped` unsent.
+async fn tab_complete_prompt(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    use crate::services::next_prompt::Phase;
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct CompleteBody {
+        draft: String,
+    }
+    let Ok(request) = serde_json::from_slice::<CompleteBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    next_prompt_for(&state, &phone, &tab_id, Phase::Complete, Some(request.draft)).await
+}
+
+/// The answer of both next-prompt routes: the window's when it is open, else
+/// this process's own run.
+async fn next_prompt_for(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+    phase: crate::services::next_prompt::Phase,
+    draft: Option<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use crate::services::next_prompt::{self, Ask, NextPrompt, Phase, Status};
+    let (project_id, tab) = match agent_tab(state, phone, tab_id) {
         Ok(target) => target,
         Err(error) => return error,
     };
     let answer = |prompt: NextPrompt| {
+        // The engine's cleaned line, cleaned again here whoever answered: a
+        // continuation keeps the one space it may open with.
+        let text = prompt.text.as_deref().and_then(|line| {
+            if phase == Phase::Complete { next_prompt::clean_completion(line) } else { next_prompt::clean(line) }
+        });
+        let prompt = NextPrompt { text, ..prompt };
         // Credited only beside text, as one inert capped line.
         let model = prompt.text.as_ref().and(prompt.model.as_deref()).and_then(next_prompt::clean_model);
         let mut body = json!({ "text": prompt.text, "status": prompt.status });
@@ -5197,6 +5249,10 @@ async fn tab_next_prompt(
         (StatusCode::OK, Json(body))
     };
     if phase == Phase::Warm && tab.local_model {
+        return answer(NextPrompt::status(Status::Skipped));
+    }
+    // A draft the engine writes no completion for never leaves this process.
+    if phase == Phase::Complete && draft.as_deref().and_then(next_prompt::draft_tail).is_none() {
         return answer(NextPrompt::status(Status::Skipped));
     }
     // With the window open it answers: the window's composer asks the same
@@ -5209,17 +5265,16 @@ async fn tab_next_prompt(
             request_id: new_request_id(),
             project_id: project_id.clone(),
             tmux_session: tab.tmux_name.clone(),
-            phase: if phase == Phase::Warm { "warm" } else { "final" }.to_string(),
+            phase: phase.word().to_string(),
+            draft: draft.clone(),
         },
     )
     .await;
     if !desktop_down(&response) {
         return match response {
             Ok(DesktopResponse::AgentNextPrompt { text, outcome, model }) => {
-                // Only a status word the engine knows crosses; the text is the
-                // engine's cleaned line, capped again here.
+                // Only a status word the engine knows crosses.
                 let status = serde_json::from_value::<Status>(json!(outcome)).unwrap_or(Status::Unavailable);
-                let text = text.and_then(|line| next_prompt::clean(&line));
                 answer(NextPrompt { text, model, ..NextPrompt::status(status) })
             }
             Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found" => api_error(StatusCode::NOT_FOUND, &code),
@@ -5230,8 +5285,12 @@ async fn tab_next_prompt(
     // the loopback Ollama run in this process.
     let key = format!("phone\u{1f}{project_id}\u{1f}{}", tab.tmux_name);
     let prompt = tokio::task::spawn_blocking(move || {
+        let ask = Ask { key: &key, agent: &tab.cmd, phase, local_model: tab.local_model, draft: draft.as_deref() };
+        // A completion goes on from the ended turn read a moment ago, if any.
+        if let Some(kept) = next_prompt::complete_kept_blocking(&ask) {
+            return kept;
+        }
         let transcript = headless::transcript(&project_id, &tab, None, None, Some(NEXT_PROMPT_LIMIT));
-        let ask = Ask { key: &key, agent: &tab.cmd, phase, local_model: tab.local_model };
         next_prompt::suggest_blocking(&ask, &transcript)
     })
     .await
@@ -9198,7 +9257,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/tabs/{tab_id}/status", get(agent_status))
         .route("/api/v1/tabs/{tab_id}/transcript", get(agent_transcript))
-        .route("/api/v1/tabs/{tab_id}/next-prompt", get(tab_next_prompt))
+        .route("/api/v1/tabs/{tab_id}/next-prompt", get(tab_next_prompt).post(tab_complete_prompt))
         .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
         .route("/api/v1/tabs/{tab_id}/changes", get(tab_changes))
         .route("/api/v1/tabs/{tab_id}/named-files", get(tab_named_files))

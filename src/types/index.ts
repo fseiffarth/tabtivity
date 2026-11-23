@@ -649,6 +649,10 @@ export interface Settings {
    *  mail — and is the kind of thing to have answered before the feature runs,
    *  not after; the chip's tooltip says nothing reads it so far. */
   ollama_roles?: Record<string, string>;
+  /** Whether the Suggestions model also completes a prompt while it is being
+   *  typed (`lib/agents/nextPrompt`, backend `agent_next_prompt` `complete`).
+   *  Unset is on; `false` leaves the turn-end suggestion alone. */
+  prompt_autocomplete?: boolean;
   /** Missing provider retains Ollama; prose keeps its existing Ollama role. */
   code_completion_provider?: "ollama" | "copilot";
   /** The automatic autocomplete trigger's idle delay per provider, in ms; one

@@ -13,7 +13,7 @@ import {
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
-import { endedTurnKey, useLocalNextPrompt } from "../../lib/agents/nextPrompt";
+import { endedTurnKey, useLocalNextPrompt, usePromptComplete } from "../../lib/agents/nextPrompt";
 import { NO_LIVE, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
 import { isAiOffRefusal } from "../../lib/aiSwitch";
 import { forgetSentPrompts, onSentPrompt, useSentPrompts, type SentPrompt } from "../../lib/agents/sentPrompts";
@@ -71,6 +71,7 @@ import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
 import { UntestedTag } from "../common/UntestedTag";
 import { SuggestionSourceChip } from "./SuggestionSourceChip";
+import { PromptGhost } from "./PromptGhost";
 import { ReaderAnswerAlbum, ReaderAnswerFilesContext, useReaderAnswerFiles } from "./ReaderAnswerFiles";
 import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
@@ -743,10 +744,14 @@ function withoutTakenBack(entries: TranscriptEntry[], text: string | null): Tran
   return [...entries.slice(0, at), ...entries.slice(at + 1)];
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, docked, resting, onBusy, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, suggestionModel = "", onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
+function ReaderComposer({ scope, tabKey, tabRef, cwd, remoteHost, ptyId, cli, subagent, history, queued, focused, visible, docked, resting, onBusy, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, suggestionModel = "", onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
+  /** The folder the tab's agent runs in and the host it runs on, as the
+   * session is read by: what a completion of the draft names the tab with. */
+  cwd?: string;
+  remoteHost?: string | null;
   /** The tab's CLI (`agentFamily`): whose commands the `/` menu offers. */
   cli: string;
   /** The pane the subagent's list is read off and walked in. */
@@ -800,6 +805,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const t = useT();
   const assistantChat = scope === ASSISTANT_SCOPE;
   const [draft, setDraft] = useState(() => readerDraft(scope, tabKey));
+  /** The caret stands at the draft's end with nothing selected: where a
+   * completion of it is drawn (`PromptGhost`). */
+  const [caretAtEnd, setCaretAtEnd] = useState(true);
+  const readCaret = (box: HTMLTextAreaElement) =>
+    setCaretAtEnd(box.selectionStart === box.value.length && box.selectionEnd === box.value.length);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   /** Send was pressed while the agent asked something: typed into the pane,
@@ -842,6 +852,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
     renderedRef.current(moved);
+    // A taken suggestion, an undo or a recalled prompt moves the caret
+    // without a key of its own.
+    const box = composerRef.current;
+    if (box) setCaretAtEnd(box.selectionStart === box.value.length && box.selectionEnd === box.value.length);
   }, [draft]);
   // Three lines until the text needs more: the box grows with it (upward, the
   // composer stays on the pane's last row) up to its CSS max-height. At rest
@@ -895,6 +909,32 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (e.key !== "Tab" && e.key !== "ArrowRight") return false;
     editDraft(shownSuggestion);
     caretAt.current = shownSuggestion.length;
+    return true;
+  };
+  /** How the prompt being typed goes on, by the local Suggestions model
+   * (`usePromptComplete`): dim after the caret, taken by Tab or → like the
+   * suggestion — and the rest of that suggestion while it is typed along.
+   * Not over a recalled prompt, the `/` menu or a subagent's box. */
+  const completion = usePromptComplete({
+    scope,
+    tab: tabRef.current ?? undefined,
+    cwd,
+    remoteHost,
+    visible: visible && !resting && !subagent && !sending && !inputBlocked && historyAt.current === null && slashMenu.length === 0,
+    draft,
+    atEnd: caretAtEnd,
+    seed: shownSuggestion,
+    seedModel: suggestionModel,
+    seedLocal: suggestionLocal,
+  });
+  const completionKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (!completion.text || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
+    if (e.key !== "Tab" && e.key !== "ArrowRight") return false;
+    const box = e.currentTarget;
+    if (box.selectionStart !== draft.length || box.selectionEnd !== draft.length) return false;
+    const next = draft + completion.text;
+    editDraft(next);
+    caretAt.current = next.length;
     return true;
   };
   const forgetSlash = (line: string) => {
@@ -1428,7 +1468,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     } else if (steerOpenRef.current !== null && factKey(e, e.currentTarget)) {
       // Steering's Alt+M / Alt+E: the facts row's model and effort pickers.
       e.preventDefault();
-    } else if (slashKey(e) || suggestionKey(e)) {
+    } else if (slashKey(e) || suggestionKey(e) || completionKey(e)) {
       e.preventDefault();
     } else if (questionOpen && !docked && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
       e.preventDefault();
@@ -1480,6 +1520,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           aria-label={restingPlaceholder ?? (subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? `${t(suggestionLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion")}: ${shownSuggestion}`
             : t("terminal.reader.placeholder"))}
+          aria-description={completion.text ? t("terminal.reader.completion", { text: completion.text.trim() }) : undefined}
+          onSelect={e => readCaret(e.currentTarget)}
           onPointerUp={e => dictation.capture(e.currentTarget)}
           onKeyUp={e => dictation.capture(e.currentTarget)}
           onChange={(e) => {
@@ -1490,12 +1532,16 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           onKeyDown={onComposerKey}
           onPaste={onComposerPaste}
         />
+        {completion.text && <PromptGhost box={composerRef} typed={draft} rest={completion.text} />}
         {/* One corner, one row of pills: the suggestion's (not at rest, where
             the short placeholder stands for it) with the dock's beside it. */}
         {shownSuggestion && !draft && !resting ? <span className="terminal-reader-suggestion-tag">
           <SuggestionSourceChip local={suggestionLocal} model={suggestionModel} />
           {!suggestionLocal && <UntestedTag id="terminal.reader.promptSuggestion" />}
           {suggestionLocal && <UntestedTag id="agents.localNextPrompt" />}
+          {docked && <UntestedTag id="terminal.reader.dock" />}
+        </span> : completion.text ? <span className="terminal-reader-suggestion-tag">
+          <UntestedTag id="agents.promptAutocomplete" />
           {docked && <UntestedTag id="terminal.reader.dock" />}
         </span> : docked && <span className="terminal-reader-dock-tag"><UntestedTag id="terminal.reader.dock" /></span>}
         {voice.button}
@@ -3397,6 +3443,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         scope={scope}
         tabKey={tabKey}
         tabRef={tabRef}
+        cwd={cwd}
+        remoteHost={remoteHost}
         ptyId={ptyId}
         cli={agentFamily(agentLabel)}
         subagent={openStep && isClaudeCommand(tab?.cmd) && !inWorkflow(subagentPath) ? openStep : undefined}

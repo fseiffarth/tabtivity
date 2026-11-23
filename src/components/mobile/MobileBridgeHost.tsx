@@ -83,7 +83,7 @@ import { probeLocalModelPlacement } from "../tabs/localModelGroup";
 import { listLocalDrivers, loadOllamaModel } from "../../lib/agents/localDrivers";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 import { readerAgent } from "../../lib/agents/agentReader";
-import { localAgentWorking, nextPromptArgs } from "../../lib/agents/nextPrompt";
+import { completePromptFor, localAgentWorking, nextPromptArgs } from "../../lib/agents/nextPrompt";
 import { agentWorktreeChoices, CARRIES_CONVERSATION, sameDir, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
 import { agentSwitchChoicesIn, moveAgentToWorktree, worktreeMoveDir } from "../../stores/agents/agentWorktreeSwitch";
 import { cleanCloudSession, cleanCloudTask, cloudLaunch, cloudLaunchesFor } from "../../lib/agents/cloudSessions";
@@ -312,7 +312,7 @@ type DesktopRequest =
   | { type: "prompt_mutate"; request_id: string; project_id: string; action: PromptMutation; device_id?: string }
   | { type: "agent_status"; request_id: string; project_id: string; tmux_session: string; refresh: boolean }
   | { type: "agent_transcript"; request_id: string; project_id: string; tmux_session: string; subagent?: string | null; version?: string | null; limit?: number | null }
-  | { type: "agent_next_prompt"; request_id: string; project_id: string; tmux_session: string; phase: string }
+  | { type: "agent_next_prompt"; request_id: string; project_id: string; tmux_session: string; phase: string; draft?: string | null }
   | { type: "tab_seen"; request_id: string; project_id: string; tmux_session: string }
   | { type: "tab_input"; request_id: string; project_id: string; tmux_session: string; interrupt?: boolean }
   | { type: "tab_prompt"; request_id: string; project_id: string; tmux_session: string; message: string; device_id?: string }
@@ -3044,15 +3044,24 @@ async function refreshSlices(projectId: string | null | undefined, slices: strin
  * phone and this window's composer share one run per turn: the same
  * `agent_next_prompt` arguments the Reader sends (`nextPromptArgs`), so the
  * backend names both by one session and answers a turn once. A warm-up stands
- * aside while a local-model agent tab is in a turn, as the window's own do.
+ * aside while a local-model agent tab is in a turn, as the window's own do —
+ * and so does `complete`, how the `draft` typed on the phone goes on
+ * (`completePromptFor`, the window's own ask), which the window's switch
+ * (`prompt_autocomplete`) turns off for the phone too.
  */
-async function agentNextPromptFor(projectId: string, tmuxSession: string, phase: string): Promise<DesktopResponse> {
+async function agentNextPromptFor(projectId: string, tmuxSession: string, phase: string, draft?: string | null): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   const tab = scheduleTargetTab(scope.id, tmuxSession);
   if (!tab) return { status: "error", code: "tab_not_found", message: "Agent tab is unavailable" };
+  if (phase === "complete") {
+    if (!draft) return { status: "agent_next_prompt", text: null, outcome: "skipped" };
+    if (useSettingsStore.getState().settings?.prompt_autocomplete === false) return { status: "agent_next_prompt", text: null, outcome: "unavailable" };
+    const answer = await completePromptFor(scope.id, tab, scope.cwd, hostTabId(tab, scope.project), draft);
+    return { status: "agent_next_prompt", text: answer?.text ?? null, outcome: answer?.status ?? "unavailable", model: answer?.model ?? null };
+  }
   if (phase !== "warm" && phase !== "final") return { status: "agent_next_prompt", text: null, outcome: "unavailable" };
   if (phase === "warm" && (tab.kind === "local_agent" || localAgentWorking())) {
     return { status: "agent_next_prompt", text: null, outcome: "skipped" };
@@ -3175,7 +3184,7 @@ async function handleRequest(
     case "prompt_mutate": return mutatePrompt(request.project_id, request.action, request.device_id);
     case "agent_status": return agentStatusFor(request.project_id, request.tmux_session, request.refresh);
     case "agent_transcript": return agentTranscriptFor(request.project_id, request.tmux_session, request.subagent, request.version, request.limit);
-    case "agent_next_prompt": return agentNextPromptFor(request.project_id, request.tmux_session, request.phase);
+    case "agent_next_prompt": return agentNextPromptFor(request.project_id, request.tmux_session, request.phase, request.draft);
     case "tab_seen": return markTabSeen(request.project_id, request.tmux_session);
     case "tab_input": return markTabInput(request.project_id, request.tmux_session, request.interrupt === true);
     case "tab_prompt": return recordTabPrompt(request.project_id, request.tmux_session, request.message, request.device_id);

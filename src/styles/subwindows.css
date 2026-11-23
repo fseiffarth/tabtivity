@@ -4256,6 +4256,23 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
+/* How the local model thinks the prompt being typed goes on (`PromptGhost`):
+   a layer over the box that repeats the typed text unseen, so the dim rest
+   starts where the text ends and wraps as the box wraps it. The component
+   copies the box's font, padding and size; nothing here animates. */
+.prompt-ghost {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  pointer-events: none;
+  text-align: left;
+}
+.prompt-ghost-text {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.prompt-ghost-typed { visibility: hidden; }
+.prompt-ghost-rest { color: var(--text-muted); opacity: 0.8; }
 /* Who wrote the suggestion dimmed in the empty box (and its untested pills):
    top right, clear of Send and the mic. */
 .terminal-reader-suggestion-tag {

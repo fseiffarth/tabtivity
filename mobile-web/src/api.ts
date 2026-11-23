@@ -1263,6 +1263,21 @@ export async function getNextPrompt(tabId: string, phase: NextPromptPhase, signa
   );
 }
 
+/** How long a completion may take: one short run, the turn already read. */
+const COMPLETE_PROMPT_TIMEOUT = 20_000;
+
+/** `POST /api/v1/tabs/{id}/next-prompt` — how `draft`, the prompt being
+ * typed, goes on, by the desktop's local model: `text` is what to append.
+ * The draft goes to the desktop's own Ollama and nowhere else. Every failure
+ * is a `status`. */
+export async function completePrompt(tabId: string, draft: string, signal?: AbortSignal): Promise<NextPromptAnswer> {
+  return api<NextPromptAnswer>(
+    `/api/v1/tabs/${encodeURIComponent(tabId)}/next-prompt`,
+    { method: "POST", body: JSON.stringify({ draft }), signal },
+    COMPLETE_PROMPT_TIMEOUT,
+  );
+}
+
 /** One file the chat changed that git still lists as changed. `path` is
  * relative to its checkout; `worktree` names a linked worktree (or a box
  * member's folder) it is in, never by path. */

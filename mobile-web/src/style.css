@@ -1404,6 +1404,12 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .slash-pick strong { flex:0 0 auto; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86rem; font-weight:600; color:#dcd6ff; }
 .slash-pick small { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#9498aa; font-size:.76rem; }
 .slash-row.used .slash-pick small { color:#b3a9f5; }
+/* How the local model thinks the draft goes on (`usePromptCompletion`): one
+   dim line over the field, the whole of it the tap target. */
+.composer-complete { display:flex; align-items:baseline; gap:8px; flex:0 0 auto; width:100%; margin:0 0 4px; padding:7px 8px; border:0; border-radius:8px; background:var(--surface-raised); color:#9fa4b6; font-style:italic; text-align:left; }
+.composer-complete:active { color:#dcd6ff; }
+.composer-complete-text { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.composer-complete em { flex:none; font-style:normal; color:#ffd36b; font-size:.7rem; }
 /* Claude's one suggestion: the `/` menu's look, as tall as its text, which wraps. */
 .prompt-composer textarea.suggested { color:#9fa4b6 !important; -webkit-text-fill-color:#9fa4b6; font-style:italic; }
 .composer-suggested-untested { align-self:center; flex:none; font-size:.7em; opacity:.7; }
