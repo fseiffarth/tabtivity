@@ -135,3 +135,163 @@ Rebuild the phone app first (`npm run mobile:bundle`, or the next dev build).
 - An unavailable tab is only dimmed and disabled; the project screen can
   restart a not-yet-attachable agent tab from its card, the rail cannot.
 - Folded, the "Untested" pill sits in the 64 px head and may wrap.
+
+## Step 2 — session overview pane
+
+- Start: `fbb11e98b` (step 1's handoff). Commits: `5874570e0` (2a,
+  `feat(mobile): session overview beside the iPad chat`), `eefd97d6e` (2b,
+  `feat(mobile): a chat's file opens in the iPad overview pane`); this
+  handoff is the commit after them.
+- New: `mobile-web/src/components/ChatOverview.tsx`,
+  `mobile-web/src/components/SubagentIndexGroups.tsx` (the chips' subagent
+  rows, now shared with the overview), `src/__tests__/mobile/MobileChatOverview.test.tsx`.
+- Touched: `screens/Terminal.tsx`, `screens/terminal/useOutbox.tsx` (`paned`),
+  `components/ChatLinksIndex.tsx` (exports `ChatLinkRows`),
+  `components/OutboxViewer.tsx` (arrow guard when paned), `prefs.ts`
+  (`chatOverviewPane`, `readOverviewPane`), `style.css`, the five
+  dictionaries, `src/lib/untested.ts`, `MobileTabletChat.test.tsx`,
+  `docs/filemap_frontend.md`, `docs/context/mobile_access.md` (new section
+  "The iPad chat's columns" — no other context doc described the tablet chat),
+  `todo/group-h-crossplatform.md` (31cu: three new manual boxes).
+
+### How it works
+
+- `Terminal` state: `paneOpen` (the pane, `chatOverviewPane`), `filesOpen`
+  (the library / the drawer, as before), `overviewPane` (an agent tab of a
+  project, not Tabby: the pane is an overview; else the library alone),
+  `filePaned` (split + overview tab + no tucked-away markup + an outbox,
+  inbox or asked file open). `paneAt` = `file` > `library` > `overview`, on
+  `main` as `data-overview`. `data-files-docked` is gone: the library is now
+  a grid item, not a `padding-right` dock.
+- Grid (split block): `--overview-col` 320 / 412 / 492 px (308 / 400 / 480
+  panel + 12 px), a third column after the rail's (`[data-rail][data-overview]`
+  rules) or the second without a rail; body and controls `grid-column:-3 / -2`.
+  The library (`.files-library:not(.files-split)`) and a chat viewer
+  (`> .pane-file > .outbox-viewer.paned`) become `position:relative` grid
+  items in that column; under an agent's pane they get `margin-top:
+  var(--overview-head)` (56 px) so the aside's "‹ Overview" head shows above
+  them. Their hosts are `display:contents`, so the tree is unchanged.
+- Rail: `railFolded = railForced || paneWide` goes into both `forceFolded`
+  and `railLayout` (never writes `chatRailFolded`).
+
+### Choices where the plan left room
+
+- **Library close / Escape** in an agent's pane goes back to the overview
+  (pane stays open, flag untouched); in a shell's pane it closes the pane and
+  writes the flag off, as the old files pane did.
+- **Mode not remembered**: the pane always reopens on the overview; only open
+  or closed is stored.
+- **Shell tabs** read the same `chatOverviewPane` flag, so with it unset a
+  shell in landscape now opens with the library docked (before: closed unset).
+  See Flagged.
+- **Migration**: `readOverviewPane()` reads `chatOverviewPane`; unset, it
+  reads `chatFilesPane` (unset → on), writes the answer to
+  `chatOverviewPane` once and never reads the old flag again.
+- **Markup tucked away** (`markupAway`): the overview is no markup host and
+  stays; a library under it hides with the view (as before) and an agent's
+  pane shows the overview meanwhile; a shell's chat takes its whole width.
+- **Pills**: the queue and sent-files pills are gone in split only for tabs
+  that have the overview (a shell or Tabby's chat keeps the gallery pill).
+- **"Project files"** is the Files section's head action, or a lone button at
+  the end of the pane when there is no Files section (also the empty state).
+  Absent while the desktop's "Project files on the phone" switch is off.
+- **Finished subagents**: the newest three are the last three in transcript
+  order; Show all expands in place (no "show fewer"). Files show the newest
+  four, Links the newest four, Sent three tiles (`OutboxGrid` without
+  Delete) and always a Show all that opens the gallery.
+- **Section titles** reuse the chips' strings with counts ("Subagents (n)",
+  "Files (n)", "Links (n)", "Files from the agent (n)", "Prompt queue").
+- **A file in the pane** (2b): opens even when the pane was closed (then
+  ‹ Overview closes the file and the pane stays closed); ‹ Overview from a
+  file also puts away a library it covered. Escape in the composer leaves a
+  paned file alone (only with the focus in the viewer), and the viewer's
+  ←/→ picture stepping ignores keys typed in a text field when paned (also
+  helps the library's own `files-split` search box).
+- **Panel glyph** is an inline SVG (window with a right column), the mirror
+  of `SidebarIcon`; the button keeps the `drawer-open` class (+ `has-count`).
+- The terminal view keeps the pane, as it kept the docked files pane.
+
+### Names (all checked free before use)
+
+- Classes: `chat-overview`, `chat-overview-head`, `chat-overview-title`,
+  `chat-overview-back`, `chat-overview-body`, `chat-overview-section`,
+  `chat-overview-section-head`, `chat-overview-action`, `chat-overview-more`,
+  `chat-overview-empty`, `pane-file`, modifier `drawer-open.has-count`.
+- Attribute: `data-overview="overview" | "library" | "file"` on `main`.
+  CSS vars `--overview-col`, `--overview-head`.
+- i18n: `mobile.chatOverview.region`, `.title`, `.backLabel`, `.toggle`,
+  `.toggleRunning`, `.projectFiles`, `.queued`, `.showAll`, `.empty` (en, de,
+  es, fr, it).
+- Flag `chatOverviewPane` (on unset); `chatFilesPane` stays in `MobileFlag`
+  for the one read. Untested id `mobile.chatOverview` (pill in the pane head).
+
+### Tests changed in `MobileTabletChat.test.tsx`
+
+- The tier-change case: the pane button is now "Show or hide the session
+  overview", open by default; the library is reached through "Project files"
+  and its attribute is `data-overview="library"`; flag `chatOverviewPane`.
+- "opens the pane at once…": now also covers on-unset and the one-time
+  carry-over of a closed `chatFilesPane`.
+- Keys case: the library is opened from the overview; Escape in it returns to
+  the overview instead of closing the pane.
+- Markup tucked-away case: the agent keeps its overview; the library-hidden
+  half moved to a shell tab (an agent's pane opens on the overview, not the
+  library). It uses tab id `tab-marked`: `awayMarkups` outlives the screen
+  per tab and leaked into later cases once a file could stand in the pane.
+- Turn-with-markup case: a shell tab (whose pane opens with the library).
+- Drawer case: attribute and flag renamed; landscape now shows the library
+  in the pane under the overview button.
+- Stylesheet case: the 424 px padding dock became the 412 px grid column.
+
+### Gates
+
+`scripts/gates-job.sh start` on each step's tree: brand, whitespace, `npm run
+lint` (0 errors; the one older `exhaustive-deps` warning in `Terminal.tsx`),
+`npm run build`, vitest `--changed` all PASS for 2a and for 2b; Rust gates
+skipped (no Rust change). Full `npx vitest run` after 2b: 1 285 files, 13 536 tests passed, 0
+failed (step 1 ended at 13 522; the 14 new ones are `MobileChatOverview`).
+
+### Click-through for the user
+
+Rebuild the phone app first (`npm run mobile:bundle`, or the next dev build).
+
+1. **iPad landscape, overview**: an agent tab of a project with subagents,
+   files and links → the pane on the right under the header, "Overview" and
+   the Untested pill; sections only for what exists; Show all in Finished /
+   Files / Links expands in place; Sent's Show all opens the gallery; a
+   subagent row opens its conversation; a hold on a file opens its menu; with
+   queued prompts a Prompt queue row opens the queue sheet. No chips over the
+   transcript, no queue or sent-files pill. Close with the panel button →
+   chips back, the button counts running subagents; relaunch → still closed.
+2. **Library**: Project files → the library (400 px) under "‹ Overview", the
+   rail folded to tiles with no fold button; Escape with the focus in the
+   library or ‹ Overview → back to the overview, the rail unfolds.
+3. **File**: tap a picture post, a Files row, a changed file, a PDF → it
+   opens in the pane (480 px), the chat beside it scrolls and takes typing;
+   Mark up → full screen; its Chat button → chat with the overview; ‹ Overview
+   closes the file. Turn the iPad with a file open → upright it covers the
+   chat, back in landscape it is in the pane.
+4. **Shell tab** in landscape: the panel button shows/hides the library alone.
+5. **Portrait iPad**: header pills, chips and the files drawer as before; a
+   turn mid-draft keeps draft, scroll and connection.
+6. **Phone** upright and on its side: unchanged.
+
+### Flagged for user
+
+- **Shell tabs now open with the library docked** in landscape when the flag
+  is unset (one flag for both kinds, on by default per plan). If that is
+  unwanted, shells need their own off-by-default reading.
+- **The landscape header has no queue or sent-files pill even while the pane
+  is closed** (plan); the queue is then reachable only by opening the pane
+  (or the queued bubble's own buttons in the chat).
+- **A file from the chat opens in the pane even when the pane was closed**
+  (rather than full screen over the chat); say if a closed pane should mean
+  the old full-screen viewer.
+- The markup-asks poll pauses while a paned file is open (its condition
+  already paused for any open viewer); the banner comes back when it closes.
+- The mode (overview / library) is not remembered across chats.
+- The pane's three sent tiles carry the gallery's Save/Share row, which is
+  tight at ~90 px per tile.
+- Never seen on an iPad: the grid placement of the library and of a paned
+  `MarkupView` (PDF reader) as `position:relative` grid items is verified only
+  by jsdom and the stylesheet tests.

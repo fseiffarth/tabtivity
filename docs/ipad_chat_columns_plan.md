@@ -1,6 +1,6 @@
 # iPad chat in three columns — plan
 
-Status: in implementation (2026-11-23). Handoff: `docs/ipad_chat_columns_handoff.md`.
+Status: steps 1 and 2 code-complete, never seen on an iPad (2026-11-23). Handoff: `docs/ipad_chat_columns_handoff.md`.
 
 ## Why
 
