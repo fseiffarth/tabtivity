@@ -755,6 +755,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["desktop_coordinates_supported", "client"],
   ["detached_retire_ack", "client"],
   ["detached_retire_ready", "client"],
+  ["detached_first_paint", "client"],
   ["detached_window_frontmost", "client"],
   ["detached_window_is_parked", "client"],
   ["detached_window_screens", "client"],

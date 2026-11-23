@@ -52,7 +52,7 @@ const asked = () => vi.mocked(invoke).mock.calls.filter(([command]) => command =
 describe("Mobile bridge — the local-model next prompt", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockImplementation((command: string) => {
-      if (command === "agent_next_prompt") return Promise.resolve({ text: "Run the whole suite", turnKey: "k", status: "ok" });
+      if (command === "agent_next_prompt") return Promise.resolve({ text: "Run the whole suite", turnKey: "k", status: "ok", model: "qwen3:4b" });
       if (command === "list_agents" || command === "agent_schedules_list") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
@@ -65,9 +65,9 @@ describe("Mobile bridge — the local-model next prompt", () => {
   });
   afterEach(() => cleanup());
 
-  it("asks with the Reader's own arguments and answers text and outcome", async () => {
+  it("asks with the Reader's own arguments and answers text, outcome and model", async () => {
     const response = await ask({ type: "agent_next_prompt", request_id: "n1", project_id: paper.id, tmux_session: CODEX_TMUX, phase: "final" });
-    expect(response).toEqual({ status: "agent_next_prompt", text: "Run the whole suite", outcome: "ok" });
+    expect(response).toEqual({ status: "agent_next_prompt", text: "Run the whole suite", outcome: "ok", model: "qwen3:4b" });
     expect(asked()).toHaveLength(1);
     expect(asked()[0][1]).toEqual(nextPromptArgs(paper.id, codex, "/projects/paper", undefined, "final"));
   });
@@ -80,6 +80,26 @@ describe("Mobile bridge — the local-model next prompt", () => {
     // The turn's own suggestion is still asked.
     const final = await ask({ type: "agent_next_prompt", request_id: "n3", project_id: paper.id, tmux_session: CODEX_TMUX, phase: "final" });
     expect(final).toMatchObject({ outcome: "ok" });
+  });
+
+  it("asks how the phone's draft goes on with the Reader's arguments and the draft", async () => {
+    const response = await ask({ type: "agent_next_prompt", request_id: "c1", project_id: paper.id, tmux_session: CODEX_TMUX, phase: "complete", draft: "run the whole" });
+    expect(response).toMatchObject({ status: "agent_next_prompt", outcome: "ok", model: "qwen3:4b" });
+    expect(asked()).toHaveLength(1);
+    expect(asked()[0][1]).toEqual({ ...nextPromptArgs(paper.id, codex, "/projects/paper", undefined, "complete"), draft: "run the whole" });
+  });
+
+  it("completes nothing without a draft, with the switch off, or while a local-model tab is in a turn", async () => {
+    const none = await ask({ type: "agent_next_prompt", request_id: "c2", project_id: paper.id, tmux_session: CODEX_TMUX, phase: "complete" });
+    expect(none).toEqual({ status: "agent_next_prompt", text: null, outcome: "skipped" });
+    useSettingsStore.setState({ settings: { prompt_autocomplete: false } as Settings, loaded: true });
+    const off = await ask({ type: "agent_next_prompt", request_id: "c3", project_id: paper.id, tmux_session: CODEX_TMUX, phase: "complete", draft: "run the whole" });
+    expect(off).toEqual({ status: "agent_next_prompt", text: null, outcome: "unavailable" });
+    useSettingsStore.setState({ settings: {} as Settings, loaded: true });
+    useActivityStore.setState({ busyByTab: { [`${paper.id}:${local.key}`]: true } });
+    const busy = await ask({ type: "agent_next_prompt", request_id: "c4", project_id: paper.id, tmux_session: CODEX_TMUX, phase: "complete", draft: "run the whole" });
+    expect(busy).toMatchObject({ status: "agent_next_prompt", text: null, outcome: "skipped" });
+    expect(asked()).toHaveLength(0);
   });
 
   it("answers an unknown tab as not found and a bad phase without asking", async () => {

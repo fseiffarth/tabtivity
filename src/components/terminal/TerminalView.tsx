@@ -2827,6 +2827,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         localOnly={localOnly}
         visible={visible && readerOn}
         focused={focused && readerOn && !panelOn}
+        paneFocused={focused}
+        // The chat beside Diffs or Data: only the main window's own panes
+        // have its side panel; an attach-only view (cockpit, root, Tabby)
+        // would pull the chat out from under its own window.
+        sideChatOffered={readerTopBar && !attachOnly && !isDetachedWindow()}
         shown={readerOn}
         changesOpen={changesOn}
         filesOpen={filesOn}

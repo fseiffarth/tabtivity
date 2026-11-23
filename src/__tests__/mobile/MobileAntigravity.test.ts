@@ -144,6 +144,11 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort`, () => {
     expect(picker!.hidden).toBeUndefined();
   });
 
+  it("keeps the auto-compaction override out of the current model's name", () => {
+    const picker = readAntigravityPicker(lines(...PICKER.map((row) => row.replace("(current)", "(current · 838860)"))));
+    expect(picker?.options[2]).toMatchObject({ label: "Gemini 3.6 Flash", description: "(current)" });
+  });
+
   it("reads nothing where the heading is a line of output", () => {
     expect(readAntigravityPicker(lines(
       "Switch Model",

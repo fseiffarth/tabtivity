@@ -363,15 +363,17 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const coldCache = !resumeCost && !live.working && !live.question ? coldPromptCache(usage?.cache, now) : null;
   const clock = new Date(now);
   const fromPanel = !!(limits.session || limits.week);
-  const shown = fromPanel ? limits : sessionLimits(usage, clock);
+  const selected = fromPanel ? limits : sessionLimits(usage, clock);
+  // A lone Fable row also serves as the compact weekly fallback on mobile.
+  const shown = selected.fable && selected.week === selected.fable ? { ...selected, week: undefined } : selected;
   const readTime = fromPanel ? new Date(readAt) : clock;
-  const limitFact = (meter: LimitMeters["session"], key: "mobile.facts.session" | "mobile.facts.week") => {
+  const limitFact = (meter: LimitMeters["session"], key: "session" | "week" | "fable") => {
     if (!meter) return null;
     const resetAt = meter.resets ? resolveResetAt(meter.resets, readTime) : null;
     if (resetAt && resetAt.getTime() <= clock.getTime()) return null;
     const left = meter.resets ? resetCountdown(meter.resets, clock, readTime) : "";
     const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
-    const percentText = t(key, { percent: Math.round(remaining) });
+    const percentText = t(`mobile.facts.${key}`, { percent: Math.round(remaining) });
     return (
       <button
         type="button"
@@ -382,7 +384,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         title={[meter.resets ? resetText(meter.resets, clock, readTime) : "", t("mobile.facts.limitToggle"), readAt < now - 180_000 ? t("agents.usage.readAge", { minutes: Math.floor((now - readAt) / 60_000) }) : ""].filter(Boolean).join("\n")}
       >
         {limitBars ? <>
-          {t(key === "mobile.facts.session" ? "mobile.facts.sessionLabel" : "mobile.facts.weekLabel")}
+          {t(`mobile.facts.${key}Label`)}
           <span className="terminal-reader-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span>
         </> : percentText}
         {left && <> · {t("mobile.facts.resetIn", { time: left })}</>}
@@ -670,9 +672,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             <UntestedTag id="terminal.reader.cacheCold" />
           </span>
         )}
-        {limitFact(shown.session, "mobile.facts.session")}
-        {limitFact(shown.week, "mobile.facts.week")}
-        {(shown.session || shown.week) && <UntestedTag id="terminal.reader.limitBars" />}
+        {limitFact(shown.session, "session")}
+        {limitFact(shown.week, "week")}
+        {limitFact(shown.fable, "fable")}
+        {(shown.session || shown.week || shown.fable) && <UntestedTag id="terminal.reader.limitBars" />}
       </div>
       <div className="terminal-reader-facts-chips" ref={chipSlot} />
     </div>

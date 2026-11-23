@@ -131,13 +131,28 @@ export function normalizePath(p: string): string {
 export function isPathWithin(path: string, root: string): boolean {
   if (!path || !root) return false;
   const windows = isWinStyle(path) || isWinStyle(root);
-  const canonical = (value: string) => {
-    const normalized = normalizePath(value).replace(/\\/g, "/").replace(/\/+$/, "");
-    return windows ? normalized.toLowerCase() : normalized;
-  };
-  const child = canonical(path);
-  const parent = canonical(root);
+  const child = comparable(path, windows);
+  const parent = comparable(root, windows);
   return child === parent || child.startsWith(`${parent}/`);
+}
+
+/** True when `a` and `b` spell the same path: `.`/`..`/doubled separators and a
+ *  trailing separator ignored, and — as in `isPathWithin` — a Windows path
+ *  compared case-insensitively with either separator. The "is this file already
+ *  open in a tab" test: two openers spelling one file differently must still
+ *  find each other's tab. */
+export function samePath(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const windows = isWinStyle(a) || isWinStyle(b);
+  return comparable(a, windows) === comparable(b, windows);
+}
+
+/** One spelling of `value` for comparisons: normalised, `/`-separated, no
+ *  trailing separator, case-folded for Windows. */
+function comparable(value: string, windows: boolean): string {
+  const normalized = normalizePath(value).replace(/\\/g, "/").replace(/\/+$/, "");
+  return windows ? normalized.toLowerCase() : normalized;
 }
 
 /** Separator-normalized relative path when `path` is within `root`, otherwise

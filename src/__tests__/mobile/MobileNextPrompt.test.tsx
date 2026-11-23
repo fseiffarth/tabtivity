@@ -79,7 +79,7 @@ class FakeWebSocket {
 }
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
-import { NEXT_PROMPT_CLAUDE_SETTLE_MS, NEXT_PROMPT_SETTLE_MS } from "../../../mobile-web/src/terminal/nextPrompt";
+import { NEXT_PROMPT_CLAUDE_SETTLE_MS, NEXT_PROMPT_COMPLETE_MS, NEXT_PROMPT_SETTLE_MS } from "../../../mobile-web/src/terminal/nextPrompt";
 
 const CODEX = { id: "tab-x", label: "Codex", kind: "agent" as const, agent_label: "Codex", available: true, viewer_busy: false };
 const CLAUDE = { id: "tab-s", label: "Claude", kind: "agent" as const, agent_label: "Claude Code", available: true, viewer_busy: false };
@@ -107,7 +107,9 @@ const SUGGESTION = "run the tests";
 
 /** The phases the route was asked for, in order. */
 let asked: string[] = [];
-let answer: () => unknown = () => ({ text: SUGGESTION, status: "ok" });
+/** The drafts the completion route (the POST) was sent, in order. */
+let completed: string[] = [];
+let answer: () => unknown = () => ({ text: SUGGESTION, status: "ok", model: "qwen3:4b" });
 
 describe("Mobile composer — the local model's next-prompt suggestion", () => {
   beforeEach(() => {
@@ -116,10 +118,16 @@ describe("Mobile composer — the local model's next-prompt suggestion", () => {
     FakeWebSocket.instances = [];
     FakeWebSocket.sent = [];
     asked = [];
-    answer = () => ({ text: SUGGESTION, status: "ok" });
+    completed = [];
+    answer = () => ({ text: SUGGESTION, status: "ok", model: "qwen3:4b" });
     localStorage.clear();
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    vi.stubGlobal("fetch", vi.fn((url: string) => {
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && /\/next-prompt$/.test(String(url))) {
+        const { draft } = JSON.parse(String(init.body)) as { draft: string };
+        completed.push(draft);
+        return Promise.resolve(jsonResponse(200, { text: draft.endsWith("upd") ? "ate the changelog" : " update the changelog", status: "ok", model: "qwen3:4b" }));
+      }
       const match = /\/next-prompt\?phase=(\w+)/.exec(String(url));
       if (match) {
         asked.push(match[1]);
@@ -147,12 +155,49 @@ describe("Mobile composer — the local model's next-prompt suggestion", () => {
     await wait(NEXT_PROMPT_SETTLE_MS);
     expect(field().value).toBe(SUGGESTION);
     expect(field().getAttribute("aria-description")).toBe("Local model suggests");
+    expect(document.querySelector(".composer-suggested-by")?.firstChild?.textContent).toBe("qwen3:4b");
     expect(asked).toEqual(["final"]);
     expect(FakeWebSocket.sent).toEqual([]);
     // Repainted, the same turn is not asked again.
     await paint(`${CODEX_IDLE}\n`);
     await wait(2_000);
     expect(asked).toEqual(["final"]);
+  });
+
+  it("offers how a typed draft goes on in a strip over the field; a tap appends it and nothing is sent", async () => {
+    answer = () => ({ text: null, status: "ok" });
+    await open(CODEX, CODEX_IDLE);
+    await wait(NEXT_PROMPT_SETTLE_MS);
+    expect(field().value).toBe("");
+    fireEvent.change(field(), { target: { value: "run the tests and" } });
+    expect(document.querySelector(".composer-complete")).toBeNull();
+    await wait(NEXT_PROMPT_COMPLETE_MS);
+    expect(completed).toEqual(["run the tests and"]);
+    const strip = document.querySelector<HTMLButtonElement>(".composer-complete")!;
+    expect(strip.querySelector(".composer-complete-text")?.textContent).toBe("… update the changelog");
+    expect(strip.getAttribute("aria-label")).toBe("Take the suggested continuation: update the changelog");
+    fireEvent.click(strip);
+    expect(field().value).toBe("run the tests and update the changelog");
+    expect(FakeWebSocket.sent).toEqual([]);
+    // Inside a word, the strip shows the word whole.
+    fireEvent.change(field(), { target: { value: "please upd" } });
+    await wait(NEXT_PROMPT_COMPLETE_MS);
+    expect(document.querySelector(".composer-complete-text")?.textContent).toBe("… update the changelog");
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".composer-complete")!);
+    expect(field().value).toBe("please update the changelog");
+  });
+
+  it("completes nothing for the untouched suggestion filled into the field, a command or one word", async () => {
+    await open(CODEX, CODEX_IDLE);
+    await wait(NEXT_PROMPT_SETTLE_MS);
+    expect(field().value).toBe(SUGGESTION);
+    await wait(NEXT_PROMPT_COMPLETE_MS * 3);
+    for (const draft of ["/model opus now", "run"]) {
+      fireEvent.change(field(), { target: { value: draft } });
+      await wait(NEXT_PROMPT_COMPLETE_MS * 3);
+    }
+    expect(completed).toEqual([]);
+    expect(document.querySelector(".composer-complete")).toBeNull();
   });
 
   it("drops it at the first keystroke: the reader's text stays", async () => {

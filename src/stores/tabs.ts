@@ -17,7 +17,7 @@ import { translateNow } from "../lib/i18n";
 import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
 import { useSettingsStore } from "./settings";
-import { basename, relativePathWithin, resolvePath } from "../lib/paths";
+import { basename, relativePathWithin, resolvePath, samePath } from "../lib/paths";
 import { getDetachedWindowContext, type DetachedWindowContext } from "./detachedContext";
 import { usePopoutViewStore } from "./popoutView";
 import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
@@ -3447,7 +3447,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       // re-opened linked file): refocus it in place rather than stack a second
       // copy — the popout's mirror of `openLinkedFile`'s path dedupe. Non-embed
       // tabs (a Python/shell run) carry no `embedPath` and always add a fresh one.
-      if (tab.kind === "embed" && tab.embedPath) {
+      const want = tab.kind === "embed" ? tab.embedPath : undefined;
+      if (want) {
         const payloads = s.tabsByScope[scope] ?? [];
         const keysInPopout = new Set(allGroups(rec.subtree).flatMap((g) => g.tabKeys));
         const existing = payloads.find(
@@ -3455,7 +3456,8 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
             keysInPopout.has(p.key) &&
             p.kind === "embed" &&
             p.viewer === tab.viewer &&
-            p.embedPath === tab.embedPath,
+            !!p.embedPath &&
+            samePath(p.embedPath, want),
         );
         if (existing) {
           created = existing.key;

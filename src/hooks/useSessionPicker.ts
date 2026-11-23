@@ -1,7 +1,7 @@
 import { agentFamily } from "../../shared/agentComposer";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { OPENCODE_MODEL_KEYS, OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys } from "../../mobile-web/src/terminal/openCodeMini";
+import { OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys, openCodeModelKeys } from "../../mobile-web/src/terminal/openCodeMini";
 import { antigravityEffortKeys, isAntigravityTab, type AntigravityEffort } from "../../mobile-web/src/terminal/antigravity";
 import { sameSelectStep, selectMoveKeys, type SelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
 import { bufferRows } from "../../mobile-web/src/terminal/subagentInput";
@@ -281,8 +281,9 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
         () => {},
       );
     }
+    const term = terminalFor(ptyId);
     const sent = isOpenCodeTab(agentLabel)
-      ? typeKeys(OPENCODE_MODEL_KEYS)
+      ? typeKeys(openCodeModelKeys(term ? bufferRows(term.buffer.active, term.rows) : []))
       : tab.scheduleTargetId
         ? submitScheduledAgentCommand(tab.scheduleTargetId, next)
         : Promise.reject(new Error("no agent input"));

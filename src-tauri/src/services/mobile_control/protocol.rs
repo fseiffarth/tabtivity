@@ -1403,12 +1403,15 @@ pub enum DesktopRequest {
     /// The local-model "what's next" suggestion for one agent tab's newest
     /// turn (`services::next_prompt`), asked by the window so the phone and the
     /// window's own composer share one run per turn. Addressed like
-    /// `AgentTranscript`; `phase` is `warm` or `final`.
+    /// `AgentTranscript`; `phase` is `warm`, `final` or — with `draft`, the
+    /// prompt being typed on the phone — `complete`.
     AgentNextPrompt {
         request_id: String,
         project_id: String,
         tmux_session: String,
         phase: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft: Option<String>,
     },
     /// What the desktop can hand the phone's composer as an image: the
     /// clipboard's image and the recent files of the screenshot and picture
@@ -2214,13 +2217,16 @@ pub enum DesktopResponse {
     AgentTranscript {
         transcript: crate::services::agent_transcript::AgentTranscript,
     },
-    /// Answers [`DesktopRequest::AgentNextPrompt`]: the suggestion's text and
-    /// its `services::next_prompt::Status` word (`outcome`, since `status`
-    /// names this response).
+    /// Answers [`DesktopRequest::AgentNextPrompt`]: the suggestion's text (a
+    /// `complete`'s is what to append to the draft), its
+    /// `services::next_prompt::Status` word (`outcome`, since `status` names
+    /// this response) and the model that wrote it (the phone's chip).
     AgentNextPrompt {
         #[serde(default)]
         text: Option<String>,
         outcome: String,
+        #[serde(default)]
+        model: Option<String>,
     },
     /// Acknowledges a [`DesktopRequest::TabSeen`], [`DesktopRequest::TabInput`]
     /// or [`DesktopRequest::TabPrompt`] — and a delivered

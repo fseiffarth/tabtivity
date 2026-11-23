@@ -199,6 +199,11 @@ export function getActivity(signal?: AbortSignal): Promise<ActivityList> {
   return api<ActivityList>("/api/v1/activity", { signal });
 }
 
+/** How often a screen that lists a project's tabs reads `getProjectDetail`
+ * again while the page is visible: the project screen's cards, and the tabs
+ * rail beside a tablet's chat (`ChatTabsRail`) at the same cadence. */
+export const PROJECT_DETAIL_POLL = 5_000;
+
 /** `GET /api/v1/projects/{id}` — the project's row, tabs, agents and file sides. */
 export function getProjectDetail(projectId: string, signal?: AbortSignal): Promise<ProjectDetail> {
   return api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(projectId)}`, signal ? { signal } : undefined);
@@ -1255,6 +1260,21 @@ export async function getNextPrompt(tabId: string, phase: NextPromptPhase, signa
     `/api/v1/tabs/${encodeURIComponent(tabId)}/next-prompt?phase=${phase}`,
     { signal },
     phase === "final" ? NEXT_PROMPT_TIMEOUT : REQUEST_TIMEOUT,
+  );
+}
+
+/** How long a completion may take: one short run, the turn already read. */
+const COMPLETE_PROMPT_TIMEOUT = 20_000;
+
+/** `POST /api/v1/tabs/{id}/next-prompt` — how `draft`, the prompt being
+ * typed, goes on, by the desktop's local model: `text` is what to append.
+ * The draft goes to the desktop's own Ollama and nowhere else. Every failure
+ * is a `status`. */
+export async function completePrompt(tabId: string, draft: string, signal?: AbortSignal): Promise<NextPromptAnswer> {
+  return api<NextPromptAnswer>(
+    `/api/v1/tabs/${encodeURIComponent(tabId)}/next-prompt`,
+    { method: "POST", body: JSON.stringify({ draft }), signal },
+    COMPLETE_PROMPT_TIMEOUT,
   );
 }
 

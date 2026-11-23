@@ -1495,10 +1495,12 @@ const NEXT_PROMPT_LIMIT: usize = 400;
 /// (`services::next_prompt`): `phase` `warm` feeds the turn so far to the
 /// loopback Ollama while the agent works, `final` writes the one line the
 /// user would likely type next once the turn has ended — cached per turn, one
-/// run at a time per session. Takes `agent_tab_transcript`'s tab identity
-/// (`since`, the launch moment of a fresh tab, is optional here) and no model:
-/// the Suggestions role is resolved backend-side. Always answers with a
-/// status, never an error.
+/// run at a time per session; `complete` writes how `draft`, the prompt being
+/// typed, goes on (`text` is what to append; an ended turn read a moment ago
+/// is not read again). Takes `agent_tab_transcript`'s tab identity (`since`,
+/// the launch moment of a fresh tab, is optional here) and no model: the
+/// Suggestions role is resolved backend-side. Always answers with a status,
+/// never an error.
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_next_prompt(
@@ -1510,9 +1512,10 @@ pub async fn agent_next_prompt(
     remote_host: Option<String>,
     phase: String,
     since: Option<i64>,
+    draft: Option<String>,
     ctx: Ctx,
 ) -> crate::services::next_prompt::NextPrompt {
-    use crate::services::next_prompt::{desktop_key, NextPrompt, Phase, Status};
+    use crate::services::next_prompt::{complete_kept_blocking, desktop_key, Ask, NextPrompt, Phase, Status};
     let Some(phase) = Phase::parse(&phase) else {
         return NextPrompt::status(Status::Unavailable);
     };
@@ -1523,6 +1526,21 @@ pub async fn agent_next_prompt(
     let Some(key) = desktop_key(&agent, project_id.as_deref(), &session_id, tab_dir.as_deref(), since, remote_host.as_deref()) else {
         return NextPrompt::status(Status::Unavailable);
     };
+    // A draft belongs to `complete` alone; the turn it goes on from is not
+    // read again while the session's slot still holds it.
+    let draft = draft.filter(|_| phase == Phase::Complete);
+    if phase == Phase::Complete {
+        let (key, agent, draft) = (key.clone(), agent.clone(), draft.clone());
+        let kept = app_core::rt::spawn_blocking(move || {
+            complete_kept_blocking(&Ask { key: &key, agent: &agent, phase, local_model, draft: draft.as_deref() })
+        })
+        .await;
+        match kept {
+            Ok(Some(answer)) => return answer,
+            Ok(None) => {}
+            Err(_) => return NextPrompt::status(Status::Unavailable),
+        }
+    }
     let transcript = agent_tab_transcript(
         agent.clone(),
         project_id,
@@ -1539,21 +1557,19 @@ pub async fn agent_next_prompt(
         ctx,
     )
     .await;
-    app_core::rt::spawn_blocking(move || agent_next_prompt_blocking(&key, &agent, phase, local_model, &transcript))
-        .await
-        .unwrap_or_else(|_| NextPrompt::status(Status::Unavailable))
+    app_core::rt::spawn_blocking(move || {
+        agent_next_prompt_blocking(&Ask { key: &key, agent: &agent, phase, local_model, draft: draft.as_deref() }, &transcript)
+    })
+    .await
+    .unwrap_or_else(|_| NextPrompt::status(Status::Unavailable))
 }
 
 /// [`agent_next_prompt`]'s Ollama run, off the async runtime.
 fn agent_next_prompt_blocking(
-    key: &str,
-    agent: &str,
-    phase: crate::services::next_prompt::Phase,
-    local_model: bool,
+    ask: &crate::services::next_prompt::Ask<'_>,
     transcript: &crate::services::agent_transcript::AgentTranscript,
 ) -> crate::services::next_prompt::NextPrompt {
-    use crate::services::next_prompt::{suggest_blocking, Ask};
-    suggest_blocking(&Ask { key, agent, phase, local_model }, transcript)
+    crate::services::next_prompt::suggest_blocking(ask, transcript)
 }
 
 /// The files the tab's conversation — or `subagent`'s — changed, as the

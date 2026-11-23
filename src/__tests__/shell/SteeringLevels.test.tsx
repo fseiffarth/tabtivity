@@ -47,6 +47,9 @@ import {
   activateRegionCursor,
   clearRegionCursor,
   focusRegionSearch,
+  regionSearchField,
+  regionSearchToggle,
+  stepSettingsPage,
   moveRegionCursor,
   moveRegionCursorByLine,
   placeRegionCursor,
@@ -751,6 +754,34 @@ describe("region cursor", () => {
     expect(regionCursor()).toBeNull();
     document.getElementById("field")!.remove();
     expect(focusRegionSearch(root)).toBe(false);
+  });
+
+  it("/ never picks a dropdown, prefers the marked search, and waits for a folded one", () => {
+    const root = surface();
+    root.insertAdjacentHTML("afterbegin", `<select id="filter"><option>a</option></select>`);
+    expect(regionSearchField(root)?.id).toBe("field");
+    root.insertAdjacentHTML("beforeend", `<input id="find" type="search" data-steering-search />`);
+    expect(regionSearchField(root)?.id).toBe("find");
+    // Folded away behind its toggle: no other box (a commit message) stands in.
+    document.getElementById("find")!.remove();
+    root.insertAdjacentHTML("beforeend", `<button id="toggle" data-steering-search-toggle aria-expanded="false">s</button>`);
+    expect(regionSearchField(root)).toBeNull();
+    expect(regionSearchToggle(root)?.id).toBe("toggle");
+  });
+
+  it("←/→ step through settings' search results from the one opened, never onto a copy-link button", () => {
+    surface();
+    document.body.insertAdjacentHTML("beforeend", `
+      <div class="settings-dialog"><nav class="settings-navigation-links">
+        <div><button id="r1">one</button><button id="c1" class="settings-navigation-copy">link</button></div>
+        <div><button id="r2" aria-current="location">two</button><button id="c2" class="settings-navigation-copy">link</button></div>
+        <div><button id="r3">three</button><button id="c3" class="settings-navigation-copy">link</button></div>
+      </nav></div>`);
+    const clicked: string[] = [];
+    document.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => clicked.push(b.id)));
+    expect(stepSettingsPage(1)).toBe(true);
+    expect(stepSettingsPage(-1)).toBe(true);
+    expect(clicked).toEqual(["r3", "r1"]);
   });
 
   it("finds controls and clickable rows once, skipping what is hidden", () => {

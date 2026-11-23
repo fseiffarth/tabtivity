@@ -90,6 +90,8 @@ import {
   regionForLayer,
   regionHasControls,
   regionRoot,
+  regionSearchField,
+  regionSearchToggle,
   resumeRegionCursor,
   scrollRegion,
   settingsDialog,
@@ -101,6 +103,7 @@ import {
   type SteeringApp,
 } from "../lib/shortcuts/steeringRegion";
 import { placeSidePanelCursor, steerSidePanel } from "../lib/shortcuts/steeringSidePanel";
+import { FLASH_CLASS as SETTINGS_FLASH_CLASS } from "../components/layout/settingsSearch";
 import { cycleReaderView, queueMovesFor, readerInsideFor, readerViewFor } from "../lib/agents/readerSteering";
 import {
   openProjectShellInRootConsole,
@@ -251,6 +254,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       useKeyboardSteeringStore.getState().enter();
       announceOwner();
       syncLayer();
+      dropSearchCaret();
     };
 
     // ── Between windows ────────────────────────────────────────────────────
@@ -555,6 +559,51 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       clearRegionCursor();
       useKeyboardSteeringStore.getState().handOff(box);
     };
+    // The search box with the caret takes the keyboard (`/`); Esc comes back
+    // (`onSteeringKeyDown`). Gone some other way (a click, a pick that moved
+    // focus on): nothing waits to come back. Enter in settings' search opens
+    // its first result and steering comes back on it (`backFromSettingsSearch`).
+    const handSearchOff = () => {
+      handOffSteering("search");
+      document.activeElement?.addEventListener(
+        "blur",
+        () => {
+          if (useKeyboardSteeringStore.getState().handedTo === "search") {
+            useKeyboardSteeringStore.getState().dropHandoff();
+          }
+        },
+        { once: true },
+      );
+    };
+    // Settings' search opened a result (Enter): back to steering on the
+    // setting it revealed (`revealSetting` flashes its box), or on the page
+    // when the result was a page. When the reveal put the caret in the
+    // setting's one text field, that field keeps the keys (Esc comes back).
+    const backFromSettingsSearch = () => {
+      let tries = 20;
+      const land = () => {
+        const s = useKeyboardSteeringStore.getState();
+        // Steering came back, or went to some other box, meanwhile.
+        if (s.active || (s.handedTo !== null && s.handedTo !== "search")) return;
+        const dialog = settingsDialog();
+        if (!dialog) return;
+        const target = dialog.querySelector<HTMLElement>(`.${SETTINGS_FLASH_CLASS}`);
+        if (!target && tries-- > 0) {
+          window.setTimeout(land, 50);
+          return;
+        }
+        s.resume();
+        const field = document.activeElement;
+        if (target && field instanceof HTMLElement && target.contains(field) && focusedTypingField(dialog)) {
+          handFieldOff(field);
+          return;
+        }
+        if (field instanceof HTMLElement && dialog.contains(field)) field.blur();
+        clearRegionCursor();
+        if (!(target && placeRegionCursor(target))) placeCursorSoon("settings");
+      };
+      window.setTimeout(land, 0);
+    };
     // A text field takes the keyboard (`field` handoff): a dialog focused its
     // own name box, a steering key opened an inline one (a tab's rename, a
     // menu's hours field), or Enter pressed one. Keys reach the field; Esc
@@ -573,24 +622,54 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       handedLayer = layer?.contains(field) ? layer : null;
       handOffSteering("field");
     };
+    // The field `/` hands the keys to on a surface with a region of its own:
+    // settings' search, the + menu's filter, an app view's search box.
+    const searchFieldOf = (region: SteeringRegion): HTMLElement | null => {
+      const root = region === "settings" ? settingsDialog() : regionRoot(region);
+      return root ? regionSearchField(root) : null;
+    };
+    // That search box with the caret while steering walks its surface never
+    // gets the keys (only `/` hands them over), so the caret is stale: the
+    // settings dialog's own first focus put it there, or steering came on
+    // over it. A box that looks ready to type into while every letter steers
+    // reads as broken (user, 2026-11-23): drop it.
+    const dropSearchCaret = () => {
+      if (!useKeyboardSteeringStore.getState().active) return;
+      const layer = topLayer();
+      const field = layer ? focusedTypingField(layer) : null;
+      if (!layer || !field) return;
+      const region = regionForLayer(layer);
+      if (region === "overlay" || region === "cockpit") return;
+      if (field === searchFieldOf(region)) field.blur();
+    };
     // The text field with the caret, when it should take the keyboard. One in
-    // a dialog or menu (the generic overlay — not settings, the + menu, an app
-    // window, whose own fields `/` hands over) always; one outside any layer
-    // only right after a steering key (`afterKey`), so a tab's editor or
-    // prompt box focusing itself on a tab switch never takes it. A terminal
-    // never does. True when it handed the keyboard over.
+    // a dialog or menu (the generic overlay) always. One in settings, the +
+    // menu or an app view only right after a steering key (`afterKey`): a
+    // press opened it there (a type-to-delete box, a to-do rename, a compose
+    // tab's To) — never their search box, which waits for `/`
+    // (`dropSearchCaret`), nor anything in the cockpit. One outside any layer
+    // only after a steering key too, so a tab's editor or prompt box focusing
+    // itself on a tab switch never takes it. A terminal never does. True when
+    // it handed the keyboard over.
     const handToField = (afterKey = false): boolean => {
       if (!useKeyboardSteeringStore.getState().active) return false;
+      dropSearchCaret();
       const field = document.activeElement;
       if (!(field instanceof HTMLElement) || field === declinedField || field.closest(".xterm")) return false;
       const layer = topLayer();
       if (layer?.contains(field)) {
-        if (regionForLayer(layer) !== "overlay" || !focusedTypingField(layer)) return false;
+        if (!focusedTypingField(layer)) return false;
+        const region = regionForLayer(layer);
+        if (region === "cockpit" || (region !== "overlay" && !afterKey)) return false;
         syncLayer(); // the dialog is where Esc comes back to
       } else {
         // A pane's own field stays its own, except one a steering key opened
-        // for typing (`data-steering-field`: the Diffs note box).
-        if (!afterKey || (field.closest(".center-pane") && !field.hasAttribute("data-steering-field"))) return false;
+        // for typing (`data-steering-field`: the Diffs note box, the side
+        // panel's commit message). Such a field takes the keys whenever its
+        // caret shows up — the commit message focuses itself only once its
+        // draft came back, long after the key that asked for it.
+        const opened = field.hasAttribute("data-steering-field");
+        if (!(afterKey || opened) || (field.closest(".center-pane") && !opened)) return false;
         if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return false;
         if (!focusedTypingField(document.body)) return false;
       }
@@ -605,12 +684,21 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         handedField = handedLayer = null;
         return;
       }
-      const closed = layer ? !layer.isConnected || topLayer() !== layer : !field.isConnected;
+      // A field that went while its surface stays (a to-do rename committed,
+      // a type-to-delete box done) is closed too: nothing else holds the keys.
+      const closed = !field.isConnected || (!!layer && (!layer.isConnected || topLayer() !== layer));
       if (closed) {
         // Committed, submitted, cancelled — or covered: steering is back, on
         // what is on top now.
         handedField = handedLayer = null;
         s.resume();
+        // The + menu's filter picked a row: the new tab has the keyboard, as
+        // after Enter on a row (`steerRegion`'s press).
+        const back = useKeyboardSteeringStore.getState();
+        if (back.level === "region" && back.region === "addTab" && !regionRoot("addTab")) {
+          exitSteering();
+          return;
+        }
         syncLayer();
         handToField();
         return;
@@ -1237,7 +1325,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         if (inCockpitRoster() && action && ROSTER_ACTIONS.has(action)) {
           const mapped = action === "up" ? "cockpitUp" : action === "down" ? "cockpitDown" : action;
           const selected = runCockpitRoster(mapped);
-          if (mapped === "cockpitFilter") handOffSteering("search");
+          if (mapped === "cockpitFilter") handSearchOff();
           else if (mapped === "cockpitJump") syncLayer();
           else if (mapped === "cockpitShow") {
             window.setTimeout(() => {
@@ -1313,25 +1401,30 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         }
         // Type into the surface's search field (the + menu's filter). It never
         // takes the keyboard by itself: E S D F keep steering until asked.
-        case "search":
+        case "search": {
           // Settings: the dialog's own search box, above the left-hand list.
           // Esc in it comes back here (`onSteeringKeyDown`); the legend says so.
-          if (focusRegionSearch(region === "settings" ? (settingsDialog() ?? root) : root)) {
-            handOffSteering("search");
-            const field = document.activeElement;
-            // Gone some other way (a click, a pick that moved focus on):
-            // nothing waits to come back.
-            field?.addEventListener(
-              "blur",
-              () => {
-                if (useKeyboardSteeringStore.getState().handedTo === "search") {
-                  useKeyboardSteeringStore.getState().dropHandoff();
-                }
-              },
-              { once: true },
-            );
+          const searchRoot = region === "settings" ? (settingsDialog() ?? root) : root;
+          if (focusRegionSearch(searchRoot)) {
+            handSearchOff();
+            return;
           }
+          // A search the surface keeps folded away (the side panel's Files
+          // search): show it, then hand it the keys once it is up.
+          const toggle = regionSearchToggle(searchRoot);
+          if (!toggle) return;
+          toggle.click();
+          const typeWhenUp = (tries: number) =>
+            window.setTimeout(() => {
+              const s = useKeyboardSteeringStore.getState();
+              if (!s.active || s.level !== "region" || s.region !== region) return;
+              const now = regionRoot(region);
+              if (now && focusRegionSearch(now)) handSearchOff();
+              else if (tries > 0) typeWhenUp(tries - 1);
+            }, 30);
+          typeWhenUp(10);
           return;
+        }
         // Steering's own "are you sure" (W, K): yes, whatever the cursor is on.
         // The box closes and `syncSoon` takes steering back down.
         case "confirm":
@@ -1485,6 +1578,19 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         }
       }
       if (!steering.active) {
+        // Enter in settings' search opens its first result (the box's own
+        // key): steering comes back on the setting it revealed.
+        if (
+          steering.handedTo === "search" &&
+          e.key === "Enter" &&
+          !e.isComposing &&
+          e.target instanceof Element &&
+          e.target.matches(".settings-navigation-search") &&
+          // Nothing matched: Enter opens nothing, the box keeps the keys.
+          !settingsDialog()?.querySelector(".settings-navigation-links .settings-empty")
+        ) {
+          backFromSettingsSearch();
+        }
         if (isTextKey(e)) lastTypedAt = e.timeStamp;
         if (steering.handedTo === "field") checkFieldHandoff();
         return;
@@ -1535,6 +1641,18 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       const target = e.target instanceof Element ? e.target : null;
       // The legend's own fold button is steering's, not a place to go.
       if (!target || target.closest(".steering-bar")) return;
+      // A press into a text field means typing there: once the caret has
+      // landed, the field takes the keys (Esc comes back), as Enter on it
+      // would — never a box that looks typeable while every letter steers.
+      if (target.closest("input, textarea, [contenteditable='true']")) {
+        window.setTimeout(() => {
+          const field = document.activeElement;
+          if (!useKeyboardSteeringStore.getState().active || !(field instanceof HTMLElement)) return;
+          if (!(field === target || field.contains(target) || target.contains(field))) return;
+          if (field.closest(".xterm") || !focusedTypingField(document.body)) return;
+          handFieldOff(field);
+        }, 0);
+      }
       cancelPlace();
       const region = steering.level === "region" ? steering.region : null;
       const root = region ? regionRoot(region) : null;

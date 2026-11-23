@@ -31,6 +31,8 @@ import { useT } from "../../lib/i18n";
 import { voiceInputOffered } from "../../lib/voice/desktopVoice";
 import { experimentalEnabled } from "../../lib/experimental";
 import { openTexWorkspace } from "../../lib/viewers/tex/openTexWorkspace";
+import { openTabInNewSubwindow } from "../../lib/tabs/tabScopeContext";
+import { fileTabMatcher } from "../../lib/tabs/fileTab";
 import { hasActiveModal, useModalFocus } from "../../hooks/useModalFocus";
 import { isEditableTarget } from "../../hooks/useKeyboard";
 import { resolveProjectDirectory } from "../../types";
@@ -107,9 +109,14 @@ function openProjectFile(projectDir: string, rel: string, beside: boolean) {
   }
   const label = basename(path);
   const tabs = useTabsStore.getState();
-  const focused = tabs.focusedGroupId;
-  if (beside && focused) {
-    tabs.splitWithNewTab({ label, cmd: "", cwd: projectDir, kind: "embed", embedPath: path, viewer }, focused, "right");
+  if (beside && tabs.focusedGroupId) {
+    // A tab already showing the file moves beside the focused subwindow rather
+    // than a second copy opening there.
+    openTabInNewSubwindow(
+      tabs.scope,
+      { label, cmd: "", cwd: projectDir, kind: "embed", embedPath: path, viewer },
+      fileTabMatcher(path, viewer),
+    );
     return;
   }
   openLinkedFile(undefined, projectDir, { path, viewer, label });

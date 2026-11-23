@@ -4,12 +4,16 @@ import {
   NEXT_PROMPT_CLAUDE_SETTLE_MS,
   NEXT_PROMPT_SETTLE_MS,
   useNextPrompt,
+  usePromptCompletion,
   useWorkEndKey,
   type NextPromptAnswer,
   type NextPromptPhase,
+  type NextPromptShown,
+  type PromptCompletionShown,
 } from "../../../mobile-web/src/terminal/nextPrompt";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
 import { useActivityStore } from "../../stores/activity";
+import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { usePaneVisible } from "../files/fileAccess";
 import { isClaudeCommand } from "../terminal/terminalControl";
@@ -22,7 +26,10 @@ import { readerOffered, readerRequest } from "./agentReader";
  * `agent_tab_transcript` read names it by, never a model (the backend picks
  * the Suggestions role itself). The Chat composer (`TerminalReaderView`) and
  * steering's prompt box (`SteeringPromptOverlay`) show what it gives in the
- * slot Claude's own suggestion takes, so Tab / → take it unchanged.
+ * slot Claude's own suggestion takes, so Tab / → take it unchanged. While a
+ * prompt is typed there, `usePromptComplete` asks the same command how it
+ * goes on (`complete`, with the draft), drawn dim after the caret
+ * (`PromptGhost`).
  */
 
 /** The ended turn of a stored conversation, as a key new for each turn: its
@@ -54,7 +61,7 @@ export function nextPromptArgs(
   tab: TabEntry,
   cwd: string | undefined,
   remoteHost: string | null | undefined,
-  phase: NextPromptPhase,
+  phase: NextPromptPhase | "complete",
 ): Record<string, unknown> | null {
   const request = readerRequest(scope, tab, cwd, undefined, 0, undefined, undefined, remoteHost);
   if (!request) return null;
@@ -62,7 +69,7 @@ export function nextPromptArgs(
   return { agent, projectId, tabDir, since, sessionId, localModel, remoteHost: remoteHost ?? null, phase };
 }
 
-export { useWorkEndKey };
+export { useWorkEndKey, type NextPromptShown, type PromptCompletionShown };
 
 export interface LocalNextPromptInput {
   scope: string;
@@ -82,8 +89,9 @@ export interface LocalNextPromptInput {
   composerEmpty: boolean;
 }
 
-/** The local model's suggestion for `tab`'s ended turn ("" when none). */
-export function useLocalNextPrompt({ scope, tab, cwd, remoteHost, visible, working, turnKey, progress, warm = true, screenSuggestion, composerEmpty }: LocalNextPromptInput): string {
+/** The local model's suggestion for `tab`'s ended turn and the model that
+ * wrote it (`text` "" when none). */
+export function useLocalNextPrompt({ scope, tab, cwd, remoteHost, visible, working, turnKey, progress, warm = true, screenSuggestion, composerEmpty }: LocalNextPromptInput): NextPromptShown {
   const paneVisible = usePaneVisible();
   const ident = useRef({ scope, tab, cwd, remoteHost });
   ident.current = { scope, tab, cwd, remoteHost };
@@ -108,6 +116,62 @@ export function useLocalNextPrompt({ scope, tab, cwd, remoteHost, visible, worki
       return args
         ? Promise.resolve().then(() => invoke<NextPromptAnswer>("agent_next_prompt", args)).catch(() => null)
         : Promise.resolve(null);
+    },
+  });
+}
+
+/** Asks how `draft` goes on for `tab` (`agent_next_prompt`, `complete`):
+ * `skipped` while a local-model agent tab is in a turn (its Ollama is
+ * answering that), null for a tab with no session to name. */
+export function completePromptFor(
+  scope: string,
+  tab: TabEntry | undefined,
+  cwd: string | undefined,
+  remoteHost: string | null | undefined,
+  draft: string,
+): Promise<NextPromptAnswer | null> {
+  if (localAgentWorking()) return Promise.resolve({ text: null, status: "skipped" });
+  const args = tab ? nextPromptArgs(scope, tab, cwd, remoteHost, "complete") : null;
+  return args
+    ? Promise.resolve().then(() => invoke<NextPromptAnswer>("agent_next_prompt", { ...args, draft })).catch(() => null)
+    : Promise.resolve(null);
+}
+
+export interface PromptCompleteInput {
+  scope: string;
+  tab: TabEntry | undefined;
+  cwd?: string;
+  remoteHost?: string | null;
+  /** The composer is on screen and takes typing. `PaneVisibleContext` and the
+   * setting (`prompt_autocomplete`, on unless false) are honoured as well. */
+  visible: boolean;
+  draft: string;
+  /** The caret is at the draft's end, nothing selected. */
+  atEnd: boolean;
+  /** The suggestion the empty box offers, and who wrote it. */
+  seed?: string;
+  seedModel?: string;
+  seedLocal?: boolean;
+}
+
+/** How the prompt being typed for `tab` goes on (`usePromptCompletion`):
+ * the local Suggestions model's continuation, or the rest of the offered
+ * suggestion while the draft is typed along it. */
+export function usePromptComplete({ scope, tab, cwd, remoteHost, visible, draft, atEnd, seed, seedModel, seedLocal }: PromptCompleteInput): PromptCompletionShown {
+  const paneVisible = usePaneVisible();
+  const on = useSettingsStore((s) => s.settings?.prompt_autocomplete !== false);
+  const ident = useRef({ scope, tab, cwd, remoteHost });
+  ident.current = { scope, tab, cwd, remoteHost };
+  return usePromptCompletion({
+    enabled: visible && paneVisible && on && readerOffered(tab, !!remoteHost),
+    draft,
+    atEnd,
+    seed,
+    seedModel,
+    seedLocal,
+    complete: (text) => {
+      const { scope: s, tab: t, cwd: c, remoteHost: host } = ident.current;
+      return completePromptFor(s, t, c, host, text);
     },
   });
 }

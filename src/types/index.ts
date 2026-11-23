@@ -649,6 +649,10 @@ export interface Settings {
    *  mail — and is the kind of thing to have answered before the feature runs,
    *  not after; the chip's tooltip says nothing reads it so far. */
   ollama_roles?: Record<string, string>;
+  /** Whether the Suggestions model also completes a prompt while it is being
+   *  typed (`lib/agents/nextPrompt`, backend `agent_next_prompt` `complete`).
+   *  Unset is on; `false` leaves the turn-end suggestion alone. */
+  prompt_autocomplete?: boolean;
   /** Missing provider retains Ollama; prose keeps its existing Ollama role. */
   code_completion_provider?: "ollama" | "copilot";
   /** The automatic autocomplete trigger's idle delay per provider, in ms; one
@@ -946,6 +950,12 @@ export interface Settings {
    *  the pointer rests on the edge rail and closes on mouse-leave, with no reflow.
    *  Unset → off. */
   side_panel_auto_hide?: boolean;
+  /** An agent tab's Reader on Diffs or Data draws its chat in the side panel
+   *  (opened over its own view while it does) instead of the one status line
+   *  over the docked composer. The switch is a button in that composer's line
+   *  (`stores/agents/readerSideChat`). Unset → off. Rides in the backend's
+   *  `extra` catch-all. */
+  reader_side_chat?: boolean;
   /** @deprecated Read-only fallback for {@link Settings.side_panel_open}; nothing
    *  writes it any more (it rides in the backend's `extra` catch-all). */
   side_panel_pinned?: boolean;

@@ -1015,6 +1015,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("desktop_coordinates_supported", Client),
     ("detached_retire_ack", Client),
     ("detached_retire_ready", Client),
+    ("detached_first_paint", Client),
     ("detached_window_frontmost", Client),
     ("detached_window_is_parked", Client),
     ("detached_window_screens", Client),

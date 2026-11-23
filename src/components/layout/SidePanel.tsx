@@ -33,6 +33,7 @@ import { version as APP_VERSION } from "../../../package.json";
 import { CloseIcon, PencilIcon, UndoIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { usePoll, type PollRun } from "../../lib/usePoll";
+import { ReaderSideChat } from "./ReaderSideChat";
 
 interface Props {
   open: boolean;
@@ -489,6 +490,7 @@ export function SidePanel({
       containerProps={{ onMouseEnter, onMouseLeave }}
       resizeHandle={resizeHandle}
       hidden={hidden}
+      cover={<ReaderSideChat />}
       footer={versionFooter}
       view={panelView}
       assistant

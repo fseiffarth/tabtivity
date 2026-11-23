@@ -314,6 +314,22 @@ project root (a root file `PROJECT.md`/`TODO.md`/… a tool might read, same
 note as a root `Makefile`); no upload-log entry and no Undo — the user deletes
 it like any file. The remote side (`&on=host`) has no `docs` and no create.
 
+## The iPad chat's columns (layout, no access change)
+
+On a landscape iPad (`SPLIT_QUERY`) an agent tab of a project reads in three
+columns (`docs/ipad_chat_columns_plan.md`): the project's tabs on the left
+(`ChatTabsRail`), the chat, and the session overview on the right
+(`ChatOverview`: subagents, queue, files, sent files, links; it switches to the
+files library and, for a file, to its viewer). Nothing new crosses the bridge:
+the rail reads the project detail the screen already reads, the overview shows
+what the chat already holds, and the library and viewers are the same routes as
+the drawer's. `Terminal.tsx` never branches its tree on the tier — `main`
+carries `data-rail` and `data-overview` and the stylesheet's grid places the
+columns — so a turn of the iPad keeps the socket, the draft and the scroll.
+The pane's open state is this device's (`chatOverviewPane`, on unset, read once
+from the retired `chatFilesPane`); a portrait iPad and a phone keep the chips,
+the header pills and the drawer.
+
 ## Known gaps
 
 - **Downgrade.** An older build ignores the list, so after a downgrade every

@@ -80,7 +80,8 @@ const ROW = /^(> | {2})(\S.*)$/u;
 /** The note the dialog prints beside the model the session is on. Its column
  * is fixed, so a long label leaves a single space before it — which is why
  * this is stripped by name rather than split off as a second column. */
-const CURRENT = /\s+\(current\)$/u;
+// With an auto-compaction override, 1.5.15 includes its token count here.
+const CURRENT = /\s+\(current(?: · \d+)?\)$/u;
 /** The window a list too long for the pane is drawn in: `[1-6 of 7 items]`. */
 const WINDOW_RANGE = /^\[(\d{1,3})\s*[-–]\s*(\d{1,3})\s+of\s+(\d{1,3})\s+items?\]$/u;
 /** Rows read out of one dialog; the cap only bounds a misread. */

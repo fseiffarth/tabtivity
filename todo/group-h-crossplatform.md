@@ -4663,6 +4663,78 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cu — iPad chat in three columns: the project's tabs beside the chat**
+  (2026-11-23; `docs/ipad_chat_columns_plan.md`, handoff
+  `docs/ipad_chat_columns_handoff.md`). Step 1 (tabs rail + portrait strip)
+  code-complete, `MobileChatRail.test.tsx`, untested id `mobile.chatRail`;
+  ⚠️ never seen on an iPad; PWA rebuild (`npm run mobile:bundle`) needed. Step 2
+  (session overview pane) code-complete, `MobileChatOverview.test.tsx`,
+  untested id `mobile.chatOverview`; ⚠️ never seen on an iPad either.
+  - [ ] 🖐️ iPad in landscape, an agent tab of a project with three or more tabs:
+    a rail on the left under the header ("Tabs · n"), rows in the desktop's
+    order with the state mark, the name, the model and state underneath, the
+    asking pill on a question, a coloured tab's stripe, the current tab
+    highlighted, an unavailable tab dimmed; the chat is centred beside it (a
+    700 px column). Tap another row → that tab opens, its rail the same; tap
+    the current row → nothing. Fold → 48 px tiles (initial, a prompt glyph for
+    a shell, the state on the corner, a question tints the tile); reopen the
+    app → still folded; unfold. In Split View or Stage Manager under 1120 px
+    the rail stays folded and has no fold button. Let another tab finish on the
+    desktop → its mark changes within ~5 s. Switch Chat → Terminal and Diffs:
+    the rail stays. A project with one tab and Tabby's chat: no rail.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
+  - [ ] 🖐️ iPad upright: one row of chips under the header, the current chip
+    scrolled into view, long names cut at ~22 characters, a question chip with
+    its pill; swipe the row sideways; tap a chip → that tab. Turn the iPad
+    with a half-typed draft: the draft, the scroll and the connection survive,
+    rail ↔ strip swap.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
+  - [ ] 🖐️ Phone, upright and on its side: the chat is exactly as before (no
+    rail, no strip, no new gap under the header).
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS
+    - [ ] ❌ Doesn't work on iOS
+  - [ ] 🖐️ iPad in landscape, an agent tab of a project with subagents, sent
+    files and links: the session overview stands on the right under the header
+    (open the first time), the chat centred between it and the rail; sections
+    only for what the session has (Subagents running first, then the newest
+    three finished with Show all; Prompt queue while prompts are queued; Files,
+    newest four with Show all, a hold opens the file menu; Files from the
+    agent as three tiles, Show all opens the gallery; Links, newest four); no
+    chips over the transcript, no queue or sent-files pill in the header. Tap a
+    subagent, a file, a link, the queue row: each opens as from the chips.
+    Close the pane with the panel button → the chips come back, the button
+    counts running subagents; reopen the app → still closed. Project files →
+    the library in the pane (400 px) with "‹ Overview" above it, the rail
+    folded to tiles; ‹ Overview → back, the rail unfolds. A shell tab: the
+    button shows or hides the library alone. A fresh chat with nothing yet:
+    one muted line and Project files.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
+  - [ ] 🖐️ iPad in landscape, a file from the chat (a sent picture's post, a
+    row of the overview's Files, a changed file, a PDF): it opens in the pane
+    (480 px) under "‹ Overview", the chat beside it still scrolls and takes
+    typing (arrow keys and Escape in the composer leave the file alone), the
+    rail folded; a PDF reads there; Mark up → full screen as before, its Chat
+    button → back to the chat with the overview beside it; ‹ Overview → the
+    file closes, the rail unfolds. Turn the iPad with a file open: upright it
+    covers the chat as before, back in landscape it is in the pane again.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
+  - [ ] 🖐️ iPad upright and a phone: the header still has the queue and
+    sent-files pills and the files button opens the drawer; the chips stay
+    over the transcript. Turn the iPad mid-draft with the pane open: draft,
+    scroll and connection survive, the pane comes and goes.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS
+    - [ ] ❌ Doesn't work on iOS
+
 - [ ] **31cq — Root off the phone's project list: logo door, per-phone opt-in** (2026-11-04;
   ✅ code-complete, `the_root_scope_is_off_for_every_phone_until_the_list_names_it`,
   `MobileHome`, `MobilePairedDeviceAccess`, `MobileRootPhonePicker` tests; ⚠️ never seen

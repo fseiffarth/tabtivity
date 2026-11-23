@@ -1761,3 +1761,26 @@ fn display_path_strips_windows_verbatim_prefixes() {
         r"\\server\share\file.txt"
     );
 }
+
+/// Listed through a symlinked project folder, an entry is spelled under that
+/// folder, not its canonical target: the frontend's other openers (search,
+/// links) join onto the folder as given, and a tab must be found again by them.
+#[cfg(unix)]
+#[test]
+fn list_dir_local_spells_entries_under_the_folder_as_given() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(real.join("sub")).unwrap();
+    std::fs::write(real.join("sub").join("a.pdf"), b"%PDF").unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let project = link.to_string_lossy().into_owned();
+
+    let top = list_dir_local(&project, "").unwrap();
+    assert_eq!(top.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), [link.join("sub").to_string_lossy()]);
+    let sub = list_dir_local(&project, "sub").unwrap();
+    assert_eq!(sub[0].path, link.join("sub").join("a.pdf").to_string_lossy());
+    // A `..` in the folder asked for keeps the canonical spelling.
+    let back = list_dir_local(&project, "sub/..").unwrap();
+    assert!(back[0].path.starts_with(&*tmp.path().canonicalize().unwrap().join("real").to_string_lossy()));
+}

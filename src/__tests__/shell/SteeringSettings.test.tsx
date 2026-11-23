@@ -33,10 +33,26 @@ function Dialog({ onClose }: { onClose: () => void }) {
   const ref = useModalFocus(onClose);
   const [page, setPage] = useState<"general" | "layout">("general");
   const [zoom, setZoom] = useState("1");
+  // Enter in the search opens its one result, the zoom setting, and flashes
+  // its box as `revealSetting` does.
+  const [flash, setFlash] = useState(false);
   return (
     <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog">
       <nav className="settings-navigation">
-        <input id="search" type="text" className="settings-navigation-search" />
+        {/* In the app the modal frame's first focus lands here (jsdom's
+            `tabIndex` skips the input, so it is asked for). */}
+        <input
+          id="search"
+          type="text"
+          className="settings-navigation-search"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            setPage("layout");
+            setFlash(true);
+          }}
+        />
         <div className="settings-navigation-links">
           {(["general", "layout"] as const).map((p) => (
             <button
@@ -67,6 +83,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
             </button>
           </>
         ) : (
+          <>
           <Dropdown
             value={zoom}
             onChange={setZoom}
@@ -75,6 +92,12 @@ function Dialog({ onClose }: { onClose: () => void }) {
               { value: "1.25", label: "125%" },
             ]}
           />
+          <div className={flash ? "settings-card settings-search-flash" : "settings-card"}>
+            <button id="l1" type="button">
+              l1
+            </button>
+          </div>
+          </>
         )}
       </div>
     </div>
@@ -242,6 +265,64 @@ describe("steering through settings", () => {
 
     press({ key: " ", shiftKey: true });
     expect(steering()).toMatchObject({ active: true, level: "region", region: "settings" });
+  });
+
+  it("the caret the dialog put in its search goes while steering walks it, so the box never looks typeable", async () => {
+    render(<Harness />);
+    // Opened by the pointer: the modal frame focuses its first field, the
+    // search, and typing goes there.
+    act(() => void window.dispatchEvent(new CustomEvent("app:open-settings", { detail: "main" })));
+    expect(document.activeElement?.id).toBe("search");
+
+    // Steering comes on over it: the caret leaves, the keys steer.
+    press({ key: " ", shiftKey: true });
+    expect(steering()).toMatchObject({ active: true, region: "settings" });
+    expect(document.activeElement?.id).not.toBe("search");
+
+    // `/` still hands it the keys.
+    await settle();
+    press({ key: "/" });
+    expect(steering().active).toBe(false);
+    expect(document.activeElement?.id).toBe("search");
+  });
+
+  it("settings opened from steering leaves no caret in its search", async () => {
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "/" });
+    await settle();
+    expect(steering()).toMatchObject({ active: true, region: "settings" });
+    expect(document.activeElement?.id).not.toBe("search");
+  });
+
+  it("Enter in the search opens its result and steering comes back on the revealed setting", async () => {
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "/" });
+    await settle();
+    press({ key: "/" });
+    expect(steering()).toMatchObject({ active: false, handedTo: "search" });
+    const search = document.getElementById("search")!;
+    act(() => void search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    await settle();
+    expect(steering()).toMatchObject({ active: true, level: "region", region: "settings", handedTo: null });
+    expect(regionCursor()?.id).toBe("l1");
+    expect(document.activeElement?.id).not.toBe("search");
+  });
+
+  it("a press into the search while steering hands it the keys", async () => {
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "/" });
+    await settle();
+    const search = document.getElementById("search")!;
+    act(() => {
+      search.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      search.focus();
+    });
+    await settle();
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
+    expect(document.activeElement?.id).toBe("search");
   });
 
   it("a plain key over settings is the dialog's; steering left elsewhere joins settings opened by the pointer", async () => {

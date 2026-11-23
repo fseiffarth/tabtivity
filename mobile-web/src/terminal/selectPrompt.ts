@@ -63,6 +63,10 @@ export interface SelectPrompt {
   /** The card is drawn from the waiting entry before the screen shows the
    * dialog: nothing can be sent from it, `options` carry no screen rows. */
   readOnly?: true;
+  /** The card is drawn from the waiting entry with no dialog read off the
+   * screen, and each row answers by its number key (`keys`): a one-question,
+   * single-choice Claude ask under an asking lamp (`withWaitingEntry`). */
+  byNumber?: true;
   /** Navigation read from a CLI whose headers have no status glyphs. */
   navigation?: { tabs: QuestionTab[]; focus: number | null; submit: boolean; keys: QuestionStepKeys };
   options: SelectOption[];
@@ -97,6 +101,10 @@ export interface SelectPrompt {
   /** A review page read as a dialog (`readReviewStep`): its one row is not the
    * CLI's own text, so a reader names it in its own words. */
   review?: true;
+  /** The dialog's own text when its rows also carry the screen behind it
+   * (`readOpenCodeNotice`): cut out by column where it was read, it stands in
+   * for `[context, start)` of the lines. */
+  body?: string[];
 }
 
 /** One step of a dialog as far as it is known: every row seen of it, in the

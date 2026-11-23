@@ -51,7 +51,7 @@
  */
 
 import type { ReadableLine, ReadableSpan } from "./readableScreen";
-import type { SelectPrompt } from "./selectPrompt";
+import { selectKeys, type SelectPrompt } from "./selectPrompt";
 
 /** A tab whose label names OpenCode. Renamable by the user, like every other
  * family's — `agentModes` explains why the label is the tie-break. */
@@ -590,13 +590,13 @@ function dropLeading(spans: readonly ReadableSpan[], count: number): ReadableSpa
  * The list is a scroll box about half the pane tall, so a frame is a slice of
  * it; `OpenCodePickerWalk` puts the slices together.
  */
-const PICKER_TITLE = /^(\s+)(Select [a-z][\w ]{0,30}?)(?:\s+\d+(?:\/\d+)?)?(?:\s+esc)?$/u;
+const PICKER_TITLE = /^(\s+)(Select [a-z][\w ]{0,30}?|Free models|Search models)(?:\s+\d+(?:\/\d+)?)?(?:\s+esc)?$/u;
 /** The same title row with the screen behind the overlay showing on either
  * side of it: the full TUI dims its session rather than clearing it, so over a
  * conversation the title row carries the transcript's words to its left and
  * the sidebar's to its right. Only with its `esc`, which is what tells the
  * dialog's title from those words — and where the dialog's right edge is. */
-const PICKER_TITLE_OVER = /^(.*?\S\s{2,})(Select [a-z][\w ]{0,30}?)(?:\s+\d+(?:\/\d+)?)?\s+esc(?=\s{2,}|\s*[│┃]|\s*$)/u;
+const PICKER_TITLE_OVER = /^(.*?\S\s{2,})(Select [a-z][\w ]{0,30}?|Free models|Search models)(?:\s+\d+(?:\/\d+)?)?\s+esc(?=\s{2,}|\s*[│┃]|\s*$)/u;
 /** Rows read out of one picker. The full TUI lists every provider's models on
  * a tall pane; the cap only bounds a misread. */
 const MAX_PICKER_ROWS = 40;
@@ -612,7 +612,7 @@ const MAX_LIST_GAP = 1;
 const PICKER_FOOTER = /(?:^|\s)ctrl\+\p{L}\b/u;
 /** The full TUI's highlight, drawn left of the labels' column. Mini draws no
  * marker at all, so a picker without one simply reports no current row. */
-const PICKER_MARK = /[●▸❯>]/u;
+const PICKER_MARK = /[●▪▸❯>]/u;
 const MARK_REACH = 3;
 /** Narrower than any picker OpenCode draws: a title row that ends before this
  * is not the overlay's right edge. */
@@ -653,6 +653,8 @@ export interface OpenCodePickerRow {
 export interface OpenCodePickerPage {
   title: string;
   rows: OpenCodePickerRow[];
+  /** Highlight in the 2.4 full TUI's filterless variant list. */
+  variantCursor?: number;
   /** Index, in the lines read, of the title row. */
   start: number;
 }
@@ -712,11 +714,31 @@ export function readOpenCodePickerPage(lines: readonly PickerLine[]): OpenCodePi
   // dialog leaves empty still carry the transcript beside it.
   const skipBlank = () => { while (index < lines.length && !cell(screenText(lines[index]))) index += 1; };
   skipBlank();
-  // The search field, whether it holds the placeholder or a typed query.
-  if (index >= lines.length) return null;
-  index += 1;
-  skipBlank();
+  const freeModels = heading[2] === "Free models";
+  if (freeModels) {
+    // The 2.4 full TUI wraps its subtitle above the filter on narrow panes.
+    let remaining = "Connect a provider for access to more models";
+    while (remaining && index < lines.length) {
+      const part = cell(screenText(lines[index])).trim();
+      if (!part || !remaining.startsWith(part)) return null;
+      remaining = remaining.slice(part.length).trimStart();
+      index += 1;
+    }
+    skipBlank();
+  }
+  // 2.4 draws the connected model search in the header and the variant
+  // list with no search at all. The latter's cursor is a bar in the gutter.
+  const gutter = (text: string) => text.slice(Math.max(0, column - 4), column);
+  const variants = heading[2] === "Select variant" && lines.slice(index, index + MAX_PICKER_ROWS).some(
+    (line) => /^(?:┃ | {2})▪ $/u.test(gutter(screenText(line))),
+  );
+  if (heading[2] !== "Search models" && !variants) {
+    if (index >= lines.length) return null;
+    index += 1;
+    skipBlank();
+  }
   const rows: OpenCodePickerRow[] = [];
+  let variantCursor = -1;
   let gap = 0;
   /** The screen row of the last row read into the list. */
   let lastRow: number | undefined;
@@ -728,11 +750,13 @@ export function readOpenCodePickerPage(lines: readonly PickerLine[]): OpenCodePi
     // list; past the list, the end of it.
     if (!row) {
       gap += 1;
-      if (gap > MAX_LIST_GAP || rows.length === 0) break;
+      if (freeModels || variants || gap > MAX_LIST_GAP || rows.length === 0) break;
       continue;
     }
     const at = screenRow(lines[index]);
-    if (lastRow !== undefined && at !== undefined && at - lastRow - 1 > MAX_LIST_GAP) break;
+    // The 2.4 free and variant lists have no group separators. Past the
+    // first gap are model details or the underlying session.
+    if (lastRow !== undefined && at !== undefined && at - lastRow - 1 > (freeModels || variants ? 0 : MAX_LIST_GAP)) break;
     lastRow = at;
     if (PICKER_FOOTER.test(row)) break;
     const columns = row.split(COLUMN_SPLIT);
@@ -744,18 +768,22 @@ export function readOpenCodePickerPage(lines: readonly PickerLine[]): OpenCodePi
     // (the highlighted row is bold too, on its own colour).
     const span = spanAt(lines[index], column);
     const bold = span?.className?.split(" ").includes("b") === true;
-    const isHeading = gap > 0 || (bold && span?.background === panel);
+    const isHeading = !freeModels && (gap > 0 || (bold && span?.background === panel));
     gap = 0;
+    // On a narrow pane readableScreen strips a leading bar and its following
+    // space as a frame edge. That edge ends two cells before the label.
+    if (variants && (gutter(text).startsWith("┃") || lines[index].edge === column - 2)) variantCursor = rows.length;
     rows.push({
       text: label.slice(0, MAX_LABEL),
-      tag: columns.slice(1).join(" · ").trim() || undefined,
-      heading: isHeading,
+      tag: freeModels ? "Free" : columns.slice(1).join(" · ").trim() || undefined,
+      heading: !variants && isHeading,
       // Two columns left of the labels; further left is the screen behind.
       marked: PICKER_MARK.test(text.slice(Math.max(0, column - MARK_REACH), column)),
     });
   }
   if (rows.length === 0) return null;
-  return { title: heading[2].trim(), rows, start: title };
+  if (variants && variantCursor < 0) return null;
+  return { title: heading[2].trim(), rows, start: title, ...(variants ? { variantCursor } : {}) };
 }
 
 /** The headings of the sections OpenCode lists above its providers: their
@@ -809,7 +837,7 @@ export function openCodePickerPrompt(page: OpenCodePickerPage, rows: readonly Op
       number: options.length + 1,
       label,
       description: [provider, row.tag].filter(Boolean).join(" · ") || undefined,
-      keys: openCodePickKeys(query),
+      keys: page.variantCursor === undefined ? openCodePickKeys(query) : selectKeys(page.variantCursor, options.length),
     });
   }
   // The picker's own heading is the line `start` points at, so it has no
@@ -995,7 +1023,7 @@ export class OpenCodePickerWalk {
     // Another step of the dialog (its variant list): a list of its own.
     if (this.page && this.page.title !== page.title) this.reset();
     this.page = page;
-    if (this.held) return;
+    if (this.held || page.variantCursor !== undefined) return;
     const seen = page.rows.map((row) => `${row.text}\u0000${row.tag ?? ""}`).join("\u0001");
     if (this.rows && seen === this.seen) return;
     this.seen = seen;
@@ -1092,4 +1120,84 @@ const DIALOG_CLOSE = "\u001b";
 export function openCodeDialogCloseKeys(rows: readonly (string | { text: string })[]): string[] {
   const open = rows.some((row) => DIALOG_HEADER.test((typeof row === "string" ? row : row.text).trimEnd()));
   return open ? [DIALOG_CLOSE] : [];
+}
+
+/** The keys that open the model picker over `rows` (the viewport): a dialog
+ * already up — a notice the chat could not read — closed first, or the
+ * palette's keys vanish into it (`OPENCODE_MODEL_KEYS`). */
+export function openCodeModelKeys(rows: readonly (string | { text: string })[]): string[] {
+  return [...openCodeDialogCloseKeys(rows), ...OPENCODE_MODEL_KEYS];
+}
+
+/** A notice's footer: the one key that closes it, at the dialog's right edge
+ * (`ok enter`). The screen behind may show past that edge. */
+const NOTICE_FOOTER = /(?:^|\s{2})\s*([a-z]{1,12}) enter(?=\s{2,}|\s*$)/u;
+/** Its title row up to that edge: the title (words one space apart, so the
+ * screen behind it on the left stays out), then `esc`. */
+const NOTICE_TITLE = /(?:^|\s{2})\s*(\S+(?: \S+)*)\s{2,}esc$/u;
+/** Non-blank rows under the footer: the full TUI's version in the corner. */
+const NOTICE_FOOTER_REACH = 3;
+/** How far above its footer a notice's title may sit. */
+const NOTICE_ROWS = 60;
+/** Narrower than any notice OpenCode draws (a 60-column pane's is 50). */
+const MIN_NOTICE_WIDTH = 24;
+const MAX_NOTICE_TITLE = 80;
+
+/** Whether `text` has nothing but blanks or the end at `column`. */
+function edgeAt(text: string, column: number): boolean {
+  return /^(?:\s{2}|\s*$)/u.test(text.slice(column));
+}
+
+/**
+ * A notice OpenCode lays over its session with one key to close it — the 2.4
+ * full TUI's `What's new in 2.4.0` after an update (captured 2026-11-23 at
+ * 120×40 and 60×30):
+ *
+ *                                  What's new in 2.4.0               esc
+ *                                  Built-In Desktop Browser
+ *                                  Import your sign-ins and …
+ *                       ┃  Ask    automation. Set "automations": …
+ *                       ~/work:   When a connected provider has …    commands
+ *                                                               ok enter
+ *
+ * Until it is closed it takes every key: the model chip's Ctrl+P and `model`
+ * vanished into it and its Enter only closed it, so the picker never came.
+ * The rows between title and footer carry the composer and status bar behind
+ * the notice on either side, so its text is cut out by column: from the
+ * title's first column to where `esc` and the footer's `enter` both end.
+ * One row, the footer's word, answered with Enter.
+ */
+export function readOpenCodeNotice(lines: readonly PickerLine[]): SelectPrompt | null {
+  let footer = lines.length - 1;
+  let close: RegExpExecArray | null = null;
+  for (let seen = 0; footer >= 0 && seen <= NOTICE_FOOTER_REACH; footer -= 1) {
+    if (!lines[footer].text.trim()) continue;
+    close = NOTICE_FOOTER.exec(screenText(lines[footer]));
+    if (close) break;
+    seen += 1;
+  }
+  if (!close) return null;
+  const right = close.index + close[0].length;
+  for (let index = footer - 1; index >= Math.max(0, footer - NOTICE_ROWS); index -= 1) {
+    const text = screenText(lines[index]);
+    const heading = edgeAt(text, right) ? NOTICE_TITLE.exec(text.slice(0, right)) : null;
+    if (!heading) continue;
+    const left = right - heading[0].trimStart().length;
+    const title = heading[1];
+    if (right - left < MIN_NOTICE_WIDTH || title.length > MAX_NOTICE_TITLE) return null;
+    const body = lines.slice(index + 1, footer).map((line) => screenText(line).slice(left, right).trimEnd());
+    while (body.length > 0 && !body[0]) body.shift();
+    while (body.length > 0 && !body[body.length - 1]) body.pop();
+    const word = close[1];
+    return {
+      options: [{ index: 0, number: 1, label: word.length <= 2 ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1), keys: ["\r"] }],
+      current: 0,
+      title,
+      body,
+      start: footer,
+      question: footer,
+      context: footer,
+    };
+  }
+  return null;
 }

@@ -39,6 +39,15 @@ describe(`${BRAND.display} Mobile agent busy reader`, () => {
     // 2.1.310 names what it waits on before the timer.
     expect(agentWork(rows("✢ Orchestrating… (running PostToolUse hook · 7s · ↓ 307 tokens · thought for 2s)", "❯ "))).toEqual({ elapsed: "7s", tokens: "307" });
     expect(agentWork(rows("✻ Pondering… (12s · ↓ 3.4k tokens · thinking with high effort)", "❯ "))).toEqual({ elapsed: "12s", tokens: "3.4k", effort: "high" });
+    // Claude Code 2.1.326+ in auto mode: the footer under the box carries the
+    // interrupt hint too, below the spinner; the numbers are the spinner's.
+    expect(agentWork(rows(
+      "✢ Smooshing… (3s · ↓ 17 tokens)",
+      "",
+      "❯ ",
+      "  user@host:~/project",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status · esc to interrupt · ← 1 age…",
+    ))).toEqual({ elapsed: "3s", tokens: "17" });
     expect(agentWork(rows("› fix the tests", "• Working (0s • esc to interrupt)"))).toEqual({ elapsed: "0s", tokens: undefined });
     expect(agentWork(rows("⠏ Thinking about it (esc to cancel, 3s)", "> Type your message"))).toEqual({ elapsed: "3s", tokens: undefined });
   });

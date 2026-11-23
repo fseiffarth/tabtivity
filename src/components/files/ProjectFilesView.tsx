@@ -344,6 +344,9 @@ export interface ProjectFilesViewProps {
   resizeHandle?: React.ReactNode;
   pin?: React.ReactNode;
   hidden?: React.ReactNode;
+  /** Panel-only: drawn over the whole viewer, which stays mounted under it
+   *  (the Reader's chat beside Diffs or Data, `ReaderSideChat`). */
+  cover?: React.ReactNode;
   /** Panel-only bottom frame chrome, rendered outside the scrollable viewer. */
   footer?: React.ReactNode;
 
@@ -387,6 +390,7 @@ export function ProjectFilesView({
   resizeHandle,
   pin,
   hidden,
+  cover,
   footer,
   compact,
   view: hostView,
@@ -1762,6 +1766,7 @@ export function ProjectFilesView({
         className={`toolbar-btn toolbar-btn--sm toolbar-btn--icon${searchOpen ? " active" : ""}`}
         aria-pressed={searchOpen}
         aria-expanded={searchOpen}
+        data-steering-search-toggle
         onClick={() => setSearchOpen((v) => !v)}
         title={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
         aria-label={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
@@ -1850,6 +1855,7 @@ export function ProjectFilesView({
       {...importDrop.handlers}
     >
       {resizeHandle}
+      {cover}
       {importDrop.conflictModal}
       {dialogs}
       {/* Compact (docked subwindow) viewer: only the project-name/tags/source-
@@ -2281,19 +2287,19 @@ export function ProjectFilesView({
             changes={!activeBox && gitStatus?.is_repo && projectDir && active && !remoteBlocked && (
               <div className="git-change-groups">
                 {gitCanAdd && (
-                  <GitChangeGroup key={gitContextKey + "unstaged"} title={t("gitChangeTree.groupUnstaged")}
+                  <GitChangeGroup key={gitContextKey + "unstaged"} contextKey={gitContextKey} title={t("gitChangeTree.groupUnstaged")}
                     meta={String(gitStatus.unstaged + gitStatus.untracked)}
                     projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="unstaged" refreshKey={gitChangesKey}
                     disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
                 )}
                 {gitCanCommit && (
-                  <GitChangeGroup key={gitContextKey + "staged"} title={t("gitChangeTree.groupStaged")}
+                  <GitChangeGroup key={gitContextKey + "staged"} contextKey={gitContextKey} title={t("gitChangeTree.groupStaged")}
                     meta={String(gitStatus.staged)}
                     projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="staged" refreshKey={gitChangesKey}
                     disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
                 )}
                 {gitCanPush && canReviewOutgoing && (
-                  <GitChangeGroup key={gitContextKey + "unpushed"}
+                  <GitChangeGroup key={gitContextKey + "unpushed"} contextKey={gitContextKey}
                     title={networkBranch?.upstream
                       ? t("gitChangeTree.groupOutgoingTo", { destination: networkBranch.upstream })
                       : t("gitChangeTree.groupOutgoing")}
@@ -2322,6 +2328,7 @@ export function ProjectFilesView({
                 onChange={(e) => setCommitMsg(e.target.value)}
                 rows={7}
                 className="git-commit-input"
+                data-steering-field
               />
             )}
             {commitMsg !== null ? (

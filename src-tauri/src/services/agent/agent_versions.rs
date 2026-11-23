@@ -116,7 +116,7 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "opencode",
-        version: "2.3.2",
+        version: "2.4.1",
         surface: "§1.5 — launch flags, session plugin, stored messages and tools, TUI screens, Tabby's tool pin",
     },
     Verified {
@@ -146,7 +146,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "antigravity",
-        version: "1.5.14",
+        version: "1.5.15",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {

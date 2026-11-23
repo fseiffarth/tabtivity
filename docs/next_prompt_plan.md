@@ -26,6 +26,15 @@ Tabtivity already reads for the Chat view (`agent_tab_transcript`).
   of its own at turn end (its suggestions off, or it skipped one). Claude's own,
   when present, always wins.
 
+- **D5 Prompt autocomplete (2026-11-23):** the same model also completes a
+  prompt while it is typed, in all three composers: dim text after the caret
+  in the Chat composer and steering's prompt box (Tab or → takes it), a
+  tappable strip over the phone's field.
+- **D6 Trigger (2026-11-23):** automatic after a short typing pause, with its
+  own switch beside the Suggestions role, on by default
+  (`Settings.prompt_autocomplete`); the switch leaves D1's suggestion alone.
+  As built: `docs/context/agent_reader.md`, "Prompt autocomplete".
+
 ## Rules this has to keep
 
 - **Never leaves the machine.** Same endpoint rules as the mail assistant:
@@ -101,6 +110,11 @@ Caveats to measure, not assume:
   re-processing; a warm request's generated token may push the state past the
   prefix. Expect the gain on attention-only models; measure both, and if hybrid
   models re-read every time, say so in the Suggestions chip's hint.
+  *Measured 2026-11-23 (`qwen3.5:9b`):* they did — llama.cpp's one checkpoint
+  per prompt sits four tokens before its end, past any text appended inside the
+  same user message. Fixed by closing each warm-up's text as its own user
+  message (and the completion's draft likewise); see the module doc of
+  `services::agent::next_prompt`.
 - Anything else on the same model (autocomplete pinned to it) evicts the cache;
   a dedicated small model on the Suggestions chip keeps its own runner, if
   `OLLAMA_MAX_LOADED_MODELS` lets both stay loaded.
@@ -158,6 +172,7 @@ type NextPrompt = {
   turnKey: string | null;   // id of the turn's last entry the answer was built from
   status: "ok" | "warmed" | "skipped" | "busy" | "not_running" | "no_model" | "refused" | "unavailable";
   reason?: string;          // human text for refused/no_model, never shown as an error bubble
+  model?: string;           // the model that wrote `text` (ok with text only): the "suggested by" chip
 };
 ```
 
@@ -170,7 +185,8 @@ type NextPrompt = {
 - Ollama down / no model / remote host / cloud model never throw: a status.
 
 Phone route `GET /api/v1/tabs/{tab_id}/next-prompt?phase=warm|final` →
-`{ "text": string | null, "status": … }` (no `turnKey`, ids or paths), the tab
+`{ "text": string | null, "status": …, "model"?: string }` (no `turnKey`, ids
+or paths; `model` beside text only, one inert capped line), the tab
 resolved like `/api/v1/tabs/{tab_id}/transcript`.
 
 Frontend side: the desktop skips `warm` while any local-model agent tab is

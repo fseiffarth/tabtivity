@@ -7,6 +7,7 @@ import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useWindowsStore } from "../../stores/windows";
 import { openTexWorkspace } from "../viewers/tex/openTexWorkspace";
 import { openTabInNewSubwindow, openTabInScope } from "../tabs/tabScopeContext";
+import { fileTabMatcher } from "../tabs/fileTab";
 
 /**
  * The single open-a-file policy shared by every file listing (the FileTree in
@@ -129,8 +130,7 @@ function placeEmbedTab(
   const placeTab = where.placeTab ?? (newSubwindow
     ? (tb: Omit<TabEntry, "key">) => openTabInNewSubwindow(tabScope, tb)
     : undefined);
-  const sameFile = (t: TabEntry) =>
-    t.kind === "embed" && t.viewer === tab.viewer && t.embedPath === tab.embedPath;
+  const sameFile = fileTabMatcher(tab.embedPath ?? "", tab.viewer);
   if (newSubwindow && !where.placeTab) {
     openTabInNewSubwindow(tabScope, tab, sameFile);
     return;

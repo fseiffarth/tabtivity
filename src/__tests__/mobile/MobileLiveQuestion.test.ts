@@ -52,3 +52,30 @@ describe("the phone's live question", () => {
     for (const label of ["Codex", "OpenCode", "Copilot", "Gemini", undefined]) expect(boxHidesDialog(label, true)).toBe(false);
   });
 });
+
+describe("the phone's live question on OpenCode's notice", () => {
+  it("reads 2.4.0's What's new as a one-row dialog with its own text", () => {
+    const pad = " ".repeat(33);
+    const box = " ".repeat(23);
+    const rows = [
+      "",
+      `${pad}What's new in 2.4.0${" ".repeat(32)}esc   `,
+      "",
+      `${pad}Built-In Desktop Browser`,
+      `${box}┃  Ask    automation. Set "automations": false in your config if`,
+      `${box}~/work:   When a connected provider has a video model, the agent   commands`,
+      "",
+      `${" ".repeat(79)}ok enter   `,
+      "",
+      `${" ".repeat(113)}2.4.0`,
+    ];
+    const question = phoneReads(rows, "OpenCode");
+    expect(question?.title).toBe("What's new in 2.4.0");
+    expect(question?.options.map((option) => [option.label, option.keys])).toEqual([["OK", ["\r"]]]);
+    expect(question?.body).toEqual([
+      "Built-In Desktop Browser",
+      "automation. Set \"automations\": false in your config if",
+      "When a connected provider has a video model, the agent",
+    ]);
+  });
+});

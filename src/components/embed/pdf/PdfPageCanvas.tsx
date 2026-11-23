@@ -108,6 +108,7 @@ export function PdfPageCanvas({
   questionPins,
   tickBadges,
   onSize,
+  onPainted,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -189,6 +190,8 @@ export function PdfPageCanvas({
   onNoteDelete?: (noteId: string, baseline: readonly PdfNote[]) => void;
   /** Right-click → Print from here: the preview opens on this sheet to the end. */
   onPrintFrom?: () => void;
+  /** A raster of this sheet has just been put up (every paint, not only the first). */
+  onPainted?: () => void;
   /** This sheet is near the viewport and its remarks are wanted. Called instead of
    *  reading them here, so one owner holds one set of ids for one page. */
   onNeedNotes?: () => void;
@@ -337,6 +340,10 @@ export function PdfPageCanvas({
     hiddenStale.current = false;
     setCatchUp((n) => n + 1);
   }, [paneVisible]);
+
+  // Read by the render effect, which does not re-run for a new handler.
+  const onPaintedRef = useRef(onPainted);
+  onPaintedRef.current = onPainted;
 
   // What is currently ON this canvas: the fingerprint of the content it was
   // painted from, and the geometry it was painted at. A recompile hands the
@@ -525,6 +532,7 @@ export function PdfPageCanvas({
       const finalFp = fp ?? (await fingerprintPage(page, rot));
       if (cancelled) return;
       painted.current = { fp: finalFp, scale, rot, dpr, hidden: hiddenHighlights };
+      onPaintedRef.current?.();
     })();
     return () => {
       cancelled = true;

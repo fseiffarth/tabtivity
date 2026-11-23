@@ -1716,17 +1716,23 @@ html[data-steer-region="card"] .subwindow.focused .terminal-sign-in .terminal-si
   height: min(93vh, calc(100vh - 24px));
   max-height: min(93vh, calc(100vh - 24px));
 }
-/* Root and the cockpit views sit next to the title. Equal spaces flank the
-   system views and move the apps toward the window controls. */
-.root-view-strip {
+/* Root and the cockpit views sit next to the title, the apps against the
+   window controls, and the system views on the bar's centre: the spacers'
+   flex-grow is set inline from a measurement (`RootViewStrip`), 1 : 1 until
+   then. Two classes on
+   purpose: projects-tabs.css loads after this file, and its one-class
+   `.tab-strip { flex: 0 1 auto }` would otherwise win, so the strip would hug
+   its tabs and the spacers would get no room. */
+.root-view-strip.tab-strip {
   flex: 0 0 auto;
   align-items: center;
 }
-.root-view-strip-expanded {
+.root-view-strip.root-view-strip-expanded {
   flex: 1 1 auto;
 }
 .root-view-spacer {
   flex: 1 0 0;
+  min-width: 0;
 }
 .root-view-divider {
   align-self: stretch;
@@ -3172,7 +3178,33 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-top: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
 }
 .terminal-reader-command span {
-  font-family: var(--font-mono);
+  font-family: inherit;
+}
+.terminal-reader-command-body {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.terminal-reader-command-kind {
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.terminal-reader-command.session-setting .terminal-reader-command-kind {
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+}
+.terminal-reader-command.single-action::before,
+.terminal-reader-command.single-action::after {
+  border-top-style: dashed;
+}
+.terminal-reader-command-body .terminal-reader-time {
+  margin: 0;
 }
 .terminal-reader-command.interrupted {
   color: var(--status-interrupted);
@@ -3687,7 +3719,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   flex: 1 1 auto;
   min-height: 0;
 }
-.terminal-reader.panel-open > :is(.terminal-reader-subagent-bar, .terminal-reader-subagent-index, .terminal-reader-stream) {
+.terminal-reader.panel-open > :is(.terminal-reader-subagent-bar, .terminal-reader-subagent-index, .terminal-reader-stream-anchor) {
   display: none;
 }
 /* The composer docked under the panel (`.terminal-reader-dock`, no box of its
@@ -3755,6 +3787,93 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   right: 64px;
   transform: translateY(-50%);
 }
+/* The chat's place and its own element (`TerminalReaderView` streamHost):
+   neither draws a box, so the stream is the Reader's flex item wherever the
+   host sits — here, or in the side panel's slot. */
+.terminal-reader-stream-anchor,
+.terminal-reader-stream-host { display: contents; }
+/* The docked line's switch for the chat in the side panel: left of the mic
+   (or of Send without one), the mic's quiet round button. */
+.terminal-reader-side-chat {
+  position: absolute;
+  right: 36px;
+  bottom: 7px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-side-chat svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.terminal-reader-side-chat:hover { color: var(--text-primary); background: var(--bg-hover); }
+.terminal-reader-side-chat.on { color: var(--accent); }
+.terminal-reader-input.with-mic .terminal-reader-side-chat { right: 60px; }
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-side-chat { bottom: 6px; }
+.terminal-reader-input:has(> .terminal-reader-side-chat) textarea { padding-right: 72px; }
+.terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) textarea,
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) textarea {
+  padding-right: 96px;
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) .terminal-reader-dock-tag {
+  right: 88px;
+}
+/* The side panel's cover holding the chat (`ReaderSideChat`): over the
+   panel's view, under its resize sash (z-index 30); the Reader's ground and
+   ink, a narrower column of bubbles. */
+.reader-side-chat {
+  --prompt-strip-h: 36px;
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-main));
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+}
+.reader-side-chat-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+  background: var(--bg-side-panel);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.reader-side-chat-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.reader-side-chat-back { flex: none; }
+.reader-side-chat-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.reader-side-chat-body .terminal-reader-turns { padding: 10px; }
+.reader-side-chat-body .terminal-reader-turn { max-width: 94%; }
 .terminal-changes-body { display: flex; flex: 1; min-height: 0; }
 .terminal-changes-body > .terminal-changes-files {
   width: clamp(160px, 22%, 260px);
@@ -4224,12 +4343,50 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
-/* The untested pill of Claude's suggestion, dimmed in the empty box as its
-   placeholder: top right, clear of Send and the mic. */
+/* How the local model thinks the prompt being typed goes on (`PromptGhost`):
+   a layer over the box that repeats the typed text unseen, so the dim rest
+   starts where the text ends and wraps as the box wraps it. The component
+   copies the box's font, padding and size; nothing here animates. */
+.prompt-ghost {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  pointer-events: none;
+  text-align: left;
+}
+.prompt-ghost-text {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.prompt-ghost-typed { visibility: hidden; }
+.prompt-ghost-rest { color: var(--text-muted); opacity: 0.8; }
+/* Who wrote the suggestion dimmed in the empty box (and its untested pills):
+   top right, clear of Send and the mic. */
 .terminal-reader-suggestion-tag {
   position: absolute;
   top: 4px;
   right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* "Suggested by": a reader chip that only labels — no hover, no pointer. */
+.terminal-reader-chip.suggestion-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  cursor: var(--cur-default, default);
+  pointer-events: auto;
+}
+.terminal-reader-chip.suggestion-source-chip:hover { color: var(--text-muted); background: var(--bg-subtle); }
+.terminal-reader-chip.suggestion-source-chip .untested-tag { margin-left: 0; }
+.suggestion-source-by { white-space: nowrap; }
+.suggestion-source-name {
+  max-width: 200px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 /* The phone composer's Send (`.send-icon` in mobile-web): a paper plane in
    an accent disc, faded while there is nothing to send. */

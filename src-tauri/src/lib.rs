@@ -2530,6 +2530,7 @@ pub fn run() {
             commands::subwindow::detached_window_screens,
             commands::subwindow::detached_retire_ack,
             commands::subwindow::detached_retire_ready,
+            commands::subwindow::detached_first_paint,
             // The deck presenter's audience window (M#90)
             commands::presenter::open_presenter_window,
             commands::presenter::close_presenter_window,

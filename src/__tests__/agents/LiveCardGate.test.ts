@@ -96,5 +96,30 @@ describe("the transcript's waiting question laid over the live reading", () => {
     expect(card.signature).toBe("entry:2026-11-18T09:19:13.591Z");
     expect(card.stray).toBe(false);
     expect(card.working).toBeNull();
+    // A multi-select stays read-only: its ticks need the screen.
+    expect(card.question?.byNumber).toBeUndefined();
+  });
+
+  it("answers a one-question single-choice entry card by the row's number", () => {
+    const single: TranscriptEntry = {
+      kind: "answer", text: "Warm-ups?", at: "2026-11-23T15:42:23.134Z", blocking: true,
+      questions: [{ header: "Warm-ups", question: "What should I do about them?", options: [{ label: "Split the turn" }, { label: "Skip on hybrid models" }, { label: "Leave as is" }] }],
+    };
+    const card = withWaitingEntry(NO_LIVE, single, true);
+    expect(card.question?.readOnly).toBeUndefined();
+    expect(card.question?.byNumber).toBe(true);
+    expect(card.question!.options.map((option) => answerKeys(card.question!, option))).toEqual([["1"], ["2"], ["3"]]);
+    // Not under a lamp that does not ask, and not for several questions.
+    expect(withWaitingEntry(NO_LIVE, single, false)).toBe(NO_LIVE);
+    const two: TranscriptEntry = { ...single, questions: [...single.questions!, { header: "More", question: "And?", options: [{ label: "A" }, { label: "B" }] }] };
+    expect(withWaitingEntry(NO_LIVE, two, true).question?.readOnly).toBe(true);
+    // A dialog read off the screen keeps the screen's own keys.
+    const screen = readReaderLive(plainBuffer([
+      "❯ ask", "", " ☐ Warm-ups", "", "What should I do about them?", "", "❯ 1. Split the turn", "  2. Skip on hybrid models", "  3. Leave as is",
+      "  4. Type something.", "", "  5. Chat about this", "", "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]), "Claude", 120);
+    const merged = withWaitingEntry(screen, single, true);
+    expect(merged.question?.byNumber).toBeUndefined();
+    expect(answerKeys(merged.question!, merged.question!.options[1])).toEqual(["\u001b[B", "\r"]);
   });
 });

@@ -547,6 +547,50 @@ describe("the desktop Reader's live screen", () => {
     expect(idle.working).toBeNull();
   });
 
+  // Claude Code 2.1.330's whole screen in auto mode with a status line, as
+  // verify-cli captured it at 100x34 (host and path made neutral). Since 2.1.326
+  // the footer under the box ends in `esc to interrupt` while a turn runs —
+  // a busy row with no numbers, below the spinner that has them.
+  const RULE = "─".repeat(100);
+  const claudeScreen = (above: string[], box: string, footer: string) => plainBuffer([
+    "❯ reply with the word done",
+    "",
+    ...above,
+    `${" ".repeat(80)}◐ medium · /effort`,
+    RULE,
+    `❯\u00a0${box}`,
+    RULE,
+    "  user@host:~/project (develop) · Opus 5.5",
+    footer,
+  ]);
+
+  it("reads the spinner's timer and tokens under Claude 2.1.326+'s busy footer", () => {
+    const busy = readReaderLive(claudeScreen(
+      ["● Running 1 shell command…", "", "✢ Smooshing… (3s · ↓ 17 tokens)"],
+      "",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status · esc to interrupt · ← 1 age…",
+    ), "Claude", 100);
+    expect(busy.question).toBeNull();
+    expect(busy.working).toEqual({ elapsed: "3s", tokens: "17" });
+    expect(busy.status?.mode).toBe("auto");
+
+    // Before the spinner prints its timer the footer alone says it works.
+    const starting = readReaderLive(claudeScreen(
+      ["✶ Percolating… "],
+      "",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status · esc to interrupt · ← 1 agent",
+    ), "Claude", 100);
+    expect(starting.working).toEqual({ elapsed: undefined, tokens: undefined });
+
+    // Finished: the footer drops the hint and the spinner became `Baked for`.
+    const idle = readReaderLive(claudeScreen(
+      ["● done", "✻ Baked for 1s · done 1:31"],
+      "",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status",
+    ), "Claude", 100);
+    expect(idle.working).toBeNull();
+  });
+
   it("calls a screen it cannot read stray, and nothing it reads or a blank one", () => {
     const busy = ["> fix it", "", "✻ Thinking… (9s · ↓ 1.2k tokens · esc to interrupt)", "> ", "  ? for shortcuts"];
     const idle = ["> fix it", "", "⏺ Done.", "", "> ", "  ? for shortcuts"];
@@ -842,5 +886,123 @@ describe("output above Claude Code's input box is not a dialog", () => {
       "  Press enter to confirm or esc to cancel",
     ];
     expect(readReaderLive(plainBuffer(rows), "Codex", 76).question?.options).toHaveLength(2);
+  });
+});
+
+/** OpenCode 2.4.0's `What's new` notice after an update from 2.3.2, captured
+ * 2026-11-23 at 120×40: laid over the start screen, whose box and status bar
+ * show through on the left and right of its rows. */
+const OPENCODE_WHATS_NEW = [
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "                                 What's new in 2.4.0                                esc",
+  "",
+  "",
+  "                                 Built-In Desktop Browser",
+  "                                 Import your sign-ins and browsing history from Chrome,",
+  "                                 Edge, Firefox or Safari, and add extensions from",
+  "                                 Chromium browsers or the Chrome and Edge stores.",
+  "                                 Everything stays in one persistent desktop profile:",
+  "                                 chat links open signed in, your tabs survive restarts",
+  "                                 and the agent can read and drive the…",
+  "",
+  "                                 Automations",
+  "                                 Ask the agent to run a prompt, a script or a shell",
+  "                                 command on a timer, on a cron schedule or when an MCP",
+  "                       ┃         server sends an event, and manage them with /",
+  "                       ┃  Ask    automation. Set \"automations\": false in your config if",
+  "                       ┃         you don't want them.",
+  "                       ┃  Buil",
+  "                       ╹▀▀▀▀▀▀   Generate Videos                                          ▀▀▀▀▀▀▀▀",
+  "                       ~/work:   When a connected provider has a video model, the agent   commands",
+  "                                 can make videos with generate_video. It keeps working",
+  "                                 while the video renders and saves the files into your",
+  "                                 workspace when they're ready.",
+  "",
+  "                                 New TUI Look",
+  "",
+  "",
+  "",
+  "                                                                               ok enter",
+  "",
+  "",
+  "",
+  "                                                                                                                 2.4.0",
+  "",
+];
+
+/** The same notice at 60×30, where it covers the whole width. */
+const OPENCODE_WHATS_NEW_60 = [
+  "",
+  "",
+  "",
+  "",
+  "    What's new in 2.4.0                              esc",
+  "",
+  "",
+  "    Built-In Desktop Browser",
+  "    Import your sign-ins and browsing history from",
+  "    Chrome, Edge, Firefox or Safari, and add extensions",
+  "    from Chromium browsers or the Chrome and Edge",
+  "    stores. Everything stays in one persistent desktop",
+  "    profile: chat links open signed in, your tabs",
+  "    survive restarts and the agent can read and drive",
+  "    the…",
+  "",
+  "    Automations",
+  "    Ask the agent to run a prompt, a script or a shell",
+  "    command on a timer, on a cron schedule or when an",
+  "    MCP server sends an event, and manage them with /",
+  "    automation. Set \"automations\": false in your config",
+  "    if you don't want them.",
+  "",
+  "",
+  "",
+  "",
+  "                                                ok enter",
+  "",
+  "",
+  "",
+];
+
+describe("readReaderLive on OpenCode's What's new notice", () => {
+  it("reads it as a dialog with the notice's own text and its one key, not a stray screen", () => {
+    const live = readReaderLive(plainBuffer(OPENCODE_WHATS_NEW), "OpenCode", 120);
+    expect(live.stray).toBe(false);
+    expect(live.question?.title).toBe("What's new in 2.4.0");
+    expect(live.ask).toEqual(["What's new in 2.4.0"]);
+    expect(live.question?.options.map((option) => [option.label, option.keys])).toEqual([["OK", ["\r"]]]);
+    expect(answerKeys(live.question!, live.question!.options[0])).toEqual(["\r"]);
+    expect(live.context[0]).toBe("Built-In Desktop Browser");
+    // The composer and status bar behind it stay out of its text.
+    expect(live.context).toContain("automation. Set \"automations\": false in your config if");
+    expect(live.context).toContain("When a connected provider has a video model, the agent");
+    expect(live.context.join("\n")).not.toMatch(/┃|Ask {2}|~\/work|commands|ok enter|2\.4\.0$/u);
+    expect(live.context[live.context.length - 1]).toBe("New TUI Look");
+  });
+
+  it("reads it on a narrow pane", () => {
+    const live = readReaderLive(plainBuffer(OPENCODE_WHATS_NEW_60), "OpenCode", 60);
+    expect(live.question?.title).toBe("What's new in 2.4.0");
+    expect(live.context.slice(0, 2)).toEqual(["Built-In Desktop Browser", "Import your sign-ins and browsing history from"]);
+    expect(live.context[live.context.length - 1]).toBe("if you don't want them.");
+  });
+
+  it("is OpenCode's alone, and its pickers are no notice", () => {
+    expect(readReaderLive(plainBuffer(OPENCODE_WHATS_NEW), "Claude", 120).question?.title).not.toBe("What's new in 2.4.0");
+    const pad = " ".repeat(34);
+    const picker = readReaderLive(plainBuffer([
+      `${pad}Free models${" ".repeat(38)}esc`,
+      `${pad}Connect a provider for access to more models`,
+      `${pad}Search`,
+      `${" ".repeat(30)}┃ ▪ Tidepool Alpha Free`,
+      `${pad}Hy4 flash Free`,
+      `${pad}connect provider ctrl+a              favorite ctrl+f`,
+    ]), "OpenCode", 120);
+    expect(picker.question).toBeNull();
   });
 });

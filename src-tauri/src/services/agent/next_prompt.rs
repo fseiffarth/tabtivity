@@ -26,23 +26,56 @@
 //! (the turn so far, `num_predict: 1`), and at turn end `final` sends the same
 //! prompt plus the last answer: only the new tokens are read. That holds only
 //! if every later prompt starts with the earlier one byte for byte, which
-//! [`TurnPrompt`] guarantees: the system prompt is fixed, the user message
-//! opens with the turn's prompt, and each entry is rendered once, when it is
-//! first seen, and never again — its long or one-line form decided then, by
-//! the budget used so far. Past the budget, entries are one line each; when
-//! the last answer was one of those, `final` appends it in full after the
-//! prefix.
+//! [`TurnPrompt`] guarantees: the system prompt is fixed, the turn's text
+//! opens with its prompt, and each entry is rendered once, when it is first
+//! seen, and never again — its long or one-line form decided then, by the
+//! budget used so far. Past the budget, entries are one line each; when the
+//! last answer was one of those, `final` appends it in full after the prefix.
+//!
+//! A shared prefix is not enough for a hybrid or recurrent model (Qwen 3.5,
+//! Nemotron): its cache cannot be cut back to any token, so llama.cpp restores
+//! only a checkpoint, taken four tokens before the end of each prompt — inside
+//! the template's assistant opener. Text appended inside the same user message
+//! diverges before that, and every warm-up re-read the whole turn (measured
+//! 2026-11-23, `qwen3.5:9b`, `forcing full prompt re-processing` in
+//! `journalctl -u ollama`). So each warm-up *closes* the text it sent: the next
+//! request sends that text as its own user message, a fixed reply
+//! ([`TURN_GOES_ON`]) and the rest as a new user message, and so restores the
+//! warm-up's checkpoint ([`TurnPrompt::warm_messages`]). Attention-only models
+//! reuse the same prefix either way.
 //!
 //! # One run per turn
 //!
 //! Each session (one key per tab, per process) has one slot: a `final` ends a
-//! warm-up in flight (its socket is shut, Ollama stops it; user decision
+//! warm-up or a completion in flight (its socket is shut, Ollama stops it; user decision
 //! 2026-11-22 — the suggestion is never late behind a slow first warm-up),
 //! waits for another final, then reads the cached answer when the turn is the
 //! same (keyed by the turn's last entry); a `warm` that finds the slot taken
 //! is `busy`. Memory only; the newest turn per session, a few dozen sessions.
 //! The phone asks through the window when it is open
 //! (`DesktopRequest::AgentNextPrompt`), so both share the window's slot.
+//!
+//! # Completing a prompt being typed
+//!
+//! `complete` writes how a draft the user is typing goes on (the dim text
+//! after the caret, taken by Tab; a strip on the phone). It opens with the
+//! `final` request's messages byte for byte, then the turn's suggestion as the
+//! model's reply and one more user message: the draft, and the order to reply
+//! with a line that *begins with the draft's last words* ([`draft_tail`]).
+//! The draft is a message of its own for the hybrid models' sake (see above):
+//! appended inside the turn's last message, every keystroke re-read the whole
+//! turn (measured 2026-11-23, `qwen3.5:9b`: ~1 050 of 1 250 tokens each, about
+//! 3.5 s); after it, the final's checkpoint is restored and only the draft's
+//! message is read (0.6–1 s). That is what small models do reliably (a pre-filled
+//! assistant message is ignored by some chat templates, measured 2026-11-23),
+//! and it can be checked: a reply that does not begin with those words is
+//! dropped, the rest is the continuation ([`continuation`]). A draft needs one
+//! finished word; a `/command` is never completed. The newest draft wins: a
+//! completion ends a warm-up or an older completion in flight, and stands
+//! aside for a `final` or a newer one waiting. A turn that has ended is kept
+//! for [`KEPT_FOR`] so the next keystrokes' completions do not read the
+//! transcript again ([`complete_kept_blocking`]). Off with
+//! `Settings::prompt_autocomplete: false`.
 //!
 //! `AppHandle`-free: the command (`commands::agents::agent_next_prompt`) and
 //! the phone route (`mobile_control::host`, `/next-prompt`) read the transcript
@@ -95,6 +128,23 @@ const PS_TIMEOUT: Duration = Duration::from_secs(3);
 /// `/api/ps` reports as expiring centuries away; `commands::ollama`'s rule).
 const PINNED_AFTER_SECS: i64 = 365 * 24 * 60 * 60;
 const FINAL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Longest draft a completion is written for, in characters; a longer one is
+/// `skipped`.
+pub const MAX_DRAFT_CHARS: usize = 2_000;
+/// How much of a long draft's end the model is shown, in characters.
+const DRAFT_SHOWN_CHARS: usize = 1_500;
+/// Longest tail of the draft's last line the reply must begin with, in
+/// characters: the model writes it again, so it bounds the run's length.
+const TAIL_CHARS: usize = 60;
+/// Longest continuation handed out, in characters.
+pub const MAX_COMPLETION_CHARS: usize = 120;
+/// Tokens a completion may write: the tail again, then a few words.
+const COMPLETE_NUM_PREDICT: i64 = 64;
+/// A completion is only worth having while the user still pauses.
+const COMPLETE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long an ended turn's prompt is kept for completions: within it they
+/// do not read the transcript again.
+pub const KEPT_FOR: Duration = Duration::from_secs(15);
 /// A warm-up reads the whole turn so far cold on its first run.
 const WARM_TIMEOUT: Duration = Duration::from_secs(120);
 /// The shortest gap between two warm-ups of one session; a closer one is
@@ -116,11 +166,13 @@ explanation. If there is no clear next step, reply with exactly NONE.";
 
 // ── The answer ──────────────────────────────────────────────────────────────
 
-/// `warm` feeds the turn so far; `final` writes the suggestion for an ended turn.
+/// `warm` feeds the turn so far; `final` writes the suggestion for an ended
+/// turn; `complete` writes how the draft being typed goes on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Warm,
     Final,
+    Complete,
 }
 
 impl Phase {
@@ -128,7 +180,17 @@ impl Phase {
         match word {
             "warm" => Some(Self::Warm),
             "final" => Some(Self::Final),
+            "complete" => Some(Self::Complete),
             _ => None,
+        }
+    }
+
+    /// The word [`Phase::parse`] reads.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Warm => "warm",
+            Self::Final => "final",
+            Self::Complete => "complete",
         }
     }
 }
@@ -137,11 +199,13 @@ impl Phase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
-    /// A final run answered (`text` may still be `null`: the model said NONE).
+    /// A final run or a completion answered (`text` may still be `null`: the
+    /// model said NONE, or its line did not go on from the draft).
     Ok,
     /// A warm-up was fed.
     Warmed,
-    /// Nothing to do: no ended turn, or a warm-up for a local-model tab.
+    /// Nothing to do: no ended turn, a warm-up for a local-model tab, or a
+    /// draft a completion is not written for.
     Skipped,
     /// A warm-up while this session's slot is taken, or too soon after the last.
     Busy,
@@ -149,11 +213,13 @@ pub enum Status {
     NoModel,
     /// The endpoint or the model would not keep the turn on this machine.
     Refused,
-    /// No transcript, the AI switch is off, or Ollama failed the request.
+    /// No transcript, the AI switch is off, completions are switched off, or
+    /// Ollama failed the request.
     Unavailable,
 }
 
-/// The answer the command returns; the phone route passes `text` and `status` only.
+/// The answer the command returns; the phone route passes `text`, `status`
+/// and `model` only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NextPrompt {
@@ -162,11 +228,20 @@ pub struct NextPrompt {
     pub status: Status,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The model that wrote `text` (an `ok` answer with text only): the
+    /// composers' "suggested by" chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl NextPrompt {
     pub fn status(status: Status) -> Self {
-        Self { text: None, turn_key: None, status, reason: None }
+        Self { text: None, turn_key: None, status, reason: None, model: None }
+    }
+    /// An `ok` answer: `text`, and the model that wrote it when there is text.
+    fn answered(text: Option<String>, model: &str, turn_key: &str) -> Self {
+        let model = text.as_ref().map(|_| model.to_string());
+        Self { text, model, ..Self::keyed(Status::Ok, turn_key) }
     }
     fn keyed(status: Status, turn_key: &str) -> Self {
         Self { turn_key: Some(turn_key.to_string()), ..Self::status(status) }
@@ -256,14 +331,24 @@ fn turn_key(prompt: &TranscriptEntry, last: Option<&TranscriptEntry>) -> String 
 
 // ── The append-only prompt ──────────────────────────────────────────────────
 
-/// One turn's user message, grown entry by entry. Every rendering it hands
-/// out starts with every earlier one ([`TurnPrompt::message`]); only
-/// [`TurnPrompt::final_message`]'s tail is not kept.
+/// The fixed reply between two of a turn's user messages: the text a warm-up
+/// sent, closed, and what came after it (see the module's *Warm-up*).
+pub const TURN_GOES_ON: &str = "Noted. Waiting for the rest of the turn.";
+
+/// The line the last user message of a `final` or `complete` ends with.
+const TURN_SO_FAR: &str = "\nThat is the whole turn so far.\n";
+
+/// One turn's text, grown entry by entry. Every rendering it hands out starts
+/// with every earlier one ([`TurnPrompt::message`]); a request sends it as user
+/// messages split where warm-ups ended ([`TurnPrompt::warm_messages`]), and
+/// only [`TurnPrompt::final_messages`]' tail is not kept.
 #[derive(Debug, Clone)]
 pub struct TurnPrompt {
     turn: u64,
     budget_chars: usize,
     text: String,
+    /// Where each warm-up's text ended: the user messages split there.
+    cuts: Vec<usize>,
     /// The fingerprint of the last entry rendered, where the next read resumes.
     last: Option<u64>,
     /// That entry was an answer rendered one-line (past the budget).
@@ -278,25 +363,46 @@ impl TurnPrompt {
             "The user's last message to the coding agent ({agent}):\n{}\n\nWhat the agent did and said since, in order:\n",
             bounded(prompt.text.trim(), MAX_PROMPT_CHARS)
         );
-        Self { turn: fingerprint(prompt), budget_chars: budget_tokens * CHARS_PER_TOKEN, text, last: None, last_short: false }
+        Self { turn: fingerprint(prompt), budget_chars: budget_tokens * CHARS_PER_TOKEN, text, cuts: Vec::new(), last: None, last_short: false }
     }
 
-    /// The message so far — what a warm-up sends.
+    /// The turn's text so far, in one piece.
     pub fn message(&self) -> &str {
         &self.text
     }
 
-    /// The message plus, when the turn's last answer went one-line, that answer
-    /// in full: what a final run sends.
-    pub fn final_message(&self, answer: Option<&TranscriptEntry>) -> String {
-        match answer.filter(|_| self.last_short) {
-            Some(answer) => format!(
-                "{}\nThe agent's last message in full:\n{}\n",
-                self.text,
-                bounded(answer.text.trim(), MAX_ENTRY_CHARS)
-            ),
-            None => self.text.clone(),
+    /// The user messages a warm-up sends — the text so far, split where the
+    /// earlier warm-ups ended — and the end of this one, where the next
+    /// request splits it too.
+    pub fn warm_messages(&mut self) -> Vec<String> {
+        let messages = self.messages("");
+        if self.cuts.last().copied().unwrap_or(0) < self.text.len() {
+            self.cuts.push(self.text.len());
         }
+        messages
+    }
+
+    /// The user messages a final run (and a completion) sends: the warm-ups'
+    /// split, the last one closed by the rest of the text, the last answer in
+    /// full when it went one-line, and [`TURN_SO_FAR`].
+    pub fn final_messages(&self, answer: Option<&TranscriptEntry>) -> Vec<String> {
+        let full = match answer.filter(|_| self.last_short) {
+            Some(answer) => format!("\nThe agent's last message in full:\n{}\n", bounded(answer.text.trim(), MAX_ENTRY_CHARS)),
+            None => String::new(),
+        };
+        self.messages(&format!("{full}{TURN_SO_FAR}"))
+    }
+
+    /// The text split at the cuts, `tail` added to the last piece; empty
+    /// pieces dropped.
+    fn messages(&self, tail: &str) -> Vec<String> {
+        let mut bounds = vec![0];
+        bounds.extend(&self.cuts);
+        let mut pieces: Vec<String> = bounds.windows(2).map(|at| self.text[at[0]..at[1]].to_string()).collect();
+        let rest = &self.text[bounds.last().copied().unwrap_or(0)..];
+        pieces.push(format!("{rest}{tail}"));
+        pieces.retain(|piece| !piece.is_empty());
+        pieces
     }
 
     /// Render the turn's entries not yet rendered. The read resumes after the
@@ -389,14 +495,14 @@ pub fn budget_tokens(context_length: Option<u32>) -> usize {
 /// `slot`'s prompt brought up to `turn`: kept and grown when it is the same
 /// turn and still lines up, else started over. The system prompt is
 /// [`SYSTEM`], always.
-pub fn prompt_for<'s>(slot: &'s mut Option<TurnPrompt>, agent: &str, turn: Turn<'_>, budget_tokens: usize) -> &'s TurnPrompt {
+pub fn prompt_for<'s>(slot: &'s mut Option<TurnPrompt>, agent: &str, turn: Turn<'_>, budget_tokens: usize) -> &'s mut TurnPrompt {
     let same = slot.as_ref().is_some_and(|prompt| prompt.turn == fingerprint(turn.prompt));
     if !same || !slot.as_mut().is_some_and(|prompt| prompt.extend(turn.entries)) {
         let mut fresh = TurnPrompt::new(agent, turn.prompt, budget_tokens);
         fresh.extend(turn.entries);
         *slot = Some(fresh);
     }
-    slot.as_ref().expect("set above")
+    slot.as_mut().expect("set above")
 }
 
 // ── The output ──────────────────────────────────────────────────────────────
@@ -428,6 +534,16 @@ pub fn clean(output: &str) -> Option<String> {
     }
     let capped: String = line.chars().take(MAX_SUGGESTION_CHARS).collect();
     Some(capped.trim_end().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Longest model name a "suggested by" chip carries, in characters.
+pub const MAX_MODEL_CHARS: usize = 80;
+
+/// A model name as it may cross to a client: one inert line ([`inert`]),
+/// capped; `None` for nothing left.
+pub fn clean_model(name: &str) -> Option<String> {
+    let line: String = inert(&strip_ansi(name)).chars().take(MAX_MODEL_CHARS).collect();
+    Some(line.trim_end().to_string()).filter(|s| !s.is_empty())
 }
 
 /// `text` with its ANSI escape sequences removed: CSI (`ESC [` … final byte,
@@ -485,24 +601,123 @@ fn inert(line: &str) -> String {
         .join(" ")
 }
 
+// ── Completing a draft ──────────────────────────────────────────────────────
+
+/// The end of `draft` a completion must begin with: the last words of its
+/// last line (at most [`TAIL_CHARS`], from a word's start, spaces folded).
+/// `None` for a draft that is not completed: a `/command`, one without a
+/// finished word yet, one whose last line is blank, or one past
+/// [`MAX_DRAFT_CHARS`].
+pub fn draft_tail(draft: &str) -> Option<String> {
+    let typed = draft.trim_start();
+    if typed.starts_with('/') || !typed.contains(char::is_whitespace) || draft.chars().count() > MAX_DRAFT_CHARS {
+        return None;
+    }
+    let line = inert(draft.rsplit('\n').next().unwrap_or(""));
+    let chars = line.chars().count();
+    if chars == 0 {
+        return None;
+    }
+    if chars <= TAIL_CHARS {
+        return Some(line);
+    }
+    let cut: String = line.chars().skip(chars - TAIL_CHARS).collect();
+    // From a word's start, when the cut holds one.
+    Some(match cut.split_once(' ') {
+        Some((_, words)) if !words.is_empty() => words.to_string(),
+        _ => cut,
+    })
+}
+
+/// The user message a completion sends after the turn and the model's reply
+/// to it (see the module's *Completing a prompt being typed*).
+fn complete_message(draft: &str, tail: &str) -> String {
+    let typed = draft.trim();
+    let shown = match typed.char_indices().rev().nth(DRAFT_SHOWN_CHARS) {
+        Some((at, c)) => format!("…{}", &typed[at + c.len_utf8()..]),
+        None => typed.to_string(),
+    };
+    format!(
+        "The user has begun typing that next message. What they typed so far:\n{shown}\n\nReply with only how \
+         the message goes on, as one line that begins with exactly this text:\n{tail}\n"
+    )
+}
+
+/// What the model's `output` adds to `draft`: its first line must begin with
+/// `tail` ([`draft_tail`]; letter case aside), and what follows is the
+/// continuation — one inert capped line ([`clean_completion`]), opened by a
+/// space where a new word starts after a draft that ends inside one. `None`
+/// when the line does not go on from the draft, or adds nothing.
+pub fn continuation(output: &str, tail: &str, draft: &str) -> Option<String> {
+    let output = match output.rfind("</think>") {
+        Some(end) => &output[end + "</think>".len()..],
+        None if output.trim_start().starts_with("<think>") => return None,
+        None => output,
+    };
+    let plain = strip_ansi(output);
+    let line = plain.split(['\n', '\r']).map(inert).find(|line| !line.is_empty())?;
+    let quotes: &[char] = &['"', '\'', '`', '“', '”', '‘', '’', '«', '»', '„'];
+    let quoted = line.starts_with(quotes) && !tail.starts_with(quotes);
+    let mut rest = if quoted { line.trim_start_matches(quotes).trim_start() } else { line.as_str() };
+    rest = rest.strip_prefix('…').map(str::trim_start).unwrap_or(rest);
+    // The tail, letter for letter whatever its case.
+    let mut left = rest.chars();
+    for want in tail.chars() {
+        let got = left.next()?;
+        if got != want && !got.to_lowercase().eq(want.to_lowercase()) {
+            return None;
+        }
+    }
+    let mut rest = left.as_str();
+    if quoted {
+        rest = rest.trim_end_matches(quotes);
+    }
+    if draft.ends_with(char::is_whitespace) {
+        rest = rest.trim_start();
+    }
+    clean_completion(rest)
+}
+
+/// A continuation as it may cross to a client: one inert line ([`inert`]),
+/// capped at [`MAX_COMPLETION_CHARS`], with the one space it opened with
+/// kept (it separates a new word from the draft). `None` for nothing left.
+pub fn clean_completion(text: &str) -> Option<String> {
+    let spaced = text.starts_with(char::is_whitespace);
+    let plain = strip_ansi(text);
+    let line = plain.split(['\n', '\r']).map(inert).find(|line| !line.is_empty())?;
+    let capped: String = line.chars().take(MAX_COMPLETION_CHARS).collect();
+    let capped = capped.trim_end();
+    Some(if spaced { format!(" {capped}") } else { capped.to_string() })
+}
+
 // ── Sessions: one slot each ─────────────────────────────────────────────────
 
 #[derive(Default)]
 struct Session {
     prompt: Option<TurnPrompt>,
-    /// The newest final answer: its turn key and text.
-    answered: Option<(String, Option<String>)>,
+    /// The newest final answer: its turn key, text and the model that wrote it.
+    answered: Option<(String, Option<String>, String)>,
+    /// The newest completion: its turn key, the draft, the continuation and
+    /// the model that wrote it.
+    completed: Option<(String, String, Option<String>, String)>,
+    /// The turn an ask last read, when it had ended: when, its key and its
+    /// final user messages — what a completion within [`KEPT_FOR`] is built
+    /// on without another transcript read. `None` while the turn runs.
+    ended: Option<(Instant, String, Vec<String>)>,
     last_warm: Option<Instant>,
 }
 
 /// One session's slot: its state, held over a run, and the abort handle of a
-/// warm-up in flight, which a `final` reaches without that lock.
+/// warm-up or a completion in flight, which a `final` or a newer completion
+/// reaches without that lock.
 #[derive(Default)]
 struct Slot {
     state: Mutex<Session>,
-    warm: Mutex<Option<Arc<ollama::Abort>>>,
-    /// Finals waiting for `state`: a warm-up arriving meanwhile stands aside.
-    finals: std::sync::atomic::AtomicUsize,
+    running: Mutex<Option<Arc<ollama::Abort>>>,
+    /// Finals and completions waiting for `state`: a warm-up arriving
+    /// meanwhile stands aside, and so does a completion that got the slot
+    /// before it started (the one waiting is newer, or a final).
+    waiting: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Default)]
@@ -561,14 +776,15 @@ fn session(key: &str) -> Arc<Slot> {
 // ── The ask ─────────────────────────────────────────────────────────────────
 
 /// Who asks: the session's key (one per tab and process), the CLI, the phase,
-/// and whether the tab is a local-model one (its agent owns the GPU, so it is
-/// never warmed).
+/// whether the tab is a local-model one (its agent owns the GPU, so it is
+/// never warmed), and — a `complete` — the draft being typed.
 #[derive(Debug, Clone, Copy)]
 pub struct Ask<'a> {
     pub key: &'a str,
     pub agent: &'a str,
     pub phase: Phase,
     pub local_model: bool,
+    pub draft: Option<&'a str>,
 }
 
 /// The two Ollama calls a run makes, as a seam for tests: the model's
@@ -614,24 +830,63 @@ pub(crate) fn keep_alive_for(setting: Option<&str>, pinned: bool) -> serde_json:
     }
 }
 
-/// [`suggest_with`] against the configured Ollama and today's settings.
-/// Blocking: call it off the async runtime.
-pub fn suggest_blocking(ask: &Ask<'_>, transcript: &AgentTranscript) -> NextPrompt {
-    let settings = crate::storage::load_settings().unwrap_or_default();
-    let ollama = Ollama {
+/// The configured Ollama, for [`suggest_blocking`] and [`complete_kept_blocking`].
+fn with_ollama<T>(run: impl FnOnce(&Ollama<'_>) -> T) -> T {
+    run(&Ollama {
         caps: &ollama::capabilities_of_at,
         pinned: &|addr, model| {
             ollama::ollama_http_at(addr, "GET", "/api/ps", None, PS_TIMEOUT)
                 .is_ok_and(|body| pinned_in_ps(&body, model, chrono::Utc::now()))
         },
         chat: &|addr, body, timeout, abort| ollama::ollama_http_abortable(addr, "POST", "/api/chat", Some(body), timeout, abort),
-    };
-    suggest_with(&settings, ask, transcript, &ollama)
+    })
+}
+
+/// [`suggest_with`] against the configured Ollama and today's settings.
+/// Blocking: call it off the async runtime.
+pub fn suggest_blocking(ask: &Ask<'_>, transcript: &AgentTranscript) -> NextPrompt {
+    let settings = crate::storage::load_settings().unwrap_or_default();
+    with_ollama(|ollama| suggest_with(&settings, ask, transcript, ollama))
+}
+
+/// [`complete_kept_with`] against the configured Ollama and today's settings:
+/// what a `complete` ask is answered with before the transcript is read.
+/// `None` says to read it and call [`suggest_blocking`]. Blocking.
+pub fn complete_kept_blocking(ask: &Ask<'_>) -> Option<NextPrompt> {
+    let settings = crate::storage::load_settings().unwrap_or_default();
+    with_ollama(|ollama| complete_kept_with(&settings, ask, ollama))
+}
+
+/// Why a `complete` ask is answered without a model run, if it is: the
+/// draft is not one to complete, or completions (or all AI) are switched off.
+fn complete_refusal(settings: &Settings, ask: &Ask<'_>) -> Option<Status> {
+    if ask.draft.and_then(draft_tail).is_none() {
+        return Some(Status::Skipped);
+    }
+    let off = settings.prompt_autocomplete == Some(false) || crate::services::ai_switch::off_now(settings.ai_off, settings.ai_off_until);
+    off.then_some(Status::Unavailable)
+}
+
+/// A `complete` ask answered from the ended turn the session's slot read
+/// within [`KEPT_FOR`] — no transcript read. `None` when nothing that fresh
+/// is kept (the caller reads the transcript and asks [`suggest_with`]); an
+/// ask that needs no turn at all (see [`complete_refusal`]) is answered here.
+pub(crate) fn complete_kept_with(settings: &Settings, ask: &Ask<'_>, backend: &Ollama<'_>) -> Option<NextPrompt> {
+    if ask.phase != Phase::Complete {
+        return None;
+    }
+    if let Some(status) = complete_refusal(settings, ask) {
+        return Some(NextPrompt::status(status));
+    }
+    run(settings, ask, None, backend)
 }
 
 /// One ask, answered with a status, never an error (Contract).
 pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &AgentTranscript, backend: &Ollama<'_>) -> NextPrompt {
     if ask.phase == Phase::Warm && ask.local_model {
+        return NextPrompt::status(Status::Skipped);
+    }
+    if ask.phase == Phase::Complete && ask.draft.and_then(draft_tail).is_none() {
         return NextPrompt::status(Status::Skipped);
     }
     if !transcript.available {
@@ -640,51 +895,70 @@ pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &Agen
     let Some(turn) = current_turn(transcript) else {
         return NextPrompt::status(Status::Skipped);
     };
-    let answer = match ask.phase {
-        Phase::Final => match turn.final_answer() {
-            Some(answer) => Some(answer),
-            None => return NextPrompt::status(Status::Skipped),
-        },
-        Phase::Warm => None,
-    };
-    // The AI switch (`services::ai_switch`), read off the same snapshot.
+    if ask.phase == Phase::Final && turn.final_answer().is_none() {
+        return NextPrompt::status(Status::Skipped);
+    }
+    // The AI switch (`services::ai_switch`) and the completions' own switch,
+    // read off the same snapshot.
     if crate::services::ai_switch::off_now(settings.ai_off, settings.ai_off_until) {
         return NextPrompt::status(Status::Unavailable);
     }
-    let key = turn_key(turn.prompt, turn.entries.last());
-    let Some(model) = suggest_model_from(settings) else {
-        return NextPrompt::refused(Status::NoModel, NO_MODEL.to_string());
-    };
+    if ask.phase == Phase::Complete && settings.prompt_autocomplete == Some(false) {
+        return NextPrompt::status(Status::Unavailable);
+    }
+    run(settings, ask, Some(turn), backend).unwrap_or_else(|| NextPrompt::status(Status::Unavailable))
+}
 
+/// The run both entries share: the session's slot, the gate, the request.
+/// `turn` is the transcript's newest turn, or `None` for a completion built
+/// on the ended turn the slot keeps — answered `None` when it keeps none.
+fn run(settings: &Settings, ask: &Ask<'_>, turn: Option<Turn<'_>>, backend: &Ollama<'_>) -> Option<NextPrompt> {
+    let draft = ask.draft.filter(|_| ask.phase == Phase::Complete);
+    let tail = draft.and_then(draft_tail);
+    let read_key = turn.map(|turn| turn_key(turn.prompt, turn.entries.last()));
+    let busy = || Some(NextPrompt { turn_key: read_key.clone(), ..NextPrompt::status(Status::Busy) });
     let slot = session(ask.key);
     let mut state = match ask.phase {
-        Phase::Final => {
-            // A turn's suggestion never waits behind a warm-up: that one is
-            // ended, and its lock comes free as soon as its socket closes.
-            slot.finals.fetch_add(1, Ordering::SeqCst);
-            if let Some(warm) = slot.warm.lock_ok().as_ref() {
-                warm.abort();
+        Phase::Final | Phase::Complete => {
+            // A turn's suggestion never waits behind a warm-up, nor a draft's
+            // completion behind an older one: that run is ended, and its lock
+            // comes free as soon as its socket closes.
+            slot.waiting.fetch_add(1, Ordering::SeqCst);
+            if let Some(running) = slot.running.lock_ok().as_ref() {
+                running.abort();
             }
             let state = slot.state.lock_ok();
-            slot.finals.fetch_sub(1, Ordering::SeqCst);
+            slot.waiting.fetch_sub(1, Ordering::SeqCst);
             state
         }
         Phase::Warm => match slot.state.try_lock() {
-            Ok(_) if slot.finals.load(Ordering::SeqCst) > 0 => return NextPrompt::keyed(Status::Busy, &key),
-            Ok(guard) => guard,
+            Ok(guard) if slot.waiting.load(Ordering::SeqCst) == 0 => guard,
+            Ok(_) | Err(TryLockError::WouldBlock) => return busy(),
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(TryLockError::WouldBlock) => return NextPrompt::keyed(Status::Busy, &key),
         },
+    };
+    let key = match read_key.clone() {
+        Some(key) => key,
+        None => state.ended.as_ref().filter(|(at, ..)| at.elapsed() < KEPT_FOR).map(|(_, key, _)| key.clone())?,
+    };
+    let Some(model) = suggest_model_from(settings) else {
+        return Some(NextPrompt::refused(Status::NoModel, NO_MODEL.to_string()));
     };
     match ask.phase {
         Phase::Final => {
-            if let Some((answered, text)) = state.answered.as_ref().filter(|(answered, _)| *answered == key) {
-                return NextPrompt { text: text.clone(), ..NextPrompt::keyed(Status::Ok, answered) };
+            if let Some((answered, text, by)) = state.answered.as_ref().filter(|(answered, ..)| *answered == key) {
+                return Some(NextPrompt::answered(text.clone(), by, answered));
+            }
+        }
+        Phase::Complete => {
+            let same = |(answered, typed, ..): &&(String, String, Option<String>, String)| *answered == key && Some(typed.as_str()) == draft;
+            if let Some((answered, _, text, by)) = state.completed.as_ref().filter(same) {
+                return Some(NextPrompt::answered(text.clone(), by, answered));
             }
         }
         Phase::Warm => {
             if state.last_warm.is_some_and(|at| at.elapsed() < WARM_MIN_GAP) {
-                return NextPrompt::keyed(Status::Busy, &key);
+                return Some(NextPrompt::keyed(Status::Busy, &key));
             }
             state.last_warm = Some(Instant::now());
         }
@@ -693,66 +967,123 @@ pub(crate) fn suggest_with(settings: &Settings, ask: &Ask<'_>, transcript: &Agen
     // The gate, before a byte of the turn is sent: loopback, allowed, local.
     let addr = match ollama_local::preflight(settings, &model) {
         Ok(addr) => addr,
-        Err(LocalRefusal::NotRunning) => return NextPrompt::keyed(Status::NotRunning, &key),
-        Err(refusal) => return NextPrompt { turn_key: Some(key), ..NextPrompt::refused(Status::Refused, refusal_reason(refusal, &model)) },
+        Err(LocalRefusal::NotRunning) => return Some(NextPrompt::keyed(Status::NotRunning, &key)),
+        Err(refusal) => {
+            return Some(NextPrompt { turn_key: Some(key), ..NextPrompt::refused(Status::Refused, refusal_reason(refusal, &model)) })
+        }
     };
     let caps = (backend.caps)(&addr, &model);
     if ollama_local::embedding_only(&caps) {
         let reason = format!("the model '{model}' is embedding-only, so it cannot write a suggestion — pick a completion model for the Suggestions role.");
-        return NextPrompt { turn_key: Some(key), ..NextPrompt::refused(Status::Refused, reason) };
+        return Some(NextPrompt { turn_key: Some(key), ..NextPrompt::refused(Status::Refused, reason) });
     }
 
-    let budget = budget_tokens(settings.ollama_context_length);
-    let prompt = prompt_for(&mut state.prompt, ask.agent, turn, budget);
-    let user = match ask.phase {
-        Phase::Warm => prompt.message().to_string(),
-        Phase::Final => prompt.final_message(answer),
+    // The turn's messages: grown from the transcript's turn, or the kept ones.
+    let messages = match turn {
+        Some(turn) => {
+            let budget = budget_tokens(settings.ollama_context_length);
+            let prompt = prompt_for(&mut state.prompt, ask.agent, turn, budget);
+            let ended = turn.final_answer();
+            let messages = match ask.phase {
+                Phase::Warm => prompt.warm_messages(),
+                Phase::Final | Phase::Complete => prompt.final_messages(ended),
+            };
+            state.ended = ended.filter(|_| ask.phase != Phase::Warm).map(|_| (Instant::now(), key.clone(), messages.clone()));
+            messages
+        }
+        None => state.ended.as_ref().map(|(.., messages)| messages.clone())?,
     };
+    // A completion follows the turn with the turn's suggestion as the model's
+    // reply (`NONE` when it has none yet), then the draft.
+    let follow_up = match (draft, tail.as_deref()) {
+        (Some(draft), Some(tail)) => {
+            let reply = state.answered.as_ref().filter(|(answered, ..)| *answered == key).and_then(|(_, text, _)| text.clone());
+            Some((reply.unwrap_or_else(|| "NONE".to_string()), complete_message(draft, tail)))
+        }
+        _ => None,
+    };
+    let follow_up = follow_up.as_ref().map(|(reply, user)| (reply.as_str(), user.as_str()));
     let keep_alive = keep_alive_for(settings.ollama_keep_alive.as_deref(), (backend.pinned)(&addr, &model));
-    let body = chat_body(&model, &user, ask.phase, caps.iter().any(|c| c == "thinking"), keep_alive);
-    let timeout = if ask.phase == Phase::Warm { WARM_TIMEOUT } else { FINAL_TIMEOUT };
+    let body = chat_body(&model, &messages, follow_up, ask.phase, caps.iter().any(|c| c == "thinking"), keep_alive);
+    let timeout = match ask.phase {
+        Phase::Warm => WARM_TIMEOUT,
+        Phase::Final => FINAL_TIMEOUT,
+        Phase::Complete => COMPLETE_TIMEOUT,
+    };
     let abort = Arc::new(ollama::Abort::default());
-    if ask.phase == Phase::Warm {
-        *slot.warm.lock_ok() = Some(abort.clone());
+    let abortable = ask.phase != Phase::Final;
+    if abortable {
+        *slot.running.lock_ok() = Some(abort.clone());
     }
-    let sent = (backend.chat)(&addr, &body, timeout, &abort);
-    if ask.phase == Phase::Warm {
-        slot.warm.lock_ok().take();
+    // A final or a newer draft's completion arrived while this one set up:
+    // it could not end a run not yet started, so this one stands aside.
+    let sent = if ask.phase == Phase::Complete && slot.waiting.load(Ordering::SeqCst) > 0 {
+        Err(ollama::ABORTED.to_string())
+    } else {
+        (backend.chat)(&addr, &body, timeout, &abort)
+    };
+    if abortable {
+        slot.running.lock_ok().take();
     }
     let raw = match sent {
         Ok(raw) => raw,
-        // A final ended it; what Ollama read of the turn so far stays cached.
-        Err(error) if error == ollama::ABORTED => return NextPrompt::keyed(Status::Skipped, &key),
-        Err(error) if error == ollama::MODEL_NOT_RUNNING => return NextPrompt::keyed(Status::NotRunning, &key),
-        Err(_) => return NextPrompt::keyed(Status::Unavailable, &key),
+        // A final or a newer completion ended it; what Ollama read of the
+        // turn so far stays cached.
+        Err(error) if error == ollama::ABORTED => return Some(NextPrompt::keyed(Status::Skipped, &key)),
+        Err(error) if error == ollama::MODEL_NOT_RUNNING => return Some(NextPrompt::keyed(Status::NotRunning, &key)),
+        Err(_) => return Some(NextPrompt::keyed(Status::Unavailable, &key)),
     };
     if ask.phase == Phase::Warm {
-        return NextPrompt::keyed(Status::Warmed, &key);
+        return Some(NextPrompt::keyed(Status::Warmed, &key));
     }
     let Some(content) = serde_json::from_str::<serde_json::Value>(&raw).ok().and_then(|v| v["message"]["content"].as_str().map(String::from)) else {
-        return NextPrompt::keyed(Status::Unavailable, &key);
+        return Some(NextPrompt::keyed(Status::Unavailable, &key));
     };
-    let text = clean(&content);
-    state.answered = Some((key.clone(), text.clone()));
-    NextPrompt { text, ..NextPrompt::keyed(Status::Ok, &key) }
+    let text = match (draft, tail.as_deref()) {
+        (Some(draft), Some(tail)) => {
+            let text = continuation(&content, tail, draft);
+            state.completed = Some((key.clone(), draft.to_string(), text.clone(), model.clone()));
+            text
+        }
+        _ => {
+            let text = clean(&content);
+            state.answered = Some((key.clone(), text.clone(), model.clone()));
+            text
+        }
+    };
+    Some(NextPrompt::answered(text, &model, &key))
 }
 
-/// The `/api/chat` body. A warm-up and the final run differ only in
-/// `num_predict`: anything else that differed (the context length, the
-/// thinking switch) would reload the model or re-render the template and
+/// The `/api/chat` body: the system prompt, the turn's user messages with
+/// [`TURN_GOES_ON`] between them, and for a completion its `follow_up` — the
+/// model's reply and the draft's user message. Otherwise the phases differ
+/// only in `num_predict`: anything else that differed (the context length,
+/// the thinking switch) would reload the model or re-render the template and
 /// throw the cache away.
-fn chat_body(model: &str, user: &str, phase: Phase, thinking: bool, keep_alive: serde_json::Value) -> String {
-    let num_predict = if phase == Phase::Warm { 1 } else { FINAL_NUM_PREDICT };
+fn chat_body(model: &str, turn: &[String], follow_up: Option<(&str, &str)>, phase: Phase, thinking: bool, keep_alive: serde_json::Value) -> String {
+    let num_predict = match phase {
+        Phase::Warm => 1,
+        Phase::Final => FINAL_NUM_PREDICT,
+        Phase::Complete => COMPLETE_NUM_PREDICT,
+    };
     let mut body = serde_json::json!({
         "model": model,
         "stream": false,
         "keep_alive": keep_alive,
         "options": { "temperature": 0.2, "num_predict": num_predict },
-        "messages": [
-            { "role": "system", "content": SYSTEM },
-            { "role": "user", "content": user },
-        ],
     });
+    let mut messages = vec![serde_json::json!({ "role": "system", "content": SYSTEM })];
+    for (at, user) in turn.iter().enumerate() {
+        if at > 0 {
+            messages.push(serde_json::json!({ "role": "assistant", "content": TURN_GOES_ON }));
+        }
+        messages.push(serde_json::json!({ "role": "user", "content": user }));
+    }
+    if let Some((reply, draft)) = follow_up {
+        messages.push(serde_json::json!({ "role": "assistant", "content": reply }));
+        messages.push(serde_json::json!({ "role": "user", "content": draft }));
+    }
+    body["messages"] = serde_json::Value::Array(messages);
     // A thinking model would spend the few tokens a line gets on its
     // reasoning; one without the capability rejects the field.
     if thinking {

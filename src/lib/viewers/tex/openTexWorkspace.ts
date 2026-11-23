@@ -10,10 +10,11 @@ import {
 import { resolveTexRoot } from "./tex";
 import { basename, dirname } from "../../paths";
 import { openTabInScope } from "../../tabs/tabScopeContext";
+import { isFileTab } from "../../tabs/fileTab";
 
 /** Whether a tab is THE workspace tab of the main document `root`. */
 const isWorkspaceFor = (root: string) => (t: TabEntry) =>
-  t.kind === "embed" && t.viewer === "texworkspace" && t.embedPath === root;
+  isFileTab(t, root, "texworkspace");
 
 /**
  * The single open-a-LaTeX-file policy: open (or focus) the ONE "TeX workspace"
@@ -86,7 +87,7 @@ export async function openTexWorkspace(
   // A CHILD editor tab (a drop, a followed link) never matches: its `embedPath`
   // is not the root the click resolved to.
   const isLegacyEditor = (t: TabEntry) =>
-    t.kind === "embed" && t.viewer === "tex" && t.embedPath === root;
+    t.viewer === "tex" && isFileTab(t, root, "tex");
   const existing = scopeTabs.find((t) => isWorkspaceFor(root)(t) || isLegacyEditor(t));
   if (existing) {
     if (isLegacyEditor(existing)) store.setTabViewer(existing.key, "texworkspace");

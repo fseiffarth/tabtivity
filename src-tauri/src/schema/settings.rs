@@ -566,6 +566,12 @@ pub struct Settings {
     /// has never heard of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_roles: Option<HashMap<String, String>>,
+    /// Whether the Suggestions model also completes a prompt while it is being
+    /// typed (`services::agent::next_prompt`, `complete`): the dim text after
+    /// the caret in the Chat composer and steering's prompt box, a strip on the
+    /// phone. Unset is on; `false` leaves the turn-end suggestion alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_autocomplete: Option<bool>,
     /// Missing/unknown provider retains Ollama. Prose always retains its role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_completion_provider: Option<String>,

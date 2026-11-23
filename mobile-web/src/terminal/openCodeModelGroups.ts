@@ -38,7 +38,7 @@ const TITLES: Record<string, TranslationKey> = {
  * and every other CLI's list is shown as it comes. One answer for the markup
  * model chip, the reader, the steering box and the phone's sheet. */
 export function isOpenCodeModelList(agentLabel: string | undefined, stepTitle: string | undefined): boolean {
-  return isOpenCodeTab(agentLabel) && stepTitle === "Select model";
+  return isOpenCodeTab(agentLabel) && (stepTitle === "Select model" || stepTitle === "Search models" || stepTitle === "Free models");
 }
 
 export function openCodeModelGroupTitle<T>(group: OpenCodeModelGroup<T>, t: (key: TranslationKey) => string): string {

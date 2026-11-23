@@ -96,15 +96,25 @@ async function pillFor(path: string): Promise<HTMLElement> {
   return pill as HTMLElement;
 }
 
+async function openWorktrees() {
+  await userEvent.setup().click(await screen.findByRole("button", { name: /^Worktrees/, expanded: false }));
+}
+
+async function openBranches() {
+  await userEvent.setup().click(await screen.findByRole("button", { name: /^Branches/, expanded: false }));
+}
+
 async function renderHistory() {
   await act(async () => {
     render(<GitHistory projectDir="/p" />);
   });
+  await openWorktrees();
 }
 
 describe("#23 git worktrees", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     worktrees = WORKTREES;
     setupInvoke();
   });
@@ -113,13 +123,24 @@ describe("#23 git worktrees", () => {
     vi.unstubAllGlobals();
   });
 
-  it("lists the worktrees", async () => {
-    await renderHistory();
-    expect(await screen.findByText("Worktrees")).toBeTruthy();
-    // main worktree (branch "main") and the linked "feature" worktree.
-    // Scope to the worktree pill: "feature" also appears as a branch pill.
-    const featurePill = (await screen.findByTitle(`/p/${NAMES.worktreesDir}/feature`)) as HTMLElement;
-    expect(featurePill.textContent).toContain("feature");
+  it("starts both lists collapsed and remembers them independently per repository", async () => {
+    const { rerender } = render(<GitHistory projectDir="/p" />);
+    const user = userEvent.setup();
+    expect(await screen.findByRole("button", { name: /^Branches/, expanded: false })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /^Worktrees/, expanded: false })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Select worktree feature" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "spare" })).toBeNull();
+
+    await openBranches();
+    await openWorktrees();
+    expect(await screen.findByRole("button", { name: "Select worktree feature" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^Worktrees/, expanded: true }));
+
+    rerender(<GitHistory projectDir="/other" />);
+    expect(await screen.findByRole("button", { name: /^Branches/, expanded: false })).toBeTruthy();
+    rerender(<GitHistory projectDir="/p" />);
+    expect(await screen.findByRole("button", { name: /^Branches/, expanded: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Worktrees/, expanded: false })).toBeTruthy();
   });
 
   it("create form sends git_worktree_add with camelCase args", async () => {
@@ -335,7 +356,7 @@ describe("#23 git worktrees", () => {
     await act(async () => {
       render(<GitHistory projectDir="/p" projectId="pid" remote />);
     });
-    await screen.findByText("Worktrees");
+    await openWorktrees();
     mockInvoke.mockClear();
     await user.click(screen.getByTitle("Side"));
     await user.click(screen.getByRole("option", { name: "Mirror" }));
@@ -365,6 +386,7 @@ describe("#23 git worktrees", () => {
 describe("selected worktree context", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     worktrees = WORKTREES;
     mockInvoke.mockImplementation((cmd: string, args: Record<string, unknown> = {}) => {
       const selection = args.worktree as { path: string; site: string } | undefined;
@@ -380,11 +402,13 @@ describe("selected worktree context", () => {
     const user = userEvent.setup();
     const onWorktreeChanged = vi.fn();
     await act(async () => { render(<GitHistory projectDir="/p" onWorktreeChanged={onWorktreeChanged} />); });
+    await openWorktrees();
+    await openBranches();
     await user.click(screen.getByRole("button", { name: "Select worktree feature" }));
     await screen.findByText("feature history");
     const worktree = { path: `/p/${NAMES.worktreesDir}/feature`, site: "host" };
     expect(onWorktreeChanged).toHaveBeenLastCalledWith(worktree);
-    expect(mockInvoke).toHaveBeenCalledWith("git_log", { projectDir: "/p", worktree, limit: 100, skip: 0 });
+    expect(mockInvoke).toHaveBeenCalledWith("git_log", { projectDir: "/p", worktree, limit: 20, skip: 0 });
     expect(screen.getByRole("button", { name: "feature" }).className).toContain("current");
     await user.click(screen.getByRole("button", { name: "spare" }));
     expect(mockInvoke).toHaveBeenCalledWith("git_checkout", { projectDir: "/p", worktree, target: "spare" });
@@ -395,6 +419,7 @@ describe("selected worktree context", () => {
   it("a branch in another worktree jumps there without checking it out", async () => {
     const user = userEvent.setup();
     await renderHistory();
+    await openBranches();
     await user.click(screen.getByRole("button", { name: "feature Used in feature" }));
     await screen.findByText("feature history");
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "git_checkout")).toBe(false);
@@ -406,6 +431,7 @@ describe("selected worktree context", () => {
   it("a mirror selection uses explicit mirror context throughout", async () => {
     const user = userEvent.setup();
     await act(async () => { render(<GitHistory projectDir="/p" remote projectId="pid" />); });
+    await openWorktrees();
     await user.click(screen.getByTitle("Side"));
     await user.click(screen.getByRole("option", { name: "Mirror" }));
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_branches", { projectDir: "/p", worktree: { path: "", site: "mirror" } }));
@@ -426,6 +452,7 @@ describe("selected worktree context", () => {
     const user = userEvent.setup();
     let rerender!: ReturnType<typeof render>["rerender"];
     await act(async () => { ({ rerender } = render(<GitHistory projectDir="/p" />)); });
+    await openWorktrees();
     const previous = mockInvoke.getMockImplementation()!;
     let answer!: (value: typeof COMMITS) => void;
     mockInvoke.mockImplementation((cmd: string, args: Record<string, unknown>) => {

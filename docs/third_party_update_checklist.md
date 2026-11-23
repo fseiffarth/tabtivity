@@ -2242,6 +2242,43 @@ background instead of being killed; a subagent's permission prompt now shows
 while its session is viewed and over an open composer; the footer drops time
 to first token; schedules became automations.
 
+**2.4.0** (2026-11-23, Linux, local stub). The full and mini TUIs completed
+the tool, approval, question and session-plugin probes. All four resume
+cases restored history, and the warm-up exited 0. The Rust store reader found
+18 entries, one readable subagent and two file changes. All 12 remote-store
+snapshots passed SQLite's quick check. Tabby's web search succeeded and its
+forced shell and subagent calls were refused. The advertised list still
+includes `skill`. The help snapshots add `machine` to the top-level commands.
+
+The full TUI now opens **Free models** with a wrapped subtitle and model
+details below the list, or **Search models** with the filter in the header
+and a square marking the current model. Captures at 42, 60 and 120 columns
+cover both. Selecting by name applied Big Pickle, and selecting by name and
+provider opened GPT-6.2 Astra's variant step. That step has no filter.
+Its bar is the cursor, the square is the saved variant, and arrows followed
+by Enter applied medium. Mini still opens the previous searchable picker.
+Upstream's new MCP-event automations are a candidate for project-tab jobs.
+[OpenCode release notes](https://opencode.ai/changelog/v2.4.0)
+
+**2.4.1** (2026-11-23, Linux, local stub, npm binaries of both versions run
+side by side). `turns.py` full, mini and `ask`, `tabby.py`, `resume.py`,
+`hooks.py events` and `turn`, and `remote_store.py` print the same lines
+(every turn word PASS, the nested run moves neither record, 12 snapshots
+pass `quick_check`); the store reader reads 18 entries, the subagent and two
+changes; help, including `models`, is unchanged. One reader-visible change:
+a provider set only in config (the stub, and the app's inline Ollama
+provider) now shows in the full TUI's model picker. 2.4.0 opened `Free
+models` with no current row and a `Connect provider` tip beside permission
+prompts; 2.4.1 opens `Search models` with `Ollama (local)` › `stub` first
+and marked, and drops the tip. The readers already take both titles. The
+provider's `whitelist` is still dropped: `opencode models` lists every
+installed Ollama model on both versions, so a local tab's picker now shows
+them all. A home 2.4.0 used opens 2.4.1 with no What's new notice. Not
+exercised: the SDK's subscription-abort fix (the session plugin's
+`ctx.event.subscribe()` was unaffected), compaction, and the experimental
+`model_speeds` and plugin `ctx.experimental.automation` APIs.
+[OpenCode release notes](https://opencode.ai/changelog/v2.4.1)
+
 Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
 run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
 install -g @opencode/cli`, as both link `opencode`), and the update check
@@ -2578,6 +2615,21 @@ status line then names the planner), `/thinking`, Esc right after a send now
 cancels it (`Message not sent: canceled before it was sent`), Auto mode reads
 outside the workspace without asking, `AI: Out of credits` only with a positive
 balance. Not reached: a real plan's link, a real sign-in.
+
+**1.5.15** (2026-11-23, Linux, read-only binary copy and Gemini stub).
+The model and effort dialogs, queued footer at 44 and 56 columns, sign-in
+screens, hook registration, distinct same-folder tabs, resume and concurrent
+conversation warning were exercised again. Both store schemas and the three
+prompt/answer pairs matched 1.5.14. The remote-store probe still observed
+separate conversation presence locks. With `AGY_CLI_AUTO_COMPACT_OVERRIDE=80%`,
+`/context` showed a threshold of 838.9k and `/model` marked the active row
+`(current · 838860)`. Keep the count out of the picker label. The threshold
+is a candidate for the Reader's context card. Over ACP stdio, `session/load`
+replayed all three prompts and answers in order before its reply, which
+also carried models, modes and config options. An unknown session returned
+`-32002`. Restoring a pending approval on reattach remains untested.
+[Antigravity release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.5.15)
+
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row

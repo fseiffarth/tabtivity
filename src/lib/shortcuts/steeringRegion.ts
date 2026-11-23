@@ -467,7 +467,8 @@ export function markLayer(layer: HTMLElement | null) {
  *  is no other page to go to. */
 export function stepSettingsPage(delta: 1 | -1): boolean {
   const pages = Array.from(
-    settingsDialog()?.querySelectorAll<HTMLElement>(".settings-navigation-links button") ?? [],
+    // The pages, or the search's results — never a result's copy-link button.
+    settingsDialog()?.querySelectorAll<HTMLElement>(".settings-navigation-links button:not(.settings-navigation-copy)") ?? [],
   );
   if (pages.length === 0) return false;
   const at = pages.findIndex((el) => el.matches('[aria-current]:not([aria-current="false"])'));
@@ -696,12 +697,26 @@ export function focusedTypingField(layer: HTMLElement): HTMLElement | null {
  * DOM focus and the caller leaves steering for the user to type; "press" — it
  * was clicked; "open" — it was double-clicked; null — no cursor.
  */
-/** `root`'s first shown text field — the + menu's filter, a search box. */
+/** `root`'s search box: a shown field marked `data-steering-search`, else —
+ *  on a surface without a search toggle — its first shown text field (the +
+ *  menu's filter, settings' search). Never a dropdown (`select`), which `/`
+ *  would hand the arrows; and where a toggle shows the search, never some
+ *  other box that happens to be open (the side panel's commit message). */
 export function regionSearchField(root: HTMLElement): HTMLElement | null {
-  return regionTargets(root).find(isTextEntry) ?? null;
+  const typing = regionTargets(root).filter((el) => isTextEntry(el) && !(el instanceof HTMLSelectElement));
+  const marked = typing.find((el) => el.hasAttribute("data-steering-search"));
+  if (marked) return marked;
+  if (root.querySelector("[data-steering-search-toggle]")) return null;
+  return typing[0] ?? null;
 }
 
-/** Hand `root`'s first text field the caret (steering's `/`). False when the
+/** The button that shows `root`'s search box while it is hidden (the side
+ *  panel's Files search), or null. */
+export function regionSearchToggle(root: HTMLElement): HTMLElement | null {
+  return root.querySelector<HTMLElement>('[data-steering-search-toggle][aria-expanded="false"]');
+}
+
+/** Hand `root`'s search box the caret (steering's `/`). False when the
  *  surface has none. */
 export function focusRegionSearch(root: HTMLElement): boolean {
   const field = regionSearchField(root);

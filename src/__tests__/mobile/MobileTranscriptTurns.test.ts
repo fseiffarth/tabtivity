@@ -113,6 +113,47 @@ describe("slashCommand", () => {
     expect(commandRuns(turns, new Set([1])).folded.has(0)).toBe(false);
     expect([...commandRuns(turns, new Set([1])).folded]).toEqual([1]);
   });
+  it("shows only the final model choice among consecutive settings", () => {
+    const turns = transcriptTurns([
+      { kind: "prompt", text: "/model", setting: "Fable 5.2", at: "1" },
+      { kind: "prompt", text: "/effort high", at: "2" },
+      { kind: "prompt", text: "/models", setting: "Opus 5.5", at: "3" },
+      { kind: "prompt", text: "/model sonnet", setting: "Sonnet 5", at: "4" },
+      { kind: "prompt", text: "/plan", at: "5" },
+    ]);
+    const runs = commandRuns(turns);
+    expect([...runs.folded]).toEqual([0, 1, 2, 3]);
+    expect(runs.lead.get(4)).toBe("/effort high · /model sonnet → Sonnet 5");
+    expect([...runs.lead.keys()]).toEqual([4]);
+    // When a model choice ends the run, it is rendered by that turn itself.
+    expect(commandRuns(turns.slice(0, 4)).lead.get(3)).toBe("/effort high");
+    expect(commandRuns([turns[0], turns[2]]).lead.size).toBe(0);
+  });
+  it("keeps repeated one-off and custom commands separate from settings", () => {
+    const turns = transcriptTurns([
+      { kind: "prompt", text: "/effort low", at: "1" },
+      { kind: "prompt", text: "/effort high", at: "2" },
+      { kind: "prompt", text: "/compact", at: "3" },
+      { kind: "prompt", text: "/compact", at: "4" },
+      { kind: "prompt", text: "/custom:skill", at: "5" },
+      { kind: "prompt", text: "/model opus", at: "6" },
+    ]);
+    const runs = commandRuns(turns);
+    expect([...runs.folded]).toEqual([0]);
+    expect(runs.lead.size).toBe(0);
+  });
+  it("preserves model changes across conversation, days, and pending sends", () => {
+    const first = { kind: "prompt", text: "/models", setting: "Fable 5.2", at: "1" } as const;
+    const last = { kind: "prompt", text: "/models", setting: "Opus 5.5", at: "3" } as const;
+    for (const middle of [
+      { kind: "prompt", text: "hello", at: "2" } as const,
+      { kind: "answer", text: "hello", at: "2" } as const,
+      { kind: "prompt", text: "/models", pending: 1, at: "2" } as const,
+    ]) {
+      expect(commandRuns(transcriptTurns([first, middle, last])).folded.size).toBe(0);
+    }
+    expect(commandRuns(transcriptTurns([first, last]), new Set([1])).folded.size).toBe(0);
+  });
   it("marks only prompts as commands", () => {
     const turns = transcriptTurns([
       { kind: "prompt", text: "/goal ship it", at: "1" },

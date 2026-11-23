@@ -12,9 +12,14 @@
 //! Control on it ("requires a full-scope login token") and turns Claude in
 //! Chrome off. So a tab gets it only while the shared login
 //! (`services::agent_auth`) holds none for Claude — signed out, or the login
-//! gone — and Tabtivity then leaves out `--remote-control`
-//! ([`injects_local`]). A value the user set (this token, an API key, an auth
-//! token) wins, and a tab on an API key (`agent_api_keys`) gets none.
+//! over: Claude ends a login whose refresh was refused by emptying the record
+//! in place, so the file is read, not just found
+//! (`agent_auth::claude_login_live`) — and Tabtivity then leaves out
+//! `--remote-control` ([`injects_local`]). A value the user set (this token,
+//! an API key, an auth token) wins, and a tab on an API key
+//! (`agent_api_keys`) gets none. The token is in a tab's environment from its
+//! start: a tab already running when the login ends has none, and gets it
+//! when it is opened again.
 //!
 //! **Local.** The spawn carries it under its app-named carrier ([`CARRIER`],
 //! in `tmux_local::SECRET_ENV`), which `agent_exec` maps to [`TOKEN_ENV`] in
@@ -25,8 +30,9 @@
 //! **Remote** (`Settings::claude_token_remote`, absent = on). The token rides
 //! ssh's encrypted environment channel as [`REMOTE_ENV`] (`SendEnv`, which a
 //! stock sshd takes for `LC_*`), never the argv, and the remote command
-//! exports [`TOKEN_ENV`] from it only when the host keeps no
-//! `~/.claude/.credentials.json` of its own (`ssh_exec::remote_command`). In a
+//! exports [`TOKEN_ENV`] from it only when the host's own
+//! `~/.claude/.credentials.json` holds no token (`ssh_exec::remote_command`;
+//! none, or a login Claude ended by emptying it). In a
 //! tmux-wrapped tab tmux 3.0+ copies it into the session through a fixed
 //! `update-environment` slot. A host whose sshd refuses `LC_*`, or an older
 //! tmux, simply runs on the host's own login.
@@ -278,10 +284,16 @@ pub(crate) fn inject_remote(opts: &mut crate::terminal::PtyOptions) {
 /// unless the host has its own login, and with `unset` drops [`REMOTE_ENV`]
 /// (an `LC_*` name a later `ssh` from the agent would forward). A group, so
 /// it chains with `&&` and always succeeds.
+///
+/// The host's own login is a credentials file that holds a token: Claude
+/// ends a login in place (both tokens emptied, the file kept), and such a
+/// file — like none at all — leaves the host without one. Any non-empty
+/// token in the file counts, an MCP server's included: when in doubt the
+/// host keeps its own login.
 pub fn remote_export_line(unset: bool) -> String {
     let unset = if unset { format!(" unset {REMOTE_ENV};") } else { String::new() };
     format!(
-        "{{ if [ -n \"${{{REMOTE_ENV}:-}}\" ] && [ ! -s \"$HOME/.claude/.credentials.json\" ]; then export {TOKEN_ENV}=\"${REMOTE_ENV}\"; fi;{unset} }}"
+        "{{ if [ -n \"${{{REMOTE_ENV}:-}}\" ] && ! grep -Eqs '\"(access|refresh)Token\" *: *\"[^\"]' \"$HOME/.claude/.credentials.json\"; then export {TOKEN_ENV}=\"${REMOTE_ENV}\"; fi;{unset} }}"
     )
 }
 
@@ -445,6 +457,7 @@ mod tests {
                 .arg("-c")
                 .arg(script)
                 .env_clear()
+                .envs(std::env::var_os("PATH").map(|path| ("PATH", path)))
                 .env("HOME", home.path())
                 .env(REMOTE_ENV, "tok")
                 .output()
@@ -453,8 +466,20 @@ mod tests {
         };
         assert_eq!(run(), "tok|gone");
         std::fs::create_dir_all(home.path().join(".claude")).unwrap();
-        std::fs::write(home.path().join(".claude").join(".credentials.json"), "{}").unwrap();
-        assert_eq!(run(), "none|gone");
+        let file = home.path().join(".claude").join(".credentials.json");
+        // The host's own login, as Claude writes it and pretty-printed.
+        for login in [
+            r#"{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt","expiresAt":1}}"#,
+            "{\n  \"claudeAiOauth\": {\n    \"refreshToken\": \"rt\"\n  }\n}",
+        ] {
+            std::fs::write(&file, login).unwrap();
+            assert_eq!(run(), "none|gone", "{login}");
+        }
+        // A login Claude ended in place, and a file with none: the token.
+        for over in [r#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#, "{}", ""] {
+            std::fs::write(&file, over).unwrap();
+            assert_eq!(run(), "tok|gone", "{over}");
+        }
     }
 
     #[test]

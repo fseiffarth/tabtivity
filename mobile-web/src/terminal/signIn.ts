@@ -435,7 +435,9 @@ const SIGNED_OUT = [
   /\bnot (?:signed|logged) in\b/iu,
   /\bplease run \/(?:login|auth)\b/iu,
   /\binvalid api key\b/iu,
-  /\b(?:oauth |access |auth )?token (?:has )?expired\b/iu,
+  /\b(?:oauth |access |auth )?token (?:has (?:been )?)?(?:expired|revoked)\b/iu,
+  // Claude 2.1.32x, a login past its maximum age that cannot be refreshed.
+  /\b(?:this )?login reached its time limit\b/iu,
   /\bauthentication (?:is )?required\b/iu,
   // Antigravity 1.3.3, mid-session: "Authentication expired. Please log back in."
   /\bauthentication expired\b/iu,
@@ -443,6 +445,9 @@ const SIGNED_OUT = [
   /\bselect login method\b/iu,
   /\bhow would you like to authenticate\b/iu,
 ];
+
+/** Claude's closing words on every sign-in failure, at the end of the line. */
+const SIGNED_OUT_TAIL = /\s·\s+please run \/(?:login|auth)\s*$/iu;
 
 /** The glyphs a TUI draws before a message: bullets, result hooks, borders,
  * menu cursors. Markdown's own `-`/`*` are not among them. */
@@ -462,6 +467,10 @@ function isSignedOutLine(text: string): boolean {
   const message = labelled ? line.slice(labelled[0].length) : line;
   // An unlabelled message starts a sentence; a wrapped answer line usually does not.
   if (!labelled && !/^\p{Lu}/u.test(message)) return false;
+  // Claude ends every reason with the same tail ("<reason> · Please run
+  // /login"), so a reason it adds later still counts. It must end the line:
+  // a quote of the message in an answer goes on after it.
+  if (SIGNED_OUT_TAIL.test(message)) return true;
   return SIGNED_OUT.some((pattern) => pattern.exec(message)?.index === 0);
 }
 

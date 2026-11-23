@@ -14,8 +14,7 @@ import {
 } from "../../terminal/selectPrompt";
 import { liveModelPick, modelRowsOf, modelRowsStep, sameModelRows } from "../../terminal/modelRows";
 import {
-  openCodeDialogCloseKeys, openCodePickKeys, OpenCodePickerWalk, readOpenCodePickerPage,
-  OPENCODE_MODEL_KEYS,
+  openCodeDialogCloseKeys, openCodeModelKeys, openCodePickKeys, OpenCodePickerWalk, readOpenCodePickerPage,
 } from "../../terminal/openCodeMini";
 import {
   antigravityEffortKeys, readAntigravityEffort, readAntigravityPicker, type AntigravityEffort,
@@ -241,7 +240,7 @@ export function useModelPickerAnswers({
   setKnownStep, setRememberedStep, rememberedStep, setHeldPick, heldPick, sheetAnswered, keptStep,
   setReveal, reveal, revealStuck, effortFor, setEffortFor, setEffortStep, effortStep, sawPicker,
   clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, pickerStep,
-  listedStep, listSettled, modelPreview, pickerAt, effortSlider,
+  listedStep, listSettled, modelPreview, pickerAt, effortSlider, viewportRows,
 }: {
   tab: TabRow;
   pickModel: boolean;
@@ -279,6 +278,9 @@ export function useModelPickerAnswers({
   modelPreview: SelectStep | null;
   pickerAt: number | undefined;
   effortSlider: AntigravityEffort | null;
+  /** The rows on screen now: a dialog among them is closed before the
+   * picker's keys (`openCodeModelKeys`). */
+  viewportRows: MutableRefObject<() => string[]>;
 }) {
   /** The highlight has reached the model an Antigravity tap chose, so the
    * dialog has redrawn its slider for *that* model: a model with stops asks
@@ -327,7 +329,7 @@ export function useModelPickerAnswers({
     setEffortStep(null);
     if (openCode) {
       clearPending();
-      if (!deliver(OPENCODE_MODEL_KEYS)) return;
+      if (!deliver(openCodeModelKeys(viewportRows.current()))) return;
     } else if (!sendAgentText("/model")) return;
     setModelSheet(true);
     // Refused for a tab whose CLI runs elsewhere: the sheet waits as before.
