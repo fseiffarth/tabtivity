@@ -49,13 +49,16 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * (`shared/voiceReading.ts`) — rather than whole, off unset. */
 // `projectsGrid` and `projectsBoxes` remember the Home project list layout on
 // this device: boxes when `projectsBoxes` is set, else grid or list.
-// `chatFilesPane` is the files pane a landscape tablet's chat docks beside the
-// transcript: open or closed as this device left it, off unset. `splitListHidden`
+// `chatOverviewPane` is the pane on the right of a landscape tablet's chat
+// (`ChatOverview`: the session overview, the files library or a file): open or
+// closed as this device left it, on unset. It took over from `chatFilesPane`,
+// the files pane docked there before (off unset), which is only read, once, as
+// its fallback (`readOverviewPane`), so a pane left closed stays closed. `splitListHidden`
 // folds Home's project list away beside an open project on a landscape tablet,
 // so the project takes the whole window; off unset. `chatRailFolded` folds the
 // project's tabs rail beside a landscape tablet's chat (`ChatTabsRail`) to its
 // 64 px tiles; off unset.
-export type MobileFlag = "chatFilesPane" | "chatRailFolded" | "splitListHidden" | "projectsGrid" | "projectsBoxes" | "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "homeHintHold" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintSteering" | "hintsOff" | "focusHandsFree" | "voiceBrief";
+export type MobileFlag = "chatFilesPane" | "chatOverviewPane" | "chatRailFolded" | "splitListHidden" | "projectsGrid" | "projectsBoxes" | "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "homeHintHold" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintSteering" | "hintsOff" | "focusHandsFree" | "voiceBrief";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
@@ -82,6 +85,18 @@ export function writeFlag(name: MobileFlag, value: boolean, storage?: FlagStorag
   } catch {
     // See readFlag.
   }
+}
+
+/** Whether the pane beside a landscape tablet's chat is open (`chatOverviewPane`,
+ * on unset). Unset, the retired `chatFilesPane` answers once and its answer is
+ * stored as the new flag, so whoever had closed the files pane does not find
+ * the new pane open. */
+export function readOverviewPane(storage?: FlagStorage): boolean {
+  const stored = readFlag("chatOverviewPane", true, storage);
+  if (stored === readFlag("chatOverviewPane", false, storage)) return stored;
+  const open = readFlag("chatFilesPane", true, storage);
+  writeFlag("chatOverviewPane", open, storage);
+  return open;
 }
 
 /** A choice among named options, kept the way the flags are. `speechLang` is

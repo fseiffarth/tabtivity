@@ -25,6 +25,8 @@ import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { ChatTabsRail } from "../components/ChatTabsRail";
+import { ChatOverview, type OverviewMode } from "../components/ChatOverview";
+import { SubagentIndexGroups } from "../components/SubagentIndexGroups";
 import { RAIL_WIDE_QUERY, railLayout, railOffered, rememberRailTabs, rememberedRailTabs, sameRailTabs } from "../chatRail";
 import { useVisiblePoll } from "../visiblePoll";
 import { Fragment, memo, useContext, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -66,7 +68,7 @@ import {
 } from "../api";
 import { describeFailure } from "../connection";
 import { readDraft } from "../drafts";
-import { readFlag, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
+import { readFlag, readOverviewPane, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
 import { PHONE_LANDSCAPE_QUERY, useTier } from "../useTier";
 import { useMediaQuery } from "../useMediaQuery";
 import { readSpeechLang, speechTag, type SpeechLang } from "../speechLang";
@@ -1249,30 +1251,56 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   splitRef.current = splitTier;
   /** The project's name, for the tablet header's line over the tab's. */
   const [projectName, setProjectName] = useState<string | null>(null);
-  /** Docked, the drawer is a pane beside the chat that stays open (`chatFilesPane`
-   * remembers it on this device); anywhere else it opens and closes as ever. */
-  const [filesOpen, setFilesOpen] = useState(() => splitTier && readFlag("chatFilesPane"));
+  /** An agent tab of a project (not Tabby's chat) has the session overview
+   * in the pane beside a landscape chat, which switches to the files library;
+   * any other tab's pane is the library alone. */
+  const overviewPane = tab.kind === "agent" && !!project && !bare;
+  /** The pane on the right of a landscape tablet's chat (`ChatOverview`),
+   * open or closed as this device left it (`chatOverviewPane`); a shell's
+   * opens with its library. */
+  const [paneOpen, setPaneOpen] = useState(() => splitTier && readOverviewPane());
+  /** The project's files (`ProjectFiles`): in landscape the library in that
+   * pane, anywhere else the drawer over the chat, opened and closed as ever. */
+  const [filesOpen, setFilesOpen] = useState(() => splitTier && !overviewPane && paneOpen);
+  const filesOpenRef = useRef(filesOpen);
+  filesOpenRef.current = filesOpen;
+  /** The library's own close: in an agent's pane, back to the overview; a
+   * shell's pane closes with it, and stays closed. */
   const closeFiles = useCallback(() => {
     setFilesOpen(false);
-    if (splitRef.current) writeFlag("chatFilesPane", false);
-  }, []);
-  const toggleFiles = () => {
-    const next = !filesOpen;
-    setFilesOpen(next);
-    if (splitTier) writeFlag("chatFilesPane", next);
+    if (splitRef.current && !overviewPane) {
+      setPaneOpen(false);
+      writeFlag("chatOverviewPane", false);
+    }
+  }, [overviewPane]);
+  /** The header's pane button. Closing puts the library away with it. */
+  const togglePane = () => {
+    const next = !paneOpen;
+    setPaneOpen(next);
+    writeFlag("chatOverviewPane", next);
+    setFilesOpen(next && !overviewPane);
   };
+  /** The overview's Project files (and a swipe over the output). */
+  const openFiles = useCallback(() => {
+    setFilesOpen(true);
+    if (splitRef.current) setPaneOpen(true);
+  }, []);
   // A turn of the screen brings the pane back as this device left it in
-  // landscape (a drawer already open stays, docked) and puts it away elsewhere, where it would be a full-screen
-  // drawer over the chat — unless a file or a markup view is open in it (or
-  // tucked away from it): that stays, as the drawer. Neither writes the preference.
+  // landscape (a drawer already open stays, as the library in it) and puts
+  // the files away elsewhere, where they would be a full-screen drawer over
+  // the chat — unless a file or a markup view is open in them (or tucked away
+  // from them): that stays, as the drawer. Neither writes the preference.
   const tierSeen = useRef(tier);
   useEffect(() => {
     if (tierSeen.current === tier) return;
     const was = tierSeen.current;
     tierSeen.current = tier;
-    if (tier === "split") setFilesOpen((open) => open || readFlag("chatFilesPane"));
-    else if (was === "split" && !document.querySelector(".markup-host.away, .markup-host .outbox-viewer")) setFilesOpen(false);
-  }, [tier]);
+    if (tier === "split") {
+      const open = readOverviewPane() || filesOpenRef.current;
+      setPaneOpen(open);
+      if (!overviewPane) setFilesOpen(open);
+    } else if (was === "split" && !document.querySelector(".markup-host.away, .markup-host .outbox-viewer")) setFilesOpen(false);
+  }, [tier, overviewPane]);
   /** The project's tabs, for the rail beside a landscape tablet's chat and
    * the strip under a portrait one's header (`ChatTabsRail`): read with the
    * project's detail below, and while the rail is on screen at the project
@@ -1295,8 +1323,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }, []);
   const railForced = !useMediaQuery(RAIL_WIDE_QUERY);
   const railShown = tablet && !!openTab && railOffered(project, railTabs);
-  /** `main`'s `data-rail`, which the stylesheet's grid reads. */
-  const railAt = railLayout(tier, railShown, railFoldPref || railForced);
   const openTabRef = useRef(openTab);
   openTabRef.current = openTab;
   const openRailTab = useCallback((row: TabRow) => openTabRef.current?.(row), []);
@@ -2088,11 +2114,25 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const filesSwipe = filesLabel !== null && view === "focus";
   /** The drawer is on screen (what `filesOpen` asks, once the project allows it). */
   const filesShown = filesOpen && !!project && filesLabel !== null;
-  /** Landscape on a tablet: the drawer is a pane beside the chat. While a
-   * markup view is tucked away its hosts, this one too, are hidden
-   * (`.markup-host.away`), so the chat then keeps its whole width (`main`'s
-   * `data-files-docked` is left off). */
+  /** Landscape on a tablet: the drawer is the library in the pane beside the chat. */
   const filesDocked = splitTier && filesShown;
+  /** The pane button stands for an agent's overview, else for the library
+   * where the project offers it. */
+  const overviewOffered = splitTier && overviewPane;
+  const paneButton = overviewOffered || (splitTier && !!project && filesLabel !== null);
+  /** What the pane shows (`main`'s `data-overview`, which the stylesheet's
+   * grid reads): the library while it is up, else an agent's overview while
+   * the pane is open. While a markup view is tucked away its hosts, the
+   * library's too, are hidden (`.markup-host.away`): an agent's pane shows
+   * the overview meanwhile, any other tab's chat keeps its whole width. */
+  const paneAt: OverviewMode | undefined = filesDocked && markupAway === null ? "library"
+    : overviewOffered && paneOpen ? "overview" : undefined;
+  /** Wider than the overview: the tabs rail folds meanwhile, without writing
+   * its preference. */
+  const paneWide = paneAt !== undefined && paneAt !== "overview";
+  const railFolded = railForced || paneWide;
+  /** `main`'s `data-rail`, which the stylesheet's grid reads. */
+  const railAt = railLayout(tier, railShown, railFoldPref || railFolded);
   /** Where the output is up for a swipe to read; `readableHost` is mounted
    * with it. */
   const readableShown = view === "focus" && (!altScreen || sessionFocus);
@@ -2103,9 +2143,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     // right→left pulls the files in from the right.
     return installFocusSwipe(stream, {
       onSwipeRight: () => backRef.current(),
-      onSwipeLeft: () => { if (filesSwipe) setFilesOpen(true); },
+      onSwipeLeft: () => { if (filesSwipe) openFiles(); },
     }, { leftEdge: true, rightEdge: filesSwipe });
-  }, [filesSwipe, filesShown, readableShown]);
+  }, [filesSwipe, filesShown, readableShown, openFiles]);
   /** Agent tabs read as a chat (`ReadableTurns`); a shell's output has no
    * turns to lay out. */
   const chat = tab.kind === "agent";
@@ -2712,7 +2752,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * chip's sheet (`selectModel`) and the queued bubbles' two moves
    * (`sendQueuedNow`, `pullQueued`), under the same conditions. */
   const modelPill = tablet && tab.kind === "agent" && !bare && !tab.local_model;
-  const queuePill = tablet && tab.kind === "agent" && queueCli !== null;
+  // In landscape the overview holds the queue and the sent files instead.
+  const queuePill = tablet && tab.kind === "agent" && queueCli !== null && !overviewOffered;
+  /** The subagents at work, which the pane button counts while it is closed. */
+  const runningAgents = useMemo(() => splitByWork(sessionAgents, sessionBusy).running.length, [sessionAgents, sessionBusy]);
+  const paneCount = overviewOffered && paneAt === undefined ? runningAgents : 0;
   // Memoised: the header renders on every keystroke in the composer.
   const queuedCount = useMemo(() => sessionEntries.filter((entry) => entry.kind === "prompt" && entry.queued).length, [sessionEntries]);
   // Where the bubbles carry the pair: the session chat on screen (not the
@@ -2747,7 +2791,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (view !== choice) chooseView(choice);
   };
   const worktreeCaption = tab.kind !== "agent" && tab.worktree ? [t("terminal.reader.worktree", { name: tab.worktree.label })] : [];
-  return <main className={`terminal-screen ${tab.kind}-tab`} data-view={view} data-files-docked={filesDocked && markupAway === null ? "" : undefined} data-rail={railAt} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
+  return <main className={`terminal-screen ${tab.kind}-tab`} data-view={view} data-rail={railAt} data-overview={paneAt} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
         ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} model={{
           label: assistantModels?.models.find((model) => model.id === assistantModels.current)?.label ?? modelChip,
@@ -2764,16 +2808,30 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {queuePill && <button type="button" className="header-pill header-queue" onClick={() => setQueueSheet(true)} aria-haspopup="dialog" aria-expanded={queueSheet} title={t("mobile.queue.title")} aria-label={queuedCount > 0 ? t("mobile.queue.count", { count: queuedCount }) : t("mobile.queue.title")}><ListIcon size="1em" />{queuedCount > 0 && <span className="header-count" aria-hidden="true">{queuedCount}</span>}</button>}
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
-          desktop's "Project files on the phone" switch is on. */}
-      {project && filesLabel !== null && <button
+          desktop's "Project files on the phone" switch is on. In landscape
+          it opens and closes the pane beside the chat instead: an agent's
+          overview (counting the subagents at work while it is closed), any
+          other tab's library. */}
+      {splitTier ? paneButton && <button
+        className={paneCount > 0 ? "drawer-open has-count" : "drawer-open"}
+        data-phone-hint="menu"
+        onClick={togglePane}
+        aria-pressed={paneOpen}
+        aria-label={overviewOffered
+          ? paneCount > 0 ? t("mobile.chatOverview.toggleRunning", { count: paneCount }) : t("mobile.chatOverview.toggle")
+          : t("mobile.files.toggle")}
+        title={t(overviewOffered ? "mobile.chatOverview.toggle" : "mobile.files.toggle")}
+      ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M14.5 4.5v15" /></svg>{paneCount > 0 && <span className="header-count" aria-hidden="true">{paneCount}</span>}</button>
+        : project && filesLabel !== null && <button
         className="drawer-open"
         data-phone-hint="menu"
-        onClick={splitTier ? toggleFiles : () => setFilesOpen(true)}
-        {...(splitTier ? { "aria-pressed": filesOpen } : { "aria-haspopup": "dialog" as const, "aria-expanded": filesOpen })}
-        aria-label={t(splitTier ? "mobile.files.toggle" : "mobile.project.menu")}
-        title={t(splitTier ? "mobile.files.toggle" : "mobile.project.menu")}
+        onClick={() => setFilesOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={filesOpen}
+        aria-label={t("mobile.project.menu")}
+        title={t("mobile.project.menu")}
       >{tablet ? <FolderIcon size="1em" /> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>}</button>}
-      {tabOutbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: tabOutbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{tabOutbox.length}</small></button>}
+      {tabOutbox.length > 0 && !overviewOffered && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: tabOutbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{tabOutbox.length}</small></button>}
       {/* One pill named after the view on screen; its list switches views and,
           on an agent tab's Chat, says where the chat reads from. */}
       <div className="terminal-view-switch" role={tablet ? "group" : undefined} aria-label={tablet ? t("mobile.focus.outputView") : undefined}>
@@ -2799,9 +2857,39 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       tabs={railTabs}
       currentId={tab.id}
       folded={railFoldPref}
-      forceFolded={railForced}
+      forceFolded={railFolded}
       onFold={toggleRailFold}
       onOpen={openRailTab}
+    />}
+    {/* The session overview on the right of a landscape chat: a sibling of
+        the body as the rail is. Over the library (and a file) it is only the
+        way back, the library standing under its head. */}
+    {overviewOffered && paneAt !== undefined && <ChatOverview
+      mode={paneAt}
+      onBack={closeFiles}
+      tabId={tab.id}
+      project={project}
+      agents={sessionAgents}
+      earlierAgents={earlierAgents}
+      agentsEarlier={agentsEarlier}
+      busy={sessionBusy}
+      onOpenAgent={openListedSubagent}
+      onEarlier={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}
+      queued={queueCli !== null ? queuedCount : 0}
+      queueOpen={queueSheet}
+      onQueue={() => setQueueSheet(true)}
+      files={chatFiles}
+      filesMore={changedMore}
+      onOpenFile={openChatFile}
+      onRemoveFile={removeChatFile}
+      sent={tabOutbox}
+      sentScope={outboxScope}
+      onOpenSent={openOutbox}
+      onSentDetails={setOutboxOpen}
+      onGallery={() => setGallery(true)}
+      links={chatLinks}
+      onOpenLink={askIndexLink}
+      onLibrary={filesLabel !== null ? openFiles : undefined}
     />}
     {focusMenu &&<div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
       <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
@@ -2883,8 +2971,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             followReadable(stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120);
             checkPinnedPrompt();
           }}>
-          {/* The session's subagents, files and links, one open list at a time. */}
-          {sessionFocus && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0 || chatLinks.length > 0) && <div ref={chatIndex} className="chat-index">
+          {/* The session's subagents, files and links, one open list at a time;
+              none while the pane beside a landscape chat shows the same. */}
+          {sessionFocus && !openStep && !(overviewOffered && paneAt !== undefined) && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0 || chatLinks.length > 0) && <div ref={chatIndex} className="chat-index">
             {(sessionAgents.length > 0 || agentsEarlier) &&
             <nav className={`subagent-index${subagentListOpen ? " open" : ""}`} aria-label={t("mobile.subagent.indexRegion")}>
               <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => toggleChatIndex("subagents")}>
@@ -2893,22 +2982,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 <svg className={subagentListOpen ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
               </button>
               {subagentListOpen && <div id="mobile-subagent-list" className="subagent-index-list">
-                {([["running", "mobile.subagent.running"], ["finished", "mobile.subagent.finished"]] as const).map(([group, heading]) => {
-                  const rows = splitByWork(sessionAgents, sessionBusy)[group];
-                  if (rows.length === 0) return null;
-                  const title = t(heading, { count: rows.length });
-                  return <section key={group} className="subagent-index-group" aria-label={title}>
-                    <h3 className="subagent-index-head">{title}</h3>
-                    {rows.map((entry, index) => {
-                      const status = group === "running" ? "working" : entry.finished ? "done" : null;
-                      return <button type="button" key={`${entry.at ?? index}:${index}`} className={status ? "has-status" : undefined} disabled={!entry.subagent} aria-label={`${entry.role ?? t("mobile.subagent.region")} · ${entry.text}`} onClick={() => openListedSubagent(entry)}>
-                        <small>{entry.role ?? t("mobile.subagent.region")}</small>
-                        <span>{entry.text}{entry.cut && "…"}</span>
-                        {status && <AgentStatusMark status={status} />}
-                      </button>;
-                    })}
-                  </section>;
-                })}
+                <SubagentIndexGroups agents={sessionAgents} busy={sessionBusy} onOpen={openListedSubagent} />
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}

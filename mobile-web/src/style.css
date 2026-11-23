@@ -2656,13 +2656,45 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
   .tabbed.split .home-project-card .card strong { font-size:1rem; }
   .tabbed.split .home-project-card .card-trailing { grid-template-columns:auto auto; }
 
-  /* The files, docked: the chat gives up the pane's width and the library
-     stands in the space as a floating rounded panel. z-index 11 keeps a sheet
-     (12) and the viewer (13) over it. Once a file is open the library's own
-     two-pane layout (`files-split`) takes the window, as it does today. */
-  .terminal-screen[data-files-docked] { padding-right:424px; }
-  .terminal-screen[data-files-docked] .files-library:not(.files-split) { inset:12px 12px 12px auto; z-index:11; width:400px; padding:0; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); overflow:hidden; }
-  .terminal-screen[data-files-docked] .focus-menu { right:434px; }
+  /* The pane on the right of the chat (`data-overview` on main): a column of
+     the chat's grid under the header, beside the rail's when there is one. A
+     floating panel 12px off the window's right edge and foot: 308px for the
+     session overview (`ChatOverview`), 400px for the files library, 480px for
+     a file. The library is a grid item there (its host is `display:contents`):
+     on its own panel for a shell, under the overview's head for an agent. Once
+     a file is open in the library its own two-pane layout (`files-split`)
+     takes the window, as it does elsewhere. */
+  .terminal-screen[data-overview] { --overview-col:320px; --overview-head:56px; grid-template-columns:minmax(0,1fr) var(--overview-col); }
+  .terminal-screen[data-overview="library"] { --overview-col:412px; }
+  .terminal-screen[data-overview="file"] { --overview-col:492px; }
+  .terminal-screen[data-rail="open"][data-overview] { grid-template-columns:220px minmax(0,1fr) var(--overview-col); }
+  .terminal-screen[data-rail="folded"][data-overview] { grid-template-columns:76px minmax(0,1fr) var(--overview-col); }
+  .terminal-screen[data-overview] > header { grid-column:1 / -1; grid-row:1; }
+  .terminal-screen[data-overview] > .terminal-body { grid-column:-3 / -2; grid-row:2; }
+  .terminal-screen[data-overview] > .terminal-controls { grid-column:-3 / -2; grid-row:3; }
+  .terminal-screen[data-overview] > .chat-overview { grid-column:-2 / -1; grid-row:2 / span 2; }
+  .terminal-screen[data-overview="library"] .files-library:not(.files-split) { position:relative; inset:auto; z-index:1; grid-column:-2 / -1; grid-row:2 / span 2; min-height:0; width:auto; margin:0 12px 12px 0; padding:0; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); overflow:hidden; }
+  .terminal-screen[data-overview="library"] > .chat-overview ~ .markup-host .files-library:not(.files-split) { margin-top:var(--overview-head); border-radius:0 0 var(--r-panel) var(--r-panel); background:transparent; box-shadow:none; }
+  .chat-overview { display:flex; flex-direction:column; min-height:0; margin:0 12px 12px 0; overflow:hidden; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); }
+  .chat-overview-head { display:flex; flex:0 0 auto; align-items:center; gap:6px; box-sizing:border-box; height:var(--overview-head); padding:8px 12px 4px 16px; }
+  .chat-overview-head > .untested { margin:0; }
+  .chat-overview-title { flex:1 1 auto; margin:0; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:650; }
+  .chat-overview-back { display:inline-flex; flex:1 1 auto; align-items:center; gap:2px; min-height:var(--hit); margin-left:-8px; padding:0 8px 0 2px; border:0; border-radius:999px; background:transparent; color:#bcb0ff; font-size:var(--fs-sub); font-weight:600; text-align:left; }
+  .chat-overview-back svg { width:20px; height:20px; flex:0 0 auto; }
+  .chat-overview-body { display:grid; flex:1 1 auto; align-content:start; gap:18px; min-height:0; padding:4px 12px 16px; overflow-y:auto; overscroll-behavior:contain; }
+  .chat-overview-section { display:grid; gap:8px; min-width:0; }
+  .chat-overview-section-head { display:flex; align-items:center; gap:8px; min-height:28px; padding:0 4px; }
+  .chat-overview-section-head h3 { flex:1 1 auto; margin:0; color:#e7e9f2; font-size:var(--fs-sub); font-weight:650; }
+  .chat-overview-action { flex:0 0 auto; min-height:var(--hit); margin:-8px -4px; padding:0 10px; border:0; border-radius:999px; background:transparent; color:#bcb0ff; font-size:var(--fs-foot); font-weight:600; }
+  .chat-overview-body > .chat-overview-action { justify-self:start; margin:0; background:#2e2b48; color:#e9e4ff; }
+  .chat-overview-more { justify-self:center; min-height:var(--hit); padding:0 14px; border:0; border-radius:999px; background:transparent; color:#bcb0ff; font-size:var(--fs-foot); font-weight:600; }
+  .chat-overview-empty { margin:0; padding:8px 4px; color:var(--ink-muted); font-size:var(--fs-sub); }
+  /* The chat index's own lists and the gallery's tiles, at the pane's width. */
+  .chat-overview :is(.subagent-index-list,.chat-link-index-list,.sent-index-groups) { max-height:none; padding-top:0; overflow:visible; }
+  .chat-overview .subagent-index-list button.chat-overview-more { display:block; width:auto; border:0; background:transparent; color:#bcb0ff; }
+  .chat-overview .sent-index-hint { display:none; }
+  .chat-overview .outbox-gallery-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; padding:0; }
+  .terminal-screen > header > .drawer-open.has-count { width:auto; gap:6px; padding:0 10px 0 12px; }
 
   /* The Chat view's column: 700px here, with at least 24px to either side (the
      composer's own 16px margin stands inside the controls' 8px); upright it

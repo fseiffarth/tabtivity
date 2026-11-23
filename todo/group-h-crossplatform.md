@@ -4668,7 +4668,8 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
   `docs/ipad_chat_columns_handoff.md`). Step 1 (tabs rail + portrait strip)
   code-complete, `MobileChatRail.test.tsx`, untested id `mobile.chatRail`;
   ⚠️ never seen on an iPad; PWA rebuild (`npm run mobile:bundle`) needed. Step 2
-  (session overview pane, `mobile.chatOverview`) follows.
+  (session overview pane) code-complete, `MobileChatOverview.test.tsx`,
+  untested id `mobile.chatOverview`; ⚠️ never seen on an iPad either.
   - [ ] 🖐️ iPad in landscape, an agent tab of a project with three or more tabs:
     a rail on the left under the header ("Tabs · n"), rows in the desktop's
     order with the state mark, the name, the model and state underneath, the
@@ -4692,6 +4693,33 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     - [ ] ❌ Doesn't work on iPadOS
   - [ ] 🖐️ Phone, upright and on its side: the chat is exactly as before (no
     rail, no strip, no new gap under the header).
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS
+    - [ ] ❌ Doesn't work on iOS
+  - [ ] 🖐️ iPad in landscape, an agent tab of a project with subagents, sent
+    files and links: the session overview stands on the right under the header
+    (open the first time), the chat centred between it and the rail; sections
+    only for what the session has (Subagents running first, then the newest
+    three finished with Show all; Prompt queue while prompts are queued; Files,
+    newest four with Show all, a hold opens the file menu; Files from the
+    agent as three tiles, Show all opens the gallery; Links, newest four); no
+    chips over the transcript, no queue or sent-files pill in the header. Tap a
+    subagent, a file, a link, the queue row: each opens as from the chips.
+    Close the pane with the panel button → the chips come back, the button
+    counts running subagents; reopen the app → still closed. Project files →
+    the library in the pane (400 px) with "‹ Overview" above it, the rail
+    folded to tiles; ‹ Overview → back, the rail unfolds. A shell tab: the
+    button shows or hides the library alone. A fresh chat with nothing yet:
+    one muted line and Project files.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
+  - [ ] 🖐️ iPad upright and a phone: the header still has the queue and
+    sent-files pills and the files button opens the drawer; the chips stay
+    over the transcript. Turn the iPad mid-draft with the pane open: draft,
+    scroll and connection survive, the pane comes and goes.
+    - [ ] ✅ Works on iPadOS (home-screen app)
+    - [ ] ❌ Doesn't work on iPadOS
     - [ ] ✅ Works on Android
     - [ ] ❌ Doesn't work on Android
     - [ ] ✅ Works on iOS
