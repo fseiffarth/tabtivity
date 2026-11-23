@@ -84,7 +84,7 @@ import { ARTIFACT_ATTR, answerHtml, chatLinkUrl, promptHtml } from "../../../mob
 import { parseAppLink } from "../../lib/navigation/appLinks";
 import { ReaderArtifactDialog } from "./ReaderArtifactDialog";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
-import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
+import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, viewSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
 import { claudeBoxWords, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, leadDraft, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
@@ -2362,6 +2362,34 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     keepFromBottom.current = null;
     stuck.current = true;
   }, [following, transcript, entries, browsed]);
+  // And the terminal follows the chat: switched from Chat to Terminal with a
+  // subagent open, Claude's TUI is walked onto that subagent through its
+  // agent list, so the terminal shows what the chat did. Only for the pane
+  // the switch was made in (visible while the chat showed): the choice is per
+  // CLI, and a hidden pane's terminal is not touched behind its back.
+  const terminalTarget = claudeTab && openStep && !browsed && !inWorkflow(subagentPath)
+    ? { task: openStep.task, role: openStep.role }
+    : undefined;
+  const terminalTargetRef = useRef(terminalTarget);
+  terminalTargetRef.current = terminalTarget;
+  const chatSeen = useRef({ shown, visible });
+  useEffect(() => {
+    const before = chatSeen.current;
+    chatSeen.current = { shown, visible };
+    const target = terminalTargetRef.current;
+    if (shown || !before.shown || !before.visible || !target) return;
+    void viewSubagent({
+      rows: () => {
+        const term = terminalFor(ptyId);
+        return term ? bufferRows(term.buffer.active, term.rows) : [];
+      },
+      key: (key) => {
+        noteUserInput(ptyId);
+        return writePtyInput(ptyId, ENCODER.encode(key)).then(() => true, () => false);
+      },
+      command: (command) => typePaneKeys(ptyId, agentInputWrites(command)).then(() => true, () => false),
+    }, target).catch(() => {});
+  }, [shown, visible, ptyId]);
   const turns = useMemo(() => transcriptTurns(levelEntries), [levelEntries]);
   // The files the phone sent into the project inbox, drawn in their prompts'
   // bubbles as on the phone (`ReaderInbox`).
