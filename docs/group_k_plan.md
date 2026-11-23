@@ -1,5 +1,8 @@
 # Group K #40 — Drag a file into a tab bar to open it as a frameless embedded tab
 
+> **Status (screened against code 2026-11-22):** PARTIAL (Phase 1 built, Phase 2 not). Built: `embed_capability` + `EMBEDDABLE_EXECS` (`src-tauri/src/commands/apps.rs`), `supports_embedding` (`platform/x11.rs`), the `"embed"` tab kind, `src/components/embed/EmbedPane.tsx` (Phase-1 form: opens the file externally and shows a placeholder), tests `FileDropAddsEmbedTab`, `TabPersistFilterEmbed`, `EmbedCapabilityGate`. Open: the whole Phase 2 X11 reparent layer (`services/embed.rs`, `EmbedManager` do not exist), geometry, stacking mitigation. Line numbers in the body are old. Not live-tested.
+
+
 > **STATUS: staged. Phase 1 approved for implementation now (see "Review Resolution" at bottom). Phase 2 (live X11 reparent) deferred to a separate pass with manual X11 QA.**
 
 

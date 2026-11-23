@@ -255,6 +255,36 @@ describe("SyncTeX on the PDF side", () => {
     );
   });
 
+  it("carries the clicked word and its neighbours through the PDF-to-editor jump", async () => {
+    const input = "/home/u/paper/child.tex";
+    const base = io.invoke.getMockImplementation()!;
+    io.invoke.mockImplementation(async (cmd: string, ...args: unknown[]) =>
+      cmd === "synctex_edit" ? { input, line: 3 } : base(cmd, ...args));
+    await shown();
+    const page = document.querySelector(".file-viewer-pdf-page-wrap")!;
+    // jsdom has no layout engine. Supply the three word rectangles of one
+    // proportional text run and click its final word through the page wrapper.
+    const layer = page.querySelector(".file-viewer-pdf-text-layer") ?? page.appendChild(document.createElement("div"));
+    layer.className = "file-viewer-pdf-text-layer";
+    const span = document.createElement("span");
+    span.setAttribute("role", "presentation");
+    span.textContent = "wide then wide";
+    layer.append(span);
+    Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [span] });
+    Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value(this: Range) {
+      return [{ left: this.startOffset * 10, right: this.endOffset * 10, top: 0, bottom: 10 }];
+    } });
+    try {
+      await act(async () => { fireEvent.click(page, { metaKey: true, clientX: 120, clientY: 5 }); });
+      await waitFor(() => expect(useEditorJumpStore.getState().requestsByPath[input]).toMatchObject({
+        line: 3, phrase: { words: ["wide", "then", "wide"], index: 2 },
+      }));
+    } finally {
+      Reflect.deleteProperty(document, "elementsFromPoint");
+      Reflect.deleteProperty(Range.prototype, "getClientRects");
+    }
+  });
+
   it("places a recompile's reveal with the new document's page, not the old one's", async () => {
     await shown();
     vi.useFakeTimers();

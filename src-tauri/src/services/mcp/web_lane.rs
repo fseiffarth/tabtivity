@@ -1,6 +1,6 @@
 //! **The chat assistant's web lane** — `web_fetch` and `web_search`, served on
 //! `/mcp/web` to a [`Caller::Web`] token and to nothing else. Design:
-//! `docs/assistant_plan.md` (fixed decisions 5 and 7, step A2).
+//! `docs/done/assistant_plan.md` (fixed decisions 5 and 7, step A2).
 //!
 //! The assistant's CLI runs inside the agent fence, which shares the host's
 //! network: a page fetch made from in there could reach `localhost` and the

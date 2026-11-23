@@ -1,6 +1,8 @@
 # Mobile Focus: what each agent CLI draws
 
-A survey of the agent CLIs Tabtivity offers (`src/components/tabs/newTabItems.ts`
+> **Status (screened against code 2026-11-22):** REFERENCE (a 2026-09 survey, not a plan; nothing here is "built"). The Focus parsers it describes exist in `mobile-web/src/terminal/` (`readableScreen`, `statusLine`, `chatTurns`, `agentModes`, `selectPrompt`, plus per-CLI readers such as `cursorAgent.ts`, `antigravity.ts`, `muse.ts`, `openCodeMini.ts`). Since the survey: the stored-session reader (`src-tauri/src/services/agent/agent_transcript.rs`) reads more than Claude and Codex (OpenCode and Copilot paths, `read_transcript`), and the phone's resumable set is the registry's (`agent_registry::is_resumable_bin`: claude, codex, agy, gemini, vibe, opencode, cursor-agent, copilot, droid, grok, qwen, muse). The screen shapes were never re-measured here. Not live-tested.
+
+A survey of the agent CLIs Tabtivity offers (`src/lib/tabs/newTabItems.ts`
 `AGENT_ITEMS`), taken 2026-09-15, for the phone's **Focus** view
 (`mobile-web/src/terminal/`): what each CLI puts on the screen, whether that
 screen can be read at all, and where the conversation is stored when it cannot.
@@ -8,8 +10,8 @@ screen can be read at all, and where the conversation is stored when it cannot.
 Focus reads an agent tab two ways. From the **screen** — `readableScreen` →
 `inputFrameStart`/`sessionStatus` (`statusLine.ts`) → `chatTurns`, with
 `agentModes` for the mode sheet and `selectPrompt` for dialogs — and from the
-**stored session** (`src-tauri/src/services/agent_transcript.rs`), which today
-reads Claude Code and Codex only. A full-screen (alternate-screen) TUI has no
+**stored session** (`src-tauri/src/services/agent/agent_transcript.rs`), which when
+this was written read Claude Code and Codex only (see the status line). A full-screen (alternate-screen) TUI has no
 scrollback, so for it the stored session is the only route for the conversation
 — but not for what the session is doing *now*. Measured 2026-09-20 on Claude
 Code 2.1.278: `"tui": "fullscreen"` in `~/.claude/settings.json` puts Claude
@@ -29,7 +31,7 @@ unverified until a capture of a real tab agrees.
 
 `services/mobile_control/discovery.rs::resumable` lists an agent tab only when
 it has a `session_id` **and** its command is one of `claude codex qwen opencode
-copilot cursor-agent grok gemini agy vibe` (or it carries its own resume args).
+copilot cursor-agent grok gemini agy vibe` (the 2026-09 set; `droid` and `muse` have joined it; or it carries its own resume args).
 Aider, Goose, Crush, Kimi, Pi, Amp, mini and the rest never appear on the phone
 until that gate widens. The screen parsers still serve the desktop's
 last-prompt line (`src/lib/agents/prompt/echo.ts`) for every agent.

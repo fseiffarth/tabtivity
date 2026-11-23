@@ -108,7 +108,7 @@ function CliOverviewSheet({ overview, failure, busy, onRefresh, onClose }: {
  * Home → Agent CLIs: one row saying how many CLIs are signed in and the
  * fullest window, opening a sheet with each CLI's plan and usage bars — the
  * desktop's side panel CLIs view, without the account
- * (`docs/cli_overview_plan.md`). Read when Home shows and again when the page
+ * (`docs/done/cli_overview_plan.md`). Read when Home shows and again when the page
  * comes back into view; the sheet's Refresh asks the desktop to re-read.
  */
 export function CliOverviewSection() {

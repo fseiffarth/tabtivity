@@ -160,7 +160,17 @@ function Row({ row, selected, now, onOpen }: { row: RosterRow; selected: boolean
         <span className="cockpit-state-mark" title={t(STATE_LABEL[row.state])} role="img" aria-label={t(STATE_LABEL[row.state])}>
           <DotIcon />
         </span>
-        <span className="cockpit-roster-tab">{row.tab.label}</span>
+        <span className="cockpit-roster-tab" title={row.tab.label}>{row.tab.label}</span>
+        <span className="cockpit-roster-trail">
+          {row.tab.autoContinue && <span className="cockpit-meta" title={t("cockpit.roster.autoContinue")}><RefreshIcon /></span>}
+          {row.nextScheduleAt !== undefined && (
+            <span className="cockpit-meta" title={t("cockpit.roster.nextSchedule")}><ClockIcon /> {formatClock(row.nextScheduleAt)}</span>
+          )}
+          {turn && <span className="cockpit-meta">{turn}</span>}
+        </span>
+      </div>
+      {row.lastPrompt && <div className="cockpit-roster-prompt">{row.lastPrompt}</div>}
+      <div className="cockpit-roster-context">
         <ScopeChip scope={row.scope} />
         {facts.model && <span className="cockpit-meta">{facts.model}</span>}
         {facts.plan && <small className="agent-mode-mark plan">{t("tabBar.modePlan")}</small>}
@@ -171,15 +181,7 @@ function Row({ row, selected, now, onOpen }: { row: RosterRow; selected: boolean
             <CloudIcon /> {row.hostDown ? t("cockpit.roster.connectFirst") : row.host}
           </span>
         )}
-        <span className="cockpit-roster-trail">
-          {row.tab.autoContinue && <span className="cockpit-meta" title={t("cockpit.roster.autoContinue")}><RefreshIcon /></span>}
-          {row.nextScheduleAt !== undefined && (
-            <span className="cockpit-meta" title={t("cockpit.roster.nextSchedule")}><ClockIcon /> {formatClock(row.nextScheduleAt)}</span>
-          )}
-          {turn && <span className="cockpit-meta">{turn}</span>}
-        </span>
       </div>
-      {row.lastPrompt && <div className="cockpit-roster-prompt">{row.lastPrompt}</div>}
       {/* What the agent says it is doing, or what it says blocks it (the blocker takes the line): its own words, marked and timed, apart from the detected state above. */}
       {note && (
         <div

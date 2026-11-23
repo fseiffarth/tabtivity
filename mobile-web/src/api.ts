@@ -4,6 +4,7 @@ import { appleTouchDevice } from "./platform";
 import { storageKey } from "../../src/lib/brand";
 import type { ModelRows } from "./terminal/modelRows";
 import type { CliOverviewRow } from "../../shared/cliOverview";
+import type { NextPromptAnswer, NextPromptPhase } from "./terminal/nextPrompt";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
 export type ScopeKind = "project" | "box" | "root" | "assistant";
@@ -1241,6 +1242,22 @@ export async function getTranscript(tabId: string, version?: string, limit?: num
   return transcript;
 }
 
+/** How long a `final` next-prompt request may take: a cold model run. */
+const NEXT_PROMPT_TIMEOUT = 30_000;
+
+/** `GET /api/v1/tabs/{id}/next-prompt` — the desktop's local model's guess at
+ * the reader's next message for the tab's ended turn (`warm` feeds it the turn
+ * so far while the agent works, answering no text). Plain text only: no turn
+ * key, ids or paths cross. Every failure is a `status`; the route itself
+ * failing is the caller's to catch. */
+export async function getNextPrompt(tabId: string, phase: NextPromptPhase, signal?: AbortSignal): Promise<NextPromptAnswer> {
+  return api<NextPromptAnswer>(
+    `/api/v1/tabs/${encodeURIComponent(tabId)}/next-prompt?phase=${phase}`,
+    { signal },
+    phase === "final" ? NEXT_PROMPT_TIMEOUT : REQUEST_TIMEOUT,
+  );
+}
+
 /** One file the chat changed that git still lists as changed. `path` is
  * relative to its checkout; `worktree` names a linked worktree (or a box
  * member's folder) it is in, never by path. */
@@ -1576,6 +1593,13 @@ export function inboxFileUrl(tabId: string, name: string, download = false): str
   return `/api/v1/tabs/${encodeURIComponent(tabId)}/inbox/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
 }
 
+/** `DELETE …/inbox/{name}` — drop one file the phone sent into the tab's
+ * project inbox (a hold on its card → Delete). Only a leaf the inbox would
+ * serve goes; the route carries the exact-origin check. */
+export async function deleteInboxFile(tabId: string, name: string): Promise<void> {
+  await api<{ removed: boolean }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/inbox/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
 /** `GET …/inbox?names=` — the files among `names` (inbox leaves) the tab's
  * project inbox holds, typed by their bytes on the desktop, in the order
  * asked; a leaf that is gone is simply missing from the answer. */
@@ -1643,6 +1667,8 @@ export interface ProjectFileListing {
   git_unread?: boolean
   /** The project root's catalog docs and the state each is in (the desktop tree's "Project docs" group; names only, in the catalog's order). Root of this computer's side only; missing in any folder, on the remote side, from an older desktop, or when the read timed out — the plain group then. A ghost row is `state === "missing" && creatable`. */
   docs?: DocStatus[]
+  /** The rows the desktop side panel hides by ending for this project (its "Hidden by extension" group), by name; the library folds them into Hidden. Missing from an older desktop. */
+  hidden_ext?: string[]
 }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of

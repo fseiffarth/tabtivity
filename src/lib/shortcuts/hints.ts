@@ -1,5 +1,5 @@
 import { IS_MAC } from "../platform";
-import { livePanelToggleLabel } from "./shortcutHint";
+import { livePanelToggleLabel, liveShortcutLabel } from "./shortcutHint";
 import type { TranslationKey } from "../i18n";
 import { FEATURE_HINTS, featureBodyKey, featureTitleKey, type FeatureHintId, type FeatureHintSpec } from "./featureHints";
 
@@ -166,12 +166,14 @@ export const HINTS: HintDef[] = [
   ),
 ];
 
-/** Resolve a hint's body text. Every hint but "toggle-panels" is a static key;
- *  that one is the per-OS focus-mode tip, computed at read time. */
+/** Resolve the hint with the shortcuts currently assigned in settings. */
 export function resolveHintBody(
   def: HintDef,
   t: (key: TranslationKey, params?: Record<string, string | number>) => string,
 ): string {
+  if (def.id === "editor-autocomplete") {
+    return t("hint.f.editor-autocomplete.body", { shortcut: liveShortcutLabel("editorAutocomplete") });
+  }
   return def.bodyKey ? t(def.bodyKey) : focusModeTip(t);
 }
 

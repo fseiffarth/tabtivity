@@ -112,7 +112,7 @@ advisory blocks a release even without a code change. Three ways in:
   Release button already refuses while the tip's CI is running or red
   (`ci_pending` / `ci_failed`, `docs/context/git_push_mcp.md`).
 
-All four bundles (AppImage, deb, exe, dmg) must be there; artifacts expire
+All five bundles (AppImage, desktop deb, exe, dmg, server deb) must be there; artifacts expire
 after GitHub's retention (90 days by default) — re-run ci-cd on the commit
 to release an older one.
 

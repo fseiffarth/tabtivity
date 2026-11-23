@@ -1,5 +1,5 @@
 // The two Remote ⇄ Remote-only conversions behind the pill's Edit group
-// (`docs/remote_only_projects_plan.md` E8/F9): "Stop keeping a local copy…"
+// (`docs/done/remote_only_projects_plan.md` E8/F9): "Stop keeping a local copy…"
 // previews what only the mirror holds and refuses while anything does; "Keep a
 // local copy…" records a folder and hands pairing to git lockstep, host
 // authoritative. Both run only while the project is connected and never on a VM

@@ -323,6 +323,21 @@ pub fn kind(root: &Path, name: &str) -> Option<&'static str> {
     outbox::probe_as(&dir, name, valid_stored_name).map(|(_, _, kind)| kind)
 }
 
+/// Delete one project-inbox file by its leaf — the phone's Delete on a file
+/// it sent (a hold on its card in the chat). Exactly what [`read`] would serve
+/// goes: the leaf is re-proved in the held folder (`probe_as`), so a link, a
+/// folder or a name [`store`] never writes is `NotFound`, never a deletion
+/// somewhere else; an unlink never follows a link.
+pub fn remove(root: &Path, name: &str) -> Result<(), OutboxError> {
+    let Some(dir) = outbox::drop_dir(root, INBOX_DIR)? else {
+        return Err(OutboxError::NotFound);
+    };
+    if outbox::probe_as(&dir, name, valid_stored_name).is_none() {
+        return Err(OutboxError::NotFound);
+    }
+    dir.remove_file(name).map_err(|e| OutboxError::Io(e.to_string()))
+}
+
 /// The background sweep of a project inbox (`drop_sweep`): every file a leaf
 /// [`store`] could have written, last written before `cutoff`, goes. Links,
 /// folders and names the inbox never writes stay. Returns how many went.
@@ -690,6 +705,36 @@ mod tests {
         assert_eq!(read(root, &photo.name).unwrap(), (png.to_vec(), "image/png"));
         assert_eq!(read(root, ".hidden.png"), Err(OutboxError::NotFound));
         assert_eq!(read(root, "../note.txt"), Err(OutboxError::NotFound));
+    }
+
+    #[test]
+    fn a_stored_file_is_removed_by_its_leaf_and_nothing_else_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let photo = store_at(root, INBOX_DIR, "photo.png", b"\x89PNG\r\n\x1a\nrest", at(T0)).unwrap();
+        fs::write(root.join(INBOX_DIR).join(".hidden.png"), b"x").unwrap();
+        fs::write(root.join("note.txt"), b"keep").unwrap();
+        assert_eq!(remove(root, ".hidden.png"), Err(OutboxError::NotFound));
+        assert_eq!(remove(root, "../note.txt"), Err(OutboxError::NotFound));
+        assert_eq!(remove(root, &photo.name), Ok(()));
+        assert_eq!(read(root, &photo.name), Err(OutboxError::NotFound));
+        assert_eq!(remove(root, &photo.name), Err(OutboxError::NotFound));
+        assert!(root.join(INBOX_DIR).join(".hidden.png").is_file());
+        assert!(root.join("note.txt").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_linked_leaf_never_touches_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        let inbox = dir.path().join(INBOX_DIR);
+        fs::create_dir_all(&inbox).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), inbox.join("link.txt")).unwrap();
+        assert_eq!(remove(dir.path(), "link.txt"), Err(OutboxError::NotFound));
+        assert!(outside.path().join("secret.txt").is_file());
+        assert!(fs::symlink_metadata(inbox.join("link.txt")).is_ok());
     }
 
     #[test]

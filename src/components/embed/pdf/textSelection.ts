@@ -65,7 +65,7 @@ let listeners: AbortController | null = null;
 
 /** Put a layer back to rest: its block home at the end, the selecting state off. */
 function reset(end: HTMLElement, layer: HTMLElement) {
-  layer.append(end);
+  if (layer.lastChild !== end) layer.append(end);
   end.style.userSelect = "";
   layer.classList.remove(SELECTING_CLASS);
 }
@@ -99,8 +99,7 @@ function engineHandlesGaps(sample: HTMLElement): boolean {
  * line ended a line early; with it, it ends at that line's last word.
  *
  * Only when the pointer is over the bare layer or its block (anywhere else the engine
- * hit a span and knows better), and only to a span whose box spans the pointer's
- * height. Spans left of the pointer win, so a pointer in the gutter of a two-column
+ * hit a span and knows better), and only to a span level with the pointer or just across the line spacing. Spans left of the pointer win, so a pointer in the gutter of a two-column
  * page ends the line it is level with rather than jumping into the next column.
  * Returns whether it moved the selection (a fresh `selectionchange` follows).
  */
@@ -122,7 +121,10 @@ function snapToPointerLine(selection: Selection, x: number, y: number): boolean 
       continue;
     }
     const r = span.getBoundingClientRect();
-    if (r.width <= 0 || y < r.top || y > r.bottom) continue;
+    // Allow half a line of leading on either side. In a paragraph gap there
+    // is no nearby line to snap to, so leave the browser's endpoint alone.
+    const leading = r.height / 2;
+    if (r.width <= 0 || r.height <= 0 || y < r.top - leading || y > r.bottom + leading) continue;
     level.push({ node: text, r, dy: Math.abs((r.top + r.bottom) / 2 - y) });
   }
   if (level.length === 0) return false;
@@ -193,6 +195,10 @@ function installListeners() {
   document.addEventListener(
     "pointerdown",
     (e: PointerEvent) => {
+      const layer = e.target instanceof Element
+        ? e.target.closest<HTMLElement>(`.${TEXT_LAYER_CLASS}`)
+        : null;
+      if (e.button !== 0 || !layer || !layers.has(layer)) return;
       pointerDown = true;
       downAt = { x: e.clientX, y: e.clientY };
       dragged = false;
@@ -213,6 +219,7 @@ function installListeners() {
     },
     { signal },
   );
+  document.addEventListener("pointercancel", endGesture, { signal });
   window.addEventListener("blur", endGesture, { signal });
   document.addEventListener(
     "pointermove",
@@ -235,6 +242,9 @@ function installListeners() {
   document.addEventListener(
     "selectionchange",
     () => {
+      // WebKit can deliver the final change after pointerup. Moving the block
+      // then leaves it covering the gaps where the next selection may start.
+      if (!pointerDown) return;
       const selection = document.getSelection();
       if (!selection || selection.rangeCount === 0) {
         resetAll();
@@ -291,7 +301,10 @@ function installListeners() {
       const end = layer ? layers.get(layer) : undefined;
       if (anchor && parent && end && anchor !== end && anchor !== layer) {
         end.style.userSelect = "text";
-        parent.insertBefore(end, backwards ? anchor : anchor.nextSibling);
+        const before = backwards ? anchor : anchor.nextSibling;
+        if (before !== end && (end.parentNode !== parent || end.nextSibling !== before)) {
+          parent.insertBefore(end, before);
+        }
       }
     },
     { signal },
@@ -309,7 +322,9 @@ export function attachTextSelection(layer: HTMLElement): () => void {
   layer.append(end);
 
   const local = new AbortController();
-  layer.addEventListener("mousedown", () => layer.classList.add(SELECTING_CLASS), {
+  layer.addEventListener("mousedown", (e) => {
+    if (e.button === 0) layer.classList.add(SELECTING_CLASS);
+  }, {
     signal: local.signal,
   });
   layer.addEventListener(

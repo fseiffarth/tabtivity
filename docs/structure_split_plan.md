@@ -1,6 +1,10 @@
 # Structure split, round 2 — plan
 
-Status: plan only (2026-10-26). Scope cut on 2026-10-26 (user's call): this
+> **Status (screened against code 2026-11-22):** NOT-STARTED. `src/components/settings/AgentsPanel.tsx` is 1,107 lines (was 992), `src/components/embed/fileViewer/TexView.tsx`
+> 1,462 (was 1,376); no `AgentCard`/`useAgentActions` module exists. The phone `useComposerSend` (still a
+> long argument list fed from `Terminal.tsx`) lives in `mobile-web/src/screens/terminal/useComposer.ts` from S7c (`11ad737b3`). Not live-tested unless the doc/todo says so.
+
+History: plan only (2026-10-26). Scope cut on 2026-10-26 (user's call): this
 round splits the phone composer and `AgentsPanel`, with `TexView` optional.
 `CodeEditor` and `OllamaPanel` are deferred (see "Not done").
 

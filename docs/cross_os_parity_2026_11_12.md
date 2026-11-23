@@ -1,5 +1,7 @@
 # Windows and macOS parity audit — 2026-11-12
 
+> **Status (screened against code 2026-11-22):** REFERENCE (audit; ledger is `todo/group-h-crossplatform.md` item 2442). Fixed in code since: 2442b–j, m (part), n/w, q–t, aa (e.g. `agent_home::windows_profile_env`, `agent_fence::add_canonical_spellings`, `paths::is_windows_device_name`, `print_native.rs`); 2442a is fixed in code (`muse_session.rs` test `log()` now JSON-escapes the root) though the todo box is still unticked. Still open per the todo: 2442k, l, o (part), p, u, v, x/y/z (part), ab, ac, ad. Findings and line numbers below are the 2026-11-12 reading and are not updated. Nothing run on Windows or macOS.
+
 Which Linux features are missing, stubbed or silently degraded on Windows and
 macOS, as of `develop` at `214933ab5` (v0.2.66). Work items: `todo/group-h-crossplatform.md`
 item **2442**; the ids below (`2442a` …) are its sub-items.

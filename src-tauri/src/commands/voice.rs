@@ -24,7 +24,9 @@ pub async fn voice_model_install_script(id: String) -> Result<String, String> {
 }
 
 /// Start listening for the calling window's tab `tab_key`; answers the new
-/// session id. Any other session stops first.
+/// session id. Any other session stops first. `lang` `auto` with `langs`
+/// (at most 5 whisper codes) picks among them and locks on one; `fallback`
+/// is the one a partial uses before the first pick.
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn voice_listen_start(
@@ -37,8 +39,11 @@ pub async fn voice_listen_start(
     headset: bool,
     prompt: Option<String>,
     gpu: bool,
+    langs: Option<Vec<String>>,
+    fallback: Option<String>,
 ) -> Result<u64, String> {
-    let req = ListenRequest { tab_key, model, lang, mode, pause_ms, headset, prompt, gpu };
+    let langs = langs.unwrap_or_default();
+    let req = ListenRequest { tab_key, model, lang, langs, fallback, mode, pause_ms, headset, prompt, gpu };
     app_core::rt::try_blocking("voice", move || voice::listen_start(&ctx.0, req).map_err(String::from)).await
 }
 

@@ -19,12 +19,12 @@ import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupBack, type MarkupNewTab, type MarkupTarget } from "../components/OutboxViewer";
 import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
-import { SentFilesIndex, type SentFile } from "../components/SentFilesIndex";
+import { SentFileHold, SentFilesIndex, useSentFileMenu, type SentFile } from "../components/SentFilesIndex";
 import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
-import { Fragment, memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useContext, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   ANY_FILE_ACCEPT,
@@ -57,6 +57,8 @@ import {
   type TabWorktrees,
   type TabLocations,
   type AssistantModels,
+  deleteInboxFile,
+  getNextPrompt,
 } from "../api";
 import { describeFailure } from "../connection";
 import { readDraft } from "../drafts";
@@ -70,6 +72,7 @@ import { liveModelPick } from "../terminal/modelRows";
 import { type TerminalControl } from "../terminal/protocol";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { readPromptSuggestion } from "../terminal/promptSuggestion";
+import { NEXT_PROMPT_CLAUDE_SETTLE_MS, NEXT_PROMPT_SETTLE_MS, useNextPrompt, usePageShown, useWorkEndKey } from "../terminal/nextPrompt";
 import { readLiveQuestion } from "../terminal/liveDialog";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
@@ -111,7 +114,7 @@ import { isPermissionDialog, permissionSubject, permissionSubjectLabel } from ".
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, pendingPrompt, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
-import { inboxInPlace, inboxLeaves, inboxSegments, withoutInboxReferences } from "../terminal/inboxRefs";
+import { inboxInPlace, inboxLeaves, inboxSegments, markInboxGone, withoutInboxReferences } from "../terminal/inboxRefs";
 import { type ClearMark } from "../terminal/clearedSession";
 import { readHeld } from "../terminal/heldPrompts";
 import { ageLabel } from "../terminal/fileLabels";
@@ -315,6 +318,9 @@ const awayMarkups = new Map<string, MarkupBack>();
  * where they stand instead (`inboxSegments`). Both follow from the text
  * alone, so a shown bubble keeps its shape. */
 function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers; inbox?: ChatInbox }) {
+  // A hold on one of the files asks Save, Share or Delete (the chat's menu).
+  const held = useContext(SentFileHold);
+  const onHold = held ? (file: OutboxFile) => held({ file, from: "phone" }) : undefined;
   const leaves = useMemo(() => inbox ? inboxLeaves(text) : [], [inbox, text]);
   const segments = useMemo(() => leaves.length > 0 ? inboxSegments(text) : [], [leaves, text]);
   if (!inbox || leaves.length === 0) return <PromptText text={text} links={links} />;
@@ -323,11 +329,11 @@ function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers;
     const first = segments.findIndex((segment) => segment.kind === "files");
     return <>{segments.map((segment, i) => segment.kind === "words"
       ? <PromptText key={i} text={segment.text} links={links} />
-      : <InboxAlbum key={i} tabId={inbox.tabId} leaves={segment.leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} tag={i === first ? undefined : null} />)}</>;
+      : <InboxAlbum key={i} tabId={inbox.tabId} leaves={segment.leaves} files={inbox.files} onOpen={inbox.onOpen} onHold={onHold} onSettle={inbox.onSettle} tag={i === first ? undefined : null} />)}</>;
   }
   const words = withoutInboxReferences(text);
   return <>
-    <InboxAlbum tabId={inbox.tabId} leaves={leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} />
+    <InboxAlbum tabId={inbox.tabId} leaves={leaves} files={inbox.files} onOpen={inbox.onOpen} onHold={onHold} onSettle={inbox.onSettle} />
     {words && <PromptText text={words} links={links} />}
   </>;
 }
@@ -2115,10 +2121,31 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * sent, and only once per suggestion — so the reader edits it or sends it as
    * they would take it with Tab in the CLI. `liveQuestion` is the chat's alone;
    * in the Terminal view a dialog on screen is no box, so it reads as "". */
-  const promptSuggestion = useMemo(
+  const screenSuggestion = useMemo(
     () => (tab.kind === "agent" && !liveQuestion && !liveBusy ? readPromptSuggestion(liveScreen, agentLabel) : ""),
     [tab.kind, liveQuestion, liveBusy, liveScreen, agentLabel],
   );
+  /** Where the CLI draws none (any but Claude, or a Claude turn it skipped
+   * one on), the desktop's local model's guess (`terminal/nextPrompt.ts`):
+   * asked once per ended turn, the turn fed to it ahead while the agent works
+   * and the stored session moves (Chat view: Terminal reads none) — not on a
+   * local-model tab, whose turn holds the GPU. A field holding only the
+   * suggestion still counts as empty. */
+  const pageShown = usePageShown();
+  const idleTurn = useWorkEndKey(liveBusy);
+  const localSuggestion = useNextPrompt({
+    // Not before the CLI has drawn its input box: an unpainted screen reads idle.
+    enabled: tab.kind === "agent" && !cloudTab && connected && cliReady && pageShown && !subagentTarget,
+    working: liveBusy,
+    turnKey: liveQuestion ? null : idleTurn,
+    progress: transcript?.version,
+    canWarm: () => tab.local_model !== true,
+    settleMs: agentKey === "claude" ? NEXT_PROMPT_CLAUDE_SETTLE_MS : NEXT_PROMPT_SETTLE_MS,
+    screenSuggestion,
+    composerEmpty: !draft || draft === suggestionRef.current.filled,
+    ask: (phase) => getNextPrompt(tab.id, phase),
+  });
+  const promptSuggestion = screenSuggestion || localSuggestion;
   const suggestionOffered = promptSuggestion && connected && !subagentTarget && pending.length === 0 && !editing ? promptSuggestion : "";
   useEffect(() => {
     const state = suggestionRef.current;
@@ -2143,6 +2170,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setDraft(suggestionOffered);
   }, [promptSuggestion, suggestionOffered]);
   const suggested = !!draft && draft === suggestionRef.current.filled;
+  /** What the field holds untouched is the local model's, not Claude's. */
+  const suggestedLocal = suggested && !screenSuggestion && draft === localSuggestion;
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
@@ -2197,6 +2226,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (row.from === "changed" || row.from === "named") openProjectFile(row.file);
     else openSentFile(row);
   }, [openProjectFile, openSentFile]);
+  /** A hold's Delete, on a card in the chat or in its Files list: a file the
+   * agent sent goes as the gallery's 🗑 takes it; one the phone sent leaves
+   * the project inbox, and its card says it is gone. */
+  const removeChatFile = useCallback(async ({ file, from }: SentFile) => {
+    if (from === "agent") return removeOutbox(file);
+    if (from !== "phone") return;
+    await deleteInboxFile(tab.id, file.name);
+    markInboxGone(tab.id, file.name);
+    setInboxOpen((open) => open?.name === file.name ? null : open);
+  }, [removeOutbox, tab.id]);
+  const fileMenu = useSentFileMenu({ tabId: tab.id, project, onRemove: removeChatFile });
   const answerLinks = useViewableNamed(namedFiles, viewableFile);
   /** What this tab sent is its own post in the chat; an answer naming the
    * project file it was copied from does not draw it again. */
@@ -2363,7 +2403,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     },
   });
   startVoiceRef.current = startVoice;
-  /** "{assistant} navigate": spoken navigation, in hands-free's open mic. */
+  /** "{assistant} navigate" and "{assistant} help": spoken navigation, in any open mic. */
   const nav = useVoiceNav({
     tab, project: projectOfTab, openTab, openProject, setOpen: setNavOpen, utterances: utteranceHooks, tabbyGate,
     handsFreeOn: handsFreeRef, guard: handsFreeGuard, voiceOpen, recognition, endDictation, startVoiceRef,
@@ -2374,6 +2414,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     sessionFocus, startVoiceRef, hasDraft: () => draftRef.current.trim() !== "",
   });
   const navLine = voiceFailure ? null : nav.line ?? landingLine;
+  /** A line's own register row ("Tabby help"), else navigation's. */
+  const navUntested = navLine?.untested ? isUntested(navLine.untested) : isUntested("mobile.voice.navigate");
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language || note.params ? { ...note.params, ...(note.language ? { language: note.language } : {}) } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
@@ -2382,7 +2424,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The Tabby gate's line: the cue after a spoken send, or the wait for a
    * prompt after the start word alone. */
   const tabbyLine = handsFree && listening && tabbyGate.line
-    ? t(tabbyGate.line === "cue" ? "mobile.voice.tabbyCue" : "mobile.voice.tabbyListening")
+    ? t(tabbyGate.line === "cue" ? "voice.gate.cue" : "voice.gate.listening")
     : "";
   const voiceLine = voiceProblem ? sayVoice(voiceProblem)
     : voicePreview ? t("mobile.voice.heard", { text: voicePreview })
@@ -2815,7 +2857,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}
-            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={openChatIndex === "files"} onToggle={() => toggleChatIndex("files")} onOpen={openChatFile} />}
+            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={openChatIndex === "files"} onToggle={() => toggleChatIndex("files")} onOpen={openChatFile} onRemove={removeChatFile} />}
             {chatLinks.length > 0 && <ChatLinksIndex links={chatLinks} open={openChatIndex === "links"} onToggle={() => toggleChatIndex("links")} onOpen={askIndexLink} />}
           </div>}
           {sessionFocus && openStep
@@ -2846,7 +2888,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} onOpenArtifact={setArtifactTarget} />
+                  <SentFileHold.Provider value={fileMenu.hold}><TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} onOpenArtifact={setArtifactTarget} /></SentFileHold.Provider>
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
@@ -2885,14 +2927,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                       until the desktop types it in: not taken yet. */}
                   {/* Both act on the CLI's whole queue, so every queued bubble
                       carries the same pair. */}
-                  {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox}
+                  {queuedShown && <SentFileHold.Provider value={fileMenu.hold}><TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox}
                     queuedActions={agentAtWork && !editing && queueReadable && <div className="transcript-queued-actions">
                       {sendNowOffered && <button type="button" disabled={!connected || sendNowWaiting} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>}
                       {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
                       <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
                       {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
                       {queueCli !== "claude" && isUntested("mobile.chat.queuedActionsOther") && <em>{t("mobile.focus.untested")}</em>}
-                    </div>} />}
+                    </div>} /></SentFileHold.Provider>}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
             ? <div className="readable-empty"><strong>{t("mobile.focus.waitingOutput")}</strong><span>{t("mobile.focus.waitingOutputHint")}</span></div>
@@ -2923,7 +2965,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </>}
     </div>
     <div className="terminal-controls">
-      {tab.kind === "agent" && navLine && voiceStrip(navLine, isUntested("mobile.voice.navigate"), isUntested("mobile.voice.navigate"))}
+      {tab.kind === "agent" && navLine && voiceStrip(navLine, navUntested, navUntested)}
       {/* The hands-free status line carries no untested mark; its button does. */}
       {tab.kind === "agent" && !navLine && handsFreeLine && voiceStrip(handsFreeLine, isUntested("mobile.voice.handsFree"), false)}
       {tab.kind === "agent" && !navLine && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || isUntested("mobile.voice.draftEdits") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}
@@ -3055,7 +3097,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {/* An untouched suggestion reads greyed in the field itself, as the
             CLI dims it; the first edit makes it the reader's own text. */}
         <div className="composer-field">
-          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t("terminal.reader.suggestion") : undefined} value={fieldDraft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => {
+          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t(suggestedLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion") : undefined} value={fieldDraft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => {
             tabbyGate.clear();
             // The guess after the draft is the recognizer's, not the reader's.
             setDraft(draftFromField(event.target.value, draft, voiceHeard.interim));
@@ -3071,7 +3113,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           }} />
           {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-          {suggested && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
+          {suggested && !suggestedLocal && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
+          {suggestedLocal && isUntested("agents.localNextPrompt") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
           {fieldDraft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
           {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={() => {
             // A tap ends spoken navigation, whatever else it does. A stop reads the
@@ -3298,6 +3341,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     />}
     {/* The viewer covers the phone; the gallery stays chosen behind it, so
         closing the file lands back on the grid. */}
+    {fileMenu.sheet}
     {gallery && (!outboxOpen || markupAway !== null) && <OutboxGallery scope={outboxScope} files={tabOutbox} tabOnly onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
     {/* A markup view's Chat tucks its viewer away (`markupAway`) without
         unmounting it; the host is always there, so the switch never remounts. */}

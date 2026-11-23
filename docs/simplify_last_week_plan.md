@@ -1,5 +1,9 @@
 # Simplify pass over the week of 2026-11-05 — what is still open
 
+> **Status (screened against code 2026-11-22):** PARTIAL (a live to-do list). Sampled rows are still open: #6 `copy_tree_core` is still in `commands/projects.rs` beside
+> `services/tree_copy.rs`; #13 `commitOpen` still separate in `SteeringPromptOverlay.tsx`; #38 `MutationObserver` still in
+> `mobile-web/src/steering/usePhoneSteering.ts`. #— `RESERVED_NAMES` now lives in `src-core/src/services/web_safety.rs`. Not live-tested unless the doc/todo says so.
+
 A quality review (reuse, simplification, efficiency, altitude) of the 356
 commits since `5ec871f38` found 62 items. 49 were implemented on 2026-11-12
 (uncommitted on `develop` at the time of writing; checked by type-check, lint,
@@ -62,5 +66,5 @@ Everything else was meant to be behaviour-identical.
 | 21 | repo-wide | `wrapStep` for the remaining `(at + delta + n) % n` sites. | Applied to the steering files only. |
 | 23 | `components/settings/ClaudeTokenRow.tsx` | The In use / Standby label goes stale after a login import or sign-out. | Needs `AgentsPanel`'s `loginsVersion` passed to both copies. |
 | 11 | `components/mail/MailView.tsx` | Inbox tab key handler. | Not the same contract as the view-bar tabs (no arrows, middle-click close). |
-| — | `services/web_safety.rs` `RESERVED_NAMES` | A fourth Windows device-name list (mail attachments). | Outside the finding; could use `paths::is_windows_device_name`. |
+| — | `src-core/src/services/web_safety.rs` `RESERVED_NAMES` | A fourth Windows device-name list (mail attachments). | Outside the finding; could use `paths::is_windows_device_name`. |
 | 47 | `commands/tex/host.rs:66,115` | `engine.filter(ENGINES.contains)`. | Kept on purpose: the value reaches a remote command line. |

@@ -67,8 +67,8 @@ const MODE_CYCLE_LIMIT = 6;
  * context left and the account's 5-hour and weekly limits — plus, as the
  * phone's chips, the permission mode (a list walked with Shift+Tab, or one
  * press where the session's modes are unknown) and the reasoning effort (a
- * list sent as Claude's `/effort`; elsewhere the `/model` picker, whose next
- * step it is), and the folder the agent works in with the worktree it is —
+ * list sent as Claude's `/effort`; on Codex, the current model's reasoning
+ * levels; elsewhere the `/model` picker), and the folder and worktree —
  * the branch chip moves the agent to another worktree of the project
  * (`switchAgentWorktree`), its conversation along where its CLI allows. The status facts
  * come off the pane's live screen (`ReaderLive.status`); the limits from the
@@ -95,7 +95,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   /** A level was sent from the effort list: shown until the session says. */
   onEffortPicked: (effort: string) => void;
   visible: boolean;
-  typeKeys: (keys: string[]) => Promise<void>;
+  typeKeys: (keys: string[], canWrite?: (key: string) => boolean) => Promise<void>;
   /** Whether a session picker is up: the Reader then leaves it out of
    * its own answer buttons. */
   onPicking: (picking: boolean) => void;
@@ -169,13 +169,13 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     : [];
   useEffect(() => { onPicking(picking); }, [picking, onPicking]);
 
-  const openPicker = (command: "/model" | "/permissions" = "/model") => {
+  const openPicker = (command: "/model" | "/permissions" = "/model", options?: { effortOnly?: boolean }) => {
     if (picking) return;
     onStatusClose();
     closeModes();
     closeEffort();
     closeWorktrees();
-    session.open(command);
+    session.open(command, options);
   };
 
   // --- The permission mode ---------------------------------------------------
@@ -265,11 +265,9 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setEffortOpen(false);
     setEffortSending("");
   };
-  /** Claude takes the level as `/effort <level>`; every other CLI sets it on
-   * its `/model` picker's next step, so that picker opens instead. */
   const openEffort = () => {
     if (!claude) {
-      openPicker();
+      openPicker("/model", { effortOnly: codex });
       return;
     }
     onStatusClose();

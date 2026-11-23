@@ -37,7 +37,7 @@ env:
   # illegal instruction on a user's older one. whisper-rs-sys hands GGML_* to
   # cmake. OFF builds for AVX2/FMA (docs/desktop_voice_plan.md, step 0).
   GGML_NATIVE: "OFF"
-  # The bundles' speech GPU backend (docs/voice_gpu_plan.md). LunarG's SDK, not
+  # The bundles' speech GPU backend (docs/done/voice_gpu_plan.md). LunarG's SDK, not
   # the runner's packages: Ubuntu 24.04's glslc and headers are older than what
   # whisper.cpp's Vulkan shaders were measured with. Windows has no other source.
   # The SDK is 1.4.363 plus a final `.0`, spelled at each use: the privacy check reads a

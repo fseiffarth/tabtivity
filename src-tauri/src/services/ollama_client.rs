@@ -305,6 +305,56 @@ pub(crate) fn ollama_http_at(
     json_body: Option<&str>,
     read_timeout: Duration,
 ) -> Result<String, String> {
+    ollama_http_inner(addr, method, path, json_body, read_timeout, None)
+}
+
+/// The answer of a request [`Abort::abort`] ended before it was answered.
+pub(crate) const ABORTED: &str = "aborted";
+
+/// A handle another thread uses to end an [`ollama_http_abortable`] request
+/// in flight: it shuts the request's socket down, which Ollama takes as the
+/// client going away and stops the request. Abort before the request connects
+/// and it never sends.
+#[derive(Default)]
+pub(crate) struct Abort {
+    aborted: std::sync::atomic::AtomicBool,
+    stream: std::sync::Mutex<Option<TcpStream>>,
+}
+
+impl Abort {
+    pub(crate) fn abort(&self) {
+        use app_core::sync::LockExt;
+        self.aborted.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(stream) = self.stream.lock_ok().as_ref() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    pub(crate) fn is_aborted(&self) -> bool {
+        self.aborted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// [`ollama_http_at`] that `abort` can end early, answering [`ABORTED`].
+pub(crate) fn ollama_http_abortable(
+    addr: &str,
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+    abort: &Abort,
+) -> Result<String, String> {
+    ollama_http_inner(addr, method, path, json_body, read_timeout, Some(abort))
+}
+
+fn ollama_http_inner(
+    addr: &str,
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+    abort: Option<&Abort>,
+) -> Result<String, String> {
     #[cfg(test)]
     if let Some(answer) = test_http::answer(addr, method, path) {
         return answer;
@@ -314,6 +364,27 @@ pub(crate) fn ollama_http_at(
     stream
         .set_read_timeout(Some(read_timeout))
         .map_err(|e| format!("set timeout: {e}"))?;
+    if let Some(abort) = abort {
+        use app_core::sync::LockExt;
+        let clone = stream.try_clone().map_err(|e| format!("clone: {e}"))?;
+        *abort.stream.lock_ok() = Some(clone);
+        // An abort between the check above and the store would find no socket.
+        if abort.is_aborted() {
+            return Err(ABORTED.to_string());
+        }
+    }
+    let answered = ollama_http_send(&mut stream, addr, method, path, json_body);
+    if let Some(abort) = abort {
+        use app_core::sync::LockExt;
+        abort.stream.lock_ok().take();
+        if abort.is_aborted() {
+            return Err(ABORTED.to_string());
+        }
+    }
+    answered
+}
+
+fn ollama_http_send(stream: &mut TcpStream, addr: &str, method: &str, path: &str, json_body: Option<&str>) -> Result<String, String> {
 
     let req = match json_body {
         Some(body) => format!(

@@ -1,17 +1,8 @@
 # Cockpit MCP — useful self-only metadata
 
-Status: delivery steps 1-3 implemented 2026-11-06 (metadata foundation,
-`tab_get_info`, `tab_set_activity`, `tab_set_handoff`, desktop roster subtitle
-and detail handoff; step 3: `tab_set_results`, project gate, publish- and
-open-time containment checks, desktop results fold), step 4 (2026-11-06:
-`tab_set_progress`, `tab_set_blocker`, `tab_set_verification`, roster blocker
-line, detail progress/blocker/verification sections) and step 5 (2026-11-06:
-`tab_request_attention` with the Needs-you group, dismissal command and badge,
-`tab_add_milestone` with the detail list and the Tonight recap) implemented;
-never live. As built and limits: `docs/context/cockpit_mcp.md`. Phone
-presentation (including results, the step 4 reports, attention and
-milestones) is not started.
-Builds on `docs/cockpit_mcp_plan.md` and the implemented rename lane described
+> **Status (screened against code 2026-11-22):** Delivery steps 1-5 are in code: all ten tools in `services/mcp/cockpit_mcp.rs` (`TOOL_*`), storage and limits in `services/cockpit_meta.rs`, `services/cockpit_results.rs`, desktop in `lib/cockpit/agentNotes.ts` and `components/cockpit/CockpitReports.tsx`/`CockpitResults.tsx`. Open: phone presentation (nothing in `mobile-web/src` or `mobile_control` reads the notes). As built: `docs/context/cockpit_mcp.md`. Not live-tested.
+
+Builds on `docs/done/cockpit_mcp_plan.md` and the implemented rename lane described
 in `docs/context/cockpit_mcp.md`.
 
 ## Fixed decisions (plan review, 2026-11-06)

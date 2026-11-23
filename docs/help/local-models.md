@@ -141,7 +141,7 @@ calling; the Models & agents menu tags models without it "no tools".
    (Ctrl+Space only) to spend fewer of a Copilot account's completions. A short note says why nothing comes
    (no local model loaded, Copilot not allowed for this project).
 2. In the editor, pause typing (Auto) or press **Ctrl+Space**. **Tab** accepts,
-   **Alt+→** takes one word, **Shift+Tab** cycles the length (sentence → block
+   **Ctrl+→** takes one word, **Alt+→** the rest of the line, **Shift+Tab** cycles the length (sentence → block
    → scope), **Esc** dismisses.
 
 ## Troubleshooting

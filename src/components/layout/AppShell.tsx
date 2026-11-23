@@ -1554,7 +1554,7 @@ export function AppShell() {
           it lands on top of the dialog that started the install or the login.
           Its host also persists the root scope and merges the rows a root agent
           wrote through Tabtivity's MCP tools — both while closed. It is also the
-          cockpit's window (`docs/cockpit_root_merge_plan.md`, `docs/cockpit_apps_merge_plan.md`):
+          cockpit's window (`docs/done/cockpit_root_merge_plan.md`, `docs/done/cockpit_apps_merge_plan.md`):
           Now, Projects, Tonight, Mail, Calendar, To-do, Agents, Models and
           Machines are views of this one surface. */}
       <RootOverlayHost />

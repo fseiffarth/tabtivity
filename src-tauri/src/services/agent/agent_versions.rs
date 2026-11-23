@@ -121,7 +121,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "claude",
-        version: "2.1.329",
+        version: "2.1.330",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
@@ -146,7 +146,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "antigravity",
-        version: "1.5.13",
+        version: "1.5.14",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
@@ -156,12 +156,12 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "muse",
-        version: "1.4.24",
+        version: "1.4.25",
         surface: "§1.5 — launcher's no-update switch, --model/--reasoning-effort, login file, the ⟩ menu lamp",
     },
     Verified {
         agent: "vibe",
-        version: "3.1.3",
+        version: "3.1.4",
         surface: "§1.5 — hooks.toml session hooks, --resume <id> and the unified store, VIBE_ACTIVE_MODEL, .vibe/AGENTS.md",
     },
 ];
@@ -843,11 +843,11 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.329")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.330")).0, DriftState::Match);
         // A recipe with no recorded check — the honest answer is "nobody has
         // verified this", not a tick.
         assert_eq!(drift_in(&[], "muse", Some("1.3.0")).0, DriftState::Unverified);
-        // Muse's first check was 1.4.15 (now 1.4.24); the 1.3.0 many still run is older.
+        // Muse's first check was 1.4.15 (now 1.4.25); the 1.3.0 many still run is older.
         let (state, stale) = drift("muse", Some("1.3.0"));
         assert_eq!(state, DriftState::Moved);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));

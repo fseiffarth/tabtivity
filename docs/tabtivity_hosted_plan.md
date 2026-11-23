@@ -1,5 +1,8 @@
 # Tabtivity Hosted — one server, several users, desktop and phone as thin clients
 
+> **Status (screened against code 2026-11-22):** PARTIAL, nearly all built and merged into `develop` (`4ed492a5d`, 2026-10-11; the `hosted` branch named below no longer exists). P0–P5 are in code: `src-tauri/src/services/command_class.rs`, `src-core/`, `src-gateway/` (gateway, admin helper, keeper, broker, OIDC), `src-serverd/`, `src-tauri/src/services/server/{vault,share,shared_calendar,agent_keys,oidc}.rs`, `services::connect`, `scripts/package-server-deb.sh`. Open: every live run, plus the deferred list in `server.md` § Open problems 5; pair mode was dropped. Status and decisions now live in `server.md`; command counts in §3.3/§10 are the 2026-09/10 numbers. Not live-tested.
+
+
 *Status, the user's decisions and open points: [`server.md`](server.md).
 All phases are built on branch `hosted` (2026-10-06, unmerged, never run
 live); the build log is [`hosted_handoff.md`](hosted_handoff.md). The text
@@ -747,7 +750,7 @@ credentials** panel. Users opt in per CLI (§5.2).
     - The keeper caps connections per caller uid (4) and each exchange at
       2 s; it remembers earlier keys as fingerprints only, so a rotated key
       in a login file is never adopted as the user's own.
-  - *Superseded (user, 2026-10-10, #2389 — `docs/agent_key_path_plan.md`):*
+  - *Superseded (user, 2026-10-10, #2389 — `docs/done/agent_key_path_plan.md`):*
     the administrator's key reaches agents only through each user's
     daemon's **API proxy**, the desktop's own-key path: a proxy token + base
     URL in the agent, the key (or the broker token) added by the proxy. The

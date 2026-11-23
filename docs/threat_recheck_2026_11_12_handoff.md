@@ -1,5 +1,8 @@
 # New-feature threat review — 2026-11-12
 
+> **Status (screened against code 2026-11-22):** REFERENCE (evidence for gaps 105–114). 105–111 are fixed in code (the first pass 2026-11-12, 111 on 2026-11-17); 112 and 113 are open; 114's plain-text paste case was closed by `5d8906dfe`. "No fixes implemented" below is the state at review time. Not live-verified.
+
+
 ## Result and scope
 
 **Five new findings: two medium, three low. No fixes implemented.** This is a

@@ -107,7 +107,7 @@ export interface VoiceStatus {
 /** `services::voice::gpu::CpuReason`. */
 export type VoiceCpuReason = "not-built" | "no-gpu" | "off" | "crashed";
 
-/** Where whisper really runs (`services::voice::gpu`, docs/voice_gpu_plan.md):
+/** Where whisper really runs (`services::voice::gpu`, docs/done/voice_gpu_plan.md):
  * what a load got, never what the setting asked for. */
 export type VoiceDevice = { kind: "gpu"; name: string | null } | { kind: "cpu"; reason: VoiceCpuReason };
 
@@ -138,6 +138,7 @@ export const VOICE_EVENTS = {
   vad: "voice:vad",
   partial: "voice:partial",
   final: "voice:final",
+  lang: "voice:lang",
   state: "voice:state",
   owner: "voice:owner",
   error: "voice:error",
@@ -149,7 +150,12 @@ export type VoiceState = "preparing" | "listening" | "paused" | "stopped";
 export interface LevelEvent { session: number; level: number }
 export interface VadEvent { session: number; segment: number; state: "start" | "end" }
 export interface TextEvent { session: number; segment: number; text: string }
-export interface FinalEvent extends TextEvent { outcome?: "transcribed" | "filtered" | "failed" | "incomplete" }
+/** `lang`: the whisper code the segment was decoded in (`"de"`), present when
+ * it was `transcribed`; absent from a backend older than the detection. */
+export interface FinalEvent extends TextEvent { outcome?: "transcribed" | "filtered" | "failed" | "incomplete"; lang?: string }
+/** A candidate-language session locked on `lang`: sent once, just before the
+ * final of the segment that locked it (`voice_listen_start`'s `langs`). */
+export interface LangEvent { session: number; lang: string }
 export interface StateEvent { discarded?: boolean; session: number; state: VoiceState; reason?: VoiceErrorCode; device?: VoiceDevice }
 export interface ErrorEvent { session: number; code: VoiceErrorCode }
 /** What became of a read (`voice_speak`); `done` comes after the mic's mute
@@ -178,6 +184,52 @@ export function voiceLangTag(choice: VoiceLangChoice | undefined, uiLanguage: La
   if (!choice || choice === "auto") return uiLanguage;
   if (choice === "detect") return "auto";
   return choice;
+}
+
+/** Most candidate languages `voice_detect_langs` may hold. */
+export const MAX_DETECT_LANGS = 5;
+
+/** The app language a whisper code names, else undefined: only these count as
+ * the language a spoken edit is matched in (not `normalizeLang`, which turns
+ * "nl" into English). */
+export function appLanguage(code: string | undefined): Language | undefined {
+  return LANGUAGES.find((language) => language.value === code)?.value;
+}
+
+/** The candidates `detect` picks among (`voice_detect_langs`): app languages
+ * only, deduplicated, at most five; unset or empty is the UI language and English. */
+export function detectLangs(stored: readonly string[] | undefined, uiLanguage: Language): Language[] {
+  const picked: Language[] = [];
+  // The settings file is hand-editable: anything but a list counts as unset.
+  for (const code of Array.isArray(stored) ? stored : []) {
+    if (typeof code !== "string") continue;
+    const language = appLanguage(code);
+    if (language && !picked.includes(language)) picked.push(language);
+  }
+  if (picked.length === 0) return uiLanguage === "en" ? ["en"] : [uiLanguage, "en"];
+  return picked.slice(0, MAX_DETECT_LANGS);
+}
+
+/** What a session started with `choice` is told about candidates: `langs` and
+ * the UI language as `fallback` under `detect`, nothing otherwise. */
+export function voiceCandidates(
+  choice: VoiceLangChoice | undefined,
+  stored: readonly string[] | undefined,
+  uiLanguage: Language,
+): { langs?: string[]; fallback?: string } {
+  if (choice !== "detect") return {};
+  const langs = detectLangs(stored, uiLanguage);
+  return { langs, fallback: langs.includes(uiLanguage) ? uiLanguage : langs[0] };
+}
+
+/** The language each tab's dictation last locked on, for read-aloud under
+ * `detect`. In memory only (docs/voice_language_detection_plan.md, D5). */
+const lockedByTab = new Map<string, Language>();
+export function rememberSpokenLang(tabKey: string, lang: Language): void {
+  lockedByTab.set(tabKey, lang);
+}
+export function lockedSpokenLang(tabKey: string): Language | undefined {
+  return lockedByTab.get(tabKey);
 }
 
 /** The speech language picker's choices (Settings → Voice and the Chat's dictation strip). */
@@ -240,7 +292,10 @@ export interface DesktopDictationHandlers {
   onPartial(text: string, segment: number): void;
   /** A settled segment: its text, or empty when it was dropped. */
   onIncomplete(segment: number): void;
-  onFinal(text: string, segment: number, filtered?: boolean): void;
+  /** `lang`: the language the segment was decoded in, when the backend says. */
+  onFinal(text: string, segment: number, filtered?: boolean, lang?: string): void;
+  /** The session locked on a language (candidate sessions only; may never come). */
+  onLang?(lang: string): void;
   onLevel(level: number | null): void;
   onPaused(paused: boolean): void;
   onError(key: TranslationKey): void;
@@ -257,6 +312,10 @@ export interface DesktopDictationOptions {
   headset: boolean;
   /** The `voice_gpu` setting. */
   gpu: boolean;
+  /** Candidate languages whisper picks among (`lang` is then `auto`): sent only
+   * when non-empty, with `fallback` (the one partials use before a pick). */
+  langs?: string[];
+  fallback?: string;
 }
 
 export interface DesktopDictation {
@@ -325,7 +384,12 @@ export async function startDesktopDictation(
         pending.delete(final.segment);
         if (open === final.segment) open = null;
         if (final.outcome === "failed" || final.outcome === "incomplete") handlers.onIncomplete(final.segment);
-        else handlers.onFinal(final.text, final.segment, final.outcome === "filtered");
+        else handlers.onFinal(final.text, final.segment, final.outcome === "filtered", final.lang);
+        break;
+      }
+      case VOICE_EVENTS.lang: {
+        const lang = (payload as LangEvent).lang;
+        if (typeof lang === "string" && lang) handlers.onLang?.(lang);
         break;
       }
       case VOICE_EVENTS.error:
@@ -357,7 +421,7 @@ export async function startDesktopDictation(
     else handle(event, e.payload);
   };
   try {
-    for (const event of [VOICE_EVENTS.level, VOICE_EVENTS.vad, VOICE_EVENTS.partial, VOICE_EVENTS.final, VOICE_EVENTS.error, VOICE_EVENTS.state]) {
+    for (const event of [VOICE_EVENTS.level, VOICE_EVENTS.vad, VOICE_EVENTS.partial, VOICE_EVENTS.final, VOICE_EVENTS.lang, VOICE_EVENTS.error, VOICE_EVENTS.state]) {
       unlisten.push(await listen<Payload>(event, route(event)));
     }
     session = await invoke<number>("voice_listen_start", {
@@ -368,6 +432,7 @@ export async function startDesktopDictation(
       pauseMs: options.pauseMs,
       headset: options.headset,
       gpu: options.gpu,
+      ...(options.langs && options.langs.length > 0 ? { langs: options.langs, ...(options.fallback ? { fallback: options.fallback } : {}) } : {}),
     });
   } catch (error) {
     for (const off of unlisten.splice(0)) off();

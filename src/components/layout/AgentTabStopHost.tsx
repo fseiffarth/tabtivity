@@ -110,7 +110,7 @@ async function finalChecks(a: Agent): Promise<FinalStopChecks> {
 
 /**
  * Stops idle agent tabs and wakes the ones a relaunch brought back stopped
- * (`docs/agent_tab_stop_plan.md` §6). Main window only, beside the other agent
+ * (`docs/done/agent_tab_stop_plan.md` §6). Main window only, beside the other agent
  * hosts; runs unfocused like them.
  *
  * Each sweep: the cheap guards on every agent tab, the pure pick

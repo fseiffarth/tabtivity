@@ -1,5 +1,8 @@
 # Threat recheck — the code of 2026-11-12 to 2026-11-19
 
+> **Status (screened against code 2026-11-22):** REFERENCE (evidence for gaps 115–122). Of its eight findings, 115, 117, 118, 119, 121 and 122 are fixed in develop (see `docs/threat_recheck_2026_11_19_plan.md`); 116 and 120 are open, and 112–114 are as the "Regression check" section says except 114's plain-text paste case (`5d8906dfe`). "No fixes implemented" below is the state at review time. Not live-verified.
+
+
 ## Result and scope
 
 **Eight new findings: one medium, one low-to-medium, six low. No high. No

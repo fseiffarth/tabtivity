@@ -1,6 +1,6 @@
 /**
  * The chat assistant reaches the phone as a scope of its own
- * (`docs/assistant_plan.md`, decision 12).
+ * (`docs/done/assistant_plan.md`, decision 12).
  *
  * The sidecar's `discovery::assistant_open` is the perimeter; the desktop
  * bridge repeats the same rule (the experimental flag, and `assistant_access`

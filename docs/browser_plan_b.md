@@ -1,5 +1,7 @@
 # In-App Browser — Plan B: Threat Model & Security Architecture
 
+> **Status (screened against code 2026-11-22):** REFERENCE (threat model; build order largely done). BC-1 is in place (`src-tauri/capabilities/default.json` is scoped by `webviews`; `src-tauri/tests/capability_scope.rs`). The policy and sanitizer code landed under other names than §13 prescribes: `src-core/src/services/web_safety.rs` (`navigation_decision`, `is_globally_routable`, `registrable`, `describe_url`) instead of `browser_policy`, and `src-tauri/src/services/browser_engine.rs` (quarantine) plus `commands/browser.rs` (`browser_reader_fetch`, `browser_open_live` with `incognito(true)`, `on_navigation`, `on_new_window` deny, `on_download`; `browser_download_decide`) instead of `browser_download`. UI in `src/components/browser/`; tripwires in `src/__tests__/browser/BrowserTripwire.test.ts`. Windows is no longer refused (see `commands/browser.rs` header). Live-page replacement: `docs/browser_sandbox_plan.md`. Not live-tested.
+
 > Scope: the security posture of an embedded web browser (TODO group J, #61). Tab/UI
 > integration is Plan A's; engine and Tauri-API feasibility is Plan C's. This document
 > owns the threat model, the isolation boundary, and every defence — it names Plan A's

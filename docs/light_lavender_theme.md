@@ -10,7 +10,7 @@ read as lavender instead of grey/black.
 |---------|------|
 | App CSS variables (window/panels/pills/accent) | `src/styles/themes.css` — `[data-theme="light_lavender"]` block |
 | Registration in the Settings → Theme picker | `src/types/index.ts` — `Theme` union + `THEMES` array |
-| Terminal (xterm) palette | `src/components/terminal/TerminalView.tsx` — `terminalTheme()` `light_lavender` branch + the pane-background ternary |
+| Terminal (xterm) palette | `src/lib/terminal/terminalPalette.ts` — `terminalPalette()` `light_lavender` branch (shared with the phone's terminal); `TerminalView.tsx` `terminalTheme()` resolves the scheme and calls it |
 
 Adding/adjusting a theme: see the "HOW TO ADD A THEME" comment at the top of the
 theme blocks in `themes.css`.
@@ -18,7 +18,7 @@ theme blocks in `themes.css`.
 ## Terminal palette
 
 The terminal does **not** read the CSS variables — it has its own hardcoded
-palette per app theme in `terminalTheme()`. Claude Code, when set to its **ANSI
+palette per app theme in `terminalPalette()`. Claude Code, when set to its **ANSI
 theme** (`/theme` inside a Claude tab), maps its UI onto these 16 ANSI colors, so
 tuning a slot here recolors Claude's message blocks, diffs and chrome.
 
@@ -30,7 +30,7 @@ tuning a slot here recolors Claude's message blocks, diffs and chrome.
 |------|-----|----------|
 | `background` | `#faf9fe` | Pane background / canvas |
 | `foreground` | `#2c2348` | Default text color |
-| `cursor` | `#7c5cdb` | Text cursor block |
+| `cursor` | `#6f4fd3` | Text cursor block |
 | `cursorAccent` | `#faf9fe` | Glyph under the cursor block |
 | `selectionBackground` | `#dccff2` | Mouse-selection highlight |
 | `selectionForeground` | `#241d38` | Text inside a selection |
@@ -66,3 +66,6 @@ tuning a slot here recolors Claude's message blocks, diffs and chrome.
   and diff line backgrounds are easy to tell apart.
 - Claude Code's **truecolor** themes ignore this palette entirely; only its ANSI
   theme honors it.
+- Every terminal also gets xterm's `minimumContrastRatio` (`TERMINAL_MIN_CONTRAST`,
+  4.5), which pushes text drawn too close to the background (the light `white`
+  slot, 1.6:1 here) up to WCAG AA.

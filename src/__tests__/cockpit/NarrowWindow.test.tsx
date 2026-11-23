@@ -1,5 +1,5 @@
 /**
- * The window's width bands (`docs/cockpit_root_merge_plan.md`, decision 8):
+ * The window's width bands (`docs/done/cockpit_root_merge_plan.md`, decision 8):
  * 1180 px and up is the full layout, 820 to 1179 px Now's rail is the icon rail
  * (the full one in a popover) beside roster and detail, under 820 px Now is
  * master / detail with a "Needs you N" chip. The band is measured on the frame

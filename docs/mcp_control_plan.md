@@ -1,6 +1,8 @@
 # Tabtivity MCP Control Server — plan
 
-*Plan only. Nothing here is implemented. Produced 2026-08-03.* The **root
+> **Status (screened against code 2026-11-22):** Not built. No control MCP server exists: no `/mcp/control` route, no tab-opening or project-activating tool in `services/mcp/` or `root_mcp.rs`. The agent-facing lanes that shipped are tab-scoped only (cockpit `tab_*`, tabs, git, markup, print, help, schedule; `docs/context/agent_mcp_wiring.md`). Not live-tested.
+
+*Produced 2026-08-03.* The **root
 console's MCP** (`docs/context/root_console.md`) is the shipped, HTTP,
 write-capable surface — a different server with a different threat model; this
 document is the *control* server that was not built.

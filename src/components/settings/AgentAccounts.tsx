@@ -134,7 +134,7 @@ export function CodexAutoReviewToggle() {
 }
 
 /** OpenCode cache warming (top-level `warming` in the layer's OpenCode
- *  config, `docs/cli_caching_plan.md` phase 2). */
+ *  config, `docs/done/cli_caching_plan.md` phase 2). */
 export function OpenCodeWarmingToggle() {
   const t = useT();
   return (

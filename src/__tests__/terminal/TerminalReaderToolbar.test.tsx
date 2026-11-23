@@ -100,7 +100,12 @@ describe("desktop conversation toolbar", () => {
     fireEvent.change(box, { target: { value: "keep this draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     await screen.findByText("No file changes in this conversation yet.");
-    expect(screen.queryByRole("textbox")).toBeNull();
+    // The same box, docked under the panel, open since it holds a draft.
+    expect(screen.getByRole("textbox")).toBe(box);
+    expect(box.value).toBe("keep this draft");
+    const root = host.querySelector(".terminal-reader")!;
+    expect(root.classList.contains("panel-open")).toBe(true);
+    expect(root.classList.contains("dock-open")).toBe(true);
     fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
     expect(screen.getByRole("tab", { name: "Terminal" }).getAttribute("aria-selected")).toBe("true");
     await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Chat" })));
@@ -116,15 +121,18 @@ describe("desktop conversation toolbar", () => {
     expect((screen.getByRole("tab", { name: /^Data/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("returns to Chat when a prompt or dropped file is inserted while reviewing Diffs", async () => {
+  it("keeps Diffs when a prompt or dropped file is inserted, the docked field open", async () => {
     render(<Pane host={host} />);
     await screen.findByText("hello");
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     await screen.findByText("No file changes in this conversation yet.");
     act(() => { expect(insertIntoReader("p:a", "file.ts")).toBe(true); });
-    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("draft file.ts");
-    expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(box.value).toBe("draft file.ts");
+    expect(screen.getByRole("tab", { name: "Diffs" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(box);
+    expect(host.querySelector(".terminal-reader")?.classList.contains("dock-open")).toBe(true);
   });
 
   it("lists the conversation's files in the Files tab with the picked one in its viewer", async () => {
@@ -137,7 +145,8 @@ describe("desktop conversation toolbar", () => {
     // Nothing picked yet: the newest file is shown.
     expect(option.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("file-viewer").textContent).toBe("/project/src/result.ts");
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(host.querySelector(".terminal-reader")?.classList.contains("panel-open")).toBe(true);
+    expect(host.querySelector(".terminal-reader")?.contains(host.querySelector(".terminal-files"))).toBe(true);
     expect(openFile).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /^Open in a tab/ }));
     expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ entry: expect.objectContaining({ path: "/project/src/result.ts" }) }));
@@ -226,12 +235,31 @@ describe("desktop conversation toolbar", () => {
     expect(invoke).toHaveBeenCalledWith("open_in_file_manager", { path: "/project/blender" });
   });
 
-  it("lists the conversation's workflow runs as Workspaces, apart from its subagents", async () => {
+  it("over Chat leaves the top bar without the menus: the dock stands for them", async () => {
     entries.push(
       { kind: "agent", text: "Review parser", role: "reviewer", subagent: "child", at: "2026-10-25T09:01:00Z" },
       { kind: "agent", text: "Audit the repo", role: "workflow", subagent: "run", workflow: true, at: "2026-10-25T09:02:00Z" },
     );
     render(<Pane host={host} />);
+    const done = await screen.findByRole("button", { name: /2 done/ });
+    expect(done.closest(".terminal-reader-agent-dock")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^Subagents \(|^Workspaces \(/ })).toBeNull();
+    expect(document.querySelector(".reader-topbar-navigation .terminal-reader-subagent-index")).toBeNull();
+    // Diffs covers the chat and its dock: the menus are back in the top bar.
+    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
+    expect(await screen.findByRole("button", { name: /^Subagents \(1\)/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Subagents \(/ })).toBeNull());
+  });
+
+  it("lists the conversation's workflow runs as Workspaces over Diffs, apart from its subagents", async () => {
+    entries.push(
+      { kind: "agent", text: "Review parser", role: "reviewer", subagent: "child", at: "2026-10-25T09:01:00Z" },
+      { kind: "agent", text: "Audit the repo", role: "workflow", subagent: "run", workflow: true, at: "2026-10-25T09:02:00Z" },
+    );
+    render(<Pane host={host} />);
+    await screen.findByRole("button", { name: /2 done/ });
+    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     expect(await screen.findByRole("button", { name: /^Subagents \(1\)/ })).toBeTruthy();
     const workspaces = screen.getByRole("button", { name: /^Workspaces \(1\)/ });
     expect(workspaces.closest(".reader-topbar-navigation")).not.toBeNull();
@@ -245,9 +273,10 @@ describe("desktop conversation toolbar", () => {
   it("keeps subagent navigation above the views and returns from Diffs to its chat", async () => {
     entries.push({ kind: "agent", text: "Review parser", role: "reviewer", subagent: "child", at: "2026-10-25T09:01:00Z" });
     render(<Pane host={host} />);
+    await screen.findByRole("button", { name: /1 done/ });
+    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     const menu = await screen.findByRole("button", { name: /^Subagents \(1\)/ });
     expect(menu.closest(".reader-topbar-navigation")).not.toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     fireEvent.click(menu);
     const navigation = screen.getByRole("navigation", { name: "Subagents in this conversation" });
     fireEvent.click(within(navigation).getByRole("button", { name: /Review parser/ }));

@@ -50,7 +50,7 @@ Plain `voice` is the CPU. `voice-vulkan` (Linux, Windows) and `voice-metal`
 `glslc` at build time and links the loader. Bundles and the dev build turn them
 on (`scripts/lib/voice_gpu.sh`). Both sit on `whisper-rs-sys`, not `whisper-rs`,
 whose `vulkan` feature fails to compile where bindgen falls back to the bundled
-bindings. Measurements and open risks: `docs/voice_gpu_plan.md`.
+bindings. Measurements and open risks: `docs/done/voice_gpu_plan.md`.
 
 On Windows, `voice-vulkan` needs a target dir of about 22 characters or fewer.
 whisper.cpp's shader generator is a nested cmake project, and MSBuild's file
@@ -87,6 +87,36 @@ time, 300–700 ms), so a GPU is asked about every 0.4 s and a slow CPU is not
 swamped. The final stays one run over the whole segment (a seam is not a
 sentence end). Plain dictate keeps its 700 ms closing pause: shorter would
 split sentences at thinking pauses, and the field already shows the words.
+
+## The speech language (`lang.rs`)
+
+`lang: "auto"` is whisper's open detection, per segment:
+`FullParams::set_language(None)`. Never `set_detect_language(true)`, which
+means *detect only* and returns no text (that was the "Let the model guess"
+bug, fixed 2026-11-22).
+
+With `langs` (at most 5 whisper codes, from the `voice_detect_langs` setting)
+a session picks among those languages instead of whisper's ~99, since an open
+pick on a short phrase drifts to a neighbour (German to Dutch).
+- **Who detects:** only a `Job::Final` (`Transcriber::transcribe_final`) runs
+  `pcm_to_mel` + `lang_detect` and takes the best candidate's renormalised
+  probability (`lang::pick`). Partials and seam prefixes use the locked
+  language, else the last kept pick, else the fallback.
+- **The lock:** `LangPicker` (worker side) locks on the first kept final with
+  at least 1500 ms of audio and p >= 0.6. Later finals don't detect: the lock
+  holds for the session, and the renderer's picker is the way out. One
+  candidate is locked from the start.
+- **Events:** `voice:final` carries `lang` when transcribed. `voice:lang
+  { session, lang }` goes out once, just before the final that locked,
+  candidate sessions only.
+- **Params:** built once per candidate, because each setter leaks a C string.
+- **Cancel:** `lang_detect` cannot be aborted, so `cancel` is checked after
+  it.
+- **The renderer:** the voice-command matcher and read-aloud follow the
+  locked language. Read-aloud keeps it per tab, in memory.
+
+The phone cannot detect: the browser's recognizer has to be told one language
+up front. Plan: `docs/voice_language_detection_plan.md`.
 
 ## One listener per machine
 
@@ -195,14 +225,21 @@ the line interrupts. The screen must stay on and the page open — Android
 takes the mic from a hidden page — so working from a pocket would need a
 native app.
 
-## Spoken navigation on the phone (docs/voice_nav_mode_plan.md)
+## Spoken navigation on the phone (docs/done/voice_nav_mode_plan.md)
 
-Inside the Focus mic, hands-free only. The dictation hook reads **utterances**,
-not deltas (`voiceInput.ts` `stepUtterances`: Android finalizes one utterance
-several times as it grows), so "starts with Tabby" and "Tabby navigate" are
-judged on a settled utterance; `useVoiceInput`'s `dispatch` is the one ordered
-route a held utterance takes (navigation mode → "Tabby navigate" → [spoken
-draft edits] → the Tabby gate → hands-free's guard and `pick` → dictation).
+Inside the Focus mic, hands-free or a plain tap (a plain tap used to type
+"Tabby navigate" into the box; 2026-11-22 the user chose any mic). The
+dictation hook reads **utterances** on every mic, not deltas (`voiceInput.ts`
+`stepUtterances`: Android finalizes one utterance several times as it grows),
+so "starts with Tabby" and "Tabby navigate" are judged on a settled
+utterance; only the Tabby gate, the send guard and `pick` stay hands-free's.
+`useVoiceInput`'s `dispatch` is the one ordered route a held utterance takes
+(navigation mode → "Tabby navigate" / "Tabby help" → [spoken draft edits] →
+the Tabby gate → hands-free's guard and `pick` → dictation). "Tabby help"
+(`voice.help`) says what can be said where it is — the draft's commands, or
+in the mode ("help" alone) the navigation ones — with the mic closed, since
+the recognizer would hear it. A jump's landing read stays hands-free's: a
+plain tap only opens the tab.
 `useVoiceNav` is the mode: it sets `utterances.capture` (nothing heard is
 typed, the send guard is kept out), matches each utterance with
 `match(..., { requireCommandWord: false })` against lists built from rows the
@@ -220,6 +257,46 @@ through the reading cursor (`readTurn(tab, sinceKey)`), then starts the mic with
 the gate on. Hands-free's reopen of the mic defers to the open mode (`navOpen`).
 The start word is exact (phonetic spelling plus `voice.assistantAliases`): a
 fuzzy score let "taxi" and "toby" in.
+
+## Spoken navigation on the desktop (docs/desktop_tabby_navigate_plan.md)
+
+The slim slice, inside the mic a Chat already owns. The mode itself is one
+controller for both hosts (`shared/voiceNavMode.ts`: the order of checks, the
+ask-back, the idle timer, the epochs); the phone's `useVoiceNav` and the
+desktop's `useReaderVoiceNav` are its adapters. Hosts answer a command by
+calling `ctx.apply` in the tick they decided it, not by returning a promise:
+an extra await moved the phone's lines a tick later and broke its tests.
+
+- **A whisper final is an utterance.** The voice detector closed it, so the
+  desktop judges each final directly and needs no settle rule; only the live
+  preview is held back (`useLiveDictation` `show`: a spoken edit, "Tabby
+  navigate" or "Tabby help" in the making shows on the "Heard:" line). Each
+  final goes: empty or filtered → the mode / help / navigate → the Tabby gate
+  → recovery, `pick`, the send guard, the draft. So navigation beats an open
+  question's pick and never reaches the send guard.
+- **The mic stays open through a turn** (Hands-free). Pausing it meant nothing
+  could be said while the agent works. Now only a hidden pane pauses it, and
+  the Tabby gate (`useReaderTabbyGate`) drops talk that does not start with the
+  start word until the turn is over and its answer read. While a prompt is
+  being dictated behind the gate, read-aloud holds (`holdsReading`), so the
+  voice never mutes the mic mid-word.
+- **No mic bounce to speak.** Mode lines go through `voice_speak` under
+  `${ptyId}#nav:n`; the backend drops captured audio while it speaks plus a
+  300 ms tail, and the next step waits for that read's `voice:speaking` end
+  (guarded by a timer).
+- **The queues are steering's walk** (`statusTabs` / `nextStatusTab` from the
+  tab shown, `afterStatusJump` for Back), so voice and the status keys agree;
+  no module cursor.
+- **Root is out of reach**, and so are Tabby's chats: no list or queue holds
+  them, so a landing never opens a mic on the unfenced Host session.
+- **Main window only.** A popout's Chat answers "Navigation works in the main
+  window"; a jump to a tab in a popout raises it, says where, listens nowhere.
+  A tab with no Chat (Terminal view, a shell) is said before the jump, and
+  nothing listens there: voice never switches a pane's view.
+- **The landing is a note** by PTY id (`desktopNav.ts`, 30 s), taken by the
+  Chat that comes into view; the tab left drops its session at the jump. The
+  note records whether the jump was made with Hands-free on (read, then
+  listen gated) or off (the mic just opens, ungated).
 
 ## Where this goes: hands-free navigation
 

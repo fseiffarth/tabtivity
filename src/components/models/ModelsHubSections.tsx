@@ -96,7 +96,18 @@ export const MODEL_ROLES: Array<{ key: string; labelKey: TranslationKey; pending
   // this role, so the chip is live — a resident model can be pinned to it and the
   // mail features run against it.
   { key: "mail", labelKey: "localModel.role.mail" },
+  // The local model's guess at an agent tab's next prompt, where the CLI draws
+  // none of its own (`lib/agents/nextPrompt`, `services::agent::next_prompt`).
+  { key: "suggest", labelKey: "localModel.role.suggest" },
 ];
+
+/** The roles a session's or a mailbox's content goes to, which an Ollama
+ * cloud model (it runs on ollama.com) can't take: the chip is disabled on one
+ * unless it is already on, so it can be turned off. */
+const LOCAL_ONLY_ROLES: Partial<Record<string, TranslationKey>> = {
+  mail: "localModel.mailCloudTitle",
+  suggest: "localModel.suggestCloudTitle",
+};
 
 /**
  * One row of the Machine group: a fixed label, the reading, a secondary fact,
@@ -629,11 +640,12 @@ export function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: Models
             const on = roles[r.key] === m.name;
             const roleLabel = t(r.labelKey);
             // An Ollama cloud model can't be the Mail model: mail stays on this
-            // machine (gap 25). Disabled unless it is already on, so it can be
-            // turned off.
-            const cloudMail = r.key === "mail" && m.remote === true;
-            const title = cloudMail
-              ? t("localModel.mailCloudTitle", { name: m.name })
+            // machine (gap 25) — nor the Suggestions one, which reads sessions.
+            // Disabled unless it is already on, so it can be turned off.
+            const cloudTitle = m.remote === true ? LOCAL_ONLY_ROLES[r.key] : undefined;
+            const cloudMail = !!cloudTitle;
+            const title = cloudTitle
+              ? t(cloudTitle, { name: m.name })
               : t(on ? "localModel.usedForRole" : "localModel.useForRole", {
                   role: roleLabel.toLowerCase(),
                   name: m.name,
@@ -1448,7 +1460,7 @@ export function LocalModelsSection({
                   </span>
                 </button>
                 {/* Task tags: pin this model to a job (autocomplete/
-                    tabs/mail). Several loaded models can each own a different
+                    tabs/mail/suggestions). Several loaded models can each own a different
                     one. A `pending` tag adds "nothing reads this yet" to its
                     tooltip — the chip must not imply a job that doesn't run. */}
                 <div className="local-model-roles">
@@ -1456,11 +1468,13 @@ export function LocalModelsSection({
                     const on = roles[r.key] === m.name;
                     const roleLabel = t(r.labelKey);
                     // An Ollama cloud model can't be the Mail model: mail stays
-                    // on this machine (gap 25). Disabled like the MCP chip of a
-                    // model without tools — still clickable to turn it off.
-                    const cloudMail = r.key === "mail" && m.remote === true;
-                    const title = cloudMail
-                      ? t("localModel.mailCloudTitle", { name: m.name })
+                    // on this machine (gap 25) — nor the Suggestions one, which
+                    // reads sessions. Disabled like the MCP chip of a model
+                    // without tools — still clickable to turn it off.
+                    const cloudTitle = m.remote === true ? LOCAL_ONLY_ROLES[r.key] : undefined;
+                    const cloudMail = !!cloudTitle;
+                    const title = cloudTitle
+                      ? t(cloudTitle, { name: m.name })
                       : t(on ? "localModel.usedForRole" : "localModel.useForRole", {
                           role: roleLabel.toLowerCase(),
                           name: m.name,

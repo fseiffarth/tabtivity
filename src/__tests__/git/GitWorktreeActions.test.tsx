@@ -52,11 +52,11 @@ describe("worktree selection in the shared Git viewer", () => {
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_status", { projectDir: "/p", worktree: selection, branchExchange: true }));
     await user.click(await screen.findByRole("button", { name: /Add \(1\)/ }));
     expect(mockInvoke).toHaveBeenCalledWith("git_add_all", { projectDir: "/p", worktree: selection });
-    await user.click(screen.getByRole("button", { name: "Show changed files" }));
+    // The change lists are inline (Not staged, Staged), read for the selection.
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_change_stats", { projectDir: "/p", worktree: selection, scope: "unstaged" }));
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_change_stats", { projectDir: "/p", worktree: selection, scope: "staged" }));
     await user.click(await screen.findByRole("button", { name: "Stage" }));
     expect(mockInvoke).toHaveBeenCalledWith("git_add_path", { projectDir: "/p", worktree: selection, relPath: "note.txt", unstage: false });
-    await user.click(screen.getByRole("button", { name: "Show staged files" }));
     await user.click(await screen.findByRole("button", { name: "Staged diff" }));
     expect(await screen.findByText("+staged version")).toBeTruthy();
     expect(mockInvoke).toHaveBeenCalledWith("git_diff_file", { projectDir: "/p", worktree: selection, relPath: "note.txt", staged: true });

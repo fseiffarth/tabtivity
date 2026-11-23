@@ -10,6 +10,11 @@
   min-height: 100%;
   box-sizing: border-box;
   padding: var(--space-1);
+  /* The list's width picks its layout: compact rows below 720 px, the column
+     list (Name · Git · Modified · Size · share) from 720 px — one markup, so
+     the side panel, a docked column and a wide Files tab each switch at their
+     own width. */
+  container: file-list / inline-size;
 }
 
 /* The pinned header (remote bar + search + breadcrumb). ONE sticky element so
@@ -22,19 +27,47 @@
   background: var(--bg-panel);
 }
 
+/* The Files view's one toolbar row (`.sp-toolbar`): breadcrumb, folder total
+   and the compact sort on the left, the host's actions at the end. Inside the
+   tree's 4 px gutter, so its own left inset is the rows' 8 px. */
+.file-tree-toolbar {
+  padding: 0 var(--space-1) 0 var(--space-2);
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.file-tree-toolbar .sp-toolbar-end .toolbar-btn--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.file-tree-toolbar .sp-toolbar-end .toolbar-btn--icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 .file-tree-breadcrumb {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 1px;
-  width: 100%;
-  padding: 2px var(--space-1) var(--space-1);
+  min-width: 0;
   font-size: var(--text-md);
-  background: var(--bg-panel);
 }
 
 .file-tree-path-edit {
-  padding: 2px var(--space-1) var(--space-1);
+  flex: 1 1 auto;
+  padding: 2px 0;
+}
+
+/* The total and the sort sit right after the crumbs, not pushed to the edge:
+   the actions group owns the row's one auto margin. */
+.file-tree-toolbar .file-tree-path-total {
+  margin-left: 0;
 }
 
 .file-tree-path-input {
@@ -52,6 +85,7 @@
 .file-tree-up {
   display: flex;
   align-items: center;
+  justify-content: center;
   padding: 2px 6px;
   margin-right: 2px;
   background: transparent;
@@ -480,12 +514,28 @@
   text-decoration-thickness: 1px;
   opacity: 0.85;
 }
-.file-tree-crumb.crumb-missing::after {
-  content: "⊘";
+.file-tree-crumb-missing-mark {
+  display: inline-flex;
   margin-left: 3px;
-  font-size: 0.85em;
-  text-decoration: none;
-  display: inline-block;
+  vertical-align: -1px;
+}
+
+.file-tree-crumb-missing-mark svg {
+  width: 9px;
+  height: 9px;
+}
+
+/* ⌂ is a drawn glyph sized to the crumbs' text. */
+.file-tree-crumb--home,
+.file-tree-up {
+  display: inline-flex;
+  align-items: center;
+}
+
+.file-tree-crumb--home svg,
+.file-tree-up svg {
+  width: 13px;
+  height: 13px;
 }
 
 .file-tree-crumb-sep {
@@ -520,6 +570,147 @@
 }
 
 .file-entry:hover { background-color: var(--pill-hover-bg); }
+
+/* The tree's row grid (docs/files_panel_redesign_plan.md, "One row grid"):
+   git chip · action · icon + name + badges · size · share bar, every column
+   reserved on every row — folders, files, doc ghosts and memory rows alike —
+   so all the names of a list start on one vertical line whatever a row
+   carries. The cells are named, so a row that leaves one out (a size not
+   measured yet) keeps the others in place. The wide layout adds the Git and
+   Modified columns below. */
+.file-entry.file-grid {
+  display: grid;
+  grid-template-columns: 16px 20px minmax(0, 1fr) auto 28px;
+  grid-template-areas: "state act main size share";
+  column-gap: 6px;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+}
+
+.file-grid > .file-state { grid-area: state; }
+.file-grid > .file-act { grid-area: act; }
+.file-grid > .file-main { grid-area: main; }
+.file-grid > .file-git { grid-area: git; }
+.file-grid > .file-mod { grid-area: mod; }
+.file-grid > .file-size { grid-area: size; text-align: right; }
+.file-grid > .file-share { grid-area: share; display: inline-flex; align-items: center; }
+/* A non-empty entry's fill never thins below a visible sliver. */
+.file-share .sp-bar > span { min-width: 2px; }
+
+/* Narrow: no Git or Modified column (the chip and the tooltip say those). */
+.file-grid > .file-git,
+.file-grid > .file-mod {
+  display: none;
+}
+
+.file-grid .file-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Git ignores it: no chip, a muted name. */
+.file-entry.git-ignored .file-name {
+  color: var(--text-muted);
+}
+
+/* The wide layout: a column list with a sticky header whose cells sort. */
+.file-cols {
+  display: none;
+}
+
+@container file-list (min-width: 720px) {
+  .file-entry.file-grid {
+    grid-template-columns: 16px 22px minmax(200px, 1.4fr) 110px 150px 76px minmax(120px, 1fr);
+    grid-template-areas: "state act main git mod size share";
+    column-gap: var(--space-3);
+    padding: 0 var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .file-grid > .file-git,
+  .file-grid > .file-mod {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-md);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .file-grid > .file-size {
+    font-size: var(--text-md);
+    color: var(--text-secondary);
+  }
+
+  .file-grid .sp-bar {
+    width: 100%;
+    max-width: 240px;
+  }
+
+  .file-cols {
+    display: grid;
+    grid-template-columns: 16px 22px minmax(200px, 1.4fr) 110px 150px 76px minmax(120px, 1fr);
+    column-gap: var(--space-3);
+    align-items: center;
+    min-height: 30px;
+    padding: 0 var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  /* The compact sort control's job is the column heads' here. */
+  .file-tree-sort {
+    display: none;
+  }
+}
+
+.file-cols-size {
+  justify-self: end;
+}
+
+.file-cols-share {
+  font-weight: 400;
+}
+
+.file-cols-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 24px;
+  margin-left: calc(-1 * var(--space-1));
+  padding: 0 var(--space-1);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: var(--cur-pointer, pointer);
+}
+
+.file-cols-size .file-cols-sort {
+  margin-left: 0;
+  margin-right: calc(-1 * var(--space-1));
+}
+
+.file-cols-sort:hover {
+  background-color: var(--pill-hover-bg);
+}
+
+.file-cols-sort.active {
+  color: var(--text-primary);
+}
+
+.file-cols-sort svg {
+  width: 11px;
+  height: 11px;
+}
 
 /* Multi-selection highlight (click / shift-range / ctrl-toggle). Sits above the
    plain hover but below the move-drop-target outline. */
@@ -578,6 +769,16 @@
 
 /* Let the flex-1 tree scroll actually shrink when the Downloads section below it
    grows (a flex child won't shrink past its content without min-height:0). */
+/* The Files (Project) tab: the list on the main surface, its chrome (the
+   toolbar row and column header) on the panel's. */
+.project-files-tab .side-panel-scroll {
+  background: var(--bg-main);
+}
+
+.project-files-tab .file-tree-head {
+  background: var(--bg-panel);
+}
+
 .side-panel-scroll {
   min-height: 0;
   /* Disable scroll anchoring. The tree's content height shifts after mount —
@@ -609,43 +810,70 @@
 .downloads-resize:hover {
   background: var(--accent-soft);
 }
-.downloads-header {
+.downloads-header,
+.downloads-section--line {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
-  border-bottom: 1px solid var(--border-color);
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 0 var(--space-2) 0 var(--space-3);
 }
-.downloads-title {
+.downloads-header {
+  border-bottom: 1px solid var(--border-subtle);
+}
+/* The empty form: the label, what the window holds, the picker, refresh —
+   one line instead of the ~190 px resizable section. */
+.downloads-section--line {
+  flex-wrap: wrap;
+}
+.downloads-title,
+.downloads-line-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
-.downloads-windows {
-  display: flex;
-  gap: 2px;
-  margin-left: auto;
-}
-.downloads-win-btn {
-  font-size: var(--text-sm);
-  padding: 1px 6px;
-  height: 20px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+.downloads-line-toggle {
+  height: 24px;
+  padding: 0;
+  border: none;
   background: transparent;
-  color: var(--text-secondary, var(--text-primary));
+  font-family: inherit;
   cursor: var(--cur-pointer, pointer);
 }
-.downloads-win-btn.active {
-  color: var(--accent);
-  border-color: var(--accent);
+.downloads-line-toggle:hover {
+  color: var(--text-primary);
+}
+.downloads-line-toggle svg:first-child {
+  width: 12px;
+  height: 12px;
+}
+.downloads-line-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.downloads-header .downloads-windows {
+  margin-left: auto;
+}
+/* The window picker is the shared `.seg`, at the toolbar's size. */
+.downloads-windows.seg > button {
+  height: 20px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
 }
 .downloads-target {
   font-size: var(--text-sm);
   color: var(--text-muted, var(--text-secondary));
-  padding: 2px var(--space-2);
-  border-bottom: 1px solid var(--border-color);
+  padding: 2px var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -668,12 +896,24 @@
   font-size: var(--text-sm);
   color: var(--text-muted, var(--text-secondary));
   white-space: nowrap;
-  margin-left: 6px;
 }
 .downloads-copied {
-  color: var(--accent);
+  display: inline-flex;
+  color: var(--success);
   font-size: var(--text-md);
-  margin-left: 4px;
+}
+.dl-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+}
+/* A download row has no share bar: the size · time meta ends the row. */
+.downloads-row.file-grid {
+  grid-template-columns: 16px 20px minmax(0, 1fr) auto;
+  grid-template-areas: "state act main size";
 }
 
 /* Only EMBEDDABLE files can be dragged onto a subwindow's tab bar (Group K).
@@ -747,12 +987,6 @@
   font-size: var(--text-sm);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
-}
-
-.file-run-slot {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
 }
 
 .file-run-btn:hover {
@@ -1388,18 +1622,39 @@
   cursor: var(--cur-default, default);
 }
 
-.file-tree-section-divider {
-  display: flex;
+/* The tree's section heads are the kit's `.sp-head` (sentence case, no rule,
+   8 px of air), set on the rows' inset inside the tree's 4 px gutter. */
+.file-tree .sp-head {
+  padding: 0 var(--space-2);
+}
+
+.file-tree .sp-head:hover {
+  color: var(--text-primary);
+}
+
+/* A head's total ends the row; its auto margin is `.sp-head-end`'s. */
+.file-tree .sp-head .file-tree-path-total {
+  padding-left: 0;
+}
+
+/* The fold chevron, in the head's first 16 px so it sits over the chips. */
+.file-tree-caret {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  padding: var(--space-1) var(--space-1) 2px;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  border-top: 1px solid var(--border-color);
+  justify-content: center;
+  width: 16px;
+  flex: 0 0 16px;
+}
+
+.file-tree-caret svg {
+  width: 12px;
+  height: 12px;
+}
+
+@container file-list (min-width: 720px) {
+  .file-tree .sp-head {
+    padding: 0 var(--space-3);
+  }
 }
 
 .file-entry.scaffold {
@@ -1414,9 +1669,10 @@
   opacity: 0.65;
 }
 
-/* A pointer file (CLAUDE.md / GEMINI.md) nests one level under AGENTS.md. */
-.file-entry.doc-nested {
-  padding-left: calc(var(--space-2) + 16px);
+/* A pointer file (CLAUDE.md / GEMINI.md) nests one level under AGENTS.md:
+   the name cell indents, the chip and action columns never move. */
+.file-entry.doc-nested .file-main {
+  padding-left: 16px;
 }
 
 /* A creatable doc that is not there. A button, not a file row. */
@@ -1440,29 +1696,30 @@
 }
 
 .doc-ghost-plus {
-  width: 1em;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
 }
 
-/* "Agent memory (n)" at the end of the Project docs group: a quiet sub-header
-   (no divider rule) over read-only rows. Static. */
-.file-tree-memory-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.doc-ghost-plus svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* "Agent memory" at the end of the Project docs group: a quiet sub-head on the
+   row grid (its chevron in the action column) over read-only rows, which
+   nest one level under it. Static. */
+.file-entry.file-tree-memory-toggle {
   width: 100%;
   box-sizing: border-box;
-  padding: 3px var(--space-2);
   background: none;
   border: none;
   font: inherit;
   font-size: var(--text-sm);
   text-align: left;
   color: var(--text-secondary);
-  cursor: var(--cur-pointer, pointer);
 }
 
-.file-tree-memory-toggle:hover {
+.file-entry.file-tree-memory-toggle:hover {
   color: var(--text-primary);
 }
 
@@ -1473,7 +1730,10 @@
   border: none;
   font-family: inherit;
   text-align: left;
-  padding-left: calc(var(--space-2) + 16px);
+}
+
+.file-entry.doc-memory .file-main {
+  padding-left: 16px;
 }
 
 .agent-memory-body {
@@ -1509,56 +1769,13 @@
   color: var(--text-secondary);
 }
 
-.file-tree-hidden-toggle {
-  width: 100%;
-  background: none;
-  border: none;
-  border-top: 1px solid var(--border-color);
-  cursor: var(--cur-pointer, pointer);
-  text-align: left;
-}
-
-.file-tree-hidden-toggle:hover {
-  color: var(--text-primary);
-}
-
-/* Footer for the tree's render cap (see ROW_CAP_STEP in FileTree.tsx). Wears the
-   section-divider chrome so it reads as another band in the list, but centered
-   and in the accent color — it is an action, not a heading. */
+/* Footer for the tree's render cap (see ROW_CAP_STEP in FileTree.tsx): a
+   quiet full-width action (`.btn-quiet`) under the last row. */
 .file-tree-more {
-  width: 100%;
+  display: flex;
   justify-content: center;
-  background: none;
-  border: none;
-  border-top: 1px solid var(--border-color);
-  cursor: var(--cur-pointer, pointer);
-  color: var(--accent);
-}
-
-.file-tree-more:hover {
-  background-color: var(--pill-hover-bg);
-}
-
-.file-tree-hidden-caret {
-  display: inline-block;
-  width: 9px;
-  font-size: var(--text-xs);
-}
-
-/* The breadcrumb's right end: the folder total and the sort control, stacked
-   at the edge by ONE auto margin on the group (two autos on two siblings would
-   share the slack and float the total mid-row instead). */
-.file-tree-crumb-end {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-/* Inside the group the total no longer pushes: the group already did. */
-.file-tree-crumb-end .file-tree-path-total {
-  margin-left: 0;
+  width: 100%;
+  margin-top: var(--space-2);
 }
 
 .file-tree-sort {
@@ -1591,8 +1808,10 @@
   min-width: 96px;
 }
 
-/* Direction toggle: the ↑/↓ that the old row folded into the active key. */
+/* Direction toggle: an up / down arrow beside the key. */
 .file-tree-sort-dir {
+  display: inline-flex;
+  align-items: center;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
@@ -1608,6 +1827,11 @@
 .file-tree-sort-dir:hover {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.file-tree-sort-dir svg {
+  width: 11px;
+  height: 11px;
 }
 
 .file-tree-path-total {
@@ -1639,13 +1863,11 @@
 
 .file-icon { font-size: var(--text-md); flex-shrink: 0; line-height: 1.3; color: var(--text-secondary); }
 .file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; line-height: 1.3; }
-.file-size { font-size: var(--text-sm); color: var(--text-muted); flex-shrink: 0; line-height: 1.3; }
-.file-size.size-small  { color: var(--text-muted); }
-.file-size.size-medium { color: var(--warning); }
-.file-size.size-large  { color: color-mix(in srgb, var(--warning) 50%, var(--danger)); }
-.file-size.size-huge   { color: var(--danger); }
-/* A folder excluded from scans. Italic and dimmer than `size-small` so it reads
-   as "no measurement" rather than as a very small one — the whole point is that
+/* Sizes are neutral text; how big an entry is relative to its section is the
+   share bar's to say (`.sp-bar`), not a heat colour. */
+.file-size { font-size: var(--text-sm); color: var(--text-muted); flex-shrink: 0; line-height: 1.3; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* A folder excluded from scans. Italic and dimmed so it reads as "no
+   measurement" rather than as a very small one — the whole point is that
    nothing was walked, and a number-shaped grey would suggest otherwise. */
 .file-size-excluded { font-style: italic; opacity: 0.65; }
 
@@ -1992,19 +2214,61 @@
   word-break: break-all;
 }
 
-/* The tab archive's list (`tabs/TabArchiveList`): the Sessions view's rows,
-   under a filter row. Shown in the side panel's Archive view and the + menu's
-   Archived tabs dialog. */
+/* The tab archive's list (`tabs/TabArchiveList`): the kit's toolbar (filter,
+   bulk delete) over two-line `.sp-row--plain` rows — kind glyph in the
+   kind's tab colour, label over the kind word, the date and a trash button
+   at the end. Shown in the side panel's Archive view and the + menu's
+   Archived tabs dialog. The toolbar stays put while the list scrolls. */
 .tab-archive-head {
-  display: flex;
-  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 1;
   gap: var(--space-2);
-  padding: var(--space-1) 0 var(--space-2);
+  background: var(--bg-panel);
 }
 
 .tab-archive-head input {
   flex: 1;
   min-width: 0;
+  height: 28px;
+}
+
+/* The side panel mounts the list in the orange views' padded scroll box; the
+   kit's rows bring their own inset, so the list cancels that padding. */
+.side-panel-orange > .tab-archive-list {
+  margin: calc(-1 * var(--space-1)) -6px 0;
+}
+
+.tab-archive-dialog .tab-archive-head {
+  background: transparent;
+  position: static;
+}
+
+.tab-archive-restore {
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+
+.tab-archive-restore:disabled {
+  cursor: var(--cur-default, default);
+  opacity: 0.6;
+}
+
+.tab-archive-icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.tab-archive-delete {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1);
 }
 
 .tab-archive-dialog {

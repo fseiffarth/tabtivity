@@ -19,11 +19,17 @@ show a dot while a project has uncommitted work (not in Fast mode).
 
 At the top of the file panel's git bar:
 
-- **Stage all** stages every change (the count shows what is unstaged).
+- **Add (n)** stages every change (the count shows what is unstaged); **Show
+  changed files** lists them, each with **Stage** / **Unstage** and a **Staged
+  diff**, so one commit can hold just some of your edits.
 - **Commit (n)** commits the staged files: type the message, then **Confirm
-  commit**.
+  commit**. The draft message belongs to its checkout (repository or
+  worktree) and stays if the commit is refused.
 - **Push (n)** pushes the commits not on the remote yet; the arrow beside it
-  lists the files they touch.
+  lists the files they touch. A new branch with no remote copy shows
+  **Publish branch to …** instead (it sets up tracking), and a branch whose
+  remote namesake exists shows **Track …**. A rejected push leaves your commit
+  in place and offers **Fetch and review**.
 
 Git runs with your own settings, but a repository's hooks run only once you
 have allowed them for that project, and again after they change.
@@ -40,8 +46,10 @@ The **Git** view of the file panel shows:
   **Checkout** that commit.
 - **Fetch** updates how far each branch is behind its upstream. A branch that
   is behind shows a chip; click it to review the incoming commits and changed
-  files (with diffs) before you **Fast-forward** or **Merge**. A merge that
-  conflicts stops, and you resolve the files one by one.
+  files (with diffs) before you **Fast-forward** or **Merge**. The review is
+  pinned to the commits you looked at: if the remote moves meanwhile, you get
+  a fresh review. A merge that conflicts stops, and you resolve the files one
+  by one.
 
 ## Worktrees
 

@@ -1,4 +1,4 @@
-//! The chat assistant's commands (`docs/assistant_plan.md`, A3): what the
+//! The chat assistant's commands (`docs/done/assistant_plan.md`, A3): what the
 //! overlay's new-chat menu and the search settings call. Payloads are
 //! camelCase. Every command refuses while the experimental flag is off
 //! (`Settings::assistant_enabled`) with the fixed wire code [`OFF`]; a refusal

@@ -398,7 +398,7 @@ Range `e322f1c7..6fe52775` (main commit `1ed60f08`), bugs only.
 ## Final review (2026-10-10)
 
 Whole range `7746648d..ee2262a0`: the S13 follow-ups and their review
-(`docs/performance_handoff.md` `### S13`) plus T1–T3 and their reviews.
+(`docs/done/performance_handoff.md` `### S13`) plus T1–T3 and their reviews.
 Cross-step integration, leftovers and bookkeeping; nothing run live.
 
 **Checked**

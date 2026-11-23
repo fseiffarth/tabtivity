@@ -1,5 +1,8 @@
 # Dictation improvement plan
 
+> **Status (screened against code 2026-11-22):** PARTIAL. Built: the desktop recovery contract (per-segment `FinalOutcome` in `src-tauri/src/services/voice/session.rs`, "Restore words" / "Dismiss" in `ReaderVoice.tsx` + `useLiveDictation.ts`; d0a449d71), caret / selection dictation (`DraftRange`, `replaceDictated`, `rebaseRange` in `src/lib/voice/provisionalDraft.ts`), and the phone hidden-page stop (`visibilitychange` in `mobile-web/src/voiceSession.ts`; 0908086be). Open: the section 2 latency baseline and the section 4 physical-device trials; the measurement table is empty and no pacing change has been made. Not live-tested.
+
+
 Prioritize the last sentence. Desktop Chat can show words while someone speaks and then clear them if final transcription fails. Fix that loss first. Measure latency and recognition quality on the current build in parallel. Use those measurements to decide whether performance tuning or mid-draft editing comes next. Phone interruption testing can proceed independently.
 
 This is a source-based plan. Desktop uses a local transcription worker. Phone Focus uses browser recognition with its own restart and utterance handling. Both already display provisional text. Live results are still open in the voice section of `todo/group-s-agents.md`.

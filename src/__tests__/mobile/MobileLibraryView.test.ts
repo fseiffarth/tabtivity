@@ -6,7 +6,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ProjectFileEntry } from "../../../mobile-web/src/api";
-import { DEFAULT_LIBRARY_VIEW, readLibraryView, sortEntries, writeLibraryView, type LibraryView } from "../../../mobile-web/src/libraryView";
+import { DEFAULT_LIBRARY_VIEW, isHiddenRow, kindGroups, readLibraryView, sortEntries, writeLibraryView, type LibraryView } from "../../../mobile-web/src/libraryView";
 import { storageKey } from "../../lib/brand";
 
 const KEY = storageKey("mobile.filesLibraryView");
@@ -55,17 +55,36 @@ describe("libraryView — sortEntries", () => {
   });
 });
 
+describe("libraryView — kind groups and hidden rows", () => {
+  it("groups rows by kind in the kind order, each keeping its order, empty kinds left out", () => {
+    const groups = kindGroups(sortEntries(ENTRIES, { ...DEFAULT_LIBRARY_VIEW, desc: true }));
+    expect(groups.map((group) => [group.glyph, group.entries.map((item) => item.name)])).toEqual([
+      ["dir", ["Zeta", "alpha"]],
+      ["pdf", ["paper.pdf"]],
+      ["image", ["photo.png"]],
+      ["text", ["file10.txt", "file2.txt"]],
+    ]);
+    expect(kindGroups([])).toEqual([]);
+  });
+
+  it("hides dotfiles and the names the desktop hides by ending", () => {
+    const ext = new Set(["board.kicad_prl"]);
+    expect([".claude", ".gitignore", "board.kicad_prl", "board.kicad_pcb", "a.b"].map((name) => isHiddenRow({ name }, ext)))
+      .toEqual([true, true, true, false, false]);
+  });
+});
+
 describe("libraryView — the stored view", () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
   it("reads the defaults when nothing is stored: grid, by name, folders on top, thumbnails on", () => {
-    expect(readLibraryView()).toEqual({ layout: "grid", sort: "name", desc: false, foldersFirst: true, thumbs: true });
+    expect(readLibraryView()).toEqual({ layout: "grid", sort: "name", desc: false, foldersFirst: true, thumbs: true, groupKinds: true });
   });
 
   it("round-trips a choice", () => {
-    const view: LibraryView = { layout: "list", sort: "created", desc: true, foldersFirst: false, thumbs: false };
+    const view: LibraryView = { layout: "list", sort: "created", desc: true, foldersFirst: false, thumbs: false, groupKinds: false };
     writeLibraryView(view);
     expect(readLibraryView()).toEqual(view);
   });

@@ -170,7 +170,7 @@ backend new `src-tauri/src/services/skills.rs` +
     retro,writing-for-agents}` rewritten for this repo's rules (never start
     the app, `gates.sh`, `todo/` entries, `docs/` hand-offs); MIT notice in
     `.claude/skills/THIRD_PARTY_NOTICES.md`; reasoning in
-    `docs/mattpocock_skills_adoption_plan.md`. Claude Code only. Upstream
+    `docs/done/mattpocock_skills_adoption_plan.md`. Claude Code only. Upstream
     updates are pulled by hand (diff against the pinned commit).
     - [ ] 🖐️ Manual test — `/to-tickets` on a plan writes correctly numbered
       entries; `/handoff` writes `docs/<feature>_handoff.md`.

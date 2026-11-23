@@ -4,28 +4,24 @@ The front door for everything about the server version: where it stands,
 what the user decided, what is open, and which document holds the detail.
 Read this first; keep it current when a decision or an open point changes.
 
+> **Status (screened against code 2026-11-22):** the whole of P0–P5 is in `develop` (`4ed492a5d`, 2026-10-11): `src-gateway`, `src-serverd`, `src-core`, `services::server`/`connect`/`command_class`, `scripts/package-server-deb.sh` + ci-cd.yml `package-server`. Nothing has run on a real server. The bullets below are the 2026-10-11 record, corrected where the merge made them stale; no `hosted` branch or `.claude/worktrees/hosted` exists any more. Open items here are not re-verified individually. Not live-tested.
+
 ## Status (2026-10-11)
 
-- **Built, reviewed, unmerged, never run live.** Branch `hosted`
-  (`.claude/worktrees/hosted`), `f3efd50b..` — every phase of the plan
-  (P0–P5) plus follow-up steps, each with its own reviewer, then two final
-  reviewers and a final fix round. All gates green, including the Windows
-  and macOS all-targets checks and a GTK-free server daemon (`ldd`: libc
-  only).
-- **`develop` merged in (2026-10-07).** `develop` `a6ed2c7a` (214 commits
-  past the branch base, incl. #2339 and the desktop's own agent API keys) is
-  merged into `hosted`; 39 conflicted files, how each was resolved is in
-  `hosted_handoff.md` § "Merge `develop` → `hosted`". The other direction,
-  `hosted` → `develop`, is still owed (#2386). Merged again 2026-10-10
-  (`develop` `6754d5cd`, 13 conflicted files; § "Merge `develop` → `hosted`
-  (2026-10-10)") and twice 2026-10-11 (`develop` `32d65f6a`, one conflicted
-  file; then `80142cc7`, the performance work, 13 conflicted files —
-  § "Merge `develop` → `hosted` (2026-10-11, the performance work)"). All
-  gates green incl. the Windows/macOS cross-checks and the daemon's `ldd`.
+- **Built, reviewed, merged into `develop`, never run live.** The `hosted`
+  branch (`f3efd50b..`; every phase P0–P5 plus follow-ups, each reviewed, then
+  two final reviewers and a fix round) was merged into `develop` on
+  2026-10-11 (`4ed492a5d`, "Merge branch 'hosted': the server version"); the
+  workspace now has `src-core`, `src-gateway`, `src-serverd` beside
+  `src-tauri`, and the branch itself is gone. `develop` kept merging into
+  `hosted` until then (conflict resolutions: `hosted_handoff.md` § "Merge
+  `develop` → `hosted`", the 2026-10-10 and 2026-10-11 sections). All gates
+  were green incl. the Windows/macOS cross-checks and a GTK-free daemon
+  (`ldd`: libc only).
 - **One agent-API-key path built (2026-10-10, #2389).** Admin keys, a
   server user's own key and the desktop's own key all reach agents through
   `api_proxy`; limits in billed tokens; one "runs on" control per CLI.
-  `docs/agent_key_path_plan.md` (steps 1–5, `1db2a95a..`).
+  `docs/done/agent_key_path_plan.md` (steps 1–5, `1db2a95a..`).
 - **Markup questions on a server built (2026-10-11, #2390).** The daemon
   serves the markup MCP lane itself (it has no window), so a server user's
   agents get `markup_ask`/`markup_done` and the browser client and phone
@@ -133,7 +129,7 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
   tokens per UTC month (the broker's); the desktop's USD figure stays only
   as an estimate. Mistral Vibe admin keys are dropped (no base-URL
   variable). A keyed container spawn fails, naming the way out. Built
-  2026-10-10 (`docs/agent_key_path_plan.md`).
+  2026-10-10 (`docs/done/agent_key_path_plan.md`).
 
 **Secrets and mail**
 - Same-user unfenced processes can read the vault key; accepted and
@@ -172,14 +168,14 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 
 1. **Two agent-API-key systems (#2389): settled and built 2026-10-10.**
    One path (`api_proxy`) for every key, one budget unit (billed tokens),
-   one credential choice per CLI — `docs/agent_key_path_plan.md`. Left as
+   one credential choice per CLI — `docs/done/agent_key_path_plan.md`. Left as
    a known residual: a daemon restart drops every proxy token, so a keyed
    agent in a tmux tab that outlived it must be restarted. Never run live.
-2. **The merge (#2386).** `develop` → `hosted` done 2026-10-07 (39
-   conflicts, class rows and desktop-feature attributes for develop's new
-   commands included; TODO numbers did not collide), again 2026-10-10 and
-   2026-10-11. Owed: `hosted` → `develop`. (The root MCP's local-model lane
-   needs no model-allowlist call: it forwards no model to Ollama.)
+2. **The merge (#2386): done.** `hosted` → `develop` was merged on
+   2026-10-11 (`4ed492a5d`) after `develop` → `hosted` had been merged four
+   times (39 conflicts the first time, class rows and desktop-feature
+   attributes for develop's new commands included). New `develop` commands
+   now need their `command_class` row at once (AGENTS.md).
 3. **Agent tools on a server: settled and built 2026-10-11 (#2390,
    #2391).** The daemon serves every lane the window does. Left as a known
    residual, as for the API proxy: a daemon restart drops every MCP token,
@@ -198,9 +194,9 @@ All answered 2026-09-29 … 2026-10-10; the plan's §12 holds Q1–Q14.
 ## Open decisions
 
 None. #2389 and #2387 were answered 2026-10-10 and are built; #2388
-2026-10-11 (commit the macOS schema). The agent MCP lanes on a server were asked for 2026-10-11 and built. `hosted` → `develop` (#2386) waits by the user's
-call (2026-10-10) while heavy work continues on `develop`; re-merge
-`develop` → `hosted` as needed.
+2026-10-11 (commit the macOS schema, now `src-tauri/gen/schemas/macOS-schema.json`).
+The agent MCP lanes on a server were asked for 2026-10-11 and built.
+`hosted` → `develop` (#2386) was merged 2026-10-11.
 
 ## Live runs owed, in order
 

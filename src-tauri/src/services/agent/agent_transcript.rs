@@ -428,7 +428,7 @@ pub struct TranscriptUsage {
 /// the next message writes to the cache again once the time has run out.
 /// Claude says the lifetime per request (`usage.cache_creation`: 1 h for a
 /// subscription's main conversation, 5 min on an API key); Codex's is
-/// OpenAI's 30 minutes. See `docs/cli_caching_plan.md` phase 3.
+/// OpenAI's 30 minutes. See `docs/done/cli_caching_plan.md` phase 3.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptCache {
@@ -1013,19 +1013,19 @@ fn codex_transcript_at(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
-    let thread = thread.to_string();
+    let home = crate::services::agent_home::scope_home(project_id);
     let stores = crate::services::codex_store::state_dbs(Some(project_id.unwrap_or("root")));
     let Some(token) = subagent else {
-        let spawns = Spawns::Codex { stores: &stores, thread: &thread };
+        let spawns = Spawns::Codex { stores: &stores, home: &home, thread };
         return read_transcript_in(main, TranscriptKind::Codex, &spawns, false, version, limit);
     };
     let child = stores.iter().find_map(|db| {
-        crate::services::codex_store::descendant_threads(db, &thread, MAX_SUBAGENT_DEPTH)
+        crate::services::codex_store::descendant_threads(db, thread, MAX_SUBAGENT_DEPTH)
             .into_iter()
             .find(|child| subagent_token(&child.id) == token)
     })?;
     let rollout = codex_rollout(project_id, &child)?;
-    let spawns = Spawns::Codex { stores: &stores, thread: &child.id };
+    let spawns = Spawns::Codex { stores: &stores, home: &home, thread: &child.id };
     read_transcript_in(&rollout, TranscriptKind::Codex, &spawns, false, version, limit)
 }
 
@@ -1207,7 +1207,7 @@ enum Spawns<'a> {
     /// in this folder, naming the call.
     Claude(&'a Path),
     /// Codex: the threads `thread` spawned, per its state stores.
-    Codex { stores: &'a [PathBuf], thread: &'a str },
+    Codex { stores: &'a [PathBuf], home: &'a Path, thread: &'a str },
 }
 
 /// How much of a transcript's tail a read for `limit` entries takes: one
@@ -1275,7 +1275,11 @@ fn read_transcript_in(
     let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
     let context_card = newest_context_card(&lines, kind);
-    let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain);
+    let history = match spawns {
+        Spawns::Codex { home, thread, .. } => Some((*home, *thread)),
+        _ => None,
+    };
+    let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain, history);
     let waiting_tools = shell_calls.tools.clone();
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
@@ -1303,7 +1307,7 @@ fn read_transcript_in(
                 }
             }
         }
-        Spawns::Codex { stores, thread } => {
+        Spawns::Codex { stores, thread, .. } => {
             let children = stores
                 .iter()
                 .map(|db| crate::services::codex_store::spawned_threads(db, thread))
@@ -1788,6 +1792,7 @@ fn parse_entries(
     lines: &[&str],
     kind: TranscriptKind,
     sidechain: bool,
+    codex_history: Option<(&Path, &str)>,
 ) -> (Vec<TranscriptEntry>, Vec<(usize, String)>, ShellCalls) {
     // Branches Claude left: nothing on them is in its conversation any more.
     let rewound = if kind == TranscriptKind::Claude && !sidechain { claude_rewound(lines) } else { Default::default() };
@@ -1828,6 +1833,8 @@ fn parse_entries(
     // whether the turn they wait in is still going.
     let mut async_asks: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut async_open: Vec<String> = Vec::new();
+    let mut unrecorded_turn = None;
+    let history = std::cell::OnceCell::new();
     for line in lines {
         let line = line.trim();
         if line.is_empty() {
@@ -1859,6 +1866,9 @@ fn parse_entries(
             runs.extend(claude_workflow_launch(&value));
         }
         if kind == TranscriptKind::Codex {
+            if value["type"] == "event_msg" && value["payload"]["type"] == "task_started" {
+                unrecorded_turn = value["payload"]["turn_id"].as_str().map(str::to_owned);
+            }
             for (call, index, answer) in codex_async_replies(&value) {
                 async_open.retain(|open| *open != call);
                 if let Some(entry) = async_asks.get(&call).and_then(|&at| entries.get_mut(at)) {
@@ -1900,6 +1910,9 @@ fn parse_entries(
         for record in records {
             match record {
                 Record::Turn(role, raw) => {
+                    if role == "prompt" {
+                        unrecorded_turn = None;
+                    }
                     if typed && role == "prompt" {
                         shells.clear();
                         tools.clear();
@@ -1907,6 +1920,16 @@ fn parse_entries(
                         turn_start = entries.len();
                     }
                     if role == "interrupted" {
+                        let turn = unrecorded_turn.take();
+                        if let (Some(turn), Some((home, thread)), Some(ts)) = (turn, codex_history, value["payload"]["started_at"].as_i64()) {
+                            if value["payload"]["turn_id"].as_str() == Some(&turn) {
+                                let rows = history.get_or_init(|| codex_input_history(home, thread));
+                                if let Some(Some(prompt)) = rows.as_ref().and_then(|rows| rows.get(&ts)) {
+                                    let sent_at = chrono::DateTime::from_timestamp(ts, 0).map(|time| time.to_rfc3339());
+                                    entries.extend(transcript_entry("prompt", prompt, sent_at));
+                                }
+                            }
+                        }
                         asked.clear();
                         tools.clear();
                     }
@@ -2910,6 +2933,35 @@ struct WorkflowRun {
     run: String,
     name: Option<String>,
     summary: Option<String>,
+}
+
+/// Codex writes submitted input here even when an early interrupt prevents
+/// the user message reaching the rollout. Match only an unambiguous row of
+/// this thread at the aborted turn's start second.
+fn codex_input_history(home: &Path, thread: &str) -> Option<std::collections::HashMap<i64, Option<String>>> {
+    use crate::services::home_io::HomeFile;
+    use std::io::{Read, Seek, SeekFrom};
+
+    #[derive(Deserialize)]
+    struct Input {
+        session_id: String,
+        ts: i64,
+        text: String,
+    }
+    let mut file = HomeFile::open_existing(home, ".codex/history.jsonl")?.open_read()?;
+    let start = file.metadata().ok()?.len().saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
+    let mut prompts = std::collections::HashMap::new();
+    for line in bytes.split(|&b| b == b'\n').skip(usize::from(start > 0)) {
+        if let Ok(row) = serde_json::from_slice::<Input>(line) {
+            if row.session_id == thread {
+                prompts.entry(row.ts).and_modify(|entry| *entry = None).or_insert(Some(row.text));
+            }
+        }
+    }
+    Some(prompts)
 }
 
 /// A Codex rollout record as a turn: the `response_item` messages — the

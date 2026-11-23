@@ -263,6 +263,9 @@ describe("Mobile project — read-only file browser", () => {
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const library = await openLibrary();
     await within(library).findByRole("button", { name: "Open the folder src" });
+    // Grouped by kind by default; ungrouped, the sort alone orders the rows.
+    expect(shownNames(library)).toEqual(["src", "paper.pdf", "plot.png", "notes.md"]);
+    viewPick(library, "Group by kind Untested");
     // Name, ascending, folders on top; the scaffold and the gitignored stay folded.
     expect(shownNames(library)).toEqual(["src", "notes.md", "paper.pdf", "plot.png"]);
 
@@ -280,7 +283,7 @@ describe("Mobile project — read-only file browser", () => {
     viewPick(library, "Descending");
     expect(shownNames(library)).toEqual(["notes.md", "plot.png", "paper.pdf", "src"]);
     expect(JSON.parse(localStorage.getItem(storageKey("mobile.filesLibraryView")) ?? "{}"))
-      .toEqual({ layout: "grid", sort: "kind", desc: true, foldersFirst: false, thumbs: true });
+      .toEqual({ layout: "grid", sort: "kind", desc: true, foldersFirst: false, thumbs: true, groupKinds: false });
 
     // The docs group leads, sorted on its own.
     fireEvent.click(within(library).getByRole("button", { name: "Project docs (2)" }));
@@ -364,18 +367,20 @@ describe("Mobile project — read-only file browser", () => {
     expect(sheet.textContent).toContain("Read-only");
     await within(sheet).findByRole("button", { name: "Open the folder src" });
     viewPick(sheet, "List");
-    // Each row's tile names its kind; the scaffold and the gitignored fold
-    // shut below the rest, as on the desktop's tree.
+    // Each row's tile names its kind, under its kind's header; the scaffold
+    // and the gitignored fold shut below the rest, as on the desktop's tree.
     expect(Array.from(sheet.querySelectorAll(".files-list li > button:first-child strong")).map((row) => row.textContent))
-      .toEqual(["src", "notes.md", "paper.pdf", "plot.png"]);
+      .toEqual(["src", "paper.pdf", "plot.png", "notes.md"]);
     expect(Array.from(sheet.querySelectorAll(".files-icon")).map((tile) => tile.className.replace("files-icon files-icon-", "")))
-      .toEqual(["dir", "text", "pdf", "image"]);
+      .toEqual(["dir", "pdf", "image", "text"]);
+    expect(Array.from(sheet.querySelectorAll(".files-kind-head")).map((head) => head.textContent))
+      .toEqual(["Folders", "PDFs", "Pictures", "Text files"]);
     // Each row says when it was last edited, and created where the desktop's
     // filesystem keeps a birth time (notes.md here, not the folder).
     const meta = Array.from(sheet.querySelectorAll(".files-list small")).map((row) => row.textContent ?? "");
     expect(meta[0]).toContain("Edited ");
     expect(meta[0]).not.toContain("Created");
-    expect(meta[1]).toMatch(/^8 B · Created .+ · Edited .+$/);
+    expect(meta[3]).toMatch(/^8 B · Created .+ · Edited .+$/);
 
     // Into a folder, and back by ‹ (the project's name at the root).
     fireEvent.click(within(sheet).getByRole("button", { name: "Open the folder src" }));
@@ -407,6 +412,33 @@ describe("Mobile project — read-only file browser", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Open" }));
     const text = screen.getByRole("dialog", { name: "notes.md" });
     await waitFor(() => expect(text.querySelector("pre")?.textContent).toBe("# Hello\n"));
+  });
+
+  it("folds dotfiles and the desktop's hidden endings into Hidden, an ignored dotfile staying ignored", async () => {
+    const host = hostWith(true);
+    const dot = (name: string, extra: object = {}) =>
+      ({ token: `tok-${name}`, name, kind: "dir", size: 0, modified: 1_770_000_000, ...extra });
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => String(input) === "/api/v1/projects/p1/files"
+      ? new Response(JSON.stringify({
+        ...ROOT,
+        entries: [...ROOT.entries, dot(".claude"), dot(".cache", { ignored: true }),
+          { token: "tok-prl", name: "board.kicad_prl", kind: "text/plain", size: 2, modified: 1_770_000_000 }],
+        hidden_ext: ["board.kicad_prl"],
+      }), { status: 200 })
+      : host(input, init)));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    const sheet = await openLibrary();
+    const hidden = await within(sheet).findByRole("button", { name: "Hidden (2) Untested" });
+    expect(hidden.getAttribute("aria-expanded")).toBe("false");
+    expect(within(sheet).getByRole("button", { name: "gitignored (3)" })).toBeTruthy();
+    expect(within(sheet).queryByRole("button", { name: "Open the folder .claude" })).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: "Open board.kicad_prl" })).toBeNull();
+
+    fireEvent.click(hidden);
+    expect(hidden.getAttribute("aria-expanded")).toBe("true");
+    expect(within(sheet).getByRole("button", { name: "Open the folder .claude" }).closest("li")?.classList.contains("files-folded")).toBe(true);
+    expect(within(sheet).getByRole("button", { name: "Open board.kicad_prl" })).toBeTruthy();
+    expect(within(sheet).queryByRole("button", { name: "Open the folder .cache" })).toBeNull();
   });
 
   it("folds the root's scaffold and what git ignores into collapsed sections", async () => {
@@ -466,7 +498,7 @@ describe("Mobile project — read-only file browser", () => {
       // In the list every file row carries ↗ Share; a folder has nothing to share.
       viewPick(sheet, "List");
       expect(within(sheet).getAllByRole("button", { name: /^Share / }).map((button) => button.getAttribute("aria-label")))
-        .toEqual(["Share notes.md", "Share paper.pdf", "Share plot.png"]);
+        .toEqual(["Share paper.pdf", "Share plot.png", "Share notes.md"]);
       fireEvent.click(within(sheet).getByRole("button", { name: "Share plot.png" }));
       await waitFor(() => expect(share).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(within(sheet).getByRole("button", { name: "Share plot.png" }).hasAttribute("disabled")).toBe(false));

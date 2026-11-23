@@ -1,7 +1,7 @@
 # Per-turn checkpoints
 
-Plan and the user's three decisions: `docs/turn_checkpoints_plan.md`. Build
-notes and deviations: `docs/turn_checkpoints_handoff.md`. Code:
+Plan and the user's three decisions: `docs/done/turn_checkpoints_plan.md`. Build
+notes and deviations: `docs/done/turn_checkpoints_handoff.md`. Code:
 `src-tauri/src/services/checkpoints/` (`store`, `snapshot`, `restore`,
 `worker`, `mod`), `commands/checkpoints.rs`; window side
 `components/terminal/{ReaderCheckpoints,CheckpointRestoreDialog,CheckpointDiffScope}.tsx`.

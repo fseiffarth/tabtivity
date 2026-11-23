@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use super::gpu::VoiceDevice;
 use super::vad::{Vad, VadConfig, VadEvent, RATE};
-use super::{phantom, ListenRequest, Owner, VoiceError, EV_ERROR, EV_FINAL, EV_LEVEL, EV_PARTIAL, EV_STATE, EV_VAD};
+use super::{phantom, ListenRequest, Owner, VoiceError, EV_ERROR, EV_FINAL, EV_LANG, EV_LEVEL, EV_PARTIAL, EV_STATE, EV_VAD};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,6 +183,18 @@ pub struct Transcript {
     pub text: String,
     /// Whisper's no-speech probability (the highest of the segment's windows).
     pub no_speech: f32,
+    /// The whisper code the run decoded in (`"de"`), when known.
+    pub lang: Option<&'static str>,
+    /// True on the one final that locked the session's language
+    /// (`lang::LangPicker`): the session announces it with `voice:lang`.
+    pub locked: bool,
+}
+
+impl Transcript {
+    /// No language, no lock: a plain answer.
+    pub fn plain(text: String, no_speech: f32) -> Self {
+        Self { text, no_speech, lang: None, locked: false }
+    }
 }
 
 /// Speech to text, living on the worker thread (whisper's parameters are not
@@ -192,6 +204,13 @@ pub trait Transcriber {
     /// when the factory's `cancel` flag turns true (a final is due, or the
     /// session aborts); a cancelled run's result is thrown away.
     fn transcribe(&mut self, audio: &[f32], partial: bool) -> Result<Transcript, VoiceError>;
+
+    /// A finished segment's one run. Only this may detect the language: the
+    /// worker also calls `transcribe(.., false)` for a partial's seam
+    /// prefix, so `partial` cannot mean "this is a final".
+    fn transcribe_final(&mut self, audio: &[f32]) -> Result<Transcript, VoiceError> {
+        self.transcribe(audio, false)
+    }
 
     /// Whether a finished segment is speech at all (Silero, when installed).
     fn confirm_speech(&mut self, _audio: &[f32]) -> bool {
@@ -218,6 +237,11 @@ pub struct SessionConfig {
     pub owner: Owner,
     pub mode: ListenMode,
     pub lang: String,
+    /// The languages to pick among (whisper codes, primary subtags,
+    /// deduplicated; empty means none, see `ListenRequest::validate`).
+    pub langs: Vec<String>,
+    /// Which candidate runs before any pick (only ever one of `langs`).
+    pub fallback: Option<String>,
     pub end_silence_ms: u32,
     pub headset: bool,
     pub prompt: Option<String>,
@@ -247,7 +271,7 @@ impl Pacing {
         min_gap: Duration::from_millis(300),
         max_gap: Duration::from_millis(700),
         // A run over this much audio takes about 1.5 s on the CPU's `small`
-        // model, about 0.2 s on a GPU (docs/voice_gpu_plan.md).
+        // model, about 0.2 s on a GPU (docs/done/voice_gpu_plan.md).
         commit_tail: 6 * RATE as usize,
     };
 
@@ -263,6 +287,8 @@ impl SessionConfig {
             owner,
             mode: req.mode,
             lang: req.lang.clone(),
+            langs: req.langs.clone(),
+            fallback: req.fallback.clone(),
             end_silence_ms: req.pause_ms,
             headset: req.headset,
             prompt: req.prompt.clone(),
@@ -298,6 +324,17 @@ struct TextEvent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     outcome: Option<FinalOutcome>,
     text: &'a str,
+    /// The whisper code a transcribed final was decoded in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lang: Option<&'static str>,
+}
+
+/// `voice:lang`: the session's language locked (candidate sessions only).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LangEvent {
+    session: u64,
+    lang: &'static str,
 }
 
 #[derive(Serialize)]
@@ -382,9 +419,9 @@ fn worker<F: TranscriberFactory>(
                 cancel.store(false, Ordering::SeqCst);
                 if shutdown.load(Ordering::SeqCst) { break }
                 let outcome = if !echo && transcriber.confirm_speech(&audio) {
-                    transcriber.transcribe(&audio, false)
+                    transcriber.transcribe_final(&audio)
                 } else {
-                    Ok(Transcript { text: String::new(), no_speech: 1.0 })
+                    Ok(Transcript::plain(String::new(), 1.0))
                 };
                 if done.send(Done::Final { segment, outcome }).is_err() {
                     return;
@@ -474,7 +511,7 @@ impl Listener {
     fn failed(&self, segment: u64, code: VoiceError) {
         let session = self.config.session;
         self.to_owner(EV_ERROR, ErrorEvent { session, code });
-        self.to_owner(EV_FINAL, TextEvent { session, segment, text: "", outcome: Some(FinalOutcome::Failed) });
+        self.to_owner(EV_FINAL, TextEvent { session, segment, text: "", outcome: Some(FinalOutcome::Failed), lang: None });
     }
 
     /// Warns once when the mic has delivered only silence for a while, and
@@ -624,7 +661,7 @@ impl Listener {
                 let tail = phantom::keep(&t.text, t.no_speech, prompt);
                 let text = join(&self.committed_text, tail.as_deref());
                 if !text.is_empty() {
-                    self.to_owner(EV_PARTIAL, TextEvent { session, segment, text: &text, outcome: None });
+                    self.to_owner(EV_PARTIAL, TextEvent { session, segment, text: &text, outcome: None, lang: None });
                 }
             }
             Done::Final { segment, outcome } => {
@@ -635,7 +672,13 @@ impl Listener {
                     Ok(t) => {
                         let text = phantom::keep(&t.text, t.no_speech, self.config.prompt.as_deref());
                         let outcome = if text.is_some() { FinalOutcome::Transcribed } else { FinalOutcome::Filtered };
-                        self.to_owner(EV_FINAL, TextEvent { session, segment, text: text.as_deref().unwrap_or(""), outcome: Some(outcome) });
+                        // A language only goes with text that was kept; the
+                        // one that locked says so first, once.
+                        let lang = text.as_ref().and(t.lang);
+                        if let Some(lang) = lang.filter(|_| t.locked) {
+                            self.to_owner(EV_LANG, LangEvent { session, lang });
+                        }
+                        self.to_owner(EV_FINAL, TextEvent { session, segment, text: text.as_deref().unwrap_or(""), outcome: Some(outcome), lang });
                     }
                     Err(e) => self.failed(segment, e),
                 }
@@ -810,7 +853,7 @@ fn run_with_drain_limit<S: AudioSource, F: TranscriberFactory>(
         }
         if !control.aborted() {
             for segment in std::mem::take(&mut listener.pending_finals) {
-                listener.to_owner(EV_FINAL, TextEvent { session, segment, text: "", outcome: Some(FinalOutcome::Incomplete) });
+                listener.to_owner(EV_FINAL, TextEvent { session, segment, text: "", outcome: Some(FinalOutcome::Incomplete), lang: None });
             }
         }
     }
@@ -837,6 +880,8 @@ mod tests {
             owner: Owner::Tab { client: ClientId::new("main"), key: "tab-1".into() },
             mode: ListenMode::Dictate,
             lang: "en".into(),
+            langs: Vec::new(),
+            fallback: None,
             end_silence_ms: 700,
             headset: false,
             prompt: None,
@@ -907,7 +952,7 @@ mod tests {
             let text = if self.text == "#len" {
                 vec!["w"; audio.len() / 320].join(" ")
             } else if self.text.starts_with('[') { self.text.to_string() } else { format!("{} {}", self.text, calls.iter().filter(|(_, partial)| !partial).count()) };
-            Ok(Transcript { text, no_speech: 0.0 })
+            Ok(Transcript::plain(text, 0.0))
         }
     }
 
@@ -1273,6 +1318,119 @@ mod tests {
         assert_eq!(segments, [1, 2]);
     }
 
+    /// Logs which entry point each run came through; its finals answer with a
+    /// language, and the `locks_on`-th one says it locked.
+    struct LangFactory {
+        log: Arc<Mutex<Vec<&'static str>>>,
+        text: &'static str,
+        locks_on: usize,
+    }
+
+    struct LangFake {
+        log: Arc<Mutex<Vec<&'static str>>>,
+        text: &'static str,
+        locks_on: usize,
+        finals: usize,
+    }
+
+    impl TranscriberFactory for LangFactory {
+        type T = LangFake;
+        fn load(self, _config: &SessionConfig, _cancel: Arc<AtomicBool>) -> Result<LangFake, VoiceError> {
+            Ok(LangFake { log: self.log, text: self.text, locks_on: self.locks_on, finals: 0 })
+        }
+    }
+
+    impl Transcriber for LangFake {
+        fn transcribe(&mut self, audio: &[f32], partial: bool) -> Result<Transcript, VoiceError> {
+            self.log.lock().unwrap().push(if partial { "partial" } else { "seam" });
+            Ok(Transcript::plain(vec!["w"; audio.len() / 320].join(" "), 0.0))
+        }
+
+        fn transcribe_final(&mut self, _audio: &[f32]) -> Result<Transcript, VoiceError> {
+            self.log.lock().unwrap().push("final");
+            self.finals += 1;
+            Ok(Transcript { text: self.text.into(), no_speech: 0.0, lang: Some("de"), locked: self.finals == self.locks_on })
+        }
+    }
+
+    /// Two segments, the voice having spoken over the audio between them
+    /// (the gate threw samples away at the returned piece).
+    fn two_segments() -> (Vec<f32>, usize) {
+        let mut audio = hiss(500);
+        audio.extend(tone(600, 220.0, 0.2));
+        let gap = audio.len() / 160;
+        audio.extend(tone(600, 220.0, 0.2));
+        audio.extend(hiss(1000));
+        (audio, gap)
+    }
+
+    #[test]
+    fn a_final_carries_its_language_and_the_locking_one_announces_it_first_once() {
+        let events = RecordingEvents::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let factory = LangFactory { log: log.clone(), text: "Hallo Welt", locks_on: 1 };
+        let (audio, gap) = two_segments();
+        let (control, thread) = spawn(&events, config(5), FakeSource { audio, gap_at: Some(gap), fail_start: None, pace: None }, factory);
+        wait_for(&events, EV_FINAL, 2);
+        control.stop();
+        thread.join().unwrap();
+        let all = events.take();
+        let order: Vec<&str> = all.iter().map(|e| e.event.as_str()).filter(|e| [EV_LANG, EV_FINAL].contains(e)).collect();
+        assert_eq!(order, [EV_LANG, EV_FINAL, EV_FINAL], "voice:lang once, just before the final that locked");
+        let lang = &all.iter().find(|e| e.event == EV_LANG).unwrap();
+        assert_eq!(lang.client.as_ref().map(ClientId::as_str), Some("main"), "to the owner");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&lang.payload).unwrap(), serde_json::json!({ "session": 5, "lang": "de" }));
+        for f in payloads_of(&all, EV_FINAL) {
+            assert_eq!((f["outcome"].as_str(), f["lang"].as_str()), (Some("transcribed"), Some("de")), "{f}");
+        }
+    }
+
+    #[test]
+    fn a_filtered_final_has_no_language_and_never_announces_one() {
+        let events = RecordingEvents::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let factory = LangFactory { log, text: "[BLANK_AUDIO]", locks_on: 1 };
+        let (control, thread) = spawn(&events, config(5), FakeSource { audio: speech(), gap_at: None, fail_start: None, pace: None }, factory);
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+        assert!(events.payloads(EV_LANG).is_empty());
+        let f = &events.payloads(EV_FINAL)[0];
+        assert_eq!(f["outcome"], "filtered");
+        assert!(f.get("lang").is_none(), "{f}");
+    }
+
+    #[test]
+    fn a_failed_final_has_no_language() {
+        let events = RecordingEvents::new();
+        let (send, results) = mpsc::channel();
+        send.send(Err(VoiceError::ModelFailed)).unwrap();
+        let (control, thread) =
+            spawn(&events, config(5), FakeSource { audio: speech(), gap_at: None, fail_start: None, pace: None }, ControlledFinals { results });
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+        assert!(events.payloads(EV_LANG).is_empty());
+        assert!(events.payloads(EV_FINAL)[0].get("lang").is_none());
+    }
+
+    #[test]
+    fn only_a_final_may_detect_a_seam_prefix_and_a_partial_never_do() {
+        let events = RecordingEvents::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let factory = LangFactory { log: log.clone(), text: "Hallo Welt", locks_on: 1 };
+        let pacing = Pacing { min_gap: Duration::ZERO, max_gap: Duration::ZERO, commit_tail: 3 * RATE as usize };
+        let cfg = SessionConfig { pacing, ..config(4) };
+        let source = FakeSource { audio: phrases(), gap_at: None, fail_start: None, pace: Some(Duration::from_millis(2)) };
+        let (control, thread) = spawn(&events, cfg, source, factory);
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+        let log = log.lock().unwrap().clone();
+        assert_eq!(log.iter().filter(|c| **c == "final").count(), 1, "{log:?}");
+        assert!(log.contains(&"partial") && log.contains(&"seam"), "previews and a seam ran: {log:?}");
+    }
+
     #[test]
     fn a_model_that_will_not_load_stops_the_session() {
         let events = RecordingEvents::new();
@@ -1300,7 +1458,7 @@ mod tests {
 
     impl Transcriber for ControlledFinals {
         fn transcribe(&mut self, _: &[f32], partial: bool) -> Result<Transcript, VoiceError> {
-            if partial { return Ok(Transcript { text: String::new(), no_speech: 1.0 }) }
+            if partial { return Ok(Transcript::plain(String::new(), 1.0)) }
             self.results.recv().unwrap_or(Err(VoiceError::ModelFailed))
         }
     }
@@ -1310,7 +1468,7 @@ mod tests {
         let events = RecordingEvents::new();
         let control = Arc::new(Control::default());
         let (send, results) = mpsc::channel();
-        send.send(Ok(Transcript { text: "first".into(), no_speech: 0.0 })).unwrap();
+        send.send(Ok(Transcript::plain("first".into(), 0.0))).unwrap();
         let mut audio = speech();
         audio.extend(speech());
         let source = FakeSource { audio, gap_at: None, fail_start: None, pace: None };

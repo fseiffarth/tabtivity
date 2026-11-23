@@ -17,7 +17,7 @@
  *     `bodyLooksUnsafe` is the tripwire that refuses to render a body the
  *     backend's sanitizer should already have made inert.
  *
- * Design rationale: `docs/mail_client_plan_a.md` §6 (the frozen contract) and
+ * Design rationale: `docs/done/mail_client_plan_a.md` §6 (the frozen contract) and
  * `docs/mail_client_plan_b.md` §2 (the render pipeline).
  */
 

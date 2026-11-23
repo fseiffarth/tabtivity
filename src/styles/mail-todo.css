@@ -6,7 +6,7 @@
    between files without checking the cascade. */
 
 /* ── Mail client ─────────────────────────────────────────────────────────────
-   The embedded IMAP/SMTP tab (docs/mail_client_plan_a.md §1 row 13). Everything
+   The embedded IMAP/SMTP tab (docs/done/mail_client_plan_a.md §1 row 13). Everything
    here is built from the theme tokens (--text-primary / --bg-panel / --accent),
    so the pane inherits every theme rather than carrying its own palette.
 
@@ -1100,10 +1100,11 @@ button.machines-table-name:hover {
   white-space: nowrap;
 }
 /* ── Tabby's side-panel view (assistant/AssistantView) ──────────────────────
-   One of the side panel's views, so it is stacked for the panel's width: a
-   head row with the chat's CLI (and local model) dropdown and Relaunch on top,
-   the one chat filling what is left. The cards wear the settings design
-   system's (`.settings-card`, `.settings-btn`), so only the layout is new. */
+   One of the side panel's views, so it is stacked for the panel's width: the
+   kit's toolbar row (`.sp-toolbar`) with the chat's CLI (and model) dropdowns
+   and Relaunch at its end on top, the one chat filling what is left. The
+   cards wear the settings design system's (`.settings-card`, `.settings-btn`),
+   so only the layout is new. */
 .assistant-view {
   flex: 1 1 auto;
   min-height: 0;
@@ -1111,22 +1112,19 @@ button.machines-table-name:hover {
   flex-direction: column;
   border-top: 1px solid var(--border-color);
 }
+/* The layout is the kit's; the row keeps its rule over the chat. */
 .assistant-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px var(--space-2);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel);
 }
 .assistant-head-pick {
-  flex: 1 1 0;
+  flex: 0 1 auto;
   min-width: 0;
 }
 .assistant-relaunch {
-  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .assistant-chat-main {
   flex: 1 1 auto;

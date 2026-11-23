@@ -127,6 +127,15 @@ describe("the pure path through subagents", () => {
     expect(stepSibling([], 1)).toEqual([]);
   });
 
+  it("steps to a sibling without the flags of the one stepped away from", () => {
+    const siblings = [
+      { token: "00000000000000a1", task: "Run the review", role: "Workflow", running: true, background: true, workflow: true },
+      { token: "00000000000000b2", task: "Find the tests" },
+    ];
+    const next = stepSibling([{ ...siblings[0], siblings, scrollTop: 12 }], 1);
+    expect(next[0]).toEqual({ token: "00000000000000b2", task: "Find the tests", siblings, scrollTop: 12 });
+  });
+
   it("walks into a workflow run and its agents, and types to neither", () => {
     const run: TranscriptEntry[] = [
       { kind: "agent", text: "Improve the chart", role: "chart-improve", subagent: "00000000000000c3", workflow: true, running: true, background: true },

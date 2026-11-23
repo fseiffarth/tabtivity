@@ -1,5 +1,8 @@
 # Tabtivity Hosted — handoff
 
+> **Status (screened against code 2026-11-22):** REFERENCE (build log, history; do not rewrite). Every step it records is in `develop` since the merge `4ed492a5d` (2026-10-11); the worktree/branch `hosted` it names is gone. The live steps it lists are still owed (`server.md` § Live runs owed). Not live-tested.
+
+
 *One section per phase of [`tabtivity_hosted_plan.md`](tabtivity_hosted_plan.md).
 Each phase's agent appends its own section; nothing here was run live unless a
 section says so. Worktree: `.claude/worktrees/hosted`, branch `hosted`,
@@ -3647,7 +3650,7 @@ keys from the keeper/broker or the per-user vault; one budget model in
 billed tokens (the USD figure an estimate only); Mistral Vibe admin keys
 dropped; a keyed container spawn fails naming the way out; `pty_drop_files`
 stays `Client`; `hosted` → `develop` waits. Built in the main session, no
-subagents, five steps — plan and progress in `docs/agent_key_path_plan.md`:
+subagents, five steps — plan and progress in `docs/done/agent_key_path_plan.md`:
 
 1. `1db2a95a` token budget (ledger v2, token reservations, the old USD limit
    as a hint, Manage CLIs in million billed tokens).

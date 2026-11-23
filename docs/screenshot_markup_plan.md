@@ -1,7 +1,8 @@
 # Screenshot markup: capture, mark up, send to the agent tab
 
-Status: **plan only** (2026-10-23), nothing built. TODO #2425 in
-`todo/group-m-viewers.md`. Builds on the desktop PDF markup
+> **Status (screened against code 2026-11-22):** PARTIAL / SUPERSEDED in part. The desktop half exists: the image viewer has **Mark up** on a single picture (`ImageView.tsx`, `usePdfMarkup` `picture`, untested id `desktop.markup.picture`, `docs/done/markup_notes_style_plan.md`). The capture half is gone: `commands/screenshot.rs`, `ScreenshotSaveOverlay` and `lib/window/screenshot.ts` no longer exist (banner below), and `ImageAnnotator` is still its own tool beside Mark up, not retired. Capture-from-agent-tab (todo 2425) is not started.
+
+Builds on the desktop PDF markup
 (`docs/done/pdf_markup_rounds_plan.md` §2.6, `docs/done/markup_tools_plan.md`)
 and the screenshot staging flow (`src-tauri/src/commands/screenshot.rs`,
 `ScreenshotSaveOverlay`).

@@ -46,7 +46,9 @@ another pane, or pop that pane out to a second screen.
 
 - **Ctrl+Click** in the source (outside an `\input` path) shows that spot in
   the PDF (**Cmd+Click** on macOS).
-- **Ctrl+Click** in the PDF jumps to the source line that produced it.
+- **Ctrl+Click** in the PDF jumps to the source line that produced it, and
+  puts the caret on the word you clicked when that word is found once in the
+  paragraph there (otherwise it lands on the line).
 
 This works across tiled and popped-out panes, and inside an agent tab's
 **Data** view: there Compile, **Open PDF** and both Ctrl+Clicks switch the

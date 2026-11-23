@@ -1712,14 +1712,14 @@ untested tag until a VM has actually booted on this machine).
       files — a multi-gigabyte tree is a long modal with a counter and no way
       out but closing the window.
 
-### G.27 — Remote-only projects (`docs/remote_only_projects_plan.md`)
+### G.27 — Remote-only projects (`docs/done/remote_only_projects_plan.md`)
 
 Implemented 2026-10-29 on the `ro-*` branches (A1–A13, A12 the
 conversion), **nothing live-tested**. A remote project created
 with **Keep a local copy** off has no mirror: tabs, git, search and TeX builds
 run on the host, files are read over SFTP, nothing syncs. A VM project is
 remote-only + boot. Rationale: `docs/context/remote_projects.md` § Remote-only;
-step record: `docs/remote_only_projects_handoff.md`.
+step record: `docs/done/remote_only_projects_handoff.md`.
 
 - [x] 🤖 Automated tests (A1, engine contract) — `local_copy_in_resolves_per_posture`
   (`services/remote.rs`), the spec round-trip, the run-host and agent-move

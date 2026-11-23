@@ -1010,7 +1010,7 @@ annotation plus animation (already built, and unique), and then #133–#138.*
 
 ## V.4 — Privacy while presenting
 
-142. ✅ **Privacy curtain** (`docs/privacy_curtain_plan.md`, 2026-10-27,
+142. ✅ **Privacy curtain** (`docs/done/privacy_curtain_plan.md`, 2026-10-27,
      uncommitted, never live). Presenting a PDF fullscreen or opening a deck's
      audience window covers the main window and every popout with an opaque
      "Hidden while presenting" panel, so a share of the wrong window or screen

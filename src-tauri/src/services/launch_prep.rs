@@ -997,7 +997,7 @@ pub async fn prepare(
     }
 
     // Pinned-tier hard refusals (`docs/vm_projects_plan.md`,
-    // `docs/remote_only_projects_plan.md`): a VM or remote-only project has no
+    // `docs/done/remote_only_projects_plan.md`): a VM or remote-only project has no
     // tree on this machine, so the remote→local fallback that exists elsewhere
     // is refused outright — for a VM it is the untrusted agent stepping outside
     // the boundary — and a spawn while the VM is down refuses with a sentinel
@@ -3266,7 +3266,7 @@ mod tests {
         assert!(err.contains("needs its launch"), "{err}");
     }
 
-    // ── reattach: the MCP stamp decides the grant (docs/mcp_reattach_plan.md) ──
+    // ── reattach: the MCP stamp decides the grant (docs/done/mcp_reattach_plan.md) ──
 
     mod reattach {
         use super::*;

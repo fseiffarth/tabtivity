@@ -1,5 +1,7 @@
 # Local models only, phase 1 — handoff
 
+> **Status (screened against code 2026-11-22):** The intro below ("phase 2 … not started") is stale: phase 2 (Cut network, Linux: `services/local_lane/`, `--unshare-net` in `agent_fence.rs`) is built and recorded from "Phase 2 — Cut network (Linux)" on. Open: macOS (phase 3), containers and VMs (phase 4), the flagged items there (nothing ran in a real `--unshare-net` namespace). Not live-tested unless the doc/todo says so.
+
 Branch `feat/local-models-only` (based on `develop` efb20935). Plan:
 `docs/local_models_only_plan.md`. Design, audit and limits as built:
 `docs/context/local_models_only.md`. Phase 1 only; phase 2 (network cut, local

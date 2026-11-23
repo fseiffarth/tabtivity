@@ -1,5 +1,7 @@
 # Mail client — first live QA against Gmail
 
+> **Status (screened against code 2026-11-22):** REFERENCE (live-QA script). The code it walks is built (`src-tauri/src/services/mail/`, `commands/mail.rs`, the header ✉ overlay); the QA itself is still the open item (no live verdict recorded here). Phase 0 step 2 was corrected: `mail_client` is in `ON_BY_DEFAULT_FLAGS` (`src/lib/experimental.ts`). Not live-tested.
+
 The mail client is code-complete and has **never touched a real server**. This is
 the ordered plan for the first live session. It extends
 `docs/mail_client_plan_b.md` §7.9 with the setup, the Gmail specifics, and the
@@ -16,8 +18,8 @@ doesn't**, so a surprise is reportable rather than just confusing.
 1. **Rebuild.** The last change touched `src-tauri/`, so hot-reload will not pick
    it up. Restart your instance from the rebuilt binary.
 2. **Check the flag is on.** The client sits behind the `mail_client`
-   experimental flag: off in a release build unless debug mode is on. If no Mail
-   tab type is offered, that is the flag, not a bug.
+   experimental flag, which is on by default (Settings → Mail → "Mail client").
+   If the header has no Mail button, that is the flag, not a bug.
 3. **Get an app password.** `myaccount.google.com/apppasswords` — needs 2-Step
    Verification enabled. Your normal password will not work; Google retired basic
    auth. Make one *for this test* so you can revoke it in Phase 7.

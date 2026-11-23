@@ -65,7 +65,7 @@ const ANCHORS: Record<CapAnchor, AnchorDef> = {
   add: { find: () => first(`${FOCUSED} .tab-new-btn`), align: "start" },
   files: { find: () => first(`${FOCUSED} .subwindow-files-toggle`), align: "end" },
   card: { find: () => activeTabCard(), align: "end" },
-  // On the Subagents toggle; with a subagent open, on its bar.
+  // On the Subagents toggle (the dock's done pill); with a subagent open, on its bar.
   subagents: {
     find: () => {
       const frame = activeSubagentFrame();
@@ -75,6 +75,8 @@ const ANCHORS: Record<CapAnchor, AnchorDef> = {
       for (const selector of [
         ".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)",
         ".terminal-reader-subagent-toggle",
+        // The Chat dock's pills, when none is finished yet (no done pill).
+        ".terminal-reader-agents",
       ]) {
         const control = Array.from(frame.querySelectorAll<HTMLElement>(selector)).find(drawn);
         if (control) return control;

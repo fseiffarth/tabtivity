@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
+import { LANGUAGES, useI18nStore, useT, type Language, type TranslationKey } from "../../lib/i18n";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import {
   DEFAULT_VOICE_MODEL,
   VOICE_MODEL_LABELS,
   VOICE_MODELS,
+  MAX_DETECT_LANGS,
   VOICE_PAUSE_MS,
+  detectLangs,
   naturalVoiceFor,
   retryVoiceGpu,
   voiceDeviceLabel,
@@ -38,7 +40,7 @@ const PAUSES = [1000, 1500, 2000, 3000] as const;
  * otherwise); headset mode, in which talking over the voice
  * stops it; the pause after which hands-free sends; and whether speech may
  * use the GPU, with what the last dictation really ran on
- * (docs/voice_gpu_plan.md).
+ * (docs/done/voice_gpu_plan.md).
  */
 export function VoiceSettings() {
   const t = useT();
@@ -62,6 +64,14 @@ export function VoiceSettings() {
     } catch (error) {
       setProblem(voiceErrorKey(error));
     }
+  };
+
+  // The languages `detect` picks among; the last one stays checked.
+  const candidates = detectLangs(settings?.voice_detect_langs, uiLanguage);
+  const toggleCandidate = (language: Language, on: boolean) => {
+    const next = on ? [...candidates, language] : candidates.filter((code) => code !== language);
+    if (next.length < 1 || next.length > MAX_DETECT_LANGS) return;
+    void updateSettings({ voice_detect_langs: LANGUAGES.map((l) => l.value).filter((code) => next.includes(code)) });
   };
 
   // Read-aloud's language, as `useReaderReadAloud` tells the voice.
@@ -119,6 +129,27 @@ export function VoiceSettings() {
           />
         }
       />
+      {settings?.voice_lang === "detect" && (
+        <SettingRow
+          label={<>{t("settings.voice.detectLangs")} <UntestedTag id="settings.voice.detectLangs" /></>}
+          help={t("settings.voice.detectLangsHelp")}
+          control={
+            <span className="settings-voice-langs" role="group" aria-label={t("settings.voice.detectLangs")}>
+              {LANGUAGES.map((language) => (
+                <label key={language.value}>
+                  <input
+                    type="checkbox"
+                    checked={candidates.includes(language.value)}
+                    disabled={candidates.length === 1 && candidates.includes(language.value)}
+                    onChange={(e) => toggleCandidate(language.value, e.target.checked)}
+                  />
+                  {" "}{language.label}
+                </label>
+              ))}
+            </span>
+          }
+        />
+      )}
       <SettingRow
         label={<>{t("settings.voice.rate")} <UntestedTag id="terminal.reader.voice.readAloud" /></>}
         help={t(status?.speak && !(natural && naturalVoice?.installed) ? voiceErrorKey(status.speak) : "settings.voice.rateHelp")}

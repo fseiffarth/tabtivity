@@ -954,7 +954,7 @@ interface TabsStore {
   setDetachedBounds: (scope: string, groupId: string, bounds: WindowBounds) => void;
   // Record a popout's latest per-window zoom (streamed back over DETACHED_ZOOM)
   // so it persists and the popout reopens at that zoom after a restart.
-  setDetachedZoom: (scope: string, groupId: string, zoom: number) => void;
+  setDetachedZoom: (scope: string, groupId: string, zoom: number | undefined) => void;
   // #42: return and clear the scope's pending respawn targets (groups that were
   // detached at save time). Caller re-opens each via detachGroup once its pane
   // has mounted. Returns [] when there is nothing to respawn.
@@ -3894,7 +3894,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // double as PTY ids, so always mint a fresh one on restore.
     const keyMap = new Map<string, string>();
     const scope = targetScope ?? get().scope;
-    // Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): with the cap
+    // Stopping idle agent tabs (`docs/done/agent_tab_stop_plan.md`): with the cap
     // on, every agent tab that may ever be stopped comes back stopped, so
     // nothing spawns for it; the shown ones wake at once (`PaneSlot`), and the
     // stop sweep's restore wake starts the most recently used up to the cap.

@@ -760,6 +760,31 @@ Claude's `/fast` — different thing.
   background, the stream cut short). `esc_early.py queued`: the queue goes
   first and the held prompt comes back into the box unsent, as on 2.1.318.
   Not exercised: a live tab, the phone, a real sign-in.
+- **2.1.330 (2026-11-22), outside Tabtivity, beside 2.1.329** (both from the
+  agent install's `versions/`) — `VERIFIED` moves to 2.1.330. One reader fix:
+  the sign-in link is now short, `https://claude.ai/oauth/authorize?<opaque>`,
+  with no `client_id`, `response_type` or PKCE key, so neither the desktop's
+  sign-in card nor the phone's sheet saw it (`isSignInUrl`). Any query on an
+  `/oauth/authorize` path now counts, and is the OAuth kind that may want the
+  code pasted back (`TerminalUrls.test.ts`, `MobileSignIn.test.tsx`, frames
+  from `claude auth login` at 120, 80 and 42 columns). `--help` identical.
+  `hooks.sh` 19 events with the same keys (`cmp.py`), `sedcheck.py` 0
+  mismatches over 19 payloads; `turn_hooks.py` all 23 cases the same events
+  and keys. `meta.py`: two new record types, `derived-from` (the parent
+  session a `-p` run came from) and `data-flow-records` (response ids), with no
+  `message`; the Chat reader shows nothing for them
+  (`claude_2_1_330_bookkeeping_records_reach_no_bubble`). Frame replay
+  (`prompt.py` 120/60/42/72, `model.py` plain and `expand`, the `tui_` and
+  Send now frames): 193 read the same, the rest differ in raw text, the model's
+  one-line command summary, timing, or `/usage`'s note count. `chat_send.py`
+  all five submitted word for word; `send_now.py` early/tool/typed read as on
+  2.1.329, `stream` sent and answered the queued prompt (the model ran a tool,
+  so the hint came late); `esc_early.py queued` as on 2.1.329. Changelog items
+  near what Tabtivity reads, not exercised: SessionStart hook env kept with
+  `-p --continue`; `--continue`/`--resume` no longer open an empty session on a
+  bad timestamp; `/resume` hides sessions that only opened a screen;
+  `CLAUDE_CODE_FULL_SIGN_IN_LINK=1` prints the long link. Not exercised: a live
+  tab, the phone, a real sign-in.
 
 **Verify**
 
@@ -1663,6 +1688,21 @@ after `Stop` (nothing reads them). The echo frames (trust, idle, a reply, the
 menu included. `reads_a_real_muse_store` reads the 1.4.24 store (prompt,
 answer, five chats). The public changelog still stops at 1.4.18. Not
 verified: a real model, sign-in, the Update click.
+
+**1.4.25** (2026-11-22, the channel's version, beside the saved 1.4.24 runs;
+the binary is the one Manage CLIs installed, `muse-bin-1.4.25-R9361.1`, its
+sha256 the channel manifest's; outside Tabtivity, scratch homes): `--version`
+keeps its shape; `--help` and the `acp`, `auth`, `exec`, `login` and `resume`
+help are identical. The launcher is still version 4 with `MUSE_NO_AUTO_UPDATE`,
+`MUSE_CHANNEL` and the login file unchanged; the binary still names
+`TBH_CREDENTIAL_BACKEND`. `resume.py` 14/14; `turns.py events` and `shared`
+the same events and fields. `remote.py`: the tab's process holds its
+`session.jsonl` and `.session.lock` (also after `resume <id>`), `route_facts`
+names its pid (no saved 1.4.24 run to diff). The echo frames read the same, the
+`/` menu one command longer. `reads_a_real_muse_store` reads the `resume.py`
+store (prompt, answer, the chats); the `turns.py` home reads empty on 1.4.24
+as well (its newest session has no turn). No public changelog for 1.4.25. Not
+verified: a real model, sign-in, the Update click.
 Copilot's row started at 1.0.89 (2026-09-30, from the npm package, not live): `-p`,
 `--continue`, `session-state` under `COPILOT_HOME`/home, and `authTokens` /
 `storeTokenPlaintext` in the runtime it unpacks into `~/.cache/copilot/pkg/`.
@@ -1812,7 +1852,7 @@ docs, not live.
 
 "Reads the project's `AGENTS.md`" (new projects scaffold no `CLAUDE.md` /
 `GEMINI.md` pointer; re-check yes/no per CLI on update, table in
-`docs/scaffold_files_plan.md` §3a). Two CLIs do not by default, so
+`docs/done/scaffold_files_plan.md` §3a). Two CLIs do not by default, so
 `agent_hint::register_in_home` sets it in Tabtivity's own agent homes, after
 the global layer: **Gemini** `~/.gemini/settings.json` `context.fileName`
 (string or array; `["GEMINI.md","AGENTS.md"]` union, the user's entries kept,
@@ -2517,6 +2557,27 @@ pages differ only in the PKCE challenge and state. A subagent's early `Stop`
 (`fullyIdle: false`) did not fire this run; 1.5.11 drew it in one of two runs,
 so it is a race, and `hook.sh` skips it either way. Not reached: a real plan's
 link, a real sign-in.
+**1.5.14** (2026-11-22, the agent install's copy, read-only, beside 1.5.13; run
+with `AGY_CLI_DISABLE_AUTO_UPDATE=1`, still named in the binary; its sha512
+unchanged after every run) — `VERIFIED` moves to 1.5.14. `--help` and `agy
+models --help` identical. `main.py` (80, 42), `second.py`, `queued.py` (44,
+56), `signin.py` (42×24, 80×24) and `hooks.py turns|tabs|format` print the same
+as on 1.5.13 apart from ids and the PKCE challenge; `store.py` reads the same
+turns and model from identical schemas; `remote.py` (rerun on 1.5.13 beside it)
+shows the same holders — the tab's process with `conversations/<id>.db`, its
+WAL and `presence/<id>.lock` — only fd numbers and timing differ. `hooks.py
+events`: the subagent step now also dumps the subagent's own `SessionStart` and
+`Stop` (another conversation, `emptyInput: true`) and the parent's early `Stop`
+(`fullyIdle: false`), the race 1.5.11 showed once; the tab's record stays on
+the parent and `.turn` ends `done`. Frame replay: 79 frames read the same; at
+42 columns `/model`'s keyboard hint now wraps onto two rows, so the window shows
+six models (`[3-8 of 8 items]`) and the readers follow the drawn rows, `(current)`
+and the hidden count. Changelog items near what Tabtivity reads, not exercised:
+the `Orchestrator` row in `/model` with Planner/Executor and their efforts (the
+status line then names the planner), `/thinking`, Esc right after a send now
+cancels it (`Message not sent: canceled before it was sent`), Auto mode reads
+outside the workspace without asking, `AI: Out of credits` only with a positive
+balance. Not reached: a real plan's link, a real sign-in.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
@@ -2611,7 +2672,7 @@ older types per step, `pre_llm`/`post_llm` around each model call
 hook extracts only `session_id`). A closed port still fires no `post_agent`.
 Changelog items near what Tabtivity reads, not exercised: Mistral Large 4 is
 the default model (Tabtivity pins none for Vibe); hooks get 2 s rather than 5
-s at quit (`session_end` writes one small file); `/goal` and `/loop`. Cursor 2026.09.28 keeps `-p/--print`,
+s at quit (`session_end` writes one small file); `/goal` and `/loop`. Re-checked **3.1.4** (2026-11-22, the agent install's copy, against the saved 3.1.3 runs): `resume.py` 11/11 pass with the same facts (`unified/<id>/CURRENT` still written although local sessions now run on the "Session API" engine by default); `turn_hooks.py` and `apierr` fire the same hook sequence with the same keys. `--help` adds `--approval-policy`; `--agent` no longer names the approval policies but still accepts them (Tabtivity passes neither, and its local-model `config.toml` sets only `active_model` and `enabled_tools`). Changelog items near what Tabtivity reads, not exercised: Shift+Tab cycles approval policies only; Ctrl+X opens the status rail and no longer cuts (Tabtivity sends Vibe no Ctrl+X); Esc before the first answer puts the prompt back in the box; Ctrl+D or `/exit` mid-reply no longer ends the turn (resume carries it on); hooks with `match` select agents only. Cursor 2026.09.28 keeps `-p/--print`,
 `--continue` and its chats under `~/.cursor`. Aider 0.86.2 (latest) needs
 only its binary name and `aider.chat/install.sh`, still served. Droid, OpenClaw and OpenCode are also `LOCAL_DRIVERS` (Ollama-backed
 tabs via `ollama launch <agent>`).

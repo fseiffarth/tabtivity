@@ -1,6 +1,6 @@
 /**
  * Runtime marks the stop sweep (`AgentTabStopHost`) reads per agent PTY
- * (`docs/agent_tab_stop_plan.md` §5–§6): whether its pane is on screen and
+ * (`docs/done/agent_tab_stop_plan.md` §5–§6): whether its pane is on screen and
  * when it last was, when this window last started it, when the phone last
  * looked at it, and which tabs a restore brought back stopped. Plain module
  * state, written by the pane layer (`PaneSlot`), the phone bridge and the

@@ -157,7 +157,7 @@ describe("useIndependentFileSource (a Files tab / the docked column)", () => {
 });
 
 describe("a host-pinned project (no local copy)", () => {
-  // `remote_only` (docs/remote_only_projects_plan.md): the host is the only
+  // `remote_only` (docs/done/remote_only_projects_plan.md): the host is the only
   // tree, so there is no side to decide and nothing to remember.
   const PINNED = {
     id: PID,

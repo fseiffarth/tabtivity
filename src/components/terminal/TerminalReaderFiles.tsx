@@ -141,10 +141,10 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
     };
     return {
       showPdf: show,
-      showSource(input, line, column) {
+      showSource(input, line, column, phrase) {
         if (!show(input)) return false;
         // Waits in the store for the editor this pick mounts (or the one shown).
-        useEditorJumpStore.getState().applyJump(input, line, column);
+        useEditorJumpStore.getState().applyJump(input, line, column, phrase);
         return true;
       },
     };

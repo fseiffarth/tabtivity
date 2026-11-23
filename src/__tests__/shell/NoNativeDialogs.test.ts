@@ -1,6 +1,6 @@
 /**
  * No browser-native `confirm` / `prompt` / `alert` in the app (fixed decision
- * #5 of docs/screen_2026_10_15_medium_plan.md). WebKitGTK draws them as a bare
+ * #5 of docs/done/screen_2026_10_15_medium_plan.md). WebKitGTK draws them as a bare
  * box headed with the page origin ("localhost:1420 says"), themeless and
  * blocking; the desktop asks through `useDialogs()` (`PromptDialogs`), the
  * phone through its own sheets (`ConfirmSheet` / `NameSheet` / `OptionSheet`).

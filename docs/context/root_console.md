@@ -122,10 +122,10 @@ views of one PTY would take turns resizing it.
 ## Views: one window, ten
 
 The console's window is also the cockpit's, and the apps' and system pages'
-(`docs/context/cockpit.md`). A view strip in the title bar reads Now, Projects,
-Tonight, a divider, Mail, Calendar, To-do, a divider, Agents, Models, Machines, a
-divider, then **Root** (the star): the console proper, this whole document. It is
-icon + label at 1180 px and up, icons only from 820 px, and the current tab plus a
+(`docs/context/cockpit.md`). The title bar puts **Root** (the star) next to the
+Cockpit label, followed by Now, Projects and Tonight. Agents, Machines and Models
+sit in the middle. Mail, To-do and Calendar sit on the right. The strip shows an
+icon and label at 1180 px and up, icons only from 820 px, and the current tab plus a
 ▾ menu under that. `stores/rootOverlay` holds `view` (`WindowView`, `lib/cockpit/views`)
 next to `open`; `show()` always means Root, `openView(view)` opens any other view
 (and never hydrates root), `rootViewShown` / `viewShown` ask whether a view is on
@@ -525,11 +525,12 @@ does not exist for it — the same "unknown tool" an invented name gets.
   per request.
 - **"Local" means the model, not the endpoint** (gap 25). A loopback Ollama
   runs an Ollama cloud model (`*-cloud`) on ollama.com. The tab's model is
-  fixed at spawn in `Identity::model` (`local_model_of`: the raw
-  `TABTIVITY_LOCAL_MODEL`, else the `VIBE_ACTIVE_MODEL` alias mapped back
-  through the "MCP"-chipped models; a disagreeing pair or an ambiguous alias
-  is `None`; never read from the Vibe home, which the tab writes). Each read
-  asks `ollama::model_is_local_at` with the spawn endpoint: the model must be
+  fixed at spawn in `Identity::model` (`VibeLaunch::model` from
+  `agent_privacy::local_vibe_launch`: the model the verified
+  `vibe_local/<alias>` home's `config.toml` names, which a
+  `TABTIVITY_LOCAL_MODEL` label must match; a spawn that is not verified
+  local gets no token, and the label alone proves nothing). Each read
+  asks `ollama_client::model_is_local_at` with the spawn endpoint: the model must be
   listed by that endpoint's `/api/tags` with no remote and no `cloud` tag
   (cached a minute; an unreadable list, no server or no recorded model fail
   closed) — else `LOCAL_READ_CLOUD`. The mail assistant

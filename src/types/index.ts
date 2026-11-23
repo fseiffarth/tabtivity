@@ -738,6 +738,9 @@ export interface Settings {
    *  rather than the OS voice (unset: yes). */
   voice_model?: string;
   voice_lang?: string;
+  /** The candidate languages `detect` picks among: app language codes, 1 to 5
+   *  (unset: the UI language and English). */
+  voice_detect_langs?: string[];
   voice_gpu?: boolean;
   voice_headset?: boolean;
   voice_pause_ms?: number;
@@ -824,7 +827,7 @@ export interface Settings {
   project_remarks?: boolean;
   /** EXPERIMENTAL, default OFF. The chat assistant: chats in a scope of its
    *  own that can search and read the web and see nothing else
-   *  (`docs/assistant_plan.md`). The backend reads the same flag
+   *  (`docs/done/assistant_plan.md`). The backend reads the same flag
    *  (`Settings::assistant_enabled`) and refuses its commands, the spawn and
    *  the web lane while it is off. */
   assistant?: boolean;
@@ -917,7 +920,7 @@ export interface Settings {
    *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
    *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
   sleep_tabs_after_min?: number;
-  /** Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the most agent
+  /** Stopping idle agent tabs (`docs/done/agent_tab_stop_plan.md`): the most agent
    *  tabs with a running process before the least recently used are stopped
    *  (kept, resumed when shown). Unset → 30; `0` → off. Read through
    *  `stopAgentTabsCap` (`lib/agents/agentTabStop`). */
@@ -1200,7 +1203,7 @@ export interface RemoteSpec {
    *  forward. Written by the backend at creation/boot, never user-set. What a
    *  VM-aware surface (the pill glyph, the spawn guard) dispatches on. */
   vm?: boolean;
-  /** Remote-only project (`docs/remote_only_projects_plan.md`): no local
+  /** Remote-only project (`docs/done/remote_only_projects_plan.md`): no local
    *  mirror; files, tabs and git all live on the host. Written by the backend
    *  at creation (or a conversion), read-only to the renderer. Absent = `vm`
    *  (a VM is remote-only). Read it through `isHostPinned`, never directly. */
@@ -1707,7 +1710,7 @@ export interface HostInitReport {
 }
 
 /** `remote_unpair_mirror_preview`'s answer: what "Stop keeping a local copy"
- *  would leave behind (`docs/remote_only_projects_plan.md` E8). Every count
+ *  would leave behind (`docs/done/remote_only_projects_plan.md` E8). Every count
  *  blocks the conversion; `stoppedWorkers` is only named. */
 export interface UnpairPreview {
   lockstepEnabled: boolean;

@@ -265,6 +265,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_tab_model", Core),
     ("agent_tab_recent_prompts", Core),
     ("agent_tab_transcript", Core),
+    // A local model on the machine the user sits at writes it (the loopback
+    // rule of `services::ollama_local`): never exposed by a daemon.
+    ("agent_next_prompt", Client),
     ("agent_session_export_write", Core),
     ("agent_cli_handoff_prepare", Core),
     ("agent_tab_artifact", Core),

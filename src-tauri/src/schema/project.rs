@@ -135,7 +135,7 @@ pub struct RemoteSpec {
     /// boundary, not a perf surprise. Written at creation, never user-set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vm: Option<bool>,
-    /// The project keeps **no local copy** (`docs/remote_only_projects_plan.md`):
+    /// The project keeps **no local copy** (`docs/done/remote_only_projects_plan.md`):
     /// its tree lives only on the host, every tab runs there, git runs there and
     /// nothing is synced. Read it through [`RemoteSpec::is_remote_only`], never
     /// raw: a VM project always is, whatever this says; a plain Remote is only

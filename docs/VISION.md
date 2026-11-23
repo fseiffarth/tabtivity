@@ -1,4 +1,7 @@
-# Tabtivity / Eltron Desktop Strategy Summary
+# Tabtivity Desktop Strategy Summary
+
+> **Status (screened against code 2026-11-22):** REFERENCE (strategy, not a plan). The adapter architecture it asks for exists as `WorkspaceBackend` with `detect_backend()` (`src-tauri/src/platform/mod.rs`): X11 parking workspace (`x11.rs`, the MVP it names), KDE Wayland (`wayland_kde.rs`), Windows (`windows.rs`), macOS (`macos.rs`) and a no-op `null.rs`. There is no Hyprland, GNOME Shell or sway adapter and no own-compositor work; the product has grown far past window control (tabs, agents, remote, mail, phone), which this document does not cover. Not live-tested.
+
 
 ## Core vision
 

@@ -1,9 +1,11 @@
 # Box redesign — creation and membership management
 
+> **Status (screened against code 2026-11-22):** REFERENCE (design lens, superseded by the merged plan `docs/box_redesign_plan.md`). The steps it proposes landed on `develop` as `2dff17a2` (see the plan's status); the "today" sections describe the code of 2026-11-03, before the redesign, and are now historical. Not live-tested.
+
 Lens: how a box is learned about, created, filled, edited and dissolved.
 Header access (lens a) and in-box arrangement (lens b) are touched only where
 this design depends on them. Based on the code as of 2026-11-03, not the docs
-alone. Nothing here is built.
+alone.
 
 ## 1. Today
 

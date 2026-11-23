@@ -1,5 +1,7 @@
 # Safe for everyone plan — Tabtivity for people who aren't security experts
 
+> **Status (screened against code 2026-11-22):** NOT-STARTED apart from fragments (class PARTIAL-minimal). Built: #2327(b) accept-once on Windows (`agent_fence_platform_accepted`, `UnfencedPlatformDialog`); the abstract-socket hole is narrowed by Landlock scoping and `--unshare-net` for cut fences (`docs/context/agent_authority.md`, `services/agent/agent_fence.rs`), while X11 reach stays unaudited (#2321); tmux < 3.2 is detected (`tmux_local::tmux_supports_session_env`, gap 4). Absent in code: `safety_profile`/Safety panel, `app_manifest` per-window command permissions (`src-tauri/build.rs`), `SECURITY.md`, `tests/hostile/`, fuzz targets, background update check (`UpdatesPanel.tsx` still says it never polls), engine-version check, unfenced+bypass badge. Not live-tested.
+
 Plan for TODO Group O #2321–#2333 (`todo/group-o-security.md`, section
 "Safe for everyone"). Written 2026-09-24 from `docs/threat_model.md` as re-checked
 against HEAD `d73da93e`. Verify each fact against code before acting on it.

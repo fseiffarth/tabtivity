@@ -1900,7 +1900,7 @@
   opacity: 0.7;
 }
 
-/* A stopped agent tab (docs/agent_tab_stop_plan.md): its process was ended to
+/* A stopped agent tab (docs/done/agent_tab_stop_plan.md): its process was ended to
    free memory and it resumes when shown. The label dims further and a small
    pause mark, two static bars, sits before it. Static: nothing animates. */
 .tab.stopped .tab-label {
@@ -2401,7 +2401,6 @@
 :root[data-blurred] .project-search-popover,
 :root[data-blurred] .file-run-args,
 :root[data-blurred] .file-viewer-run-args,
-:root[data-blurred] .git-change-tree,
 :root[data-blurred] .presentation-settings,
 :root[data-blurred] .cal-alarm-popup,
 :root[data-blurred] .project-switch-toast,
@@ -3033,14 +3032,13 @@ button.tab-todo-link {
 .project-search-popover,
 .file-run-args,
 .file-viewer-run-args,
-.git-change-tree,
 .presentation-settings,
 .cal-alarm-popup {
   /* No hairline outline: the elevation shadow separates the menu from what
      it floats over, and the accent ring — matching the header bar and the
      dialog chrome — is the only edge that carries meaning. Fill and ring come
      from the floating recipe in apps.css, whose ring rule outranks this
-     border (the change tree, rail-less, keeps it). */
+     border. */
   border: 0;
   border-top: 2px solid transparent;
   border-radius: var(--radius);
@@ -4003,33 +4001,6 @@ html:not(.show-untested-tags) .untested-tag {
 .git-push-mcp-level { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
 .git-push-mcp-protected { font-size: var(--text-sm); min-width: 14em; }
 
-/* ── Agent-tab state, painted on the row ─────────────────────────────────
-   What an AGENT TAB is doing, in the tab ring's own palette (`--status-*`, see
-   themes.css) and its stroke style: the row in the Agents view and the border
-   around the tab it names are the same statement, and a row that said "needs a
-   decision" in the error red while the tab wore amber read as a third state.
-   This used to be a pill beside the tab's name; the whole row carries it now,
-   so a list of agents is readable as a block of colour from across the desk
-   instead of word by word. Working is dotted for the same reason it is on the
-   ring — unfinished — and done is the same green closed up. Idle keeps the
-   plain row: a tab with nothing to say is what the tab bar shows as no ring at
-   all. The tint stays low so the row's own text keeps its contrast. */
-.agent-prompts-tab.is-agent-working {
-  border-color: var(--status-working);
-  border-style: dotted;
-  background: color-mix(in srgb, var(--status-working) 12%, var(--control-bg));
-}
-
-.agent-prompts-tab.is-agent-decision {
-  border-color: var(--status-decision);
-  background: color-mix(in srgb, var(--status-decision) 12%, var(--control-bg));
-}
-
-.agent-prompts-tab.is-agent-done {
-  border-color: var(--status-done);
-  background: color-mix(in srgb, var(--status-done) 12%, var(--control-bg));
-}
-
 /* A sent prompt that has not reached its agent yet: aimed, waiting for a safe
    idle point. Neutral like delivered — nothing is wrong with it — but named,
    because "sent" and "arrived" are not the same thing. */
@@ -4152,34 +4123,35 @@ html:not(.show-untested-tags) .untested-tag {
   }
 }
 
-/* ── Agents view (Files / Git / Apps / Agents row) ──────────────────────── */
-.agent-prompts-view { display: flex; flex-direction: column; gap: 12px; }
+/* ── Agents view (side panel → Agents) ───────────────────────────────────
+   The kit's toolbar over one list of `.sp-row`s (side-panel-kit.css): state
+   chip (a prompt waiting), the chevron that opens the row, the agent's name
+   over its CLI · model · time, and its status word. Everything else a row can
+   do sits in `.agent-prompts-details`, open per row. The status is the word
+   and the kit's lamp; the row itself is no longer tinted. */
+.agent-prompts-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.agent-prompts-list { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: var(--space-2); }
+.agent-prompts-list > .git-push-proposals { width: auto; margin: var(--space-1) var(--space-3); }
+/* Kept for the prompt chart, which still stacks its parts with it. */
 .agent-prompts-section { display: flex; flex-direction: column; gap: 8px; }
 .agent-prompts-section h3 { margin: 0; font-size: var(--text-md); color: var(--text-secondary); }
 .agent-prompts-section .settings-help { margin: 0; }
-.agent-prompts-tab {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: var(--space-2) 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  background: var(--control-bg);
-}
-.agent-prompts-tab-main { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
+.agent-prompts-sort { display: flex; align-items: center; gap: 6px; margin-right: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); }
 
 /* The row itself is the jump: a press that never moves shows that tab. Under
    the "native" sort the same press is also the drag handle that reorders the
    list (the computed sorts would just undo a drop), so the cursor says grab
    there and pointer everywhere else. `dragging` fades the row being carried and
    `drop-before`/`drop-after` draw the landing slot as an accent rule on the
-   neighbour's edge — a static border, never an animated shadow. */
-.agent-prompts-tab { position: relative; cursor: var(--cur-pointer, pointer); }
+   neighbour's edge — a static border, never an animated shadow. The rule sits
+   on the item (row + its open details), so a drop lands past the details. */
+.agent-prompts-item { position: relative; }
+.agent-prompts-tab { cursor: var(--cur-pointer, pointer); }
 .agent-prompts-tab.reorderable { cursor: var(--cur-grab, grab); }
-.agent-prompts-tab.dragging { opacity: 0.5; cursor: var(--cur-grabbing, grabbing); }
-.agent-prompts-tab.drop-before::before,
-.agent-prompts-tab.drop-after::before {
+.agent-prompts-item.dragging { opacity: 0.5; }
+.agent-prompts-item.dragging .agent-prompts-tab { cursor: var(--cur-grabbing, grabbing); }
+.agent-prompts-item.drop-before::before,
+.agent-prompts-item.drop-after::before {
   content: "";
   position: absolute;
   left: 0;
@@ -4189,48 +4161,45 @@ html:not(.show-untested-tags) .untested-tag {
   border-radius: 2px;
   pointer-events: none;
 }
-.agent-prompts-tab.drop-before::before { top: -5px; }
-.agent-prompts-tab.drop-after::before { bottom: -5px; }
+.agent-prompts-item.drop-before::before { top: -1px; }
+.agent-prompts-item.drop-after::before { bottom: -1px; }
 /* Dragging must not paint a text selection across the rows it passes over. */
-.agent-prompts-view:has(.agent-prompts-tab.dragging) { user-select: none; }
-.agent-prompts-tab-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.agent-prompts-view:has(.agent-prompts-item.dragging) { user-select: none; }
 
-/* The heading and, once there is more than one tab to order, the sort pick on
-   the same line: a one-tab list has nothing to sort and no control for it. */
-.agent-prompts-tabs-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.agent-prompts-tabs-head .settings-section-title { margin: 0; }
-.agent-prompts-sort { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-muted); }
-
-/* The model tag: the model the session itself is showing, in the same pill the
-   state uses so the two read as one row of facts about the tab. */
-.agent-prompts-model {
-  padding: 1px 7px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-full);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
+.agent-prompts-chevron { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; color: var(--text-secondary); }
+.agent-prompts-icon { color: var(--text-secondary); }
+.agent-prompts-queued { color: var(--accent); }
+.agent-prompts-cmd { font-family: var(--font-mono); }
 
 /* The tab's name is the link to the tab. A bare text button, so the row still
-   reads as a name and not as a toolbar — the same restraint (and the same
-   accent-on-hover) `.agent-prompts-file` uses for the other clickable label in
-   this view. */
+   reads as a name and not as a toolbar. */
 .agent-prompts-tab-name {
   padding: 0;
   border: 0;
   background: none;
   color: inherit;
   font: inherit;
+  font-weight: 500;
   text-align: left;
   cursor: var(--cur-pointer, pointer);
 }
 .agent-prompts-tab-name:hover { color: var(--accent); text-decoration: underline; }
-.agent-prompts-tab-head small,
-.agent-prompts-tab-when { color: var(--text-muted); font-size: var(--text-sm); }
-.agent-prompts-tab-head .danger-text { color: var(--danger); }
+
+/* An open row's details, indented to the name's column (the row's padding,
+   its 16px and 20px columns and their two 6px gaps) and washed like the
+   selected row above them. */
+.agent-prompts-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px var(--space-3) var(--space-3) calc(var(--space-3) + 48px);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.agent-prompts-item.expanded > .agent-prompts-details { background: var(--accent-soft); }
+.agent-prompts-details small { font-size: var(--text-sm); }
+.agent-prompts-continue { display: inline-flex; align-items: center; gap: 4px; }
+.agent-prompts-proposal { display: flex; flex-direction: column; gap: 2px; color: var(--text-secondary); }
 /* The last prompt the tab was given, from its transcript — one line, cut with
    an ellipsis; the whole of it is in the title and in the tab itself. */
 .agent-prompts-last-prompt {
@@ -4239,8 +4208,14 @@ html:not(.show-untested-tags) .untested-tag {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-style: italic;
 }
+.agent-prompts-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; color: var(--text-primary); }
+.agent-prompts-actions .settings-btn { display: inline-flex; align-items: center; gap: 4px; }
+/* A switched-on toggle (the composer, auto-continue): the wash
+   `.toolbar-btn.active` uses, with `aria-pressed` saying it out loud. */
+.agent-prompts-actions .settings-btn.active { background: var(--pill-active-bg); border-color: var(--border-color); }
+.agent-prompts-actions .agent-prompts-rename-btn { margin-left: auto; }
+.agent-prompts-details .agent-composer { margin-top: 4px; padding: var(--space-2); border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-panel); color: var(--text-primary); }
 
 .agent-prompts-notice {
   padding: var(--space-2) 10px;
@@ -4251,27 +4226,31 @@ html:not(.show-untested-tags) .untested-tag {
   font-size: var(--text-md);
 }
 
-/* The section headers use the settings design system's own header
-   (`.settings-section-title` — small caps, accent, hairline above), so the
-   Agents view's three sections read as sections rather than as three slightly
-   larger lines of body text. The overrides here are only what a 6px-padded side
-   panel needs: no top rule on the first one, and room for a trailing button. */
-.agent-prompts-view .settings-section-title { margin-top: 0; }
-.agent-prompts-view .settings-section-title > .settings-btn { margin-left: auto; }
-.agent-prompts-section:first-child .settings-section-title { padding-top: 0; border-top: none; }
-
-/* CLI overview (side panel → CLIs): the Agents view's cards, one per CLI. */
-.cli-overview-head { display: flex; align-items: baseline; gap: 8px; }
-.cli-overview-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.cli-overview-plan { padding: 1px 7px; border: 1px solid var(--border-color); border-radius: 999px; font-size: var(--text-sm); color: var(--text-secondary); }
-.cli-overview-facts { color: var(--text-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
-.cli-overview-meter { display: flex; flex-direction: column; gap: 3px; }
-.cli-overview-meter > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: var(--text-md); }
-.cli-overview-meter > div:first-child span:last-child { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-.cli-overview-meter small { color: var(--text-muted); font-size: var(--text-sm); }
-.cli-overview-bar { height: 6px; overflow: hidden; background: var(--bg-hover); border-radius: 3px; }
-.cli-overview-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
-.cli-overview-bar.high > span { background: var(--warning); }
+/* CLI overview (side panel → CLIs, and the console's Agents → Usage): the
+   kit's toolbar, then per CLI a plain two-line row (name, plan, account; its
+   open tabs at the end) with its usage meters under the name. A meter is the
+   kit's `.sp-bar` drawn across the row: data on the activity ramp, the same
+   colour at any fill (no warning tint near the limit; the number says it). */
+.cli-overview-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.cli-overview-view > .cli-overview { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.cli-overview-view .cli-overview-list { flex: 1; min-height: 0; overflow-y: auto; }
+.cli-overview-list { padding-bottom: var(--space-3); }
+.cli-overview-card { margin-top: var(--space-1); }
+.cli-overview-icon { color: var(--text-secondary); }
+.cli-overview-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cli-overview-head .sp-row-name { font-weight: 600; }
+.cli-overview-plan { flex: none; padding: 0 7px; border: 1px solid var(--border-color); border-radius: var(--radius-full); font-size: var(--text-sm); color: var(--text-secondary); white-space: nowrap; }
+/* Under the name: the row's padding, the 16px icon and its 6px gap. */
+.cli-overview-meter,
+.cli-overview-facts { padding: 2px var(--space-3) 6px calc(var(--space-3) + 22px); }
+.cli-overview-meter { display: flex; flex-direction: column; }
+.cli-overview-meter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: var(--text-md); }
+.cli-overview-meter-head span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cli-overview-meter-head span:last-child { flex: none; font-size: var(--text-sm); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.cli-overview-meter > .sp-bar { display: block; width: 100%; margin: 4px 0 3px; }
+.cli-overview-meter small,
+.cli-overview-facts { font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.cli-overview-facts { margin: 0; padding-top: 0; }
 
 /* Prompt chart: a command bar, then three columns — the drafts, one time axis
    that fills the tab, and (while a card is selected) its inspector. The card
@@ -4678,8 +4657,6 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-link-editor-ends { margin: 0; padding: 0 9px; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .agent-prompt-link-editor-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 9px; }
 
-.agent-prompts-tab { flex-direction: row; }
-.agent-prompts-tab-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
 
 /* Per-tab composer. The prefix chips copy `.file-tree-search-mode` — the side
    panel's existing "this option is on" chip — rather than introducing a second
@@ -4719,8 +4696,8 @@ html:not(.show-untested-tags) .untested-tag {
 
 /* Renaming an agent tab from the Agents view (its name is how one agent is told
    from another here). The input copies the tab bar's own inline rename
-   (`.tab-label-edit`) so the two renames look like one feature; the ✎ that
-   opens it is the view's existing chip. */
+   (`.tab-label-edit`) so the two renames look like one feature; the pencil
+   that opens it sits at the end of the open row's actions. */
 .agent-prompts-rename {
   flex: 1;
   min-width: 0;
@@ -4735,7 +4712,6 @@ html:not(.show-untested-tags) .untested-tag {
   margin: 0;
   outline: none;
 }
-.agent-prompts-rename-btn { flex: none; line-height: 1; }
 
 /* ── Markdown prompt field (common/MarkdownPromptField) ────────────────────
    A prompt is Markdown wherever it lands, so the fields that hold one in the

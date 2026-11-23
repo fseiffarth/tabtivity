@@ -1,5 +1,8 @@
 # Threat recheck 2026-11-19 — fix plan for gaps 115, 117, 118, 119, 121, 122
 
+> **Status (screened against code 2026-11-22):** PARTIAL, built as planned: 115 (+H1) `affddece6` (`services/checkpoints/restore.rs`), 117 `2f84f38ad`/`aaaddf71a`/`8b9c945e3` (`shell_mask`), 118+119 `d7967299a` (`mobile_control/host.rs` `restore_archived_tab`, `archived_tab_rows`), 121 `d344f742c` (`release.yml` `head_branch` filter), 122 `855d3c832` (`remote_agents.rs` `home_prelude`: `umask 077`, `-O` check). Not in this run and still open: 116 (`commands/python.rs` still gates the Poetry probe on `exec_trust::approved_for`), 120 (`mobile-web/src/shell/frameGuard.ts`), hardening H2–H13. Not live-verified.
+
+
 Source: `docs/threat_recheck_2026_11_19_handoff.md` (evidence, reproduction,
 proposed corrections) and the gap rows in `docs/threat_model.md`. Line numbers
 there are as of develop `4cf65018d`; re-find by anchor text.

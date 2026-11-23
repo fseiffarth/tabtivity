@@ -1908,7 +1908,7 @@ mod tests {
         assert!(seen.contains(concat!(crate::app_env!("TAB_UID"), "=u-detached")), "{seen}");
     }
 
-    // ── the MCP stamp (docs/mcp_reattach_plan.md) ───────────────────────────
+    // ── the MCP stamp (docs/done/mcp_reattach_plan.md) ───────────────────────────
 
     const STAMP: &str = "0123456789abcdef0123456789abcdef:-:4242";
 

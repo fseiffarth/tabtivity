@@ -1604,6 +1604,11 @@ From the review of the week's code (`214933ab5..4cf65018d`) in
 evidence file `docs/threat_recheck_2026_11_19_handoff.md`. Read from the code
 with two synthetic checks; nothing was run live and nothing is fixed.
 
+> Screened 2026-11-22: fixed on develop, not live-verified — 2443 (`affddece6`), 2445
+> (`2f84f38ad`, `aaaddf71a`, `8b9c945e3`), 2446 (`d7967299a`), 2448 (`d344f742c`),
+> 2449 (`855d3c832`); their test boxes are not re-checked here. Open: 2444 (gap 116),
+> 2447 (gap 120), 2450, 2451.
+
 2443. **Checkpoint restore must not write or delete through a swapped
     folder.** The restore checks each path, then removes and checks out by
     path; a writer in the folder's fence swaps a subfolder for a link in

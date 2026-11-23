@@ -1,5 +1,7 @@
 # Headless MCP — handoff
 
+> **Status (screened against code 2026-11-22):** Phase 1 and 1b are done and in code (`start_headless`, `Runtime::serves_markup`, `serve_without_keyring`); phases 2 (git queue) and 3 (parity) under "Next" are still not built. Tracking item: `todo/group-z-server.md` #2339. Not live-tested.
+
 Plan: [`docs/headless_mcp_plan.md`](headless_mcp_plan.md). TODO #2339
 (`todo/group-z-server.md`). Never run live.
 

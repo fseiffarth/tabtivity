@@ -398,7 +398,7 @@ fn read_lists() -> (BoxesList, ProjectsList) {
 pub const ROOT_SCOPE: &str = "root";
 
 /// Whether `scope_id` is the chat assistant's scope (`storage::ASSISTANT_SCOPE`,
-/// `docs/assistant_plan.md`), under any spelling that names the same directory
+/// `docs/done/assistant_plan.md`), under any spelling that names the same directory
 /// (`Assistant`, `assistant `: the id becomes a path under the state dir, and a
 /// case-folding filesystem or the key reduction would otherwise let it share
 /// the scope's state). The assistant has no fence roots at all: it is neither a
@@ -422,7 +422,7 @@ fn read_only_for_scope(scope_id: &str, configured: impl FnOnce() -> Vec<String>)
 }
 
 /// The assistant's one writable support mount: the spawn's own chat folder,
-/// `<state_dir>/assistant/work/<uid>` (`docs/assistant_plan.md`, decision 17),
+/// `<state_dir>/assistant/work/<uid>` (`docs/done/assistant_plan.md`, decision 17),
 /// so a chat cannot see its siblings. `cwd` must be exactly one uuid-shaped
 /// component below the work folder; it is never created here (the spawn gate,
 /// `launch_prep::ensure_chat_dir`, is the one creator, mode `0700`) and must

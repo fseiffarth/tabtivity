@@ -1,11 +1,6 @@
 # VM Projects — Isolated Agent VMs over SSH (Implementation Plan)
 
-Status: **implemented, not live-tested** (2026-08-07): Phases 0–4 plus the
-mirrorless sync posture are on `develop` (see `todo/group-g-remote.md` G.26
-for the item-level ledger and what remains — the opt-in-mirror/manual-pull
-half of Phase 5, and Phase 6). Design rationale live-doc:
-`docs/context/vm_projects.md`. Nothing below has run against a real VM yet;
-the Phase 1/2 live-QA loops are still owed.
+> **Status (screened against code 2026-11-22):** PARTIAL. Phases 0–4 are built: `services/vm.rs` (doctor, `fetch_base_command`/`build_base_command`, QMP shutdown, orphan sweep, `netdev_arg` guestfwd), `src-core/src/services/vm_proxy.rs` (allowlisting CONNECT proxy), `commands/vm.rs` (`vm_doctor/_status/_boot/_shutdown/_rebuild/_allow_temporarily/_set_spec`), `VmSettingsDialog.tsx`, and the spawn guard `launch_prep::pinned_spawn_refusal`. Open: the opt-in mirror flow and manual-pull-only `git_peer` gating (Phase 5, rest; `todo/group-g-remote.md` G.26) and Phase 6. Rationale: `docs/context/vm_projects.md`. Not live-tested (no VM has booted).
 
 ## Goal
 

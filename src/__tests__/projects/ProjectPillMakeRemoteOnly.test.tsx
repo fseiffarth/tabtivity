@@ -1,5 +1,5 @@
 /**
- * Local → Remote-only from the pill (`docs/remote_only_projects_plan.md` D7):
+ * Local → Remote-only from the pill (`docs/done/remote_only_projects_plan.md` D7):
  * "Make remote only…" opens the Extend dialog with its local-copy switch off,
  * and once that extend landed the pill opens the Stop-keeping check — but only
  * after the host is connected, since the check asks it which commits it has.

@@ -4,10 +4,10 @@ import { overviewMeters, planLabel, type CliOverviewRow } from "../../../shared/
 import { resetText } from "../../../mobile-web/src/terminal/limitResets";
 import { AGENT_CLI_ROWS } from "../../lib/agents/agentClis";
 import { useI18nStore, useT, dateLocale } from "../../lib/i18n";
-import { usePoll } from "../../lib/usePoll";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 import { useTabsStore } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
-import { RefreshIcon } from "../common/icons/Icon";
+import { RefreshIcon, TerminalIcon } from "../common/icons/Icon";
 
 /** The phone's pacing for a usage panel: often enough to watch a window fill,
  *  rare enough that the CLI is not spawned for nothing (its read is cached
@@ -30,9 +30,10 @@ function useOpenTabs(): Record<string, number> {
   }, [tabsByScope]);
 }
 
-/** The side panel's CLIs view: `CliOverviewBody` in the panel's scroll box. */
+/** The side panel's CLIs view: `CliOverviewBody` filling the panel, its
+ *  toolbar fixed and its list scrolling. */
 export function CliOverviewView({ active }: { active: boolean }) {
-  return <div className="side-panel-scroll cli-overview-view" style={{ flex: 1, overflowY: "auto", padding: 6 }}>
+  return <div className="cli-overview-view">
     <CliOverviewBody active={active} />
   </div>;
 }
@@ -41,8 +42,8 @@ export function CliOverviewView({ active }: { active: boolean }) {
  * The CLIs overview's body — one component for its two hosts, the side
  * panel's CLIs view and the Agents view's Usage section: per agent CLI in use, its plan, the account it
  * is signed in as, its usage windows with when each rolls over, and how many
- * of its tabs are open (`docs/cli_overview_plan.md`). Account-wide, so the
- * same in every scope. Read while shown, every few minutes; ⟳ asks again.
+ * of its tabs are open (`docs/done/cli_overview_plan.md`). Account-wide, so the
+ * same in every scope. Read while shown, every few minutes; Refresh asks again.
  */
 export function CliOverviewBody({ active }: { active: boolean }) {
   const t = useT();
@@ -68,7 +69,10 @@ export function CliOverviewBody({ active }: { active: boolean }) {
     }
   }, []);
 
-  usePoll((poll) => load(false, () => poll.stopped), POLL_MS, { enabled: active });
+  // Stable, or `usePoll` restarts on every render, and its immediate run's
+  // answer re-renders: the panel then read the CLIs back to back while shown.
+  const poll = useCallback((run: PollRun) => load(false, () => run.stopped), [load]);
+  usePoll(poll, POLL_MS, { enabled: active });
 
   // Rows with an open tab but no login, plan or reading still say they are
   // in use: the backend lists only what the store knows about.
@@ -89,57 +93,67 @@ export function CliOverviewBody({ active }: { active: boolean }) {
   const dateFormat = new Intl.DateTimeFormat(dateLocale(lang), { month: "short", day: "numeric" });
   const timeFormat = new Intl.DateTimeFormat(dateLocale(lang), { hour: "numeric", minute: "2-digit" });
 
-  return <section className="agent-prompts-section">
-      <div className="agent-prompts-tabs-head">
-        <h3 className="settings-section-title">{t("cliOverview.title")} <UntestedTag id="clis.overview" /></h3>
-        <button
-          type="button"
-          className="toolbar-btn toolbar-btn--sm"
-          disabled={busy}
-          onClick={() => void load(true)}
-          title={t("common.refresh")}
-          aria-label={t("common.refresh")}
-        ><RefreshIcon /></button>
+  return <section className="cli-overview">
+      <div className="sp-toolbar">
+        <span className="sp-toolbar-title">{t("cliOverview.title")}</span>
+        <UntestedTag id="clis.overview" />
+        <div className="sp-toolbar-end">
+          <button
+            type="button"
+            className="toolbar-btn toolbar-btn--sm"
+            disabled={busy}
+            onClick={() => void load(true)}
+            title={t("common.refresh")}
+            aria-label={t("common.refresh")}
+          ><RefreshIcon /></button>
+        </div>
       </div>
-      {failed && <p className="settings-help">{t("cliOverview.failed")}</p>}
-      {rows && shown.length === 0 && <p className="settings-help">{t("cliOverview.empty")}</p>}
-      {!rows && !failed && <p className="settings-help">{t("pdfMeta.reading")}</p>}
-      {shown.map((row) => {
-        const meters = overviewMeters(row, clock);
-        const tabs = openTabs[row.id] ?? 0;
-        const facts = [
-          row.account,
-          row.signedIn ? null : t("cliOverview.notSignedIn"),
-          tabs ? t(tabs === 1 ? "cliOverview.tabsOne" : "cliOverview.tabs", { count: tabs }) : null,
-          row.plan?.until ? t("cliOverview.planUntil", { date: dateFormat.format(new Date(row.plan.until)) }) : null,
-        ].filter(Boolean);
-        return <article className="agent-prompts-tab cli-overview-card" key={row.id}>
-          <div className="agent-prompts-tab-main">
-            <div className="cli-overview-head">
-              <strong>{row.label}</strong>
-              {row.plan && <span className="cli-overview-plan">{planLabel(row.plan)}</span>}
+      <div className="cli-overview-list">
+        {failed && <p className="sp-note">{t("cliOverview.failed")}</p>}
+        {rows && shown.length === 0 && <p className="sp-note">{t("cliOverview.empty")}</p>}
+        {!rows && !failed && <p className="sp-note">{t("pdfMeta.reading")}</p>}
+        {shown.map((row) => {
+          const meters = overviewMeters(row, clock);
+          const tabs = openTabs[row.id] ?? 0;
+          const facts = [
+            row.account,
+            row.signedIn ? null : t("cliOverview.notSignedIn"),
+            row.plan?.until ? t("cliOverview.planUntil", { date: dateFormat.format(new Date(row.plan.until)) }) : null,
+          ].filter(Boolean);
+          return <article className="cli-overview-card" key={row.id} aria-label={row.label}>
+            <div className="sp-row sp-row--plain sp-row--two">
+              <span className="sp-row-main">
+                <TerminalIcon className="cli-overview-icon" />
+                <span className="sp-row-text">
+                  <span className="cli-overview-head">
+                    <span className="sp-row-name">{row.label}</span>
+                    {row.plan && <span className="cli-overview-plan">{planLabel(row.plan)}</span>}
+                  </span>
+                  {facts.length > 0 && <span className="sp-row-sub">{facts.join(" · ")}</span>}
+                </span>
+              </span>
+              <span className="sp-row-meta">{tabs ? t(tabs === 1 ? "cliOverview.tabsOne" : "cliOverview.tabs", { count: tabs }) : null}</span>
             </div>
-            {facts.length > 0 && <small className="cli-overview-facts">{facts.join(" · ")}</small>}
             {meters.map((meter) => <div className="cli-overview-meter" key={meter.label}>
-              <div>
+              <div className="cli-overview-meter-head">
                 <span>{meter.label}</span>
                 <span>{t("cliOverview.used", { percent: Math.round(meter.percent) })}</span>
               </div>
-              <div
-                className={`cli-overview-bar${meter.percent >= 90 ? " high" : ""}`}
+              <span
+                className="sp-bar"
                 role="img"
                 aria-label={t("mobile.status.meterUsed", { label: meter.label, percent: Math.round(meter.percent) })}
-              ><span style={{ width: `${meter.percent}%` }} /></div>
+              ><span style={{ width: `${meter.percent}%` }} /></span>
               {meter.resets && <small>{resetText(meter.resets, clock, readTime)}</small>}
             </div>)}
-            {row.limits && meters.length > 0 && <small className="cli-overview-facts">
+            {row.limits && meters.length > 0 && <p className="cli-overview-facts">
               {t("cliOverview.asOf", { time: timeFormat.format(new Date(row.limits.readAt * 1000)) })}
-            </small>}
-            {row.signedIn && meters.length === 0 && <small className="cli-overview-facts">
+            </p>}
+            {row.signedIn && meters.length === 0 && <p className="cli-overview-facts">
               {row.usage?.code ? t("cliOverview.usageFailed") : t("cliOverview.noUsage")}
-            </small>}
-          </div>
-        </article>;
-      })}
+            </p>}
+          </article>;
+        })}
+      </div>
     </section>;
 }

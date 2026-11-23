@@ -19,6 +19,10 @@ screens, **S** (or the bar's screen button) moves it to the next screen; the
 screen it ends on is remembered for the next time. **Open in external app**
 hands the file to your system's PDF reader.
 
+Drag over the page's text to select it, across lines, columns and the gaps
+between them. A small bar offers highlight colours, **Highlight and write a
+remark**, and a switch for copying the selection to the clipboard by itself.
+
 ## Arranging pages
 
 **Arrange pages** lets you reorder and delete pages, and **Insert PDF** adds
@@ -51,16 +55,20 @@ counts sheets as well as pages ("Print (12 pages on 3 sheets)").
 
 ## Marking up a PDF for an agent
 
-**✎ Mark up** in the PDF toolbar (also on the PDF of a TeX workspace) opens the
-markup strip: pen, highlighter, typed notes and an eraser over the pages.
-Write what should change, as you would on paper, then **Submit**:
+**✎ Mark up** in the PDF toolbar (also on the PDF of a TeX workspace) opens
+markup mode: a small tool dock floats over the pages (drag its grip to any
+edge, click it to fold the dock away) with a pen, highlighter, eraser, lasso,
+text note and proofreading marks, plus Undo and Redo. Click the active tool
+again for its options (size, colour, favourites); hold **E** to erase while
+held. Write what should change, as you would on paper, then **Submit** in the
+bar at the top:
 
 1. Tabtivity saves a marked copy, `<name>-marked.pdf`, into the project's
    `.tabtivity/inbox/` folder.
 2. It sends a prompt with the file, the marked copy and your notes to an agent
-   tab of the same project — the strip shows which; click it to pick another.
-   If the agent is busy, the prompt waits in its queue.
-3. The strip stays open. Each Submit is a **round**; you can keep marking
+   tab of the same project — the bar shows which (**Send to**); click it to
+   pick another. If the agent is busy, the prompt waits in its queue.
+3. Markup mode stays open. Each Submit is a **round**; you can keep marking
    while the agent works.
 
 Your marks live only in this window until you submit — never in the project
@@ -69,16 +77,16 @@ your marks (or offers **Reload PDF**, if you turned that off). Marking works
 on local projects in the main window, on the PDF as saved (save page changes
 first), one pane per file.
 
-Each group of marks that belong together is one **remark**, with its own small
-**Submit** to send just that remark. The model chip beside the agent opens that
-tab's own model list, to run the next round on another model.
+Marks that belong together form one **remark**; the agent ticks them off as a
+group (see below). The model chip beside the agent opens that tab's own model
+list, to run the next round on another model.
 
 ## Apply directly, or list first
 
 Settings → Agents → **PDF markup**:
 
 - **Apply marks directly** (on by default): the agent makes the changes right
-  away and **Undo** in the strip restores every file the round changed (a
+  away and **Undo** in the Agent panel restores every file the round changed (a
   dialog lists them first). Where no undo is possible — for example the
   project is not a git repository — the agent lists the changes first.
 - With it off, the agent first lists what your marks ask for; **Make these
@@ -94,8 +102,8 @@ Settings → Agents → **PDF markup**:
 ## The agent's questions and ticks
 
 A local Claude, Codex or tool-capable Local Model tab can ask you about an
-unclear mark: the question appears as a card under the markup strip, with a
-numbered pin on the page; pick an answer and **Send answers** (it becomes the
+unclear mark: the question appears in the **Agent** panel of the bar (it opens only when you
+open it), with a numbered pin on the page; pick an answer and **Send answers** (it becomes the
 agent's next prompt). After making a change it can tick the mark off: a green
 **✓** appears on the remark — click it to approve and remove those marks, or
 **Approve all**. Nothing is removed without your click, and **Undo** brings

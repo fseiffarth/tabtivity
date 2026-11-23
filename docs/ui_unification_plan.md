@@ -1,5 +1,7 @@
 # UI Unification Plan — 2026-09-16
 
+> **Status (screened against code 2026-11-22):** PARTIAL. Tier 1 (U-01…U-21) landed 2026-09-16, as the header says. Tier 2 and 3 are mostly open: native `<select>` is still in 27 components (T3-03), `QuickOpen.css`/`ImageAnnotator.css` still sit under `src/components` (T2-25), `.ollama-action-btn` and `.browser-btn` remain (T2-20/21), no `.empty-note` or `.hovercard` base exists (T2-17/18), and some `var(--mono-font, …)` fallbacks remain (T2-02). Done since, by other work: phantom `var(--border, …)` is gone (T2-01), `window.confirm/prompt/alert` is gone outside `lib/transport/dialogAdapter.ts` (T3-05, with an ESLint ban), and `AddRemarkDialog` no longer uses the missing `modal-*` classes (T3-14). T2-03's premise changed: `--radius-sm` is 6 px now. Several Tier 2/3 ideas were taken further by `docs/done/desktop_ui_plan.md` and `docs/desktop_ui_round2_plan.md`. Not live-tested.
+
 The desktop frontend (`src/styles/*.css`, `src/components/**`) has a well-designed
 token layer and a real set of shared primitives, but adoption is uneven: the
 vocabulary exists, the call sites often re-spell it. This document is the work

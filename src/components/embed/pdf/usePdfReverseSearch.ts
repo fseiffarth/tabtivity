@@ -14,6 +14,7 @@ import {
   resolveTexRoot,
   type SyncNoticeKind,
 } from "../../../lib/viewers/tex/tex";
+import type { PdfWordPhrase } from "../../../lib/viewers/tex/reverseWord";
 import type { FileSource } from "../../../lib/files/fileAccess";
 
 /**
@@ -145,14 +146,14 @@ export function usePdfReverseSearch({
   // With no map to ask (none beside the PDF) the
   // click still opens the `.tex` that built the PDF, at its top, and says why.
   const onSyncClick = useCallback(
-    async (page: number, x: number, y: number) => {
+    async (page: number, x: number, y: number, phrase?: PdfWordPhrase) => {
       setSyncNotice(null);
-      const jump = async (input: string, line: number) => {
+      const jump = async (input: string, line: number, word?: PdfWordPhrase) => {
         // A one-pane host (the agent tab's Data view) shows the source in this
         // PDF's place instead of a tab.
-        if (host?.showSource(input, line, 0)) return;
+        if (host?.showSource(input, line, 0, word)) return;
         const root = await resolveTexRoot(input).catch(() => input);
-        jumpToSource(input, line, 0, root);
+        jumpToSource(input, line, 0, root, word);
       };
       const openByName = (source: string | null) => {
         if (source) void jump(source, 1);
@@ -164,7 +165,7 @@ export function usePdfReverseSearch({
         return;
       }
       const src = hasMap ? await synctexEdit(path, page, x, y, scope) : null;
-      if (src) await jump(src.input, src.line);
+      if (src) await jump(src.input, src.line, phrase);
       const status = hasMap ? await synctexStatus(path, scope) : null;
       const kind = hasMap ? syncNoticeKind(status, src != null) : "noMap";
       if (!kind) return;

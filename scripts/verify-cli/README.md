@@ -68,7 +68,9 @@ gives its usage.
   `UserPromptSubmit` for whether each Enter submitted. `model.py <label> <bin>
   [expand]` walks the `/model` picker at 120×40 and 80×24 with arrows and
   Esc only (no turn); `expand` opens the folded `More models` row first. These need the login
-  and make small paid haiku turns.
+  and make small paid haiku turns. `login.sh <label> <bin>` needs none: it
+  draws `claude auth login`'s sign-in link in a scratch HOME at 120, 80 and 42
+  columns for the frame replay's `signIn` (2.1.330 shortened the link).
   Binaries come from the agent install's `.local/share/claude/versions/<v>`.
   `turn_hooks.py <label> <bin> <port> [case…]` needs no login: a scratch
   HOME, `stub_anthropic.py`, a dumping hook on every turn-relevant event. It

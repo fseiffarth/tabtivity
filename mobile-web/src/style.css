@@ -8,7 +8,7 @@ button { color:inherit; }
    tab bar and the to-do ＋ keep to the same edges. */
 :root { --screen-measure:720px; }
 /* Home and the project screen's scale: type, 4pt spacing, group surfaces,
-   the 44px hit box, octagon cuts (docs/mobile_home_redesign_plan.md). */
+   the 44px hit box, octagon cuts (docs/done/mobile_home_redesign_plan.md). */
 :root { --fs-large:1.75rem; --fs-title:1.25rem; --fs-headline:1.0625rem; --fs-body:.9375rem; --fs-sub:.875rem; --fs-foot:.8125rem; --fs-caption:.75rem; --fs-micro:.6875rem; --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-7:32px; --surface-group:#1a1d2b; --surface-raised:#222637; --hairline:#2b3040; --edge:#363c50; --ink-muted:#98a0b4; --hit:44px; --r-sm:8px; --r-md:12px; --r-lg:16px; --r-sheet:20px; }
 @media (min-width:900px) { :root { --screen-measure:100vw; } }
 .screen { max-width:var(--screen-measure); min-height:100dvh; margin:auto; padding:max(22px,env(safe-area-inset-top)) 18px max(24px,env(safe-area-inset-bottom)); }
@@ -402,6 +402,7 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .home-needs-title { font-size:var(--fs-body); font-weight:600; }
 .home-needs-copy small { color:var(--ink-muted); font-size:var(--fs-foot); }
 .home-needs-row time { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-caption); font-variant-numeric:tabular-nums; }
+.home-needs-row.unavailable > :not(time),.activity-card.unavailable > span:first-child { opacity:.45; }
 .home-group-more { min-height:var(--hit); color:#bcb0ff; font-size:var(--fs-sub); font-weight:600; }
 .home-projects > .tab-card { border:0; border-radius:0; background:transparent; }
 .home-project-card .card { gap:var(--sp-3); min-height:60px; padding:10px var(--sp-3); }
@@ -455,7 +456,7 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 /* The radius these screens round their pieces to, each its own `--o`. */
 .projects-row > .new-tab,.home-group,.tool-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { border-radius:var(--o); }
 /* Tool screens: the head and the few pieces Mail, To-do and Calendar share
-   (docs/mobile_tool_screens_plan.md). The group, the row, the segment and the
+   (docs/done/mobile_tool_screens_plan.md). The group, the row, the segment and the
    large title are Home's own rules above (`.tool-group`, `.tool-row`,
    `.tool-segment`, `.screen-head h1` are aliases there). Dark-palette tokens
    only; the build rewrites the colours per theme. */
@@ -1186,6 +1187,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-group + .subagent-index-group { margin-top:6px; }
 .sent-index-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:6px; margin:0; padding:0; list-style:none; }
 .sent-index-list li { min-width:0; }
+.sent-index-list button, .sent-index-list a, .outbox-post-picture, .outbox-post-file { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
 .sent-index-list button, .sent-index-list a { display:grid; gap:3px; width:100%; padding:4px 4px 6px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; text-decoration:none; }
 .sent-index-group .sent-index-list :is(button,a) { border-color:color-mix(in srgb,var(--group) 35%,#2c3a55); }
 .sent-index-thumb { display:grid; place-items:center; width:100%; aspect-ratio:1; overflow:hidden; border-radius:6px; background:#2b2f45; color:#b9c4e0; font-size:1.15rem; font-weight:700; }
@@ -1602,6 +1604,12 @@ span.files-close { background:transparent; }
 .files-tile-menu svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
 .files-tile-share { justify-self:start; padding:5px 10px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.75rem; }
 .files-grid > .files-section { grid-column:1 / -1; }
+/* A kind's header (Folders, PDFs, …) while the library groups by kind: the
+   saved strips' small caps, across the whole grid; not a button. */
+.files-library-body .files-kind-head { grid-column:1 / -1; list-style:none; }
+.files-library-body .files-kind-head h3 { margin:6px 0 -4px; padding:0 4px; color:#98a0b4; font-size:.76rem; font-weight:650; letter-spacing:.04em; text-transform:uppercase; }
+.files-library-body .files-list > .files-kind-head h3 { margin:12px 0 4px; }
+.files-library-body .files-kind-head:first-child h3 { margin-top:0; }
 .files-grid .files-section button { display:flex; align-items:center; width:100%; text-align:left; }
 .files-grid .files-section svg { fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .files-grid .files-share-error { padding:0 2px; }
@@ -2198,7 +2206,7 @@ span.files-close { background:transparent; }
 .markup-comment textarea { min-height:56px; resize:vertical; border:1px solid #34384a; border-radius:8px; background:#0f131c; color:#e6e9f2; font:400 .85rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; padding:6px 8px; }
 .markup-comment .markup-pen-actions { display:flex; justify-content:flex-end; }
 .markup-more-value { margin-left:auto; color:#8fb8ff; font-size:.8rem; }
-/* The notes-style dock (docs/markup_notes_style_plan.md): the Draw/Scroll
+/* The notes-style dock (docs/done/markup_notes_style_plan.md): the Draw/Scroll
    switch, the six slots; a slot's sheet holds favourites, a segmented choice,
    the size slider, switches and the Proof grid; the Agent badge's sheet. */
 .markup-toolbar > button.markup-finger { width:44px; border-radius:14px; display:flex; flex-direction:column; gap:0; font-size:.95rem; line-height:1; }
@@ -2296,7 +2304,7 @@ span.files-close { background:transparent; }
   .print-page:last-child { break-after:auto; }
   .print-page img { display:block; max-width:100%; max-height:98vh; margin:0 auto; }
 }
-/* ── The phone design pass (docs/mobile_pwa_design_plan.md) ──────────────────
+/* ── The phone design pass (docs/done/mobile_pwa_design_plan.md) ──────────────────
    Focus, the sheets, pairing and the lock on Home's system: the `--fs-*`,
    `--sp-*` and surface tokens, and the one cut-corner mechanism the Mail /
    To-do / Calendar block above uses — a bordered element is clipped and

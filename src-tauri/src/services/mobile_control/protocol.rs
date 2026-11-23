@@ -121,7 +121,7 @@ pub struct CreateTabRequest {
     /// sign-in rides with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<String>,
-    /// A chat of the assistant scope (`docs/assistant_plan.md`, decision 12):
+    /// A chat of the assistant scope (`docs/done/assistant_plan.md`, decision 12):
     /// the opaque launch id `launch-options` listed, which stands for a CLI
     /// and, for a local one, a model. The scope takes this and nothing else —
     /// no agent, mode, worktree, cloud, sign-in or local-model field rides
@@ -1400,6 +1400,16 @@ pub enum DesktopRequest {
         #[serde(default)]
         limit: Option<usize>,
     },
+    /// The local-model "what's next" suggestion for one agent tab's newest
+    /// turn (`services::next_prompt`), asked by the window so the phone and the
+    /// window's own composer share one run per turn. Addressed like
+    /// `AgentTranscript`; `phase` is `warm` or `final`.
+    AgentNextPrompt {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        phase: String,
+    },
     /// What the desktop can hand the phone's composer as an image: the
     /// clipboard's image and the recent files of the screenshot and picture
     /// folders (`services::desktop_images`). Only opaque ids and labels come
@@ -1674,6 +1684,7 @@ impl DesktopRequest {
             | Self::SwitchAssistantModel { request_id, .. }
             | Self::AgentStatus { request_id, .. }
             | Self::AgentTranscript { request_id, .. }
+            | Self::AgentNextPrompt { request_id, .. }
             | Self::DesktopImages { request_id, .. }
             | Self::AttachDesktopImage { request_id, .. }
             | Self::MarkupQuestions { request_id, .. }
@@ -1809,6 +1820,7 @@ impl DesktopRequest {
             | Self::AssistantModels { .. }
             | Self::AgentStatus { .. }
             | Self::AgentTranscript { .. }
+            | Self::AgentNextPrompt { .. }
             | Self::DesktopImages { .. }
             | Self::AttachDesktopImage { .. }
             | Self::MarkupQuestions { .. }
@@ -2202,6 +2214,14 @@ pub enum DesktopResponse {
     AgentTranscript {
         transcript: crate::services::agent_transcript::AgentTranscript,
     },
+    /// Answers [`DesktopRequest::AgentNextPrompt`]: the suggestion's text and
+    /// its `services::next_prompt::Status` word (`outcome`, since `status`
+    /// names this response).
+    AgentNextPrompt {
+        #[serde(default)]
+        text: Option<String>,
+        outcome: String,
+    },
     /// Acknowledges a [`DesktopRequest::TabSeen`], [`DesktopRequest::TabInput`]
     /// or [`DesktopRequest::TabPrompt`] — and a delivered
     /// [`DesktopRequest::MarkupAnswer`] or a [`DesktopRequest::MarkupDismiss`].
@@ -2538,7 +2558,7 @@ pub enum TerminalEvent {
     /// tab), `host_offline` (a remote-host tab whose host the desktop no
     /// longer holds an ssh master for — also the upgrade's `409`, beside the
     /// routes' `409 tab_on_host` for what would act on this machine;
-    /// `docs/mobile_remote_host_tabs_plan.md`), `session_gone` (a host tab's
+    /// `docs/done/mobile_remote_host_tabs_plan.md`), `session_gone` (a host tab's
     /// attach found no session on the host: `pty_bridge::attach_end_reason`),
     /// and the frame refusals
     /// (`input_frame_too_large`, `invalid_terminal_control`,

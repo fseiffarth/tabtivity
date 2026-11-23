@@ -1,5 +1,7 @@
 # API keys for agent CLIs, and a built-in API chat — plan
 
+> **Status (screened against code 2026-11-22):** Part A (own keys: `services/agent/agent_api_keys.rs`), Part C (loopback proxy, token limits: `services/api/{api_proxy,api_meter,api_usage,api_prices}.rs`) and the #2389 admin-key path (`services/server/agent_keys.rs`, see `docs/done/agent_key_path_plan.md`) are in code; the OpenAI extension is too. Part B (a tool-less API chat tab: `api_chat` service, `ChatTabView`) was never built and no code names it; Tabby (`docs/done/assistant_plan.md`) took its place, on the CLI logins. Not live-tested unless the doc/todo says so.
+
 **OpenAI/Codex extension (2026-10-22):** Manage CLIs now accepts an OpenAI key
 with the same monthly billed-token limit as the existing providers. Local
 Codex tabs get only a proxy token and a launch-only custom Responses provider
@@ -10,10 +12,6 @@ in output); interrupted answers use the existing conservative estimate.
 Only `api.openai.com` is dialled. The hosted administrator's key keeper still
 offers Claude/Gemini only. The earlier exclusion notes below describe the
 original scope; Codex is no longer excluded from the user's own keys.
-
-Status: Part A built 2026-10-04 (see "Implementation notes (Part A)" at the
-end; never live-verified); Part B not scheduled. Reviewed against the code the
-same day (see "Review notes").
 
 ## Why
 
@@ -1290,7 +1288,7 @@ Not fixed, with reason:
 
 ## #2389 notes (2026-10-10, branch `hosted`)
 
-One key path for desktop and server (`docs/agent_key_path_plan.md`):
+One key path for desktop and server (`docs/done/agent_key_path_plan.md`):
 
 - **C3's limit is in billed tokens now**, the key broker's unit
   (`keys_wire::billed_tokens`: input, cache writes, output in full, cache

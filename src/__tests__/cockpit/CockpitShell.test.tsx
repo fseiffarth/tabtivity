@@ -1,5 +1,5 @@
 /**
- * The merged window's shell (`docs/cockpit_root_merge_plan.md`): one window, one
+ * The merged window's shell (`docs/done/cockpit_root_merge_plan.md`): one window, one
  * store, five views. It opens on a view, the strip of views is always there,
  * Escape and the backdrop close it, only the shown view mounts, `show()`
  * always means Root, and the header badge is derived from the stores.
@@ -78,12 +78,10 @@ describe("the merged window", () => {
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().openView("now"));
     expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Cockpit");
-    const tabs = screen.getAllByRole("tab");
-    // Now Projects Tonight │ Mail Calendar To-do │ Agents Models Machines │ Root
-    expect(tabs).toHaveLength(10);
-    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    expect(screen.getAllByRole("tab")).toHaveLength(10);
+    expect(screen.getByRole("tab", { name: "Now" }).getAttribute("aria-selected")).toBe("true");
     expect(await screen.findByTestId("cockpit-body")).toBeTruthy();
-    fireEvent.mouseDown(tabs[2], { button: 0 });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Tonight" }), { button: 0 });
     expect(useRootOverlayStore.getState().view).toBe("tonight");
     expect((await screen.findByTestId("cockpit-body")).getAttribute("data-view")).toBe("tonight");
     expect(screen.getAllByTestId("cockpit-body")).toHaveLength(1);
@@ -105,12 +103,13 @@ describe("the merged window", () => {
   it("arrow keys move the focus along the strip, Enter chooses", async () => {
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().openView("now"));
-    const tabs = screen.getAllByRole("tab");
-    tabs[0].focus();
-    fireEvent.keyDown(tabs[0], { key: "ArrowRight" });
-    expect(document.activeElement).toBe(tabs[1]);
+    const now = screen.getByRole("tab", { name: "Now" });
+    const projects = screen.getByRole("tab", { name: "Projects" });
+    now.focus();
+    fireEvent.keyDown(now, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(projects);
     expect(useRootOverlayStore.getState().view).toBe("now");
-    fireEvent.keyDown(tabs[1], { key: "Enter" });
+    fireEvent.keyDown(projects, { key: "Enter" });
     expect(useRootOverlayStore.getState().view).toBe("projects");
   });
 

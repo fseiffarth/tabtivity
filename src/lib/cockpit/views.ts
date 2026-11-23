@@ -3,10 +3,10 @@
  * filter and selection state) and `stores/rootOverlay` (which view the shared
  * window shows) can both name them without importing each other.
  *
- * Eleven views in four groups (`VIEW_GROUPS`): the cockpit's own three, the
- * cross-project apps (mail, calendar, to-do), the machine's system pages
- * (agents, models, machines) and Root, the root console proper. Only the shown
- * one is mounted (mail's unsent composers excepted, `MailView`).
+ * Ten views in four groups (`VIEW_GROUPS`): Root, the cockpit's own three,
+ * the system pages (agents, machines, models) and the cross-project apps
+ * (mail, to-do, calendar). Only the shown view is mounted (mail's unsent
+ * composers excepted, `MailView`).
  */
 export type CockpitView = "now" | "projects" | "tonight";
 export const COCKPIT_VIEWS: readonly CockpitView[] = ["now", "projects", "tonight"];
@@ -24,10 +24,10 @@ export type WindowView = "root" | ConsoleView;
 
 /** The title bar's strip, left to right; a divider sits between groups. */
 export const VIEW_GROUPS: readonly (readonly WindowView[])[] = [
-  ["now", "projects", "tonight"],
-  ["mail", "calendar", "todo"],
-  ["agents", "models", "machines"],
   ["root"],
+  ["now", "projects", "tonight"],
+  ["agents", "machines", "models"],
+  ["mail", "todo", "calendar"],
 ];
 
 export function isAppView(view: WindowView): view is AppView {

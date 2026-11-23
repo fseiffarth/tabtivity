@@ -28,6 +28,18 @@ describe("readSignIn", () => {
     expect(signIn).toEqual({ url: new URL(CLAUDE_URL).toString(), site: "claude.ai", flow: "code" });
   });
 
+  it("reads Claude Code's short link, wrapped at 42 columns (2.1.330)", () => {
+    const signIn = readSignIn(rows(
+      "If the browser didn't open, visit:",
+      "https://claude.ai/oauth/authorize?z-9BPEhw",
+      "HUOJnCnjF5gRJZP4IsQH6dIjlW_Zu6CnqQti0",
+      "Paste code here if prompted >",
+    ));
+    expect(signIn).toEqual({
+      url: "https://claude.ai/oauth/authorize?z-9BPEhwHUOJnCnjF5gRJZP4IsQH6dIjlW_Zu6CnqQti0", site: "claude.ai", flow: "code",
+    });
+  });
+
   it("reads a device login and its code", () => {
     expect(readSignIn(rows("To authenticate, visit https://github.com/login/device and enter code ABCD-1234.", "Waiting for authorization..."))).toEqual({
       url: "https://github.com/login/device", site: "github.com", flow: "device", userCode: "ABCD-1234",

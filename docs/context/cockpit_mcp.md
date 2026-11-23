@@ -5,7 +5,7 @@
 `tab_set_verification`, `tab_request_attention` and `tab_add_milestone` on `/mcp/cockpit` as its own `Caller::Cockpit` token
 lane. Existing help, markup, schedule, git, root and
 web lanes keep their authorities and routes. These lanes share a listener,
-not a token. Design: `docs/cockpit_mcp_plan.md`.
+not a token. Design: `docs/done/cockpit_mcp_plan.md`.
 
 `tab_rename` changes the caller's own display label. The host
 resolves its tmux session — or, for a spawn no session host carries (Windows
@@ -69,7 +69,11 @@ best effort, the rename stands without it), and `tab_get_info` answers
 `labelByAgent: true` while the label is still that one, false for the CLI's
 name or a name the user gave. That is how the conversation after a
 `/clear` knows the old title is an agent's to replace. Codex gets the
-instructions only.
+instructions only. Every non-assistant home's Claude `settings.json` allows
+`tab_get_info` and `tab_rename` (`agent_home::tab_naming_allow_rules`): plan
+mode asked before each naming, though both touch only the caller's own tab.
+That is a rule for two self-only tools, not a mode; the other cockpit tools
+stay the user's to allow.
 
 ## Agent notes: activity and handoff
 

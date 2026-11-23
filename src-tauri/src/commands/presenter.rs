@@ -632,7 +632,7 @@ fn audience_monitor(app: &AppHandle, pick: Option<&MonitorPick>) -> Option<(usiz
 //
 // While a presentation window is open, every other app window draws an opaque
 // curtain (`src/lib/window/privacyCurtain.ts`), so sharing the wrong window or
-// the wrong screen in a call shares nothing (`docs/privacy_curtain_plan.md`).
+// the wrong screen in a call shares nothing (`docs/done/privacy_curtain_plan.md`).
 // This side tells the windows when a presentation starts and ends, and sets the
 // OS capture protection: Windows' `WDA_EXCLUDEFROMCAPTURE` and macOS'
 // `NSWindowSharingNone` make a window black in any capture, the share picker's

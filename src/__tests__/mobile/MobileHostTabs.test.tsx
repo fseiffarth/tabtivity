@@ -1,6 +1,6 @@
 /**
  * A remote project's tabs that run on its host, on the phone
- * (`docs/mobile_remote_host_tabs_plan.md`): the host lists them with
+ * (`docs/done/mobile_remote_host_tabs_plan.md`): the host lists them with
  * `on_host`, reached over the desktop's own SSH connection. The card carries
  * an "on host" chip; while the desktop is not connected to the host it says so
  * in one line and never asks the desktop to restart the tab; schedules are

@@ -56,6 +56,7 @@ describe("PDF text selection (pdf.js viewer port)", () => {
 
   it("moves the block right after the span the selection ends in", () => {
     const layer = makeLayer(["Alpha ", "beta ", "gamma"]);
+    layer.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
     const spans = layer.querySelectorAll("span");
     const range = document.createRange();
     range.setStart(spans[0].firstChild!, 0);
@@ -69,11 +70,16 @@ describe("PDF text selection (pdf.js viewer port)", () => {
     // The drag let go: the block goes home, after every span.
     document.dispatchEvent(new Event("pointerup"));
     expect(layer.lastElementChild).toBe(endOf(layer));
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(layer.classList.contains(SELECTING_CLASS)).toBe(false);
+    expect(layer.lastElementChild).toBe(endOf(layer));
+    expect(sel.toString()).toBe("Alpha be");
   });
 
   it("leaves a layer the selection does not touch at rest", () => {
     const a = makeLayer(["Here"]);
     const b = makeLayer(["There"]);
+    a.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
     const range = document.createRange();
     range.selectNodeContents(a.querySelector("span")!);
     const sel = document.getSelection()!;
@@ -140,7 +146,7 @@ describe("PDF text selection (pdf.js viewer port)", () => {
       const sel = document.getSelection()!;
       sel.removeAllRanges();
       sel.collapse(a1.firstChild!, 0);
-      document.dispatchEvent(new MouseEvent("pointerdown", { clientX: 1, clientY: 1 }));
+      layer.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 1, clientY: 1 }));
       layer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
       // In the right margin, level with the second line.
       document.dispatchEvent(new MouseEvent("pointermove", { clientX: 200, clientY: 11.8 }));
@@ -152,6 +158,10 @@ describe("PDF text selection (pdf.js viewer port)", () => {
       await new Promise((r) => setTimeout(r, 5));
       expect(sel.focusNode).toBe(a2.firstChild);
       expect(sel.focusOffset).toBe("line".length);
+      // Finish just beneath the second line, in its leading.
+      document.dispatchEvent(new MouseEvent("pointerup", { clientX: 200, clientY: 24 }));
+      expect(sel.focusNode).toBe(b1.firstChild);
+      expect(sel.focusOffset).toBe("second line".length);
     } finally {
       doc.elementFromPoint = had;
       document.dispatchEvent(new MouseEvent("pointerup"));
@@ -169,14 +179,14 @@ describe("PDF text selection (pdf.js viewer port)", () => {
       const sel = document.getSelection()!;
       // A click with a pixel of jitter, in the margin: the caret stays put.
       sel.collapse(span.firstChild!, 0);
-      document.dispatchEvent(new MouseEvent("pointerdown", { clientX: 100, clientY: 5 }));
+      layer.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 100, clientY: 5 }));
       document.dispatchEvent(new MouseEvent("pointermove", { clientX: 101, clientY: 5 }));
       document.dispatchEvent(new MouseEvent("pointerup", { clientX: 101, clientY: 5 }));
       await new Promise((r) => setTimeout(r, 5));
       expect(sel.isCollapsed).toBe(true);
       // A drag released in the margin before any move's timeout ran: snapped at once.
       sel.collapse(span.firstChild!, 0);
-      document.dispatchEvent(new MouseEvent("pointerdown", { clientX: 2, clientY: 5 }));
+      layer.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 2, clientY: 5 }));
       document.dispatchEvent(new MouseEvent("pointermove", { clientX: 120, clientY: 5 }));
       document.dispatchEvent(new MouseEvent("pointerup", { clientX: 120, clientY: 5 }));
       expect(sel.focusNode).toBe(span.firstChild);

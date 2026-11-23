@@ -2,7 +2,7 @@
 
 - [ ] **Continue work with another CLI** — v0 on develop since 2026-11-04
   (`TerminalLimitHandoff`, pill `terminal.limitHandoff`); plan
-  `docs/cli_session_handoff_plan.md` (rewritten 2026-11-18) hardens it.
+  `docs/done/cli_session_handoff_plan.md` (rewritten 2026-11-18) hardens it.
   Steps A–D implemented on branch `cli-handoff`, never live; new pill
   `agent.cliHandoff` (tab menu).
   - [x] A. Successor tab through `newAgentTabForDraft` (resumable, `TAB_UID`).
@@ -23,13 +23,13 @@
     - [ ] ❌ Doesn't work on macOS
 
 - [ ] **Notes on diff lines, added to the Chat draft** (implemented 2026-11-13, never
-  live; frontend only). Plan `docs/diff_notes_plan.md`, handoff
-  `docs/diff_notes_handoff.md`; pill `diff-notes`, steering key `C` (`viewNote`).
+  live; frontend only). Plan `docs/done/diff_notes_plan.md`, handoff
+  `docs/done/diff_notes_handoff.md`; pill `diff-notes`, steering key `C` (`viewNote`).
   Open: the phone's `ChatChanges` and the git-panel `DiffView` (plan "Later").
   - [x] 🤖 Automated test (`DiffNotes.test.ts`, `ReaderDiffNotes.test.tsx`)
   - [ ] 🖐️ Manual QA: in a Claude tab with a few edits open Diffs; click the **+**
     on an added range (Shift+click extends) and on a deleted line in two files,
-    in split, then unified; **Add to draft**: the Chat composer holds the prompt
+    in split, then unified; **Add to draft**: the field under Diffs holds the prompt
     (file:lines, the quoted diff, your note) and the notes are gone; nothing was
     sent. Check the **+** button over the first line-number gutter and the note
     box on a horizontally scrolled diff on the real paint path; **C** inside
@@ -43,9 +43,31 @@
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+- [ ] **The Chat's input field docked under Diffs and Data** (implemented
+  2026-11-22, never live; frontend only). Plan `docs/agent_input_dock_plan.md`,
+  handoff `docs/agent_input_dock_handoff.md`; pill `terminal.reader.dock`.
+  - [x] 🤖 Automated test (`ReaderInputDock.test.tsx`, `TerminalReaderToolbar.test.tsx`,
+    `TerminalReaderChanges.test.tsx`, `ReaderDiffNotes.test.tsx`, `TerminalReaderView.test.tsx`)
+  - [ ] 🖐️ Manual QA: agent tab → Diffs: a one-line field under the diff cards;
+    click it: facts row and chips appear, Plan toggles and the dock stays open;
+    type, switch to Chat: same draft. Send from Diffs: the view stays, a status
+    line shows working and Stop. A diff note's **Add to draft**: Diffs stays,
+    the field opens. Data: the same field; `/` opens the slash menu over the
+    file viewer, not under it; Terminal: no field. A permission ask while in
+    Diffs: status line, disabled field, **Answer in Chat** switches with the
+    keyboard on the question's rows. Steering inside Diffs: Space opens the
+    docked field, Esc returns to the Diffs cursor, S/F still scroll the diffs.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 - [ ] **Per-turn checkpoints** (implemented 2026-11-13, never live; experimental
-  `turn_checkpoints`). Plan `docs/turn_checkpoints_plan.md`, handoff
-  `docs/turn_checkpoints_handoff.md`, design `docs/context/checkpoints.md`,
+  `turn_checkpoints`). Plan `docs/done/turn_checkpoints_plan.md`, handoff
+  `docs/done/turn_checkpoints_handoff.md`, design `docs/context/checkpoints.md`,
   help topic `checkpoints`; pills `settings.turnCheckpoints`, `checkpoints.now`,
   `checkpoints.bubble`, `checkpoints.restore`, `checkpoints.scope`. After
   `npm run backend:stale` is clear:
@@ -162,7 +184,7 @@
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 - [ ] **Cockpit MCP: rename the calling tab** (implemented 2026-11-06, never live).
-  Plan: `docs/cockpit_mcp_plan.md`. Begin with self-only `tab_rename` on a
+  Plan: `docs/done/cockpit_mcp_plan.md`. Begin with self-only `tab_rename` on a
   separate authenticated lane, using versioned workspace edits; later consider
   own-tab colour/info and scoped aggregate counts. As built:
   `docs/context/cockpit_mcp.md`; pills `cockpit.mcp.rename` and
@@ -2061,7 +2083,7 @@ unchanged; the new agents are additive.
         cycles and joins are refused only at schedule time).
 
       - **Rework (2026-11-19), never run live.** The chart is redesigned
-        (`docs/prompt_chart_redesign_plan.md`, handoff beside it): one command
+        (`docs/done/prompt_chart_redesign_plan.md`, handoff beside it): one command
         bar and a quick composer row over three columns (Drafts, a timeline
         that fills the tab, an inspector); past cards end at their right edge
         and say how the turn went (Running, Needs answer, Finished, Delivered,
@@ -3120,7 +3142,7 @@ unchanged; the new agents are additive.
   `MobileAssistantScreens` vitest; ❌ never live-verified — pills
   `settings.assistant`, `settings.assistantPhone`, `assistant.overlay`,
   `assistant.newChat`, `assistant.search`, `mobile.assistant`). Plan:
-  `docs/assistant_plan.md`; rationale: `docs/context/assistant.md`; help
+  `docs/done/assistant_plan.md`; rationale: `docs/context/assistant.md`; help
   topic `assistant`. Experimental (Settings → System → Experimental). Backend
   changed: run `npm run backend:stale` and use a rebuilt binary; the phone
   also needs `npm run mobile:bundle`.
@@ -3266,7 +3288,7 @@ unchanged; the new agents are additive.
   non-resumable, but restore can re-attach by the stored id. Update
   `docs/help/agent-clis.md` § Cloud sessions.
 
-### AI switch (edge rail ⏻) — `docs/ai_switch_plan.md`
+### AI switch (edge rail ⏻) — `docs/done/ai_switch_plan.md`
 
 - [x] Built 2026-10-20 (uncommitted): `services::ai_switch` + gates, side
   panel button, waiting agent tabs, timers, completions, mail AI, phone.
@@ -3299,8 +3321,8 @@ unchanged; the new agents are additive.
   voice: good enough, or is Piper needed?** Settings → Experimental →
   Hands-free, then the chip: ask, pause, the chime, the prompt goes after the
   window; once more, say "stop" in the window and the draft stays. The answer
-  is read, the mic listens again, and stays paused while the agent still
-  runs tools. Sit silent in a noisy room for a minute: nothing is sent.
+  is read, the mic dictates without "Tabby" again, and keeps the Tabby gate
+  while the agent still runs tools. Sit silent in a noisy room for a minute: nothing is sent.
   Ctrl+Shift+Q stops the voice and the agent keeps going. With a headset and
   Headset mode on, talking over the voice stops it. **Judge: is interrupting
   like this enough?** Start the mic in a second tab: the first stops, the
@@ -3372,6 +3394,27 @@ unchanged; the new agents are additive.
 - [ ] Talk over a natural voice through speakers: `webrtc-audio-processing`
   echo cancellation against the samples `piper.rs` plays (plan step 7);
   probe the crate on the three CI OSes first.
+- [x] "Tabby navigate" in the Chat mic (built 2026-11-22, not run live,
+  `docs/desktop_tabby_navigate_plan.md`): the shared mode
+  (`shared/voiceNavMode.ts`), the Tabby gate through a turn, the landing.
+  Pills `terminal.reader.voice.navigate`, `.tabbyGate`, `.help`.
+- [ ] 🖐️ Test gate, "Tabby navigate" (main window, Hands-free and read-aloud
+  on) — the nine steps of the plan's Verification: a spoken send then
+  "Tabby, and add a test, go Tabby" queues the second prompt while other talk
+  is dropped; "Tabby navigate", "project …", "yes" lands on its agent tab,
+  reads the last prompt and answer, then listens; "the done tab" twice walks
+  as the next-done key does and Back returns; "box …"; a root agent waiting is
+  never landed on; silence closes it after ~10 s; "Tabby help" in both places;
+  a popout's Chat says "Navigation works in the main window"; Hands-free off,
+  "Tabby navigate, tab two" jumps and the mic dictates there ungated.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 ### Send skill — `docs/context/agent_sessions.md`
 
@@ -3572,7 +3615,7 @@ unchanged; the new agents are additive.
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
-#### Follow-ups from the review (`docs/tab_messaging_mcp_handoff.md`, "Flagged for user")
+#### Follow-ups from the review (`docs/done/tab_messaging_mcp_handoff.md`, "Flagged for user")
 
 - [x] **Wake notices stack up** (`tabs.mcp.wake`; blocks the "once for that
   batch" box above). A message that arrives while an earlier notice is still
@@ -3607,7 +3650,7 @@ unchanged; the new agents are additive.
   `locked:` (unlocked `local` comes from it, by plan); add grant-matrix rows
   for remote, worker and `local_only` tabs in `root_mcp/tests.rs`.
 
-### Per-tab resume: Antigravity and Muse — `docs/agent_tab_resume_plan.md`
+### Per-tab resume: Antigravity and Muse — `docs/done/agent_tab_resume_plan.md`
 
 - [x] Built 2026-11-16: a hook per CLI records each tab's own conversation
   (`services::antigravity_session`, `services::muse_session`), and a restored
@@ -3640,7 +3683,7 @@ unchanged; the new agents are additive.
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
 
-### Turn state from each CLI's own hooks — `docs/agent_tab_resume_plan.md` (follow-up run)
+### Turn state from each CLI's own hooks — `docs/done/agent_tab_resume_plan.md` (follow-up run)
 
 - [x] Built 2026-11-16: Claude's failure and elicitation events, Codex's
   `PermissionRequest`, and the turn record for Vibe, Copilot, OpenCode,

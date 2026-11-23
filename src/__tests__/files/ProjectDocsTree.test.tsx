@@ -158,7 +158,8 @@ describe("file tree · Project docs group", () => {
     setupInvoke(null);
     await renderPanel();
     const toggle = (await screen.findByText("Project docs", { exact: false })).closest("button") as HTMLElement;
-    expect(toggle.textContent).toContain("Project docs (3)");
+    expect(toggle.textContent).toContain("Project docs");
+    expect(toggle.querySelector(".sp-count")?.textContent).toBe("3");
     fireEvent.click(toggle);
     expect(document.querySelector(".doc-ghost")).toBeNull();
   });

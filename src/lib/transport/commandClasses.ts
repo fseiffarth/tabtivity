@@ -89,6 +89,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["agent_tab_model", "core"],
   ["agent_tab_recent_prompts", "core"],
   ["agent_tab_transcript", "core"],
+  ["agent_next_prompt", "client"],
   ["agent_session_export_write", "core"],
   ["agent_cli_handoff_prepare", "core"],
   ["agent_tab_artifact", "core"],

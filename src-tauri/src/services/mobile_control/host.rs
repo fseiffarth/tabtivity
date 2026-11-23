@@ -4886,7 +4886,7 @@ fn note_chat_file(state_dir: &std::path::Path, project: &super::discovery::Resol
 /// A tab that runs on its remote project's host has nothing on this machine
 /// for a route to act on — its inbox, a sign-in, a desktop switch to it — so
 /// such a route answers `409 tab_on_host` and the phone hides the control
-/// (`docs/mobile_remote_host_tabs_plan.md`).
+/// (`docs/done/mobile_remote_host_tabs_plan.md`).
 fn not_on_host(tab: &ResolvedTab) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if tab.place.on_host() {
         return Err(api_error(StatusCode::CONFLICT, "tab_on_host"));
@@ -4930,7 +4930,7 @@ fn creatable(
 }
 
 /// The chat assistant's scope takes no schedules and no collected prompts
-/// (`docs/assistant_plan.md`: a chat is typed into, never scheduled, and its
+/// (`docs/done/assistant_plan.md`: a chat is typed into, never scheduled, and its
 /// words stay in the CLI's transcript): `project_id` is the raw scope id of a
 /// tab or scope the catalog resolved, which is `assistant` for no other scope.
 fn no_schedules_here(project_id: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
@@ -5149,6 +5149,86 @@ async fn agent_transcript(
         ),
         _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
     }
+}
+
+/// `?phase=warm|final` (`final` when absent). Anything else is refused.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct NextPromptQuery {
+    phase: Option<String>,
+}
+
+/// Entries read for a next-prompt suggestion: enough for a long turn whole.
+const NEXT_PROMPT_LIMIT: usize = 400;
+
+/// `GET /api/v1/tabs/{tab_id}/next-prompt?phase=warm|final` — the
+/// local-model "what's next" suggestion for the agent tab's newest turn
+/// (`services::next_prompt`), for the phone's composer. With the window open
+/// the window answers it (`DesktopRequest::AgentNextPrompt`, one run per turn
+/// for both screens); with none, the CLI's own transcript is read off the tab
+/// record and the loopback Ollama run happens here, cached per turn. Answers only `text`
+/// and `status` — no turn key, no id, no path — and always a status, never an
+/// error, once the tab resolves.
+async fn tab_next_prompt(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<NextPromptQuery>,
+) -> impl IntoResponse {
+    use crate::services::next_prompt::{self, Ask, NextPrompt, Phase, Status};
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Some(phase) = Phase::parse(query.phase.as_deref().unwrap_or("final")) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_phase");
+    };
+    let (project_id, tab) = match agent_tab(&state, &phone, &tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let answer = |prompt: NextPrompt| (StatusCode::OK, Json(json!({ "text": prompt.text, "status": prompt.status })));
+    if phase == Phase::Warm && tab.local_model {
+        return answer(NextPrompt::status(Status::Skipped));
+    }
+    // With the window open it answers: the window's composer asks the same
+    // session, so a turn both screens watch runs the model once (user,
+    // 2026-11-22), and this process does not talk to Ollama.
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::AgentNextPrompt {
+            request_id: new_request_id(),
+            project_id: project_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            phase: if phase == Phase::Warm { "warm" } else { "final" }.to_string(),
+        },
+    )
+    .await;
+    if !desktop_down(&response) {
+        return match response {
+            Ok(DesktopResponse::AgentNextPrompt { text, outcome }) => {
+                // Only a status word the engine knows crosses; the text is the
+                // engine's cleaned line, capped again here.
+                let status = serde_json::from_value::<Status>(json!(outcome)).unwrap_or(Status::Unavailable);
+                let text = text.and_then(|line| next_prompt::clean(&line));
+                answer(NextPrompt { text, ..NextPrompt::status(status) })
+            }
+            Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found" => api_error(StatusCode::NOT_FOUND, &code),
+            _ => answer(NextPrompt::status(Status::Unavailable)),
+        };
+    }
+    // No window: the CLI's own transcript, read here off the tab record, and
+    // the loopback Ollama run in this process.
+    let key = format!("phone\u{1f}{project_id}\u{1f}{}", tab.tmux_name);
+    let prompt = tokio::task::spawn_blocking(move || {
+        let transcript = headless::transcript(&project_id, &tab, None, None, Some(NEXT_PROMPT_LIMIT));
+        let ask = Ask { key: &key, agent: &tab.cmd, phase, local_model: tab.local_model };
+        next_prompt::suggest_blocking(&ask, &transcript)
+    })
+    .await
+    .unwrap_or_else(|_| NextPrompt::status(Status::Unavailable));
+    answer(prompt)
 }
 
 /// `GET /api/v1/tabs/{tab_id}/uncommitted` — the files the agent tab's
@@ -7406,6 +7486,39 @@ async fn inbox_file(
     response
 }
 
+/// `DELETE /api/v1/tabs/{tab_id}/inbox/{name}` — drop one file the phone sent
+/// into this tab's project inbox (a hold on its card in the chat → Delete).
+/// The same guards as an outbox delete (`outbox_delete`): the session and the
+/// exact origin, and only a leaf `inbox::read` would serve is removed.
+async fn inbox_delete(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let root = match inbox_root(&state, &phone, &tab_id) {
+        Ok(root) => root,
+        Err(error) => return error,
+    };
+    if !inbox::valid_stored_name(&name) {
+        return api_error(StatusCode::NOT_FOUND, "file_not_found");
+    }
+    let removed = tokio::task::spawn_blocking(move || inbox::remove(&root, &name))
+        .await
+        .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    match removed {
+        Ok(()) => (StatusCode::OK, Json(json!({ "removed": true }))),
+        Err(outbox::OutboxError::Io(_)) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "delete_failed"),
+        Err(error) => outbox_error(error),
+    }
+}
+
 /// How long the phone may keep an inbox picture (`inbox_file`) or a
 /// versioned outbox one (`outbox_bytes`): this device only, a day.
 const INBOX_FILE_CACHE: &str = "private, max-age=86400, immutable";
@@ -8112,6 +8225,21 @@ fn has_host_files(project: &super::discovery::ResolvedProject) -> bool {
         && project.primary_host.as_ref().is_some_and(|spec| host_files::root_of(spec).is_some())
 }
 
+/// The rows of a listing the desktop side panel folds under "Hidden by
+/// extension" — the project's `panel_hidden_endings` on its trusted
+/// `projects.json` entry, never the in-folder `project.json` — as the names
+/// the phone folds into its Hidden section. None where the registry has no
+/// such project (a box) or cannot be read.
+fn hidden_ext_of(raw_id: &str, rel: &str, names: &[String]) -> Vec<String> {
+    let Ok(entry) = crate::services::remote::project_entry(raw_id) else { return Vec::new() };
+    let list = |key: &str| -> Vec<String> {
+        entry.extra.get(key).and_then(|value| value.as_array())
+            .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    };
+    files::hidden_by_ending(&list("panel_hidden_endings"), &list("panel_shown_paths"), rel, names.iter().map(String::as_str))
+}
+
 /// Whether a file-browser request asks for the remote side (`?on=host`).
 fn on_host_side(query: &HashMap<String, String>) -> bool {
     query.get("on").is_some_and(|side| side == "host")
@@ -8188,7 +8316,8 @@ fn files_rel(
 /// **Upload here** may write into this folder (`project_files_upload`): the
 /// switch is on and no segment of the folder starts with a dot. `remarks`
 /// says whether the reader may write remarks into a PDF of it
-/// (`project_files_remarks`).
+/// (`project_files_remarks`). `hidden_ext` names the rows the desktop side
+/// panel hides by ending (`hidden_ext_of`), which the phone folds away.
 ///
 /// `&on=host` lists the remote side instead: the project's tree on its
 /// primary host (`host_files`), with host-side tokens and never `uploads`.
@@ -8212,10 +8341,14 @@ async fn project_files_list(
             Err(error) => return error,
         };
         let key = state.auth.lock_ok().host_key().to_vec();
+        let (rule_id, rule_rel) = (raw_id.clone(), rel.clone());
         return match state.host_files.list(&spec, known, rel, key, raw_id).await {
             // Read-only: Upload here never writes to the host.
             Ok(listing) => {
+                let names: Vec<String> = listing.entries.iter().map(|entry| entry.name.clone()).collect();
+                let hidden_ext = deadline::local(move || Ok(hidden_ext_of(&rule_id, &rule_rel, &names))).await.unwrap_or_default();
                 let mut answer = json!(listing);
+                answer["hidden_ext"] = json!(hidden_ext);
                 answer["uploads"] = json!(false);
                 answer["remarks"] = json!(false);
                 (StatusCode::OK, Json(answer))
@@ -8239,10 +8372,17 @@ async fn project_files_list(
     let docs_root = rel.is_empty().then(|| root.clone());
     // A directory walk that opens every kept file to type it: off the
     // executor, under the local deadline (a stalled mount answers `timeout`).
-    let listed = deadline::local(move || files::list(&root, &rel, &key, &raw_id)).await;
+    let listed = deadline::local(move || {
+        let listing = files::list(&root, &rel, &key, &raw_id)?;
+        let names: Vec<String> = listing.entries.iter().map(|entry| entry.name.clone()).collect();
+        let hidden_ext = hidden_ext_of(&raw_id, &rel, &names);
+        Ok((listing, hidden_ext))
+    })
+    .await;
     match listed {
-        Ok(listing) => {
+        Ok((listing, hidden_ext)) => {
             let mut answer = json!(listing);
+            answer["hidden_ext"] = json!(hidden_ext);
             if let Some(root) = docs_root {
                 if let Ok(docs) = deadline::local(move || Ok(project_docs::status(&root))).await {
                     answer["docs"] = json!(docs);
@@ -9050,6 +9190,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/tabs/{tab_id}/status", get(agent_status))
         .route("/api/v1/tabs/{tab_id}/transcript", get(agent_transcript))
+        .route("/api/v1/tabs/{tab_id}/next-prompt", get(tab_next_prompt))
         .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
         .route("/api/v1/tabs/{tab_id}/changes", get(tab_changes))
         .route("/api/v1/tabs/{tab_id}/named-files", get(tab_named_files))
@@ -9061,7 +9202,7 @@ fn router(state: HostState) -> Router {
             "/api/v1/tabs/{tab_id}/inbox",
             get(inbox_described).merge(post(inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
         )
-        .route("/api/v1/tabs/{tab_id}/inbox/{name}", get(inbox_file))
+        .route("/api/v1/tabs/{tab_id}/inbox/{name}", get(inbox_file).delete(inbox_delete))
         .route(
             "/api/v1/projects/{project_id}/inbox",
             post(project_inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)),

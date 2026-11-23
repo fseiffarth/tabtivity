@@ -21,8 +21,8 @@ A remote project created with *Keep a local copy* off has **no local tree at
 all**: the file panel and viewers read over SFTP, every tab, run and build runs
 on the host, git runs on the host, nothing is synced. Tabtivity keeps only
 cockpit state (the registry entry, `project.json`, `sessions/<id>/`, time,
-notes). Plan and step-by-step record: `docs/remote_only_projects_plan.md`,
-`docs/remote_only_projects_handoff.md`.
+notes). Plan and step-by-step record: `docs/done/remote_only_projects_plan.md`,
+`docs/done/remote_only_projects_handoff.md`.
 
 - **One posture, VMs included.** A VM project was already mirrorless, but by
   five unrelated signals. The posture now has a name and a VM is *remote-only +
@@ -85,8 +85,9 @@ notes). Plan and step-by-step record: `docs/remote_only_projects_plan.md`,
   without a tree imports remote-only (no mirror folder); one with a tree
   imports as a plain Remote whose mirror is that tree.
 - **Conversions.** Remote ⇄ Remote-only is the pill's job after creation
-  (Local → Remote-only: Extend to remote with the copy off, then the same
-  conversion once lockstep has seeded the host — no second engine; git-only,
+  (*Stop keeping a local copy…* / *Keep a local copy…*; Local → Remote-only is
+  *Make remote only…*: `ExtendToRemoteDialog` with the copy off, then the same
+  Stop dialog once lockstep has seeded the host — no second engine; git-only,
   since nothing else carries a non-git tree up).
   The mirror folder is never deleted by it (D8), and both directions refuse a
   VM in v1: the VM's mirror must be manual-pull-only, and pairing through

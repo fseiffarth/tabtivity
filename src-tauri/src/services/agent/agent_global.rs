@@ -1041,7 +1041,7 @@ pub fn set_codex_auto_review(on: bool) -> io::Result<()> {
 /// it stops after a cache miss and skips subagents. Each keep-alive is a real
 /// request (a cache read of the whole context). Off by default in OpenCode;
 /// the Manage CLIs switch writes it into the layer, so it is the user's own
-/// OpenCode config in every home (`docs/cli_caching_plan.md` phase 2).
+/// OpenCode config in every home (`docs/done/cli_caching_plan.md` phase 2).
 const OPENCODE_CONFIG: &str = ".config/opencode/opencode.json";
 const OPENCODE_WARMING: &str = "warming";
 

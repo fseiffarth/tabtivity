@@ -19,6 +19,10 @@ import { pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop
 import { onParsedSettled } from "../../lib/terminal/parsedSettled";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { readReaderLive } from "../../lib/agents/readerLive";
+import { useLocalNextPrompt, useWorkEndKey } from "../../lib/agents/nextPrompt";
+import { projectIdOfScope } from "../../lib/terminal/ptyId";
+import { useProjectsStore } from "../../stores/projects";
+import { hostTabId } from "../../stores/tabs/tabLocation";
 import { isNewConversationCommand } from "../../lib/agents/typedClear";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
@@ -70,7 +74,8 @@ const drafts = new Map<string, string>();
  * with `/` opens its `/` menu under the box (`ReaderSlashMenu`: ↑/↓, Tab or
  * Enter on a picked row fills it, Esc closes it), and the empty box shows
  * Claude Code's own suggestion for the next prompt, read off the pane's
- * screen, as its placeholder — Tab or → takes it in.
+ * screen, as its placeholder — Tab or → takes it in; where the CLI draws
+ * none, the local model's (`lib/agents/nextPrompt`).
  *
  * Under the text, the phone composer's chips on Alt+keys (the letters type
  * text here): Alt+M lists the session's own `/model` picker, Alt+E the
@@ -217,10 +222,29 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     () => (slashClosed || picking || effortOpen || commitOpen ? [] : slashSuggestions(value, cli, usedSlash)),
     [slashClosed, picking, effortOpen, commitOpen, value, cli, usedSlash],
   );
-  /** Claude's suggestion while the box is empty, as its own CLI shows it:
-   * the placeholder, taken into the box by Tab or →, so the user still
-   * sends, edits or ignores it. */
-  const shownSuggestion = suggestion && !value && !busy && !working && !picking && !effortOpen && !commitOpen ? suggestion : "";
+  /** The local model's suggestion where the CLI draws none of its own
+   * (`lib/agents/nextPrompt`), asked once each time the agent is idle while
+   * the box is open. The box reads no transcript, so it warms nothing. */
+  const remoteHost = useProjectsStore((s) =>
+    hostTabId(target.tab, s.projects.find((p) => p.id === projectIdOfScope(target.scope))));
+  const idleTurn = useWorkEndKey(working);
+  const localSuggestion = useLocalNextPrompt({
+    scope: target.scope,
+    tab: target.tab,
+    remoteHost,
+    visible: true,
+    working,
+    turnKey: idleTurn,
+    warm: false,
+    screenSuggestion: suggestion,
+    composerEmpty: !value,
+  });
+  const offered = suggestion || localSuggestion;
+  /** Claude's suggestion (or the local model's) while the box is empty, as
+   * Claude's own CLI shows it: the placeholder, taken into the box by Tab or
+   * →, so the user still sends, edits or ignores it. */
+  const shownSuggestion = offered && !value && !busy && !working && !picking && !effortOpen && !commitOpen ? offered : "";
+  const suggestionLocal = !!shownSuggestion && !suggestion;
 
   /** OpenCode's picker is answered by typing a row's query into its search
    * field, and its walk (`OpenCodePickerWalk`) moves the dialog's highlight
@@ -565,13 +589,14 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         <UntestedTag id="steering.promptPaste" />
         <UntestedTag id="steering.promptAltGr" />
         {(slashMenu.length > 0 || shownSuggestion) && <UntestedTag id="steering.promptSuggestions" />}
+        {suggestionLocal && <UntestedTag id="agents.localNextPrompt" />}
       </h2>
       <textarea
         ref={input}
         className="file-paste-name steering-prompt-input"
         autoFocus
         rows={4}
-        aria-label={shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}` : t("steering.prompt.placeholder")}
+        aria-label={shownSuggestion ? `${t(suggestionLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion")}: ${shownSuggestion}` : t("steering.prompt.placeholder")}
         placeholder={shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion }) : t("steering.prompt.placeholder")}
         aria-invalid={!!error}
         aria-describedby={error ? errorId : undefined}

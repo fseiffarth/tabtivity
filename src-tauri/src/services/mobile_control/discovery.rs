@@ -230,7 +230,7 @@ pub enum ScopeKind {
     /// The root console (`docs/context/root_console.md`, "On the phone"): the
     /// one scope that is in neither list, behind its own switch and gate.
     Root,
-    /// The chat assistant (`docs/assistant_plan.md`, decision 12): like root it
+    /// The chat assistant (`docs/done/assistant_plan.md`, decision 12): like root it
     /// is in neither list and behind a switch of its own ([`assistant_open`]),
     /// but it holds no project, no files and no repository: every
     /// `== ScopeKind::Project` gate leaves it out, and its tabs are chats the
@@ -247,7 +247,7 @@ pub struct PublicProject {
     /// Where the project's tabs run: a type word the phone words one line
     /// from (`local`, `remote`, `container`, `vm`), never a host name or path.
     pub host: ProjectHost,
-    /// A remote project with no local copy (`docs/remote_only_projects_plan.md`):
+    /// A remote project with no local copy (`docs/done/remote_only_projects_plan.md`):
     /// its tabs run and its files live on its host alone, so the phone offers
     /// no "this computer" and words the project as such. A fact about the
     /// type, like `host`; absent for every other project.
@@ -445,7 +445,7 @@ pub struct PublicTab {
     pub location_movable: bool,
     /// The tab runs on its project's remote host, and the phone reaches it
     /// through the desktop's ssh master for that host
-    /// (`docs/mobile_remote_host_tabs_plan.md`): the phone wears a chip naming
+    /// (`docs/done/mobile_remote_host_tabs_plan.md`): the phone wears a chip naming
     /// it ([`Self::host_label`]) and hides what would act on this machine (the
     /// inbox, desktop images, Mark up's Submit, sign-in).
     #[serde(skip_serializing_if = "std::ops::Not::not")]

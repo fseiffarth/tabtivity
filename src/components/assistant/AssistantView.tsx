@@ -16,6 +16,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
+import { RefreshIcon } from "../common/icons/Icon";
 import { AttachedAgentPane } from "../layout/AttachedAgentPane";
 import { CliBlockCard, SearchSetupCard } from "./AssistantCards";
 import { cliBlock, defaultCliOf, defaultModelOf, orderedClis, useAssistantOptions, type AssistantOptionsHandle } from "./useAssistantOptions";
@@ -33,8 +34,8 @@ interface Launch {
  * the experimental switch on), so every effect below — the options poll
  * included — is visible-only.
  *
- * **One chat.** On top, the CLI it runs and its model as dropdowns and
- * Relaunch; below, the chat — an attach-only view of its tab
+ * **One chat.** On top, the panel's toolbar row (`.sp-toolbar`): the CLI it
+ * runs and its model as dropdowns, Relaunch at its end; below, the chat — an attach-only view of its tab
  * (`AttachedAgentPane` with `readerAlways`: the Reader is always on here, and
  * the agent's own terminal one toggle away). The PTY belongs to the tab's pane
  * in `CenterPanel`; closing the panel or switching views ends nothing.
@@ -209,7 +210,7 @@ export function AssistantView() {
 
   return (
     <div className="assistant-view" aria-label={t("assistant.title")}>
-      <div className="assistant-head">
+      <div className="sp-toolbar assistant-head">
         <Dropdown
           className="assistant-head-pick"
           value={current?.cli ?? ""}
@@ -236,16 +237,18 @@ export function AssistantView() {
           />
         )}
         {currentCli && (currentCli.local || modelChoices.length > 0) && <UntestedTag id="assistant.modelSwitch" />}
-        <button
-          type="button"
-          className="settings-btn sm assistant-relaunch"
-          title={t("assistant.relaunchHint")}
-          disabled={!chat || busy || switching || !!want}
-          onClick={relaunch}
-        >
-          {t("assistant.relaunch")}
-        </button>
-        <UntestedTag id="assistant.view" />
+        <div className="sp-toolbar-end">
+          <UntestedTag id="assistant.view" />
+          <button
+            type="button"
+            className="settings-btn sm assistant-relaunch"
+            title={t("assistant.relaunchHint")}
+            disabled={!chat || busy || switching || !!want}
+            onClick={relaunch}
+          >
+            <RefreshIcon /> {t("assistant.relaunch")}
+          </button>
+        </div>
       </div>
       <section className="assistant-chat-main">{body}</section>
     </div>

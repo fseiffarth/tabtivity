@@ -1,5 +1,5 @@
 /**
- * F7 (`docs/cockpit_followup_handoff.md`): Tonight's "Show" on an item. Wide, it
+ * F7 (`docs/done/cockpit_followup_handoff.md`): Tonight's "Show" on an item. Wide, it
  * switches to Now with the agent selected (the detail sits beside the roster);
  * in a narrow window Now shows one column, so it must land on that agent's
  * DETAIL, with the roster one back press away.

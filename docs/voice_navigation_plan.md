@@ -1,8 +1,7 @@
 # Voice navigation: driving Tabtivity by spoken commands
 
-Status: future plan (2026-10-22). Nothing implemented. It starts only after
-the desktop voice plan's phase 1 (`docs/desktop_voice_plan.md`, steps 0–4)
-has landed and the user has tested it live. This is that plan's step 9.
+> **Status (2026-11-22):** PARTIAL (desktop half). The slim slice is built: "Tabby navigate" inside a Chat's open mic, the Tabby gate and the landing (`docs/desktop_tabby_navigate_plan.md`; never live-tested). Still open: the push-to-talk key, `services::voice::Owner::Window` (only `Tab` exists), a spoken `SteeringAction` route, and the full command set. The matcher it relies on is built once for both hosts (`src/lib/voice/voiceCommands.ts`, 84fa79233), and the phone got a slim slice instead, "Tabby navigate" in the Focus mic (`docs/done/voice_nav_mode_plan.md`). Not live-tested.
+
 
 ## Why
 

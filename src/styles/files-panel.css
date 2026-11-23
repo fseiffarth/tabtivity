@@ -800,6 +800,17 @@
   margin-left: 2px;
 }
 
+/* The project settings button ends the header's right-hand group: it takes
+   the row's right-push only when it is the group's first button. */
+.side-panel-mobile-btn ~ .side-panel-settings-btn {
+  margin-left: 2px;
+}
+
+/* In the docked viewer, which has no header row, it ends the view strip. */
+.side-panel-views > .side-panel-settings-btn {
+  margin-left: auto;
+}
+
 .side-panel-mobile-btn.side-panel-solo-btn.on {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
@@ -893,66 +904,40 @@
   flex: 0 0 auto;
 }
 
-/* The two toolbar rows: views (tabs above) and actions. The action row is the
-   quieter one — smaller, icon-only buttons — and vanishes when a scope has no
-   action to offer. */
-.side-panel-actions {
-  padding-top: 2px;
-  padding-bottom: 2px;
+/* The view strip, the panel's one row of view tabs (a view's own actions live
+   in that view's toolbar row, never here). */
+.side-panel-views {
+  min-height: 36px;
   gap: 2px;
 }
-.side-panel-actions:empty {
-  display: none;
+
+.side-panel-views .toolbar-btn--tab {
+  height: 26px;
+  padding: 0 var(--space-2);
+  gap: 6px;
 }
 
-/* Narrow panel (round 2, 2026-11-04): the view tabs keep only their glyph (the
-   name is the tooltip) and the action row joins them, one row instead of two.
+.side-panel-views .toolbar-btn--tab svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Narrow panel: the view tabs keep only their glyph (the name is the tooltip),
+   except the active one, which keeps its label so the strip says where you are.
    A container query, so the panel, the Files (Project) tab and the docked
    column each switch at their own width. */
 .side-panel-toolbars {
   container-type: inline-size;
 }
 @container (max-width: 560px) {
-  .side-panel-toolbars-row {
-    display: flex;
-    align-items: center;
-    background-color: var(--bg-side-panel-header);
-    border-bottom: 1px solid var(--border-subtle);
-  }
-  .side-panel-toolbars-row > .side-panel-toolbar {
-    border-bottom: none;
-    background-color: transparent;
-  }
-  .side-panel-toolbars-row > .side-panel-views {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-  .side-panel-toolbars-row > .side-panel-actions {
-    flex: 0 1 auto;
-    padding-left: 0;
-    justify-content: flex-end;
-  }
-  .side-panel-views .toolbar-btn-label {
+  .side-panel-views .toolbar-btn--tab:not(.active) .toolbar-btn-label {
     display: none;
   }
-  .side-panel-views .toolbar-btn--tab {
-    height: 22px;
-    min-width: 24px;
+  .side-panel-views .toolbar-btn--tab:not(.active) {
+    min-width: 26px;
+    padding: 0 var(--space-1);
     justify-content: center;
   }
-}
-.side-panel-actions .toolbar-btn--sm {
-  height: 18px;
-  min-width: 18px;
-  padding: 0 var(--space-1);
-  font-size: var(--text-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.side-panel-actions .toolbar-btn--sm svg {
-  width: 11px;
-  height: 11px;
 }
 
 /* The Git button carries the colour of its next available action: red for Add,
@@ -1004,7 +989,7 @@
 .hidden-sw-list {
   display: flex;
   flex-direction: column;
-  padding: 0 6px var(--space-1);
+  padding: 0 var(--space-3) var(--space-1);
   gap: 2px;
   max-height: 30vh;
   overflow-y: auto;
@@ -1180,21 +1165,15 @@
   animation: side-panel-drop-flash 0.5s ease-out;
 }
 
-/* ── Git action buttons ──────────────────────────────────────────────── */
-/* The Add/Commit/Push footer: pinned under the scrolling history rather than
-   floating above it, so the actions stay put however far down the log the
-   view is scrolled. Hence border-TOP and `flex: 0 0 auto` — it is a sibling
-   of `.side-panel-scroll`, not a row inside it. `position: relative` is what
-   the change-tree popover anchors to. */
+/* ── Git footer ───────────────────────────────────────────────────────── */
+/* The Add/Commit/Push footer is the kit's `.sp-foot`: pinned under the
+   scrolling history rather than floating above it, so the actions stay put
+   however far down the log the view is scrolled. It wraps, since the commit
+   box, an error, a receipt and an agent's push request card each take a line
+   of their own. */
 .git-action-bar {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
   flex-wrap: wrap;
-  gap: 3px;
-  padding: var(--space-1) 6px;
-  background: var(--bg-panel);
-  border-top: 1px solid var(--border-color);
+  gap: var(--space-1);
 }
 
 /* An agent's push request card sits in this footer, and the footer never
@@ -1203,13 +1182,15 @@
    scrollbar both gone. Capped like the commit box, the cards scroll on their
    own. Scoped here: the Agents view's copy lives in an ordinary scroll. */
 .git-action-bar .git-push-proposals {
+  flex-basis: 100%;
   max-height: 33vh;
   overflow-y: auto;
 }
 
 .git-branch-status {
   flex-basis: 100%;
-  font-size: 0.85em;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 .git-action-error {
   width: 100%;
@@ -1229,222 +1210,112 @@
   box-sizing: border-box;
   min-height: 96px;
   max-height: 33vh;
-  font-family: inherit;
-  font-size: var(--text-sm);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-md);
   padding: 3px 5px;
   resize: vertical;
   color: var(--text-primary);
-  background: var(--bg-panel);
+  background: var(--bg-main);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
 }
 
+/* The footer's actions are `.settings-btn.sm`, the next step `.primary`. The
+   state lamp in Add / Commit / Push carries the git state colour; the label
+   stays ink. */
 .git-action-btn {
-  /* A neutral button; the action's colour (red=add, yellow=commit,
-     green=push) lives on the status dot it carries and on the glyph. Until
-     2026-11-04 the whole button was tinted and framed in it, so the bar was
-     three coloured outlines in caps. --git-btn-accent stays the per-action
-     hook. Geometry matches `.toolbar-btn` in the view switcher two rows up
-     (20px tall) so the panel has one button size. */
-  --git-btn-accent: var(--accent);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  border-radius: var(--radius-sm);
-  cursor: var(--cur-pointer, pointer);
-  padding: 1px 6px;
-  height: 20px;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-family: inherit;
-  transition: background var(--transition), color var(--transition), border-color var(--transition);
-  white-space: nowrap;
-  flex: 1;
-  justify-content: center;
+  gap: var(--space-1);
 }
 
-.git-action-btn:hover {
-  background: var(--bg-hover);
-}
-.git-action-btn .git-btn-glyph {
-  color: var(--git-btn-accent);
-}
-
-.git-action-btn:disabled {
-  opacity: 0.4;
-  cursor: var(--cur-not-allowed, not-allowed);
-}
-
-/* Action-specific accents, matched to the inline status dots. Set on the
-   group wrapper too so the caret toggle inherits the same colour. */
-.git-action-btn--add,
-.git-action--add { --git-btn-accent: var(--danger); }
-.git-action-btn--commit,
-.git-action--commit { --git-btn-accent: var(--warning); }
-.git-action-btn--push,
-.git-action--push { --git-btn-accent: var(--success); }
-.git-action-btn--pull { --git-btn-accent: var(--info); }
-.git-action-btn--release { --git-btn-accent: var(--accent); }
-
-/* An action + its disclosure caret, joined into one pill so the two read as a
-   single control. The action button loses its right rounding, the caret its
-   left, and they share a divider. */
-.git-action {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.git-action .git-action-btn {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.git-action-toggle {
-  --git-btn-accent: var(--accent);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-color);
-  border-left: none;
-  color: var(--text-secondary);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  cursor: var(--cur-pointer, pointer);
-  padding: 0 5px;
-  height: 20px;
-  font-size: var(--text-sm);
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  font-family: inherit;
-  transition: background var(--transition), border-color var(--transition);
-}
-
-.git-action-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.git-action-toggle:disabled {
-  opacity: 0.4;
-  cursor: var(--cur-not-allowed, not-allowed);
-}
-
-/* The label is always shown now (not hover-only) so each action reads clearly
-   without pointing at it; the leading glyph stays as a quick visual marker.
-   Sentence case, like every other button (caps until 2026-11-04). */
 .git-btn-label {
-  display: inline;
   font-size: var(--text-sm);
-  font-weight: 600;
-  line-height: 1;
-}
-
-/* The leading ⊕/✔/⬆ marker. Kept a shade larger than the button's 10px text
-   so shrinking the buttons to the toolbar's size didn't shrink the one part
-   of them that is read as an icon. */
-.git-btn-glyph {
-  font-size: var(--text-md);
   line-height: 1;
 }
 
 /* The colored state dot inside a git action button (add/commit/push). The
    color comes from lib/theme/gitColors' GIT_STATE_COLOR via inline style; only the
-   geometry lives here so the four buttons cannot drift. */
+   geometry lives here so the buttons cannot drift. */
 .git-step-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  margin-right: 3px;
   flex-shrink: 0;
 }
 
-/* Click-opened navigable change tree, grown UPWARD out of the Add/Commit/Push
-   actions — they sit at the foot of the panel now, so a downward popover would
-   open off the bottom edge. Anchored to the right and grown leftward: the panel
-   hugs the app's right frame, so anchoring left would push a wide tree off
-   screen. Sized to the longest path (min keeps it readable, max caps depth). */
+/* ── Change groups ────────────────────────────────────────────────────── */
+/* Not staged, Staged, Outgoing: one `.sp-head` each over its rows, inline
+   above the branches and the history (`GitChangeGroup`). The rows are
+   `.sp-row`: chip, stage toggle (a folder's chevron), icon + name, stats. */
 .git-change-tree {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  top: auto;
-  right: 0;
-  left: auto;
-  min-width: 280px;
-  max-width: min(480px, calc(100vw - 16px));
-  width: max-content;
-  z-index: 200;
-  max-height: 320px;
-  /* Shared popover surface (the `.context-menu` group), minus its rail and
-     accent wash (apps.css); it never scrolls itself — `.git-change-rows` is
-     its `.menu-scroll-region`. */
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: var(--text-sm);
-  /* Inset on every side so the rows' scrollbar clears the rounded corners
-     instead of riding the frame's top-right edge. */
-  padding: var(--space-2) var(--space-1);
-}
-/* Once it lists rows, a fixed box: folding a folder changed the max-content
-   width and the height, and anchored bottom-right that moved every row —
-   the folder just clicked included — out from under the pointer. */
-.git-change-tree:has(> .git-change-rows) {
-  width: min(480px, calc(100vw - 16px));
-  height: 320px;
 }
 
-.git-change-empty {
-  padding: var(--space-2) var(--space-3);
-  color: var(--text-muted);
-}
-
-.git-change-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 10px 2px 0;
-  white-space: nowrap;
-  color: var(--text-primary);
+.git-change-error {
+  color: var(--danger);
+  overflow-wrap: anywhere;
 }
 
 .git-change-row.is-dir {
   cursor: var(--cur-pointer, pointer);
-  color: var(--text-secondary);
 }
 
-.git-change-row.is-dir:hover {
-  background: var(--pill-hover-bg);
-}
-
-.git-change-caret {
-  display: inline-block;
-  width: 10px;
-  flex-shrink: 0;
-  text-align: center;
+.git-change-caret,
+.git-change-icon {
+  display: inline-flex;
+  align-items: center;
   color: var(--text-muted);
 }
 
-.git-change-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* The stage toggle: an empty box, ticked once the file is staged. */
+.git-stage-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 3px;
+  background: var(--bg-main);
+  color: var(--bg-main);
+  font-size: var(--text-xs);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.git-stage-toggle.is-on {
+  border-color: var(--info);
+  background: var(--info);
+}
+
+.git-stage-toggle:hover:not(:disabled) {
+  border-color: var(--text-primary);
+}
+
+.git-stage-toggle:disabled {
+  opacity: 0.4;
+  cursor: var(--cur-default, default);
+}
+
+.git-change-diff {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-1);
+  height: 20px;
 }
 
 .git-change-stat {
-  flex-shrink: 0;
   display: inline-flex;
   gap: 5px;
-  margin-left: 10px;
+  font-family: var(--font-mono, monospace);
   font-variant-numeric: tabular-nums;
 }
 
 .git-change-add { color: var(--success); }
-.git-change-preview { padding: var(--space-2); }
-.git-change-preview pre { overflow: auto; }
-.git-action-receipt { flex-basis: 100%; overflow-wrap: anywhere; color: var(--text-secondary); }
-.git-change-del { color: var(--danger); }
+.git-change-preview { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
+.git-change-preview pre { overflow: auto; max-height: 240px; }
+.git-action-receipt { flex-basis: 100%; overflow-wrap: anywhere; color: var(--text-secondary); font-size: var(--text-sm); }
+.git-change-del { color: var(--text-muted); }
 .git-change-zero,
 .git-change-stat--bin { color: var(--text-muted); }
 
@@ -1455,44 +1326,39 @@
   font-size: var(--text-sm);
 }
 
-.git-history-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: var(--space-1) 6px;
-  border-bottom: 1px solid var(--border-color);
-}
-
+/* The view's one `.sp-toolbar`: branch, then its upstream line and the
+   worktree it is checked out in, then graph / fetch / refresh. */
 .git-history-branch {
-  flex: 1;
-  min-width: 0;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The worktree (and, remote, which copy) after the branch, in meta ink. */
-.git-history-worktree {
-  font-weight: 400;
-  color: var(--text-muted);
+.git-history-branch .app-icon {
+  color: var(--text-secondary);
 }
-.git-history-worktree::before {
+.git-history-meta {
+  flex: 1;
+  margin-left: var(--space-1);
+}
+/* The parts after the upstream line, in meta ink, joined by a middle dot. */
+.git-history-meta > span + span::before {
   content: " · ";
 }
 
 .git-history-mode {
-  font-size: var(--text-sm);
-  padding: 1px 6px;
   white-space: nowrap;
 }
 
+/* Indented to the rows' name column (inset + chip + toggle + gaps). */
 .git-branch-list {
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
-  padding: var(--space-1) 6px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 2px var(--space-3) 2px calc(var(--space-3) + 48px);
 }
 
 /* Branch and worktree chips are one neutral chip: no frame at rest, a hover
@@ -1560,7 +1426,7 @@
 .git-pull-list {
   list-style: none;
   margin: 0;
-  padding: 0 6px var(--space-1);
+  padding: 0 var(--space-3) var(--space-1);
   max-height: 120px;
   overflow-y: auto;
   font-size: var(--text-sm);
@@ -1623,23 +1489,11 @@
 .git-worktree-section {
   display: flex;
   flex-direction: column;
-  border-bottom: 1px solid var(--border-color);
 }
 
-.git-worktree-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: var(--space-1) 6px;
-}
-
-.git-worktree-title {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
+/* The section's head is a `.sp-head`; its controls keep their own weight. */
+.git-worktree-header .toolbar-btn {
+  font-weight: 400;
 }
 
 .git-worktree-spacer {
@@ -1743,7 +1597,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  padding: 0 6px 5px;
+  padding: 0 var(--space-3) 5px;
 }
 
 .git-worktree-input {
@@ -1790,7 +1644,7 @@
 
 .git-worktree-note {
   flex-basis: 100%;
-  padding: 0 6px var(--space-1);
+  padding: 0 var(--space-3) var(--space-1);
   font-size: var(--text-sm);
   line-height: 1.35;
   color: var(--text-muted);
@@ -1800,11 +1654,11 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: var(--space-1) 6px;
+  padding: 2px var(--space-3) 6px;
 }
 
 .git-commit-search-status {
-  padding: 0 6px var(--space-1);
+  padding: 0 var(--space-3) var(--space-1);
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
@@ -1814,89 +1668,63 @@
   flex-direction: column;
 }
 
+/* A commit is a `.sp-row` button: columns 1 and 2 hold the graph (empty in
+   list mode), then hash + subject + refs, then the date. */
 .git-commit-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 3px 6px;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--border-color);
-  color: var(--text-primary);
-  cursor: var(--cur-pointer, pointer);
-  font-family: inherit;
-  font-size: var(--text-sm);
-  text-align: left;
   width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
 }
 
-.git-commit-row:hover {
-  background: var(--pill-active-bg);
-}
-
-.git-commit-row.head {
-  border-left: 2px solid var(--accent);
+.git-commit-row.head .git-commit-subject {
+  font-weight: 600;
 }
 
 /* The lazy tail of the commit list: one more row, which is also the sentinel
    that pages the next chunk in as it scrolls into view. */
 .git-commit-more {
-  justify-content: center;
-  color: var(--text-muted);
-  border-bottom: none;
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
-.git-commit-list.graph .git-commit-more {
-  height: auto;
-  padding: 3px 6px;
-}
-
-/* Graph mode: rows are a fixed height with no vertical padding so the lane
-   lines drawn per-row meet seamlessly across row boundaries. */
+/* Graph mode: rows are a fixed height so the lane lines drawn per row meet
+   seamlessly across row boundaries (GRAPH_ROW_H in GitHistory). */
 .git-commit-list.graph .git-commit-row {
-  align-items: center;
-  padding-top: 0;
-  padding-bottom: 0;
-  padding-left: 0;
-  height: 22px;
+  height: 26px;
 }
 
-.git-commit-list.graph .git-commit-row.head {
-  border-left: none;
+.git-commit-graph {
+  grid-column: 1 / span 2;
+  display: flex;
+  align-self: stretch;
 }
 
 .git-graph-cell {
   display: block;
-  align-self: stretch;
 }
 
 .git-commit-hash {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   flex-shrink: 0;
 }
 
-.git-commit-subject {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* A ref is a neutral outlined chip; a branch's lane colour, when it has one,
+   is its text (set inline). */
 .git-commit-ref {
   flex-shrink: 0;
-  font-size: var(--text-sm);
-  padding: 0 5px;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: var(--bg-main);
-  white-space: nowrap;
-}
-
-.git-commit-date {
-  flex-shrink: 0;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
@@ -1972,6 +1800,176 @@
 .commit-window-actions button:disabled {
   opacity: 0.4;
   cursor: var(--cur-not-allowed, not-allowed);
+}
+
+/* ── Diverged, Sessions, Jobs, Apps (`.sp-list-view`) ─────────────────────
+   Lists built from the side panel kit: the kit's rows and heads carry the
+   inset, so the view has none of its own. The row and action classes below
+   (`orange-file-*`, `tmux-*`) are shared with the file tree's sync slot and
+   the Archive view, so they are only re-set here, under these views. */
+.sp-list-view {
+  padding: 0 0 var(--space-2);
+}
+
+.sp-list-view .sp-row.orange-file-row {
+  display: grid;
+  padding: 0 var(--space-3);
+  border-bottom: 0;
+}
+
+/* A row's name is its open / attach / watch button, filling column 3. */
+.sp-list-view .sp-row-main.orange-file-name {
+  height: 100%;
+  min-height: inherit;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.sp-list-view .sp-row-main.orange-file-name:hover:not(:disabled) {
+  color: inherit;
+}
+
+.sp-list-view .sp-row-meta.orange-file-actions {
+  gap: 2px;
+}
+
+/* Row and head actions rest borderless; the side's tint (take remote, keep
+   local, delete) stays on the icon and comes back as a fill on hover. */
+.sp-list-view .orange-file-act--icon:not(:hover) {
+  border-color: transparent;
+}
+
+.sp-list-view .sp-head .orange-file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* "Take the newer copy automatically": the view's one toolbar row. */
+.sp-list-view .sp-toolbar.orange-take-newer {
+  flex-direction: row;
+  align-items: center;
+  margin: 0;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 0;
+}
+
+/* The diverged head's "exclude changed on both" tick, under the head. */
+.sp-list-view .orange-bulk-exclude {
+  padding: 0 var(--space-3) var(--space-1);
+}
+
+/* Which side moved, as the word on the row's second line, in its side's ink
+   (the pill it was until the redesign is the chip in column 1 now). */
+.sp-list-view .sp-row-sub .orange-mtime-badge {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+/* Sessions: one machine per section, its head carrying the bulk kills, then
+   an Agents / Shells / Other sub-head per kind. The card frame the machine
+   group wore is gone: heads and air separate the groups now. */
+.sessions-view .tmux-machine-group {
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.sessions-view .tmux-machine-head {
+  color: var(--text-primary);
+}
+
+.sessions-view .tmux-machine-group-name {
+  flex: 0 1 auto;
+}
+
+.sessions-view .tmux-machine-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.sessions-view .tmux-kind-head {
+  margin-top: 2px;
+  min-height: 24px;
+  padding-left: calc(var(--space-3) + 22px);
+  font-weight: 500;
+}
+
+.sessions-view .tmux-machine-group .sp-row.orange-file-row,
+.sessions-view .tmux-kind-group:not(:last-child) .sp-row.orange-file-row:last-child {
+  border-bottom: 0;
+}
+
+.sessions-view .tmux-attached {
+  color: var(--text-muted);
+}
+
+.sessions-view .sp-toolbar .tmux-scope-toggle {
+  padding: 0;
+}
+
+.sessions-view .sp-row-sub .tmux-session-meta {
+  margin-left: 0;
+}
+.sessions-view .sp-row-sub .tmux-session-meta::before {
+  content: " · ";
+}
+
+.sessions-view .tmux-kill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-1);
+}
+
+/* Jobs: the queue, then the workspaces. A job's state is a squeue code on
+   the chip (R, PD), its elapsed time the row's meta. */
+.jobs-view .jobs-state-chip {
+  width: auto;
+  min-width: 16px;
+  padding: 0 2px;
+}
+
+.jobs-view .jobs-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--space-1);
+}
+
+.jobs-view .jobs-ws-here {
+  color: var(--text-muted);
+}
+
+.jobs-view .sp-toolbar .toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Apps: two sections on a desktop that parks (hidden on a project switch,
+   stays on screen), else one list. A row is the app's icon and name, the
+   file it opened in meta ink, and Close app or Remove from list. */
+.apps-view .apps-row-icon {
+  display: inline-flex;
+  color: var(--text-secondary);
+}
+
+.apps-view .apps-row-file {
+  color: var(--text-muted);
+}
+
+.apps-view .apps-row-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--space-1);
 }
 
 /* ── The browser desktop client (hosted plan P2) ─────────────────────────── */

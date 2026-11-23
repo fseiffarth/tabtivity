@@ -1,6 +1,6 @@
 # Desktop UI round 2 — Plan
 
-Status: steps 1–2 and two fold batches landed; step 3 dropped; the rest of the fold needs its own design pass (see Progress).
+> **Status (screened against code 2026-11-22):** PARTIAL. Steps 1 and 2 are in code (four palettes and `--float-fill` in `themes.css`, `.side-panel-toolbars` in `files-panel.css`); step 3 dropped; step 4's fold is partly done (`.seg` and `.btn-quiet` with `.is-danger`/`.is-notable` in `settings-chrome.css`; 124 `*-btn` rules remain in `src/styles`). Open: the shared toolbar-button design pass and the colour-literal sweep. The rules it produced are in `docs/context/desktop_ui_system.md`. Never run live.
 
 Design: the "Desktop UI round 2" canvas (palette, layout, hygiene, and
 light_lavender today vs proposed rebuilt from the user's screenshot of

@@ -1,6 +1,6 @@
 # Localhost viewers (JupyterLab & co.) — plan
 
-Status: plan only (2026-11-05). No code yet. Never run live.
+> **Status (screened against code 2026-11-22):** PARTIAL. Phase 1 is in code (`f0edce684`, fix `66eb029a3`): `src/lib/terminal/{serverUrls,linkRoute}.ts`, `src-tauri/src/services/port_forward.rs`, `commands/port_forward.rs`, `docs/context/port_forwards.md`. Phase 1b is settled as unsupported on Windows (`SUPPORTED = cfg!(not(windows))`). Phase 2's routing is in the same code (`hostId`, a node name with a port as `remoteHost`); no separate phase-2 work or tests were found. Phase 3 (containers) is not built: a container tab routes to `unsupported`. Phase 4 (in-app view) is not built. Never run live.
 
 A program in a project tab prints `http://localhost:8888/lab?token=…`
 (JupyterLab), `Local: http://localhost:5173/` (Vite), `TensorBoard … at

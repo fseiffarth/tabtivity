@@ -1,6 +1,6 @@
 /**
  * Tabs and panes of a host-pinned project (a VM or remote-only project,
- * `isHostPinned`; `docs/remote_only_projects_plan.md` F6/F7): the "+" menu
+ * `isHostPinned`; `docs/done/remote_only_projects_plan.md` F6/F7): the "+" menu
  * offers no row that starts on this machine, and while the host is down every
  * pane holds on the Connect placeholder — the Files tab included, which on a
  * plain remote project browses the mirror offline.

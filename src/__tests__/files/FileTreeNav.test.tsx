@@ -120,7 +120,7 @@ describe("file tree navigation", () => {
     expect(document.querySelector(".file-tree-breadcrumb")).toBeTruthy();
     expect(document.querySelector(".file-tree-up[title='Go up']")).toBeNull();
     expect(document.querySelector(".file-tree-crumb[title='Project root']")).toBeTruthy();
-    expect(document.querySelector(".file-tree-crumb.current")?.textContent).toBe("⌂");
+    expect(document.querySelector(".file-tree-crumb.current")?.getAttribute("title")).toBe("Project root");
 
     // Enter the subfolder.
     await user.click(await screen.findByText("sub"));
@@ -137,7 +137,7 @@ describe("file tree navigation", () => {
     await user.click(screen.getByTitle("Project root"));
     await screen.findByText(LONG_NAME);
     expect(document.querySelector(".file-tree-up[title='Go up']")).toBeNull();
-    expect(document.querySelector(".file-tree-crumb.current")?.textContent).toBe("⌂");
+    expect(document.querySelector(".file-tree-crumb.current")?.getAttribute("title")).toBe("Project root");
   });
 
   it("seeds relPath from the saved folder so a mount never flashes root", () => {

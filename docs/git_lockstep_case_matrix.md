@@ -1,5 +1,8 @@
 # Git Lockstep Case Matrix (#28p)
 
+> **Status (screened against code 2026-11-22):** REFERENCE (survey). A 2026-07-13 snapshot of `services::git_peer` + `sync_auto`, run live against an SSH host (`git_lockstep_live_qa.md`, driver `src-tauri/examples/lockstep_drv.rs`); the code has moved on since (e.g. `services/remote/sync_op.rs`, `retry_ff_clearing_identical`), so re-scan before trusting a row. The hardening plan it cites (`docs/git_lockstep_hardening_plan.md`) no longer exists in `docs/`. Not live-tested beyond the cited run.
+
+
 Snapshot of `services::git_peer` + `services::sync_auto` behaviour as of
 2026-07-13 (post D1–D8, `docs/git_lockstep_hardening_plan.md`). Source of truth
 is the code; re-scan before trusting this against a later commit.

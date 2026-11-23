@@ -1,8 +1,6 @@
 # Windows session host — plan
 
-Status: **P0–P3 built, not run live** (2026-11-14; P4 open). Todo: `todo/group-h-crossplatform.md`
-item 31g, child *31g-1*. Line numbers below are from 2026-11-13: re-grep before
-trusting them.
+> **Status (screened against code 2026-11-22):** PARTIAL. P0–P3 are in code: `src-tauri/src/services/session_mux/` (`tmux.rs`, `winhost.rs`), `services/session_host/` (`protocol.rs`, `server.rs`, `table.rs`, `client.rs`, `win/{conpty,job,pipe}.rs`, `launch.rs`), pipe-backed PTY instead of an attach client (see "P0 outcome"). P4 (shells, local Sessions view on Windows, flag default on) is open per `todo/group-h-crossplatform.md` 31g-1; the flag `windows_session_host` is still off by default. Line numbers below are stale; re-grep. Not run live on Windows.
 
 ## Problem
 

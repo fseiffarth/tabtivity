@@ -358,7 +358,12 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
   const [seen, setSeen] = useState<SeenDone>(() => readSeenDone());
   const openAgentTab = (projectId: string, tab: ActivityTab) => {
     if (tab.agent_status === "done") setSeen(markDoneSeen(tab.id, tab.done_at));
-    openTab(projectId, tab);
+    // A tab with no live session here — ended, started before the project's
+    // Mobile switch, or on a host the desktop is not connected to — opens its
+    // project: its card there restarts it, or says why it cannot. A terminal
+    // opened on it would only report the session gone.
+    if (!tab.available) open(projectId);
+    else openTab(projectId, tab);
   };
   /** One project row's opener — tile, name and caption, agent counts, open
    *  tabs — the same in every layout. `caption` replaces the scope line (a

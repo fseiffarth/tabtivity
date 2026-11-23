@@ -1,5 +1,5 @@
 //! The chat assistant's launches as a phone sees them
-//! (`docs/assistant_plan.md`, decision 12, A5/S5a).
+//! (`docs/done/assistant_plan.md`, decision 12, A5/S5a).
 //!
 //! The phone never names a CLI or a model: `launch-options` lists *launches*,
 //! each under an opaque id derived from the host key (`discovery::key_id`,

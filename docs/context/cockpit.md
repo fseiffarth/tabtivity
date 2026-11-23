@@ -8,11 +8,11 @@ views beside **Root**, the console proper (`docs/context/root_console.md`,
 "Views"): Now, Projects, Tonight (the cockpit's own), Mail, Calendar, To-do (the
 cross-project apps), Agents, Models, Machines (the machine's system pages). One
 frame, one title bar, one Escape rule, one ✓ Approvals pill. Plan and fixed
-decisions: `docs/desktop_cockpit_plan.md`; the merge: `docs/cockpit_root_merge_plan.md`
-(decisions), `docs/cockpit_root_merge_design.md` (layout), `docs/cockpit_root_merge_handoff.md`
-(build log); the apps and system pages: `docs/cockpit_apps_merge_plan.md` and
+decisions: `docs/desktop_cockpit_plan.md`; the merge: `docs/done/cockpit_root_merge_plan.md`
+(decisions), `docs/done/cockpit_root_merge_design.md` (layout), `docs/done/cockpit_root_merge_handoff.md`
+(build log); the apps and system pages: `docs/done/cockpit_apps_merge_plan.md` and
 its handoff. It was an experiment (`cockpit`) until the follow-up round
-(`docs/cockpit_root_merge_plan.md`, F2): the gate is gone, the surface is always
+(`docs/done/cockpit_root_merge_plan.md`, F2): the gate is gone, the surface is always
 on, and a profile's stale `cockpit` settings key is ignored (the backend keeps
 it in `Settings.extra`; nothing reads it).
 
@@ -60,7 +60,7 @@ Restore is an explicit action (that fold button's right-click, or a row's ⋯ me
 
 ## Layout (the declutter pass)
 
-`docs/cockpit_declutter_plan.md` made the views quieter without adding a read.
+`docs/done/cockpit_declutter_plan.md` made the views quieter without adding a read.
 No view has a heading row (the strip names it; the untested pill rides each view's
 first row, `CockpitUntested`). Now's columns are flat, one hairline apart; the
 Needs-you rail has no root-approvals group (they are the title-bar pill and the

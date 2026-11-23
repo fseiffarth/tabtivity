@@ -1,6 +1,6 @@
 //! The project's root docs as the file listing shows them (status per catalog
 //! entry, create one on demand) and the agent CLIs' memories for the project
-//! (listed and read, read-only). Plan: `docs/scaffold_files_plan.md` §4, §5.
+//! (listed and read, read-only). Plan: `docs/done/scaffold_files_plan.md` §4, §5.
 //!
 //! The renderer sends a project id and a *name* — a catalog entry, or a memory
 //! file's `(cli, home, name)` — never a path. `*_blocking` bodies on a worker:

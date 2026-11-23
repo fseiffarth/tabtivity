@@ -56,7 +56,7 @@ import {
 } from "./remote/vpn/vpnStatus";
 import { canConnectVpnSilently, connectVpnSilently } from "../lib/remote/vpn/vpnConnect";
 import { useConnectDialogStore } from "./remote/connectDialog";
-// Static on purpose (§6 of docs/performance_plan.md): both stores sit in the
+// Static on purpose (§6 of docs/done/performance_plan.md): both stores sit in the
 // startup chunk anyway, so an `await import()` here split nothing and only drew
 // a Rollup warning. `boxes` imports this module back; the cycle is safe because
 // neither side touches the other at module scope, only inside actions.

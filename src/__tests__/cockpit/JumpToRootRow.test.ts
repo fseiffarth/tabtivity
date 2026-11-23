@@ -3,7 +3,7 @@
  * Root view of the very window opens on that tab, the workspace scope stays
  * what it was, and the window is not closed. Any other row still shows its tab
  * in its own pane and closes the window. Root is no place to switch to
- * (`docs/cockpit_root_merge_plan.md`, M4).
+ * (`docs/done/cockpit_root_merge_plan.md`, M4).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

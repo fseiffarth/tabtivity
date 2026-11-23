@@ -1,5 +1,5 @@
 /**
- * The desktop markup mode's tool dock (`docs/markup_notes_style_plan.md`): a
+ * The desktop markup mode's tool dock (`docs/done/markup_notes_style_plan.md`): a
  * small floating toolbar over the pages — the six tools (pen, highlighter,
  * eraser, lasso, text, Proof), the favourites (saved pens), undo/redo and
  * the ⋯ menu. Pressing the armed tool again opens its options (`PdfMarkupToolOptions`);

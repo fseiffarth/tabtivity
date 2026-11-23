@@ -18,7 +18,12 @@ import {
   startDesktopDictation,
   voiceDeviceLabel,
   voiceDeviceWhy,
+  voiceCandidates,
   voiceErrorKey,
+  detectLangs,
+  appLanguage,
+  lockedSpokenLang,
+  rememberSpokenLang,
   voiceLangTag,
   type DesktopDictationHandlers,
 } from "../../lib/voice/desktopVoice";
@@ -36,7 +41,8 @@ function recorder() {
     onStart: () => calls.push("start"),
     onSegment: (open, segment) => calls.push(`segment ${segment} ${open ? "open" : "end"}`),
     onPartial: (text) => calls.push(`partial ${text}`),
-    onFinal: (text, segment) => calls.push(`final ${segment} ${text}`),
+    onFinal: (text, segment, _filtered, lang) => calls.push(`final ${segment} ${text}${lang ? ` [${lang}]` : ""}`),
+    onLang: (lang) => calls.push(`lang ${lang}`),
     onLevel: () => {},
     onPaused: (paused) => calls.push(paused ? "paused" : "resumed"),
     onError: (key) => calls.push(`error ${key}`),
@@ -77,6 +83,31 @@ describe("the desktop dictation session", () => {
     expect(invoke).toHaveBeenCalledWith("voice_listen_start", {
       tabKey: "agent-1", model: "small", lang: "de", mode: "dictate", pauseMs: 1500, headset: false, gpu: true,
     });
+  });
+
+  it("sends the candidates and the fallback only when there are some", async () => {
+    invoke.mockResolvedValue(4);
+    const { handlers: h } = recorder();
+    await startDesktopDictation({ ...options, lang: "auto", langs: ["de", "en"], fallback: "en" }, h);
+    expect(invoke).toHaveBeenCalledWith("voice_listen_start", {
+      tabKey: "agent-1", model: "small", lang: "auto", mode: "dictate", pauseMs: 1500, headset: false, gpu: true, langs: ["de", "en"], fallback: "en",
+    });
+    await startDesktopDictation({ ...options, langs: [], fallback: "en" }, h);
+    expect(invoke).toHaveBeenLastCalledWith("voice_listen_start", {
+      tabKey: "agent-1", model: "small", lang: "de", mode: "dictate", pauseMs: 1500, headset: false, gpu: true,
+    });
+  });
+
+  it("hands over the language a final was decoded in, and the lock before it", async () => {
+    invoke.mockResolvedValue(4);
+    const { calls, handlers: h } = recorder();
+    await startDesktopDictation(options, h);
+    emit("voice:lang", { session: 3, lang: "fr" });
+    emit("voice:lang", { session: 4, lang: "de" });
+    emit("voice:final", { session: 4, segment: 1, text: "Öffne die Datei", outcome: "transcribed", lang: "de" });
+    emit("voice:final", { session: 4, segment: 2, text: "from an older backend" });
+    emit("voice:final", { session: 4, segment: 3, text: "", outcome: "filtered" });
+    expect(calls).toEqual(["lang de", "final 1 Öffne die Datei [de]", "final 2 from an older backend", "final 3 "]);
   });
 
   it("says where the model landed, from the state event that first carries it", async () => {
@@ -178,6 +209,33 @@ describe("voice settings and messages", () => {
     expect(voiceLangTag("auto", "fr")).toBe("fr");
     expect(voiceLangTag("en", "de")).toBe("en");
     expect(voiceLangTag("detect", "de")).toBe("auto");
+  });
+
+  it("picks the candidates: stored app languages, else the UI language and English", () => {
+    expect(detectLangs(undefined, "de")).toEqual(["de", "en"]);
+    expect(detectLangs([], "en")).toEqual(["en"]);
+    expect(detectLangs(["fr", "nl", "fr", "it"], "de")).toEqual(["fr", "it"]);
+    expect(detectLangs(["nl"], "es")).toEqual(["es", "en"]);
+    // A hand-edited settings file: not a list, or not strings in it.
+    expect(detectLangs(5 as unknown as string[], "de")).toEqual(["de", "en"]);
+    expect(detectLangs("de" as unknown as string[], "fr")).toEqual(["fr", "en"]);
+    expect(detectLangs([3, "it"] as unknown as string[], "de")).toEqual(["it"]);
+    expect(appLanguage("nl")).toBeUndefined();
+    expect(appLanguage("de")).toBe("de");
+  });
+
+  it("sends candidates only for the detect choice, with the UI language as fallback", () => {
+    expect(voiceCandidates("auto", ["de", "en"], "en")).toEqual({});
+    expect(voiceCandidates("fr", undefined, "en")).toEqual({});
+    expect(voiceCandidates("detect", undefined, "de")).toEqual({ langs: ["de", "en"], fallback: "de" });
+    expect(voiceCandidates("detect", ["it", "fr"], "de")).toEqual({ langs: ["it", "fr"], fallback: "it" });
+  });
+
+  it("remembers a tab's locked language in memory", () => {
+    expect(lockedSpokenLang("tab-x")).toBeUndefined();
+    rememberSpokenLang("tab-x", "it");
+    expect(lockedSpokenLang("tab-x")).toBe("it");
+    expect(lockedSpokenLang("tab-y")).toBeUndefined();
   });
 
   it("says every backend code, and something for an unknown one", () => {

@@ -1,8 +1,8 @@
 # Question detection from the CLI's own output — plan
 
-Status: implemented 2026-11-18 (Phases 0–4, Sonnet subagents; on develop;
-handoff `docs/question_detection_handoff.md`), never live. Probe run offline (stub model),
-never live.
+> **Status (screened against code 2026-11-22):** Phases 0-4 are in code: the screen gate in `src/lib/agents/readerLive.ts`, the waiting-question entry `waiting_question_entry` in `services/agent/agent_transcript.rs`, the phone's `mobile-web/src/terminal/askedQuestion.ts`, permission subjects. Open: "Later: other CLIs" (OpenCode, Codex sync `request_user_input`, Copilot), each behind its own probe. Not live-tested.
+
+Implemented 2026-11-18 by Sonnet subagents (handoff `docs/question_detection_handoff.md`); the probe ran offline against a stub model.
 
 ## Problem
 

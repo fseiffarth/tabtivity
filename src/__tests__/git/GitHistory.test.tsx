@@ -55,7 +55,7 @@ describe("#7 git history view", () => {
 
   it("shows current branch, commit list with HEAD marked", async () => {
     await renderHistory();
-    expect(await screen.findByText(/⎇\s*main/)).toBeTruthy();
+    expect((await screen.findByTitle(/^Current branch/)).textContent).toContain("main");
     const headRow = (await screen.findByText("feat: add widget")).closest("button")!;
     expect(headRow.className).toContain("head");
     const olderRow = screen.getByText("fix: earlier bug").closest("button")!;

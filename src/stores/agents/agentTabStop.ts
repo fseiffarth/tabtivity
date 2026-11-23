@@ -1,5 +1,5 @@
 /**
- * Stopping and waking one agent tab (`docs/agent_tab_stop_plan.md` §3–§5).
+ * Stopping and waking one agent tab (`docs/done/agent_tab_stop_plan.md` §3–§5).
  *
  * Stop: the guards are read again on the tab as it is now; then the tab is
  * marked `stopped`, so its pane (`PaneSlot`) unmounts the `TerminalView`,

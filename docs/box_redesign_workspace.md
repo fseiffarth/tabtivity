@@ -1,6 +1,8 @@
 # Boxes, redesigned: working inside one (arrangement and organisation)
 
-Status: **design proposal, 2026-11-03. Nothing here is built.** Lens: what a
+> **Status (screened against code 2026-11-22):** REFERENCE (design lens, superseded by the merged plan `docs/box_redesign_plan.md`). The steps it proposes landed on `develop` as `2dff17a2` (see the plan's status); the "today" sections describe the code of 2026-11-03, before the redesign, and are now historical. Not live-tested.
+
+Lens: what a
 user sees and does once a `box:<id>` scope is open. Access/switching (header
 chip and pills) and creating/managing membership are the other two lenses; this
 doc touches them only where a step depends on them (section 3 marks those).

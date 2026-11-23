@@ -1,9 +1,8 @@
 # Tabtivity Mobile × Project Boxes — Parity Plan (TODO 31av / 31aw)
 
-Status: **proposed, 2026-09-20. Nothing here is built.** The shipped half is
-31aa (2026-09-05, code-complete, phone QA still open); this plan covers the
-two desktop affordances a box has and the phone does not, and says plainly
-which desktop box features are deliberately *not* coming to the phone.
+> **Status (screened against code 2026-11-22):** NOT-STARTED (phases 1 and 2). The shipped half (31aa) is as described under "Where 31aa left it": box scopes, `Catalog::load` roots, `box:<id>` through `mobileScope`. `PublicTab` has no `member` field, `PublicProject.members` is the Home folding list of opaque member project ids (`discovery.rs:287`, `Home.tsx`), not the `[{ id, name }]` of phase 2, and `CreateRequest` has no `member_id`. Not live-tested.
+
+Proposed 2026-09-20. The shipped half is 31aa (2026-09-05, code-complete, phone QA still open); this plan covers the two desktop affordances a box has and the phone does not, and says plainly which desktop box features are deliberately *not* coming to the phone.
 
 ## Where 31aa left it
 

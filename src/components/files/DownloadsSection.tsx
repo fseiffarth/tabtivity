@@ -6,9 +6,9 @@ import { useWindowsStore } from "../../stores/windows";
 import { useDragStore } from "../../stores/drag/drag";
 import { bindDragRelease } from "../../lib/window/dragPlatform";
 import { fmtModified, fmtSize, type FileEntry } from "../../lib/viewers/fileUtils";
-import { useT } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import { FileIcon } from "../common/icons/FileIcon";
-import { CheckIcon, CloseIcon, InboxIcon, RefreshIcon } from "../common/icons/Icon";
+import { ArrowRightIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, InboxIcon, RefreshIcon } from "../common/icons/Icon";
 import { useResizableSection } from "./useResizableSection";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
@@ -48,14 +48,16 @@ interface TimeWindow {
   label: string;
   /** Age cutoff in seconds; null = no filter (all). */
   secs: number | null;
+  /** The collapsed line's "nothing here" sentence for this window. */
+  none: TranslationKey;
 }
 
 const WINDOWS: TimeWindow[] = [
-  { label: "1h", secs: 3600 },
-  { label: "24h", secs: 86400 },
-  { label: "7d", secs: 604800 },
-  { label: "30d", secs: 2592000 },
-  { label: "All", secs: null },
+  { label: "1h", secs: 3600, none: "downloads.noneLastHour" },
+  { label: "24h", secs: 86400, none: "downloads.noneLast24h" },
+  { label: "7d", secs: 604800, none: "downloads.noneLast7d" },
+  { label: "30d", secs: 2592000, none: "downloads.noneLast30d" },
+  { label: "All", secs: null, none: "downloads.noneYet" },
 ];
 
 export function DownloadsSection({
@@ -102,6 +104,10 @@ export function DownloadsSection({
   const [error, setError] = useState<string | null>(null);
   // path → collision-safe rel it landed at, briefly shown as a ✓ confirmation.
   const [copied, setCopied] = useState<Record<string, string>>({});
+  // Opened by hand from the one-line form. While the window holds no rows the
+  // section is that one line — the full resizable section is ~190 px of
+  // nothing — unless the user opens it; rows arriving open it by themselves.
+  const [expanded, setExpanded] = useState(false);
 
   const refresh = useCallback(async () => {
     if (paths.length === 0) {
@@ -260,6 +266,66 @@ export function DownloadsSection({
   // the server's would be the wrong machine — so the section is not there.
   if (isServerClient()) return null;
 
+  const windowPicker = (
+    <div className="seg downloads-windows" role="group" aria-label={t("downloads.windowsLabel")}>
+      {WINDOWS.map((w, i) => (
+        <button
+          key={w.label}
+          type="button"
+          className={`downloads-win-btn${i === winIdx ? " active" : ""}`}
+          aria-pressed={i === winIdx}
+          onClick={() => setWinIdx(i)}
+          title={
+            w.secs == null
+              ? t("downloads.allDownloads")
+              : t("downloads.modifiedInLast", { label: w.label })
+          }
+        >
+          {w.secs == null ? t("downloads.windowAll") : w.label}
+        </button>
+      ))}
+    </div>
+  );
+  const refreshButton = (
+    <button
+      type="button"
+      className="toolbar-btn toolbar-btn--sm downloads-refresh"
+      onClick={() => void refresh()}
+      title={t("common.refresh")}
+      aria-label={t("common.refresh")}
+    >
+      <RefreshIcon />
+    </button>
+  );
+
+  // Nothing to show for this window: one line — the label (which opens the
+  // full section), what the window holds, the window picker and refresh.
+  if (entries.length === 0 && !expanded && !error) {
+    const status = !hasSources
+      ? t("downloads.noSourcesConfigured")
+      : loading
+        ? t("downloads.scanning")
+        : t(WINDOWS[winIdx].none);
+    return (
+      <div className="downloads-section downloads-section--line">
+        <button
+          type="button"
+          className="downloads-line-toggle"
+          aria-expanded={false}
+          onClick={() => setExpanded(true)}
+        >
+          <ChevronRightIcon />
+          <InboxIcon />
+          {t("downloads.title")}
+        </button>
+        <span className="downloads-line-status" title={status}>{status}</span>
+        {windowPicker}
+        {refreshButton}
+        <UntestedTag id="downloads.remembered" />
+      </div>
+    );
+  }
+
   return (
     <div className="downloads-section" ref={sectionRef} style={{ height: heightPx }}>
       <div
@@ -268,35 +334,36 @@ export function DownloadsSection({
         title={t("downloads.resizeHint")}
       />
       <div className="downloads-header">
-        <span className="downloads-title"><InboxIcon /> {t("downloads.title")} <UntestedTag id="downloads.remembered" /></span>
-        <div className="downloads-windows">
-          {WINDOWS.map((w, i) => (
-            <button
-              key={w.label}
-              className={`downloads-win-btn${i === winIdx ? " active" : ""}`}
-              aria-pressed={i === winIdx}
-              onClick={() => setWinIdx(i)}
-              title={
-                w.secs == null
-                  ? t("downloads.allDownloads")
-                  : t("downloads.modifiedInLast", { label: w.label })
-              }
-            >
-              {w.secs == null ? t("downloads.windowAll") : w.label}
-            </button>
-          ))}
-        </div>
+        {/* Folds back to the one-line form while there is nothing to show;
+            with rows the section stays open and the label is just a label. */}
+        {entries.length === 0 ? (
+          <button
+            type="button"
+            className="downloads-line-toggle"
+            aria-expanded={true}
+            onClick={() => {
+              // An error is what holds the section open with no rows; folding
+              // it is dismissing that too.
+              setError(null);
+              setExpanded(false);
+            }}
+          >
+            <ChevronDownIcon />
+            <InboxIcon />
+            {t("downloads.title")}
+          </button>
+        ) : (
+          <span className="downloads-title"><InboxIcon /> {t("downloads.title")}</span>
+        )}
+        <UntestedTag id="downloads.remembered" />
+        {windowPicker}
+        {refreshButton}
         <button
-          className="toolbar-btn toolbar-btn--sm"
-          onClick={() => void refresh()}
-          title={t("common.refresh")}
-        >
-          <RefreshIcon />
-        </button>
-        <button
+          type="button"
           className="toolbar-btn toolbar-btn--sm"
           onClick={onClose}
           title={t("downloads.hide")}
+          aria-label={t("downloads.hide")}
         >
           <CloseIcon />
         </button>
@@ -325,37 +392,46 @@ export function DownloadsSection({
             return (
               <div
                 key={entry.path}
-                className="file-entry file downloads-row"
+                className="file-entry file file-grid downloads-row"
                 style={{ userSelect: "none" }}
                 title={entry.path}
                 onPointerDown={(ev) => onRowPointerDown(ev, entry)}
                 onClick={() => openPreview(entry)}
               >
-                <span className="file-icon">
-                  <FileIcon ext={entry.extension} isDir={entry.is_dir} />
+                {/* The tree's row grid: an empty state cell, the copy action in
+                    the action column, then the name and its size · time. */}
+                <span className="sp-row-state file-state" />
+                <span className="sp-row-act file-act">
+                  {landed ? (
+                    <span className="downloads-copied" title={t("downloads.copiedTo", { rel: landed })}>
+                      <CheckIcon />
+                    </span>
+                  ) : (
+                    !isRemote && (
+                      <button
+                        type="button"
+                        className="btn-quiet dl-copy-btn"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          void copyEntry(entry, targetFolder);
+                        }}
+                        title={t("downloads.copyInto", { target: targetLabel })}
+                        aria-label={t("downloads.copyInto", { target: targetLabel })}
+                      >
+                        <ArrowRightIcon />
+                      </button>
+                    )
+                  )}
                 </span>
-                <span className="file-name">{entry.name}</span>
-                <span className="downloads-meta">
+                <span className="sp-row-main file-main">
+                  <span className="file-icon">
+                    <FileIcon ext={entry.extension} isDir={entry.is_dir} />
+                  </span>
+                  <span className="file-name">{entry.name}</span>
+                </span>
+                <span className="file-size downloads-meta">
                   {!entry.is_dir && fmtSize(entry.size)} · {fmtModified(entry.modified_secs)}
                 </span>
-                {landed ? (
-                  <span className="downloads-copied" title={t("downloads.copiedTo", { rel: landed })}>
-                    <CheckIcon />
-                  </span>
-                ) : (
-                  !isRemote && (
-                    <button
-                      className="toolbar-btn toolbar-btn--sm dl-copy-btn"
-                      onClick={(ev) => {
-                        ev.stopPropagation();
-                        void copyEntry(entry, targetFolder);
-                      }}
-                      title={t("downloads.copyInto", { target: targetLabel })}
-                    >
-                      →
-                    </button>
-                  )
-                )}
               </div>
             );
           })

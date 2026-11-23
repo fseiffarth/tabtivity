@@ -1,8 +1,6 @@
 # Skill creator — plan (desktop + phone)
 
-Status: **plan; Phase 0 done** (`InstalledSkill.folder`). Ticket: #2429. Builds on the Skills Library
-(`docs/done/skills_plan.md`). Open decisions at the end; recommended option
-first. Line numbers are as of 2026-11-06.
+> **Status (screened against code 2026-11-22):** Only Phase 0 is in code (`InstalledSkill.folder` in `schema/skills.rs`; uninstall by folder, `a024075ac`). The creator itself is not built: no `skill_authoring.rs`, `skills_write`, `SkillEditor` or phone skill writes. Open decisions at the end still apply. Ticket #2429; builds on `docs/done/skills_plan.md`; line numbers are as of 2026-11-06. Not live-tested unless the doc/todo says so.
 
 ## Goal
 

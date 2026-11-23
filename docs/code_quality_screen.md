@@ -1,5 +1,10 @@
 # Code-quality screen — 2026-10-12
 
+> **Status (screened against code 2026-11-22):** PARTIAL. The eight "Fix these first" items and their follow-up round are in code (`storage::write_private_atomic`,
+> `ProjectEntry::directory()` in `schema/projects.rs`, `LockExt::lock_ok` in `src-core/src/sync.rs`, `app_core::rt::blocking`,
+> `subscribeTauri` in `src/hooks/useTauriListener.ts`, one `isSignInUrl`). The per-area tables below are an untracked backlog; part of
+> it was fixed by `docs/code_screen_plan.md`. File paths and line numbers are of 2026-10-12 and many have moved. Not live-tested unless the doc/todo says so.
+
 A read-only screen of the whole codebase for **duplicates**, **bad coding
 practices** and **simplification candidates** (over-long files and functions,
 verbose code). It is not about runtime performance. Four agents screened the

@@ -41,6 +41,9 @@ import { CloseIcon, GripIcon, MoreIcon, PencilIcon, PlusIcon, RefreshIcon } from
 
 const MENU_ID = "machines";
 
+/** The SSH target a terminal login opens and its readiness poll dials. */
+type SshTarget = { user: string | null; host: string; port: number | null };
+
 /**
  * **What a row actually knows**, from the two maps that used to be one.
  *
@@ -532,6 +535,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
   // lands in the store's `errors` map and is shown from there, alongside the
   // aggregate lamp state.
   const [retryError, setRetryError] = useState("");
+  // "Log in in terminal" from the retry form (see `startTerminalRetry`): a login
+  // is open in the root terminal and the row waits to reconnect through it.
+  const [retryViaTerminal, setRetryViaTerminal] = useState(false);
+  const [retryWaiting, setRetryWaiting] = useState(false);
+  const retryPoll = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryRun = useRef(0);
   // Rows render compact by default (lamp + label + actions only) — target
   // address, usage meters and the auto-connect toggle are behind a per-row
   // expand so a long machine list stays scannable.
@@ -1051,6 +1060,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
     setRetryUser(m?.user ?? "");
     setRetryPassword("");
     setRetryError("");
+    // Drop a terminal login another row's retry was still waiting on.
+    retryRun.current++;
+    if (retryPoll.current) clearTimeout(retryPoll.current);
+    retryPoll.current = null;
+    setRetryViaTerminal(false);
+    setRetryWaiting(false);
   };
   const submitRetry = async (id: string) => {
     const m = machines.find((mm) => mm.id === id);
@@ -1106,6 +1121,13 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
   // backed off and capped hard (below) so a wrong answer is cheap. Adopting a
   // session Tabtivity could have opened by itself is harmless; the terminal path
   // still exists for the host where it is the only way in.
+  /** Open `target`'s SSH login in the root terminal (deduped per target). */
+  const openTerminalLogin = (target: SshTarget) => {
+    const login = sshLogin(target.user, target.host, target.port);
+    const tabLabel = `ssh · ${target.user ? `${target.user}@` : ""}${target.host}`;
+    openConnectionInRoot({ label: tabLabel, login, dedupeKey: loginDedupeKey(login) });
+  };
+
   const clearAddPoll = () => {
     if (addPoll.current) {
       clearTimeout(addPoll.current);
@@ -1113,11 +1135,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
     }
   };
 
-  const finishTerminalAdd = async (target: {
-    user: string | null;
-    host: string;
-    port: number | null;
-  }) => {
+  const finishTerminalAdd = async (target: SshTarget) => {
     const machine = await register({
       user: target.user ?? undefined,
       host: target.host,
@@ -1161,8 +1179,15 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
   const POLL_MAX_ATTEMPTS = 8;
   const pollDelayMs = (attempt: number) => Math.min(3000 * 2 ** attempt, 30_000);
 
-  const pollAddLogin = (
-    target: { user: string | null; host: string; port: number | null },
+  /** The readiness poll behind every terminal login here (add, edit, retry):
+   *  ask until `ssh_connect` gets through, then `onReady`; after
+   *  `POLL_MAX_ATTEMPTS` misses, `onGiveUp`. `timer` holds the pending retry so
+   *  the caller's cancel/unmount can clear it. */
+  const pollTerminalLogin = (
+    target: SshTarget,
+    timer: { current: ReturnType<typeof setTimeout> | null },
+    onReady: () => void,
+    onGiveUp: () => void,
     attempt = 0,
   ) => {
     void invoke<void>("ssh_connect", {
@@ -1175,22 +1200,38 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
       // login in the first place, since it is the one that asks for a challenge
       // code) could not be added this way at all.
       background: false,
-    })
-      .then(async () => {
-        clearAddPoll();
-        setAddWaiting(false);
-        await finishTerminalAdd(target).catch((e) => setAddError(String(e)));
-      })
-      .catch(() => {
+    }).then(
+      () => {
+        timer.current = null;
+        onReady();
+      },
+      () => {
         if (attempt + 1 >= POLL_MAX_ATTEMPTS) {
-          clearAddPoll();
-          setAddWaiting(false);
-          setAddError(t("machines.err.noLoginYet"));
+          timer.current = null;
+          onGiveUp();
           return;
         }
-        addPoll.current = setTimeout(() => pollAddLogin(target, attempt + 1), pollDelayMs(attempt));
-      });
+        timer.current = setTimeout(
+          () => pollTerminalLogin(target, timer, onReady, onGiveUp, attempt + 1),
+          pollDelayMs(attempt),
+        );
+      },
+    );
   };
+
+  const pollAddLogin = (target: SshTarget) =>
+    pollTerminalLogin(
+      target,
+      addPoll,
+      () => {
+        setAddWaiting(false);
+        void finishTerminalAdd(target).catch((e) => setAddError(String(e)));
+      },
+      () => {
+        setAddWaiting(false);
+        setAddError(t("machines.err.noLoginYet"));
+      },
+    );
 
   const startTerminalAdd = async () => {
     const parsed = parseSshAddress(address);
@@ -1204,9 +1245,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
       port: parsed.port ?? null,
     };
     setAddError("");
-    const login = sshLogin(target.user, target.host, target.port);
-    const tabLabel = `ssh · ${target.user ? `${target.user}@` : ""}${target.host}`;
-    openConnectionInRoot({ label: tabLabel, login, dedupeKey: loginDedupeKey(login) });
+    openTerminalLogin(target);
     setAddWaiting(true);
     clearAddPoll();
     pollAddLogin(target);
@@ -1339,7 +1378,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
 
   const finishTerminalEdit = async (
     id: string,
-    target: { user: string | null; host: string; port: number | null },
+    target: SshTarget,
   ) => {
     // Persist the edited identity WITHOUT reconnecting — the terminal login has
     // already opened the session, so `connect: false` avoids a second (possibly
@@ -1363,33 +1402,19 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
     setEditWaiting(false);
   };
 
-  const pollEditLogin = (
-    id: string,
-    target: { user: string | null; host: string; port: number | null },
-    attempt = 0,
-  ) => {
-    void invoke<void>("ssh_connect", {
-      user: target.user,
-      host: target.host,
-      port: target.port,
-      password: null,
-      background: false,
-    })
-      .then(async () => {
-        clearEditPoll();
+  const pollEditLogin = (id: string, target: SshTarget) =>
+    pollTerminalLogin(
+      target,
+      editPoll,
+      () => {
         setEditWaiting(false);
-        await finishTerminalEdit(id, target).catch((e) => setEditError(String(e)));
-      })
-      .catch(() => {
-        if (attempt + 1 >= POLL_MAX_ATTEMPTS) {
-          clearEditPoll();
-          setEditWaiting(false);
-          setEditError(t("machines.err.noLoginYetEdit"));
-          return;
-        }
-        editPoll.current = setTimeout(() => pollEditLogin(id, target, attempt + 1), pollDelayMs(attempt));
-      });
-  };
+        void finishTerminalEdit(id, target).catch((e) => setEditError(String(e)));
+      },
+      () => {
+        setEditWaiting(false);
+        setEditError(t("machines.err.noLoginYetEdit"));
+      },
+    );
 
   const startTerminalEdit = async (id: string) => {
     const parsed = parseSshAddress(editAddress);
@@ -1403,9 +1428,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
       port: parsed.port ?? null,
     };
     setEditError("");
-    const login = sshLogin(target.user, target.host, target.port);
-    const tabLabel = `ssh · ${target.user ? `${target.user}@` : ""}${target.host}`;
-    openConnectionInRoot({ label: tabLabel, login, dedupeKey: loginDedupeKey(login) });
+    openTerminalLogin(target);
     setEditWaiting(true);
     clearEditPoll();
     pollEditLogin(id, target);
@@ -1427,6 +1450,89 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
 
   // The menu unmounts on close; a timer firing into it afterwards is nobody's.
   useEffect(() => clearEditPoll, []);
+
+  // ── Terminal sign-in on RETRY: the failed row's own way in ───────────────────
+  // The retry form's one password field is useless for a host that refuses
+  // passwords (key-only), asks a challenge, or wants a key passphrase the
+  // background connect can't ask for. This opens the stored target's login in
+  // the root terminal and, once it is through, reconnects the row through the
+  // store (`connect`, or `update` when the username was corrected here) — the
+  // session already exists, so that second dial rides it, and it is what clears
+  // the row's error and lights the lamp.
+  const clearRetryPoll = () => {
+    if (retryPoll.current) {
+      clearTimeout(retryPoll.current);
+      retryPoll.current = null;
+    }
+  };
+
+  const retryTarget = (id: string): SshTarget | null => {
+    const m = machines.find((mm) => mm.id === id);
+    if (!m) return null;
+    return { user: retryUser.trim() || m.user || null, host: m.host, port: m.port ?? null };
+  };
+
+  const finishTerminalRetry = async (id: string, target: SshTarget) => {
+    const m = useGlobalMachinesStore.getState().machines.find((mm) => mm.id === id);
+    if (!m) return;
+    if (target.user !== (m.user ?? null)) {
+      await update(id, { user: target.user ?? undefined, host: m.host, port: m.port, label: m.label }, { connect: true });
+    } else {
+      await connect(id);
+    }
+    setRetryId(null);
+    setRetryPassword("");
+  };
+
+  const pollRetryLogin = (id: string, target: SshTarget) => {
+    // A cancel (or a retry of another row) bumps the run, so an answer still in
+    // flight for this one lands on nothing.
+    const run = ++retryRun.current;
+    pollTerminalLogin(
+      target,
+      retryPoll,
+      () => {
+        if (retryRun.current !== run) return;
+        setRetryWaiting(false);
+        void finishTerminalRetry(id, target).catch((e) => setRetryError(String(e)));
+      },
+      () => {
+        if (retryRun.current !== run) return;
+        setRetryWaiting(false);
+        setRetryError(t("machines.err.noLoginYetRetry"));
+      },
+    );
+  };
+
+  const startTerminalRetry = (id: string) => {
+    const target = retryTarget(id);
+    if (!target) return;
+    setRetryError("");
+    setRetryViaTerminal(true);
+    openTerminalLogin(target);
+    setRetryWaiting(true);
+    clearRetryPoll();
+    pollRetryLogin(id, target);
+  };
+
+  /** Re-arm the poll — for a login finished after the bound ran out. */
+  const rearmTerminalRetry = (id: string) => {
+    const target = retryTarget(id);
+    if (!target) return;
+    setRetryError("");
+    setRetryWaiting(true);
+    clearRetryPoll();
+    pollRetryLogin(id, target);
+  };
+
+  const cancelRetry = () => {
+    retryRun.current++;
+    clearRetryPoll();
+    setRetryWaiting(false);
+    setRetryId(null);
+  };
+
+  useEffect(() => clearRetryPoll, []);
 
   const startExport = () => {
     setAdding(false);
@@ -1727,12 +1833,48 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
                         if (e.key === "Enter") void submitRetry(m.id);
                       }}
                     />
+                    {/* The login is a root-terminal tab, so say where it went. */}
+                    {retryWaiting && (
+                      <div className="settings-help" role="status">
+                        {t("machines.terminalLoginHint.pre")}{" "}
+                        <strong>{t("machines.rootTerminal")}</strong>{" "}
+                        {t("machines.terminalEditHint.post")}
+                      </div>
+                    )}
                     {retryError && <ErrorNote className="vpn-indicator-error" error={retryError} />}
                     <div className="vpn-indicator-actions">
-                      <button type="button" className="vpn-indicator-connect" onClick={() => void submitRetry(m.id)}>
+                      <button
+                        type="button"
+                        className="vpn-indicator-connect"
+                        disabled={retryWaiting}
+                        onClick={() => void submitRetry(m.id)}
+                      >
                         {t("machines.retry")}
                       </button>
-                      <button type="button" className="vpn-indicator-remove" onClick={() => setRetryId(null)}>
+                      {/* For a host the password field can't reach: key-only, a
+                          challenge code, a key passphrase. */}
+                      <button
+                        type="button"
+                        className="vpn-indicator-connect"
+                        disabled={retryWaiting}
+                        title={t("machines.loginInTerminalRetryTitle")}
+                        onClick={() => startTerminalRetry(m.id)}
+                      >
+                        {retryWaiting ? t("machines.waitingForLogin") : t("machines.loginInTerminal")}
+                        <UntestedTag id="machinesIndicator.18" />
+                      </button>
+                      {/* Only after the poll has given up: a login finished late is
+                          still a login, and re-arming beats starting over. */}
+                      {retryViaTerminal && !retryWaiting && retryError && (
+                        <button
+                          type="button"
+                          className="vpn-indicator-connect"
+                          onClick={() => rearmTerminalRetry(m.id)}
+                        >
+                          {t("machines.loggedInRetry")}
+                        </button>
+                      )}
+                      <button type="button" className="vpn-indicator-remove" onClick={cancelRetry}>
                         {t("common.cancel")}
                       </button>
                     </div>

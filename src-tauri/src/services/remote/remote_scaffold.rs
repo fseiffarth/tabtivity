@@ -1,5 +1,5 @@
 //! The host half of creating a **remote-only** project
-//! (`docs/remote_only_projects_plan.md`, E6b): the scaffold a local project
+//! (`docs/done/remote_only_projects_plan.md`, E6b): the scaffold a local project
 //! gets on its own disk, written into the host tree over the pooled SFTP
 //! session, then the host repo and its first commit.
 //!

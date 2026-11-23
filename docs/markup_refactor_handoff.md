@@ -1,5 +1,7 @@
 # Markup refactor — handoff
 
+> **Status (screened against code 2026-11-22):** PARTIAL. Impl 1 to 3 are in code (see `docs/markup_refactor_plan.md`); the open items are step H (`useMarkupHost`, absent from `src/`) and `queueHeldPrompt`. Its "Flagged for user" live click-through is still owed. Never run live.
+
 Plan: `docs/markup_refactor_plan.md`. Base: `develop` at `70df7dc10` and later.
 Each agent appends its section; nothing above it is rewritten.
 

@@ -2536,7 +2536,7 @@ pub fn run() {
             commands::presenter::presenter_next_monitor,
             commands::presenter::presenter_inhibit_sleep,
             commands::presenter::presenter_release_sleep,
-            // The privacy curtain (docs/privacy_curtain_plan.md)
+            // The privacy curtain (docs/done/privacy_curtain_plan.md)
             commands::presenter::presenting_state,
             commands::presenter::privacy_curtain_set,
             commands::workspace::network_conn_type,
@@ -2735,6 +2735,7 @@ pub fn run() {
             commands::agents::agent_tab_last_prompt,
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
+            commands::agents::agent_next_prompt,
             commands::agents::agent_session_export_write,
             commands::agents::agent_tab_artifact,
             commands::agents::agent_cli_handoff_prepare,
