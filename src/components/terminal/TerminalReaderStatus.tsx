@@ -101,9 +101,11 @@ export function TerminalReaderStatus({ tab, ptyId, agentLabel, visible, canRefre
   }
   for (const [label, native, fallback] of [
     [t("terminal.reader.status.sessionLimit"), "5h limit", limits.session],
-    [t("terminal.reader.status.weekLimit"), "Weekly limit", limits.week],
+    // A lone Fable row is also the weekly fallback; show it once, as Fable.
+    [t("terminal.reader.status.weekLimit"), "Weekly limit", limits.fable && limits.week === limits.fable ? undefined : limits.week],
+    [t("terminal.reader.status.fableLimit"), undefined, limits.fable],
   ] as const) {
-    const value = field(native);
+    const value = native ? field(native) : undefined;
     const remaining = codexRemaining(value) ?? (fallback ? 100 - fallback.percent : undefined);
     if (remaining != null && Number.isFinite(remaining) && remaining >= 0 && remaining <= 100) {
       meters.push(value

@@ -63,7 +63,7 @@ function statusFetch(usage: unknown) {
 
 const settle = () => act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
 
-describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly windows`, () => {
+describe(`${BRAND.display} Mobile facts row shows the account's 5h, weekly and Fable windows`, () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -76,7 +76,7 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     vi.restoreAllMocks();
   });
 
-  it("reads the usage panel on open and prints the session and all-models week", async () => {
+  it("reads the usage panel on open and prints the session, all-models week and Fable week", async () => {
     const fetchMock = statusFetch({ label: "Claude Code", supported: true, raw: PANEL, cached: false });
     vi.stubGlobal("fetch", fetchMock);
     const { container } = render(<Terminal tab={TAB} back={() => {}} />);
@@ -86,8 +86,9 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     const limits = [...container.querySelectorAll(".session-facts .fact-limit")];
     expect(limits[0].textContent).toMatch(/^5h 29% · in \d+h \d+m$/u);
     expect(limits[1].textContent).toMatch(/^week 6% · in \d+d \d+[hm]$/u);
-    // Nearly spent is called out; the session window is not there yet.
-    expect(limits.map((node) => node.classList.contains("high"))).toEqual([false, true]);
+    expect(limits[2].textContent).toBe("Fable 88%");
+    // Nearly spent is called out; the session and Fable windows are not there yet.
+    expect(limits.map((node) => node.classList.contains("high"))).toEqual([false, true, false]);
   });
 
   it("shows Codex account limits before any prompt or saved transcript exists", async () => {
@@ -96,7 +97,7 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     const { container } = render(<Terminal tab={{ ...TAB, label: "Codex", agent_label: "Codex" }} back={() => {}} />);
     await settle();
     const limits = [...container.querySelectorAll<HTMLButtonElement>(".session-facts .fact-limit")];
-    expect(limits).toHaveLength(2);
+    expect(limits).toHaveLength(3);
     expect(limits[0].textContent).toContain("5h 29%");
     expect(limits[1].textContent).toContain("week 6%");
     expect(limits[0].title).toContain("Usage last read 5 min ago");
@@ -110,13 +111,13 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
 
     fireEvent.click(first.container.querySelector(".session-facts .fact-limit")!);
     const bars = [...first.container.querySelectorAll<HTMLElement>(".session-facts .fact-limit-bar > span")];
-    expect(bars.map((bar) => bar.style.width)).toEqual(["29%", "6%"]);
+    expect(bars.map((bar) => bar.style.width)).toEqual(["29%", "6%", "88%"]);
     expect(first.container.querySelector(".session-facts .fact-limit")?.textContent).toMatch(/^5h · in /u);
     first.unmount();
 
     const again = render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
-    expect(again.container.querySelectorAll(".session-facts .fact-limit-bar")).toHaveLength(2);
+    expect(again.container.querySelectorAll(".session-facts .fact-limit-bar")).toHaveLength(3);
     fireEvent.click(again.container.querySelectorAll(".session-facts .fact-limit")[1]);
     expect(again.container.querySelector(".session-facts .fact-limit-bar")).toBeNull();
     localStorage.clear();
@@ -163,6 +164,14 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     expect([...container.querySelectorAll(".session-facts .fact-limit")].map((node) => node.textContent))
       .toEqual(["5h 85% · in 1h 0m", "week 5% · in 1d 0m"]);
     expect(facts?.querySelector(".fact-path")).toBeNull();
+  });
+
+  it("shows a lone Fable week once, as Fable", async () => {
+    vi.stubGlobal("fetch", statusFetch({ label: "Claude Code", supported: true, raw: "Current session: 10% used\nCurrent week (Fable): 30% used", cached: false }));
+    const { container } = render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    expect([...container.querySelectorAll(".session-facts .fact-limit")].map((node) => node.textContent))
+      .toEqual(["5h 90%", "Fable 70%"]);
   });
 
   it("drops a stored window that has already rolled over", async () => {

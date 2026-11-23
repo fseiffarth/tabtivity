@@ -1454,10 +1454,12 @@ describe("the Reader's live rows", () => {
     expect(facts.textContent).toContain("week 6%");
     expect(host.querySelector(".terminal-reader-fact.high")?.textContent).toBe("week 6%");
 
-    // A click on either limit flips both to bars of what is left, and back.
+    expect(facts.textContent).toContain("Fable 88%");
+
+    // A click on any limit flips the row to bars of what is left, and back.
     fireEvent.click(screen.getByRole("button", { name: "5h 29%" }));
     const bars = [...facts.querySelectorAll<HTMLElement>(".terminal-reader-limit-bar > span")];
-    expect(bars.map((bar) => bar.style.width)).toEqual(["29%", "6%"]);
+    expect(bars.map((bar) => bar.style.width)).toEqual(["29%", "6%", "88%"]);
     expect(facts.textContent).not.toContain("5h 29%");
     expect(screen.getByRole("button", { name: "week 6%" }).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "week 6%" }));
@@ -1777,7 +1779,7 @@ describe("the Reader's live rows", () => {
       command === "agent_tab_transcript" ? { ...transcript, truncated: false }
         : command === "agent_usage" ? {
           agent: "claude", label: "Claude", supported: true, cached: false,
-          raw: "Current session: 2% used\nCurrent week (all models): 99% used",
+          raw: "Current session: 2% used\nCurrent week (all models): 99% used\nCurrent week (Fable): 12% used",
         }
           : []));
     term = fakeTerminal([">", "~/p (develop) · Opus 5.5 · 85% context left"]);
@@ -1789,6 +1791,7 @@ describe("the Reader's live rows", () => {
     const panel = screen.getByRole("dialog", { name: "Claude status" });
     expect(within(panel).getByRole("meter", { name: "5-hour limit" }).getAttribute("aria-valuenow")).toBe("98");
     expect(within(panel).getByRole("meter", { name: "Weekly limit" }).getAttribute("aria-valuenow")).toBe("1");
+    expect(within(panel).getByRole("meter", { name: "Fable weekly limit" }).getAttribute("aria-valuenow")).toBe("88");
     expect(panel.querySelector(".terminal-reader-status-meter.low")?.textContent).toContain("1% left");
   });
 

@@ -1621,13 +1621,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const contextLeft = status?.context ?? (storedUsage?.contextLeft != null ? `${storedUsage.contextLeft}%` : undefined);
   const limitTime = new Date(limitsNow);
   const fromPanel = !!(limits.session || limits.week);
-  const shownLimits = fromPanel ? limits : sessionLimits(storedUsage, limitTime);
+  const selectedLimits = fromPanel ? limits : sessionLimits(storedUsage, limitTime);
+  // A lone Fable row is also the weekly fallback; show it once, as Fable.
+  const shownLimits = selectedLimits.fable && selectedLimits.week === selectedLimits.fable ? { ...selectedLimits, week: undefined } : selectedLimits;
   const readTime = fromPanel ? new Date(limitsReadAt) : limitTime;
   const sessionReset = shownLimits.session?.resets ? resetCountdown(shownLimits.session.resets, limitTime, readTime) : "";
   const weekReset = shownLimits.week?.resets ? resetCountdown(shownLimits.week.resets, limitTime, readTime) : "";
+  const fableReset = shownLimits.fable?.resets ? resetCountdown(shownLimits.fable.resets, limitTime, readTime) : "";
   // A tap on either limit flips both between the percentage and a bar of
   // what is left; the phone keeps the choice.
-  const limitFact = (meter: LimitMeters["session"], reset: string, key: "mobile.facts.session" | "mobile.facts.week", label: "mobile.facts.sessionLabel" | "mobile.facts.weekLabel") => {
+  const limitFact = (meter: LimitMeters["session"], reset: string, key: "mobile.facts.session" | "mobile.facts.week" | "mobile.facts.fable", label: "mobile.facts.sessionLabel" | "mobile.facts.weekLabel" | "mobile.facts.fableLabel") => {
     if (!meter) return null;
     const resetAt = meter.resets ? resolveResetAt(meter.resets, readTime) : null;
     if (resetAt && resetAt.getTime() <= limitTime.getTime()) return null;
@@ -3217,6 +3220,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
         {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
         {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
+        {limitFact(shownLimits.fable, fableReset, "mobile.facts.fable", "mobile.facts.fableLabel")}
         {(shownLimits.session || shownLimits.week) && isUntested("mobile.facts.limitBars") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
       </div>}
