@@ -568,6 +568,7 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
     [answered && "answered", index === tabFocus && "current"].filter(Boolean).join(" ") || undefined;
   return <>
     {prompt.source === "opencode" && isUntested("agents.opencode.questions") && <em>{t("mobile.focus.untested")}</em>}
+    {prompt.body && isUntested("agents.opencode.notice") && <em>{t("mobile.focus.untested")}</em>}
     {tabs.length > 0 && !stepped && <div className="question-tabs">
       {tabs.map((tab, index) => <span key={index} className={tab.answered ? "answered" : undefined}>{tab.answered && "✓ "}{tab.label}</span>)}
     </div>}
@@ -1657,7 +1658,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setKnownStep, setRememberedStep, rememberedStep, setHeldPick, heldPick, sheetAnswered, keptStep,
     setReveal, reveal, revealStuck, effortFor, setEffortFor, setEffortStep, effortStep, sawPicker,
     clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, pickerStep,
-    listedStep, listSettled, modelPreview, pickerAt, effortSlider,
+    listedStep, listSettled, modelPreview, pickerAt, effortSlider, viewportRows,
   });
   /** The hidden-link notice's button: the key the CLI hands its link over
    * on, answered by a clipboard copy the terminal above catches. */

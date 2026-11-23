@@ -1121,3 +1121,83 @@ export function openCodeDialogCloseKeys(rows: readonly (string | { text: string 
   const open = rows.some((row) => DIALOG_HEADER.test((typeof row === "string" ? row : row.text).trimEnd()));
   return open ? [DIALOG_CLOSE] : [];
 }
+
+/** The keys that open the model picker over `rows` (the viewport): a dialog
+ * already up — a notice the chat could not read — closed first, or the
+ * palette's keys vanish into it (`OPENCODE_MODEL_KEYS`). */
+export function openCodeModelKeys(rows: readonly (string | { text: string })[]): string[] {
+  return [...openCodeDialogCloseKeys(rows), ...OPENCODE_MODEL_KEYS];
+}
+
+/** A notice's footer: the one key that closes it, at the dialog's right edge
+ * (`ok enter`). The screen behind may show past that edge. */
+const NOTICE_FOOTER = /(?:^|\s{2})\s*([a-z]{1,12}) enter(?=\s{2,}|\s*$)/u;
+/** Its title row up to that edge: the title (words one space apart, so the
+ * screen behind it on the left stays out), then `esc`. */
+const NOTICE_TITLE = /(?:^|\s{2})\s*(\S+(?: \S+)*)\s{2,}esc$/u;
+/** Non-blank rows under the footer: the full TUI's version in the corner. */
+const NOTICE_FOOTER_REACH = 3;
+/** How far above its footer a notice's title may sit. */
+const NOTICE_ROWS = 60;
+/** Narrower than any notice OpenCode draws (a 60-column pane's is 50). */
+const MIN_NOTICE_WIDTH = 24;
+const MAX_NOTICE_TITLE = 80;
+
+/** Whether `text` has nothing but blanks or the end at `column`. */
+function edgeAt(text: string, column: number): boolean {
+  return /^(?:\s{2}|\s*$)/u.test(text.slice(column));
+}
+
+/**
+ * A notice OpenCode lays over its session with one key to close it — the 2.4
+ * full TUI's `What's new in 2.4.0` after an update (captured 2026-11-23 at
+ * 120×40 and 60×30):
+ *
+ *                                  What's new in 2.4.0               esc
+ *                                  Built-In Desktop Browser
+ *                                  Import your sign-ins and …
+ *                       ┃  Ask    automation. Set "automations": …
+ *                       ~/work:   When a connected provider has …    commands
+ *                                                               ok enter
+ *
+ * Until it is closed it takes every key: the model chip's Ctrl+P and `model`
+ * vanished into it and its Enter only closed it, so the picker never came.
+ * The rows between title and footer carry the composer and status bar behind
+ * the notice on either side, so its text is cut out by column: from the
+ * title's first column to where `esc` and the footer's `enter` both end.
+ * One row, the footer's word, answered with Enter.
+ */
+export function readOpenCodeNotice(lines: readonly PickerLine[]): SelectPrompt | null {
+  let footer = lines.length - 1;
+  let close: RegExpExecArray | null = null;
+  for (let seen = 0; footer >= 0 && seen <= NOTICE_FOOTER_REACH; footer -= 1) {
+    if (!lines[footer].text.trim()) continue;
+    close = NOTICE_FOOTER.exec(screenText(lines[footer]));
+    if (close) break;
+    seen += 1;
+  }
+  if (!close) return null;
+  const right = close.index + close[0].length;
+  for (let index = footer - 1; index >= Math.max(0, footer - NOTICE_ROWS); index -= 1) {
+    const text = screenText(lines[index]);
+    const heading = edgeAt(text, right) ? NOTICE_TITLE.exec(text.slice(0, right)) : null;
+    if (!heading) continue;
+    const left = right - heading[0].trimStart().length;
+    const title = heading[1];
+    if (right - left < MIN_NOTICE_WIDTH || title.length > MAX_NOTICE_TITLE) return null;
+    const body = lines.slice(index + 1, footer).map((line) => screenText(line).slice(left, right).trimEnd());
+    while (body.length > 0 && !body[0]) body.shift();
+    while (body.length > 0 && !body[body.length - 1]) body.pop();
+    const word = close[1];
+    return {
+      options: [{ index: 0, number: 1, label: word.length <= 2 ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1), keys: ["\r"] }],
+      current: 0,
+      title,
+      body,
+      start: footer,
+      question: footer,
+      context: footer,
+    };
+  }
+  return null;
+}

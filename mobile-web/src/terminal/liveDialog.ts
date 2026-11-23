@@ -1,5 +1,6 @@
 import { agentFamily } from "../../../shared/agentComposer";
 import { agentWork } from "./agentBusy";
+import { isOpenCodeTab, readOpenCodeNotice } from "./openCodeMini";
 import type { ReadableLine } from "./readableScreen";
 import { pressHintShown, readCodexHooksPage, readReviewStep, readSelectPrompt, readStrayDialog, type SelectPrompt } from "./selectPrompt";
 import { inputFrameStart } from "./statusLine";
@@ -43,7 +44,9 @@ export function readLiveQuestion(
   // A page that names its own keys (`Press enter to save`) holds no input box.
   const noFrame = pressHintShown(screen) || inputFrameStart(screen, agentLabel) >= screen.length;
   if (boxHidesDialog(agentLabel, !noFrame)) return null;
-  return readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
+  // OpenCode's notice (`What's new`) takes every key until closed.
+  return (isOpenCodeTab(agentLabel) ? readOpenCodeNotice(tail) : null)
+    ?? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
     // No input box and no busy row: a first run's own screen (Claude
     // Code's theme picker, a `Press Enter to continue`).
     ?? (noFrame && !agentWork(screen) ? readStrayDialog(tail, columns) : null);

@@ -7,6 +7,8 @@ import {
   joinOpenCodeWraps,
   openCodeComposer,
   openCodeDialogCloseKeys,
+  openCodeModelKeys,
+  OPENCODE_MODEL_KEYS,
   mergeOpenCodePage,
   openCodeMiniRow,
   openCodePickKeys,
@@ -764,6 +766,16 @@ describe(`${BRAND.display} Mobile OpenCode dialogs over the composer`, () => {
     expect(openCodeDialogCloseKeys([" ~/projects/app                 esc exit shell mode"])).toEqual([]);
     expect(openCodeDialogCloseKeys(["  press esc to close it"])).toEqual([]);
     expect(openCodeDialogCloseKeys([])).toEqual([]);
+  });
+
+  it("closes a notice before the model chip's palette keys, which it would swallow", () => {
+    // OpenCode 2.4.0's What's new notice: Ctrl+P and `model` vanished into
+    // it and Enter only closed it, so the picker never opened.
+    expect(openCodeModelKeys([
+      "                                 What's new in 2.4.0                                esc   ",
+      "                                 Built-In Desktop Browser",
+    ])).toEqual(["\u001b", ...OPENCODE_MODEL_KEYS]);
+    expect(openCodeModelKeys([" Build · DeepSeek V4.1 Flash Free OpenCode", " ~/proj:develop   ctrl+p commands"])).toEqual(OPENCODE_MODEL_KEYS);
   });
 });
 

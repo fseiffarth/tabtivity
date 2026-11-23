@@ -291,6 +291,7 @@ function LiveQuestion({ ptyId, live, subject, answered, failure, busy, onAnswer,
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
       <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /> <UntestedTag id="terminal.reader.trustPath" /></small>
       {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
+      {question.body && <UntestedTag id="agents.opencode.notice" />}
       {question.readOnly && <UntestedTag id="terminal.reader.questionWaiting" />}
       {subject && (
         <p className="terminal-reader-question-subject">

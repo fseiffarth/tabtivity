@@ -22,7 +22,7 @@ import {
   type SelectPrompt,
 } from "../../../mobile-web/src/terminal/selectPrompt";
 import { isAntigravityTab, readAntigravityEffort, readAntigravityPicker, type AntigravityEffort } from "../../../mobile-web/src/terminal/antigravity";
-import { isOpenCodeTab, openCodePickKeys, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
+import { isOpenCodeTab, openCodePickKeys, readOpenCodeNotice, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
 import { readPromptSuggestion } from "../../../mobile-web/src/terminal/promptSuggestion";
 import { queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
 import { agentFamily } from "../../../shared/agentComposer";
@@ -119,7 +119,8 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // Claude Code hides its input box while a dialog is up: with one on screen
   // the rows above it are output, however a list in them is marked.
   const question = hooksPage ?? (tail.length > 0 && !boxHidesDialog(agentLabel, !noFrame)
-    ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
+    ? (isOpenCodeTab(agentLabel) ? readOpenCodeNotice(tail) : null)
+      ?? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
       ?? (noFrame && !agentWork(lines) ? readStrayDialog(tail, columns) : null)
     : null);
   if (question) {

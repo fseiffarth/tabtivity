@@ -97,6 +97,10 @@ export interface SelectPrompt {
   /** A review page read as a dialog (`readReviewStep`): its one row is not the
    * CLI's own text, so a reader names it in its own words. */
   review?: true;
+  /** The dialog's own text when its rows also carry the screen behind it
+   * (`readOpenCodeNotice`): cut out by column where it was read, it stands in
+   * for `[context, start)` of the lines. */
+  body?: string[];
 }
 
 /** One step of a dialog as far as it is known: every row seen of it, in the
