@@ -372,6 +372,8 @@
   `local_drivers::opencode_ollama_config` no longer limits the picker to the
   loaded ones. A config model's `limit.context` does still win (that is how
   the context % follows Ollama's window). Find 2.x's way to hide models.
+  2.4.1 (2026-11-23) still drops it, and now lists config-only providers in
+  the full TUI's picker, so a local tab shows every installed model there.
 - [ ] 🖐️ OpenCode 2 context % follows Ollama: open a local OpenCode tab on a
   model Ollama runs below its trained window (32 768, the context setting) and
   send a prompt: the sidebar/status % is measured against that window, not the

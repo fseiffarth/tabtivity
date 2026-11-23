@@ -116,7 +116,7 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "opencode",
-        version: "2.4.0",
+        version: "2.4.1",
         surface: "§1.5 — launch flags, session plugin, stored messages and tools, TUI screens, Tabby's tool pin",
     },
     Verified {

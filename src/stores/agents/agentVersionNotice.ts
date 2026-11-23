@@ -72,7 +72,7 @@ export interface NewerAgentVersion {
 const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
   claude: "2.1.330",
   codex: "0.171.0",
-  opencode: "2.4.0",
+  opencode: "2.4.1",
   antigravity: "1.5.15",
   copilot: "1.0.114",
   muse: "1.4.25",

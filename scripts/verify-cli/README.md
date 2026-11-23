@@ -83,7 +83,10 @@ gives its usage.
   screen). Its
   scratch work dir sits under the repo, so the TUI cases answer the repo
   `CLAUDE.md`'s external-imports question with its default.
-- **OpenCode** (`opencode/`): `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`
+- **OpenCode** (`opencode/`): `round.sh <label> <bin> <port>` runs the whole
+  set below except `db.py` for one binary into `probe-<label>.log` (eight
+  ports from `<port>`); run old and new at once, ports 100 apart, and diff the
+  logs. `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`
   forces tool calls through the stub in a tab-like home. The session plugin
   is rebuilt from `opencode_session.rs` on every run. `hooks.py
   events|turn <label> <bin> <port>` lists a dumping plugin beside it (every
