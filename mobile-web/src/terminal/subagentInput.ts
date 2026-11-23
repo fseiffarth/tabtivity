@@ -369,7 +369,7 @@ export function inputBoxText(rows: readonly string[]): string | null {
   const from = Math.max(1, rows.length - 30);
   for (let index = rows.length - 2; index >= from; index -= 1) {
     if (!rows[index].startsWith("❯") || !RULE.test(rows[index - 1]) || !RULE.test(rows[index + 1])) continue;
-    return rows[index].slice(1).replace(/ /gu, " ").trim();
+    return rows[index].slice(1).replace(/\u00a0/gu, " ").trim();
   }
   return null;
 }
