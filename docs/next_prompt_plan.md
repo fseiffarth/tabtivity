@@ -110,6 +110,11 @@ Caveats to measure, not assume:
   re-processing; a warm request's generated token may push the state past the
   prefix. Expect the gain on attention-only models; measure both, and if hybrid
   models re-read every time, say so in the Suggestions chip's hint.
+  *Measured 2026-11-23 (`qwen3.5:9b`):* they did — llama.cpp's one checkpoint
+  per prompt sits four tokens before its end, past any text appended inside the
+  same user message. Fixed by closing each warm-up's text as its own user
+  message (and the completion's draft likewise); see the module doc of
+  `services::agent::next_prompt`.
 - Anything else on the same model (autocomplete pinned to it) evicts the cache;
   a dedicated small model on the Suggestions chip keeps its own runner, if
   `OLLAMA_MAX_LOADED_MODELS` lets both stay loaded.

@@ -108,9 +108,48 @@ fn every_later_prompt_has_the_earlier_one_as_an_exact_prefix() {
     let turn = current_turn(&t).unwrap();
     let prompt = prompt_for(&mut slot, "codex", turn, budget);
     let last = turn.final_answer().unwrap();
-    let final_message = prompt.final_message(Some(last));
+    let final_messages = prompt.final_messages(Some(last));
+    let [final_message] = final_messages.as_slice() else { panic!("no warm-up, one message: {final_messages:?}") };
     assert!(final_message.starts_with(&previous));
-    assert!(final_message.ends_with(&format!("{}\n", last.text.trim())), "{final_message}");
+    assert!(final_message.ends_with(&format!("{}\n{TURN_SO_FAR}", last.text.trim())), "{final_message}");
+}
+
+/// Each warm-up closes the text it sent: every later request sends that text
+/// as the same user messages and the rest after them, so a hybrid model's
+/// checkpoint (taken just before the end of each prompt) lies inside the
+/// part the next request shares.
+#[test]
+fn a_warm_up_closes_its_text_and_later_requests_keep_it_whole() {
+    let mut entries = vec![entry("prompt", "build the feature")];
+    let mut slot = None;
+    let mut sent: Vec<Vec<String>> = Vec::new();
+    for n in 0..4 {
+        entries.push(entry("answer", &format!("step {n}")));
+        let t = transcript(entries.clone());
+        let messages = prompt_for(&mut slot, "codex", current_turn(&t).unwrap(), BUDGET_TOKENS).warm_messages();
+        if let Some(before) = sent.last() {
+            assert_eq!(&messages[..before.len()], before.as_slice(), "warm-up {n} rewrote a sent message");
+            assert_eq!(messages.len(), before.len() + 1);
+        }
+        assert!(messages.last().unwrap().contains(&format!("step {n}")));
+        sent.push(messages);
+    }
+    // Nothing new: the same messages again, no empty one.
+    let t = transcript(entries.clone());
+    let prompt = slot.as_mut().unwrap();
+    assert_eq!(&prompt.warm_messages(), sent.last().unwrap());
+    // Glued together they are the turn's text, unchanged.
+    assert_eq!(sent.last().unwrap().concat(), prompt.message());
+    // The final keeps them all and closes the turn in a message of its own.
+    let finals = prompt_for(&mut slot, "codex", current_turn(&t).unwrap(), BUDGET_TOKENS).final_messages(None);
+    assert_eq!(&finals[..4], sent.last().unwrap().as_slice());
+    assert_eq!(finals[4], TURN_SO_FAR);
+    // An entry after the last warm-up goes before that line, in the same message.
+    entries.push(entry("answer", "step 4"));
+    let t = transcript(entries);
+    let finals = prompt_for(&mut slot, "codex", current_turn(&t).unwrap(), BUDGET_TOKENS).final_messages(None);
+    assert_eq!(finals.len(), 5);
+    assert!(finals[4].contains("step 4") && finals[4].ends_with(TURN_SO_FAR), "{:?}", finals[4]);
 }
 
 #[test]
@@ -193,11 +232,15 @@ fn a_final_run_answers_once_per_turn_and_a_warm_run_writes_one_token() {
         assert_eq!(body["think"], false);
         assert_eq!(body["messages"][0]["content"], SYSTEM);
     }
-    let warm_user = warm["messages"][1]["content"].as_str().unwrap();
-    let final_user = fin["messages"][1]["content"].as_str().unwrap();
-    assert!(final_user.starts_with(warm_user), "{warm_user:?} / {final_user:?}");
-    assert!(final_user.contains("Want me to run the whole suite?"));
-    assert!(!final_user.contains("old answer"), "only the newest turn: {final_user}");
+    // The warm-up's message, closed, then the fixed reply and the rest.
+    assert_eq!(warm["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(fin["messages"][1], warm["messages"][1]);
+    assert_eq!(fin["messages"][2], serde_json::json!({ "role": "assistant", "content": TURN_GOES_ON }));
+    assert_eq!(fin["messages"].as_array().unwrap().len(), 4);
+    let final_user = fin["messages"][3]["content"].as_str().unwrap();
+    assert!(final_user.contains("Want me to run the whole suite?") && final_user.ends_with(TURN_SO_FAR), "{final_user}");
+    let whole = format!("{}{final_user}", warm["messages"][1]["content"].as_str().unwrap());
+    assert!(!whole.contains("old answer"), "only the newest turn: {whole}");
     ollama::test_tags::set(None);
 }
 
@@ -530,10 +573,16 @@ fn a_completion_sends_the_turn_then_the_draft_and_answers_what_to_append() {
     assert_eq!(done["options"]["num_predict"], COMPLETE_NUM_PREDICT);
     assert_eq!(done["think"], false);
     assert_eq!(done["messages"][0]["content"], SYSTEM);
-    let final_user = fin["messages"][1]["content"].as_str().unwrap();
-    let complete_user = done["messages"][1]["content"].as_str().unwrap();
-    assert!(complete_user.starts_with(final_user), "{final_user:?} / {complete_user:?}");
-    assert!(complete_user.ends_with("typed so far:\nyes, run the\n\nReply with only how the message goes on, as one line that begins with exactly this text:\nyes, run the\n"), "{complete_user}");
+    // The final's messages byte for byte, closed, then its suggestion as the
+    // model's reply and the draft as a second user message: a hybrid model
+    // restores only a checkpoint taken inside the final's assistant opener.
+    assert_eq!(fin["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(done["messages"][1], fin["messages"][1]);
+    assert_eq!(done["messages"][2], serde_json::json!({ "role": "assistant", "content": "Run it" }));
+    assert_eq!(done["messages"][3]["role"], "user");
+    let complete_user = done["messages"][3]["content"].as_str().unwrap();
+    assert_eq!(complete_user, "The user has begun typing that next message. What they typed so far:\nyes, run the\n\nReply with only how the message goes on, as one line that begins with exactly this text:\nyes, run the\n");
+    assert_eq!(done["messages"].as_array().unwrap().len(), 4);
 
     // Nothing to complete, or switched off: no request.
     let sent = AtomicUsize::new(0);
@@ -594,12 +643,13 @@ fn a_completion_goes_on_from_the_kept_turn_without_the_transcript() {
 
     let bodies = bodies.lock().unwrap().clone();
     assert_eq!(bodies.len(), 3, "{bodies:?}");
-    let user = |at: usize| serde_json::from_str::<serde_json::Value>(&bodies[at]).unwrap()["messages"][1]["content"].as_str().unwrap().to_string();
-    assert!(!user(0).contains("Want me to run the whole suite?"), "the running turn has no last answer yet");
-    let (read_user, kept_user) = (user(1), user(2));
-    assert!(read_user.contains("Want me to run the whole suite?"));
-    let turn = read_user.split("\nThe user has begun typing").next().unwrap();
-    assert!(kept_user.starts_with(turn) && kept_user.contains("typed so far:\nand then\n"), "{kept_user}");
+    let message = |at: usize, of: usize| serde_json::from_str::<serde_json::Value>(&bodies[at]).unwrap()["messages"][of]["content"].as_str().unwrap().to_string();
+    assert!(!message(0, 1).contains("Want me to run the whole suite?"), "the running turn has no last answer yet");
+    let (read_turn, kept_turn) = (message(1, 1), message(2, 1));
+    assert!(read_turn.contains("Want me to run the whole suite?"));
+    assert_eq!(kept_turn, read_turn, "the kept turn is the message read");
+    assert_eq!(message(2, 2), "NONE", "no suggestion was written for the turn");
+    assert!(message(2, 3).contains("typed so far:\nand then\n"), "{}", message(2, 3));
 
     // Past its time the kept turn is read again.
     {

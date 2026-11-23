@@ -26,12 +26,23 @@
 //! (the turn so far, `num_predict: 1`), and at turn end `final` sends the same
 //! prompt plus the last answer: only the new tokens are read. That holds only
 //! if every later prompt starts with the earlier one byte for byte, which
-//! [`TurnPrompt`] guarantees: the system prompt is fixed, the user message
-//! opens with the turn's prompt, and each entry is rendered once, when it is
-//! first seen, and never again — its long or one-line form decided then, by
-//! the budget used so far. Past the budget, entries are one line each; when
-//! the last answer was one of those, `final` appends it in full after the
-//! prefix.
+//! [`TurnPrompt`] guarantees: the system prompt is fixed, the turn's text
+//! opens with its prompt, and each entry is rendered once, when it is first
+//! seen, and never again — its long or one-line form decided then, by the
+//! budget used so far. Past the budget, entries are one line each; when the
+//! last answer was one of those, `final` appends it in full after the prefix.
+//!
+//! A shared prefix is not enough for a hybrid or recurrent model (Qwen 3.5,
+//! Nemotron): its cache cannot be cut back to any token, so llama.cpp restores
+//! only a checkpoint, taken four tokens before the end of each prompt — inside
+//! the template's assistant opener. Text appended inside the same user message
+//! diverges before that, and every warm-up re-read the whole turn (measured
+//! 2026-11-23, `qwen3.5:9b`, `forcing full prompt re-processing` in
+//! `journalctl -u ollama`). So each warm-up *closes* the text it sent: the next
+//! request sends that text as its own user message, a fixed reply
+//! ([`TURN_GOES_ON`]) and the rest as a new user message, and so restores the
+//! warm-up's checkpoint ([`TurnPrompt::warm_messages`]). Attention-only models
+//! reuse the same prefix either way.
 //!
 //! # One run per turn
 //!
@@ -47,11 +58,15 @@
 //! # Completing a prompt being typed
 //!
 //! `complete` writes how a draft the user is typing goes on (the dim text
-//! after the caret, taken by Tab; a strip on the phone). It is the same
-//! request as `final` — the system prompt and the turn first, so Ollama reads
-//! only the new tokens — with one paragraph after the turn: the draft, and
-//! the order to reply with a line that *begins with the draft's last words*
-//! ([`draft_tail`]). That is what small models do reliably (a pre-filled
+//! after the caret, taken by Tab; a strip on the phone). It opens with the
+//! `final` request's messages byte for byte, then the turn's suggestion as the
+//! model's reply and one more user message: the draft, and the order to reply
+//! with a line that *begins with the draft's last words* ([`draft_tail`]).
+//! The draft is a message of its own for the hybrid models' sake (see above):
+//! appended inside the turn's last message, every keystroke re-read the whole
+//! turn (measured 2026-11-23, `qwen3.5:9b`: ~1 050 of 1 250 tokens each, about
+//! 3.5 s); after it, the final's checkpoint is restored and only the draft's
+//! message is read (0.6–1 s). That is what small models do reliably (a pre-filled
 //! assistant message is ignored by some chat templates, measured 2026-11-23),
 //! and it can be checked: a reply that does not begin with those words is
 //! dropped, the rest is the continuation ([`continuation`]). A draft needs one
@@ -316,14 +331,24 @@ fn turn_key(prompt: &TranscriptEntry, last: Option<&TranscriptEntry>) -> String 
 
 // ── The append-only prompt ──────────────────────────────────────────────────
 
-/// One turn's user message, grown entry by entry. Every rendering it hands
-/// out starts with every earlier one ([`TurnPrompt::message`]); only
-/// [`TurnPrompt::final_message`]'s tail is not kept.
+/// The fixed reply between two of a turn's user messages: the text a warm-up
+/// sent, closed, and what came after it (see the module's *Warm-up*).
+pub const TURN_GOES_ON: &str = "Noted. Waiting for the rest of the turn.";
+
+/// The line the last user message of a `final` or `complete` ends with.
+const TURN_SO_FAR: &str = "\nThat is the whole turn so far.\n";
+
+/// One turn's text, grown entry by entry. Every rendering it hands out starts
+/// with every earlier one ([`TurnPrompt::message`]); a request sends it as user
+/// messages split where warm-ups ended ([`TurnPrompt::warm_messages`]), and
+/// only [`TurnPrompt::final_messages`]' tail is not kept.
 #[derive(Debug, Clone)]
 pub struct TurnPrompt {
     turn: u64,
     budget_chars: usize,
     text: String,
+    /// Where each warm-up's text ended: the user messages split there.
+    cuts: Vec<usize>,
     /// The fingerprint of the last entry rendered, where the next read resumes.
     last: Option<u64>,
     /// That entry was an answer rendered one-line (past the budget).
@@ -338,25 +363,46 @@ impl TurnPrompt {
             "The user's last message to the coding agent ({agent}):\n{}\n\nWhat the agent did and said since, in order:\n",
             bounded(prompt.text.trim(), MAX_PROMPT_CHARS)
         );
-        Self { turn: fingerprint(prompt), budget_chars: budget_tokens * CHARS_PER_TOKEN, text, last: None, last_short: false }
+        Self { turn: fingerprint(prompt), budget_chars: budget_tokens * CHARS_PER_TOKEN, text, cuts: Vec::new(), last: None, last_short: false }
     }
 
-    /// The message so far — what a warm-up sends.
+    /// The turn's text so far, in one piece.
     pub fn message(&self) -> &str {
         &self.text
     }
 
-    /// The message plus, when the turn's last answer went one-line, that answer
-    /// in full: what a final run sends.
-    pub fn final_message(&self, answer: Option<&TranscriptEntry>) -> String {
-        match answer.filter(|_| self.last_short) {
-            Some(answer) => format!(
-                "{}\nThe agent's last message in full:\n{}\n",
-                self.text,
-                bounded(answer.text.trim(), MAX_ENTRY_CHARS)
-            ),
-            None => self.text.clone(),
+    /// The user messages a warm-up sends — the text so far, split where the
+    /// earlier warm-ups ended — and the end of this one, where the next
+    /// request splits it too.
+    pub fn warm_messages(&mut self) -> Vec<String> {
+        let messages = self.messages("");
+        if self.cuts.last().copied().unwrap_or(0) < self.text.len() {
+            self.cuts.push(self.text.len());
         }
+        messages
+    }
+
+    /// The user messages a final run (and a completion) sends: the warm-ups'
+    /// split, the last one closed by the rest of the text, the last answer in
+    /// full when it went one-line, and [`TURN_SO_FAR`].
+    pub fn final_messages(&self, answer: Option<&TranscriptEntry>) -> Vec<String> {
+        let full = match answer.filter(|_| self.last_short) {
+            Some(answer) => format!("\nThe agent's last message in full:\n{}\n", bounded(answer.text.trim(), MAX_ENTRY_CHARS)),
+            None => String::new(),
+        };
+        self.messages(&format!("{full}{TURN_SO_FAR}"))
+    }
+
+    /// The text split at the cuts, `tail` added to the last piece; empty
+    /// pieces dropped.
+    fn messages(&self, tail: &str) -> Vec<String> {
+        let mut bounds = vec![0];
+        bounds.extend(&self.cuts);
+        let mut pieces: Vec<String> = bounds.windows(2).map(|at| self.text[at[0]..at[1]].to_string()).collect();
+        let rest = &self.text[bounds.last().copied().unwrap_or(0)..];
+        pieces.push(format!("{rest}{tail}"));
+        pieces.retain(|piece| !piece.is_empty());
+        pieces
     }
 
     /// Render the turn's entries not yet rendered. The read resumes after the
@@ -449,14 +495,14 @@ pub fn budget_tokens(context_length: Option<u32>) -> usize {
 /// `slot`'s prompt brought up to `turn`: kept and grown when it is the same
 /// turn and still lines up, else started over. The system prompt is
 /// [`SYSTEM`], always.
-pub fn prompt_for<'s>(slot: &'s mut Option<TurnPrompt>, agent: &str, turn: Turn<'_>, budget_tokens: usize) -> &'s TurnPrompt {
+pub fn prompt_for<'s>(slot: &'s mut Option<TurnPrompt>, agent: &str, turn: Turn<'_>, budget_tokens: usize) -> &'s mut TurnPrompt {
     let same = slot.as_ref().is_some_and(|prompt| prompt.turn == fingerprint(turn.prompt));
     if !same || !slot.as_mut().is_some_and(|prompt| prompt.extend(turn.entries)) {
         let mut fresh = TurnPrompt::new(agent, turn.prompt, budget_tokens);
         fresh.extend(turn.entries);
         *slot = Some(fresh);
     }
-    slot.as_ref().expect("set above")
+    slot.as_mut().expect("set above")
 }
 
 // ── The output ──────────────────────────────────────────────────────────────
@@ -583,16 +629,16 @@ pub fn draft_tail(draft: &str) -> Option<String> {
     })
 }
 
-/// The paragraph a completion adds after the turn (`turn` is the final
-/// request's message, so everything before the paragraph is already read).
-fn complete_message(turn: &str, draft: &str, tail: &str) -> String {
+/// The user message a completion sends after the turn and the model's reply
+/// to it (see the module's *Completing a prompt being typed*).
+fn complete_message(draft: &str, tail: &str) -> String {
     let typed = draft.trim();
     let shown = match typed.char_indices().rev().nth(DRAFT_SHOWN_CHARS) {
         Some((at, c)) => format!("…{}", &typed[at + c.len_utf8()..]),
         None => typed.to_string(),
     };
     format!(
-        "{turn}\nThe user has begun typing that next message. What they typed so far:\n{shown}\n\nReply with only how \
+        "The user has begun typing that next message. What they typed so far:\n{shown}\n\nReply with only how \
          the message goes on, as one line that begins with exactly this text:\n{tail}\n"
     )
 }
@@ -655,9 +701,9 @@ struct Session {
     /// the model that wrote it.
     completed: Option<(String, String, Option<String>, String)>,
     /// The turn an ask last read, when it had ended: when, its key and its
-    /// final message — what a completion within [`KEPT_FOR`] is built on
-    /// without another transcript read. `None` while the turn runs.
-    ended: Option<(Instant, String, String)>,
+    /// final user messages — what a completion within [`KEPT_FOR`] is built
+    /// on without another transcript read. `None` while the turn runs.
+    ended: Option<(Instant, String, Vec<String>)>,
     last_warm: Option<Instant>,
 }
 
@@ -932,27 +978,33 @@ fn run(settings: &Settings, ask: &Ask<'_>, turn: Option<Turn<'_>>, backend: &Oll
         return Some(NextPrompt { turn_key: Some(key), ..NextPrompt::refused(Status::Refused, reason) });
     }
 
-    // The turn's message: grown from the transcript's turn, or the kept one.
-    let message = match turn {
+    // The turn's messages: grown from the transcript's turn, or the kept ones.
+    let messages = match turn {
         Some(turn) => {
             let budget = budget_tokens(settings.ollama_context_length);
             let prompt = prompt_for(&mut state.prompt, ask.agent, turn, budget);
             let ended = turn.final_answer();
-            let message = match ask.phase {
-                Phase::Warm => prompt.message().to_string(),
-                Phase::Final | Phase::Complete => prompt.final_message(ended),
+            let messages = match ask.phase {
+                Phase::Warm => prompt.warm_messages(),
+                Phase::Final | Phase::Complete => prompt.final_messages(ended),
             };
-            state.ended = ended.filter(|_| ask.phase != Phase::Warm).map(|_| (Instant::now(), key.clone(), message.clone()));
-            message
+            state.ended = ended.filter(|_| ask.phase != Phase::Warm).map(|_| (Instant::now(), key.clone(), messages.clone()));
+            messages
         }
-        None => state.ended.as_ref().map(|(.., message)| message.clone())?,
+        None => state.ended.as_ref().map(|(.., messages)| messages.clone())?,
     };
-    let user = match (draft, tail.as_deref()) {
-        (Some(draft), Some(tail)) => complete_message(&message, draft, tail),
-        _ => message,
+    // A completion follows the turn with the turn's suggestion as the model's
+    // reply (`NONE` when it has none yet), then the draft.
+    let follow_up = match (draft, tail.as_deref()) {
+        (Some(draft), Some(tail)) => {
+            let reply = state.answered.as_ref().filter(|(answered, ..)| *answered == key).and_then(|(_, text, _)| text.clone());
+            Some((reply.unwrap_or_else(|| "NONE".to_string()), complete_message(draft, tail)))
+        }
+        _ => None,
     };
+    let follow_up = follow_up.as_ref().map(|(reply, user)| (reply.as_str(), user.as_str()));
     let keep_alive = keep_alive_for(settings.ollama_keep_alive.as_deref(), (backend.pinned)(&addr, &model));
-    let body = chat_body(&model, &user, ask.phase, caps.iter().any(|c| c == "thinking"), keep_alive);
+    let body = chat_body(&model, &messages, follow_up, ask.phase, caps.iter().any(|c| c == "thinking"), keep_alive);
     let timeout = match ask.phase {
         Phase::Warm => WARM_TIMEOUT,
         Phase::Final => FINAL_TIMEOUT,
@@ -1002,11 +1054,13 @@ fn run(settings: &Settings, ask: &Ask<'_>, turn: Option<Turn<'_>>, backend: &Oll
     Some(NextPrompt::answered(text, &model, &key))
 }
 
-/// The `/api/chat` body. The phases differ only in `num_predict` (and a
-/// completion's paragraph after the turn): anything else that differed (the
-/// context length, the thinking switch) would reload the model or re-render
-/// the template and throw the cache away.
-fn chat_body(model: &str, user: &str, phase: Phase, thinking: bool, keep_alive: serde_json::Value) -> String {
+/// The `/api/chat` body: the system prompt, the turn's user messages with
+/// [`TURN_GOES_ON`] between them, and for a completion its `follow_up` — the
+/// model's reply and the draft's user message. Otherwise the phases differ
+/// only in `num_predict`: anything else that differed (the context length,
+/// the thinking switch) would reload the model or re-render the template and
+/// throw the cache away.
+fn chat_body(model: &str, turn: &[String], follow_up: Option<(&str, &str)>, phase: Phase, thinking: bool, keep_alive: serde_json::Value) -> String {
     let num_predict = match phase {
         Phase::Warm => 1,
         Phase::Final => FINAL_NUM_PREDICT,
@@ -1017,11 +1071,19 @@ fn chat_body(model: &str, user: &str, phase: Phase, thinking: bool, keep_alive: 
         "stream": false,
         "keep_alive": keep_alive,
         "options": { "temperature": 0.2, "num_predict": num_predict },
-        "messages": [
-            { "role": "system", "content": SYSTEM },
-            { "role": "user", "content": user },
-        ],
     });
+    let mut messages = vec![serde_json::json!({ "role": "system", "content": SYSTEM })];
+    for (at, user) in turn.iter().enumerate() {
+        if at > 0 {
+            messages.push(serde_json::json!({ "role": "assistant", "content": TURN_GOES_ON }));
+        }
+        messages.push(serde_json::json!({ "role": "user", "content": user }));
+    }
+    if let Some((reply, draft)) = follow_up {
+        messages.push(serde_json::json!({ "role": "assistant", "content": reply }));
+        messages.push(serde_json::json!({ "role": "user", "content": draft }));
+    }
+    body["messages"] = serde_json::Value::Array(messages);
     // A thinking model would spend the few tokens a line gets on its
     // reasoning; one without the capability rejects the field.
     if thinking {
