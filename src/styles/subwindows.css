@@ -1716,8 +1716,10 @@ html[data-steer-region="card"] .subwindow.focused .terminal-sign-in .terminal-si
   height: min(93vh, calc(100vh - 24px));
   max-height: min(93vh, calc(100vh - 24px));
 }
-/* Root and the cockpit views sit next to the title. Equal spaces flank the
-   system views and move the apps toward the window controls. Two classes on
+/* Root and the cockpit views sit next to the title, the apps against the
+   window controls, and the system views on the bar's centre: the spacers'
+   flex-grow is set inline from a measurement (`RootViewStrip`), 1 : 1 until
+   then. Two classes on
    purpose: projects-tabs.css loads after this file, and its one-class
    `.tab-strip { flex: 0 1 auto }` would otherwise win, so the strip would hug
    its tabs and the spacers would get no room. */
@@ -1730,6 +1732,7 @@ html[data-steer-region="card"] .subwindow.focused .terminal-sign-in .terminal-si
 }
 .root-view-spacer {
   flex: 1 0 0;
+  min-width: 0;
 }
 .root-view-divider {
   align-self: stretch;
