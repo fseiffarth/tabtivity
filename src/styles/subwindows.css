@@ -1717,12 +1717,15 @@ html[data-steer-region="card"] .subwindow.focused .terminal-sign-in .terminal-si
   max-height: min(93vh, calc(100vh - 24px));
 }
 /* Root and the cockpit views sit next to the title. Equal spaces flank the
-   system views and move the apps toward the window controls. */
-.root-view-strip {
+   system views and move the apps toward the window controls. Two classes on
+   purpose: projects-tabs.css loads after this file, and its one-class
+   `.tab-strip { flex: 0 1 auto }` would otherwise win, so the strip would hug
+   its tabs and the spacers would get no room. */
+.root-view-strip.tab-strip {
   flex: 0 0 auto;
   align-items: center;
 }
-.root-view-strip-expanded {
+.root-view-strip.root-view-strip-expanded {
   flex: 1 1 auto;
 }
 .root-view-spacer {
