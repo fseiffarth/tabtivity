@@ -207,6 +207,9 @@ export function MailComposeDialog({
   // itself from `header.id`). Display-only until Tab / the right arrow.
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [selection, setSelection] = useState({ start: 0, end: 0 });
+  // The ghost belongs to the caret: with focus elsewhere (the subject, a
+  // button) the last selection is stale, so nothing is asked or shown.
+  const [bodyFocused, setBodyFocused] = useState(false);
   const pendingCaret = useRef<number | null>(null);
   const canComplete = useMailAiFeature(fromAccount, "autocomplete");
   const quoteIntro = header
@@ -220,7 +223,7 @@ export function MailComposeDialog({
     : null;
   const zoneEnd = mailCompletionZoneEnd(text, quote);
   const caret = Math.min(selection.start, text.length);
-  const completionAtEnd = mailCaretCompletes(text, { start: caret, end: Math.min(selection.end, text.length) }, zoneEnd);
+  const completionAtEnd = bodyFocused && mailCaretCompletes(text, { start: caret, end: Math.min(selection.end, text.length) }, zoneEnd);
   const completion = useMailComplete({
     enabled: canComplete,
     accountId: from,
@@ -625,9 +628,14 @@ export function MailComposeDialog({
                 trackSelection(e.target);
               }}
               onSelect={(e) => trackSelection(e.currentTarget)}
+              onFocus={(e) => {
+                setBodyFocused(true);
+                trackSelection(e.currentTarget);
+              }}
+              onBlur={() => setBodyFocused(false)}
               onKeyDown={completionKey}
             />
-            {completion.text && <PromptGhost box={bodyRef} typed={text.slice(0, caret)} rest={completion.text} />}
+            {bodyFocused && completion.text && <PromptGhost box={bodyRef} typed={text.slice(0, caret)} rest={completion.text} />}
           </div>
 
           <div className="mail-attach-row">

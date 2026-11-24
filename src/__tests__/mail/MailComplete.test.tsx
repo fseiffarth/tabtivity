@@ -111,6 +111,14 @@ describe("the completion zone", () => {
     expect(oneLine.endsWith(windowDraft(oneLine))).toBe(true);
     expect(windowDraft(oneLine).startsWith("abc ")).toBe(true);
     expect(windowDraft("short")).toBe("short");
+    // No space or line to cut at, and the cut splits an emoji: the window
+    // never opens on its lone low surrogate.
+    const emoji = "\u{1F600}".repeat(NEXT_PROMPT_MAX_DRAFT_CHARS);
+    const cut = windowDraft(`${emoji}x`);
+    expect(cut.length).toBeLessThanOrEqual(NEXT_PROMPT_MAX_DRAFT_CHARS);
+    const first = cut.charCodeAt(0);
+    expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
+    expect(cut.startsWith("\u{1F600}") && cut.endsWith("x")).toBe(true);
     expect(newMailSlot()).toMatch(/^mail-[0-9a-f]{12}$/);
   });
 });

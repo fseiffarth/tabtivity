@@ -270,7 +270,11 @@ export function windowDraft(draft: string): string {
   const line = tail.indexOf("\n");
   if (line >= 0) return tail.slice(line + 1);
   const word = tail.search(/\s/u);
-  return word >= 0 ? tail.slice(word + 1) : tail;
+  if (word >= 0) return tail.slice(word + 1);
+  // No line or word to cut at: never open on the low half of a surrogate
+  // pair the cut split (the backend's serde refuses a lone surrogate).
+  const code = tail.charCodeAt(0);
+  return code >= 0xdc00 && code <= 0xdfff ? tail.slice(1) : tail;
 }
 
 /** The longest draft completed, and the longest continuation shown (the

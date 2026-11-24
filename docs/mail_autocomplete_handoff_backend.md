@@ -105,3 +105,29 @@ handoff file was added meanwhile (docs-only).
   then reads as `unavailable` and a 60 s frontend back-off.
 - Never run live: neither the desktop composer nor the phone path, nor the
   window's `mailComplete` (frontend half).
+
+## Final review — flagged for user (2026-11-24)
+
+Static review of `b1206dc13..bbda6ed47`, no confirmed bug in the range. Two
+flagged items were cheap real bugs and were fixed on integration with a
+regression test each (red without the fix, green with it):
+
+- The ghost stayed drawn after the body lost focus (stale selection): it now
+  asks and shows only while the body is focused.
+- `windowDraft` could open on a lone low surrogate when the 2000-unit cut had
+  no line or word to fall on (serde refuses it): it now drops that half.
+
+Left as they are (design or doubtful):
+
+1. Slot TTL is checked on access only, and the phone's `phone` slot is never
+   released: up to 3000 chars of a plain original stay in process memory
+   until the next request or LRU eviction (never written or logged).
+2. D6 in the composer relies on the quote being recognisable: deleting the
+   forward mark or the `> ` prefixes of a decrypted quote sends that text as
+   draft.
+3. `has_link` catches only `://` and `www.`; bare domains and `mailto:` pass.
+4. A continuation that wraps to a second visual line can paint over the
+   quote's lead-in.
+5. The phone path re-resolves ids with a local-index page read per
+   completion (no IMAP).
+6. `mail_formalize_reply` and Summarize still read decrypted originals.

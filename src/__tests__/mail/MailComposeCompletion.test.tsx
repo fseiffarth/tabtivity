@@ -50,7 +50,9 @@ function open(props: { ai?: MailAccount["ai"]; mode?: "reply" | "new" | "forward
       onClose={() => {}}
     />,
   );
-  return screen.getAllByRole("textbox").find((el) => el.classList.contains("mail-compose-body")) as HTMLTextAreaElement;
+  const box = screen.getAllByRole("textbox").find((el) => el.classList.contains("mail-compose-body")) as HTMLTextAreaElement;
+  fireEvent.focus(box);
+  return box;
 }
 
 /** Type `typed` above whatever the box already holds below it, caret after it. */
@@ -87,6 +89,18 @@ describe("the composer's ghost text", () => {
     expect(box.getAttribute("aria-description")).toContain("slides for me");
     // The quote is untouched and the ghost is display-only.
     expect(box.value).toBe(`Thanks for the${quote}`);
+  });
+
+  it("hides the ghost and asks nothing while the body is not focused", async () => {
+    const box = open();
+    await typeAbove(box, "Thanks for the");
+    expect(ghost()).toBe(" slides for me");
+    const asked = calls("mail_ai_complete").length;
+    fireEvent.blur(box);
+    expect(ghost()).toBeNull();
+    fireEvent.change(box, { target: { value: `Thanks for the slides, ${box.value}` } });
+    await advance(500);
+    expect(calls("mail_ai_complete")).toHaveLength(asked);
   });
 
   it("warms a reply when it opens, once", async () => {
