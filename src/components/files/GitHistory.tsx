@@ -673,19 +673,14 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
 
   const searchActive = query.trim() !== "" && results !== null;
 
-  // Load another page when scrolling brings the button into view. If it already
-  // fits when the page opens, leave the button available for an explicit click.
-  // The viewport observer also accounts for clipping by the panel's scroller.
+  // Keep paging while the button fits, including when the panel first opens or
+  // grows. Observing again after each page fills the panel before scrolling starts.
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || !hasMore || !autoPage || typeof IntersectionObserver === "undefined") return;
-    let wasOutside = false;
     const io = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          if (entry.intersectionRatio < 1) wasOutside = true;
-          else if (wasOutside) loadMore();
-        }
+        if (entries.some((entry) => entry.intersectionRatio === 1)) loadMore();
       },
       { threshold: 1 },
     );
