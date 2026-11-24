@@ -1963,6 +1963,7 @@ pub fn run() {
             commands::projects::set_project_remote_control,
                         commands::projects::set_project_schedule_mcp,
             commands::projects::set_project_git_push_mcp,
+            commands::projects::set_project_mcp_off,
             commands::root_mcp::git_push_mcp_proposals,
             commands::root_mcp::git_push_mcp_decide,
             commands::root_mcp::git_push_mcp_clear,

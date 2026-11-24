@@ -37,6 +37,7 @@ import { useFastMode } from "../../lib/agents/fastMode";
 import { ActivityCalendar } from "./ActivityCalendar";
 import { CategoryEditor } from "./CategoryEditor";
 import { AgentPrivacyDialog } from "./AgentPrivacyDialog";
+import { ProjectMcpDialog } from "./ProjectMcpDialog";
 import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { ExtendToRemoteDialog } from "./ExtendToRemoteDialog";
 import { ProjectExportDialog } from "./ProjectExportDialog";
@@ -1054,6 +1055,7 @@ export function ProjectPill({
   const [showExport, setShowExport] = useState(false);
   const [editCategories, setEditCategories] = useState(false);
   const [showAgentPrivacy, setShowAgentPrivacy] = useState(false);
+  const [showProjectMcp, setShowProjectMcp] = useState(false);
   const [extendRemote, setExtendRemote] = useState(false);
   // Set instead of `extendRemote` alone when a global machine was handed to this
   // (local-only) project from the header's Machines menu — seeds the "Extend to
@@ -2105,6 +2107,19 @@ export function ProjectPill({
                 <UntestedTag id="agentPrivacy.menuItem" />
               </button>
             )}
+            {/* The project's Tabtivity MCP tools, one switch per lane
+                (`services::project_lanes`). */}
+            <button
+              className="untested"
+              onClick={() => {
+                setContextMenu(null);
+                setShowProjectMcp(true);
+              }}
+              title={t("projectMcp.menuTitle")}
+            >
+              {t("projectMcp.menuItem")}
+              <UntestedTag id="projectMcp.menuItem" />
+            </button>
             <button
               className="untested"
               onClick={() => {
@@ -2425,6 +2440,10 @@ export function ProjectPill({
 
       {showAgentPrivacy && (
         <AgentPrivacyDialog project={project} onClose={() => setShowAgentPrivacy(false)} />
+      )}
+
+      {showProjectMcp && (
+        <ProjectMcpDialog project={project} onClose={() => setShowProjectMcp(false)} />
       )}
 
       {/* Category-tag editor */}

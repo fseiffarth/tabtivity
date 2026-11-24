@@ -3728,6 +3728,57 @@ fn tabs_lane_grant_matrix() {
     assert!(!shell.env.contains_key(TABS_TOKEN_ENV));
 }
 
+/// A project's own per-lane switches (`services::project_lanes`): a lane in
+/// the entry's `mcp_off` is handed to none of its spawns, the others stay,
+/// and the listener's per-request check refuses a session of an off lane.
+#[test]
+fn project_mcp_off_drops_exactly_the_switched_off_lanes() {
+    use crate::services::project_lanes;
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path();
+    std::fs::write(state.join("settings.json"), json!({ "schedule_mcp": true }).to_string()).unwrap();
+    let projects = |off: Value| {
+        let entry = json!({"id":"p","name":"P","status":"active","position":0,"local_file":"","directory":state.to_string_lossy(),"mcp_off":off});
+        std::fs::write(state.join("projects.json"), json!([entry]).to_string()).unwrap();
+    };
+    let saved = {
+        let path = crate::services::mobile_control::headless::session_file(state, "p");
+        let tab = serde_json::from_value(json!({"key":"mine","label":"mine","cmd":"claude","cwd":state.to_string_lossy(),"kind":"agent"})).unwrap();
+        crate::services::workspace::tmux_of(&crate::services::workspace::create_tab_in(&path, "p", tab, None).unwrap().tab).map(str::to_string)
+    };
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
+    let env_of = |lane: &str| match lane {
+        "cockpit" => COCKPIT_TOKEN_ENV, "help" => HELP_TOKEN_ENV, "schedule" => SCHEDULE_TOKEN_ENV, "git" => GIT_TOKEN_ENV,
+        "markup" => MARKUP_TOKEN_ENV, "print" => PRINT_TOKEN_ENV, "tabs" => TABS_TOKEN_ENV, other => panic!("{other}"),
+    };
+    let granted = || {
+        let mut o = opts("claude", &[], Some("p"));
+        o.id = "p:mcp-off".into();
+        o.tmux_session = saved.clone();
+        let store = TokenStore::default();
+        grant_lanes(&mut o, true, Some(&serving), &store, state);
+        project_lanes::LANES.into_iter().filter(|lane| o.env.contains_key(env_of(lane))).collect::<Vec<_>>()
+    };
+    projects(json!([]));
+    let all = granted();
+    for lane in ["cockpit", "help", "git", "print", "tabs"] {
+        assert!(all.contains(&lane), "{lane} granted with nothing off: {all:?}");
+    }
+    for lane in all.clone() {
+        projects(json!([lane]));
+        let left = granted();
+        assert!(!left.contains(&lane), "{lane} switched off");
+        assert_eq!(left.len(), all.len() - 1, "only {lane} dropped: {left:?}");
+    }
+    projects(json!(project_lanes::LANES));
+    assert!(granted().is_empty(), "every lane off");
+    // The listener's half: an off lane's running session is refused now.
+    let printer = Identity { tab: "p:mcp-off".into(), caller: Caller::Printer, project: Some("p".into()), schedule_target: None, push: None, endpoint: None, model: None };
+    assert!(project_lanes::refuses_at(&state.join("projects.json"), &printer));
+    projects(json!([]));
+    assert!(!project_lanes::refuses_at(&state.join("projects.json"), &printer));
+}
+
 #[test]
 fn tabs_tools_are_served_to_the_tabs_identity_alone() {
     for tool in crate::services::tabs_mcp::TOOLS {

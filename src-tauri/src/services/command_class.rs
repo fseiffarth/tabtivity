@@ -896,6 +896,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("set_project_description", Core),
     ("set_project_git_disabled", Core),
     ("set_project_git_push_mcp", Core),
+    ("set_project_mcp_off", Core),
     ("set_project_mobile_access", Core),
     ("set_project_name", Core),
     ("set_project_openvpn", Core),

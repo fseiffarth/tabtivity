@@ -1469,6 +1469,9 @@ export interface AgentPrivacy {
   cut_network?: boolean;
 }
 
+/** A Tabtivity MCP lane a project can switch off (`project_lanes::LANES`). */
+export type ProjectMcpLane = "cockpit" | "help" | "schedule" | "git" | "markup" | "print" | "tabs";
+
 export interface ProjectEntry {
   agent_privacy?: AgentPrivacy;
   schedule_mcp?: "off" | "propose" | "apply";
@@ -1476,6 +1479,9 @@ export interface ProjectEntry {
    *  messages gets the host's fixed notice queued once it is idle. Absent = off. */
   tab_messages_wake?: boolean;
   git_push_mcp?: GitPushMcpPolicy;
+  /** The Tabtivity MCP lanes this project's agent tabs are not handed
+   *  (`services::project_lanes`); absent or empty = every lane on. */
+  mcp_off?: ProjectMcpLane[];
   id: string;
   name: string;
   /** "current" | "active" | "inactive" */

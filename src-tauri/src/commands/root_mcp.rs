@@ -307,6 +307,14 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         security::audit_reason(&audit_session, "", "refused", started.elapsed(), Some("batch"));
         return Json(root_mcp::rpc_error(Value::Null, -32600, "batch requests are not supported: one message per request")).into_response();
     }
+    // The project switched this session's lane off since it was granted
+    // (`services::project_lanes`): read per request, so a running tab loses
+    // the lane without a restart. Never a help session: its token holds no
+    // project.
+    if crate::services::project_lanes::refuses(&session.identity) {
+        security::audit_reason(&audit_session, &tool, "denied", started.elapsed(), Some("project_off"));
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if session.identity.caller == root_mcp::Caller::Web {
         // The assistant's web lane (`services::web_lane`): the guarded fetch
         // and the search, nothing else. This branch always returns, so a web

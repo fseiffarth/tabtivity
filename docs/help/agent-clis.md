@@ -60,6 +60,18 @@ too. Turn it on before launching a new agent to give that agent the tools.
 Existing MCP tools retain their separate permissions. Tabby keeps its web and
 help tools.
 
+## Switch Tabtivity's tools off for one project
+
+Right-click a project's pill and choose **Tabtivity tools…**: one switch per
+MCP server Tabtivity hands that project's agent tabs (Cockpit, Help,
+Scheduled prompts, Push/release/CI, PDF markup questions, Printing, Tab
+messages). A server switched off is not given to the project's new agent tabs,
+and a running tab's next call to it is refused; Help stays in a running tab
+until it restarts. Other projects keep their tools. The switches in **Settings
+→ Agents → Tabtivity tools** still apply to every project: a server off there
+stays off whatever the project says. The project's choice is kept in
+Tabtivity's own project list, never in the project folder.
+
 ## Let agent tabs of a project message each other
 
 Local agent tabs of one project can leave each other short messages through

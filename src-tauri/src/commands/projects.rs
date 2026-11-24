@@ -2129,6 +2129,19 @@ pub fn set_project_schedule_mcp(project_id: String, level: String) -> Result<(),
     })
 }
 
+/// The project's per-lane MCP switches (`services::project_lanes`): `off` is
+/// the full list of lanes switched off, empty for all on. Returns the stored
+/// list. Authority stays in projects.json; never copied into the tree.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_project_mcp_off(project_id: String, off: Vec<String>) -> Result<Vec<String>, String> {
+    let off = crate::services::project_lanes::normalise(&off)?;
+    patch_project_entry(&project_id, |entry| {
+        crate::services::project_lanes::store(entry, &off);
+        Ok(())
+    })?;
+    Ok(off.into_iter().map(str::to_string).collect())
+}
+
 /// The agent-push policy (`services::git_push_mcp`): level and protected
 /// branches. Authority stays in projects.json; never copied into the tree.
 #[cfg_attr(feature = "desktop", tauri::command)]

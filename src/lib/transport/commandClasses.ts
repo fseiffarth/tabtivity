@@ -649,6 +649,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["set_project_description", "core"],
   ["set_project_git_disabled", "core"],
   ["set_project_git_push_mcp", "core"],
+  ["set_project_mcp_off", "core"],
   ["set_project_mobile_access", "core"],
   ["set_project_name", "core"],
   ["set_project_openvpn", "core"],

@@ -1241,6 +1241,9 @@ fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
 /// - those project agents with a schedule target: the **markup** lane while
 ///   `markup_mcp` is on (the window, or a server daemon).
 ///
+/// Each of those lanes is also skipped where the spawn's project switched it
+/// off (`services::project_lanes`, the trusted entry's `mcp_off`).
+///
 /// `runtime` is this process's listener ([`runtime`]): `None` hands out
 /// nothing, and one that does not serve the root lane (the Mobile host) hands
 /// out neither a root nor a reader token; a markup token only where
@@ -1272,10 +1275,14 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     }
     let project_lanes = agent_spawn && !root_agent && reader_project.is_none() && !opts.sandbox
         && opts.project_id.is_some() && !trusted.off_host(opts) && trusted.settings.is_some();
+    // The project's own per-lane switches (`services::project_lanes`), read
+    // from its trusted `projects.json` entry: a lane switched off there is
+    // handed to none of the project's spawns, whatever its global switch says.
+    let lane_on = |lane: &str| super::project_lanes::allows(trusted.entry.as_ref(), lane);
     if project_lanes {
         let project = opts.project_id.clone().unwrap_or_default();
         let tool_models = trusted.tool_models();
-        if super::schedule_mcp::level_at(&trusted.state, &project).is_ok() {
+        if lane_on("schedule") && super::schedule_mcp::level_at(&trusted.state, &project).is_ok() {
             grant_schedule(opts, runtime, store, &tool_models);
         }
         // Agent-requested pushes (`services::git_push_mcp`), beside the
@@ -1284,27 +1291,27 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         // them on. The bound directory is the trusted entry's, canonicalised;
         // a project without one gets no token.
         let dir = trusted.entry.as_ref().and_then(super::remote::entry_directory).and_then(|d| std::fs::canonicalize(d).ok());
-        if let Some(dir) = dir.filter(|_| super::git_push_mcp::enabled_in(&trusted.state.join("settings.json"))) {
+        if let Some(dir) = dir.filter(|_| lane_on("git") && super::git_push_mcp::enabled_in(&trusted.state.join("settings.json"))) {
             grant_git_push(opts, runtime, store, dir, &tool_models);
         }
     }
     // The help lane merges into the Vibe env the lanes above set outright.
-    if agent_spawn && help_reaches(opts, &trusted) && trusted.settings.as_ref().is_some_and(|s| s.help_mcp()) {
+    if agent_spawn && help_reaches(opts, &trusted) && lane_on("help") && trusted.settings.as_ref().is_some_and(|s| s.help_mcp()) {
         grant_help(opts, runtime, store, &trusted.tool_models());
     }
     // Last, after help: the markup questions server (`services::markup_mcp`)
     // merges into the same Vibe env. Its asks live in this process, so only a
     // process whose views answer them grants it (`Runtime::serves_markup`).
-    if project_lanes && runtime.serves_markup && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
+    if project_lanes && runtime.serves_markup && lane_on("markup") && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
         grant_markup(opts, runtime, store, &trusted.tool_models());
     }
     // The print requests server (`services::print_mcp`), merged into the same
     // Vibe env after markup. Approval needs the window's preview, so only the
     // window grants it (`Runtime::serves_print`).
-    if project_lanes && runtime.serves_print() && trusted.settings.as_ref().is_some_and(|s| s.print_mcp()) {
+    if project_lanes && runtime.serves_print() && lane_on("print") && trusted.settings.as_ref().is_some_and(|s| s.print_mcp()) {
         grant_print(opts, runtime, store, &trusted.tool_models());
     }
-    if agent_spawn && reader_project.is_none() && help_reaches(opts, &trusted)
+    if agent_spawn && reader_project.is_none() && help_reaches(opts, &trusted) && lane_on("cockpit")
         && trusted.settings.as_ref().is_some_and(|s| s.cockpit_mcp()) {
         grant_cockpit(opts, runtime, store, &trusted.state, &trusted.tool_models());
     }
@@ -1315,7 +1322,7 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     // The class comes from the gate's stamp and `local_model`, both final by
     // now: `launch_prep::prepare` runs the gate before this, and nothing
     // between here and the home it prepares changes either.
-    if project_lanes && runtime.serves_tabs() && trusted.settings.as_ref().is_some_and(|s| s.tabs_mcp())
+    if project_lanes && runtime.serves_tabs() && lane_on("tabs") && trusted.settings.as_ref().is_some_and(|s| s.tabs_mcp())
         && tabs_reaches(opts, &trusted) {
         grant_tabs(opts, runtime, store, &trusted.state, &trusted.tool_models());
     }

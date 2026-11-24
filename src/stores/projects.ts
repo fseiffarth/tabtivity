@@ -13,6 +13,7 @@ import {
   type GitPushMcpLevel,
   type GitPushMcpPolicy,
   type ProjectEntry,
+  type ProjectMcpLane,
   type PublishFrom,
   type RemoteSpec,
   type SandboxSourceDecision,
@@ -1171,6 +1172,9 @@ interface ProjectsStore {
   /** The agent-push policy (`services::git_push_mcp`): level and protected
    *  branches; an omitted argument leaves that field alone. */
   setProjectGitPushMcp: (id: string, level?: GitPushMcpLevel, protectedBranches?: string[]) => Promise<void>;
+  /** The project's per-lane MCP switches (`services::project_lanes`): the full
+   *  list of lanes switched off. */
+  setProjectMcpOff: (id: string, off: ProjectMcpLane[]) => Promise<void>;
   /** Opt a remote project in/out of auto-connect (connect it silently on launch
    *  and activation). Only offered once the connect can complete with no prompt —
    *  a saved SSH password, or a host recorded as `key_auth`; `autoConnectRemote`
@@ -2128,6 +2132,11 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   setProjectGitPushMcp: async (id, level, protectedBranches) => {
     const policy = await invoke<GitPushMcpPolicy>("set_project_git_push_mcp", { projectId: id, level: level ?? null, protected: protectedBranches ?? null });
     patchProject(id, (project) => ({ ...project, git_push_mcp: policy }));
+  },
+
+  setProjectMcpOff: async (id, off) => {
+    const stored = await invoke<ProjectMcpLane[]>("set_project_mcp_off", { projectId: id, off });
+    patchProject(id, (project) => ({ ...project, mcp_off: stored.length > 0 ? stored : undefined }));
   },
 
   setProjectAutoConnect: async (id, enabled) => {
