@@ -854,12 +854,34 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
         webview
             .inner()
             .connect_web_process_terminated(move |view, reason| {
+                let started = services::webkit_gpu::started_on();
+                let at = storage::iso_now();
                 let msg = format!(
-                    "=== WEBVIEW '{label}' TERMINATED {} reason={reason:?} ===",
-                    storage::iso_now()
+                    "=== WEBVIEW '{label}' TERMINATED {at} reason={reason:?} paint={} ===",
+                    started.map_or("unknown", services::webkit_gpu::PaintPath::label)
                 );
                 crash_log_append(&msg);
                 eprintln!("{msg}");
+                // A crash on the GPU path the setting chose: the next launch
+                // paints on the CPU, and the reloaded window asks whether to
+                // turn it back on (`services::webkit_gpu`). Written before the
+                // reload below, so the page it loads reads the new settings.
+                if services::webkit_gpu::crash_falls_back(
+                    started,
+                    reason == WebProcessTerminationReason::Crashed,
+                ) {
+                    let msg = match services::webkit_gpu::fall_back_to_cpu_at(&storage::settings_path(), &at) {
+                        Ok(true) => Some(format!(
+                            "=== GPU COMPOSITING TURNED OFF {at}: the renderer crashed on the GPU path; the next launch paints on the CPU ==="
+                        )),
+                        Ok(false) => None,
+                        Err(why) => Some(format!("=== GPU COMPOSITING NOT TURNED OFF {at}: {why} ===")),
+                    };
+                    if let Some(msg) = msg {
+                        crash_log_append(&msg);
+                        eprintln!("{msg}");
+                    }
+                }
                 // An intentional restart (the memory watchdog's) is not a crash
                 // and must not spend the budget — so this stays before the count.
                 if reason == WebProcessTerminationReason::TerminatedByApi {
@@ -1465,6 +1487,7 @@ pub fn run() {
         use services::webkit_video::DMABUF_RENDERER_VAR;
         let gpu = storage::load_settings().is_some_and(|s| s.gpu_compositing());
         let inherited = std::env::var_os(DMABUF_RENDERER_VAR);
+        services::webkit_gpu::record_start(services::webkit_gpu::paint_path(inherited.as_deref(), gpu));
         if services::webkit_gpu::should_disable_dmabuf(inherited.as_deref(), gpu) {
             std::env::set_var(DMABUF_RENDERER_VAR, "1");
         }

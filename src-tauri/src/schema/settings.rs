@@ -818,6 +818,11 @@ pub struct Settings {
     /// webview regardless. Read via `gpu_compositing()`, strict default-off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_compositing: Option<bool>,
+    /// When a renderer crash on the GPU path turned `gpu_compositing` off
+    /// (`services::webkit_gpu::fall_back_to_cpu_at`, ISO time). The main window
+    /// asks once whether to turn it back on; either answer clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_compositing_fallback: Option<String>,
     /// EXPERIMENTAL, default OFF. The markdown relationship graph: a "Graph"
     /// mode on the markdown viewer that crawls the viewed document's local-file
     /// links and renders them as a clickable navigation map. Purely a frontend

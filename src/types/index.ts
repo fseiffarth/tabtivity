@@ -821,6 +821,10 @@ export interface Settings {
    *  a restart (`docs/done/gpu_compositing_plan.md`). Like `terminal_webgl`, never
    *  carried by Debug mode. */
   gpu_compositing?: boolean;
+  /** When a renderer crash on the GPU path turned `gpu_compositing` off (ISO
+   *  time, written by the backend). `GpuFallbackHost` asks once whether to turn
+   *  it back on; either answer clears it (`null`). */
+  gpu_compositing_fallback?: string | null;
   /** EXPERIMENTAL, default OFF. The markdown relationship graph: adds a "Graph"
    *  mode to the markdown viewer that crawls the viewed document's local-file
    *  links (markdown targets recursively, everything else as a leaf) and renders
