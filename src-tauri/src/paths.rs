@@ -128,7 +128,12 @@ const TRUSTED_HELPERS: &[&str] =
     &["git", "tmux", "ssh", "scp", "sftp", "rsync", "cmd", "powershell", "icacls"];
 
 /// Directories only root can add a program to on a sane Unix install. Each
-/// hit is still checked with [`root_owned_file`].
+/// hit is still checked with [`root_owned_file`]. The last two are NixOS's,
+/// where `/usr/bin` holds only `env`: its setuid wrappers (`pkexec` works only
+/// from there, the store copy has no setuid bit, so the wrappers come first)
+/// and the system profile. Both change only through a root `nixos-rebuild`;
+/// `~/.nix-profile` and `/etc/profiles/per-user` are the user's choice and
+/// stay out.
 #[cfg(unix)]
 const SYSTEM_BIN_DIRS: &[&str] = &[
     "/usr/bin",
@@ -137,6 +142,8 @@ const SYSTEM_BIN_DIRS: &[&str] = &[
     "/sbin",
     "/usr/local/bin",
     "/usr/local/sbin",
+    "/run/wrappers/bin",
+    "/run/current-system/sw/bin",
 ];
 
 /// Where an administrator-installed copy of a helper lives on Windows, in
@@ -1985,6 +1992,15 @@ pub(crate) mod tests {
         // An unset or empty variable drops its dirs; it never means "here".
         assert_eq!(windows_system_bin_dirs(None, Some(OsStr::new(""))), Vec::<PathBuf>::new());
         assert_eq!(windows_system_bin_dirs(Some(OsStr::new("")), Some(OsStr::new(r"C:\Windows"))).len(), 3);
+    }
+
+    /// NixOS: `pkexec` elevates only as its setuid wrapper, so the wrappers
+    /// are looked in before the system profile's plain store copy.
+    #[cfg(unix)]
+    #[test]
+    fn nixos_setuid_wrappers_come_before_the_system_profile() {
+        let at = |dir: &str| SYSTEM_BIN_DIRS.iter().position(|d| *d == dir).unwrap();
+        assert!(at("/run/wrappers/bin") < at("/run/current-system/sw/bin"));
     }
 
     #[cfg(unix)]

@@ -122,8 +122,7 @@ impl ManagedProcess {
         #[cfg(target_os = "linux")]
         let mut command = {
             // Resolve a system fence, not an executable planted in the project.
-            let fence = ["/usr/bin/bwrap", "/bin/bwrap"].iter().find(|path| Path::new(path).is_file())
-                .ok_or("copilot_fence_unavailable")?;
+            let fence = crate::paths::system_executable("bwrap").ok_or("copilot_fence_unavailable")?;
             let mut command = tokio::process::Command::new(fence);
             command.args(fence_args(&executable, &installation, &project));
             command

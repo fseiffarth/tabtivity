@@ -1369,6 +1369,10 @@ fn write_keyring_filter() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// NixOS's current system profile, put back under the fence's private `/run`.
+#[cfg(any(target_os = "linux", test))]
+const NIXOS_SYSTEM_PROFILE: &str = "/run/current-system";
+
 /// Pure bubblewrap argv builder.  Later mounts intentionally shadow earlier
 /// ones: the scope home (or, with no `home_src`, an empty tmpfs) replaces the
 /// user's home and hides everything in it, selected toolchain paths and
@@ -1409,6 +1413,12 @@ pub(crate) fn bwrap_args(
         "--ro-bind-try".into(),
         "/run/systemd/resolve".into(),
         "/run/systemd/resolve".into(),
+        // NixOS keeps every system program (and nix-ld's loader behind
+        // `/lib64/ld-linux*`) under this link into the store; the store is
+        // already readable through `/`, so it shows nothing new. Skipped elsewhere.
+        "--ro-bind-try".into(),
+        NIXOS_SYSTEM_PROFILE.into(),
+        NIXOS_SYSTEM_PROFILE.into(),
     ];
     match home_src {
         Some(src) => args.extend(["--bind".into(), src.into(), home.into()]),
