@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { SettingsCard, SettingsHeader, SettingsList } from "../layout/settingsUi";
@@ -547,6 +547,12 @@ export function AgentsPanel({
     });
   };
 
+  // The Accounts & keys logins list only the CLIs installed here.
+  const installedLoginIds = useMemo(
+    () => (agents ? new Set(agents.filter((a) => a.installed).map((a) => loginIdForCmd(a.id))) : null),
+    [agents],
+  );
+
   // The sign-in line on an installed card: read-only here (the group below
   // owns the import / sign-out buttons), and absent for a CLI whose login
   // Tabtivity cannot share, so no card claims "not signed in" it cannot know.
@@ -1085,7 +1091,7 @@ export function AgentsPanel({
       </div>
       <div className="agents-groups">
         <AgentsGroup title={t("agents.groupAccounts")} summary={t("agents.sumAccounts")}>
-          <AgentAccounts onChange={() => setLoginsVersion((v) => v + 1)} />
+          <AgentAccounts onChange={() => setLoginsVersion((v) => v + 1)} installed={installedLoginIds} />
         </AgentsGroup>
         <AgentsGroup
           title={<>{t("settings.agentFenceTitle")} <UntestedTag id="settings.agentFenceTitle" /></>}

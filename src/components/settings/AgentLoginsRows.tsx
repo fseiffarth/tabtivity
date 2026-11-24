@@ -46,9 +46,15 @@ export interface AgentLogin {
  *  re-reads them when the API keys below change. */
 export function AgentLoginsRows({
   refreshKey = 0,
+  installed = null,
   onChange,
 }: {
   refreshKey?: number;
+  /** Login ids of the CLIs installed on this computer. Given, a CLI that is
+   *  not installed gets no row unless Tabtivity still holds a credential for
+   *  it (a login or API key), so that one keeps its way out. `null` while
+   *  the install list is unknown: every row shows. */
+  installed?: ReadonlySet<string> | null;
   /** Called after an import or sign-out, so a view of the same logins (the
    *  Agents section's cards) can re-read them. */
   onChange?: () => void;
@@ -69,7 +75,9 @@ export function AgentLoginsRows({
     [],
   );
   if (!logins) return null;
-  const rows = logins.filter((l) => l.shared);
+  const rows = logins.filter(
+    (l) => l.shared && (!installed || installed.has(l.id) || l.signed_in || !!l.api_key),
+  );
   const run = (id: string, cmd: "agent_login_import" | "agent_login_sign_out") => {
     setError(null);
     setBusy(id);
