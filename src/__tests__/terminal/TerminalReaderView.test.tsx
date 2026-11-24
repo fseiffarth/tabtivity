@@ -46,7 +46,7 @@ import { NAMES, envName, storageKey } from "../../lib/brand";
 /** A pane's xterm as far as the Reader reads it: its active buffer, and the
  * write event it reads on — a splice into `rows` is this fake's write, as a
  * real write changes the buffer and then fires `onWriteParsed`. */
-function fakeTerminal(rows: string[]): Terminal {
+function fakeTerminal(rows: string[], paintedEcho?: string): Terminal {
   const listeners = new Set<() => void>();
   const splice = rows.splice.bind(rows);
   rows.splice = ((...args: [number, number, ...string[]]) => {
@@ -55,7 +55,18 @@ function fakeTerminal(rows: string[]): Terminal {
     return out;
   }) as typeof rows.splice;
   return {
-    buffer: { active: { get length() { return rows.length; }, getLine: (row: number) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }) } },
+    buffer: { active: { get length() { return rows.length; }, getLine: (row: number) => {
+      const text = rows[row];
+      if (text === undefined) return undefined;
+      const line = { translateToString: () => text };
+      if (!paintedEcho || !text.startsWith(paintedEcho)) return line;
+      const off = () => 0;
+      return { ...line, getCell: (column: number) => ({
+        getChars: () => text[column], getWidth: () => 1, isBgDefault: () => false,
+        isBgPalette: () => true, getBgColor: () => 4, isFgDefault: () => true,
+        isInvisible: off, isInverse: off, isBold: off, isItalic: off, isDim: off, isUnderline: off, isStrikethrough: off,
+      }) };
+    } } },
     onWriteParsed: (cb: () => void) => {
       listeners.add(cb);
       return { dispose() { listeners.delete(cb); } };
@@ -113,6 +124,45 @@ describe("the agent pane's Reader", () => {
     }));
     // A long session that never spawned a subagent has no "Subagents (0)".
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
+  });
+
+  it("recovers the completed reply when Claude cannot save it and drops the copy once recorded", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const echo = "❯ what is a probe?";
+    const reply = "A probe uses a frozen backbone.";
+    const left = [echo, "", "● Bash(check-results)", "  ⎿ command output", "", `● ${reply}`, "", "✻ Baked for 7s · done 10:25 AM", ""];
+    const divider = "─".repeat(96);
+    const warning = "  ⚠ Transcript writes are failing (disk quota exceeded — EDQUOT) · recent messages may not be saved for resume";
+    const withDiff = left.map((line) => `${line.padEnd(56)}│ diff pane`);
+    const rows = [...withDiff, divider, "❯ ", divider, "  ⏵⏵ auto mode on (shift+tab to cycle)"];
+    const term = fakeTerminal(rows, echo);
+    const prompt = { kind: "prompt", text: "what is a probe?" };
+    let current = { ...transcript, entries: [...transcript.entries, prompt] };
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript" ? current : []));
+    registerTerminal("p:agent-1", term);
+    try {
+      reader(host);
+      await screen.findByText(prompt.text);
+      expect(screen.queryByText(reply)).toBeNull();
+      await act(async () => {
+        rows.splice(rows.length - 1, 0, warning);
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      await screen.findByText(reply);
+      expect(screen.getByText("Recovered from Terminal")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Go to terminal" })).toBeTruthy();
+      expect(screen.queryByText("command output")).toBeNull();
+      expect(screen.queryByText(/Baked for/)).toBeNull();
+      expect(screen.queryByText(/diff pane/)).toBeNull();
+
+      current = { ...current, version: "v2", entries: [...current.entries, { kind: "answer", text: reply }] };
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(screen.queryByText("Recovered from Terminal")).toBeNull();
+      expect(screen.getAllByText(reply)).toHaveLength(1);
+    } finally {
+      unregisterTerminal("p:agent-1", term);
+      vi.useRealTimers();
+    }
   });
 
   it("shows the final model and effort as readable settings without command syntax", async () => {

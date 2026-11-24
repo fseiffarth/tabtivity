@@ -2529,6 +2529,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     }, target).catch(() => {});
   }, [shown, visible, ptyId]);
   const turns = useMemo(() => transcriptTurns(levelEntries), [levelEntries]);
+  const transcriptWriteFailed = !browsed && !openStep && live.transcriptWriteFailed;
+  const lastEntry = entries[entries.length - 1];
+  const unsavedReply = transcriptWriteFailed && live.unsavedReply && lastEntry?.kind === "prompt"
+    && lastEntry.text.trim() === live.unsavedReply.prompt ? live.unsavedReply.text : undefined;
   // The newest answer is the CLI saying its login is over: Sign in is offered
   // on it, and for a local Claude tab with a saved long-lived token
   // (`services::claude_token`) going on on that token. Claude reads the token
@@ -3326,6 +3330,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </Fragment>
             );
           })}
+          {unsavedReply && (
+            <div className="terminal-reader-turn agent">
+              <pre className="terminal-reader-unsaved-reply">{unsavedReply}</pre>
+              <small className="terminal-reader-time">{t("terminal.reader.recoveredReply")}</small>
+            </div>
+          )}
           {!openStep && !browsed && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
@@ -3373,13 +3383,14 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               <pre className="terminal-reader-question-context terminal-reader-stray-screen">{live.screen.join("\n")}</pre>
             </details>
           )}
-          {(strayShown || unrecorded) && !browsed && !openStep && (
+          {(transcriptWriteFailed || strayShown || unrecorded) && !browsed && !openStep && (
             <div className="terminal-reader-working terminal-reader-stray" role="status">
-              <span>{t(strayShown ? "terminal.reader.stray" : "terminal.reader.unrecorded")}</span>
+              <span>{t(transcriptWriteFailed ? "terminal.reader.transcriptWriteFailed" : strayShown ? "terminal.reader.stray" : "terminal.reader.unrecorded")}</span>
               <button type="button" className="terminal-reader-stop" onClick={openTerminal} title={t("terminal.reader.strayOpenHint")}>
                 {t("terminal.reader.strayOpen")}
               </button>
-              {strayShown ? <UntestedTag id="terminal.reader.stray" /> : <UntestedTag id="terminal.reader.unrecorded" />}
+              {transcriptWriteFailed ? <UntestedTag id="terminal.reader.transcriptWriteFailed" />
+                : strayShown ? <UntestedTag id="terminal.reader.stray" /> : <UntestedTag id="terminal.reader.unrecorded" />}
             </div>
           )}
           {!browsed && !openStep && lowLimits.map((warning) => (

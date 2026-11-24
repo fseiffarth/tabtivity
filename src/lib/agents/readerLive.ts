@@ -1,6 +1,6 @@
 import { agentWork, type WorkFacts } from "../../../mobile-web/src/terminal/agentBusy";
-import { isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
-import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
+import { chatTurns, isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
+import { readableScreen, readableText, type ReadableBufferLike, type ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
 import { boxHidesDialog } from "../../../mobile-web/src/terminal/liveDialog";
 import {
@@ -78,6 +78,9 @@ export interface ReaderLive {
   /** OpenCode mini's footer counts prompts waiting: the one sign of a queue
    * its screen gives, so its queue buttons follow this. */
   openCodeQueued: boolean;
+  /** Claude's transcript-write warning and the last reply still on screen. */
+  transcriptWriteFailed?: true;
+  unsavedReply?: { prompt: string; text: string };
 }
 
 export const NO_LIVE: ReaderLive = {
@@ -95,6 +98,20 @@ const STRAY_SCREEN_ROWS = 40;
  * Deliberately not the viewport: a dialog drawn under a long answer is still
  * found, and the phone reads the same tail. */
 export const READER_ROWS = 300;
+
+const TRANSCRIPT_WRITE_WARNING = /^\s*⚠\uFE0F?\s*Transcript writes are failing\b/u;
+const CLAUDE_TURN_DONE = /^[✢✳✶✻✽*]\s+.+\sfor\s.+\s·\s+done\b/u;
+
+/** Only read a reply below a visible submitted prompt and above Claude's
+ * completion line. The footer warning can also appear before a turn ends. */
+function readUnsavedReply(echo: ReadableLine | undefined, tail: ReadableLine[], agentLabel: string): ReaderLive["unsavedReply"] {
+  if (!echo) return undefined;
+  const end = tail.findIndex((line) => CLAUDE_TURN_DONE.test(line.text));
+  if (end < 0) return undefined;
+  const answers = chatTurns(tail.slice(0, end), agentLabel).filter((turn) => turn.answer);
+  const answer = answers[answers.length - 1]?.answer;
+  return answer && { prompt: echo.text.trimStart().slice(2), text: readableText(answer) };
+}
 
 /** Reads `buffer` (the pane's active xterm buffer, `columns` wide) for
  * `agentLabel`'s TUI. */
@@ -153,8 +170,12 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // `inputFrameStart` answers the screen's length when it finds no input box
   // (or the box-like row is a dialog's highlighted option).
   const stray = !working && noFrame && lines.some((line) => line.text.trim() !== "");
+  const transcriptWriteFailed = agentFamily(agentLabel) === "claude" && !noFrame
+    && lines.slice(frameStart).some((line) => TRANSCRIPT_WRITE_WARNING.test(line.text));
   return {
     ...NO_LIVE, working, status, stray, screen: stray ? strayScreen(lines.map((line) => line.text)) : [],
+    transcriptWriteFailed: transcriptWriteFailed || undefined,
+    unsavedReply: transcriptWriteFailed && !working ? readUnsavedReply(screen[start - 1], tail, agentLabel) : undefined,
     openCodeQueued: agentFamily(agentLabel) === "opencode" && queuedHintShown(lines.map((line) => line.text), "opencode"),
     // Only an idle box holds one; a busy row means a turn is running.
     suggestion: working ? "" : readPromptSuggestion(lines, agentLabel),
@@ -190,6 +211,9 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.screen.join("\n") === b.screen.join("\n")
     && a.suggestion === b.suggestion
     && a.openCodeQueued === b.openCodeQueued
+    && a.transcriptWriteFailed === b.transcriptWriteFailed
+    && a.unsavedReply?.prompt === b.unsavedReply?.prompt
+    && a.unsavedReply?.text === b.unsavedReply?.text
     && sameStatus(a.status, b.status);
 }
 

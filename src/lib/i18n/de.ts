@@ -6479,6 +6479,8 @@ export const dict: Dict = {
   "terminal.reader.stray": "Das Terminal zeigt etwas, das der Chat nicht darstellen kann.",
   "terminal.reader.strayOpen": "Zum Terminal",
   "terminal.reader.unrecorded": "Deine Nachricht hat das Terminal erreicht, aber der Chat findet diesen Zug nicht im gespeicherten Gespräch. Das Terminal zeigt ihn.",
+  "terminal.reader.transcriptWriteFailed": "Claude konnte die letzten Nachrichten nicht speichern. Sie fehlen möglicherweise im Chat und beim Fortsetzen.",
+  "terminal.reader.recoveredReply": "Aus dem Terminal wiederhergestellt",
   "terminal.reader.strayOpenHint": "Die Fenster dieses Agenten wieder aufs Terminal schalten (der Chat-Schalter in der Prompt-Leiste holt den Chat zurück)",
   "terminal.undoClear.title": "Unterhaltung geleert",
   "terminal.undoClear.body": "Die vorige Unterhaltung ist noch gespeichert und lässt sich zurückholen.",

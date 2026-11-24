@@ -6665,6 +6665,8 @@ export const enSource = {
   "terminal.reader.strayOutput": "Terminal output",
   "terminal.reader.strayOpen": "Go to terminal",
   "terminal.reader.unrecorded": "Your message reached the terminal, but the chat can't find that turn in the stored conversation. The terminal shows it.",
+  "terminal.reader.transcriptWriteFailed": "Claude couldn’t save recent messages. They may be missing from Chat and when you resume.",
+  "terminal.reader.recoveredReply": "Recovered from Terminal",
   "terminal.reader.strayOpenHint": "Switch this agent's panes back to the terminal (the prompt strip's Chat switch brings the chat back)",
   "terminal.undoClear.title": "Conversation cleared",
   "terminal.undoClear.body": "The previous conversation is still saved and can come back.",
