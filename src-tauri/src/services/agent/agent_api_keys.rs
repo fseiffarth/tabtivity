@@ -29,6 +29,9 @@
 //!   environment: [`route_opencode`]). Mistral Vibe documents no such
 //!   variable and gets no key.
 //! - **Off per CLI by default.** A key reaching a CLI moves its billing.
+//! - **A keyed tab runs on the key only.** OpenCode holds logins of its own
+//!   (Copilot, ChatGPT, Zen) and reopens its last model; a keyed OpenCode tab
+//!   enables only the keyed providers and local Ollama ([`only_keyed_providers`]).
 //! - **A value the user set wins** — the CLI's credential or base-URL
 //!   variable, or another name for the same provider's credential, in the
 //!   spawn's environment or Tabtivity's own ([`Route::user_names`]).
@@ -580,7 +583,26 @@ fn opencode_inline_with(
         }
     }
     let added = left_out.len() < keyed.len();
+    if added {
+        only_keyed_providers(&mut config, keyed);
+    }
     (added.then(|| config.to_string()), left_out)
+}
+
+/// A keyed tab runs on the key, never on OpenCode's own logins: without this
+/// it reopens its last model, and a Copilot, ChatGPT or Zen one bills that
+/// login instead. `enabled_providers` (OpenCode 2.4.1 turns it into a
+/// deny-all `provider.use` policy) names the keyed providers — a user-routed
+/// one too, it is still theirs — and Tabtivity's local Ollama block when the
+/// config has one. It replaces a list the user set: theirs could reopen one.
+fn only_keyed_providers(config: &mut serde_json::Value, keyed: &[(Provider, &str, String)]) {
+    let mut allowed: Vec<&str> = keyed.iter().map(|(p, _, _)| opencode_provider(*p).0).collect();
+    if config["provider"].get("ollama").is_some() || config["providers"].get("ollama").is_some() {
+        allowed.push("ollama");
+    }
+    if let Some(root) = config.as_object_mut() {
+        root.insert("enabled_providers".into(), serde_json::json!(allowed));
+    }
 }
 
 /// What a keyed OpenCode spawn hides from its model picker
@@ -1280,6 +1302,33 @@ mod tests {
         let config: serde_json::Value = serde_json::from_str(&env[OPENCODE_INLINE_ENV]).unwrap();
         assert_eq!(config["provider"].as_object().unwrap().keys().collect::<Vec<_>>(), ["anthropic"]);
         assert!(proxies("opencode"));
+    }
+
+    /// A keyed tab reaches only the keyed providers (and Tabtivity's local
+    /// Ollama models): a last-used Copilot model must not bill that login.
+    #[test]
+    fn a_keyed_opencode_tab_enables_only_the_keyed_providers() {
+        let anthropic_only = |p: Provider| (p == Provider::Anthropic).then(|| proxied(p)).flatten();
+        let routed = |existing: Option<&str>| {
+            let mut env = HashMap::new();
+            if let Some(e) = existing {
+                env.insert(OPENCODE_INLINE_ENV.to_string(), e.to_string());
+            }
+            let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, anthropic_only);
+            route_opencode(&mut env, &set, None, &Picker::default());
+            serde_json::from_str::<serde_json::Value>(&env[OPENCODE_INLINE_ENV]).unwrap()
+        };
+        assert_eq!(routed(None)["enabled_providers"], serde_json::json!(["anthropic"]));
+        let ollama = r#"{"provider":{"ollama":{"options":{"baseURL":"http://127.0.0.1:11434/v1"}}}}"#;
+        assert_eq!(routed(Some(ollama))["enabled_providers"], serde_json::json!(["anthropic", "ollama"]));
+        let mine = r#"{"enabled_providers":["github-copilot","anthropic"]}"#;
+        assert_eq!(routed(Some(mine))["enabled_providers"], serde_json::json!(["anthropic"]));
+        // Nothing routed, nothing restricted: the tab stays on its own logins.
+        let mine = r#"{"provider":{"anthropic":{"options":{"baseURL":"https://gateway.example/v1"}}}}"#;
+        let mut env = HashMap::new();
+        let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, anthropic_only);
+        route_opencode(&mut env, &set, Some(mine), &Picker::default());
+        assert!(!env.contains_key(OPENCODE_INLINE_ENV));
     }
 
     #[test]
