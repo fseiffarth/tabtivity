@@ -387,6 +387,31 @@ describe("steering over dialogs", () => {
     expect(steering()).toMatchObject({ active: true, level: "tabs", region: null, handedTo: null });
   });
 
+  it("the chord over a dialog whose field has the caret drops the caret; Enter on the field hands it the keys", async () => {
+    function App() {
+      return <Dialog id="d" autoFocus onClose={() => {}} />;
+    }
+    render(
+      <>
+        <Keyboard />
+        <App />
+      </>,
+    );
+    // The field has the caret when the chord comes up: steering walks the
+    // dialog, so the caret goes (it would look typeable while letters steer).
+    expect(document.activeElement?.id).toBe("d-name");
+    on();
+    await settle();
+    expect(steering()).toMatchObject({ level: "region", region: "overlay", handedTo: null });
+    expect(document.activeElement?.id).not.toBe("d-name");
+    expect(regionCursor()?.id).toBe("d-name");
+
+    // Enter on the field hands it the keyboard again.
+    press({ key: "Enter" });
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
+    expect(document.activeElement?.id).toBe("d-name");
+  });
+
   it("a dialog that ignores Escape is closed by its ×", async () => {
     function App() {
       const [open, setOpen] = useState(true);

@@ -138,6 +138,11 @@ export interface SteeringOptions {
 
 /** Steering's new tabs land right of the tab it was on, not at the pane's end. */
 const BESIDE_ACTIVE = { besideActive: true } as const;
+/** The search fields that clear on Escape while they hold a query: the + menu's
+ *  filter (`AddTabMenuList`) and settings' search (`settingsUi`). Their Escape
+ *  goes to them first (`onSteeringKeyDown`); any other field's Escape would
+ *  reach the dialog's close (`useModalFocus`), so those come back to steering. */
+const CLEARING_SEARCH_FIELDS = ".tab-new-menu-search, .settings-navigation-search";
 
 /**
  * How long the window may lose the keyboard and keep steering on. A desktop
@@ -255,6 +260,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       announceOwner();
       syncLayer();
       dropSearchCaret();
+      dropOverlayCaret();
     };
 
     // ── Between windows ────────────────────────────────────────────────────
@@ -508,6 +514,15 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // moment later for a surface that mounts late (a lazy chunk). `then` runs
     // after the first pass.
     const syncTimers = new Set<number>();
+    // A one-off pass a key or a press leaves behind, cleared with the hook as
+    // `syncSoon`'s are: none may move steering once the hook is gone.
+    const soon = (run: () => void, delay: number) => {
+      const id = window.setTimeout(() => {
+        syncTimers.delete(id);
+        run();
+      }, delay);
+      syncTimers.add(id);
+    };
     const syncSoon = (then?: () => void) => {
       for (const [delay, run] of [
         [0, () => {
@@ -589,7 +604,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         if (!dialog) return;
         const target = dialog.querySelector<HTMLElement>(`.${SETTINGS_FLASH_CLASS}`);
         if (!target && tries-- > 0) {
-          window.setTimeout(land, 50);
+          soon(land, 50);
           return;
         }
         s.resume();
@@ -602,7 +617,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         clearRegionCursor();
         if (!(target && placeRegionCursor(target))) placeCursorSoon("settings");
       };
-      window.setTimeout(land, 0);
+      soon(land, 0);
     };
     // A text field takes the keyboard (`field` handoff): a dialog focused its
     // own name box, a steering key opened an inline one (a tab's rename, a
@@ -613,6 +628,9 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // elsewhere drops it (`onSteeringPointerDown`).
     let handedField: HTMLElement | null = null;
     let handedLayer: HTMLElement | null = null;
+    // The handed layer is the command palette: a pick closes it (the layer is
+    // gone by then), and that pick ends steering rather than handing it back.
+    let handedPalette = false;
     // The field that had the caret when steering came on: steered past, not
     // handed back, until it loses the caret.
     let declinedField: Element | null = null;
@@ -620,6 +638,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       const layer = topLayer();
       handedField = field;
       handedLayer = layer?.contains(field) ? layer : null;
+      handedPalette = !!handedLayer?.closest(".command-palette-backdrop");
       handOffSteering("field");
     };
     // The field `/` hands the keys to on a surface with a region of its own:
@@ -627,6 +646,25 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     const searchFieldOf = (region: SteeringRegion): HTMLElement | null => {
       const root = region === "settings" ? settingsDialog() : regionRoot(region);
       return root ? regionSearchField(root) : null;
+    };
+    // Settings opened by steering's key hand its search box the keys once
+    // the dialog is up (user, 2026-11-24): type to find a setting, Enter
+    // opens it (`backFromSettingsSearch`), Esc walks the page instead.
+    let settingsSearchTimer: number | null = null;
+    const cancelSettingsSearch = () => {
+      if (settingsSearchTimer !== null) window.clearTimeout(settingsSearchTimer);
+      settingsSearchTimer = null;
+    };
+    const searchSettingsSoon = (tries = 20) => {
+      cancelSettingsSearch();
+      settingsSearchTimer = window.setTimeout(() => {
+        settingsSearchTimer = null;
+        const s = useKeyboardSteeringStore.getState();
+        if (!s.active || s.level !== "region" || s.region !== "settings") return;
+        const dialog = settingsDialog();
+        if (dialog && focusRegionSearch(dialog)) handSearchOff();
+        else if (tries > 0) searchSettingsSoon(tries - 1);
+      }, 30);
     };
     // That search box with the caret while steering walks its surface never
     // gets the keys (only `/` hands them over), so the caret is stale: the
@@ -641,6 +679,20 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       const region = regionForLayer(layer);
       if (region === "overlay" || region === "cockpit") return;
       if (field === searchFieldOf(region)) field.blur();
+    };
+    // A dialog's text field that had the caret when steering came on (a rename
+    // box, a form field) keeps its caret and focus ring while steering walks
+    // the dialog, so it looks typeable and is not. Blur it, and put the cursor
+    // on it: Enter hands it the keys again. Fields in the terminal, and fields
+    // outside any layer (an inline rename commits on blur), are left alone.
+    const dropOverlayCaret = () => {
+      const layer = topLayer();
+      if (!layer || regionForLayer(layer) !== "overlay") return;
+      const field = focusedTypingField(layer);
+      if (!field || field.closest(".xterm")) return;
+      field.blur();
+      const root = regionRoot("overlay");
+      if (root) pointRegionCursor(root, field);
     };
     // The text field with the caret, when it should take the keyboard. One in
     // a dialog or menu (the generic overlay) always. One in settings, the +
@@ -690,12 +742,20 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       if (closed) {
         // Committed, submitted, cancelled — or covered: steering is back, on
         // what is on top now.
+        const palette = handedPalette;
         handedField = handedLayer = null;
+        handedPalette = false;
         s.resume();
         // The + menu's filter picked a row: the new tab has the keyboard, as
         // after Enter on a row (`steerRegion`'s press).
         const back = useKeyboardSteeringStore.getState();
         if (back.level === "region" && back.region === "addTab" && !regionRoot("addTab")) {
+          exitSteering();
+          return;
+        }
+        // A pick in the command palette did the same: its tab or file has the
+        // keyboard. Covered (the layer still in the DOM) is not a pick.
+        if (palette && layer && !layer.isConnected) {
           exitSteering();
           return;
         }
@@ -709,11 +769,46 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       if (layer ? !layer.contains(active) : active !== field) {
         handedField = handedLayer = null;
         s.dropHandoff();
+        return;
       }
+      // Still in the dialog. Another text field keeps the keys (Tab walks on
+      // to it). A button or checkbox means the user is not typing: steering
+      // takes the keys back on the dialog, so one Esc closes it.
+      if (!layer) return;
+      // The control the keys were handed keeps them, though a slider or a
+      // dropdown Enter handed the arrows to is no text field.
+      if (active === field) return;
+      const typing = focusedTypingField(layer);
+      if (typing) {
+        handedField = typing;
+        return;
+      }
+      handedField = handedLayer = null;
+      s.resume();
+      syncLayer();
+      const root = regionRoot(regionForLayer(layer));
+      if (root && active) pointRegionCursor(root, active);
     };
     const onFieldFocusOut = (e: FocusEvent) => {
       if (e.target === declinedField) declinedField = null;
       if (handedField) window.setTimeout(checkFieldHandoff, 0);
+    };
+    // When the last steering key ran. A field that takes the caret well after
+    // it (a lazy chunk, an async step) was opened by that key, so it takes the
+    // keys too. Past the window, a focus is the pane's own.
+    let lastSteerAt = -Infinity;
+    const STEER_FIELD_WINDOW_MS = 1500;
+    const onFieldFocusIn = (e: FocusEvent) => {
+      if (Date.now() - lastSteerAt > STEER_FIELD_WINDOW_MS) return;
+      const field = e.target;
+      if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
+      if (field.closest(".center-pane, .xterm")) return;
+      // A field in a dialog or menu has its own rules in `handToField`: a
+      // settings search waits for `/`, so it is not handed here.
+      if (topLayer()?.contains(field)) return;
+      // Behind the key's own 0 ms pass, which sees what the key closed (a
+      // menu's rename click): that pass hands the field off, not this one.
+      soon(() => handToField(true), 0);
     };
     // Escape out of a region: close what steering opened for it, back to the
     // level it was entered from.
@@ -1283,6 +1378,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         case "settings":
           window.dispatchEvent(new CustomEvent("app:open-settings", { detail: "main" }));
           enterRegion("settings");
+          searchSettingsSoon();
           return;
         // The jump box (`SteeringProjectJump`): a project's name, or its digit
         // on the ring; the pick (or Escape) brings steering back on this level.
@@ -1415,7 +1511,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           if (!toggle) return;
           toggle.click();
           const typeWhenUp = (tries: number) =>
-            window.setTimeout(() => {
+            soon(() => {
               const s = useKeyboardSteeringStore.getState();
               if (!s.active || s.level !== "region" || s.region !== region) return;
               const now = regionRoot(region);
@@ -1485,6 +1581,33 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
             syncLayer();
             const { region } = useKeyboardSteeringStore.getState();
             if (region) placeCursorSoon(region, 20, true);
+          }, 0);
+          return;
+        }
+        // A search field holding a query clears on this Esc, in its own handler
+        // (the + menu's filter, settings' search): the Esc goes to it, not to
+        // steering. Cleared, the field keeps the keys and a second Esc comes
+        // back here. Only these fields, since an Esc a dialog's field ignores
+        // would close the dialog under the user.
+        if (
+          steering.handedTo === "field" &&
+          handedLayer &&
+          handedField instanceof HTMLInputElement &&
+          handedField.value !== "" &&
+          handedField.matches(CLEARING_SEARCH_FIELDS)
+        ) {
+          const field = handedField;
+          const before = field.value;
+          window.setTimeout(() => {
+            const s = useKeyboardSteeringStore.getState();
+            if (s.handedTo !== "field" || handedField !== field) return;
+            if (field.value !== before) return;
+            // Not cleared: steering comes back, as an Esc it did not hand on.
+            handedField = handedLayer = null;
+            s.resume();
+            (document.activeElement as HTMLElement | null)?.blur();
+            const { region } = useKeyboardSteeringStore.getState();
+            if (region) placeCursorSoon(region);
           }, 0);
           return;
         }
@@ -1612,8 +1735,13 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // An arrow that met a dialog nobody announced only lands the cursor on
       // it: the legend still showed the level behind when the key was pressed.
       if (staleRepeat(e)) return;
+      cancelSettingsSearch();
       const landed = syncLayer();
+      // A focus the key makes itself is left to its own handling and the
+      // 0 and 150 ms passes; the window starts once the key is done.
+      lastSteerAt = -Infinity;
       steerKey(e, landed);
+      lastSteerAt = Date.now();
       syncSoon();
       stepTaken();
     }
@@ -1626,6 +1754,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // dialog or menu still up afterwards takes it again (`syncSoon`).
     function onSteeringPointerDown(e: PointerEvent) {
       if (isSteeringSynthetic(e)) return;
+      cancelSettingsSearch();
       const steering = useKeyboardSteeringStore.getState();
       // A press outside the field steering lent the keyboard to (or its
       // dialog): the pointer has taken over, nothing waits to come back.
@@ -1645,7 +1774,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // landed, the field takes the keys (Esc comes back), as Enter on it
       // would — never a box that looks typeable while every letter steers.
       if (target.closest("input, textarea, [contenteditable='true']")) {
-        window.setTimeout(() => {
+        soon(() => {
           const field = document.activeElement;
           if (!useKeyboardSteeringStore.getState().active || !(field instanceof HTMLElement)) return;
           if (!(field === target || field.contains(target) || target.contains(field))) return;
@@ -1817,6 +1946,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     document.addEventListener("keydown", onSteeringKeyDown, true);
     document.addEventListener("pointerdown", onSteeringPointerDown, true);
     document.addEventListener("focusout", onFieldFocusOut, true);
+    document.addEventListener("focusin", onFieldFocusIn, true);
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
     if (!popout) window.addEventListener(STEER_FROM_POPOUT, onSteerFromPopout);
@@ -1861,6 +1991,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       unlistenStatus();
       unsubscribeStatus();
       cancelPlace();
+      cancelSettingsSearch();
       for (const id of syncTimers) window.clearTimeout(id);
       unsubscribeScroll();
       unsubscribeLayers();
@@ -1868,6 +1999,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       document.removeEventListener("keydown", onSteeringKeyDown, true);
       document.removeEventListener("pointerdown", onSteeringPointerDown, true);
       document.removeEventListener("focusout", onFieldFocusOut, true);
+      document.removeEventListener("focusin", onFieldFocusIn, true);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener(STEER_FROM_POPOUT, onSteerFromPopout);
