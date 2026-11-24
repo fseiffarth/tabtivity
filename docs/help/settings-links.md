@@ -176,3 +176,4 @@ Search settings also offers Copy link beside each result. Prefer those links or 
 | experimental | Deck presenter | tabtivity://settings/experimental/settings.deckPresenter |
 | experimental | Hands-free voice in the Chat | tabtivity://settings/experimental/settings.voiceHandsFree |
 | experimental | Per-turn checkpoints | tabtivity://settings/experimental/settings.turnCheckpoints |
+| experimental | Claude token counts from trace spans | tabtivity://settings/experimental/settings.claudeOtelTokens |
