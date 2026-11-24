@@ -2538,6 +2538,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const filesOn = panelPicked === "files" && readerTopBar;
   const panelOn = changesOn || filesOn;
   const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || panelOn);
+  /** The chat in the side panel (`reader_side_chat`, the top bar's switch
+   * beside the views): only the main window's own panes have its side panel;
+   * an attach-only view (cockpit, root, Tabby) would pull the chat out from
+   * under its own window. */
+  const sideChatOffered = readerTopBar && !attachOnly && !isDetachedWindow();
+  const sideChatOn = useSettingsStore((s) => s.settings?.reader_side_chat ?? false);
+  /** On Terminal with the switch on, the chat stays read for the side panel,
+   * beside the CLI's own screen. */
+  const chatBesideTerminal = sideChatOffered && sideChatOn && !readerOn;
   const [readerNavigationSlot, setReaderNavigationSlot] = useState<HTMLSpanElement | null>(null);
   const [readerActionSlot, setReaderActionSlot] = useState<HTMLSpanElement | null>(null);
   const setReader = (on: boolean) => {
@@ -2559,7 +2568,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const readerViewsOffered: ReaderViewId[] = ["chat"];
   if (changesOffered(readerAgent) && !readerOnHost && (changesOn || changesKnown)) readerViewsOffered.push("changes");
   if (readerTopBar && (filesOn || filesKnown)) readerViewsOffered.push("files");
-  readerViewsOffered.push("terminal");
+  // No "terminal": it shares Chat's pill and is no stop of the steering cycle.
   /** Put the keys where `view` takes them: the chat's text box, a panel's own
    * root, else the terminal. */
   const focusReaderView = (view: ReaderViewId) => {
@@ -2804,6 +2813,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           } } : undefined,
           cwd,
           onHost: readerOnHost ? readerAgent : undefined,
+          sideChat: sideChatOffered,
         } : undefined}
       />
     )}
@@ -2827,13 +2837,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         tabKey={splitId.key}
         cwd={cwd}
         localOnly={localOnly}
-        visible={visible && readerOn}
+        visible={visible && (readerOn || chatBesideTerminal)}
         focused={focused && readerOn && !panelOn}
         paneFocused={focused}
-        // The chat beside Diffs or Data: only the main window's own panes
-        // have its side panel; an attach-only view (cockpit, root, Tabby)
-        // would pull the chat out from under its own window.
-        sideChatOffered={readerTopBar && !attachOnly && !isDetachedWindow()}
+        sideChatOffered={sideChatOffered}
         shown={readerOn}
         changesOpen={changesOn}
         filesOpen={filesOn}

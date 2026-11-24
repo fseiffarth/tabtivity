@@ -747,7 +747,7 @@ function withoutTakenBack(entries: TranscriptEntry[], text: string | null): Tran
   return [...entries.slice(0, at), ...entries.slice(at + 1)];
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, cwd, remoteHost, ptyId, cli, subagent, history, queued, focused, visible, docked, resting, sideChat, onBusy, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, suggestionModel = "", onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
+function ReaderComposer({ scope, tabKey, tabRef, cwd, remoteHost, ptyId, cli, subagent, history, queued, focused, visible, docked, resting, onBusy, steering, questionOpen, inputBlocked, suggestion, suggestionLocal = false, suggestionModel = "", onDraftEmpty, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -771,9 +771,6 @@ function ReaderComposer({ scope, tabKey, tabRef, cwd, remoteHost, ptyId, cli, su
   docked: boolean;
   /** Docked and at rest: one line, no chips (`dockOpen` in the Reader). */
   resting: boolean;
-  /** Docked: the switch for the chat in the side panel (`reader_side_chat`);
-   * absent where the Reader may not use the panel. */
-  sideChat?: { on: boolean; onToggle: () => void };
   /** Told when the box starts or stops holding something that keeps the
    * dock open (a draft, the mic, the `/` menu, a Prompt-key handoff); only
    * on the change, so the Reader never renders per keystroke. */
@@ -1547,30 +1544,11 @@ function ReaderComposer({ scope, tabKey, tabRef, cwd, remoteHost, ptyId, cli, su
           {!suggestionLocal && <UntestedTag id="terminal.reader.promptSuggestion" />}
           {suggestionLocal && <UntestedTag id="agents.localNextPrompt" />}
           {docked && <UntestedTag id="terminal.reader.dock" />}
-          {docked && sideChat && <UntestedTag id="terminal.reader.sideChat" />}
         </span> : completion.text ? <span className="terminal-reader-suggestion-tag">
           <SuggestionSourceChip local={completion.local} model={completion.model} />
           <UntestedTag id="agents.promptAutocomplete" />
           {docked && <UntestedTag id="terminal.reader.dock" />}
-          {docked && sideChat && <UntestedTag id="terminal.reader.sideChat" />}
-        </span> : docked && <span className="terminal-reader-dock-tag"><UntestedTag id="terminal.reader.dock" />{sideChat && <UntestedTag id="terminal.reader.sideChat" />}</span>}
-        {docked && sideChat && (
-          <button
-            type="button"
-            className={`terminal-reader-side-chat${sideChat.on ? " on" : ""}`}
-            onClick={sideChat.onToggle}
-            aria-pressed={sideChat.on}
-            aria-label={t("terminal.reader.sideChat")}
-            title={t(sideChat.on ? "terminal.reader.sideChatOff" : "terminal.reader.sideChatOn")}
-          >
-            {/* A window with its right column filled: the chat beside. */}
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="3" y="5" width="18" height="14" rx="2" />
-              <path d="M15 5v14" />
-              <path d="M17.5 9h1M17.5 12h1M17.5 15h1" />
-            </svg>
-          </button>
-        )}
+        </span> : docked && <span className="terminal-reader-dock-tag"><UntestedTag id="terminal.reader.dock" /></span>}
         {voice.button}
         <button
           type="button"
@@ -1649,13 +1627,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   cwd: string | undefined;
   /** The pane runs on this machine (`TerminalView`'s `localOnly`). */
   localOnly?: boolean;
+  /** The pane is on screen and the chat is read: Chat, Diffs or Data shown,
+   * or Terminal with the chat in the side panel (`shown` off then). */
   visible: boolean;
   focused: boolean;
   /** The pane has the keyboard, whatever the Reader shows (`focused` is off
    * under Diffs or Data): the last focused pane's chat takes the side panel. */
   paneFocused?: boolean;
   /** This Reader may draw its chat in the main window's side panel under
-   * Diffs or Data (`reader_side_chat`): a pane of the main window's own
+   * Diffs, Data or Terminal (`reader_side_chat`): a pane of the main window's own
    * layout, never a popout's or an attach-only view's (cockpit, root, Tabby). */
   sideChatOffered?: boolean;
   /** Keep the draft mounted while the terminal or the full-width Diffs tab is selected. */
@@ -1788,13 +1768,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * elsewhere: WebKit focuses no button on a click, so `:focus` would close
    * it under a chip's press) or what the composer holds (`composerBusy`). */
   const panelShown = shown && (changesOpen || filesOpen);
-  /** The chat in the side panel under Diffs or Data (`reader_side_chat`, the
-   * docked composer's switch; `stores/agents/readerSideChat`). The stream is
+  /** The chat in the side panel under Diffs, Data or Terminal
+   * (`reader_side_chat`, the top bar's switch beside the views;
+   * `stores/agents/readerSideChat`). On Terminal the Reader is hidden but
+   * still read (`visible`), so the chat there stays current. The stream is
    * portaled into a detached host element of its own, which sits in its
    * anchor here or, while this Reader holds the panel, in the panel's slot:
    * moving the element moves the one chat, its state and scroll intact. */
   const sideChatOn = useSettingsStore((s) => s.settings?.reader_side_chat ?? false);
-  const wantsSide = sideChatOffered && sideChatOn && panelShown && visible;
+  const wantsSide = sideChatOffered && sideChatOn && visible && (panelShown || !shown);
   const sideLabel = tab?.label ?? "";
   const showChatRef = useRef(onShowChat);
   useLayoutEffect(() => { showChatRef.current = onShowChat; });
@@ -1837,10 +1819,6 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     if (list) list.scrollTop = stuck.current || top === null ? list.scrollHeight : top;
   }, [sideSlot, streamAnchor, streamHost]);
   useEffect(() => () => streamHost.remove(), [streamHost]);
-  const toggleSideChat = useCallback(() => {
-    const on = useSettingsStore.getState().settings?.reader_side_chat ?? false;
-    void useSettingsStore.getState().updateSettings({ reader_side_chat: !on });
-  }, []);
   const [composerBusy, setComposerBusy] = useState(false);
   const [dockEngaged, setDockEngaged] = useState(false);
   /** The press or focus that engaged the dock, which its own document
@@ -3563,7 +3541,6 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         visible={visible && shown}
         docked={panelShown}
         resting={panelShown && !dockOpen}
-        sideChat={sideChatOffered ? { on: sideChatOn, onToggle: toggleSideChat } : undefined}
         onBusy={setComposerBusy}
         steering={steering}
         questionOpen={questionOpen}

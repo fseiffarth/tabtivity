@@ -85,20 +85,20 @@ describe("TerminalView — steering's view registry", () => {
     readerProps.current = {};
   });
 
-  it("offers Chat and Terminal until Diffs and Files have something to show", async () => {
+  it("offers only Chat until Diffs and Files have something to show — Terminal shares its pill", async () => {
     const view = await mount();
     const target = readerViewFor(ID)!;
     expect(target).not.toBeNull();
     expect(target.view()).toBe("chat");
-    expect(target.offered()).toEqual(["chat", "terminal"]);
-    expect(readerViewFacts(ID)).toEqual({ view: "chat", offered: ["chat", "terminal"] });
+    expect(target.offered()).toEqual(["chat"]);
+    expect(readerViewFacts(ID)).toEqual({ view: "chat", offered: ["chat"] });
 
     await act(async () => {
       readerProps.current.onChangesKnown?.(true);
       readerProps.current.onFilesKnown?.(true);
     });
-    expect(readerViewFor(ID)!.offered()).toEqual(["chat", "changes", "files", "terminal"]);
-    expect(readerViewFacts(ID)?.offered).toEqual(["chat", "changes", "files", "terminal"]);
+    expect(readerViewFor(ID)!.offered()).toEqual(["chat", "changes", "files"]);
+    expect(readerViewFacts(ID)?.offered).toEqual(["chat", "changes", "files"]);
     view.unmount();
   });
 

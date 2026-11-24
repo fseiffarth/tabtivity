@@ -31,8 +31,9 @@ import type { SteeringAgentCommand } from "../shortcuts/steeringAgent";
 
 export type ReaderViewId = "chat" | "changes" | "files" | "terminal";
 
-/** The cycle's order. */
-export const READER_VIEW_ORDER: readonly ReaderViewId[] = ["chat", "changes", "files", "terminal"];
+/** The cycle's order. Terminal is no stop: it shares Chat's pill (a click
+ * flips the two) and steps from Chat's place. */
+export const READER_VIEW_ORDER: readonly ReaderViewId[] = ["chat", "changes", "files"];
 
 /** What a pane with a view strip lets steering do to it. */
 export interface ReaderViewTarget {
@@ -62,14 +63,17 @@ export interface ReaderInsideTarget {
 /**
  * The next view in the cycle: `dir` 1 forward, -1 back, wrapping, skipping any
  * view not in `offered`. The current view stays selectable (it may have gone
- * grey while open), so with nothing else offered the cycle stays put.
+ * grey while open), so with nothing else offered the cycle stays put. The
+ * Terminal is never a stop; shown, it steps from Chat's place (its pill).
  */
 export function cycleReaderView(current: ReaderViewId, offered: readonly ReaderViewId[], dir: 1 | -1): ReaderViewId {
   const n = READER_VIEW_ORDER.length;
-  const from = READER_VIEW_ORDER.indexOf(current);
+  const at = current === "terminal" ? "chat" : current;
+  const from = READER_VIEW_ORDER.indexOf(at);
   for (let step = 1; step <= n; step++) {
     const candidate = READER_VIEW_ORDER[(((from + dir * step) % n) + n) % n];
-    if (candidate === current || offered.includes(candidate)) return candidate;
+    if (candidate === at) return current;
+    if (offered.includes(candidate)) return candidate;
   }
   return current;
 }

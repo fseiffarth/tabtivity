@@ -61,7 +61,7 @@ function agentTab(opts: { view?: ReaderViewId; offered?: ReaderViewId[]; strip?:
     cleanups.push(
       registerReaderViews(id, {
         view: () => view,
-        offered: () => opts.offered ?? ["chat", "changes", "files", "terminal"],
+        offered: () => opts.offered ?? ["chat", "changes", "files"],
         show,
       }),
     );
@@ -120,16 +120,17 @@ describe("steering view cycle", () => {
     expect(show).toHaveBeenCalledTimes(2);
   });
 
-  it("wraps around the strip and skips views that are not offered", () => {
-    const { show } = agentTab({ view: "terminal", offered: ["chat", "files", "terminal"] });
+  it("wraps around the strip, skips views that are not offered and never stops on Terminal", () => {
+    const { show } = agentTab({ view: "terminal", offered: ["chat", "files"] });
     render(<Harness />);
     press({ key: " ", shiftKey: true });
     press({ key: "Tab" });
-    expect(show).toHaveBeenLastCalledWith("chat");
-    press({ key: "Tab" });
     expect(show).toHaveBeenLastCalledWith("files");
-    press({ key: "Tab", shiftKey: true });
+    press({ key: "Tab" });
     expect(show).toHaveBeenLastCalledWith("chat");
+    press({ key: "Tab", shiftKey: true });
+    expect(show).toHaveBeenLastCalledWith("files");
+    expect(show).not.toHaveBeenCalledWith("terminal");
   });
 
   it("works at the panes level and Inside, and the level stays", () => {

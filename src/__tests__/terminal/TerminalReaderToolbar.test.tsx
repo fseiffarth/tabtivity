@@ -106,9 +106,16 @@ describe("desktop conversation toolbar", () => {
     const root = host.querySelector(".terminal-reader")!;
     expect(root.classList.contains("panel-open")).toBe(true);
     expect(root.classList.contains("dock-open")).toBe(true);
-    fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
+    // Chat and Terminal share one pill: from Diffs it comes back to Chat,
+    // then each click flips it.
+    expect(screen.queryByRole("tab", { name: "Terminal" })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector(".terminal-changes")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
     expect(screen.getByRole("tab", { name: "Terminal" }).getAttribute("aria-selected")).toBe("true");
-    await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Chat" })));
+    expect(screen.queryByRole("tab", { name: "Chat" })).toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Terminal" })));
     expect(screen.getByRole("textbox")).toBe(box);
     expect(box.value).toBe("keep this draft");
     expect(host.querySelector(".terminal-changes")).toBeNull();
