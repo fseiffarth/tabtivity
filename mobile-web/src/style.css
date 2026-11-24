@@ -712,6 +712,8 @@ button.mobile-alert-row { cursor:pointer; }
 .mail-mobile-reply-field { position:relative; }
 .mail-mobile-reply textarea { display:block; width:100%; min-height:110px; box-sizing:border-box; resize:vertical; padding:13px 52px 13px 13px; border:1px solid #3a3e50; background:#171a24; color:#fff; }
 .mail-mobile-reply .mail-mobile-send { position:absolute; right:var(--sp-2); bottom:var(--sp-2); display:grid; place-items:center; width:36px; height:36px; padding:0; }
+/* The local model's continuation of the reply (the Terminal composer's strip): the grid's gap spaces it. */
+.mail-mobile-reply .composer-complete { margin:0; }
 .mail-mobile-reply-confirm { display:grid; gap:8px; padding:12px; background:#493b20; color:#ffe29a; }
 .mail-mobile-reply-confirm div { display:flex; gap:8px; }
 .mail-mobile-reply-confirm div button { flex:1; }

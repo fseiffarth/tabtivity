@@ -6,7 +6,9 @@ import {
   MAIL_MESSAGE_TIMEOUT,
   MAIL_REPLY_TIMEOUT,
   api,
+  completeMailReply,
   reloadIfApplied,
+  warmMailReply,
   wasApplied,
   type MailMarkAction,
   type MobileMailAccount,
@@ -18,6 +20,7 @@ import {
 import { readChoice, writeChoice } from "../prefs";
 import { goBack as stepBack, useBackLayer } from "../backStack";
 import { installFocusSwipe } from "../terminal/focusSwipe";
+import { usePageShown, usePromptCompletion, windowDraft } from "../terminal/nextPrompt";
 import { chatDayKey, chatDayLabel, chatMoment } from "../terminal/chatTimes";
 import { isUntested } from "../../../src/lib/untested";
 import { formatBytes } from "../../../src/lib/formatBytes";
@@ -327,6 +330,34 @@ export function Mail() {
     } finally { setBusy(false); }
   };
 
+  /** How the reply being typed goes on, by the desktop's local Mail model
+   * (`usePromptCompletion`, `POST …/complete` through the open desktop
+   * window): a strip under the field that a tap appends to the reply. The
+   * desktop answers nothing without its window, or with the account's
+   * autocomplete off; not while a send is being confirmed. */
+  const pageShown = usePageShown();
+  const replyOpen = writes.reply === true && folder !== null && message !== null;
+  const completion = usePromptCompletion({
+    enabled: replyOpen && pageShown && !busy && !confirmReply,
+    draft: windowDraft(reply),
+    atEnd: true,
+    complete: (text) => completeMailReply(folder?.folder.id ?? "", message?.message.id ?? "", folder?.offset ?? 0, text),
+  });
+  /** The strip's words: the continuation, led by the word it finishes. */
+  const completionShown = !completion.text ? ""
+    : /^\s/u.test(completion.text) ? completion.text.trimStart()
+    : `${/\S*$/u.exec(reply)?.[0] ?? ""}${completion.text}`;
+  /** The model is fed the mail being answered once per opened message, when
+   * its reply box first takes the focus (fire and forget, errors ignored). */
+  const warmedFor = useRef<string | null>(null);
+  const warmReply = () => {
+    if (!replyOpen || !pageShown) return;
+    const key = `${folder.folder.id}\u0000${message.message.id}`;
+    if (warmedFor.current === key) return;
+    warmedFor.current = key;
+    void warmMailReply(folder.folder.id, message.message.id, folder.offset).catch(() => null);
+  };
+
   // Mail is a tab now, so the chevron only ever walks its own stack: message →
   // folder → account list. At the root there is nothing above it to go back to.
   const goBack = message ? () => setMessage(null) : folder ? () => setFolder(null) : null;
@@ -421,6 +452,7 @@ export function Mail() {
             disabled={busy}
             placeholder={t("mobile.mail.replyPlaceholder")}
             onChange={(event) => { setReply(event.target.value); setConfirmReply(false); setSent(false); }}
+            onFocus={warmReply}
           />
           {!confirmReply && <button
             className="primary mail-mobile-send"
@@ -430,6 +462,18 @@ export function Mail() {
             onClick={() => setConfirmReply(true)}
           ><ArrowUpIcon size="20px" /></button>}
         </div>
+        {/* How the local model thinks the reply goes on: a tap appends it.
+            Pointer-down is held back so the keyboard stays up. */}
+        {completionShown && !confirmReply && <button
+          className="composer-complete"
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => { setReply(reply + completion.text); setConfirmReply(false); setSent(false); }}
+          aria-label={t("mobile.mail.completeTake", { text: completionShown })}
+          title={completion.model ? t("terminal.reader.suggestionByModel", { model: completion.model }) : undefined}
+        >
+          <span className="composer-complete-text">… {completionShown}</span>
+          {isUntested("mail.autocomplete") && <em>{t("mobile.newTab.untested")}</em>}
+        </button>}
         {confirmReply && <div className="mail-mobile-reply-confirm">
           <span>{t("mobile.mail.replyConfirm", { address: safeText(message.message.sender.address) })}</span>
           <div>

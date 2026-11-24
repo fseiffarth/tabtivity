@@ -57,6 +57,8 @@ import {
   formatAddress,
   formatMailDate,
   mailAccountsList,
+  mailAiComplete,
+  mailAiCompleteWarm,
   mailBody,
   mailDraftSave,
   mailDraftSend,
@@ -299,6 +301,7 @@ type DesktopRequest =
   | { type: "mail_message"; request_id: string; folder_id: string; message_id: string; offset: number }
   | { type: "mail_mark"; request_id: string; folder_id: string; message_id: string; offset: number; action: MailMarkAction }
   | { type: "mail_reply"; request_id: string; folder_id: string; message_id: string; offset: number; body: string }
+  | { type: "mail_complete"; request_id: string; folder_id: string; message_id: string; offset: number; draft?: string; warm?: boolean }
   | { type: "schedules"; request_id: string; project_id: string; tmux_session: string }
   | { type: "schedule_mutate"; request_id: string; project_id: string; tmux_session: string; action: ScheduleMutation; device_id?: string }
   | { type: "rename_tab"; request_id: string; project_id: string; tmux_session: string; label: string }
@@ -362,6 +365,8 @@ type DesktopResponse =
   | { status: "agent_transcript"; transcript: MobileAgentTranscript }
   /** `outcome` is `services::next_prompt::Status`'s word; `status` names the response. */
   | { status: "agent_next_prompt"; text: string | null; outcome: string; model?: string | null }
+  /** `outcome` is `services::mail_complete::Status`'s word. */
+  | { status: "mail_complete"; text: string | null; outcome: string; model?: string | null }
   | { status: "seen" }
   | { status: "held"; held_id: string }
   | { status: "desktop_images"; images: DesktopImage[] }
@@ -2549,6 +2554,37 @@ async function mailReply(
   return mailFolderPage(folderId, offset);
 }
 
+/** The slot every phone completion uses: one reply box is open at a time. */
+const PHONE_COMPLETE_SLOT = "phone";
+
+/**
+ * How the reply typed on the phone goes on, by the desktop's local Mail model
+ * (`docs/mail_autocomplete_plan.md` D4): the phone asks through this window,
+ * which resolves the opaque ids as the reply does and hands the backend the
+ * original's store key — the raw key goes window to backend only, and the
+ * answer carries text, outcome and model, nothing else. The settings, AI
+ * switch, model, lock and account gates are the backend's; the window adds
+ * only the phone's own two (mail read, reply). A warm-up answers `warmed` at
+ * once and runs on in the background. Not a mutation: a completion never
+ * queues behind a reply.
+ */
+async function mailCompleteFor(folderId: string, messageId: string, offset: number, draft: string, warm: boolean): Promise<DesktopResponse> {
+  const answer = (outcome: string, text: string | null = null, model?: string | null): DesktopResponse =>
+    ({ status: "mail_complete", text, outcome, ...(model ? { model } : {}) });
+  if (!mailReadAllowed() || !mailWriteGates().reply) return answer("off");
+  if (!warm && !draft.trim()) return answer("skipped");
+  const resolved = await resolveMailMessage(folderId, messageId, offset);
+  if ("status" in resolved) return resolved;
+  const { header } = resolved;
+  const ctx = { slot: PHONE_COMPLETE_SLOT, accountId: header.account_id, messageId: header.id, subject: "", to: [] as string[] };
+  if (warm) {
+    void mailAiCompleteWarm(ctx);
+    return answer("warmed");
+  }
+  const result = await mailAiComplete(ctx, draft);
+  return answer(result.status, result.text, result.model);
+}
+
 /** The phone had this agent tab on its screen. That is the same act the tab bar
  * reports when the tab is switched to, so it goes through the same door: the
  * output counts as read, the `done` lamp retires, and a live decision prompt
@@ -3171,6 +3207,7 @@ async function handleRequest(
     case "mail_message": return mailReadAllowed() ? mailMessage(request.folder_id, request.message_id, request.offset) : MAIL_READ_DISABLED;
     case "mail_mark": return mailReadAllowed() ? mailMark(request.folder_id, request.message_id, request.offset, request.action) : MAIL_READ_DISABLED;
     case "mail_reply": return mailReadAllowed() ? mailReply(request.folder_id, request.message_id, request.offset, request.body, t) : MAIL_READ_DISABLED;
+    case "mail_complete": return mailCompleteFor(request.folder_id, request.message_id, request.offset, request.draft ?? "", request.warm === true);
     case "rename_tab": return renameAgentTab(request.project_id, request.tmux_session, request.label);
     case "close_tab": return closeMobileTab(request.project_id, request.tmux_session);
     case "reopen_tab": return reopenMobileTab(request.project_id, request.closed_id ?? undefined);

@@ -5,6 +5,7 @@ import { storageKey } from "../../src/lib/brand";
 import type { ModelRows } from "./terminal/modelRows";
 import type { CliOverviewRow } from "../../shared/cliOverview";
 import type { NextPromptAnswer, NextPromptPhase } from "./terminal/nextPrompt";
+import type { MailCompleteAnswer } from "../../src/types/mail";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
 export type ScopeKind = "project" | "box" | "root" | "assistant";
@@ -535,6 +536,10 @@ export const TAB_CREATE_TIMEOUT = 25_000;
 export const MAIL_MESSAGE_TIMEOUT = 40_000;
 /** Sending a reply: 2 s connect + 65 s (`MailReply` talks to SMTP and IMAP). */
 export const MAIL_REPLY_TIMEOUT = 70_000;
+/** Completing a reply as it is typed (or warming the model for it): 2 s
+ * connect + 20 s (`response_timeout` for `MailComplete` — the window fills the
+ * original's context within 6 s, then runs the model within 5 s). */
+export const MAIL_COMPLETE_TIMEOUT = 25_000;
 /** Handing an agent CLI its sign-in callback: the CLI exchanges the code with
  * its provider before it answers, and the sidecar waits 20 s for that
  * (`sign_in::CALLBACK_TIMEOUT`). */
@@ -1275,6 +1280,29 @@ export async function completePrompt(tabId: string, draft: string, signal?: Abor
     `/api/v1/tabs/${encodeURIComponent(tabId)}/next-prompt`,
     { method: "POST", body: JSON.stringify({ draft }), signal },
     COMPLETE_PROMPT_TIMEOUT,
+  );
+}
+
+/** `POST …/mail/folders/{folder}/messages/{message}/complete` — how `draft`, the
+ * reply being typed, goes on, by the desktop's local Mail model, asked through
+ * the open desktop window (no window: `unavailable`, never an error). The
+ * opaque folder and message ids and the page `offset` are the reply route's;
+ * `text` is what to append. Every failure is a `status`. */
+export function completeMailReply(folderId: string, messageId: string, offset: number, draft: string, signal?: AbortSignal): Promise<MailCompleteAnswer> {
+  return api<MailCompleteAnswer>(
+    `/api/v1/mail/folders/${encodeURIComponent(folderId)}/messages/${encodeURIComponent(messageId)}/complete`,
+    { method: "POST", body: JSON.stringify({ draft, offset }), signal },
+    MAIL_COMPLETE_TIMEOUT,
+  );
+}
+
+/** The same route with `warm: true`: the desktop feeds the model the mail being
+ * answered ahead of the first keystroke. Answers `warmed` at once. */
+export function warmMailReply(folderId: string, messageId: string, offset: number): Promise<MailCompleteAnswer> {
+  return api<MailCompleteAnswer>(
+    `/api/v1/mail/folders/${encodeURIComponent(folderId)}/messages/${encodeURIComponent(messageId)}/complete`,
+    { method: "POST", body: JSON.stringify({ warm: true, offset }) },
+    MAIL_COMPLETE_TIMEOUT,
   );
 }
 
