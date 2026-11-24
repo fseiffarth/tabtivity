@@ -8638,6 +8638,7 @@ export const enSource = {
   "projectFilesView.attachTo": "Attach to “{name}”",
   "projectFilesView.workingTitle": "Working",
   "projectFilesView.openMeta": "open",
+  "projectFilesView.currentMeta": "this tab",
   "projectFilesView.rename": "Rename",
   "projectFilesView.renameSessionTitle": "Rename this session",
   "projectFilesView.renameSessionDialogTitle": "Rename session",

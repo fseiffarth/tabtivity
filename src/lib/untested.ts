@@ -322,6 +322,7 @@ export const UNTESTED = {
   "projectFilesView.waylandStaysVisible": { area: "files", what: "Side panel Apps view · under Wayland on a parking desktop (GNOME), rows with no XWayland window (native Wayland apps) sit in their own \"Stays on screen when you switch projects\" section, with one sentence under its head saying why; XWayland rows (older Java/Qt apps, Wine) sit in \"Hidden when you switch projects\"" },
   "downloads.remembered": { area: "files", what: "Recent Downloads section under the file tree · shown by default in the side panel and in Files (Project) tabs; hiding it (toolbar inbox button or ×) is remembered for that kind of viewer across project switches, new tabs and a restart" },
   "projectFilesView.8": { area: "files", what: "ProjectFilesView · Sessions view, Kill all / Kill closed per machine" },
+  "projectFilesView.currentSession": { area: "files", what: "Side panel Sessions view · the row of the session the tab in front runs is highlighted and reads \"this tab\" instead of \"open\"" },
   "projectFilesView.openInIde": { area: "files", what: "ProjectFilesView · Side panel header, Open in IDE button" },
   "devTodo.title": { area: "files", what: "ProjectFilesView · Todo view (dev build): todo/*.md groups, task boxes write back to the file" },
   "projectRemarks.addMenu": { area: "files", what: "FileTree · Add file remark…" },

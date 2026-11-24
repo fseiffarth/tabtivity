@@ -8281,6 +8281,7 @@ export const dict: Dict = {
   "projectFilesView.attachTo": "Attacher à « {name} »",
   "projectFilesView.workingTitle": "En cours",
   "projectFilesView.openMeta": "ouvert",
+  "projectFilesView.currentMeta": "cet onglet",
   "projectFilesView.rename": "Renommer",
   "projectFilesView.renameSessionTitle": "Renommer cette session",
   "projectFilesView.renameSessionDialogTitle": "Renommer la session",

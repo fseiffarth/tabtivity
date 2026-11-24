@@ -889,6 +889,8 @@ export function ProjectFilesView({
     }
     return m;
   }, [scopeTabs, scope]);
+  // The tab in front, so its session's row reads as the current one.
+  const currentTabKey = useTabsStore((s) => (s.scope === scope ? s.activeKey : null));
 
   // Open a host session in a tab: reveal the owning tab if one exists; bring an
   // agent session back as its agent tab (`lib/remote/hostSessionTab`), so it keeps
@@ -3062,11 +3064,14 @@ export function ProjectFilesView({
                       <span className="sp-count">{rows.length}</span>
                     </div>
                     {rows.map(({ session: s }) => {
-                      const owned = sessionOwners.has(`${hostId} ${s.name}`);
+                      const ownerKey = sessionOwners.get(`${hostId} ${s.name}`);
+                      const owned = ownerKey !== undefined;
+                      const current = owned && ownerKey === currentTabKey;
                       return (
                         <div
                           key={`${hostId} ${s.name}`}
-                          className="sp-row sp-row--two orange-file-row"
+                          className={`sp-row sp-row--two orange-file-row${current ? " selected" : ""}`}
+                          aria-current={current ? "true" : undefined}
                           onMouseEnter={(e) => handleSessionRowMouseEnter(e, hostId, s.name)}
                           onMouseLeave={handleSessionRowMouseLeave}
                         >
@@ -3093,7 +3098,14 @@ export function ProjectFilesView({
                                       : t("projectFilesView.workingTitle")
                                     : t("projectFilesView.tooltipIdle")}
                                 </span>
-                                {owned && <span className="tmux-session-meta">{t("projectFilesView.openMeta")}</span>}
+                                {owned && (
+                                  <span className="tmux-session-meta">
+                                    {t(current ? "projectFilesView.currentMeta" : "projectFilesView.openMeta")}
+                                  </span>
+                                )}
+                                {current && (
+                                  <UntestedTag id="projectFilesView.currentSession" />
+                                )}
                               </span>
                             </span>
                           </button>
