@@ -10,6 +10,7 @@ import {
   readerAgent,
   readerReasonKey,
   readerRequest,
+  turnFinishedRule,
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
@@ -2885,6 +2886,13 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const planLabel = t("mobile.transcript.plan");
   const subagentLabel = t("terminal.reader.subagent");
   const empty = transcript?.available && turns.length === 0 && pending.length === 0 && !unrecorded && !live.question && !live.working;
+  /** The session's turn ended on an answer with nothing under way — the
+   *  screen and the tab's own hooks both idle, no prompt waiting — so the
+   *  chat's end says so, as the tab strip's ✓ does (`turnFinishedRule`). */
+  const tabBusy = useActivityStore((s) => !!s.busyByTab[ptyId]);
+  const finishedRule = sessionTurn && !tabBusy && pending.length === 0 && !unsavedReply
+    ? turnFinishedRule(turns)
+    : null;
   /** The conversation the bar and the Main pill go back up to. */
   const backLabel = t("mobile.subagent.back", {
     name: subagentPath.length > 1 ? subagentPath[subagentPath.length - 2].task : t("mobile.subagent.main"),
@@ -3308,6 +3316,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </Fragment>
             );
           })}
+          {finishedRule && (
+            <div className="terminal-reader-command finished" role="status">
+              <span className="terminal-reader-command-body">
+                <TabStatusMark stateClass="finished" />
+                <span>{finishedRule.took ? t("terminal.reader.finishedTook", { time: finishedRule.took }) : t("terminal.reader.finished")}</span>
+                <UntestedTag id="terminal.reader.finished" />
+              </span>
+            </div>
+          )}
           {unsavedReply && (
             <div className="terminal-reader-turn agent">
               <pre className="terminal-reader-unsaved-reply">{unsavedReply}</pre>

@@ -3,6 +3,8 @@ import type { SessionTranscript } from "../../../mobile-web/src/api";
 import type { TabEntry } from "../../stores/tabs";
 import { storageKey } from "../brand";
 import { projectIdOfScope } from "../terminal/ptyId";
+import type { TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { workingElapsed } from "../../../mobile-web/src/terminal/subagents";
 
 /**
  * The desktop agent pane's Reader: the phone's Focus Reader — the agent's
@@ -197,4 +199,20 @@ export function rememberReader(agent: string, on: boolean): void {
   } catch {
     // A convenience only: without storage every tab opens on its terminal.
   }
+}
+
+/** The finished rule under a session's last turn, or null when the chat does
+ * not end on a plain answer (a question, an interrupted turn, a command, a
+ * subagent card). `took`: from the turn's prompt to that answer, when both
+ * carry a stamp and the prompt is still in the turns shown. */
+export function turnFinishedRule(turns: readonly TranscriptTurn[]): { took?: string } | null {
+  const last = turns[turns.length - 1];
+  if (!last || last.kind !== "answer" || last.command || last.questions || last.asking) return null;
+  let prompt: TranscriptTurn | undefined;
+  for (let i = turns.length - 2; i >= 0 && !prompt; i -= 1) {
+    if (turns[i].kind === "prompt" && !turns[i].command) prompt = turns[i];
+  }
+  const end = last.stamp ? Date.parse(last.stamp) : NaN;
+  const took = Number.isFinite(end) ? workingElapsed(prompt?.stamp, end) : undefined;
+  return { took };
 }

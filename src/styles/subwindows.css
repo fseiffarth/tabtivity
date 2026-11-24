@@ -3209,6 +3209,16 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-command.interrupted {
   color: var(--status-interrupted);
 }
+/* The session's turn ended (`turnFinishedRule`): the tab strip's green ✓ on a
+   solid rule in the finished hue, so the end of the work reads at a glance. */
+.terminal-reader-command.finished {
+  color: var(--status-done);
+  font-weight: 600;
+}
+.terminal-reader-command.finished::before,
+.terminal-reader-command.finished::after {
+  border-top-color: color-mix(in srgb, var(--status-done) 45%, transparent);
+}
 .terminal-reader-day {
   justify-content: center;
 }

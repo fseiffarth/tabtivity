@@ -6437,6 +6437,8 @@ export const enSource = {
   "terminal.reader.subagent": "Subagent",
   "terminal.reader.subagentDone": "done",
   "terminal.reader.subagentDoneAt": "done · {time}",
+  "terminal.reader.finished": "Finished",
+  "terminal.reader.finishedTook": "Finished · took {time}",
   "terminal.reader.subagentStarting": "starting…",
   "terminal.reader.subagentFactsWorking": "working {time}",
   "terminal.reader.dockMain": "Main",
