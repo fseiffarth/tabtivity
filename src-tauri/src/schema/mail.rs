@@ -83,6 +83,12 @@ pub struct MailAiPrefs {
     /// Offer the composer's "Draft from notes" control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formalize: Option<bool>,
+    /// Ghost-text completion of the sentence being typed, in the composer and
+    /// the phone's reply box (`docs/context/mail_ai.md`). **Absent ⇒ on** — the
+    /// one switch here that defaults on: it writes nothing anywhere and sends
+    /// nothing. It still needs the global `mail_ai_allow` and a Mail model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autocomplete: Option<bool>,
     /// Offer "Add to calendar" extraction on a message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<bool>,
@@ -134,6 +140,7 @@ impl MailAiPrefs {
         self.summarize.is_none()
             && self.autoclassify.is_none()
             && self.formalize.is_none()
+            && self.autocomplete.is_none()
             && self.calendar.is_none()
             && self.todo.is_none()
             && self.auto_create.is_none()
@@ -1615,6 +1622,23 @@ mod column_literal_tests {
         assert!(!one.is_empty(), "an explicit off is still a setting");
         let foreign: MailAiPrefs = serde_json::from_str(r#"{"future_knob":1}"#).unwrap();
         assert!(!foreign.is_empty(), "a newer build's key must not be dropped");
+    }
+
+    /// `autocomplete` round-trips with and without the field: absent stays
+    /// absent (⇒ on) and is not written back; an explicit value survives; a
+    /// build that does not know the field would keep it in `extra`.
+    #[test]
+    fn ai_autocomplete_pref_round_trips_and_absent_is_none() {
+        let absent: MailAiPrefs = serde_json::from_str(r#"{"summarize":true}"#).unwrap();
+        assert_eq!(absent.autocomplete, None);
+        assert!(!serde_json::to_string(&absent).unwrap().contains("autocomplete"));
+        for (raw, want) in [(r#"{"autocomplete":false}"#, false), (r#"{"autocomplete":true}"#, true)] {
+            let prefs: MailAiPrefs = serde_json::from_str(raw).unwrap();
+            assert_eq!(prefs.autocomplete, Some(want));
+            assert!(!prefs.is_empty(), "an explicit value is a setting");
+            assert!(prefs.extra.is_empty(), "the field is not an extra passenger");
+            assert_eq!(serde_json::to_string(&prefs).unwrap(), raw);
+        }
     }
 
     /// The sync summary reports how many marks a filter made and omits an
