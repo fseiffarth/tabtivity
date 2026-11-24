@@ -1750,7 +1750,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
               key={c.hash}
               className={`sp-row git-commit-row${c.is_head ? " head" : ""}`}
               onClick={() => setSelected(c)}
-              title={c.subject}
+              title={[c.subject, ...refs].join("\n")}
             >
               {graphMode && !searchActive ? (
                 <span className="git-commit-graph">
@@ -1779,7 +1779,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                       className="git-commit-ref"
                       style={color ? { color } : undefined}
                     >
-                      {r}
+                      <span className="sp-row-name">{r}</span>
                     </span>
                   );
                 })}
