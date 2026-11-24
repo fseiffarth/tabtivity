@@ -1972,13 +1972,9 @@ pub fn set_project_sandbox_blocking(
         );
     }
 
-    // A local-models-only project runs no container yet
-    // (`services::agent_privacy`).
-    if enabled {
-        if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
-            return Err(refusal);
-        }
-    }
+    // A local-models-only project may have a container: its shells run there,
+    // its local-model tabs host-bound in the fence, and no agent in the
+    // container (`agent_privacy::CONTAINER_AGENT`).
 
     // Existing spec: the `projects.json` mirror in the state dir is the ONLY
     // source. There used to be a `project.json` fallback for entries predating the
@@ -2069,13 +2065,6 @@ pub fn set_project_sandbox_spec(
     clean(&mut spec.memory);
     clean(&mut spec.cpus);
     clean(&mut spec.network);
-    if spec.enabled {
-        if let Ok(entry) = crate::services::remote::project_entry(&project_id) {
-            if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
-                return Err(refusal);
-            }
-        }
-    }
     // Refuse `host` (and any non-name) here, where the user can see the error —
     // `services::sandbox::harden_opts` additionally drops an invalid network at
     // spawn, so a spec written before this check still can't remove isolation.

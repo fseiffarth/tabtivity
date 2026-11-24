@@ -328,6 +328,7 @@ pub fn transcript(
             subagent,
             version,
             limit.unwrap_or(DEFAULT_LIMIT),
+            false,
         );
     }
     let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
@@ -902,7 +903,12 @@ fn options_for(state_dir: &Path, project_id: &str, tab: &TabEntry, restart: bool
         remote_host_id: None,
         tmux_session: Some(tmux),
         tmux_attach: None,
-        host_bound_uid: None,
+        // The window's own id for the tab's host-bound grant: a container
+        // project's local-model tab runs on the host, in the fence (and is the
+        // only agent a Local models only container project starts). Only an
+        // id: the grant is the marker file `sandbox::enforce_spawn_authority`
+        // looks up in the state dir, so a record cannot invent one.
+        host_bound_uid: tab.extra.get("hostBoundUid").and_then(serde_json::Value::as_str).map(str::to_string),
         local_model: kind == Some("local_agent"),
         host_session: false,
         // The ＋ menu's login-or-key pick, as the window would pass it.
@@ -2415,6 +2421,23 @@ mod tests {
             let opts = restart_options(state.path(), scope, &stored("agent", None, &cwd)).unwrap();
             assert!(!opts.local_only && opts.cwd == cwd.to_string_lossy(), "{scope}");
         }
+    }
+
+    /// A container project's local-model tab keeps the window's host-bound id,
+    /// so `enforce_spawn_authority` runs it on the host where its marker
+    /// exists, as the window does; a record without one carries none.
+    #[test]
+    fn a_container_projects_local_tab_carries_its_host_bound_id() {
+        let state = state_dir();
+        write_projects(state.path());
+        let cwd = state.path().join("box1");
+        let mut record = stored("local_agent", None, &cwd);
+        record.cmd = "ollama".into();
+        record.extra.insert("hostBoundUid".into(), json!("hb-1"));
+        let opts = launch_options(state.path(), "box1", &record).unwrap();
+        assert_eq!(opts.host_bound_uid.as_deref(), Some("hb-1"));
+        assert!(opts.local_model && !opts.sandbox);
+        assert!(placed(state.path(), "box1", "local_agent", None, &cwd).unwrap().host_bound_uid.is_none());
     }
 
     /// A remote-only project's tabs never launch here: no kind or saved

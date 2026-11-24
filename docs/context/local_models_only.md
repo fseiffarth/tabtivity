@@ -37,7 +37,7 @@ touches only status and position, so a stale window cannot clear it.
 
 `set_project_agent_privacy` (`command_class` `client`: desktop only, decision
 D4; the phone reads the record and has no setter) refuses with a message naming
-the project when the project is remote, VM or has its container on; its record
+the project when the project is remote or VM; its record
 names no folder; another registered project's folder (or mirror) or a box folder
 lies **inside** it; `ollama_host` is not loopback (`mail_ai::resolve_endpoint`,
 which refuses a remote host even with `ollama_allow_remote_host`). It refuses
@@ -96,7 +96,8 @@ counts). Only agents are gated; a shell tab is the user's.
 
 A subject spawn is allowed only when `vet` accepts it:
 
-- not remote, not a worker host, not a container, not the Host session, not the
+- not remote, not a worker host, not inside a container (`opts.sandbox`, refused with
+  `CONTAINER_AGENT`; see "Container projects" below), not the Host session, not the
   assistant, Cut network not recorded on the project. A `remote` or `vm` value of
   `null` on the record is absent, in the setting and in the gate alike
   (`remote_or_vm`, the reading `remote_target_for` has);
@@ -160,9 +161,9 @@ Refusals start with `Local models only: "<project>" is set to Local models only,
   gets the folder; `compute_fence_roots`/`roots_for_scope` give a locked project's own
   tabs **its folder only**, no box roots.
 - `root_project_read_only_paths` skips locked projects.
-- A container never carries one: `set_project_sandbox*` refuse for a locked project and
+- No agent runs in a container that shows a locked folder:
   `sandbox::wrap_pty_options_docker` refuses an agent whose project is locked or
-  whose mount contains a locked folder.
+  whose mount contains a locked folder (`container_refusal`).
 
 - A fence that cannot read the project list is not built: `mask_dirs_now` is an error,
   not "no masks", and every fence caller propagates it.
@@ -369,7 +370,29 @@ only the verified drivers) and shells, not the cloud agents, their cloud session
 `cloudRowsOffered`, `offeredLocalAgents` are the one shared TS rule. `the_frontends_driver_lists_are_the_backends`
 ties the Rust and TS driver lists. The baked PWA needs `npm run mobile:bundle` to carry the sheet change.
 
+## Container projects (phase 4)
+
+A locked project may have its Docker container on (`check_enable` and both
+`set_project_sandbox*` commands accept it). Its **local-model tabs run host-bound**,
+the path every container project's local-model tab already took
+(`sandbox::resolve_spawn_authority`: a registered `host_bound` marker plus a
+`HOST_BOUND_LOCAL_AGENT_CMDS` command resolves `sandbox` off), so they get the fence,
+the gate, the config masks, the Claude pin and Cut network exactly as in a plain local
+project. Shells and other non-agent tabs run in the container (the user's, like a
+local shell tab). **No agent runs inside the container**: `vet` refuses a subject spawn
+with `opts.sandbox` (`CONTAINER_AGENT`), and `container_refusal` repeats it in the docker
+wrap. A container could not hold one: it hides nothing of its mount, `docker exec`
+cannot add the per-tab managed-settings and mask binds, the image has no `ollama`, and
+the host's loopback Ollama is not reachable without `--network host` or a non-loopback
+listener. A CLI typed into a container shell hits the `agent_bin` shim, whose
+`--agent-shim` binary is not in the container, so it fails rather than running.
+
+The phone's launch of a stored tab passes the record's `hostBoundUid`
+(`mobile_control::headless::options_for`), so a local tab the window made runs
+host-bound from the phone too; the marker file stays the authority. The phone
+creates no tab in a container project (`create_verdict`). Chosen over the plan's per-tab `--network none` container: see the plan, phase 4.
+
 ## Not done
 
-macOS Seatbelt network denial (phase 3: Cut network is refused there), container and VM projects
-(phase 4), and what "Cut network (phase 2, Linux)" below lists as not run in a real namespace.
+macOS Seatbelt network denial (phase 3: Cut network is refused there), VM projects
+(phase 4b in the plan), and what "Cut network (phase 2, Linux)" below lists as not run in a real namespace.

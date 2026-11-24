@@ -428,9 +428,10 @@ export function ProjectDialog({
       : tierRaw;
   const runInContainer = tier === "container";
   const isVmProject = tier === "vm";
-  // The backend covers a project on this machine alone (`agent_privacy::check_enable`
-  // refuses a remote, container or VM project), so the switch is offered there only.
-  const localOnlyOffered = !isRemoteProject && tier === "local";
+  // The backend covers a project on this machine, contained or not
+  // (`agent_privacy::check_enable` refuses a remote or VM project): a container
+  // project's local-model tabs run host-bound, in the agent sandbox.
+  const localOnlyOffered = !isRemoteProject && tier !== "vm";
   const localOnly = localOnlyOffered && localModelsOnly;
   // A git repo is created LOCALLY even for a remote (SSH) project — the local
   // mirror scaffolds with `git init` the same way a local project does — so this
@@ -1934,7 +1935,11 @@ export function ProjectDialog({
               value={tier}
               onChange={(v) => setTierChoice(v as "local" | "container" | "vm")}
               options={[
-                { value: "local", label: t("projectDialog.tierLocalOpt") },
+                {
+                  value: "local",
+                  // Windows has no agent sandbox (`agent_fence`); elsewhere local agents run in it.
+                  label: t(IS_HOST_WINDOWS ? "projectDialog.tierLocalOptNoSandbox" : "projectDialog.tierLocalOpt"),
+                },
                 ...(containerAvailable
                   ? [{ value: "container", label: t("projectDialog.tierContainerOpt") }]
                   : []),
@@ -2013,6 +2018,12 @@ export function ProjectDialog({
             </span>
             <span className="toggle-card-desc">
               {localOnlyOffered ? t("projectDialog.localOnlyDesc") : t("projectDialog.localOnlyUnavailable")}
+              {localOnlyOffered && runInContainer && (
+                <>
+                  {" "}
+                  {t("projectDialog.localOnlyContainerNote")} <UntestedTag id="projectDialog.localModelsOnlyContainer" />
+                </>
+              )}
             </span>
           </span>
           <span className="eld-switch">

@@ -170,17 +170,12 @@ pub fn is_locked(entry: &ProjectEntry) -> bool {
     privacy_of(entry).local_models_only
 }
 
-/// Why `entry` cannot be switched to a container: a Local-models-only project
-/// has no container tier yet. `None` when it may. The settings-time refusal;
-/// [`container_refusal`] is the spawn-time one, which also covers the mount.
-pub fn locked_refusal(entry: &ProjectEntry) -> Option<String> {
-    is_locked(entry).then(|| {
-        format!(
-            "\"{}\" is set to Local models only, which does not support container projects yet. Switch that off first.",
-            entry.name
-        )
-    })
-}
+/// Why an agent of a locked container project does not start inside its
+/// container: no agent may (a container cannot hide the folder from a cloud CLI,
+/// pin a CLI to the local model or reach the host's loopback Ollama). Its
+/// local-model tabs run host-bound, in this computer's agent sandbox, with
+/// every pin a local project's tab has (phase 4, `docs/context/local_models_only.md`).
+pub const CONTAINER_AGENT: &str = "no agent runs inside its container. An agent on a local model runs in this computer's agent sandbox instead: open it from the \u{ff0b} menu.";
 
 /// `path` with `.` and `..` folded away lexically.
 fn lexical(path: &Path) -> PathBuf {
@@ -572,8 +567,14 @@ fn vet(opts: &PtyOptions, subject: &Locked, probe: &Probe<'_>, remote_project: b
     if subject.cut_network && !probe.can_cut {
         return no("it is set to Cut network, which is not available on this operating system yet (nothing enforces it), so the project is closed to agents until that switch is off.");
     }
-    if opts.sandbox || opts.remote_host_id.as_deref().is_some_and(|h| h != crate::services::remote::PRIMARY_HOST) || remote_project {
-        return no("it is not a plain local folder: remote, VM and container projects are not supported by this mode yet.");
+    if opts.remote_host_id.as_deref().is_some_and(|h| h != crate::services::remote::PRIMARY_HOST) || remote_project {
+        return no("it is not a folder on this computer: remote and VM projects are not supported by this mode yet.");
+    }
+    // A container project's local-model tab runs host-bound, in the fence
+    // (`sandbox::resolve_spawn_authority`); one that would run inside the
+    // container has none of the pins and could not reach the loopback Ollama.
+    if opts.sandbox {
+        return no(CONTAINER_AGENT);
     }
     if opts.host_session {
         return no("the root console's Host session is a cloud agent with your full rights.");
@@ -936,7 +937,7 @@ pub fn container_refusal_in(locked: &[Locked], project_id: &str, project_dir: Op
             refuse(
                 l,
                 if own {
-                    "container projects are not supported by this mode yet."
+                    CONTAINER_AGENT
                 } else {
                     "its folder lies inside this project's container mount, which cannot hide it from a cloud agent."
                 },
@@ -1576,9 +1577,6 @@ pub fn check_enable(
     let no = |why: &str| Err(format!("\"{}\" cannot be set to Local models only: {why}", entry.name));
     if remote_or_vm(entry) {
         return no("it is a remote or VM project. This mode covers local folders only for now.");
-    }
-    if entry.extra.get("sandbox").and_then(|s| s.get("enabled")).and_then(Value::as_bool) == Some(true) {
-        return no("its container is switched on. Container projects are not supported by this mode yet; switch the container off first.");
     }
     let Some(dir) = entry.directory().map(PathBuf::from) else {
         return no("its record names no folder.");

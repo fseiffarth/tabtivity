@@ -349,7 +349,7 @@ fn the_host_session_the_root_console_and_other_kinds_of_project_refuse() {
     // A container tab, a worker host, a remote record, Cut network on.
     let mut contained = opts("ollama", LINE, Some("lock"), &secret);
     contained.sandbox = true;
-    assert!(World::healthy().gate(contained, &projects, tmp.path()).unwrap_err().contains("not a plain local folder"));
+    assert!(World::healthy().gate(contained, &projects, tmp.path()).unwrap_err().contains(CONTAINER_AGENT));
     let mut worker = opts("ollama", LINE, Some("lock"), &secret);
     worker.remote_host_id = Some("gpu-box".into());
     assert!(World::healthy().gate(worker, &projects, tmp.path()).is_err());
@@ -431,12 +431,32 @@ fn the_fence_repeats_the_check_on_the_stamp() {
     assert_eq!(fence_gate_in(&locked, &opts("claude", &[], Some("open"), &tmp.path().join("open")), "open").unwrap(), None);
 }
 
+/// Phase 4: a locked project with its container on starts its local-model tab
+/// host-bound (`sandbox` resolved off by the marker), in the fence, with every
+/// check a plain local project's tab gets; the same tab inside the container,
+/// or a cloud CLI host-bound, is refused.
+#[test]
+fn a_locked_container_project_starts_its_local_tab_host_bound_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let secret = tmp.path().join("secret");
+    std::fs::create_dir_all(&secret).unwrap();
+    let projects = list(json!([{ "id": "lock", "name": "Secret", "status": "active", "position": 0, "local_file": "",
+        "directory": s(&secret), "sandbox": { "enabled": true },
+        "agent_privacy": { "local_models_only": true } }]));
+    let host_bound = opts("ollama", LINE, Some("lock"), &secret);
+    assert!(World::healthy().gate(host_bound, &projects, tmp.path()).is_ok());
+    let mut contained = opts("ollama", LINE, Some("lock"), &secret);
+    contained.sandbox = true;
+    assert!(World::healthy().gate(contained, &projects, tmp.path()).unwrap_err().contains(CONTAINER_AGENT));
+    assert!(World::healthy().gate(opts("claude", &[], Some("lock"), &secret), &projects, tmp.path()).is_err());
+}
+
 #[test]
 fn a_container_never_carries_a_locked_project_or_hides_one() {
     let tmp = tempfile::tempdir().unwrap();
     let locked = locked_projects(&locked_registry(tmp.path()));
     let secret = s(&tmp.path().join("secret"));
-    assert!(container_refusal_in(&locked, "lock", Some(&secret)).is_some());
+    assert!(container_refusal_in(&locked, "lock", Some(&secret)).unwrap().contains(CONTAINER_AGENT));
     assert!(container_refusal_in(&locked, "open", Some(&s(tmp.path()))).unwrap().contains("inside this project's container mount"));
     assert!(container_refusal_in(&locked, "open", Some(&s(&tmp.path().join("open")))).is_none());
 }
@@ -455,11 +475,12 @@ fn only_a_plain_local_project_with_nothing_inside_may_be_locked() {
     for (extra, needle) in [
         (json!({ "remote": { "host": "h", "remote_path": "/r" } }), "remote or VM"),
         (json!({ "vm": { "enabled": true } }), "remote or VM"),
-        (json!({ "sandbox": { "enabled": true } }), "container"),
     ] {
         let err = check_enable(&base(extra), &boxes, "p", ok.clone()).unwrap_err();
         assert!(err.contains("Plain") && err.contains(needle), "{needle}: {err}");
     }
+    // A container project may be locked (phase 4): its local tabs run host-bound.
+    assert!(check_enable(&base(json!({ "sandbox": { "enabled": true } })), &boxes, "p", ok.clone()).is_ok());
     let err = check_enable(&base(json!({})), &boxes, "p", Err("remote host".into())).unwrap_err();
     assert!(err.contains("Ollama host"), "{err}");
     assert!(check_enable(&base(json!({})), &boxes, "ghost", ok.clone()).is_err());

@@ -185,6 +185,12 @@ agents see an empty folder where it is, and a file of the project cannot be
 dropped onto an agent that is not on a local model. Turning it on closes the
 project's running cloud agent tabs.
 
+A project in a **Docker container** can be set too. Its local-model tabs then
+run in this computer's agent sandbox, not in the container (they need the
+Ollama on this computer, and the sandbox is what holds them to it); its shells
+and builds stay in the container, and no agent starts inside the container.
+A remote or VM project cannot be set yet.
+
 OpenCode cannot be kept on the local model while the project keeps its network
 (it re-reads a config file the agent writes while it runs, so the agent could add
 a cloud provider): its local row is not offered there and an OpenCode tab is
