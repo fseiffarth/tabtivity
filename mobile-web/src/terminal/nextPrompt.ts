@@ -37,7 +37,7 @@ export type NextPromptPhase = "warm" | "final";
 export interface NextPromptAnswer {
   text: string | null;
   turnKey?: string | null;
-  status: "ok" | "warmed" | "skipped" | "busy" | "not_running" | "no_model" | "refused" | "unavailable";
+  status: "ok" | "warmed" | "skipped" | "busy" | "not_running" | "no_model" | "refused" | "unavailable" | "off" | "locked";
   reason?: string;
   model?: string | null;
 }
@@ -259,6 +259,20 @@ export const NEXT_PROMPT_COMPLETE_MS = 400;
 /** After an answer that says completions are not to be had (switched off, no
  * model, Ollama down or refused), none is asked for this long. */
 export const NEXT_PROMPT_COMPLETE_BACKOFF_MS = 60_000;
+/** `draft` cut to its last `NEXT_PROMPT_MAX_DRAFT_CHARS` characters at a line
+ * start (else a word start) — the backend's own window, for a box that holds
+ * more than a completion may be asked about (a mail body). */
+export function windowDraft(draft: string): string {
+  if (draft.length <= NEXT_PROMPT_MAX_DRAFT_CHARS) return draft;
+  const tail = draft.slice(draft.length - NEXT_PROMPT_MAX_DRAFT_CHARS);
+  // The cut fell on a line start already.
+  if (draft[draft.length - NEXT_PROMPT_MAX_DRAFT_CHARS - 1] === "\n") return tail;
+  const line = tail.indexOf("\n");
+  if (line >= 0) return tail.slice(line + 1);
+  const word = tail.search(/\s/u);
+  return word >= 0 ? tail.slice(word + 1) : tail;
+}
+
 /** The longest draft completed, and the longest continuation shown (the
  * backend's `MAX_DRAFT_CHARS` / `MAX_COMPLETION_CHARS`). */
 export const NEXT_PROMPT_MAX_DRAFT_CHARS = 2_000;

@@ -21,6 +21,7 @@
  * `docs/mail_client_plan_b.md` §2 (the render pipeline).
  */
 
+import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as pickOnServer, save as saveOnServer } from "@tauri-apps/plugin-dialog";
 import { isServerClient } from "./transport/linkState";
@@ -30,11 +31,19 @@ import { hashString } from "./theme/categoryColor";
 import type { TranslationKey } from "./i18n";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settings";
+import { usePaneVisible } from "./files/fileAccess";
+import {
+  windowDraft,
+  completableDraft,
+  usePromptCompletion,
+  type PromptCompletionShown,
+} from "../../mobile-web/src/terminal/nextPrompt";
 import { experimentalEnabled } from "./experimental";
 import { aiOffIn, useAiOff } from "./aiSwitch";
 import type { Settings } from "../types";
 import type {
   MailAiClassifyReport,
+  MailCompleteAnswer,
   MailExtractedEvent,
   MailExtractedTask,
   MailAccount,
@@ -579,6 +588,160 @@ export function mailFormalizeReply(
   });
 }
 
+// ── Ghost-text completion (docs/mail_autocomplete_plan.md) ───────────────────
+//
+// The composer asks the local Mail model how the sentence being typed goes on.
+// The frontend sends the draft the user typed **above the quote** and the
+// original's opaque store key (`messageId`); the backend resolves the original
+// itself, so no mail body crosses the boundary as context. Every failure is a
+// `status`, never an error: a rejected `invoke` reads as `unavailable`.
+
+/** What the backend reads the completion's context from. `accountId` is the
+ *  **sending** account; `subject`/`to` are read only when `messageId` is null. */
+export interface MailCompleteContext {
+  slot: string;
+  accountId: string;
+  messageId: string | null;
+  subject: string;
+  to: string[];
+}
+
+const COMPLETE_UNAVAILABLE: MailCompleteAnswer = { status: "unavailable", text: null };
+
+/** Feed the slot's context to Ollama ahead of the first keystroke (a reply's
+ *  original, the account's name and signature). Answers `warmed`/`busy`/... */
+export function mailAiCompleteWarm(ctx: MailCompleteContext): Promise<MailCompleteAnswer> {
+  return Promise.resolve(invoke<MailCompleteAnswer>("mail_ai_complete_warm", { ...ctx }))
+    .then((answer) => answer ?? COMPLETE_UNAVAILABLE)
+    .catch(() => COMPLETE_UNAVAILABLE);
+}
+
+/** How `draft` — the text before the caret, above the quote — goes on. **Never
+ *  sends and never saves**: the answer is display-only until the user takes it. */
+export function mailAiComplete(ctx: MailCompleteContext, draft: string): Promise<MailCompleteAnswer> {
+  return Promise.resolve(invoke<MailCompleteAnswer>("mail_ai_complete", { ...ctx, draft }))
+    .then((answer) => answer ?? COMPLETE_UNAVAILABLE)
+    .catch(() => COMPLETE_UNAVAILABLE);
+}
+
+/** Drop the slot's in-memory original and abort its run (composer closed). */
+export function mailAiCompleteRelease(slot: string): Promise<void> {
+  return Promise.resolve(invoke<void>("mail_ai_complete_release", { slot })).then(() => undefined, () => undefined);
+}
+
+/** A fresh composer slot: `mail-` + 12 hex digits (the backend takes
+ *  `[A-Za-z0-9_-]{1,64}`). */
+export function newMailSlot(): string {
+  const bytes = new Uint8Array(6);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  return `mail-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * Where the completion zone of a composer body ends. A reply's body is the
+ * user's text followed by the quoted original; completion works only above it.
+ * `quote.tail` is the quote string the composer appended (`quotedBody`), found
+ * from the end of the text; if the user edited the quote, the zone ends at the
+ * first line equal to `quote.intro` or starting with `> `. `quote` is `null`
+ * for a mail with no original (the whole text is the zone).
+ */
+export function mailCompletionZoneEnd(text: string, quote: { tail: string; intro: string } | null): number {
+  if (!quote) return text.length;
+  if (quote.tail) {
+    const at = text.lastIndexOf(quote.tail);
+    if (at >= 0) return at;
+  }
+  let start = 0;
+  while (start <= text.length) {
+    const end = text.indexOf("\n", start);
+    const line = end < 0 ? text.slice(start) : text.slice(start, end);
+    if ((quote.intro && line === quote.intro) || line.startsWith("> ") || line === ">") return start;
+    if (end < 0) break;
+    start = end + 1;
+  }
+  return text.length;
+}
+
+/** Whether the caret stands where a completion is drawn: nothing selected,
+ *  inside the zone above the quote, with only a line break (or the end) after
+ *  it — never in the middle of a line. */
+export function mailCaretCompletes(text: string, selection: { start: number; end: number }, zoneEnd: number): boolean {
+  if (selection.start !== selection.end || selection.start > zoneEnd) return false;
+  return selection.start === text.length || text[selection.start] === "\n";
+}
+
+/** The first word of a continuation, with the space before it and the one
+ *  after (the right arrow takes one word); "" for none. */
+export function firstCompletionWord(rest: string): string {
+  return /^\s*\S+\s?/u.exec(rest)?.[0] ?? "";
+}
+
+export interface MailCompleteInput {
+  /** Asking is allowed: the composer's gate (`useMailAiFeature`) holds. */
+  enabled: boolean;
+  accountId: string;
+  /** The original's store key, `null` for a new mail. */
+  messageId: string | null;
+  subject: string;
+  to: string[];
+  /** The text before the caret, above the quote. */
+  draft: string;
+  /** The caret stands where a completion is drawn (`mailCaretCompletes`). */
+  atEnd: boolean;
+}
+
+/**
+ * How the mail being typed goes on (`usePromptCompletion`'s timing: 0.4 s
+ * settle, the rest kept while typing along it, a 60 s backoff on any status
+ * but `ok`/`skipped`/`busy`), asked of `mail_ai_complete` for one composer
+ * slot. Warms the slot when a reply/forward opens, and a new mail at its first
+ * completable draft; releases it on unmount. Nothing is asked in a hidden pane.
+ */
+export function useMailComplete({ enabled, accountId, messageId, subject, to, draft, atEnd }: MailCompleteInput): PromptCompletionShown {
+  const paneVisible = usePaneVisible();
+  const on = enabled && paneVisible;
+  const slot = useRef("");
+  if (!slot.current) slot.current = newMailSlot();
+  const used = useRef(false);
+  const warmed = useRef<string | null>(null);
+  const ident = useRef<MailCompleteContext>({ slot: slot.current, accountId, messageId, subject, to });
+  ident.current = { slot: slot.current, accountId, messageId, subject, to };
+  const windowed = windowDraft(draft);
+  const completable = completableDraft(windowed);
+
+  // A reply or forward warms as it opens; a new mail has nothing to read until
+  // there is something to complete.
+  const warmKey = `${accountId}\u0000${messageId ?? ""}`;
+  useEffect(() => {
+    if (!on || !accountId || (messageId === null && !completable)) return;
+    if (warmed.current === warmKey) return;
+    warmed.current = warmKey;
+    used.current = true;
+    void mailAiCompleteWarm(ident.current);
+  }, [on, accountId, messageId, completable, warmKey]);
+
+  // The composer closing lets the backend drop the original it holds. Only a
+  // slot that was used has anything to drop (and StrictMode's probe unmount
+  // must leave a re-mounted composer warmable again).
+  useEffect(() => () => {
+    if (!used.current) return;
+    used.current = false;
+    warmed.current = null;
+    void mailAiCompleteRelease(ident.current.slot);
+  }, []);
+
+  return usePromptCompletion({
+    enabled: on && !!accountId,
+    draft: windowed,
+    atEnd,
+    complete: (text) => {
+      used.current = true;
+      return mailAiComplete(ident.current, text);
+    },
+  });
+}
+
 /** A calendar event read out of a message, or `null` when the model found none /
  *  was too unsure (#207). `null` is "nothing to create", not an error. */
 export function mailExtractEvent(messageId: string): Promise<MailExtractedEvent | null> {
@@ -667,7 +830,19 @@ export function mailAiResolvable(settings: Settings | null | undefined): boolean
 }
 
 /** The per-account {@link MailAiPrefs} keys that turn one mail-AI feature on. */
-export type MailAiFeature = "summarize" | "autoclassify" | "formalize" | "calendar" | "todo";
+export type MailAiFeature = "summarize" | "autoclassify" | "formalize" | "calendar" | "todo" | "autocomplete";
+
+/** Whether one per-account toggle is on. Every toggle is opt-in (`=== true`)
+ *  except `autocomplete`, which is **on unless it is `false`** (absent => on,
+ *  `docs/mail_autocomplete_plan.md` D5): ghost text writes nothing anywhere. A
+ *  missing account is never on. */
+export function mailAiPrefOn(
+  account: MailAccount | null | undefined,
+  key: keyof MailAiPrefs,
+): boolean {
+  if (!account) return false;
+  return key === "autocomplete" ? account.ai?.autocomplete !== false : account.ai?.[key] === true;
+}
 
 /** Whether a specific mail-AI feature should be offered for this account: the
  *  **account's** toggle is on AND the path is resolvable ({@link mailAiResolvable}). */
@@ -677,7 +852,7 @@ export function mailAiFeatureOn(
   feature: MailAiFeature,
 ): boolean {
   // Not while the AI switch is off (`lib/aiSwitch.ts`); the settings stay as set.
-  return account?.ai?.[feature] === true && mailAiResolvable(settings) && !aiOffIn(settings);
+  return mailAiPrefOn(account, feature) && mailAiResolvable(settings) && !aiOffIn(settings);
 }
 
 /** {@link mailAiFeatureOn} as a store subscription — the call site for a
@@ -689,7 +864,7 @@ export function useMailAiFeature(
 ): boolean {
   const resolvable = useSettingsStore((s) => mailAiResolvable(s.settings));
   const aiOff = useAiOff();
-  return resolvable && !aiOff && account?.ai?.[feature] === true;
+  return resolvable && !aiOff && mailAiPrefOn(account, feature);
 }
 
 /**
