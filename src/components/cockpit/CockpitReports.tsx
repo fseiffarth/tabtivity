@@ -2,9 +2,13 @@ import type { RosterRow } from "../../lib/cockpit/roster";
 import { currentBlocker, currentMilestones, currentVerification, openAttention, progressReport } from "../../lib/cockpit/agentNotes";
 import { dismissAttention } from "../../lib/cockpit/attention";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { isAntigravityTab, type AntigravityStepStatus } from "../../../mobile-web/src/terminal/antigravity";
+import { usePaneVisible } from "../../lib/files/fileAccess";
+import { agentTabLabel } from "../../stores/agents/agentModels";
 import type { ProgressState, VerificationOutcome } from "../../stores/tabs/types";
 import { UntestedTag } from "../common/UntestedTag";
 import { formatAgo, formatClock } from "./cockpitFormat";
+import { useScreenSteps } from "./useScreenSteps";
 
 /*
  * The structured reports an agent publishes about its own tab (cockpit MCP
@@ -22,6 +26,15 @@ const STEP_LIVE: Record<ProgressState, TranslationKey> = {
 };
 // A past report never says a step is in progress: its active step "was".
 const STEP_PAST: Record<ProgressState, TranslationKey> = { ...STEP_LIVE, active: "cockpit.notes.stepWasActive" };
+
+const SCREEN_STEP: Record<AntigravityStepStatus, TranslationKey> = {
+  done: "cockpit.notes.stepDone",
+  in_progress: "cockpit.notes.stepActive",
+  pending: "cockpit.notes.stepPending",
+  skipped: "cockpit.screenSteps.skipped",
+  failed: "cockpit.screenSteps.failed",
+  unknown: "cockpit.screenSteps.unknown",
+};
 
 const OUTCOME: Record<VerificationOutcome, TranslationKey> = {
   passed: "cockpit.notes.outcomePassed",
@@ -55,6 +68,42 @@ export function CockpitProgress({ row, now }: { row: RosterRow; now: number }) {
             <span className="cockpit-note-text">{step.label}</span>
           </li>
         ))}
+      </ol>
+    </details>
+  );
+}
+
+/** The step checklist an Antigravity tab draws above its input box, read off
+ *  its screen while it is showing: its own section, marked as read from the
+ *  screen, beside - never in place of - what the agent reported through
+ *  `tab_set_progress`. It goes when the checklist does, and is not read at all
+ *  while the pane is hidden or the machine is down. */
+export function CockpitScreenSteps({ row }: { row: RosterRow }) {
+  const t = useT();
+  const visible = usePaneVisible();
+  const enabled = visible && !row.hostDown && isAntigravityTab(agentTabLabel(row.tab));
+  const read = useScreenSteps(row.ptyId, enabled);
+  if (!read) return null;
+  const counts = [
+    t("cockpit.screenSteps.count", { done: read.done, total: read.total }),
+    read.skipped ? t("cockpit.screenSteps.skippedCount", { n: read.skipped }) : "",
+    read.failed ? t("cockpit.screenSteps.failedCount", { n: read.failed }) : "",
+  ].filter(Boolean).join(" · ");
+  return (
+    <details className="cockpit-detail-fold cockpit-agent-note cockpit-screen-steps" open>
+      <summary>
+        {t("cockpit.screenSteps.title")} <UntestedTag id="cockpit.screenSteps" />
+      </summary>
+      <p className="cockpit-meta">{counts}. {t("cockpit.screenSteps.meta")}</p>
+      <ol className="cockpit-step-list">
+        {read.moreBefore ? <li className="cockpit-step"><span className="cockpit-meta">{t("cockpit.screenSteps.earlier", { n: read.moreBefore })}</span></li> : null}
+        {read.steps.map((step, index) => (
+          <li key={index} className={`cockpit-step ${step.status}`}>
+            <span className="cockpit-step-state">{t(SCREEN_STEP[step.status])}</span>
+            <span className="cockpit-note-text">{step.title}</span>
+          </li>
+        ))}
+        {read.moreAfter ? <li className="cockpit-step"><span className="cockpit-meta">{t("cockpit.screenSteps.more", { n: read.moreAfter })}</span></li> : null}
       </ol>
     </details>
   );

@@ -380,6 +380,7 @@
   border-color: var(--border-strong, var(--border-subtle));
 }
 .cockpit-agent-progress,
+.cockpit-screen-steps,
 .cockpit-agent-blocker,
 .cockpit-agent-verification,
 .cockpit-agent-attention,
@@ -412,6 +413,7 @@
   gap: 6px;
 }
 .cockpit-agent-progress > .cockpit-meta,
+.cockpit-screen-steps > .cockpit-meta,
 .cockpit-agent-blocker > .cockpit-meta,
 .cockpit-agent-verification > .cockpit-meta {
   white-space: normal;

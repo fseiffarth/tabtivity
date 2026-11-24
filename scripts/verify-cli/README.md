@@ -25,7 +25,7 @@ and the new version through the same probe, then compare the two labels.
 | `hookdump.py <log> <event>` | A hook command that appends its event, pid, environment names (and the tab, Copilot and hook-depth values) and stdin payload to a JSONL log. Register it for every event to see which fire, with what. |
 | `stub_anthropic.py <port> <log>` | Anthropic Messages API (`ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`), streaming or not. `STUB:CALL`/`STUB:SEQ` as above (only in a request that offers tools), `STUB:ERR <status> <type>` answers that API error. Lets Claude run with no login and no paid turn. |
 | `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` anywhere in the current user turn (agy's `-p`
-adds a system message after the prompt) makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
+adds a system message after the prompt) makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first, `STUB:HOLD <secs>` beside a `STUB:CALL` waits before answering the tool's result (a screen mid-turn). `STUB_DECLS=<file>` writes the first request's tool declarations there. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
 | `parsers/frames.probe.ts` | Replays every frame of two labels through the app's own readers (Reader live view, model pickers, decision lamp, cold-resume dialog, Antigravity picker/effort, phone sign-in) and lists the frames and fields that read differently. See below. |
 
 Replay two labels:
@@ -144,6 +144,9 @@ gives its usage.
   conversation; `format` whether a release runs the hook and sets
   `ANTIGRAVITY_AGENT` for tool commands (run it on every baseline).
   `stub_gemini.py` forces the tool calls (`STUB:CALL <tool> <json>`).
+  `steps.py <label> <bin> <port> [cols]` forces an `update_steps` call and
+  holds the turn, for the step checklist (1.5.16) above the input box, and
+  writes the tool declarations to `decls.json`.
   `queued.py <label> <bin> <port> <cols> [rows]` holds a turn, queues two
   prompts behind it and opens `/model` over them (`busy`, `queued`,
   `queued_model`), for the phone's footer read beside `Press up to edit queued
