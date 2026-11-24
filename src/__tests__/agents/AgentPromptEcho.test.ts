@@ -37,6 +37,23 @@ describe("the prompt echoed on an agent pane's screen", () => {
     expect(lastPromptEcho(plainBuffer(["⏺ Hello.", "", "> "]))).toBeUndefined();
   });
 
+  it("never takes Antigravity's model picker, drawn under its input box, for a prompt", () => {
+    const picker = [
+      ">",
+      "Switch Model",
+      "",
+      "  Search:",
+      "",
+      "  Gemini 3.8 Flash             (current)",
+      "> Gemini 4 Carbon",
+      "  Gemini 4 Argon",
+      "",
+      "Keyboard: ↑/↓ Navigate  esc Go Back",
+    ];
+    expect(lastPromptEcho(plainBuffer(picker), "Google Antigravity")).toBeUndefined();
+    expect(lastPromptEcho(plainBuffer(["> fix the tests", "", "• Done.", "", ...picker]), "Google Antigravity")).toBe("fix the tests");
+  });
+
   it("stands in for a transcript the backend cannot read", async () => {
     const tab: TabEntry = { key: "agent-1", label: "Gemini", cmd: "gemini", cwd: "/p", kind: "agent", sessionId: "session-abc", scheduleTargetId: "target-1" };
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [tab] } }));

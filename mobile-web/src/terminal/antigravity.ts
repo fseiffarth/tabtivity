@@ -117,6 +117,34 @@ function headingIndex(lines: readonly AntigravityLineLike[]): number {
   return -1;
 }
 
+/** The input line right above the dialog's heading, else the heading itself. */
+function dialogFrameStart(lines: readonly AntigravityLineLike[], heading: number): number {
+  for (let above = heading - 1, seen = 0; above >= 0 && seen < INPUT_REACH; above -= 1) {
+    const text = lines[above].text;
+    if (!text.trim()) continue;
+    seen += 1;
+    if (INPUT.test(text)) return above;
+    break;
+  }
+  return heading;
+}
+
+/**
+ * The row of the `Switch Model` heading on screen, or -1 when no dialog is up.
+ * The dialog is drawn under the input box and its rows begin with the same
+ * `> ` the box and a prompt's echo do, so a reader looking for prompts reads
+ * only the screen above it, input box included (`lastPromptEcho`): the
+ * highlighted model was once taken for the tab's first prompt and named the
+ * tab. A dialog caught mid-repaint counts too, unlike `readAntigravityPicker`,
+ * which needs rows it can answer.
+ */
+export function antigravityDialogStart(lines: readonly AntigravityLineLike[]): number {
+  const heading = headingIndex(lines);
+  if (heading < 0) return -1;
+  const field = skipBlank(lines, heading + 1);
+  return field < lines.length && SEARCH_FIELD.test(lines[field].text) ? heading : -1;
+}
+
 /**
  * The `Switch Model` dialog the session is showing right now, as the rows the
  * phone lists, or `null` when the screen holds none in the recognized shape.
@@ -164,17 +192,7 @@ export function readAntigravityPicker(lines: readonly AntigravityLineLike[]): An
     break;
   }
 
-  let frameStart = heading;
-  for (let above = heading - 1, seen = 0; above >= 0 && seen < INPUT_REACH; above -= 1) {
-    const text = lines[above].text;
-    if (!text.trim()) continue;
-    seen += 1;
-    if (INPUT.test(text)) {
-      frameStart = above;
-      break;
-    }
-    break;
-  }
+  const frameStart = dialogFrameStart(lines, heading);
 
   return {
     options: rows.map((row, at) => ({

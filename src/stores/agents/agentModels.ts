@@ -288,7 +288,7 @@ export const useAgentModelsStore = create<AgentModelsStore>((set, get) => ({
     let text = typeof prompt === "string" ? prompt.trim() : "";
     if (!text) {
       const term = terminalFor(ptyId);
-      if (term) text = lastPromptEcho(term.buffer.active) ?? "";
+      if (term) text = lastPromptEcho(term.buffer.active, agentTabLabel(tab)) ?? "";
     }
     // One window records: a popout's own copy of this store sees the same
     // edge, and the history's dedupe is only against rows already written.
