@@ -53,7 +53,7 @@ use super::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
         LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobileMarkupTick, MobilePromptInput, MobileSchedule,
         MobileScheduleInput, PromptMutation, ScheduleMutation, SyncDirection, SyncOp,
-        TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
+        TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_COMPLETE_BYTES, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
     },
     presence,
@@ -372,6 +372,19 @@ struct MailReplyBody {
     body: String,
     #[serde(default)]
     offset: u32,
+}
+
+/// Body of a reply-completion ask (`…/complete`): the draft typed so far, the
+/// folder page that issued the opaque ids, or `warm` instead of a draft.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MailCompleteBody {
+    #[serde(default)]
+    draft: Option<String>,
+    #[serde(default)]
+    offset: u32,
+    #[serde(default)]
+    warm: bool,
 }
 
 /// Body of an alert row's ✓. The opaque row handle and nothing else: what the
@@ -3893,6 +3906,86 @@ async fn mail_reply(
         )
         .await,
     )
+}
+
+/// `POST /api/v1/mail/folders/{folder_id}/messages/{message_id}/complete`
+/// `{ "draft"?, "offset"?, "warm"? }` — how the reply being typed on the phone
+/// goes on, by the local mail model (`services::mail_complete`). Only the
+/// window can answer: it resolves the opaque ids against its own copy of the
+/// original, and the sidecar never sees mail. With no window (or a wedged one)
+/// there is no completion and no error: `unavailable`. Answers `text`, `status`
+/// and the `model` that wrote the text — no id, path or reason. A draft the
+/// engine writes no completion for is `skipped` without asking the window.
+async fn mail_complete(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((folder_id, message_id)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    use crate::services::mail_complete::Status;
+    if let Err(error) = section_guard(&headers, &state, "mail") {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Ok(request) = request_body::parse_json::<MailCompleteBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let draft = request.draft.unwrap_or_default();
+    if !valid_mail_id(&folder_id)
+        || !valid_mail_id(&message_id)
+        || request.offset > 100_000
+        || (request.warm && !draft.is_empty())
+    {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    if draft.len() > MAX_MAIL_COMPLETE_BYTES {
+        return api_error(StatusCode::PAYLOAD_TOO_LARGE, "draft_too_long");
+    }
+    let answer = |status: Status, text: Option<&str>, model: Option<&str>| {
+        // The engine's cleaned line, cleaned again here whoever answered, and
+        // only beside `ok`; the model is credited only beside text.
+        let text = text
+            .filter(|_| status == Status::Ok)
+            .and_then(crate::services::next_prompt::clean_completion);
+        let model = text.as_ref().and(model).and_then(crate::services::next_prompt::clean_model);
+        let mut body = json!({ "text": text, "status": status });
+        if let Some(model) = model {
+            body["model"] = json!(model);
+        }
+        (StatusCode::OK, Json(body))
+    };
+    // A draft the engine writes no completion for never leaves this process.
+    if !request.warm
+        && (draft.chars().count() > crate::services::next_prompt::MAX_DRAFT_CHARS
+            || crate::services::next_prompt::draft_tail(&draft).is_none())
+    {
+        return answer(Status::Skipped, None, None);
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::MailComplete {
+            request_id: new_request_id(),
+            folder_id,
+            message_id,
+            offset: request.offset,
+            draft,
+            warm: request.warm,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::MailComplete { text, outcome, model }) => {
+            // Only a status word the engine knows crosses.
+            let status = serde_json::from_value::<Status>(json!(outcome)).unwrap_or(Status::Unavailable);
+            answer(status, text.as_deref(), model.as_deref())
+        }
+        Ok(DesktopResponse::Error { code, .. }) if code.ends_with("_not_found") => api_error(StatusCode::NOT_FOUND, &code),
+        // No window, a wedged one, its own error, an answer of another kind.
+        _ => answer(Status::Unavailable, None, None),
+    }
 }
 
 async fn tab(
@@ -9192,6 +9285,10 @@ fn router(state: HostState) -> Router {
         .route(
             "/api/v1/mail/folders/{folder_id}/messages/{message_id}/reply",
             post(mail_reply),
+        )
+        .route(
+            "/api/v1/mail/folders/{folder_id}/messages/{message_id}/complete",
+            post(mail_complete).layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/api/v1/activity", get(activity))
         .route("/api/v1/projects", get(projects).post(new_project))

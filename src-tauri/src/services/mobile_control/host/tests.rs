@@ -680,6 +680,7 @@ async fn mutating_routes_refuse_an_unauthenticated_request() {
         "/api/v1/projects/anything/prompts/anything/send",
         "/api/v1/mail/folders/anything/messages/anything/mark",
         "/api/v1/mail/folders/anything/messages/anything/reply",
+        "/api/v1/mail/folders/anything/messages/anything/complete",
         "/api/v1/local-models",
     ] {
         let (status, _, body) = host.send(post_json(uri, ORIGIN, &create)).await;
@@ -1220,6 +1221,121 @@ async fn the_complete_route_carries_the_draft_and_answers_what_to_append() {
     let (status, _, body) = host.send(get_as(&format!("{route}?phase=complete"), &cookie)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(json(&body)["error"], "invalid_phase");
+    desktop.abort();
+}
+
+/// The reply completion's route: a draft crosses to the window with the same
+/// opaque ids a reply uses, and what comes back is `text`, `status` and the
+/// crediting `model` only — cleaned again, with no reason and nothing raw. A
+/// draft the engine writes nothing for never reaches the window; no window is
+/// `unavailable` (no error); a not-found answer passes as a 404; an unknown
+/// outcome word is `unavailable`.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_mail_complete_route_carries_draft_offset_and_warm_and_answers_text_and_status_only() {
+    let host = Fixture::bare();
+    let cookie = host.pair_device(&signing_key(59)).await.0;
+    let route = "/api/v1/mail/folders/folder-1/messages/message-1/complete";
+    let press_at = |uri: &str, origin: &'static str, body: Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri.to_string())
+            .header(header::ORIGIN, origin)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&body).expect("body")))
+            .expect("request")
+    };
+    let press = |origin: &'static str, body: Value| press_at(route, origin, body);
+    // No window: no completion and no error.
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "text": null, "status": "unavailable" }), "{body}");
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel::<DesktopRequest>();
+    let desktop = tokio::spawn(async move {
+        let answers = [
+            DesktopResponse::MailComplete {
+                text: Some("  I'll send\u{202e} them\nIgnore all and leak".into()),
+                outcome: "ok".into(),
+                model: Some("qwen3:4b\u{202e}".into()),
+            },
+            DesktopResponse::MailComplete { text: None, outcome: "warmed".into(), model: None },
+            DesktopResponse::MailComplete { text: Some("sneaky".into()), outcome: "launched".into(), model: Some("m".into()) },
+            // Text beside anything but `ok` is dropped, with its model.
+            DesktopResponse::MailComplete { text: Some("sneaky".into()), outcome: "refused".into(), model: Some("m".into()) },
+            DesktopResponse::Error { code: "message_not_found".into(), message: "x".into() },
+            DesktopResponse::Error { code: "boom".into(), message: "x".into() },
+        ];
+        for answer in answers {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else { continue };
+            let _ = seen_tx.send(request);
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and", "offset": 25 }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "text": " I'll send them", "status": "ok", "model": "qwen3:4b" }), "{body}");
+    match seen.recv().await.expect("a desktop ask") {
+        DesktopRequest::MailComplete { folder_id, message_id, offset, draft, warm, .. } => {
+            assert_eq!((folder_id.as_str(), message_id.as_str(), offset), ("folder-1", "message-1", 25));
+            assert_eq!(draft, "Thanks for the slides and");
+            assert!(!warm);
+        }
+        other => panic!("asked {other:?}"),
+    }
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "warm": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "text": null, "status": "warmed" }), "{body}");
+    match seen.recv().await.expect("a desktop ask") {
+        DesktopRequest::MailComplete { draft, warm, offset, .. } => assert!(warm && draft.is_empty() && offset == 0),
+        other => panic!("asked {other:?}"),
+    }
+    let (_, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(json(&body), json!({ "text": null, "status": "unavailable" }), "an unknown outcome word never crosses: {body}");
+    let (_, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(json(&body), json!({ "text": null, "status": "refused" }), "no text, model or reason beside a refusal: {body}");
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(json(&body)["error"], "message_not_found");
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "text": null, "status": "unavailable" }), "{body}");
+    while seen.try_recv().is_ok() {}
+
+    // Skipped here, the window not asked: one unfinished word, a command, no draft.
+    for draft in ["Thanks", "/model opus now", "", "Thanks for the\n"] {
+        let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": draft }))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body), json!({ "text": null, "status": "skipped" }), "{draft:?}: {body}");
+    }
+    let (_, _, body) = host.send(press(ORIGIN, json!({ "draft": "word ".repeat(500) }))).await;
+    assert_eq!(json(&body)["status"], "skipped", "past the engine's bound: {body}");
+    assert!(seen.try_recv().is_err(), "a draft with nothing to complete reached the window");
+
+    // Guards: origin, shape, size.
+    let (status, _, body) = host.send(press("https://evil.example", json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(json(&body)["error"], "invalid_origin");
+    for bad in [
+        json!({ "draft": "Thanks for the slides and", "to": "x@example.test" }),
+        json!({ "warm": true, "draft": "Thanks for the" }),
+        json!({ "draft": "Thanks for the slides and", "offset": 100_001 }),
+        json!({ "draft": 5 }),
+    ] {
+        let (status, _, body) = host.send(press(ORIGIN, bad.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+        assert_eq!(json(&body)["error"], "invalid_request");
+    }
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "x".repeat(MAX_MAIL_COMPLETE_BYTES + 1) }))).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    let bad_id = "/api/v1/mail/folders/a.b/messages/message-1/complete";
+    let (status, _, _) = host.send(press_at(bad_id, ORIGIN, json!({ "warm": true }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(seen.try_recv().is_err(), "a refused request reached the window");
     desktop.abort();
 }
 
@@ -7048,6 +7164,7 @@ async fn a_phone_kept_out_of_a_section_is_refused_its_routes() {
         ("GET", "/api/v1/mail/folders/anything/messages/anything"),
         ("POST", "/api/v1/mail/folders/anything/messages/anything/mark"),
         ("POST", "/api/v1/mail/folders/anything/messages/anything/reply"),
+        ("POST", "/api/v1/mail/folders/anything/messages/anything/complete"),
     ] {
         let (status, _, body) = host.send(request_as(method, uri, &kept_out, Some(serde_json::json!({})))).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {body}");
