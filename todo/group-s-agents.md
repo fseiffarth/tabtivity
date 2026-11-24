@@ -3427,7 +3427,7 @@ unchanged; the new agents are additive.
   Copilot 1.0.107; not live.
 - [ ] 🖐️ Manual test — in a new Claude tab type `/tabtivity-send README.md`:
   the file goes to the screen you typed from (the desktop chat names it, or
-  the phone gets it). In a new Codex, Copilot and OpenCode tab, `/skills` (or
+  the phone gets it). In a new Codex, Copilot, OpenCode and Antigravity tab, `/skills` (or
   the CLI's skill list) shows `tabtivity-send` **once**. Ask any of them to
   "send me the output of `ls` on my phone": it pipes through `-n` rather than
   writing a file first. Tabby's (assistant) chat lists no such skill.

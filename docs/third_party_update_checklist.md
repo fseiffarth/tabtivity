@@ -1885,7 +1885,10 @@ The `tabtivity-send` skill (`agent_hint::SKILL_DIRS`, 2026-11-08) leans on
 each CLI's user-skill folder, found by searching the installed builds, not
 live: Claude 2.1.319 `~/.claude/skills`, OpenCode 2.2.6 `~/.claude` and
 `~/.agents` skills, Codex 0.167.0 `$CODEX_HOME/skills` and `~/.agents/skills`,
-Copilot 1.0.107 `~/.copilot/skills` and `~/.agents/skills`. On update re-check
+Copilot 1.0.107 `~/.copilot/skills` and `~/.agents/skills`; Antigravity 1.5.16
+`~/.gemini/config/skills` and `~/.agents/skills` (run offline 2026-11-24: `/skills`
+lists it and the request to the model carries its description; its built-ins
+live in `~/.gemini/antigravity-cli/skills`). On update re-check
 the folder, that the frontmatter is still `name` + `description` only, and
 that the skill is listed once. A CLI that starts reading user skills joins
 `SKILL_DIRS`, unless it reads one already listed.

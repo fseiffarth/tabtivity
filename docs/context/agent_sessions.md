@@ -464,11 +464,12 @@ hint. See the third-party update checklist.
 
 The CLIs that load user skills from their home also get a `tabtivity-send`
 skill (`agent_hint::write_skill_in_home`, 2026-11-08): `SKILL.md` in
-`.claude/skills` (Claude, OpenCode), `.codex/skills` and `.copilot/skills`,
+`.claude/skills` (Claude, OpenCode), `.codex/skills`, `.copilot/skills` and
+`.gemini/config/skills` (Antigravity 1.5.16, run offline 2026-11-24),
 rewritten at each spawn after the global layer, never in the assistant's or
 the probe's home. It carries the whole contract (piped `-n`, `--clear`,
 limits, exit codes) and is a slash command (`/tabtivity-send <file>`). The
-shared `.agents/skills` is left out: OpenCode, Codex and Copilot all read it
+shared `.agents/skills` is left out: OpenCode, Codex, Copilot and Antigravity all read it
 beside their own and would list the skill twice. The one-line hint stays,
 since a skill loads only when the model matches its description.
 
