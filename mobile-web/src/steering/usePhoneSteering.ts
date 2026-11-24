@@ -91,6 +91,9 @@ const LIST_LEVELS: ReadonlySet<PhoneLevel> = new Set<PhoneLevel>(["projects", "t
 const ACTIVITY_FRESH_MS = 2000;
 /** How often the legend's counts refresh while the mode is on. */
 const ACTIVITY_POLL_MS = 5000;
+/** How long a sent draft's empty field is awaited, and how often it is checked meanwhile. */
+const SENT_WATCH_MS = 4000;
+const SENT_POLL_MS = 100;
 
 const STATUS_KIND: Partial<Record<PhoneSteeringAction, StatusKind>> = {
   nextDecision: "ask",
@@ -136,12 +139,17 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
     e.preventDefault();
     swallowed.add(keyId(e));
   };
-  const later = (fn: () => void, ms: number) => {
+  /** Runs `fn` after `ms`; the timer is cleared on unmount, and the returned function cancels it sooner. */
+  const later = (fn: () => void, ms: number): (() => void) => {
     const timer = setTimeout(() => {
       timers.delete(timer);
       fn();
     }, ms);
     timers.add(timer);
+    return () => {
+      clearTimeout(timer);
+      timers.delete(timer);
+    };
   };
 
   /** Tells the legend what the engine sees now. */
@@ -227,15 +235,35 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
     publishView();
   }
 
-  /** An Enter that sent the draft leaves the field empty: put the caret away so steering resumes. */
+  /** An Enter that sent the draft leaves the field empty: put the caret away so steering resumes.
+   * React clears the field without an `input` event, so the field is checked every
+   * `SENT_POLL_MS` for a while. Typing or a blur ends the watch early, and so does the window. */
   function resumeIfSent(field: HTMLTextAreaElement): void {
-    const check = () => {
-      if (!active() || document.activeElement !== field || field.value !== "") return;
-      field.blur();
-      repair();
+    let cancelTick: () => void = () => {};
+    let cancelEnd: () => void = () => {};
+    const stop = () => {
+      cancelTick();
+      cancelEnd();
+      field.removeEventListener("input", stop);
+      field.removeEventListener("blur", stop);
     };
-    later(check, 0);
-    later(check, 250);
+    const tick = () => {
+      if (!active() || document.activeElement !== field) {
+        stop();
+        return;
+      }
+      if (field.value === "") {
+        stop();
+        field.blur();
+        repair();
+        return;
+      }
+      cancelTick = later(tick, SENT_POLL_MS);
+    };
+    field.addEventListener("input", stop);
+    field.addEventListener("blur", stop);
+    cancelEnd = later(stop, SENT_WATCH_MS);
+    cancelTick = later(tick, 0);
   }
 
   async function statusJump(kind: StatusKind, backwards: boolean): Promise<void> {
