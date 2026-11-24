@@ -4,7 +4,7 @@ import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agent
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { BRAND } from "../../lib/brand";
-import { pickerAsks } from "../../../mobile-web/src/screens/terminal/useAsyncAsk";
+import { queuedPickerKeys, readQueuedPicker } from "../../../mobile-web/src/screens/terminal/useAsyncAsk";
 
 const lines = (...texts: string[]) => texts.map((text) => ({ text }));
 const ESC = String.fromCharCode(27);
@@ -568,17 +568,69 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     const prompt = readSelectPrompt(screen, "Codex", 110);
     expect(prompt?.options.map((option) => option.label)).toEqual(["Main window", "Popped-out window", "Phone", "Other"]);
     expect(prompt?.current).toBe(0);
-    // Which queued question it is: the lines under the queue's heading, as
-    // wrapped — not the echo of the ask further up.
-    expect(pickerAsks(prompt, screen, "Which window shows the bug?")).toBe(true);
-    expect(pickerAsks(prompt, screen, "Which file?")).toBe(false);
-    const wrapped = lines("• Queued follow-up inputs", "  Which window shows", "  the bug?", "  › 1. Main window", "    2. Phone", "  enter submit   ^] skip   shift+→ main prompt");
-    expect(pickerAsks(readSelectPrompt(wrapped, "Codex", 24), wrapped, "Which window shows the bug?")).toBe(true);
+    // Which queued question it is: its words above the rows, as wrapped — not
+    // the echo of the ask further up — and every row the asked option.
+    const asked = { question: "Which window shows the bug?", options: [{ label: "Main window" }, { label: "Popped-out window" }, { label: "Phone" }] };
+    expect(readQueuedPicker(screen, asked)).toEqual({ current: 1 });
+    expect(readQueuedPicker(screen, { ...asked, question: "Which file?" })).toBeNull();
+    expect(readQueuedPicker(screen, { ...asked, options: [{ label: "Main window" }, { label: "Popped-out window" }, { label: "Tablet" }] })).toBeNull();
+    const wrapped = lines("• Queued follow-up inputs", "  Which window shows", "  the bug?", "  › 1. Main window", "    2. Phone", "    3. Other", "  enter submit   ^] skip   shift+→ main prompt");
+    expect(readQueuedPicker(wrapped, { question: asked.question, options: [{ label: "Main window" }, { label: "Phone" }] })).toEqual({ current: 1 });
     // A picker that is not the queue's (a blocking question) is never taken for it.
     const blocking = lines("  Which window shows the bug?", "  › 1. Main window", "    2. Phone", "  enter to submit answer");
-    expect(pickerAsks(readSelectPrompt(blocking, "Codex", 110), blocking, "Which window shows the bug?")).toBe(false);
+    expect(readQueuedPicker(blocking, { question: asked.question, options: [{ label: "Main window" }, { label: "Phone" }] })).toBeNull();
     // Still queued, only the hint on screen: nothing to answer there yet.
     expect(readSelectPrompt(lines("• Queued follow-up inputs", "  ? 1 question", "    shift+← to answer", "› Ask Codex to do anything"), "Codex")).toBeNull();
+  });
+
+  it("reads Codex's queued picker taller than its area, whatever page is showing", () => {
+    // Codex 0.171.0 and 0.172.0 (`async_question.py … long`, `many` at 80x12):
+    // 13 rows in six, scrolled with the highlight, the queue's heading gone,
+    // the footer saying `option N/13`. Every row is read off its printed number.
+    const asked = { question: "Which of the twelve builds broke?", options: Array.from({ length: 12 }, (_, i) => ({ label: `Build ${String(i + 1).padStart(2, "0")}` })) };
+    const title = "  Which of the twelve builds broke?";
+    const row = (n: number, marked = false) => `${marked ? "  › " : "    "}${n}. ${n === 13 ? "Other" : `Build ${String(n).padStart(2, "0")}`}`;
+    const footer = (n: number) => `  enter submit   ^] skip   option ${n}/13   shift+→ main prompt`;
+    const top = lines(title, row(1, true), row(2), row(3), row(4), row(5), row(6), footer(1));
+    expect(readQueuedPicker(top, asked)).toEqual({ current: 1 });
+    expect(queuedPickerKeys({ current: 1 }, 11)).toEqual([...Array(11).fill("\u001b[B"), "\r"]);
+    // PageDown: rows 2–7, the highlight on the last one, which starts off-screen for 12.
+    const paged = lines(title, row(2), row(3), row(4), row(5), row(6), row(7, true), footer(7));
+    expect(readQueuedPicker(paged, asked)).toEqual({ current: 7 });
+    expect(queuedPickerKeys({ current: 7 }, 11)).toEqual([...Array(5).fill("\u001b[B"), "\r"]);
+    expect(queuedPickerKeys({ current: 7 }, 0)).toEqual([...Array(6).fill("\u001b[A"), "\r"]);
+    // The end: `Other` highlighted, rows 8–12 above it.
+    const end = lines(title, row(8), row(9), row(10), row(11), row(12), row(13, true), footer(13));
+    expect(readQueuedPicker(end, asked)).toEqual({ current: 13 });
+    expect(queuedPickerKeys({ current: 13 }, 11)).toEqual(["\u001b[A", "\r"]);
+    // Not this question: other options under the same words, or a list of another length.
+    expect(readQueuedPicker(paged, { ...asked, options: asked.options.map((option) => ({ label: option.label.replace("Build", "Job") })) })).toBeNull();
+    expect(readQueuedPicker(paged, { ...asked, options: asked.options.slice(0, 8) })).toBeNull();
+    // A blocking question's footer is not the queue's.
+    expect(readQueuedPicker(lines(title, row(1, true), row(2), "  enter to submit answer   option 1/13"), asked)).toBeNull();
+  });
+
+  it("reads Codex's queued picker whose rows are several lines tall", () => {
+    // Codex 0.171.0 and 0.172.0, `tall` at 60x16: each option is four lines,
+    // the pane shows two of them, the footer wraps, and a scrolled page opens
+    // on the tail of the row above the highlight.
+    const options = [..."ABCDE"].map((c) => ({ label: `Plan ${c}: first, second, third line 1 of plan ${c}, long enough to wrap in a narrow pane line 2 of plan ${c}, long enough to wrap in a narrow pane line 3 of plan ${c}, long enough to wrap in a narrow pane` }));
+    const asked = { question: "Which of these plans should the agent follow?", options };
+    const title = "  Which of these plans should the agent follow?";
+    const body = (c: string, mark: string) => [`  ${mark} ${"ABCDE".indexOf(c) + 1}. Plan ${c}: first, second, third`, ...[1, 2, 3].flatMap((n) => [`       line ${n} of plan ${c}, long enough to wrap in a narrow  `, "       pane"])];
+    const footer = (n: number) => [`  enter submit   ^] skip   option ${n}/6`, "  shift+→ main prompt"];
+    // Opened: Plan A whole, Plan B cut after its second line.
+    const opened = lines(title, ...body("A", "›"), ...body("B", " ").slice(0, 2), ...footer(1));
+    expect(readQueuedPicker(opened, asked)).toEqual({ current: 1 });
+    // One page down (0.172.0): the page opens on Plan A's last two lines.
+    const paged = lines(title, "       line 3 of plan A, long enough to wrap in a narrow", "       pane", ...body("B", "›"), ...footer(2));
+    expect(readQueuedPicker(paged, asked)).toEqual({ current: 2 });
+    expect(queuedPickerKeys({ current: 2 }, 4)).toEqual([...Array(3).fill("\u001b[B"), "\r"]);
+    // Plan E highlighted, `Other` below the area.
+    const last = lines(title, "       line 3 of plan D, long enough to wrap in a narrow", "       pane", ...body("E", "›"), ...footer(5));
+    expect(readQueuedPicker(last, asked)).toEqual({ current: 5 });
+    // The same page under another set of plans is not it.
+    expect(readQueuedPicker(last, { ...asked, options: options.map((option) => ({ label: option.label.replace("Plan", "Step") })) })).toBeNull();
   });
 
   it("bounds a Codex question to the dialog, not to the session above it", () => {

@@ -461,7 +461,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
         </div>
       : turn.questions
       ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t(turn.asking ? "mobile.transcript.asyncWaiting" : "mobile.transcript.notAnswered")} untested={(turn.asking ? isUntested("mobile.transcript.asyncAsk") : isUntested("mobile.focus.askedCard")) ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)}
-          answer={turn.asking && asyncAsk ? { sending: asyncAsk.sending?.key === turn.key ? asyncAsk.sending : null, label: t("mobile.transcript.answering"), pick: (question, row) => asyncAsk.pick(turn.key, turn.questions?.[question]?.question ?? "", question, row) } : undefined} />
+          answer={turn.asking && asyncAsk ? { sending: asyncAsk.sending?.key === turn.key ? asyncAsk.sending : null, label: t("mobile.transcript.answering"), pick: (question, row) => (turn.questions?.[question] && asyncAsk.pick(turn.key, turn.questions[question], question, row)) } : undefined} />
       : turn.command
       ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} inbox={inbox} links={links} />
       : turn.kind === "prompt"
@@ -2392,7 +2392,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       : null),
     [agentKey, liveQuestion, questionTabs.length, transcript, questionAsk, questionContext],
   );
-  const asyncAsk = useAsyncAsk({ deliver, liveTail, liveQuestion, answerQuestion });
+  const asyncAsk = useAsyncAsk({ deliver, liveTail });
   /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */
   const queueSteer = useRef({ shown: false, send: () => {}, pull: () => {} });
   useTerminalSteering({ focusView: view === "focus", liveQuestion, answerQuestion, composer: composerInput, queue: queueSteer });

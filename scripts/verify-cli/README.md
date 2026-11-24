@@ -188,6 +188,11 @@ gives its usage.
   the stub reads) asks an async question while the turn works on, opens it
   (shift+←) and answers it; then one skipped (^]) and one left waiting as the
   turn ends. Frames, the rollout and the hook dumps land in `async_question/`.
+  `async_question.py <label> <bin> <port> [model] long [many|tall]` asks one
+  question taller than the picker's area (12 options at 80x12, multi-line
+  options at 60x16), resizes the pane after asking, and answers the last real
+  option by the app's walk, by digits and by paging (PageDown/PageUp); frames
+  and `answers.txt` (what Codex got back) land in `async_question_long/`.
 
 - **Copilot** (`copilot/`): `screens.sh <label> <bin> [port]` walks the folder
   trust question, idle, a stub-forced `create` approval at 110 and 60 columns
