@@ -57,6 +57,7 @@ import { basename, dirname } from "../../lib/paths";
 import { readDownloadsShown, writeDownloadsShown, type DownloadsHost } from "../../lib/projects/downloadsShown";
 import { projectTypeTags, providerName } from "../projects/projectTypeTags";
 import { ScaffoldTagPopover } from "./ScaffoldTagPopover";
+import { AgentPrivacyDialog } from "../projects/AgentPrivacyDialog";
 import { PublishWindow } from "../projects/PublishWindow";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
 import { IdeHeaderButton } from "../projects/IdeMenuItems";
@@ -584,6 +585,8 @@ export function ProjectFilesView({
   const [scaffoldMissing, setScaffoldMissing] = useState(false);
   // The "no scaffold" tag's popover (missing defaults + Repair), anchored under the tag.
   const [scaffoldTagMenu, setScaffoldTagMenu] = useState<{ x: number; y: number } | null>(null);
+  // The "local only" tag opens the project's Agent privacy switch.
+  const [showAgentPrivacy, setShowAgentPrivacy] = useState(false);
   const [scaffoldProbe, setScaffoldProbe] = useState(0);
   // Nested-repo detection: when the browsed folder lives in a git repo distinct
   // from the project's own repo, `nestedRoot` holds that repo's root and the git
@@ -1318,6 +1321,7 @@ export function ProjectFilesView({
               setScaffoldTagMenu({ x: r.left, y: r.bottom + 4 });
             }
           : undefined,
+        onLocalOnlyClick: projectId ? () => setShowAgentPrivacy(true) : undefined,
       })
     : [];
 
@@ -2033,6 +2037,9 @@ export function ProjectFilesView({
           />
         )}
         {mobileAccessError && <ErrorNote className="side-panel-mobile-access-error" role="alert" error={mobileAccessError} />}
+        {showAgentPrivacy && project && (
+          <AgentPrivacyDialog project={project} onClose={() => setShowAgentPrivacy(false)} />
+        )}
         {scaffoldTagMenu && projectId && (
           <ScaffoldTagPopover
             projectId={projectId}
