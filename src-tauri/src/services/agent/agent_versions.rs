@@ -43,8 +43,10 @@ use crate::services::agent_usage::strip_ansi;
 /// A version print answers immediately; unlike a warm-up (10 minutes, because
 /// it does real work) there is nothing here worth waiting for. The ceiling
 /// exists for the CLI that ignores the flag and opens its TUI instead — that
-/// process must die, not sit there holding a slot.
-pub const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+/// process must die, not sit there holding a slot. It is not 5 s: Copilot's
+/// npm loader took 4.9 s cold beside other probes (0.2 s warm, 2026-11-24), so
+/// it timed out, and a timeout is cached for [`PROBE_TTL`] like any answer.
+pub const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Longest version text kept. The real ones are tens of bytes; the bound is
 /// here so a CLI that answers `--version` with its whole help text cannot push
