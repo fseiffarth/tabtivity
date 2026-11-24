@@ -411,7 +411,7 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/fileViewer/editableFile.tsx` | `useEditableFile` / `useReadonlyFile` (load, save, disk reload, external-change banner), `EditorApi`, the edit-history reducer. |
 | `embed/fileViewer/indent.ts` | Code-editor key helpers: `applyIndent`, `applyLineComment`, `applyAutoIndent`, `detectIndentUnit`, indent guides. |
 | `embed/fileViewer/decorations.ts` | Pure range decorators: links, snippets, search, occurrences, bracket match, change marks, grammar ranges, `applyReplacements`. |
-| `embed/fileViewer/caretMirror.ts` | Native-textarea caret geometry: device-pixel snapping, the caret mirror offsets. |
+| `embed/fileViewer/caretMirror.ts` | Native-textarea caret geometry: device-pixel snapping, the caret and range mirror offsets (wrapping at `textareaWrapWidth`). |
 | `embed/fileViewer/CodeEditor.tsx` | The textarea code editor: highlighting, autocomplete ghost/visibility/acceptance (one ghost publish per frame, edit-kind and IME trigger rules, the "not loaded — Load" pill, word/line keys; streaming/model/cache work in `lib/viewers/completion/`), spelling, hover preview, search, blame gutter. |
 | `embed/fileViewer/toolbar.tsx` | Header buttons: Save, Print, Undo/Redo, Format, Compare, mode toggle, syntax-check banner. |
 | `embed/fileViewer/editorPrefs.tsx` | Per-tab AI prefs (autocomplete mode, trigger auto/on request, provider delay from `autocomplete_delay_ms`, spelling), `EditorAiControls` (Autocomplete toggle, Local/Copilot picker, load or manage local models when none is resident), the spelling-language picker. |
@@ -460,7 +460,7 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/pdf/PdfMarkupPageRail.tsx` | The read-only page rail while marking (a click jumps, a dot marks a page with marks); `PdfViewer` passes its `PdfThumb` as `thumb`. |
 | `embed/pdf/PdfNotesPane.tsx` | Remarks panel: every comment in one list in reading order (`placedNotes`); Next/Previous walk a ring (`stepNote`). |
 | `embed/pdf/PdfTextLayer.tsx` | Selectable text layer (pdf.js `TextLayer`) over rendered pages. Not a mode — always on. |
-| `embed/pdf/clickedWord.ts`, `lib/viewers/tex/reverseWord.ts` | Reverse SyncTeX word matching. A range hit on the PDF text layer supplies context for matching in the current TeX draft. |
+| `embed/pdf/clickedWord.ts`, `lib/viewers/tex/reverseWord.ts` | Reverse SyncTeX word matching. A range hit on the PDF text layer supplies context for matching in the current TeX draft (accents, ligatures and hyphens folded; an unspelled token such as a citation number lands on its nearest word). The editor boxes the matched word and bands its row. |
 | `embed/pdf/textSelection.ts` | pdf.js viewer's `TextLayerBuilder` selection port: `endOfContent` block + WebKit move-on-`selectionchange` (no jump at gaps), ligature-folded copy. |
 | `embed/pdf/PdfSelectionBar.tsx` | Selection bar over selected text: 4 highlighter colours (swatch = action), highlight + remark, copy. |
 | `embed/pdf/selection.ts` | Selection as geometry: DOM Range rects → big points per page, clipped per page, merged along lines. |

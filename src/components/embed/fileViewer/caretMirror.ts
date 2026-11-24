@@ -88,23 +88,7 @@ export function textareaMirrorToViewport(
  * as long as the same token is being typed (the token's start does not move).
  */
 export function textareaCaretMirrorOffsets(ta: HTMLTextAreaElement, pos: number): CaretMirrorOffsets {
-  const style = getComputedStyle(ta);
-  const lh = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2 || 16;
-  const div = document.createElement("div");
-  const copy = [
-    "boxSizing", "width", "paddingTop", "paddingRight", "paddingBottom",
-    "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth",
-    "borderLeftWidth", "fontFamily", "fontSize", "fontWeight", "fontStyle",
-    "fontVariant", "letterSpacing", "wordSpacing", "lineHeight", "tabSize",
-    "textIndent", "textTransform",
-  ] as const;
-  for (const p of copy) div.style[p as never] = style[p as never];
-  div.style.position = "absolute";
-  div.style.visibility = "hidden";
-  div.style.whiteSpace = ta.wrap === "off" ? "pre" : "pre-wrap";
-  div.style.overflowWrap = "anywhere";
-  div.style.overflow = "hidden";
-  div.style.height = "auto";
+  const { div, lh } = mirrorOf(ta);
   div.textContent = ta.value.slice(0, pos);
   const marker = document.createElement("span");
   // Only the word the caret is in follows it: that is what decides whether a
@@ -117,4 +101,53 @@ export function textareaCaretMirrorOffsets(ta: HTMLTextAreaElement, pos: number)
   const left = marker.offsetLeft;
   document.body.removeChild(div);
   return { left, top, height: lh };
+}
+
+/** Where the characters `[start, end)` sit, on the row they start on (offsets
+ *  as {@link textareaCaretMirrorOffsets}, plus that row's `width` of them). */
+export function textareaRangeMirrorRect(
+  ta: HTMLTextAreaElement,
+  start: number,
+  end: number,
+): CaretMirrorOffsets & { width: number } {
+  const { div, lh } = mirrorOf(ta);
+  div.textContent = ta.value.slice(0, start);
+  const span = document.createElement("span");
+  span.textContent = ta.value.slice(start, end) || ".";
+  div.appendChild(span);
+  // The rest of the word decides whether the range wraps, as for the caret.
+  div.appendChild(document.createTextNode(/^\S{0,200}/.exec(ta.value.slice(end, end + 200))?.[0] ?? ""));
+  document.body.appendChild(div);
+  const first = span.getClientRects()[0];
+  const width = first ? first.width : span.offsetWidth;
+  const top = span.offsetTop;
+  const left = span.offsetLeft;
+  document.body.removeChild(div);
+  return { left, top, height: lh, width };
+}
+
+/** A hidden div laid out as the textarea lays its text out, wrapping at the
+ *  textarea's own wrap width (`textareaWrapWidth`: a mirror at the full box
+ *  width wraps a scrollbar's width later than the textarea does). */
+function mirrorOf(ta: HTMLTextAreaElement): { div: HTMLDivElement; lh: number } {
+  const style = getComputedStyle(ta);
+  const lh = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2 || 16;
+  const div = document.createElement("div");
+  const copy = [
+    "boxSizing", "width", "paddingTop", "paddingRight", "paddingBottom",
+    "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth",
+    "borderLeftWidth", "fontFamily", "fontSize", "fontWeight", "fontStyle",
+    "fontVariant", "letterSpacing", "wordSpacing", "lineHeight", "tabSize",
+    "textIndent", "textTransform",
+  ] as const;
+  for (const p of copy) div.style[p as never] = style[p as never];
+  const wrapWidth = textareaWrapWidth(ta);
+  if (style.boxSizing === "border-box" && wrapWidth > 0) div.style.width = `${wrapWidth}px`;
+  div.style.position = "absolute";
+  div.style.visibility = "hidden";
+  div.style.whiteSpace = ta.wrap === "off" ? "pre" : "pre-wrap";
+  div.style.overflowWrap = "anywhere";
+  div.style.overflow = "hidden";
+  div.style.height = "auto";
+  return { div, lh };
 }

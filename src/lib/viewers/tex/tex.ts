@@ -1040,6 +1040,36 @@ function rowIndices(words: WordBox[]): number[] {
   return col;
 }
 
+/**
+ * The PDF word at the point (`x`, `y`) and its reading-order context, from the
+ * page's positioned text runs (`items`, in the point's own space — SyncTeX's
+ * unturned one). What a reverse-search click sends when the text layer's own
+ * hit test found no word (a layer not yet built, a hit that missed the glyph
+ * boxes): the word under the point, else the nearest one on that row. Pure /
+ * tested.
+ */
+export function phraseAtPoint(
+  items: TextItemBox[],
+  x: number,
+  y: number,
+): { words: string[]; index: number } | undefined {
+  const words = wordBoxes(items);
+  let hit = -1;
+  let bestDx = Infinity;
+  for (const [p, wb] of words.entries()) {
+    if (y < wb.y || y > wb.y + wb.h) continue;
+    const dx = x < wb.x ? wb.x - x : x > wb.x + wb.w ? x - (wb.x + wb.w) : 0;
+    if (dx < bestDx) {
+      bestDx = dx;
+      hit = p;
+    }
+  }
+  // Off to the side of a row by more than a few letters is no word at all.
+  if (hit < 0 || bestDx > words[hit].h * 2) return undefined;
+  const start = Math.max(0, hit - 12);
+  return { words: words.slice(start, hit + 13).map((wb) => wb.text), index: hit - start };
+}
+
 /** Fallback when phrase matching finds nothing: locate `needle` as a substring of
  *  any run, nearest the target line. Handles words a token split would miss. */
 function refineSingle(target: SyncRect, needle: string, items: TextItemBox[]): SyncRect | null {
