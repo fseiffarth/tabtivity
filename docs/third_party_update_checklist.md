@@ -1892,6 +1892,26 @@ draws the folder-trust question before the welcome box, which only moves its
 rows. Real sign-in, model pickers and a model's own output were not
 exercised.
 
+Re-checked **1.0.115** (2026-11-24, `npm pack @github/copilot-linux-x64`,
+beside 1.0.114, offline against the stub): all 13 `copilot-events-probe.py`
+checks pass on both. `--help` only adds `--sandbox` and the `hooks`/`skills`
+help topics, and rewords `--assisted-approval`. `hooks.py events` fires the
+same events per step, and `turn`'s 12 checks pass with the same final words.
+Short turns now finish before the probe's first read, so `working` shows up
+only in the longer steps. `chat_send.py`: all five prompts arrived word for
+word, despite the changelog's "rapidly typed lines are submitted separately".
+`remote_store.py` (every case) matches `remote_transcript/copilot.rs`. The
+frame replay reads the same options, asks and decision lamp. The trust question
+sits ten rows higher, and a long prompt's frame caught the idle footer, not
+`Working`. The unpacked runtime still holds `authTokens`, `lastLoggedInUser`
+and `storeTokenPlaintext`. Changelog items near what Tabtivity reads: a
+session closed before its first prompt fires no `sessionEnd` (the turn record
+still names the old session after `/new`, whose `sessionEnd` does fire); Esc
+on a *hook* permission prompt now stops the turn (Tabtivity's hooks never
+ask); the footer shows the model and effort on resume (not read);
+`-p --continue` now resumes by directory (Tabtivity pins `--session-id`).
+Real sign-in, model pickers and a model's own output were not exercised.
+
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
 Auggie, CodeBuddy: `settings.json` `hooks.SessionStart[].hooks[]`, stdout JSON
@@ -2001,7 +2021,7 @@ assumes (1.0.102 and 1.0.103 pass, 2026-10-24; 1.0.105, 2026-10-30):
   `.copilot/hooks/tabtivity-turn.json`, gated on `TURN_HOOKS_SINCE`). Run
   `python3 scripts/verify-cli/copilot/hooks.py events <label> <bin>` for
   what fires, then `… turn <label> <bin>` for the words and the nested check.
-  1.0.112 (2026-11-16, offline; 1.0.114 the same, 2026-11-18): the tab variables reach hooks; every payload
+  1.0.112 (2026-11-16, offline; 1.0.114 the same, 2026-11-18; 1.0.115, 2026-11-24): the tab variables reach hooks; every payload
   starts with the event's `sessionId`; a prompt fires `userPromptSubmitted`
   (`userPromptTransformed`), a tool `preToolUse`, then `postToolUse` or
   `postToolUseFailure`; an approval `permissionRequest` then `notification`

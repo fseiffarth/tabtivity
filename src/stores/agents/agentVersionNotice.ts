@@ -74,7 +74,7 @@ const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
   codex: "0.172.0",
   opencode: "2.4.1",
   antigravity: "1.5.16",
-  copilot: "1.0.114",
+  copilot: "1.0.115",
   muse: "1.4.25",
   vibe: "3.1.4",
 };
