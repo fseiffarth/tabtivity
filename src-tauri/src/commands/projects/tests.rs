@@ -2257,6 +2257,7 @@ const SYNC_COMMANDS_ALLOWED: &[(&str, &str)] = &[
     ("projects.rs", "set_project_sandbox_spec"),
     ("projects.rs", "set_project_remote_control"),
     ("projects.rs", "set_project_schedule_mcp"),
+    ("projects.rs", "set_project_mcp_off"),
     ("projects.rs", "set_project_git_push_mcp"),
     ("projects.rs", "set_project_openvpn"),
     ("projects.rs", "set_project_auto_connect"),
