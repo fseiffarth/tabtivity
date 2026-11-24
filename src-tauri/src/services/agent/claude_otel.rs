@@ -160,13 +160,12 @@ fn count_of(value: &Value) -> Option<u64> {
             Value::String(s) => s.trim().parse::<u64>().ok()?,
             other => other.as_u64()?,
         }
-    } else if let Some(d) = value.get("doubleValue").and_then(Value::as_f64) {
+    } else {
+        let d = value.get("doubleValue").and_then(Value::as_f64)?;
         if !d.is_finite() || d < 0.0 || d.fract() != 0.0 || d > MAX_PER_REQUEST as f64 {
             return None;
         }
         d as u64
-    } else {
-        return None;
     };
     (n <= MAX_PER_REQUEST).then_some(n)
 }
@@ -199,16 +198,15 @@ fn counts_of(span: &Value) -> Option<[u64; 4]> {
         let cache_w = count_attr(span, A_GEN_CACHE_W).unwrap_or(0);
         let fresh = total_in.saturating_sub(cache_r).saturating_sub(cache_w);
         (cache_r, cache_w, count_attr(span, A_GEN_OUT).unwrap_or(0), fresh)
-    } else if let Some(plain) = count_attr(span, A_PLAIN_IN) {
+    } else {
         // Before the `gen_ai.*` names, `input_tokens` was the fresh part.
+        let plain = count_attr(span, A_PLAIN_IN)?;
         (
             count_attr(span, A_PLAIN_CACHE_R).unwrap_or(0),
             count_attr(span, A_PLAIN_CACHE_W).unwrap_or(0),
             count_attr(span, A_PLAIN_OUT).unwrap_or(0),
             plain,
         )
-    } else {
-        return None;
     };
     let n = [fresh, cache_w, cache_r, out];
     n.iter().any(|v| *v > 0).then_some(n)
