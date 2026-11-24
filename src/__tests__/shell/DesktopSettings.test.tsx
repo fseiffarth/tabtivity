@@ -8,9 +8,13 @@ import { detachedSetZoomEvent } from "../../stores/detached";
 import { SettingsDialog } from "../../components/layout/SettingsPanel";
 import { useSettingsStore } from "../../stores/settings";
 import { SETTINGS_ANCHORS } from "../../components/layout/settingsUi";
+import { storageKey } from "../../lib/brand";
 import { DEFAULT_PDF_MARKUP_APPLY, DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION, DEFAULT_PDF_MARKUP_INSTRUCTION } from "../../lib/viewers/pdfMarkup";
 
+const lastSettingsPageKey = storageKey("settings.lastPage");
+
 beforeEach(() => {
+  localStorage.removeItem(lastSettingsPageKey);
   useSettingsStore.setState({ settings: {} } as never);
 });
 
@@ -104,6 +108,37 @@ describe("settings category navigation", () => {
     fireEvent.click(within(nav()).getByRole("button", { name: "Calendar" }));
     expect(document.getElementById("settings-anchor-calendar")).toBeTruthy();
     expect(document.getElementById(SETTINGS_ANCHORS.mobile)).toBeNull();
+  });
+
+  it("reopens the most recently viewed page, including a subpanel", async () => {
+    const onClose = () => {};
+    const first = render(<SettingsDialog initialPanel="main" onClose={onClose} />);
+    fireEvent.click(within(nav()).getByRole("button", { name: "Calendar" }));
+    first.unmount();
+
+    const second = render(<SettingsDialog initialPanel="main" onClose={onClose} />);
+    expect(within(nav()).getByRole("button", { name: "Calendar" }).getAttribute("aria-current")).toBe("location");
+    await act(async () => { fireEvent.click(within(nav()).getByRole("button", { name: "Git Hosting" })); });
+    second.unmount();
+
+    await act(async () => { render(<SettingsDialog initialPanel="main" onClose={onClose} />); });
+    expect(within(nav()).getByRole("button", { name: "Git Hosting" }).getAttribute("aria-current")).toBe("location");
+  });
+
+  it("opens explicit destinations ahead of the saved page", async () => {
+    localStorage.setItem(lastSettingsPageKey, JSON.stringify("git"));
+    const onClose = () => {};
+    const { rerender } = render(<SettingsDialog onClose={onClose} initialAnchor="settings-anchor-calendar" />);
+    expect(within(nav()).getByRole("button", { name: "Calendar" }).getAttribute("aria-current")).toBe("location");
+
+    await act(async () => { rerender(<SettingsDialog onClose={onClose} initialPanel="git" />); });
+    expect(within(nav()).getByRole("button", { name: "Git Hosting" }).getAttribute("aria-current")).toBe("location");
+  });
+
+  it("opens General when the saved page is no longer available", () => {
+    localStorage.setItem(lastSettingsPageKey, JSON.stringify("settings-anchor-removed"));
+    render(<SettingsDialog onClose={() => {}} />);
+    expect(within(nav()).getByRole("button", { name: "General" }).getAttribute("aria-current")).toBe("location");
   });
 
   it("groups the entries by topic and keeps General to its own page", async () => {
