@@ -61,7 +61,9 @@ gives its usage.
   where the prompt goes. `send_now.py <label> <bin>
   early|tool|typed|stream esc|chord|chord1` lands Esc or Claude's Ctrl+X
   Ctrl+S on a held, tool-running, typed or streaming turn, for whether the
-  queue goes at once and what the turn keeps (Send now).
+  queue goes at once and what the turn keeps (Send now). The login home's
+  settings apply (its `tui` too); `VERIFY_CLAUDE_TUI=default|fullscreen` pins
+  the renderer.
   `chat_send.py <label> <bin> [case…]` types prompts
   with the Chat's and the phone's exact writes (`agentInputWrites` and its
   pacing) — fresh, idle, two-line, long, while busy — and reads
@@ -70,7 +72,8 @@ gives its usage.
   Esc only (no turn); `expand` opens the folded `More models` row first. These need the login
   and make small paid haiku turns. `login.sh <label> <bin>` needs none: it
   draws `claude auth login`'s sign-in link in a scratch HOME at 120, 80 and 42
-  columns for the frame replay's `signIn` (2.1.330 shortened the link).
+  columns for the frame replay's `signIn` (2.1.330 shortened the link);
+  `login.sh <label> <bin> console` draws `--console`'s (shortened in 2.1.331).
   Binaries come from the agent install's `.local/share/claude/versions/<v>`.
   `turn_hooks.py <label> <bin> <port> [case…]` needs no login: a scratch
   HOME, `stub_anthropic.py`, a dumping hook on every turn-relevant event. It

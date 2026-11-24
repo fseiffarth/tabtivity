@@ -798,6 +798,32 @@ Claude's `/fast` — different thing.
   bad timestamp; `/resume` hides sessions that only opened a screen;
   `CLAUDE_CODE_FULL_SIGN_IN_LINK=1` prints the long link. Not exercised: a live
   tab, the phone, a real sign-in.
+- **2.1.331 (2026-11-24), outside Tabtivity, beside 2.1.330** (both from the
+  agent install's `versions/`) — `VERIFIED` moves to 2.1.331; no reader
+  fix. `--help` identical. The Console sign-in (`auth login --console`,
+  `login.sh … console`) is now short too,
+  `https://platform.claude.com/oauth/authorize?<opaque>`; the path rule
+  already reads it, with the paste-code flow, at 120, 80 and 42 columns (the
+  long link was missed at 42) — `TerminalUrls.test.ts` pins it. `hooks.sh` 19
+  events with the same keys (`cmp.py`), `sedcheck.py` 0 mismatches over 23
+  payloads, `meta.py` the same record types. `turn_hooks.py` all 23 cases the
+  same events and keys (`tui_write` and `tui_edit` on a rerun: the first run
+  shared the machine with two other rounds). Frame replay: 151 frames the
+  same; the rest raw text, timers, a status line not drawn yet, or
+  `AskUserQuestion` one row lower with the same options. `chat_send.py` all
+  five submitted word for word. `send_now.py` early/typed/tool/stream and
+  `esc_early.py queued` read as on 2.1.330, rerun beside it the same day —
+  once `send_now.py` re-pressed the first Enter: Claude dropped an Enter typed
+  before its status line had drawn, on both releases, and the probe then sent
+  both prompts as one. Changelog items near what Tabtivity reads, not
+  exercised: `claude doctor` reports API connectivity; Stop/SubagentStop
+  hooks wait for the last reply in the transcript; `/clear`, `/compact` and
+  `/rewind` questions in a subagent's view list Yes first but start on No;
+  `PermissionDenied`'s `retry: true` now means "only if you asked for that
+  call"; `CLAUDE_CODE_DISABLE_RESPONSE_COMPRESSION` for proxies that cut
+  compressed replies; `gen_ai.usage.*` on `claude_code.llm_request` spans;
+  start-up no longer waits for the model list. Not exercised: a live tab, the
+  phone, a real sign-in.
 
 **Verify**
 
@@ -900,7 +926,27 @@ tab and resume/fork remain tagged for live verification.
   "[\"request_user_input_async\",\"<call>\",<i>]"}]</…>` and fires
   `UserPromptSubmit` with it as the prompt; a skip records nothing; the turn's
   end drops a waiting one. Read by the hook's `.ask` record, `agent_transcript`
-  and the phone's `useAsyncAsk`.
+  and the phone's `useAsyncAsk`. Choices taller than the area (0.171.0 and
+  0.172.0 alike, 2026-11-24, `async_question.py … long`): the picker scrolls
+  with the highlight (PageUp/PageDown page it), drops the queue's heading and
+  ends `enter submit ^] skip option N/M shift+→ main prompt` (wrapped on a
+  narrow pane); rows are read by their printed number (`readQueuedPicker`).
+- **0.172.0 (2026-11-24), outside Tabtivity, beside 0.171.0** — both from the
+  agent install's `releases/`; release notes read (no 0.171.x between).
+  `--help` of the top level, `exec`, `resume`, `fork`, `mcp`, `login`,
+  `queue` and `app-server` identical. `screens.sh`, `writer_lock.py` (lock
+  screen, then released after SIGKILL), `turn_hooks.py` (every phase: the same
+  hook events, keys and rollout events, the usage-limit line unchanged) and
+  `async_question.py` (the same events) read as on 0.171.0; frame replay: 42
+  frames the same, the rest a timer and the work path.
+  `codex_parses_the_local_catalog` passes. Changelog items near what
+  Tabtivity reads, not exercised: PageUp/PageDown through async-question
+  choices taller than the answer area; queued child-agent replies kept across
+  an interrupted parent turn; provider errors surfaced mid-stream and spend
+  limits named by scope (not reached by the stub's 429); optional stdio MCP
+  servers with cached tool lists start on first call by default; Tab completes
+  slash-command arguments; custom status lines under `/experimental`;
+  `codex exec resume` restores saved sandbox permissions and roots.
 - **0.171.0 (2026-11-20), outside Tabtivity, beside 0.170.0** — both from the
   agent install's `releases/`; release notes read (no 0.170.x between).
   `--help` identical except `exec`'s new `--remote <ADDR>` and
@@ -2645,6 +2691,28 @@ replayed all three prompts and answers in order before its reply, which
 also carried models, modes and config options. An unknown session returned
 `-32002`. Restoring a pending approval on reattach remains untested.
 [Antigravity release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.5.15)
+
+**1.5.16** (2026-11-24, Linux, read-only binary copy and Gemini stub, beside
+1.5.15 from its GitHub release asset). `--help` adds `-r` and `--resume` as
+aliases of `--conversation` (Tabtivity keeps passing `--conversation`).
+`main.py` (80, 42), `second.py`, `queued.py` (44, 56), `signin.py` (42×24,
+80×24), `hooks.py events|turns|tabs|format`, `store.py` (identical schemas,
+the same three prompt/answer pairs) and `remote.py` (the tab's process holds
+`conversations/<id>.db`, its WAL and `presence/<id>.lock`; a subagent and
+`/clear` as before) read as on 1.5.15. Frame replay: 89 frames the same, the
+sign-in frames differ only in the PKCE challenge. New: when the model calls
+`update_steps` (`steps[]` of `title` + `status` ∈ pending, in_progress, done,
+skipped, failed; at most 12), the working line reads `1/3 steps ·
+Generating...` with a `⎿ ✓ / ● / ○` checklist under it, above the input box;
+`antigravity/steps.py` forces one through the stub (`STUB:HOLD`), and the
+readers see no question, picker or lamp there and still read the footer's
+model and effort. Changelog items not exercised: user skills from
+`~/.agents/skills` (agy's own are `~/.gemini/config/skills/<name>/`, which
+wins on a name clash); Auto mode now writes outside the workspace without
+asking inside a VCS repo or when only adding content (the fence still bounds
+it); `agy acp` forwards subagent approvals and questions; quota refreshed
+during long turns; thinking and each tool timed separately in the status line.
+[Antigravity release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.5.16)
 
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
