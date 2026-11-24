@@ -69,6 +69,9 @@ pub mod agent_versions;
 // Claude's long-lived token (`claude setup-token`): kept in the keyring,
 // the fallback login of every Claude tab with no shared login, local and remote.
 pub mod claude_token;
+// `claude doctor`'s API connectivity section (2.1.331+): the Check API
+// connection action in Manage CLIs runs it in the probe home and parses it.
+pub mod claude_doctor;
 // One overview of the CLIs in use: plan, account, usage windows
 // (docs/done/cli_overview_plan.md).
 pub mod cli_overview;

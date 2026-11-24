@@ -54,6 +54,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["agent_logins", "core"],
   ["agent_login_sign_out", "core"],
   ["agent_login_scope_sign_out", "core"],
+  ["claude_api_check", "core"],
   ["claude_token_clear", "core"],
   ["claude_token_save", "core"],
   ["claude_token_status", "core"],

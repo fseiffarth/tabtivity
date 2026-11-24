@@ -152,6 +152,19 @@ Claude's `/fast` — different thing.
 
 **Assumes**
 
+- `claude doctor` (2026-11-24, 2.1.331; `services/agent/claude_doctor.rs`,
+  Manage CLIs → Claude → API connection): plain text on stdout, exit 0, no TTY
+  needed. From 2.1.331 it holds a blank-line-bounded `API connectivity`
+  section: `- API (<host>|custom host)[ via <proxy source>]: answered HTTP <n>
+  in <ms> ms[ (expected 200)] | no answer in <n> s | failed after <ms> ms:
+  <error> (<CODE>)`, the same for `- Sign-in (platform.claude.com)`, then
+  `- ANTHROPIC_BASE_URL: …`; or one `- Not tested: <why>` line (gateway or
+  cloud provider, a settings source that did not load, …). 2.1.330 prints no
+  such section, which the app shows as "needs 2.1.331". Doctor rewrites its
+  own `.claude.json` (feature-flag cache) and shells out to `npm`; the app runs
+  it in the probe home only. Re-run `claude doctor` in a scratch HOME (also with
+  `HTTPS_PROXY=http://127.0.0.1:1` and `CLAUDE_CODE_USE_BEDROCK=1`) on every
+  release and diff the section against `src-tauri/tests/fixtures/claude_doctor/`.
 - Turn hooks (2026-11-16, 2.1.325; 2026-11-17, 2.1.326 and 2026-11-18, 2.1.327 the same; offline: `scripts/verify-cli/claude/turn_hooks.py`,
   no login, `stub_anthropic.py`): a turn the API refuses fires `StopFailure`
   (`error`: `rate_limit`, `authentication_failed`, `unknown` for a 400) and

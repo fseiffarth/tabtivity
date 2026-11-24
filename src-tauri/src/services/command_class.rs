@@ -230,6 +230,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_logins", Core),
     ("agent_login_sign_out", Core),
     ("agent_login_scope_sign_out", Core),
+    ("claude_api_check", Core),
     ("claude_token_clear", Core),
     ("claude_token_save", Core),
     ("claude_token_status", Core),

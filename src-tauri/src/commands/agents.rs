@@ -2418,6 +2418,15 @@ pub async fn claude_token_status() -> Result<crate::services::claude_token::Clau
     app_core::rt::try_blocking("agent", || Ok(crate::services::claude_token::status())).await
 }
 
+/// Run `claude doctor` in the probe home and read its "API connectivity"
+/// section (`services::claude_doctor`): whether the API answers from this
+/// machine, with the HTTP status or the error, or why nothing was tested.
+/// A Claude older than 2.1.331 prints no such section (`verdict: missing`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn claude_api_check() -> Result<crate::services::claude_doctor::ApiCheck, String> {
+    crate::services::claude_doctor::check().await
+}
+
 /// Save a token `claude setup-token` printed (pasted by the user).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn claude_token_save(token: String) -> Result<(), String> {

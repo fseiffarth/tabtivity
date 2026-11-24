@@ -433,6 +433,7 @@ export const UNTESTED = {
   "settings.agentFencePlatformAccepted": { area: "layout", what: "SettingsSubPanels · Windows: withdraw the accepted 'agents run with your full rights'" },
   "settings.claudeToken": { area: "layout", what: "SettingsSubPanels · Claude long-lived token: Generate (claude setup-token tab, token read off its screen), paste, remove; fallback login of Claude tabs without a shared login" },
   "agents.claudeTokenCard": { area: "layout", what: "SettingsSubPanels · Claude card: a 'Claude long-lived token' fold with the same token row as Accounts & keys (a save in one re-reads the other)" },
+  "agents.claudeApiCheck": { area: "agents", what: "Manage CLIs · Claude card · API connection fold (Claude 2.1.331+): Check API connection runs `claude doctor` in the probe home and shows whether the API answers (HTTP status, or the error such as a refused proxy), or why nothing was tested (gateway/cloud provider); hidden for an older Claude" },
   "settings.claudeTokenRemote": { area: "layout", what: "SettingsSubPanels · Claude token also on remote hosts (ssh SendEnv LC_*, used only without the host's own login; tmux update-environment slot 8700)" },
   "settings.copilotFenceAuth": { area: "layout", what: "SettingsSubPanels · Copilot sign-in for fenced tabs (kept in Tabtivity's keyring, passed as COPILOT_GITHUB_TOKEN)" },
   "settings.rootFenceProjects": { area: "layout", what: "SettingsSubPanels · Root agent reads projects (root fence shows every project read-only)" },

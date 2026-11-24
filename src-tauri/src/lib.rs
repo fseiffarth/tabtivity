@@ -2714,6 +2714,7 @@ pub fn run() {
             commands::agents::agent_login_import,
             commands::agents::agent_login_sign_out,
             commands::agents::claude_token_status,
+            commands::agents::claude_api_check,
             commands::agents::claude_token_save,
             commands::agents::claude_token_clear,
             commands::agents::agent_login_scope_sign_out,

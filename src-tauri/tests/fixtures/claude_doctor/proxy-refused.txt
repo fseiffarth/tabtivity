@@ -1,0 +1,12 @@
+Claude Code doctor
+...
+Last update attempt: none recorded
+
+API connectivity
+- API (api.anthropic.com) via HTTPS_PROXY: failed after 4 ms: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)
+- Sign-in (platform.claude.com) via HTTPS_PROXY: failed after 6 ms: ECONNREFUSED
+- ANTHROPIC_BASE_URL: not set · NODE_EXTRA_CA_CERTS: not set · CLAUDE_CODE_CLIENT_CERT: not set
+  A proxy, firewall, VPN or security software between this machine and the host can cause these results. See https://code.claude.com/docs/en/network-config
+
+Remote Control
+...

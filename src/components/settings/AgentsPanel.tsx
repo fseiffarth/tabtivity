@@ -51,6 +51,7 @@ import {
 import type { AgentLogin } from "./AgentLoginsRows";
 import { CodexAutoReviewToggle, OpenCodeWarmingToggle, AgentAccounts } from "./AgentAccounts";
 import { ClaudeTokenRow } from "./ClaudeTokenRow";
+import { ClaudeApiCheck, CLAUDE_API_CHECK_SINCE, versionAtLeast } from "./ClaudeApiCheck";
 import { AgentFenceCard } from "./AgentFenceCard";
 import { AgentCronSection } from "./AgentCronSection";
 import { AgentComposerCard } from "./AgentComposerCard";
@@ -687,6 +688,12 @@ export function AgentsPanel({
       {a.id === "claude" && a.installed && (
         <AgentsFold label={<>{t("settings.claudeToken")} <UntestedTag id="agents.claudeTokenCard" /></>}>
           <ClaudeTokenRow heading={false} />
+        </AgentsFold>
+      )}
+      {/* `claude doctor` prints its API connectivity section from 2.1.331. */}
+      {a.id === "claude" && a.installed && versionAtLeast(versions[a.id]?.version, CLAUDE_API_CHECK_SINCE) && (
+        <AgentsFold label={<>{t("agents.apiCheck")} <UntestedTag id="agents.claudeApiCheck" /></>}>
+          <ClaudeApiCheck />
         </AgentsFold>
       )}
       {a.installed && installedExtras && (
