@@ -2914,6 +2914,15 @@ handle — it swallows the pointer before the card ever sees it. */
   font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
   line-height: 1.5;
 }
+/* The body box's positioned parent: the ghost text (`PromptGhost`, the local
+   model's continuation of the sentence being typed) is laid over the box as
+   its sibling, so the wrapper — not the dialog — is its offset parent. */
+.mail-compose-body-wrap {
+  position: relative;
+}
+.mail-compose-body-wrap .mail-compose-body {
+  display: block;
+}
 
 .mail-error-strip {
   display: flex;

@@ -1,5 +1,5 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { UntestedTag } from "../common/UntestedTag";
 import {
@@ -12,12 +12,16 @@ import {
   mailDraftDiscard,
   mailDraftSave,
   mailDraftSend,
+  mailCaretCompletes,
+  mailCompletionZoneEnd,
+  firstCompletionWord,
   mailFormalizeReply,
   mailPgpAvailable,
   mailPgpRecipientsReady,
   mailStagedPreview,
   stripFormatControls,
   useMailAiFeature,
+  useMailComplete,
 } from "../../lib/mail";
 import { useI18nStore, useT } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
@@ -32,6 +36,7 @@ import type {
 import { useMailStore, type MailComposeMode } from "../../stores/mail";
 import { CloseIcon, WarningIcon } from "../common/icons/Icon";
 import { AttachmentPreview } from "./MailAttachmentPreview";
+import { PromptGhost } from "../terminal/PromptGhost";
 import { MailRecipientField } from "./MailRecipientField";
 import { ErrorNote } from "../common/ErrorNote";
 
@@ -195,6 +200,65 @@ export function MailComposeDialog({
   const [tone, setTone] = useState("");
   const [drafting, setDrafting] = useState(false);
 
+  // Ghost-text completion of the sentence being typed (D1-D6 of
+  // `docs/mail_autocomplete_plan.md`). It works only in the user's own text:
+  // above the quoted original, with the caret at the end of its line. The
+  // quote never reaches the model as draft (the backend resolves the original
+  // itself from `header.id`). Display-only until Tab / the right arrow.
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const pendingCaret = useRef<number | null>(null);
+  const canComplete = useMailAiFeature(fromAccount, "autocomplete");
+  const quoteIntro = header
+    ? t("mail.quotedIntro", { date: formatMailDate(header.date, lang, use24h), sender: formatAddress(header.from) })
+    : "";
+  const quote = mode !== "new" || draft
+    ? {
+        tail: quotedBody(source, mode, quoteIntro, t("mail.forwardedIntro")),
+        intro: mode === "forward" ? t("mail.forwardedIntro") : quoteIntro,
+      }
+    : null;
+  const zoneEnd = mailCompletionZoneEnd(text, quote);
+  const caret = Math.min(selection.start, text.length);
+  const completionAtEnd = mailCaretCompletes(text, { start: caret, end: Math.min(selection.end, text.length) }, zoneEnd);
+  const completion = useMailComplete({
+    enabled: canComplete,
+    accountId: from,
+    messageId: header && mode !== "new" ? header.id : null,
+    subject,
+    to: parseRecipients(to),
+    draft: text.slice(0, caret),
+    atEnd: completionAtEnd,
+  });
+  const trackSelection = (box: HTMLTextAreaElement) =>
+    setSelection((prev) => (prev.start === box.selectionStart && prev.end === box.selectionEnd
+      ? prev
+      : { start: box.selectionStart, end: box.selectionEnd }));
+  // A taken continuation puts the caret after what was taken (setting the value
+  // of a controlled box would leave it at the end of the whole mail).
+  useLayoutEffect(() => {
+    const at = pendingCaret.current;
+    const box = bodyRef.current;
+    if (at === null || !box) return;
+    pendingCaret.current = null;
+    box.setSelectionRange(at, at);
+    setSelection({ start: at, end: at });
+  }, [text]);
+  /** Tab takes the whole continuation, the right arrow its first word; only
+   * with the ghost shown and the caret at the end of the typed text. Anything
+   * else keeps its meaning (Tab moves the focus). */
+  const completionKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!completion.text || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return;
+    if (e.key !== "Tab" && e.key !== "ArrowRight") return;
+    const box = e.currentTarget;
+    if (box.selectionStart !== box.selectionEnd || box.selectionStart !== caret) return;
+    const taken = e.key === "Tab" ? completion.text : firstCompletionWord(completion.text);
+    if (!taken) return;
+    e.preventDefault();
+    pendingCaret.current = caret + taken.length;
+    setText(text.slice(0, caret) + taken + text.slice(caret));
+  };
+
   async function draftFromNotes() {
     if (!notes.trim()) return;
     setDrafting(true);
@@ -220,6 +284,7 @@ export function MailComposeDialog({
         t("mail.forwardedIntro"),
       );
       setText(reply + tail);
+      setSelection({ start: reply.length, end: reply.length });
       setStatus(t("mailAi.draftDone"));
     } catch (err) {
       const key = mailAiErrorKey(err);
@@ -548,12 +613,22 @@ export function MailComposeDialog({
               </div>
             </div>
           )}
-          <textarea
-            className="mail-input mail-compose-body"
-            rows={14}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
+          <div className="mail-compose-body-wrap">
+            <textarea
+              ref={bodyRef}
+              className="mail-input mail-compose-body"
+              rows={14}
+              value={text}
+              aria-description={completion.text ? t("mail.composeCompletion", { text: completion.text.trim() }) : undefined}
+              onChange={(e) => {
+                setText(e.target.value);
+                trackSelection(e.target);
+              }}
+              onSelect={(e) => trackSelection(e.currentTarget)}
+              onKeyDown={completionKey}
+            />
+            {completion.text && <PromptGhost box={bodyRef} typed={text.slice(0, caret)} rest={completion.text} />}
+          </div>
 
           <div className="mail-attach-row">
             <button

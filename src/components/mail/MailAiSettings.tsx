@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -8,6 +8,7 @@ import {
   mailAccountSetAi,
   mailAiClassifyApply,
   mailAiErrorKey,
+  mailAiPrefOn,
   mailAiResolvable,
 } from "../../lib/mail";
 import type { MailAccount, MailAiClassifyReport, MailAiPrefs } from "../../types/mail";
@@ -16,7 +17,8 @@ import { ErrorNote } from "../common/ErrorNote";
 /**
  * The **Mail AI (local)** settings section (Group Q #203), now **per account**.
  *
- * The six toggles are opt-in and default off, each additionally gated by the
+ * The toggles are opt-in and default off — except Autocomplete, which reads on
+ * until turned off (`mailAiPrefOn`) — each additionally gated by the
  * global master switch `mail_ai_allow` and a resolvable loopback mail-role model
  * (`mailAiResolvable`) — the toggles are disabled with a stated reason when the
  * path is not resolvable, because a switch that turns on a feature that cannot
@@ -63,6 +65,12 @@ const AI_ITEMS: readonly AiItem[] = [
     tag: "mailAi.tagFormalize",
   },
   {
+    key: "autocomplete",
+    label: "mailAi.toggleAutocomplete",
+    help: "mailAi.toggleAutocompleteHelp",
+    tag: "mailAi.tagAutocomplete",
+  },
+  {
     key: "calendar",
     label: "mailAi.toggleCalendar",
     help: "mailAi.toggleCalendarHelp",
@@ -90,18 +98,20 @@ function AiToggle({
   help,
   checked,
   disabled,
+  untested,
   onChange,
 }: {
   label: string;
   help: string;
   checked: boolean;
   disabled: boolean;
+  untested?: ReactNode;
   onChange: (on: boolean) => void;
 }) {
   return (
     <div className="settings-toggle-card">
       <label className="settings-toggle-card-row">
-        <span>{label}</span>
+        <span>{label} {untested}</span>
         <Toggle checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       </label>
       <p className="settings-help">{help}</p>
@@ -156,8 +166,9 @@ export function MailAiSettings({
       <AiToggle
         label={t(it.label)}
         help={t(it.help)}
-        checked={account.ai?.[key] === true}
+        checked={mailAiPrefOn(account, key)}
         disabled={disabled}
+        untested={key === "autocomplete" ? <UntestedTag id="mail.autocomplete" /> : undefined}
         onChange={set(key)}
       />
     );
@@ -226,6 +237,9 @@ export function MailAiSettings({
       </div>
 
       {toggle("formalize")}
+      {/* The one toggle that is on until turned off: ghost text writes nothing
+          and sends nothing, and still needs the master switch and a model. */}
+      {toggle("autocomplete")}
       {toggle("calendar")}
       {toggle("todo")}
       {/* The one flag that removes the review step from #207/#208 — off by
@@ -252,7 +266,7 @@ export function MailAiQuickTags({ account }: { account: MailAccount }) {
   return (
     <div className="mail-ai-tags" role="group" aria-label={t("mailAi.settingsTitle")}>
       {AI_ITEMS.map((it) => {
-        const on = account.ai?.[it.key] === true;
+        const on = mailAiPrefOn(account, it.key);
         return (
           <button
             key={it.key}
