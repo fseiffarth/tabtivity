@@ -37,6 +37,10 @@ import threading
 import uuid
 
 BIN = os.environ.get("COPILOT_BIN", "copilot")
+# The runs start in a scratch work folder, so a relative path must be made
+# absolute here (a bare name is left to PATH).
+if os.sep in BIN:
+    BIN = os.path.abspath(BIN)
 AUTO_UPDATE = os.environ.get("COPILOT_AUTO_UPDATE", "false")
 failures = []
 
