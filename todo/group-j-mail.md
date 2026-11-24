@@ -449,7 +449,8 @@ sanitizer (`services/web_safety.rs`); neither has been runtime-verified.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
-202. **The local model a mail task runs on — the tag exists, the task does not.**
+202. ✅ **Done (stale, annotated 2026-11-24): the local model a mail task runs on.** The Mail role is read by `mail_ai::mail_model_from` (summarize, classify, formalize, extract — Group Q) and by the reply autocomplete (`services::mail_complete`, `docs/context/mail_ai.md`); `MODEL_ROLES` has no `pending` flag any more, and the "nothing reads it yet" tooltip is gone. The text below is the original brief, kept for the reasoning.
+    *(Original title: the tag exists, the task does not.)*
     The 🧠 menu's role chips gained a **Mail** tag (2026-07-30), stored at
     `settings.ollama_roles.mail` beside `autocomplete`/`grammar`/`tabs`, and
     **nothing reads it yet**. Only the tag shipped, deliberately: which model may
