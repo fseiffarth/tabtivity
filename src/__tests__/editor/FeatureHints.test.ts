@@ -8,6 +8,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { enSource, translate } from "../../lib/i18n";
 import { FEATURE_HINTS, type FeatureHintSpec } from "../../lib/shortcuts/featureHints";
 import { HINTS, pickHint, resolveHintBody, type HintCtx } from "../../lib/shortcuts/hints";
+import { UNBOUND } from "../../lib/shortcuts/shortcuts";
+import { useSettingsStore } from "../../stores/settings";
 
 // vitest runs from the repo root (the untested-register gate relies on that too).
 const SRC = "src";
@@ -51,6 +53,25 @@ describe("the feature-hint catalogue", () => {
         expect(rendered, `${id} ${part} has an unresolved placeholder`).not.toMatch(/\{[^}]*\}/);
       }
       expect(dict[`hint.f.${id}.body`].length, `${id} body is too long for a bubble`).toBeLessThanOrEqual(260);
+    }
+  });
+
+  it("shows how to enter navigation with a rebound or unassigned shortcut", () => {
+    const def = HINTS.find((hint) => hint.id === "steering-stations")!;
+    const { settings } = useSettingsStore.getState();
+    const body = () => resolveHintBody(def, (key, params) => translate("en", key, params));
+    try {
+      useSettingsStore.setState({
+        settings: { ...settings, keyboard_shortcuts: { steeringMode: { key: "F8" } } },
+      });
+      expect(body()).toContain("Press F8 to enter navigation mode");
+      useSettingsStore.setState({
+        settings: { ...settings, keyboard_shortcuts: { steeringMode: UNBOUND } },
+      });
+      expect(body()).toContain("in Keyboard Shortcuts");
+      expect(body()).not.toMatch(/\{[^}]*\}/);
+    } finally {
+      useSettingsStore.setState({ settings });
     }
   });
 
