@@ -91,6 +91,7 @@ async function fillAndSubmit() {
 
 describe("new project with git hosting", () => {
   beforeEach(() => {
+    localStorage.clear(); // ProjectDialog reopens on its last answers (projectDialogMemory)
     invoke.mockReset();
     useSettingsStore.setState({ settings: {} } as never);
     useProjectsStore.setState({ projects: [], activeId: null, loaded: true });

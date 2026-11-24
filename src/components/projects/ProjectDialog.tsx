@@ -43,6 +43,7 @@ import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
+import { readProjectDialogMemory, writeProjectDialogMemory } from "./projectDialogMemory";
 import { NAMES } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
 import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
@@ -103,6 +104,8 @@ export function ProjectDialog({
 }) {
   const t = useT();
   const { confirmAction, dialogs } = useDialogs();
+  // The answers the dialog had when it was last closed (`projectDialogMemory`).
+  const [memory] = useState(() => readProjectDialogMemory(kind));
   const defaultAgentCmd = useSettingsStore((s) => s.settings?.default_agent_cmd ?? "claude");
   // A GitHub/GitLab "connection through Tabtivity" = a host token saved in
   // Settings → Git Hosting (the credential publishing actually uses). Used to
@@ -112,24 +115,30 @@ export function ProjectDialog({
   // The default (first) host's profile URL says which provider a publish goes
   // to when none was picked.
   const gitProfileUrl = gitHosts?.[0]?.profile_url ?? "";
-  const [projectsRoot, setProjectsRoot] = useState("");
+  const [projectsRoot, setProjectsRoot] = useState(memory.projectsRoot ?? "");
+  // Whether the location is the user's own pick (remembered) rather than the
+  // backend default (re-read at every open).
+  const [projectsRootPicked, setProjectsRootPicked] = useState(!!memory.projectsRoot);
   // Remote (SSH) projects only: the chosen parent dir for the LOCAL mirror (the
   // synced working copy). The mirror lands at `<mirrorParent>/<name>`. Seeded
   // from the backend default (`projects-ssh` root) so it matches
   // `default_remote_mirror`; editable via the "Local location" picker.
   const [mirrorParent, setMirrorParent] = useState("");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(memory.name ?? "");
   // The folder a remote New (or host clone) makes on the host, as the user typed
   // it. `null` = not edited: it follows the project's sanitized name.
   const [hostFolder, setHostFolder] = useState<string | null>(null);
-  const [description, setDescription] = useState("");
-  const [descriptionFillMode, setDescriptionFillMode] = useState("manual");
+  const [description, setDescription] = useState(memory.description ?? "");
+  const [descriptionFillMode, setDescriptionFillMode] = useState(memory.descriptionFillMode ?? "manual");
   // Same default the import-source dropdown applies when the source is switched
   // by hand (`changeImportSource`) — a dialog opened *directly* on the clone
   // source (the New-tab menu's "Import from GitHub…") starts on the same answer
   // instead of on "Local repo only", which no cloned repository is.
+  // An import's follows its source (folder origin, clone URL); a New's is remembered.
   const [gitType, setGitType] = useState(
-    kind === "import" && initialImportSource !== "folder" ? "remote-private" : "local",
+    kind === "import"
+      ? initialImportSource !== "folder" ? "remote-private" : "local"
+      : memory.gitType ?? "local",
   );
   // Whether the user has answered the Git hosting field themselves. The clone
   // URL fills that field on their behalf (provider + visibility, below), and an
@@ -146,13 +155,13 @@ export function ProjectDialog({
   // the way a clone URL does, and nothing new is published for it.
   const [folderOrigin, setFolderOrigin] = useState<string | null>(null);
   const [mode, setMode] = useState("keep");
-  const [skipScaffold, setSkipScaffold] = useState(false);
+  const [skipScaffold, setSkipScaffold] = useState(memory.skipScaffold ?? false);
   // Trust tier at creation time (`docs/vm_projects_plan.md`): where the
   // project's tabs — and for the VM tier, its whole tree — live. `null` =
   // untouched, so the row tracks the source default until the user states a
   // preference; an explicit choice then sticks even if the import source
   // changes under it. (Subsumes the old boolean container choice.)
-  const [tierChoice, setTierChoice] = useState<"local" | "container" | "vm" | null>(null);
+  const [tierChoice, setTierChoice] = useState<"local" | "container" | "vm" | null>(memory.tierChoice ?? null);
   // `vm_doctor`'s verdict — probed once per dialog open; `null` while pending
   // (the VM option simply isn't offered until it answers).
   const [vmDoctor, setVmDoctor] = useState<VmDoctorReport | null>(null);
@@ -178,7 +187,7 @@ export function ProjectDialog({
   // "" follows the Tabtivity connection — the Settings → Git Hosting profile URL is
   // the only provider signal a *global* token carries, same sniff the pill's
   // publish window makes.
-  const [publishProvider, setPublishProvider] = useState("");
+  const [publishProvider, setPublishProvider] = useState(memory.publishProvider ?? "");
   // Whether that provider's CLI is on PATH here (`null` while probing, so a
   // pending answer never blocks submit or flashes the banner) — the publish runs
   // it, exactly as the pill's Publish… does.
@@ -192,6 +201,9 @@ export function ProjectDialog({
   // default — or work on the host alone (a remote-only project: no mirror, every
   // tab, file and git call on the host).
   const [keepLocalCopy, setKeepLocalCopy] = useState(true);
+  // A project was made from the typed name and description: they are not
+  // offered again, the choices are.
+  const [draftUsed, setDraftUsed] = useState(false);
   // The remote-only "Connect when I open this project" card (D14). `null` =
   // untouched, so it follows `autoConnectDefault` until the user answers it.
   const [autoConnectChoice, setAutoConnectChoice] = useState<boolean | null>(null);
@@ -482,8 +494,27 @@ export function ProjectDialog({
   };
 
   useEffect(() => {
+    if (memory.projectsRoot) return;
     invoke<string>("projects_root_dir").then(setProjectsRoot).catch(() => {});
-  }, []);
+  }, [memory.projectsRoot]);
+
+  // Every answer is kept as it changes, so however the dialog closes the next
+  // one opens on them (`projectDialogMemory`).
+  useEffect(() => {
+    writeProjectDialogMemory(kind, {
+      projectsRoot: projectsRootPicked ? projectsRoot : undefined,
+      gitType: kind === "new" ? gitType : undefined,
+      publishProvider,
+      tierChoice: tierChoice ?? undefined,
+      descriptionFillMode,
+      skipScaffold,
+      name: draftUsed ? undefined : name,
+      description: draftUsed ? undefined : description,
+    });
+  }, [
+    kind, projectsRoot, projectsRootPicked, gitType, publishProvider, tierChoice,
+    descriptionFillMode, skipScaffold, name, description, draftUsed,
+  ]);
 
   useEffect(() => {
     invoke<boolean>("git_available").then(setGitAvailable).catch(() => setGitAvailable(false));
@@ -720,6 +751,7 @@ export function ProjectDialog({
     const picked = await open({ directory: true, multiple: false, defaultPath: projectsRoot || undefined });
     if (typeof picked === "string") {
       setProjectsRoot(picked.replace(/\/+$/, ""));
+      setProjectsRootPicked(true);
     }
   };
 
@@ -855,6 +887,7 @@ export function ProjectDialog({
       setBootingVm(false);
     }
     await onProject(project);
+    setDraftUsed(true);
     if (isCloneImport && repoUrl.trim()) {
       const host = cloneUrlHost(repoUrl);
       if (host) {
@@ -1139,6 +1172,7 @@ export function ProjectDialog({
         rememberChosenPath();
       }
       await onProject(created);
+      setDraftUsed(true);
       if (remoteOnly && kind === "new") {
         enterStep("hostSetup");
         if (await setUpHostFolder(created, descriptionAgent)) onClose();

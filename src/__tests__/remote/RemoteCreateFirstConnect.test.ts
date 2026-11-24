@@ -23,6 +23,7 @@ const lamp = () => useRemoteStatusStore.getState().byProject.p1?.ssh;
 const connects = () => invokeMock.mock.calls.filter(([c]) => c === "remote_connect");
 
 beforeEach(() => {
+  localStorage.clear(); // ProjectDialog reopens on its last answers (projectDialogMemory)
   invokeMock.mockReset();
   invokeMock.mockResolvedValue(undefined);
   useRemoteStatusStore.setState({ byProject: {}, byHost: {} });
