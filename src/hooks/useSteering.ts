@@ -104,7 +104,13 @@ import {
 } from "../lib/shortcuts/steeringRegion";
 import { placeSidePanelCursor, steerSidePanel } from "../lib/shortcuts/steeringSidePanel";
 import { FLASH_CLASS as SETTINGS_FLASH_CLASS } from "../components/layout/settingsSearch";
-import { cycleReaderView, queueMovesFor, readerInsideFor, readerViewFor } from "../lib/agents/readerSteering";
+import {
+  cycleReaderView,
+  queueMovesFor,
+  readerComposerShown,
+  readerInsideFor,
+  readerViewFor,
+} from "../lib/agents/readerSteering";
 import {
   openProjectShellInRootConsole,
   rootViewShown,
@@ -112,7 +118,7 @@ import {
   useRootOverlayStore,
 } from "../stores/rootOverlay";
 import { newTabRequestFor, requestNewTab, requestOverlayAgent } from "../lib/shortcuts/newTabChord";
-import { requestSteeringPrompt, steeringActiveTab } from "../lib/shortcuts/steeringAgent";
+import { requestSteeringPrompt, steeringActiveTab, steeringAgentOffer } from "../lib/shortcuts/steeringAgent";
 import {
   requestSteeringConfirm,
   steeringConfirmButton,
@@ -138,6 +144,10 @@ export interface SteeringOptions {
 
 /** Steering's new tabs land right of the tab it was on, not at the pane's end. */
 const BESIDE_ACTIVE = { besideActive: true } as const;
+/** How long a new agent tab's prompt waits for the tab, and then for its Chat
+ *  composer before the prompt box opens instead. */
+const NEW_TAB_PROMPT_WAIT_MS = 4000;
+const NEW_TAB_COMPOSER_WAIT_MS = 1000;
 /** The search fields that clear on Escape while they hold a query: the + menu's
  *  filter (`AddTabMenuList`) and settings' search (`settingsUi`). Their Escape
  *  goes to them first (`onSteeringKeyDown`); any other field's Escape would
@@ -666,6 +676,39 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         else if (tries > 0) searchSettingsSoon(tries - 1);
       }, 30);
     };
+    // A new agent tab steering opened (an agent number) comes up with its
+    // prompt open (user, 2026-11-24): the pane's Chat composer once it shows,
+    // else — no composer after a second — the prompt box. Any later key or
+    // press drops the wait, as does steering leaving the tab levels.
+    let newTabPromptTimer: number | null = null;
+    const cancelNewTabPrompt = () => {
+      if (newTabPromptTimer !== null) window.clearTimeout(newTabPromptTimer);
+      newTabPromptTimer = null;
+    };
+    const promptNewAgentTab = (before: string | null) => {
+      cancelNewTabPrompt();
+      const started = Date.now();
+      let seenAt: number | null = null;
+      const tryPrompt = () => {
+        newTabPromptTimer = null;
+        const s = useKeyboardSteeringStore.getState();
+        if (!s.active || s.level === "region" || s.level === "projects") return;
+        const now = Date.now();
+        const active = steeringActiveTab();
+        if (active && active.tab.key !== before && steeringAgentOffer(active.tab).prompt) {
+          seenAt ??= now;
+          const composer = readerComposerShown(`${active.scope}:${active.tab.key}`);
+          if (composer || now - seenAt >= NEW_TAB_COMPOSER_WAIT_MS) {
+            if (requestSteeringPrompt(active.scope, active.tab, s.level)) {
+              handOffSteering("prompt");
+              return;
+            }
+          }
+        }
+        if (now - started < NEW_TAB_PROMPT_WAIT_MS) newTabPromptTimer = window.setTimeout(tryPrompt, 50);
+      };
+      newTabPromptTimer = window.setTimeout(tryPrompt, 0);
+    };
     // That search box with the caret while steering walks its surface never
     // gets the keys (only `/` hands them over), so the caret is stale: the
     // settings dialog's own first focus put it there, or steering came on
@@ -1157,13 +1200,15 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       }
 
       // New tabs in the focused pane, the Ctrl+Shift+N / M / Ctrl+1–9 set
-      // without the modifiers. Steering keeps the keyboard (walk on, Space
-      // to prompt the new agent, or Enter to type). An agent number with nothing
-      // behind it does nothing.
+      // without the modifiers. A new agent tab comes up with its prompt open
+      // (`promptNewAgentTab`; Esc there walks on), a shell or monitor keeps
+      // steering on the keyboard. An agent number with nothing behind it does
+      // nothing.
       if (slot !== null) {
         // In Root the request goes to Root's subwindow (`RootNewTabKeys`), the
         // same tab the console's + menu would open.
-        requestNewTab({ kind: "agent", slot: slot - 1 }, BESIDE_ACTIVE);
+        const before = steeringActiveTab()?.tab.key ?? null;
+        if (requestNewTab({ kind: "agent", slot: slot - 1 }, BESIDE_ACTIVE)) promptNewAgentTab(before);
         return;
       }
       switch (action) {
@@ -1735,6 +1780,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // An arrow that met a dialog nobody announced only lands the cursor on
       // it: the legend still showed the level behind when the key was pressed.
       if (staleRepeat(e)) return;
+      cancelNewTabPrompt();
       cancelSettingsSearch();
       const landed = syncLayer();
       // A focus the key makes itself is left to its own handling and the
@@ -1754,6 +1800,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // dialog or menu still up afterwards takes it again (`syncSoon`).
     function onSteeringPointerDown(e: PointerEvent) {
       if (isSteeringSynthetic(e)) return;
+      cancelNewTabPrompt();
       cancelSettingsSearch();
       const steering = useKeyboardSteeringStore.getState();
       // A press outside the field steering lent the keyboard to (or its
@@ -1991,6 +2038,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       unlistenStatus();
       unsubscribeStatus();
       cancelPlace();
+      cancelNewTabPrompt();
       cancelSettingsSearch();
       for (const id of syncTimers) window.clearTimeout(id);
       unsubscribeScroll();

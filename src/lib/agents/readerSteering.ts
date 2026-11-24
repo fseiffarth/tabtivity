@@ -142,6 +142,12 @@ export function openReaderComposer(id: string, level: SteeringBaseLevel, lead?: 
   return composers.get(id)?.(level, lead) ?? false;
 }
 
+/** Whether pane `id` has its Reader composer on show — what steering's new
+ *  agent tab waits for before it falls back to the prompt box. */
+export function readerComposerShown(id: string): boolean {
+  return composers.has(id);
+}
+
 /** What steering does to the Chat's queued prompts (Send now, Cancel and edit). */
 export interface QueueMoves {
   /** Prompts are still queued and the CLI's queue can be acted on. */
