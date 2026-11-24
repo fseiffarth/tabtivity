@@ -243,6 +243,8 @@ export const dict: Dict = {
   "mobile.composer.clearBusy": "Codex sta ancora lavorando e non può avviare una nuova conversazione ora. Fermalo con Esc, poi tocca di nuovo.",
   "mobile.inbox.attached": "Nella casella del progetto — parte con il tuo prossimo messaggio",
   "mobile.inbox.detach": "Non allegare {name} al messaggio",
+  "mobile.inbox.holdToView": "Tieni premuto per vedere {name}",
+  "mobile.inbox.holdToViewHint": "tienine premuto uno per vederlo",
   "mobile.inbox.sendWaits": "L’invio lo aspetta.",
   "mobile.inbox.sendingNote": "In viaggio verso la casella del progetto — l’invio lo aspetta.",
   "mobile.inbox.copyingNote": "Copia dal desktop — l’invio lo aspetta.",

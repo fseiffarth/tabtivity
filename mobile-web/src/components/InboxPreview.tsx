@@ -148,9 +148,11 @@ export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onHold, 
 /**
  * One file beside the composer, as a thumbnail: the picture itself (the
  * phone's own copy while it travels, then the inbox's), else its badge and
- * name. A file still on its way is dimmed; a landed one carries ✕.
+ * name. A file still on its way is dimmed; a landed one carries ✕, and a
+ * hold on it (`onView`) opens it in the viewer before it goes out. The press
+ * keeps the draft's focus, so the keyboard stays up.
  */
-export function ComposerThumb({ name, picture, kind, sending, onRemove, removeLabel }: {
+export function ComposerThumb({ name, picture, kind, sending, onRemove, removeLabel, onView, viewLabel }: {
   name: string;
   /** Where the picture loads from, when it is one. */
   picture?: string;
@@ -159,13 +161,21 @@ export function ComposerThumb({ name, picture, kind, sending, onRemove, removeLa
   sending: boolean;
   onRemove?: () => void;
   removeLabel: string;
+  /** Opens the landed file in the viewer, on a hold. */
+  onView?: () => void;
+  viewLabel?: string;
 }) {
   const [broken, setBroken] = useState(false);
+  const press = useTapHolds();
+  const hold = onView ? press(() => {}, onView) : undefined;
   return <div className={`composer-thumb${sending ? " sending" : ""}`} title={name} aria-busy={sending || undefined}>
     {picture && !broken
       ? <img src={picture} alt={name} decoding="async" onError={() => setBroken(true)} />
       : <span className="composer-thumb-file"><b aria-hidden="true">{kind ? fileBadge(kind) : "↓"}</b><small>{name}</small></span>}
     {sending && <span className="composer-thumb-progress" aria-hidden="true" />}
-    {onRemove && <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={onRemove} aria-label={removeLabel} title={removeLabel}><CloseIcon size="1em" /></button>}
+    {hold && <button type="button" className="composer-thumb-view" {...hold}
+      onPointerDown={(event) => { event.preventDefault(); hold.onPointerDown(event); }}
+      aria-label={viewLabel} title={viewLabel} />}
+    {onRemove && <button type="button" className="composer-thumb-remove" onPointerDown={(event) => event.preventDefault()} onClick={onRemove} aria-label={removeLabel} title={removeLabel}><CloseIcon size="1em" /></button>}
   </div>;
 }

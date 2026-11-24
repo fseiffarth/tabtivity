@@ -223,6 +223,8 @@ export const enSource = {
   "mobile.composer.clearBusy": "Codex is still working and can’t start a new conversation now. Stop it with Esc, then tap again.",
   "mobile.inbox.attached": "In the project inbox — goes with your next message",
   "mobile.inbox.detach": "Leave {name} out of the message",
+  "mobile.inbox.holdToView": "Hold to view {name}",
+  "mobile.inbox.holdToViewHint": "hold one to view it",
   "mobile.inbox.sendWaits": "Send waits for it.",
   "mobile.inbox.sendingNote": "On its way to the project inbox — Send waits for it.",
   "mobile.inbox.copyingNote": "Copying from the desktop — Send waits for it.",

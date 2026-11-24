@@ -550,5 +550,13 @@
     "rule": "js/incomplete-hostname-regexp",
     "sha256": "d8ff900540b43beba2f661572f63c28b2d8c8db629ebd3d9c60d76db7d9dd109",
     "reason": "A test input: a Markdown link whose address is parsed by chatLinksOf as a URL. The string is never compiled into a regular expression; the www. in it is the case under test."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/request_body.rs",
+    "line": 19,
+    "source": "serde_json::from_slice(body)",
+    "rule": "rust/unsafe-deserialization",
+    "sha256": "d3f7f2ddb1a128ba665f115240392e8248ae85a13a266c851761f0bf381ee09a",
+    "reason": "The phone API's single body parse (every mobile_control/host.rs route calls it). serde_json builds only the concrete type the caller names: no type tag in the input selects a type and no code runs during the parse, so there is nothing to reach beyond a typed struct (most with deny_unknown_fields) or a serde_json::Value whose fields the route checks. Bodies are capped by the router's body limit; every route authenticates before parsing."
   }
 ]

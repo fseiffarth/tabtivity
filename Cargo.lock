@@ -6587,7 +6587,7 @@ dependencies = [
 
 [[package]]
 name = "tabtivity"
-version = "0.2.113"
+version = "0.2.114"
 dependencies = [
  "aes-gcm",
  "ammonia",
