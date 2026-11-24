@@ -1289,8 +1289,11 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         // schedule lane. The project's level is *not* checked here — an `off`
         // project still gets the tools, so the agent can be told where to turn
         // them on. The bound directory is the trusted entry's, canonicalised;
-        // a project without one gets no token.
+        // a project without one gets no token, and neither does one that is
+        // not inside a git repo at spawn: every call there would fail, and a
+        // repo made later is refused as `repo_changed` until the tab restarts.
         let dir = trusted.entry.as_ref().and_then(super::remote::entry_directory).and_then(|d| std::fs::canonicalize(d).ok());
+        let dir = dir.filter(|d| super::git_push_mcp::git_entry_identity(d).is_some());
         if let Some(dir) = dir.filter(|_| lane_on("git") && super::git_push_mcp::enabled_in(&trusted.state.join("settings.json"))) {
             grant_git_push(opts, runtime, store, dir, &tool_models);
         }

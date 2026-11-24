@@ -6,7 +6,9 @@ fence. Globally **on** by default since 2026-09-26 (`Settings::git_push_mcp`,
 absent = on, `false` = off; Settings → Manage CLIs) — the fence has to stay
 usable, and the default level only proposes. When on, every new local
 project-agent spawn (not a container tab; not
-a remote, VM or container project) gets the `tabtivity-git` server on `/mcp/git`
+a remote, VM or container project; not a folder outside any git repo at spawn,
+`git_entry_identity` is `None` — every call would fail there, and a repo made
+later answers `repo_changed` anyway) gets the `tabtivity-git` server on `/mcp/git`
 with a `Caller::Pusher` token bound to the tab, the project and the trusted
 entry's canonical directory. The per-project level lives in the `projects.json`
 entry's `git_push_mcp` block (`level` off / propose / apply, `protected`,

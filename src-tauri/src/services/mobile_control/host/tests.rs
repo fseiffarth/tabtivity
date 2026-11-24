@@ -3080,6 +3080,10 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = recorded.clone();
     let mut host = headless_host(Arc::new(|_: PtyOptions| Box::pin(async { Ok(()) })));
+    // The push lane is granted only inside a git repo: make the project
+    // folder one (`HEAD`, `objects`, `refs` are what discovery counts).
+    for sub in ["objects", "refs"] { std::fs::create_dir_all(host.root.join(".git").join(sub)).expect("git dir"); }
+    std::fs::write(host.root.join(".git").join("HEAD"), "ref: refs/heads/main\n").expect("git HEAD");
     let state_dir = host.state.config.state_dir.clone();
     let grant_dir = state_dir.clone();
     host.state.spawner = HeadlessSpawner {
