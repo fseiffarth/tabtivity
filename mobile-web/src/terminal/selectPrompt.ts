@@ -51,6 +51,10 @@ export interface SelectOption {
   /** On a multi-select question read through the waiting entry: whether the
    * screen shows this answer's box ticked. */
   ticked?: boolean;
+  /** A row the dialog will not take (Antigravity's model outside the plan,
+   * `readAntigravityPicker`): its Enter is never pressed; `description`
+   * carries the dialog's own reason. */
+  unavailable?: true;
 }
 
 export interface SelectPrompt {

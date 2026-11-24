@@ -93,6 +93,13 @@ const INPUT = /^\s*>(\s|$)/u;
 const INPUT_REACH = 2;
 /** Non-blank rows looked through under the list for its window note. */
 const BELOW_REACH = 8;
+/** The note 1.5.16 prints under the list while the highlight is on a model
+ * the account's plan does not include — `Unavailable · Gemini 4 Carbon is
+ * currently available to Ultra and paid Pro plan subscribers.` — drawing the
+ * row greyed and no effort slider. Enter on that row does nothing: the dialog
+ * stays up. The note names the model, so it is matched to the highlighted
+ * row by its label. */
+const UNAVAILABLE = /^Unavailable\s+·\s+(\S.*)$/u;
 
 export interface AntigravityPicker extends SelectPrompt {
   /** Index of the input line the dialog is drawn under. Antigravity puts the
@@ -175,6 +182,19 @@ export function readAntigravityPicker(lines: readonly AntigravityLineLike[]): An
   // mid-repaint, and walking from a highlight this cannot see is a guess.
   if (rows.length < 2 || rows.filter((row) => row.marked).length !== 1) return null;
 
+  const marked = rows.find((row) => row.marked);
+  let unavailable: string | undefined;
+  for (let below = index, seen = 0; below < lines.length && seen < BELOW_REACH; below += 1) {
+    const text = lines[below].text.trim();
+    if (!text) continue;
+    seen += 1;
+    const note = UNAVAILABLE.exec(text);
+    if (note && marked && note[1].startsWith(`${marked.label} `)) {
+      unavailable = text;
+      break;
+    }
+  }
+
   let first = 1;
   let total = rows.length;
   for (let below = index, seen = 0; below < lines.length && seen < BELOW_REACH; below += 1) {
@@ -200,6 +220,7 @@ export function readAntigravityPicker(lines: readonly AntigravityLineLike[]): An
       number: first + at,
       label: row.label,
       ...(row.current ? { description: "(current)" } : {}),
+      ...(row.marked && unavailable ? { description: unavailable, unavailable: true as const } : {}),
     })),
     current: rows.findIndex((row) => row.marked),
     title: lines[heading].text.trim(),

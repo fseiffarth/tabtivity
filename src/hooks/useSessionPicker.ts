@@ -167,6 +167,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
       }
       setPicker((previous) => (previous && next && sameSelectStep(previous, next)
         && previous.current === next.current
+        && previous.options[previous.current]?.description === next.options[next.current]?.description
         && previous.options.length === next.options.length
         && previous.hidden === next.hidden ? previous : next));
     };
@@ -218,9 +219,12 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const preview = picking && !effortOnly && !answered && !effortFor && (!picker || (openCodeTab && !!step?.hidden)) ? rememberedStep : null;
   // A model with no slider (every Claude model Antigravity offers) is accepted
   // as soon as the walk lands: there is nothing left to ask.
+  // A model outside the account's plan takes no Enter (the dialog stays up and
+  // names why): the walk stops on it and the list shows the dialog's reason.
   useEffect(() => {
     if (!picking || !effortFor || !landed || !picker || effortStep) return;
     setEffortFor(null);
+    if (picker.options[picker.current]?.unavailable) return;
     setAnswered({ title: picker.title, options: picker.options });
     void typeKeysNow.current(["\r"]).catch(() => setAnswered(null));
   }, [picking, effortFor, landed, picker, effortStep]);

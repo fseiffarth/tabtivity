@@ -108,4 +108,22 @@ describe("the Chat view's model list on Antigravity's dialog", () => {
     act(() => result.current.choose(0));
     expect(typeKeys).toHaveBeenLastCalledWith([LEFT, LEFT, "\r"]);
   });
+
+  it("never presses Enter on a model outside the plan, and shows the dialog's reason", async () => {
+    const { result, typeKeys } = mount();
+    act(() => result.current.open());
+    await waitFor(() => expect(result.current.step).not.toBeNull());
+    act(() => result.current.choose(1));
+    expect(typeKeys).toHaveBeenCalledWith([DOWN]);
+    // 1.5.16: the row greys, the dialog names why under the list, no slider.
+    const rows = dialog(1);
+    rows.splice(rows.length - 2, 0, "", "  Unavailable · Claude Sonnet 4.6 (Thinking) is currently available to Ultra and paid Pro plan subscribers.");
+    mocks.rows = rows;
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    const row = result.current.shownStep?.options[1];
+    expect(row?.unavailable).toBe(true);
+    expect(row?.description).toMatch(/^Unavailable · /u);
+    expect(typeKeys).not.toHaveBeenCalledWith(["\r"]);
+    expect(result.current.picking).toBe(true);
+  });
 });

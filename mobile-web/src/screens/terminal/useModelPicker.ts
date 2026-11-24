@@ -37,6 +37,20 @@ const SELECT_NEXT_WAIT = 700;
  * the session itself). Longer than a redraw, short enough not to linger. */
 const PICKER_GONE_GRACE = 1_200;
 
+/** `step` with the highlighted row's "unavailable" reason from `live` laid on
+ * (Antigravity prints it only while the highlight is on that row). The merged
+ * list keeps the row it already held, so the reason stays on it for the rest
+ * of the opening. Returns `step` itself when there is nothing to add. */
+function withUnavailableRow(step: SelectStep, live: SelectPrompt): SelectStep {
+  const row = live.options[live.current];
+  if (!row?.unavailable) return step;
+  const at = step.options.findIndex((option) => option.number === row.number && option.label === row.label);
+  if (at < 0 || step.options[at].unavailable) return step;
+  const options = step.options.slice();
+  options[at] = { ...options[at], description: row.description, unavailable: true };
+  return { ...step, options };
+}
+
 /** The model sheet's reading of the picker on screen: OpenCode's walk, the rows
  * put together, and the reveal walk. */
 export function useModelPicker({
@@ -124,7 +138,7 @@ export function useModelPicker({
    * the whole list. */
   const walking = reveal !== null;
   const listedStep = useMemo<SelectStep | null>(
-    () => (!pickerStep ? null : openCode ? pickerStep : mergeSelectRows(knownStep, pickerStep, walking)),
+    () => (!pickerStep ? null : openCode ? pickerStep : withUnavailableRow(mergeSelectRows(knownStep, pickerStep, walking), pickerStep)),
     [pickerStep, openCode, knownStep, walking],
   );
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -299,7 +313,9 @@ export function useModelPickerAnswers({
       setEffortFor(null);
       return;
     }
-    if (deliver(["\r"]) && listedStep) setAnswered(listedStep);
+    // A model outside the account's plan takes no Enter: the dialog stays up
+    // and names why, which the sheet shows on the row.
+    if (!pickerStep.options[pickerStep.current]?.unavailable && deliver(["\r"]) && listedStep) setAnswered(listedStep);
     setEffortFor(null);
     // `deliver` is a fresh closure every render; the step runs on the frames.
     // eslint-disable-next-line react-hooks/exhaustive-deps
