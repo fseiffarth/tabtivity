@@ -70,7 +70,7 @@ import { relativePathWithin } from "../../lib/paths";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
 import { SERVER_CHIPS_CLASS, TerminalServerChips } from "./TerminalServerChips";
-import { isLoopbackServerHost, localPageUrl, forwardedUrl, type ServerUrl } from "../../lib/terminal/serverUrls";
+import { DEFAULT_PHONE_PORT, isLoopbackServerHost, localPageUrl, forwardedUrl, withoutOwnServers, type ServerUrl } from "../../lib/terminal/serverUrls";
 import { watchServers } from "../../lib/terminal/serverWatch";
 import { routeLink, tabLocality, type LinkRoute } from "../../lib/terminal/linkRoute";
 import { forwardAndOpen, hostLabelOf } from "../../lib/remote/portForward";
@@ -102,7 +102,7 @@ import { noteTypedLine, screenAtCursor } from "../../lib/agents/typedClear";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { notePromptTrailInput } from "../../stores/agents/promptTrail";
 import "@xterm/xterm/css/xterm.css";
-import { envName, storageKey } from "../../lib/brand";
+import { MOBILE_HOST_KEY, envName, storageKey } from "../../lib/brand";
 import { noteCheckpointKey } from "../../lib/agents/checkpoints";
 import { useCheckpointsStore } from "../../stores/agents/checkpoints";
 import type { AssistantLaunch } from "../../lib/assistant";
@@ -522,6 +522,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const [servers, setServers] = useState<ServerUrl[]>([]);
   const [dismissedServers, setDismissedServers] = useState<string[]>([]);
   const forwardRows = usePortForwardStore((s) => s.rows);
+  // The phone server's port: on this machine it is Tabtivity, never a server chip.
+  const phonePort = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]?.port ?? DEFAULT_PHONE_PORT);
 
   // The sign-in link the program on screen is waiting on (see
   // `TerminalSignInCard`), and the links the user already closed the card for.
@@ -2883,7 +2885,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     {host && visible && !signIn && (
       <TerminalServerChips
         host={host}
-        servers={servers.filter((server) => !dismissedServers.includes(server.url))}
+        servers={(locality.kind === "local" ? withoutOwnServers(servers, [phonePort]) : servers)
+          .filter((server) => !dismissedServers.includes(server.url))}
         forwardedLocalPort={(server) => forwardOfServer(server)?.localPort ?? null}
         onOpen={openServer}
         onCopy={copyServer}
