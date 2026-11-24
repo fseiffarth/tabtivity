@@ -7,7 +7,7 @@ pub use agent::{
     agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
     agent_import_offer, agent_install, agent_latest, agent_privacy, agent_prompts, agent_registry, agent_relocate, agent_resume_pinned, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, antigravity_session, assistant,
-    assistant_attach, assistant_model_probe, claude_doctor, claude_token, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
+    assistant_attach, assistant_model_probe, claude_doctor, claude_otel, claude_token, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
     model_rows, muse_session, next_prompt, opencode_models, opencode_session, opencode_store, transcript_watch,
 };
 #[cfg(unix)]

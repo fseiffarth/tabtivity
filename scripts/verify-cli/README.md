@@ -83,6 +83,17 @@ gives its usage.
   screen). Its
   scratch work dir sits under the repo, so the TUI cases answer the repo
   `CLAUDE.md`'s external-imports question with its default.
+  `otel.py <label> <bin> <stub-port> <otlp-port> [case…]` needs no login
+  either: it starts a loopback OTLP/HTTP receiver (`Receiver`, 127.0.0.1
+  only) and runs `-p` turns against the stub with Claude's trace export on
+  (the plain opt-in, protobuf, no beta flag, tools, every `OTEL_LOG_*`
+  content opt-in, a subagent, and `app`: the exact environment the app
+  injects). It dumps each POST body and `spans.txt` (name, ids, attributes,
+  resource) to `tmp/verify-cli/claude/<label>/otel/<case>/`: the span names
+  and attributes `services::claude_otel` reads
+  (`docs/claude_otel_tokens_plan.md`). `stub_anthropic.py` answers with the
+  cache tokens `STUB_CACHE_READ` / `STUB_CACHE_WRITE` name (the script sets 7
+  and 5).
 - **OpenCode** (`opencode/`): `round.sh <label> <bin> <port>` runs the whole
   set below except `db.py` for one binary into `probe-<label>.log` (eight
   ports from `<port>`); run old and new at once, ports 100 apart, and diff the

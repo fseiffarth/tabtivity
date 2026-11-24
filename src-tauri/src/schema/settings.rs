@@ -848,6 +848,13 @@ pub struct Settings {
     /// the Settings card sets in the same click.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_checkpoints: Option<bool>,
+    /// EXPERIMENTAL, default OFF. Claude's trace spans as a second, separate
+    /// source of the recap's token counts (`services::claude_otel`,
+    /// `docs/claude_otel_tokens_plan.md`): local Claude tabs started after it
+    /// is on export their `claude_code.llm_request` spans to a loopback
+    /// receiver. Read via [`Settings::claude_otel_tokens`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_otel_tokens: Option<bool>,
     /// EXPERIMENTAL, default ON (`ON_BY_DEFAULT` in `src/lib/experimental.ts`:
     /// unset is on, an explicit `false` turns it off). The chat assistant
     /// (`docs/done/assistant_plan.md`,
@@ -1467,6 +1474,12 @@ impl Settings {
     /// them only with its own switch on too (`services::checkpoints::capturing_in`).
     pub fn turn_checkpoints(&self) -> bool {
         self.experimental(self.turn_checkpoints)
+    }
+
+    /// Whether Claude's trace spans are a token source: the receiver starts and
+    /// new local Claude tabs export to it (`services::claude_otel`).
+    pub fn claude_otel_tokens(&self) -> bool {
+        self.experimental(self.claude_otel_tokens)
     }
 
     /// Whether the experimental Python Run/Debug buttons and breakpoint gutter are

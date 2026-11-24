@@ -1825,6 +1825,8 @@ pub fn wrap_pty_options_bwrap(
         if admin.is_none() {
             crate::services::claude_token::inject_launch(opts);
         }
+        // Claude's trace spans as a token source (experimental, off by default).
+        crate::services::claude_otel::inject_launch(opts, scope_id);
     }
     // A self-updater switched off only by a flag (Cursor), like the env ones below.
     let agent_exe = if agent_cmd.contains('/') {
@@ -2725,6 +2727,8 @@ pub fn wrap_pty_options_sandbox_exec(
         if admin.is_none() {
             crate::services::claude_token::inject_launch(opts);
         }
+        // Claude's trace spans as a token source (experimental, off by default).
+        crate::services::claude_otel::inject_launch(opts, scope_id);
     }
     crate::services::agent_install::apply_fence_args(&agent_cmd, Some(&resolved), &mut opts.args);
     // Inside the profile: no ssh-agent, the scope's own TMPDIR (2442n).
@@ -3090,6 +3094,7 @@ pub fn abandon_spawn(tab_id: &str, seq: u64) -> bool {
     #[cfg(unix)]
     crate::services::local_lane::close(tab_id);
     crate::services::api_proxy::on_tab_gone(tab_id);
+    crate::services::claude_otel::on_tab_gone(tab_id);
     true
 }
 
@@ -3240,6 +3245,7 @@ pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
     // Its API proxy tokens go with it (those of a tmux-held agent once the
     // session is gone too).
     crate::services::api_proxy::on_tab_gone(tab_id);
+    crate::services::claude_otel::on_tab_gone(tab_id);
     // A tab's end is when a login it made lands in its home: carry it to the
     // other scopes now rather than at the keeper's next tick. Off-thread —
     // this runs on the PTY's teardown path.

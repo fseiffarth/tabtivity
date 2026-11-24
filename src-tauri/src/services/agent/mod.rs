@@ -66,6 +66,9 @@ pub mod agent_turn;
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
 pub mod agent_versions;
+// Claude's trace spans as a second, separate source of token counts (experimental
+// `claude_otel_tokens`; docs/claude_otel_tokens_plan.md): a loopback OTLP receiver and its ledger.
+pub mod claude_otel;
 // Claude's long-lived token (`claude setup-token`): kept in the keyring,
 // the fallback login of every Claude tab with no shared login, local and remote.
 pub mod claude_token;

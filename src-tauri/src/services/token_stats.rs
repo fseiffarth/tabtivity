@@ -67,7 +67,7 @@ const UNKNOWN_MODEL: &str = "unknown";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
 
 /// The split kinds, in the order every `[u64; 4]` here uses them.
-const SPLIT: [&str; 4] = [
+pub(crate) const SPLIT: [&str; 4] = [
     metric::TOKENS_IN,
     metric::TOKENS_CACHE_W,
     metric::TOKENS_CACHE_R,
@@ -80,7 +80,7 @@ const LIFETIME: [&str; 2] = [metric::TOKENS_CACHE_W5M, metric::TOKENS_CACHE_W1H]
 
 /// What subagents used, in [`SPLIT`] order — a detail of the split, filed as
 /// well as (not instead of) the split kinds.
-const SUB: [&str; 4] = [
+pub(crate) const SUB: [&str; 4] = [
     metric::TOKENS_SUB_IN,
     metric::TOKENS_SUB_CACHE_W,
     metric::TOKENS_SUB_CACHE_R,
@@ -317,7 +317,7 @@ type Buckets = HashMap<String, HashMap<String, Counters>>;
 
 /// Saturating sum of `src` into `dst`, hours and days separately (a day
 /// bucket can outlive its hours).
-fn merge_into(dst: &mut UsageStats, src: &UsageStats) {
+pub(crate) fn merge_into(dst: &mut UsageStats, src: &UsageStats) {
     for (to, from) in [(&mut dst.hours, &src.hours), (&mut dst.days, &src.days)] {
         for (bucket, by_scope) in from {
             for (scope, counters) in by_scope {

@@ -1654,6 +1654,10 @@ pub fn run() {
             // The provider API proxy (`services::api_proxy`): loopback, holds
             // the stored API keys so a keyed agent tab gets only a token.
             services::api_proxy::start();
+            // Claude's trace-span receiver (experimental, `services::claude_otel`):
+            // only this window process may run it; it starts with the first
+            // launch that needs it, and only while the flag is on.
+            services::claude_otel::allow_receiver();
             // A SIGTERM/SIGINT (the dev launcher's Ctrl+C, a `kill`, a session
             // logout) used to end the process with none of the teardown the
             // window's × runs: PTY subtrees, local tmux sessions, the Mobile
@@ -2971,6 +2975,9 @@ pub fn run() {
                 // streams in flight briefly. Before the PTY teardown below, so
                 // its tab-gone hooks find nothing left to sweep.
                 services::api_proxy::stop_for_exit();
+                // Claude's trace-span receiver (experimental): stop accepting,
+                // end its tokens, write its ledger.
+                services::claude_otel::stop_for_exit();
                 // The local lane of every tab with Cut network on: close and
                 // remove its sockets, so none outlives the quit.
                 #[cfg(unix)]

@@ -756,6 +756,9 @@ export interface Settings {
   voice_hands_free?: boolean;
   /** EXPERIMENTAL: per-turn checkpoints of an agent tab's folder (`lib/agents/checkpoints`). */
   turn_checkpoints?: boolean;
+  /** EXPERIMENTAL: Claude's trace spans as a second, separate token source in the
+   *  recap (`services::claude_otel`, `docs/claude_otel_tokens_plan.md`). */
+  claude_otel_tokens?: boolean;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */

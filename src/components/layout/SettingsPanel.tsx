@@ -2400,6 +2400,14 @@ export function SettingsDialog({
             {/* Per-turn checkpoints: one switch for the controls and the backend's capture. */}
             <CheckpointsSettings />
 
+            {/* Claude's trace spans as a second, separate token source in the recap. */}
+            <ToggleCard
+              label={<>{t("settings.claudeOtelTokens")} <UntestedTag id="settings.claudeOtelTokens" /></>}
+              checked={experimentalEnabled(settings, "claude_otel_tokens")}
+              onChange={(e) => void updateSettings({ claude_otel_tokens: e.target.checked })}
+              help={t("settings.claudeOtelTokensHelp")}
+            />
+
             <ToggleCard
               label={t("settings.webBrowser")}
               checked={experimentalEnabled(settings, "web_browser")}

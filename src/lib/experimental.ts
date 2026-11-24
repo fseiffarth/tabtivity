@@ -79,6 +79,7 @@ export const EXPERIMENTAL_FLAGS = [
   "voice_hands_free",
   "windows_session_host",
   "turn_checkpoints",
+  "claude_otel_tokens",
 ] as const;
 
 export type ExperimentalFlag = (typeof EXPERIMENTAL_FLAGS)[number];
