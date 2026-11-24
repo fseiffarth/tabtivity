@@ -20,7 +20,7 @@ pub mod git;
 pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_hardened, git_hosting, git_init, git_peer, git_release, git_worktrees};
 pub mod mail;
 pub use mail::{
-    mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine,
+    mail_ai, mail_attach, mail_authres, mail_complete, mail_contacts, mail_crypt, mail_crypto, mail_engine,
     mail_filters, mail_pgp, mail_reader, mail_rekey, mail_sanitize, mail_store,
     mail_thunderbird,
 };

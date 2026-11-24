@@ -588,7 +588,7 @@ fn skip_osc(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
 
 /// One line with every control, bidi-override and zero-width character
 /// turned into a space and the spaces collapsed.
-fn inert(line: &str) -> String {
+pub(crate) fn inert(line: &str) -> String {
     let hidden = |c: char| {
         c.is_control()
             || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}' | '\u{2028}' | '\u{2029}')
