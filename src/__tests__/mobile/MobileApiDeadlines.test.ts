@@ -113,9 +113,8 @@ describe(`${BRAND.display} Mobile request deadlines`, () => {
 
   it("waits longer for a mail completion than the sidecar does", () => {
     // `MailComplete` has its own 20 s arm (the window's 6 s fill + 5 s run plus
-    // the gate probes; the default 10 s is below that). Until the backend half
-    // is merged the arm is not in `protocol.rs`: the contract's 20 s stands in.
-    const seconds = /Self::MailComplete \{ \.\. \}[^=]*=> \d+,/.test(PROTOCOL) ? responseTimeout("MailComplete") : 20;
+    // the gate probes; the default 10 s is below that).
+    const seconds = responseTimeout("MailComplete");
     expect(seconds).toBe(20);
     expect(MAIL_COMPLETE_TIMEOUT / 1000).toBeGreaterThan(connectTimeout() + seconds);
   });
