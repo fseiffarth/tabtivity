@@ -1545,6 +1545,28 @@ unchanged; the new agents are additive.
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+    - **2026-11-24: a Codex limit went unanswered.** A Codex tab hit its 5-hour
+      limit at 18:48 ("try again at 8:35 PM"); its own rate-limit snapshot put
+      the reset at 20:35:51, yet no `continue` reached it before the user
+      restarted the tab at 23:10. The frontend state was not seen, so the gate
+      that held it is not proven. Changed: a limit notice as the last thing on
+      the screen now outweighs a "working" verdict (Codex ends a limit turn
+      without `Stop`, and its title timer keeps the verdict from expiring); a
+      due continue the tab cannot take shows why on the row, and one given up
+      after the catch-up hour stays noted ("the last continue was not sent: …").
+      Untested register: `agentContinue.hold`.
+    - [ ] 🖐️ Manual test — turn ⟳ Continue on for a Codex tab, let it hit its
+      limit, and confirm one `continue` lands within about two minutes of the
+      reset. If it does not, read the row: "waiting until the tab can take it:
+      …" or "the last continue was not sent: …" names the gate that held it.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
 
 258. **Agents view: the ◷ Schedules menu reads as two panes, not one scroll.**
     The per-tab schedules dialog opened every time on the same three screens of

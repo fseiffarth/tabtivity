@@ -6,7 +6,7 @@ import { useI18nStore, useT } from "../../lib/i18n";
 import { useChordHint } from "../../lib/shortcuts/shortcutHint";
 import { jumpToTab, openPromptChartTab } from "../../lib/shortcuts/tabJump";
 import { useActivityStore } from "../../stores/activity";
-import { continueKey, useAgentContinueStore } from "../../stores/agents/agentContinue";
+import { continueKey, useAgentContinueStore, type ContinueStatus } from "../../stores/agents/agentContinue";
 import { agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { queuePromptForTab } from "../../stores/agents/agentPrompts";
 import { persistScopeLayout, scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
@@ -217,6 +217,14 @@ export function AgentSchedulesView({ scope, active }: Props) {
     if (!tab.autoContinue || !tab.scheduleTargetId) return null;
     const status = continueByTarget[continueKey(scope, tab.scheduleTargetId)];
     if (!status) return t("agentContinue.reading");
+    const line = continueStateLabel(status);
+    // A continue given up unsent is said beside whatever is armed next, until one lands.
+    return status.missed ? `${line} · ${t("agentContinue.missed", { reason: t(`agentContinue.hold.${status.missed}`) })}` : line;
+  };
+  const continueStateLabel = (status: ContinueStatus): string => {
+    if (status.phase === "armed" && status.holding && status.armedAt !== undefined && now.getTime() >= status.armedAt) {
+      return t("agentContinue.holding", { reason: t(`agentContinue.hold.${status.holding}`) });
+    }
     if (status.phase === "armed" && status.source === "screen" && status.armedAt !== undefined) {
       const relative = relativeToNow(new Date(status.armedAt), now, lang);
       return status.resets ? t("agentContinue.armedNotice", { relative, resets: status.resets }) : t("agentContinue.armedNoticeRetry", { relative });
@@ -326,7 +334,7 @@ export function AgentSchedulesView({ scope, active }: Props) {
           {expanded && <div className="agent-prompts-details" data-testid="agent-details">
             {lastPrompt && <small className="agent-prompts-last-prompt" data-testid="agent-last-prompt" title={`${t("agentPrompts.lastPromptTitle")}\n\n${lastPrompt}`}>{t("agentPrompts.lastPrompt", { prompt: lastPrompt })}</small>}
             <small>{summary.total === 0 ? t("agentPrompts.noSchedules") : summary.next ? `${summary.enabled} · ${t("agentPrompts.nextRun", { relative: relativeToNow(summary.next, now, lang) })}` : queued.length ? `${summary.enabled} · ${t("agentPrompts.queuedCount", { count: queued.length })}` : `${summary.enabled} · ${t("agentSchedule.noNext")}`}</small>
-            {continueText && <small className="agent-prompts-continue" data-testid="agent-continue-status"><RefreshIcon /> {continueText}{tab.scheduleTargetId && continueByTarget[continueKey(scope, tab.scheduleTargetId)]?.source === "screen" && <> <UntestedTag id="agentContinue.screenNotice" /></>}</small>}
+            {continueText && <small className="agent-prompts-continue" data-testid="agent-continue-status"><RefreshIcon /> {continueText}{tab.scheduleTargetId && continueByTarget[continueKey(scope, tab.scheduleTargetId)]?.source === "screen" && <> <UntestedTag id="agentContinue.screenNotice" /></>}{tab.scheduleTargetId && (continueByTarget[continueKey(scope, tab.scheduleTargetId)]?.holding || continueByTarget[continueKey(scope, tab.scheduleTargetId)]?.missed) && <> <UntestedTag id="agentContinue.hold" /></>}</small>}
             {authored.map(proposal)}
             <div className="agent-prompts-actions">
               <button className="settings-btn sm" type="button" onClick={() => jumpToTab(scope, tab.key)}><ArrowUpRightIcon /> {t("agentPrompts.jump")}</button>
