@@ -2568,7 +2568,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const readerViewsOffered: ReaderViewId[] = ["chat"];
   if (changesOffered(readerAgent) && !readerOnHost && (changesOn || changesKnown)) readerViewsOffered.push("changes");
   if (readerTopBar && (filesOn || filesKnown)) readerViewsOffered.push("files");
-  // No "terminal": it shares Chat's pill and is no stop of the steering cycle.
+  if (readerTopBar) readerViewsOffered.push("terminal");
   /** Put the keys where `view` takes them: the chat's text box, a panel's own
    * root, else the terminal. */
   const focusReaderView = (view: ReaderViewId) => {

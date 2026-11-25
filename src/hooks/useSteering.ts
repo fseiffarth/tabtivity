@@ -1119,7 +1119,9 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       if (!target) return;
       const current = target.view();
       const next = cycleReaderView(current, target.offered(), dir);
-      if (next !== current) target.show(next);
+      if (next === current) return;
+      if (current === "terminal" && pty) scrollTerminalToLive(pty);
+      target.show(next);
     }
 
     // The panes and tabs levels. With one subwindow there is nothing for ←/→

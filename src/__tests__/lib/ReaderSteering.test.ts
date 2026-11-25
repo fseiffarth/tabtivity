@@ -29,22 +29,22 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 const ALL: ReaderViewId[] = ["chat", "changes", "files", "terminal"];
 
 describe("cycleReaderView", () => {
-  it("walks Chat, Diffs, Files and wraps — Terminal is no stop", () => {
+  it("walks Chat, Diffs, Files and Terminal, then wraps to Chat", () => {
     expect(cycleReaderView("chat", ALL, 1)).toBe("changes");
     expect(cycleReaderView("changes", ALL, 1)).toBe("files");
-    expect(cycleReaderView("files", ALL, 1)).toBe("chat");
+    expect(cycleReaderView("files", ALL, 1)).toBe("terminal");
+    expect(cycleReaderView("terminal", ALL, 1)).toBe("chat");
   });
 
   it("goes back with -1 and wraps the other way", () => {
     expect(cycleReaderView("files", ALL, -1)).toBe("changes");
-    expect(cycleReaderView("chat", ALL, -1)).toBe("files");
+    expect(cycleReaderView("chat", ALL, -1)).toBe("terminal");
   });
 
-  it("steps from a shown Terminal as from Chat's place (their shared pill)", () => {
-    expect(cycleReaderView("terminal", ALL, 1)).toBe("changes");
+  it("switches between Chat and Terminal when the other views are unavailable", () => {
     expect(cycleReaderView("terminal", ALL, -1)).toBe("files");
-    expect(cycleReaderView("terminal", ["chat", "terminal"], 1)).toBe("terminal");
-    expect(cycleReaderView("terminal", ["chat"], -1)).toBe("terminal");
+    expect(cycleReaderView("terminal", ["chat", "terminal"], 1)).toBe("chat");
+    expect(cycleReaderView("chat", ["chat", "terminal"], 1)).toBe("terminal");
   });
 
   it("skips views that are not offered", () => {
@@ -63,7 +63,6 @@ describe("cycleReaderView", () => {
 
   it("stays put when nothing else is offered", () => {
     expect(cycleReaderView("chat", ["chat"], 1)).toBe("chat");
-    expect(cycleReaderView("chat", ["chat", "terminal"], 1)).toBe("chat");
     expect(cycleReaderView("files", [], -1)).toBe("files");
   });
 });
