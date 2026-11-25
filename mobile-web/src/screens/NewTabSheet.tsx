@@ -77,10 +77,10 @@ export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, s
   shells: boolean;
   /** A create in flight; the file row ignores it. */
   busy: boolean;
-  /** No desktop window: a shell or a plain agent is started by the host
-   *  itself (headless owner plan, H1b) and picked up by the next window;
-   *  a mode, a worktree, a cloud session, a local model or a sign-in still
-   *  needs the window — those leave the grid for one folded group. */
+  /** No desktop window: a shell, a plain agent or a cloud session is started
+   *  by the host itself (headless owner plan, H1b) and picked up by the next
+   *  window; a mode, a worktree, a local model or a sign-in still needs the
+   *  window — those leave the grid for one folded group. */
   headless?: boolean;
   /** False on a host whose tabs never reach a phone (no tmux, Windows):
    *  nothing that opens a tab is listed and `launch-options` is not asked;
@@ -163,7 +163,7 @@ export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, s
         <textarea rows={4} maxLength={4000} value={task} autoFocus aria-label={t("mobile.newTab.cloudTaskTitle", { agent: asking.agent.label })} onChange={(event) => setTask(event.target.value)} />
         <div className="mobile-schedule-actions">
           <button onClick={() => setAsking(null)}>{t("mobile.newTab.cloudTaskCancel")}</button>
-          <button className="primary" disabled={busy || !task.trim()} onClick={() => onPick("agent", asking.agent, undefined, { cloud: asking.launch.action, task: task.trim() })}>{t("mobile.newTab.cloudTaskStart")}</button>
+          <button className="primary" disabled={busy || !task.trim() || task.trim().startsWith("-")} onClick={() => onPick("agent", asking.agent, undefined, { cloud: asking.launch.action, task: task.trim() })}>{t("mobile.newTab.cloudTaskStart")}</button>
         </div>
       </div> : <>
       {creates && (machines.length > 0 || showWhere) && <div className="sheet-fields">
@@ -199,7 +199,7 @@ export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, s
         {agents.length === 0 && <p className="sheet-note">{t(showCloud ? "mobile.newTab.noAgents" : "mobile.newTab.localOnly")}</p>}
         {options.local && !headless && here && <LocalModelGroup local={options.local} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
         {showCloud && options.api_key && !headless && here && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
-        {!headless && here && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
+        {here && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
         {showCloud && options.sign_in.length > 0 && !headless && !pinned && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
         {headless && !pinned && <NeedsWindow agents={agents} options={options} linked={linked} />}
         </>}
@@ -303,16 +303,15 @@ function DefaultStar({ starred, label, onClick }: { starred: boolean; label: str
 
 /** With no window, everything only the window can start, folded into one
  * group at the sheet's foot — the reader sees what waits without a sheet of
- * dead buttons to tap: an agent's modes, the cloud sessions, the linked
- * worktrees, the local model's agents and the sign-in list. */
+ * dead buttons to tap: an agent's modes, the linked worktrees, the local
+ * model's agents and the sign-in list. (The host starts cloud sessions
+ * itself, so they keep their own group.) */
 function NeedsWindow({ agents, options, linked }: { agents: AgentRow[]; options: LaunchOptions; linked: LaunchOptions["worktrees"] }) {
   const t = useT();
   const rows: { key: string; label: string; items: string[] }[] = [];
   for (const agent of agents) {
     if (agent.modes.length) rows.push({ key: `agent:${agent.id}`, label: agent.label, items: agent.modes });
   }
-  const clouded = agents.filter((agent) => options.cloud.some((launch) => launch.agent_id === agent.id)).map((agent) => agent.label);
-  if (clouded.length) rows.push({ key: "cloud", label: t("mobile.newTab.cloudGroup"), items: clouded });
   if (linked.length && agents.length) rows.push({ key: "where", label: t("mobile.newTab.where"), items: linked.map((row) => row.branch || row.label) });
   if (options.local?.agents.length) rows.push({ key: "local", label: t("mobile.newTab.localGroup", { model: options.local.model }), items: options.local.agents.map((row) => row.label) });
   if (options.sign_in.length) rows.push({ key: "sign-in", label: t("mobile.signIn.listEntry"), items: [] });

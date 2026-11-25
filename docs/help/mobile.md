@@ -174,7 +174,9 @@ is refused. Works with the desktop window closed.
   asks once, at the first start with Mobile on; the switch is in the header's
   phone menu and in Settings → Mobile.
 - Creating a new tab from the phone needs Tabtivity up, or the switch above
-  on.
+  on. With no window open, the phone's ＋ still starts a shell, a plain
+  agent or a project's **Cloud sessions** (New / Open existing); a mode, a
+  worktree, a local model or a sign-in waits for the window.
 - A paired phone types into a terminal exactly like your keyboard: keep agent
   approval modes conservative while Mobile is on.
 - An agent tab opens as a **Chat**: the conversation as messages, a text box

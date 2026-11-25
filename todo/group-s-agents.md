@@ -3262,6 +3262,29 @@ unchanged; the new agents are additive.
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [ ] **Cloud sessions from the phone with no window** (built 2026-11-24,
+  uncommitted; never live). The Mobile host starts a project's cloud
+  session itself (`headless::CLOUD_LAUNCHES`, twin of `cloudSessions.ts`);
+  a cloud/sign-in tab no longer joins the owner's closed list or the
+  scheduler's relaunch (`workspace::is_one_shot`); a task led by `-` is
+  refused on desktop and phone.
+  - [ ] 🖐️ Manual test — Keep running when Tabtivity is closed on; quit the
+    window. Phone → a project → hold ＋: **Cloud sessions** is listed (not
+    under "Needs the window"). Claude → New session → "say hello" → Start:
+    a "Claude (cloud)" tab opens, shows `Created cloud session … View:
+    https://claude.ai/code/session_…`, and the session is on claude.ai/code.
+    Open existing starts `claude --teleport`'s picker. Close the tab: it is
+    not under Recently closed. Open the window: the cloud tab is not
+    restored.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [ ] **Follow a Claude cloud session live in a tab** (idea 2026-10-23, not
   started): the `+` menu's *open a cloud session* runs `claude --teleport`,
   which copies the session into the tab — the cloud session runs on and the

@@ -1916,7 +1916,7 @@ fn headless_create_error(refusal: headless::CreateRefusal) -> (StatusCode, Json<
         match refusal {
             headless::CreateRefusal::DesktopUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             headless::CreateRefusal::LaunchFailed(_) | headless::CreateRefusal::Persist(_) => StatusCode::BAD_GATEWAY,
-            headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) => StatusCode::BAD_REQUEST,
+            headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) | headless::CreateRefusal::Cloud(_) => StatusCode::BAD_REQUEST,
             headless::CreateRefusal::NotAttachable => StatusCode::CONFLICT,
         },
         refusal.code(),
@@ -2641,12 +2641,17 @@ async fn launch_options(
     .await;
     if desktop_down(&response) {
         // No window: the ＋ sheet offers what the owner can start — the
-        // project folder, a shell or a plain agent (headless owner plan,
-        // H3). Worktrees, cloud sessions, sign-ins, local models and API-key
-        // agents wait for the window, so none is listed.
+        // project folder, a shell, a plain agent (headless owner plan, H3)
+        // and a project's cloud sessions. Worktrees, sign-ins, local models
+        // and API-key agents wait for the window, so none is listed.
+        let cloud = if project.public.kind == ScopeKind::Project && !project.pinned {
+            headless::cloud_options(&headless::agents(&state.config.state_dir, &host_key(&state), &*state.spawner.installed))
+        } else {
+            Vec::new()
+        };
         return (
             StatusCode::OK,
-            Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
+            Json(json!({ "worktrees": [], "cloud": cloud, "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
         );
     }
     match response {

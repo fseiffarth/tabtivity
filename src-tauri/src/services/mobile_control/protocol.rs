@@ -277,8 +277,10 @@ impl CreateTabRequest {
             }
         }
         if let Some(task) = &self.task {
+            // A leading `-` would reach the CLI as a flag (`--cloud -x`), not a task.
             if self.cloud.is_none()
                 || task.trim().is_empty()
+                || task.trim_start().starts_with('-')
                 || task.chars().count() > MAX_CLOUD_TASK
                 || task
                     .chars()

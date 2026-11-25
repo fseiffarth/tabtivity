@@ -653,10 +653,14 @@ pub type HeadlessLaunch =
 /// Why a headless create was refused, as the phone's error code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateRefusal {
-    /// The request needs the window: a sign-in, a cloud session, a worktree,
-    /// a local model, a mode, a sign-in like a tab, or the root console.
+    /// The request needs the window: a sign-in, a worktree, a local model, a
+    /// mode, a sign-in like a tab, or the root console.
     DesktopUnavailable,
     UnknownAgent,
+    /// A cloud session the agent or scope does not offer
+    /// (`unsupported_cloud`), or one whose launch takes a task and got none
+    /// (`task_required`) — the desktop's own codes for the same requests.
+    Cloud(&'static str),
     /// The tab would run where no local tmux session carries it (a remote
     /// host, a container, a VM): the phone cannot attach to it.
     NotAttachable,
@@ -675,7 +679,7 @@ impl CreateRefusal {
             Self::DesktopUnavailable => "desktop_unavailable",
             Self::UnknownAgent => "unknown_agent",
             Self::NotAttachable => "not_attachable",
-            Self::Assistant(code) => code,
+            Self::Assistant(code) | Self::Cloud(code) => code,
             Self::LaunchFailed(_) => "launch_failed",
             Self::Persist(_) => "persist_failed",
         }
@@ -795,6 +799,81 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
         session_id,
         extra,
     }
+}
+
+/// One vendor cloud launch a built-in agent offers: the desktop's
+/// `CLOUD_LAUNCHES` (`src/lib/agents/cloudSessions.ts`), twinned for a create
+/// with no window and held to it by a source scan in the tests. `args` come
+/// first; a launch that takes the task (`task`) gets it as the last argument.
+pub(super) struct CloudLaunch {
+    pub bin: &'static str,
+    pub action: &'static str,
+    pub args: &'static [&'static str],
+    pub task: bool,
+}
+
+pub(super) const CLOUD_LAUNCHES: &[CloudLaunch] = &[
+    CloudLaunch { bin: "claude", action: "new", args: &["--cloud"], task: true },
+    CloudLaunch { bin: "claude", action: "open", args: &["--teleport"], task: false },
+    CloudLaunch { bin: "codex", action: "open", args: &["cloud"], task: false },
+    CloudLaunch { bin: "kiro-cli", action: "new", args: &["--cloud"], task: false },
+    CloudLaunch { bin: "vibe", action: "new", args: &["--remote"], task: true },
+    CloudLaunch { bin: "copilot", action: "open", args: &["--connect"], task: false },
+];
+
+fn cloud_launch(bin: &str, action: &str) -> Option<&'static CloudLaunch> {
+    CLOUD_LAUNCHES.iter().find(|launch| launch.bin == bin && launch.action == action)
+}
+
+/// The launch's command line. The task's text was bounded by the request's
+/// shape check (`CreateTabRequest::launch_shape_ok`: plain text, no leading
+/// `-` a CLI would read as a flag); a launch that takes one refuses none.
+fn cloud_args(launch: &CloudLaunch, task: Option<&str>) -> Result<Vec<String>, CreateRefusal> {
+    let mut args: Vec<String> = launch.args.iter().map(|arg| arg.to_string()).collect();
+    if launch.task {
+        let task = task.map(str::trim).filter(|task| !task.is_empty()).ok_or(CreateRefusal::Cloud("task_required"))?;
+        args.push(task.to_string());
+    }
+    Ok(args)
+}
+
+/// A cloud tab's record, as the desktop's `buildCloudTabSpec` writes it: no
+/// session id and no `TAB_UID` — the session is the vendor's, and a tab
+/// without one is never resumed or relaunched into a second cloud session
+/// (`workspace::is_one_shot`). The label is the window's English
+/// `newTabMenu.cloudTabLabel`, as a shell's "Shell" is.
+fn cloud_record(agent: &AgentChoice, args: Vec<String>, cwd: &Path, request_hash: &str) -> TabEntry {
+    let extra = HashMap::from([
+        ("kind".to_string(), json!("agent")),
+        ("args".to_string(), json!(args)),
+        ("env".to_string(), json!({})),
+        ("cloud".to_string(), json!(true)),
+        ("mobileRequestHash".to_string(), json!(request_hash)),
+    ]);
+    TabEntry {
+        key: format!("headless-{}", crate::storage::uuid_v4()),
+        label: format!("{} (cloud)", agent.public.label),
+        cmd: agent.bin.to_string(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        session_id: None,
+        extra,
+    }
+}
+
+/// The ＋ sheet's cloud rows with no window: each offered agent's cloud
+/// launches, agents first, as the desktop's `launchOptions` lists them. The
+/// caller offers them only for a project that is not pinned to its host.
+pub fn cloud_options(agents: &[AgentChoice]) -> Vec<super::protocol::MobileCloudLaunch> {
+    agents
+        .iter()
+        .flat_map(|agent| {
+            CLOUD_LAUNCHES.iter().filter(|launch| launch.bin == agent.bin).map(|launch| super::protocol::MobileCloudLaunch {
+                agent_id: agent.public.id.clone(),
+                action: launch.action.to_string(),
+                task: launch.task,
+            })
+        })
+        .collect()
 }
 
 /// The size a session started with no window gets. Nobody looks at it at that
@@ -971,8 +1050,9 @@ fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
 /// tab is minted into the scope's session file first (so a window opening
 /// meanwhile merges it in rather than overwriting it), then started
 /// detached through `launch`; a launch that fails takes the record back out.
-/// Everything that needs the window — a sign-in, a cloud session, a
-/// worktree, a local model, a mode, an API key, the root console — is refused with
+/// A project's vendor cloud session is the owner's too ([`CLOUD_LAUNCHES`]).
+/// Everything else that needs the window — a sign-in, a worktree, a local
+/// model, a mode, an API key, the root console — is refused with
 /// `desktop_unavailable`, as before this existed. Idempotent on the
 /// request's key, like the desktop's create.
 pub async fn create_tab(
@@ -994,7 +1074,6 @@ pub async fn create_tab(
         return create_chat(state_dir, host_key, project, request, assistant, launch).await;
     }
     if request.sign_in.is_some()
-        || request.cloud.is_some()
         || request.worktree.is_some()
         || request.local.is_some()
         || request.like_tab.is_some()
@@ -1022,7 +1101,16 @@ pub async fn create_tab(
         ),
     };
     let request_hash = key_id(host_key, "request", &[&request.idempotency_key]);
-    let mut record = tab_record(&request.kind, agent, &project.root, &request_hash);
+    let mut record = match (request.cloud.as_deref(), agent) {
+        (None, _) => tab_record(&request.kind, agent, &project.root, &request_hash),
+        // A cloud session clones the project's repository: a project's
+        // only, as the desktop's `launchOptions` lists it.
+        (Some(action), Some(agent)) if project.public.kind == ScopeKind::Project => {
+            let launch = cloud_launch(agent.bin, action).ok_or(CreateRefusal::Cloud("unsupported_cloud"))?;
+            cloud_record(agent, cloud_args(launch, request.task.as_deref())?, &project.root, &request_hash)
+        }
+        (Some(_), _) => return Err(CreateRefusal::Cloud("unsupported_cloud")),
+    };
     // A remote project's agent runs in the mirror (`project.root`), as the
     // window runs it; said on the record so a later change of the default
     // cannot move it (`discovery::tab_is_local`).
@@ -1057,7 +1145,7 @@ pub fn closed_tabs(state_dir: &Path, raw_id: &str) -> Vec<super::protocol::Close
     };
     crate::services::workspace::closed_tabs(&session)
         .into_iter()
-        .filter(|closed| launch_options(state_dir, raw_id, &closed.tab).is_ok())
+        .filter(|closed| !crate::services::workspace::is_one_shot(&closed.tab) && launch_options(state_dir, raw_id, &closed.tab).is_ok())
         .map(|closed| super::protocol::ClosedAgentTab {
             id: closed.id,
             label: closed.tab.label,
@@ -1101,7 +1189,9 @@ pub async fn reopen_tab(
             Some(id) => closed.iter().find(|c| c.id == id),
             None => closed.first(),
         };
-        if wanted.is_some_and(|c| launch_options(state_dir, &project.raw_id, &c.tab).is_err()) {
+        // A cloud or sign-in record an older build kept would start a second
+        // cloud session (or sign-in): left closed, like a host tab.
+        if wanted.is_some_and(|c| crate::services::workspace::is_one_shot(&c.tab) || launch_options(state_dir, &project.raw_id, &c.tab).is_err()) {
             return Err(CreateRefusal::NotAttachable);
         }
     }
@@ -1684,6 +1774,53 @@ fn zone_from_localtime_target(target: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`CLOUD_LAUNCHES`] is the desktop's `CLOUD_LAUNCHES` table, entry for
+    /// entry and in order: a launch changed on one side only would start a
+    /// different command with no window than with one.
+    #[test]
+    fn the_cloud_launches_match_the_desktops_table() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("src").join("lib").join("agents").join("cloudSessions.ts");
+        let source = std::fs::read_to_string(&path).expect("cloudSessions.ts");
+        let start = source.find("const CLOUD_LAUNCHES").expect("the table");
+        let table = &source[start..start + source[start..].find("\n};").expect("the table's end")];
+        let bin_re = regex::Regex::new(r#"^\s*"?([a-z][a-z-]*)"?: \["#).unwrap();
+        let entry_re = regex::Regex::new(r#"action: "(\w+)", needsTask: (true|false), args: \(\w*\) => \[([^\]]*)\]"#).unwrap();
+        let mut desktop = Vec::new();
+        let mut bin = String::new();
+        for line in table.lines() {
+            if let Some(caps) = bin_re.captures(line) {
+                bin = caps[1].to_string();
+            }
+            for caps in entry_re.captures_iter(line) {
+                desktop.push((bin.clone(), caps[1].to_string(), &caps[2] == "true", caps[3].to_string()));
+            }
+        }
+        let ours: Vec<_> = CLOUD_LAUNCHES
+            .iter()
+            .map(|launch| {
+                let mut args: Vec<String> = launch.args.iter().map(|arg| format!("\"{arg}\"")).collect();
+                if launch.task {
+                    args.push("task".to_string());
+                }
+                (launch.bin.to_string(), launch.action.to_string(), launch.task, args.join(", "))
+            })
+            .collect();
+        assert_eq!(ours, desktop);
+    }
+
+    /// A New that takes a task gets it, trimmed, as the last argument, and
+    /// none is refused; a launch without one ignores a task it was sent.
+    #[test]
+    fn a_cloud_launch_builds_its_command_line() {
+        let new = cloud_launch("claude", "new").unwrap();
+        assert_eq!(cloud_args(new, Some("  fix it \n")).unwrap(), ["--cloud", "fix it"]);
+        assert_eq!(cloud_args(new, None).unwrap_err(), CreateRefusal::Cloud("task_required"));
+        assert_eq!(cloud_args(new, Some("  ")).unwrap_err(), CreateRefusal::Cloud("task_required"));
+        assert_eq!(cloud_args(cloud_launch("kiro-cli", "new").unwrap(), Some("ignored")).unwrap(), ["--cloud"]);
+        assert!(cloud_launch("gemini", "new").is_none());
+        assert!(cloud_launch("claude", "attach").is_none());
+    }
 
     /// The phone's turn read is the same agent-written `.turn` record the
     /// watcher reads: a FIFO there reads as nothing, without blocking (gap 29).

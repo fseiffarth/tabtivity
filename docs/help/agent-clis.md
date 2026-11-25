@@ -327,8 +327,11 @@ what each installed CLI supports:
 - **GitHub Copilot**: *open a cloud session* (attaches with `--connect`).
 
 A cloud tab is labelled "(cloud)" and is not restored after a restart — the
-session lives on with the vendor; open it again from the same menu. The
-vendor's cloud needs a plan that includes it.
+session lives on with the vendor; open it again from the same menu. Closing
+one does not add it to **Recently closed**. The phone's ＋ offers the same
+group, also while no Tabtivity window is open (with **Keep running when
+Tabtivity is closed** on). A task may not start with `-`, which the CLI would
+read as an option. The vendor's cloud needs a plan that includes it.
 
 ## Talk to an agent as a chat
 

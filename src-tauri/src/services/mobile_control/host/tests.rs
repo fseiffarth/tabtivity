@@ -2133,7 +2133,7 @@ async fn a_create_with_no_window_is_minted_spawned_and_listed_by_the_owner() {
         .send(create_request(
             &project_id,
             &cookie,
-            json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "cloud": "new", "task": "x", "idempotency_key": "h1b-cloud-0123456789abcdef" }),
+            json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "mode": "plan", "idempotency_key": "h1b-mode-0123456789abcdef" }),
         ))
         .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
@@ -2151,6 +2151,81 @@ async fn a_create_with_no_window_is_minted_spawned_and_listed_by_the_owner() {
     assert_eq!(shell.cmd, "");
     assert!(!shell.agent);
     assert!(shell.tmux_session.as_deref().is_some_and(|n| n.starts_with(&format!("{}{RAW_PROJECT}--shell-", crate::brand::TMUX_PREFIX))));
+}
+
+/// A project's vendor cloud session with no window: `launch-options` lists
+/// the offered agents' cloud launches, and a create is the owner's — a
+/// one-shot record (`cloud`, no session id, no `TAB_UID`) started on the
+/// launch's own args. A New with no task or one led by `-`, and an agent
+/// with no cloud launch, are refused before anything starts.
+#[tokio::test]
+async fn a_cloud_session_with_no_window_is_listed_and_started_by_the_owner() {
+    let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = recorded.clone();
+    let host = headless_host(Arc::new(move |opts: PtyOptions| {
+        sink.lock().unwrap().push(opts);
+        Box::pin(async { Ok(()) })
+    }));
+    let cookie = host.pair_device(&signing_key(43)).await.0;
+    let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+    let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+    let agents: Vec<(String, String)> = json(&body)["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .map(|a| (a["label"].as_str().unwrap().to_string(), a["id"].as_str().unwrap().to_string()))
+        .collect();
+    let claude = agents.iter().find(|(label, _)| label == "Claude").expect("Claude").1.clone();
+
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/launch-options"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let options = json(&body);
+    assert_eq!(options["desktop_available"], false);
+    let cloud = options["cloud"].as_array().expect("cloud").clone();
+    assert!(cloud.contains(&json!({ "agent_id": claude, "action": "new", "task": true })), "{body}");
+    assert!(cloud.contains(&json!({ "agent_id": claude, "action": "open", "task": false })), "{body}");
+    assert!(!body.contains("claude"), "an agent crosses by opaque id only: {body}");
+
+    let create = |key: &str, agent: &str, extra: Value| {
+        let mut body = json!({ "project_id": project_id, "kind": "agent", "agent_id": agent, "idempotency_key": format!("cloud-{key}-0123456789abcdef") });
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        create_request(&project_id, &cookie, body)
+    };
+
+    // Refused before a record is written or anything starts.
+    let (status, _, body) = host.send(create("notask", &claude, json!({ "cloud": "new" }))).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::BAD_REQUEST, Some("task_required")), "{body}");
+    let (status, _, body) = host.send(create("flag", &claude, json!({ "cloud": "new", "task": "--dangerously-skip-permissions" }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a task led by `-` would reach the CLI as a flag: {body}");
+    let offered: Vec<&str> = cloud.iter().filter_map(|row| row["agent_id"].as_str()).collect();
+    let plain = agents.iter().find(|(_, id)| !offered.contains(&id.as_str())).expect("an agent with no cloud").1.clone();
+    let (status, _, body) = host.send(create("plain", &plain, json!({ "cloud": "open" }))).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::BAD_REQUEST, Some("unsupported_cloud")), "{body}");
+    assert!(recorded.lock().unwrap().is_empty());
+
+    // A New takes its task as the last argument; an Open runs bare.
+    let (status, _, body) = host.send(create("new", &claude, json!({ "cloud": "new", "task": "  fix the build " }))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(json(&body)["tab"]["label"], "Claude (cloud)");
+    let (status, _, body) = host.send(create("open", &claude, json!({ "cloud": "open" }))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let spawned = recorded.lock().unwrap().clone();
+    assert_eq!(spawned.iter().map(|o| o.args.clone()).collect::<Vec<_>>(), [vec!["--cloud".to_string(), "fix the build".to_string()], vec!["--teleport".to_string()]]);
+    for opts in &spawned {
+        assert_eq!(opts.cmd, "claude");
+        assert!(opts.agent);
+        assert!(!opts.env.contains_key(crate::app_env!("TAB_UID")), "the session is the vendor's: {:?}", opts.env);
+    }
+    let session_path = host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join("terminals.json");
+    let session: Value = serde_json::from_slice(&std::fs::read(&session_path).expect("session")).expect("json");
+    let minted: Vec<&Value> = session["tabLayout"].as_array().expect("tabs").iter().filter(|t| t["cloud"] == true).collect();
+    assert_eq!(minted.len(), 2, "{session}");
+    for record in minted {
+        assert!(record.get("sessionId").is_none_or(Value::is_null), "no session to resume: {record}");
+        assert_eq!(record["kind"], "agent");
+    }
 }
 
 /// A host holding the chat assistant's scope and nothing else: the flag on
