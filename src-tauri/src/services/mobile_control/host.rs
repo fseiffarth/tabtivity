@@ -1111,10 +1111,15 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
     .into_iter()
     .map(|origin| json!({ "origin": origin }))
     .collect();
+    // The machine's OpenVPN tunnel, for Home's lamp: read off the pidfiles,
+    // since the tunnel registry is the window's. Only the word crosses, never
+    // a config's path or name; null where no config is stored.
+    let vpn = crate::services::openvpn::disk_tunnel_up(&state.config.state_dir)
+        .map(|up| if up { "up" } else { "down" });
     (
         StatusCode::OK,
         Json(
-            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops }),
+            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops, "vpn": vpn }),
         ),
     )
 }

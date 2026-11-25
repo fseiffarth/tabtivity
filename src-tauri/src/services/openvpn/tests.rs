@@ -1219,3 +1219,48 @@ fn a_failed_connect_child_we_can_kill_is_reaped_not_registered() {
     assert!(registry().lock_ok().get(cfg).is_none());
     assert!(!is_connected(cfg));
 }
+
+/// The phone's VPN lamp is read off the runtime folder alone: nothing stored
+/// says nothing, a stored config with no live pidfile is down, a live pidfile
+/// is up — and neither a stale pidfile nor a management file counts as one.
+#[test]
+fn the_on_disk_tunnel_state_follows_the_pidfiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = dir.path().join("openvpn");
+    let live = |pid: i32| pid == 4242;
+    assert_eq!(disk_tunnel_up_with(&runtime, live), None, "no runtime folder at all");
+
+    let configs = runtime.join("configs");
+    std::fs::create_dir_all(&configs).unwrap();
+    assert_eq!(disk_tunnel_up_with(&runtime, live), None, "no config stored");
+    std::fs::write(configs.join("abc__work.ovpn"), "client\n").unwrap();
+    assert_eq!(disk_tunnel_up_with(&runtime, live), Some(false));
+
+    // A tunnel that died on its own leaves its pidfile behind.
+    std::fs::write(runtime.join("stale.pid"), "17\n").unwrap();
+    // The management port is no pid, whatever number it holds.
+    std::fs::write(runtime.join("work.mgmt"), "4242\n").unwrap();
+    assert_eq!(disk_tunnel_up_with(&runtime, live), Some(false));
+
+    std::fs::write(runtime.join("work.interactive.pid"), "4242\n").unwrap();
+    assert_eq!(disk_tunnel_up_with(&runtime, live), Some(true));
+
+    // A live tunnel is reported even with its config gone from the store.
+    std::fs::remove_file(configs.join("abc__work.ovpn")).unwrap();
+    assert_eq!(disk_tunnel_up_with(&runtime, live), Some(true));
+}
+
+/// A pid that is alive but is not OpenVPN (this test's own) is no tunnel where
+/// the process name can be read; a dead one never is.
+#[test]
+fn a_recycled_pid_is_not_a_tunnel() {
+    let me = std::process::id() as i32;
+    assert_eq!(pid_runs_openvpn(me), !cfg!(target_os = "linux"));
+    let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
+        .args(if cfg!(windows) { vec!["/D", "/C", "exit"] } else { vec![] })
+        .spawn()
+        .unwrap();
+    let dead = child.id() as i32;
+    child.wait().unwrap();
+    assert!(!pid_runs_openvpn(dead));
+}

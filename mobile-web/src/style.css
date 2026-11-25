@@ -380,6 +380,11 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .home-brand-dot { position:absolute; top:-1px; right:-2px; width:9px; height:9px; border-radius:50%; background:var(--warn,#f5b94a); box-shadow:0 0 0 2px #0b0d13; }
 .home-header > .lamp { flex:0 0 auto; margin:0 var(--sp-2); }
 .home-offline { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; padding:4px 10px; border-radius:999px; background:#3b2027; color:#ffb4c0; font-size:var(--fs-caption); font-weight:650; }
+/* The desktop machine's OpenVPN tunnel (`status.vpn`), beside the link's lamp:
+   filled green while it is up, dim and struck through while it is down. */
+.home-vpn { position:relative; flex:0 0 auto; padding:2px 6px; border:1px solid #34384a; border-radius:999px; color:#98a0b4; font-size:var(--fs-caption); font-weight:650; letter-spacing:.04em; text-decoration:line-through; }
+.home-vpn.up { border-color:transparent; background:#1d3a2c; color:#55d187; text-decoration:none; }
+.home-vpn > .untested { position:absolute; top:-12px; right:-4px; margin:0; text-decoration:none; }
 .home-settings,.home-head-button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; background:transparent; color:#d7d3f5; }
 .home-head-button { position:relative; border-radius:var(--r-md); }
 .home-head-button[aria-pressed="true"] { background:#2e2b48; color:#e7e9f2; }

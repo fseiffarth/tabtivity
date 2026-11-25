@@ -7394,6 +7394,31 @@ async fn status_reports_the_desktop_theme_for_a_phone_that_follows_it() {
     assert_eq!(json(&body)["color_scheme"], "light_lavender");
 }
 
+/// Home's VPN lamp: nothing while no config is stored, then the tunnel's state
+/// as one word. No live OpenVPN daemon exists in a test, so a pidfile naming
+/// this process reads down on Linux (it is not OpenVPN) — the stale-pidfile
+/// case — and the config's name never crosses either way.
+#[tokio::test]
+async fn status_reports_the_vpn_tunnel_as_one_word() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(95)).await.0;
+    let runtime = host.state.config.state_dir.join("openvpn");
+
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert!(json(&body)["vpn"].is_null(), "{body}");
+
+    let configs = runtime.join("configs");
+    std::fs::create_dir_all(&configs).expect("configs");
+    std::fs::write(configs.join("abc__institute.ovpn"), "client\n").expect("config");
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert_eq!(json(&body)["vpn"], "down", "{body}");
+
+    std::fs::write(runtime.join("abc.pid"), format!("{}\n", std::process::id())).expect("pidfile");
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert_eq!(json(&body)["vpn"], if cfg!(target_os = "linux") { "down" } else { "up" }, "{body}");
+    assert!(!body.contains("institute"), "{body}");
+}
+
 /// The desktop pill's git dot reaches the list row and the project screen
 /// under the opaque id; the desktop's raw id and any level the phone does
 /// not know stay behind.

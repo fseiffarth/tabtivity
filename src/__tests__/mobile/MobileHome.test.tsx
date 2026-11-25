@@ -168,6 +168,23 @@ describe("Mobile home — project list states", () => {
     expect(screen.getByText("Alpha")).toBeTruthy();
     expect(screen.queryByText(/No project/)).toBeNull();
   });
+
+  it("says in the header whether the desktop's VPN tunnel is up, and nothing where it has none", async () => {
+    answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
+    const home = (vpn?: "up" | "down" | null) => <Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} vpn={vpn} />;
+    const view = render(home());
+    await screen.findByText("Alpha");
+    expect(screen.queryByRole("img", { name: /^VPN on the desktop/ })).toBeNull();
+    view.rerender(home("up"));
+    expect(screen.getByRole("img", { name: "VPN on the desktop is connected" }).className).toBe("home-vpn up");
+    view.rerender(home("down"));
+    expect(screen.getByRole("img", { name: "VPN on the desktop is not connected" }).className).toBe("home-vpn");
+    // A link that is down says nothing about the tunnel.
+    fetchMock.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")));
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText(/Showing the last list this session loaded/);
+    expect(screen.queryByRole("img", { name: /^VPN on the desktop/ })).toBeNull();
+  });
 });
 
 describe("Mobile home — box layout", () => {

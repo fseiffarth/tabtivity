@@ -98,8 +98,11 @@ const HOME_LAYOUTS: [HomeLayout, TranslationKey, ComponentType<IconProps>][] = [
  *  agent tiles lead into them, and ‹ (or the phone's back) comes home. */
 const SUBVIEW_TITLE: Record<Exclude<HomeView, "active">, TranslationKey> = { agents: "mobile.home.agentsTitle", favorites: "mobile.home.viewFavorites", search: "mobile.home.viewSearch" };
 
-export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
+export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
   open: (id: string) => void;
+  /** The desktop machine's OpenVPN tunnel, for the header's pill; null where
+   * it has no VPN config or no status has said yet. */
+  vpn?: "up" | "down" | null;
   /** The project open beside this list (the split tier): its row is marked. */
   selectedId?: string;
   /** Opens Tabby's one chat (the FAB): the assistant scope is no row here. */
@@ -398,6 +401,7 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
   const rootWaiting = rootRow?.pending_reviews ?? 0;
   const rootLabel = rootRow ? `${t("mobile.home.openRoot")}${rootWaiting > 0 ? ` · ${t("mobile.home.awaitingApproval", { count: rootWaiting })}` : ""}` : "";
   const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
+  const vpnLabel = t(vpn === "up" ? "mobile.home.vpnUp" : "mobile.home.vpnDown");
   const LayoutGlyph = HOME_LAYOUTS.find(([id]) => id === layout)?.[2] ?? ListIcon;
   /** One button for the three layouts, drawn as the one in use; its sheet
    *  holds the choice. Active and Search share it. */
@@ -427,6 +431,13 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
       {offline
         ? <span className="home-offline" role="img" aria-label={connection}><span className="lamp off" aria-hidden="true" /><span aria-hidden="true">{connection}</span></span>
         : <span className="lamp" role="img" aria-label={connection} title={connection} />}
+      {/* The desktop machine's OpenVPN tunnel, when it has a VPN config: a
+          word, since a second bare lamp would not say what it is for. A dead
+          link says nothing about the tunnel, so the pill goes with it. */}
+      {!offline && vpn && <span className={vpn === "up" ? "home-vpn up" : "home-vpn"} role="img" aria-label={vpnLabel} title={vpnLabel}>
+        <span aria-hidden="true">{t("mobile.home.vpn")}</span>
+        {isUntested("mobile.home.vpnLamp") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+      </span>}
       {/* Another linked desktop (`shell/`): shown when there is one to switch
           to, or inside one's frame, where it asks the shell for its picker. */}
       <DesktopSwitchButton />

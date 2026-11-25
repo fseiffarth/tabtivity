@@ -102,3 +102,12 @@ Referenced from `AGENTS.md`.
   account quietly while down and check it on the tunnel's **rising edge** — a
   reconciled `false → true` only, never the store's first sight of a tunnel at
   launch, which would be a check at mount by the back door.
+- **The phone shows the tunnel, read off disk.** The registries are the desktop
+  window's memory and the phone sidecar is another process, so
+  `disk_tunnel_up(state_dir)` scans the runtime folder's `*.pid` files instead
+  (the evidence `adopt_config` uses) and `/api/v1/status` carries one word,
+  `vpn: "up" | "down"`, null with no stored config. Home's header draws it as a
+  pill beside the link's lamp. On Linux the pid must also be named `openvpn`
+  (`/proc/<pid>/comm`): a tunnel that dies on its own leaves its pidfile behind,
+  and after a reboot that pid is another program's. Like the desktop lamp it
+  means *the daemon runs*: a tunnel that is re-handshaking still reads up.

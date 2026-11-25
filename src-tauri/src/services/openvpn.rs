@@ -324,7 +324,13 @@ fn kill_root_pid(_pid: i32) {}
 
 /// Directory holding OpenVPN runtime files (askpass + pidfiles), created 0700.
 fn runtime_dir() -> PathBuf {
-    storage::state_dir().join("openvpn")
+    runtime_dir_in(&storage::state_dir())
+}
+
+/// [`runtime_dir`] under a given state dir, for a process that is handed its
+/// state dir instead of resolving it (the phone sidecar).
+fn runtime_dir_in(state_dir: &Path) -> PathBuf {
+    state_dir.join("openvpn")
 }
 
 /// Ready a pidfile path that ROOT will write (#868). OpenVPN opens `--writepid`
@@ -1514,6 +1520,49 @@ fn adopt_config(config: &str) -> bool {
         }
     }
     false
+}
+
+/// Whether one of this machine's tunnels is up, read **off disk**, for a process
+/// that holds none of the registries: they live in the desktop window's memory,
+/// and the phone sidecar is another process. `None` when there is nothing to
+/// report (no stored config and no tunnel), else whether a pidfile in the
+/// runtime folder records a live OpenVPN daemon — the evidence [`adopt_config`]
+/// re-seats a tunnel from, so it also answers with no window open.
+///
+/// Like every lamp here it says the daemon is *running*: a tunnel that is
+/// re-handshaking reads up.
+pub fn disk_tunnel_up(state_dir: &Path) -> Option<bool> {
+    disk_tunnel_up_with(&runtime_dir_in(state_dir), pid_runs_openvpn)
+}
+
+/// [`disk_tunnel_up`] over a given runtime folder and liveness probe. Every
+/// `*.pid` there is a tunnel's (`{stem}.pid`, `{stem}.interactive.pid`), so the
+/// scan needs no config path and cannot miss one over how a path is spelled.
+fn disk_tunnel_up_with(runtime: &Path, live: impl Fn(i32) -> bool) -> Option<bool> {
+    let any_file = |dir: &Path, wanted: &dyn Fn(&Path) -> bool| {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.flatten().any(|entry| wanted(&entry.path())))
+            .unwrap_or(false)
+    };
+    let up = any_file(runtime, &|path| {
+        path.extension().is_some_and(|ext| ext == "pid") && pidfile_pid(path).is_some_and(&live)
+    });
+    let stored = any_file(&runtime.join("configs"), &|path| path.is_file());
+    (up || stored).then_some(up)
+}
+
+/// Whether `pid` is a live OpenVPN daemon. Where the kernel's name for the
+/// process can be read (Linux) it must be `openvpn`: a pidfile outlives a tunnel
+/// that died on its own, and after a reboot its pid is some other program's.
+fn pid_runs_openvpn(pid: i32) -> bool {
+    if !pid_alive(pid) {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(name) = std::fs::read_to_string(Path::new("/proc").join(pid.to_string()).join("comm")) {
+        return name.trim() == "openvpn";
+    }
+    true
 }
 
 /// Bring up the OpenVPN tunnel for `config`, authenticating with `password` (and
