@@ -5790,6 +5790,8 @@ async fn phone_transcript(
         mask_waiting_tools(&mut transcript, &folders);
     }
     transcript.context_card = None;
+    // Every command the session ran, unmasked: the desktop's Data tab only.
+    transcript.shells_run.clear();
     transcript.cwd = None;
     transcript.running_cwds.clear();
     if let Some(prompt) = transcript.cut_prompt.as_mut() {

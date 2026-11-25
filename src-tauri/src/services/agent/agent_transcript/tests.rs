@@ -364,6 +364,48 @@ fn the_tool_calls_with_no_result_are_listed_with_what_they_act_on() {
 }
 
 #[test]
+fn every_shell_call_is_listed_in_order_finished_or_running() {
+    let bash = |call: &str, command: &str, at: &str| tool_call(call, "Bash", serde_json::json!({"command": command, "description": format!("run {command}")}), at);
+    let text = probe_prompt("first")
+        + &bash("toolu_1", "ls", "2026-11-18T09:20:00.000Z")
+        + &tool_result("toolu_1", false)
+        + &probe_prompt("second")
+        + &bash("toolu_2", "git status", "2026-11-18T09:21:00.000Z")
+        + &tool_result("toolu_2", true)
+        + &bash("toolu_3", "cargo test", "2026-11-18T09:22:00.000Z");
+    let read = read_claude(text);
+    // Only the one without its result is running …
+    assert_eq!(read.shells.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["cargo test"]);
+    // … but the Data tab's list has them all, an earlier turn's and a failed one too.
+    assert_eq!(
+        read.shells_run.iter().map(|s| (s.command.as_str(), s.description.as_deref(), s.at.as_deref())).collect::<Vec<_>>(),
+        vec![
+            ("ls", Some("run ls"), Some("2026-11-18T09:20:00.000Z")),
+            ("git status", Some("run git status"), Some("2026-11-18T09:21:00.000Z")),
+            ("cargo test", Some("run cargo test"), Some("2026-11-18T09:22:00.000Z")),
+        ]
+    );
+    let json = serde_json::to_value(&read).unwrap();
+    assert_eq!(json["shellsRun"][1]["command"], "git status");
+    assert!(serde_json::to_value(AgentTranscript::default()).unwrap().get("shellsRun").is_none());
+}
+
+#[test]
+fn the_shell_list_keeps_the_newest_within_its_bounds() {
+    let shell = |command: String| RunningShell { command, ..Default::default() };
+    let many: Vec<RunningShell> = (0..MAX_SHELLS_RUN + 5).map(|n| shell(n.to_string())).collect();
+    let kept = newest_shells(many);
+    assert_eq!(kept.len(), MAX_SHELLS_RUN);
+    assert_eq!(kept[0].command, "5");
+    assert_eq!(kept.last().unwrap().command, (MAX_SHELLS_RUN + 4).to_string());
+    // Long command lines: only as many of the newest as fit the character bound.
+    let long: Vec<RunningShell> = (0..40).map(|n| shell(format!("{n:02}{}", "x".repeat(MAX_SHELL_CHARS - 2)))).collect();
+    let kept = newest_shells(long);
+    assert_eq!(kept.len(), MAX_SHELLS_RUN_CHARS / MAX_SHELL_CHARS);
+    assert!(kept.last().unwrap().command.starts_with("39"));
+}
+
+#[test]
 fn a_rejected_call_a_new_prompt_or_an_interrupt_ends_the_wait() {
     let edit = |call: &str| tool_call(call, "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
     // A declined call has its (error) result, the interrupt notice follows.

@@ -919,6 +919,8 @@ async fn a_phone_transcript_masks_the_running_shells_command_lines() {
             },
             RunningShell { command: "cat ~/.ssh/config".into(), background: true, ..Default::default() },
         ],
+        // The Data tab's whole history is the desktop's alone.
+        shells_run: vec![RunningShell { command: format!("ls {root} /var/tmp/history"), ..Default::default() }],
         ..Default::default()
     };
     let wire = phone_transcript(&host.state, &Phone(device), &tab_id, transcript).await;
@@ -927,8 +929,9 @@ async fn a_phone_transcript_masks_the_running_shells_command_lines() {
     assert_eq!(wire["shells"][0]["cut"], true);
     assert_eq!(wire["shells"][1]["command"], "cat ~/…/config");
     assert_eq!(wire["shells"][1]["background"], true);
+    assert!(wire.get("shellsRun").is_none(), "{wire}");
     let text = wire.to_string();
-    for leaked in [root.as_str(), "sk-live", "/var/tmp", ".ssh"] {
+    for leaked in [root.as_str(), "sk-live", "/var/tmp", ".ssh", "history"] {
         assert!(!text.contains(leaked), "{leaked}: {wire}");
     }
 }

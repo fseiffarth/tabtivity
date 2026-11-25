@@ -1190,6 +1190,10 @@ export interface SessionTranscript {
    * masks each `subject` (a path project-relative or its leaf, a URL its host
    * only, anything else dropped). */
   waitingTools?: WaitingTool[];
+  /** Desktop Reader only (the phone's API strips it): every shell call the
+   * read covers, running or done, oldest first — the Reader's Data tab lists
+   * them. Bounded to the newest few hundred. */
+  shellsRun?: RunningShell[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
   contextCard?: string;

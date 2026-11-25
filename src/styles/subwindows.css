@@ -4044,6 +4044,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-files-link-meta > span { overflow: hidden; text-overflow: ellipsis; }
 .terminal-files-link-label { flex: 1 1 auto; min-width: 0; font-style: italic; }
 .terminal-files-link-meta > span:last-child { flex: none; }
+/* A shell command row: its first line in mono; the picked one whole in the viewer half. */
+.terminal-files-shell-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+.terminal-files-shell { display: flex; flex-direction: column; gap: var(--space-2); min-height: 0; padding: var(--space-3); overflow: auto; }
+.terminal-files-shell-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.terminal-files-shell-head > strong { flex: 1 1 auto; min-width: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.terminal-files-shell-head > small { color: var(--text-muted); }
 .terminal-changes-path {
   flex: 1 1 auto;
   min-width: 0;

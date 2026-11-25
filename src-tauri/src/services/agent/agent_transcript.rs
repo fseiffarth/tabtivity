@@ -96,6 +96,10 @@ pub(crate) const MAX_WAITING_TOOLS: usize = 16;
 /// How many unanswered tool calls / asks the walk keeps at once (a bound on
 /// the per-record rescans, not on what is shown).
 const MAX_WALK_TOOLS: usize = 64;
+/// The most shell calls one read lists in [`AgentTranscript::shells_run`]
+/// (the newest), and the most characters their command lines carry together.
+pub(crate) const MAX_SHELLS_RUN: usize = 200;
+const MAX_SHELLS_RUN_CHARS: usize = 200_000;
 const MAX_WALK_ASKS: usize = 8;
 /// What one ask may hold: Claude's own tool takes 1-4 questions of 2-4 rows,
 /// so these are far past use; the file is the agent's, and an ask is sent
@@ -304,6 +308,12 @@ pub struct AgentTranscript {
     /// masks every subject (`mobile_control`).
     #[serde(default, rename = "waitingTools", skip_serializing_if = "Vec::is_empty")]
     pub waiting_tools: Vec<WaitingTool>,
+    /// Every shell call the read covers, running or done, oldest first — the
+    /// newest [`MAX_SHELLS_RUN`], within [`MAX_SHELLS_RUN_CHARS`] together.
+    /// The desktop Reader's Data tab lists them. Desktop Reader only: the
+    /// phone's API strips it, a command line does not cross to the browser.
+    #[serde(default, rename = "shellsRun", skip_serializing_if = "Vec::is_empty")]
+    pub shells_run: Vec<RunningShell>,
     /// The newest `/context` card Claude printed (its `local_command` stdout,
     /// colour codes stripped). The fullscreen renderer draws it in the
     /// alternate screen, which keeps no scrollback, so the Reader's Context
@@ -400,6 +410,8 @@ struct ShellCalls {
     /// The other tool calls still waiting on their result ([`WaitingTool`]).
     tools: Vec<WaitingTool>,
     background: Vec<(RunningShell, String)>,
+    /// Every shell call read, in order ([`AgentTranscript::shells_run`]).
+    ran: Vec<RunningShell>,
 }
 
 /// What Claude's status line shows beside the model — context left, the
@@ -1368,8 +1380,9 @@ fn read_transcript_in(
         Spawns::Codex { home, thread, .. } => Some((*home, *thread)),
         _ => None,
     };
-    let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain, history);
+    let (mut entries, calls, mut shell_calls) = parse_entries(&lines, kind, sidechain, history);
     let waiting_tools = shell_calls.tools.clone();
+    let shells_run = std::mem::take(&mut shell_calls.ran);
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
     let mut spawned_tokens: Vec<String> = Vec::new();
@@ -1434,6 +1447,7 @@ fn read_transcript_in(
         tokens,
         shells,
         waiting_tools,
+        shells_run,
         context_card,
         cwd,
         running_cwds,
@@ -1899,6 +1913,8 @@ fn parse_entries(
     let mut commands: std::collections::HashMap<String, RunningShell> = std::collections::HashMap::new();
     let mut backgrounded: Vec<(String, String)> = Vec::new();
     let mut ended = std::collections::HashSet::new();
+    // Every shell call in order, for the Data tab's list.
+    let mut ran: Vec<RunningShell> = Vec::new();
     // The tool calls that have their result: a spawn call without one is a
     // subagent still at work. A background spawn's result comes at once
     // (`async_launched`); what it does after is replayed in `agents`.
@@ -2048,6 +2064,12 @@ fn parse_entries(
                 Record::Shell { call, mut shell } => {
                     shell.at = at.clone();
                     commands.insert(call.clone(), shell.clone());
+                    ran.push(shell.clone());
+                    // Bounded as the walk goes: a long session's file must
+                    // not hold every command it ever ran in memory twice.
+                    if ran.len() >= MAX_SHELLS_RUN * 2 {
+                        ran.drain(..MAX_SHELLS_RUN);
+                    }
                     shells.push((call, shell));
                 }
                 Record::Tool { call, mut tool } => {
@@ -2122,7 +2144,25 @@ fn parse_entries(
         .filter(|(call, _)| !ended.contains(call))
         .filter_map(|(call, output)| Some((RunningShell { background: true, ..commands.remove(&call)? }, output)))
         .collect();
-    (entries, calls, ShellCalls { waiting, tools, background })
+    (entries, calls, ShellCalls { waiting, tools, background, ran: newest_shells(ran) })
+}
+
+/// The newest of `ran` that [`AgentTranscript::shells_run`] carries: at most
+/// [`MAX_SHELLS_RUN`], their command lines within [`MAX_SHELLS_RUN_CHARS`]
+/// together, oldest first.
+fn newest_shells(mut ran: Vec<RunningShell>) -> Vec<RunningShell> {
+    ran.drain(..ran.len().saturating_sub(MAX_SHELLS_RUN));
+    let mut chars = 0;
+    let keep = ran
+        .iter()
+        .rev()
+        .take_while(|shell| {
+            chars += shell.command.chars().count();
+            chars <= MAX_SHELLS_RUN_CHARS
+        })
+        .count();
+    ran.drain(..ran.len() - keep);
+    ran
 }
 
 /// Claude's background subagents (`Agent` calls whose result is only the

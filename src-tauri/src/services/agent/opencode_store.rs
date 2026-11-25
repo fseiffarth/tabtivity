@@ -231,6 +231,7 @@ pub fn session_transcript_with(
         tokens: None,
         shells: Vec::new(),
         waiting_tools: Vec::new(),
+        shells_run: Vec::new(),
         context_card: None,
         cwd: None,
         running_cwds: Vec::new(),

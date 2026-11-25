@@ -495,6 +495,7 @@ function AskedQuestions({ questions, time, asking, busy, sending, pick }: {
 const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(new Map());
 const NO_PATH_LINKS: ReadonlyMap<string, FileEntry | null> = new Map();
 const NO_LINKS: readonly ChatLink[] = [];
+const NO_SHELLS: readonly RunningShell[] = [];
 /** The chat's web links are dressed like its file links (`linkPathsInHtml`). */
 const WEB_LINKS = { webLinks: true } as const;
 
@@ -3171,7 +3172,19 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // through `onOpenUrl` (the Chat's own ask-then-open), so no handler, no list.
   const linksOffered = !!onOpenUrl;
   const readerLinks = useMemo(() => (linksOffered ? chatLinksOf(turns) : NO_LINKS), [turns, linksOffered]);
-  const hasItems = readerFiles.length > 0 || readerLinks.length > 0;
+  // Every shell command the conversation on screen ran (`shellsRun`, oldest
+  // first), listed under the links newest first. A cleared conversation still
+  // being read keeps only the new chat's.
+  const readerShells = useMemo(() => {
+    if (!filesOffered || !shownTranscript?.available) return NO_SHELLS;
+    let ran = shownTranscript.shellsRun ?? NO_SHELLS;
+    if (sinceClear && !openStep) {
+      const from = sinceClear[0]?.at;
+      ran = from ? ran.filter((shell) => !!shell.at && shell.at >= from) : NO_SHELLS;
+    }
+    return ran.length ? [...ran].reverse() : NO_SHELLS;
+  }, [filesOffered, shownTranscript, sinceClear, openStep]);
+  const hasItems = readerFiles.length > 0 || readerLinks.length > 0 || readerShells.length > 0;
   useEffect(() => { onFilesKnownRef.current?.(hasItems); }, [hasItems]);
   const shownFile = filePicked ?? readerFiles[0]?.entry ?? null;
 
@@ -3499,6 +3512,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           tabKey={tabKey}
           files={readerFiles}
           links={readerLinks}
+          shells={readerShells}
           onOpenLink={onOpenUrl}
           use24h={use24h}
           picked={shownFile}
