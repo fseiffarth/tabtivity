@@ -841,6 +841,7 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
         "127.0.0.1:11434",
         &[loaded("nemotron:30b", Some(32_768))],
         Some("qwen3:8b"),
+        None,
     ))
     .unwrap();
     let p = &cfg["provider"]["ollama"];
@@ -851,7 +852,7 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
 
     // Nothing loaded: an empty whitelist, so stale config models drop out.
     let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &[], None)).unwrap();
+        serde_json::from_str(&opencode_ollama_config("h:1", &[], None, None)).unwrap();
     assert_eq!(cfg["provider"]["ollama"]["whitelist"], serde_json::json!([]));
 }
 
@@ -859,13 +860,56 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
 fn opencode_measures_context_against_the_window_ollama_runs() {
     let loaded = [loaded("qwen3-coder:30b", Some(32_768)), loaded("old:1b", None)];
     let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, Some("qwen3:8b"))).unwrap();
+        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, Some("qwen3:8b"), None)).unwrap();
     let models = &cfg["provider"]["ollama"]["models"];
     // The loaded window, not the trained 262 144 OpenCode 2 discovers.
     assert_eq!(models["qwen3-coder:30b"]["limit"], serde_json::json!({ "context": 32_768 }));
     // No reported window, or not loaded yet: OpenCode keeps its own figure.
     assert!(models["old:1b"].get("limit").is_none());
     assert!(models["qwen3:8b"].get("limit").is_none());
+}
+
+#[test]
+fn opencode_gets_the_first_load_window_of_a_model_not_loaded_yet() {
+    let loaded = [loaded("qwen3-coder:30b", Some(65_536)), loaded("old:1b", None)];
+    let cfg: serde_json::Value = serde_json::from_str(&opencode_ollama_config(
+        "h:1",
+        &loaded,
+        Some("qwen3:8b"),
+        Some(32_768),
+    ))
+    .unwrap();
+    let models = &cfg["provider"]["ollama"]["models"];
+    assert_eq!(models["qwen3:8b"]["limit"], serde_json::json!({ "context": 32_768 }));
+    // It is the requested model's alone; a loaded one keeps its own.
+    assert_eq!(models["qwen3-coder:30b"]["limit"], serde_json::json!({ "context": 65_536 }));
+    assert!(models["old:1b"].get("limit").is_none());
+}
+
+#[test]
+fn next_load_window_is_the_server_default_or_modelfile_capped_at_training() {
+    use crate::services::ollama_client::next_load_window;
+    let show = |params: &str| {
+        serde_json::json!({
+            "model_info": { "general.architecture": "qwen3moe", "qwen3moe.context_length": 262_144 },
+            "parameters": params,
+        })
+        .to_string()
+    };
+    let plain = show("temperature                    0.7\ntop_k                          20");
+    assert_eq!(next_load_window(&plain, Some(32_768)), Some(32_768));
+    // Ollama never runs past the trained window.
+    assert_eq!(next_load_window(&plain, Some(1_048_576)), Some(262_144));
+    // The server's default unknown: nothing to say.
+    assert_eq!(next_load_window(&plain, None), None);
+    // The Modelfile's own num_ctx wins over the server default.
+    let pinned = show("num_ctx                        8192\ntemperature                    0.7");
+    assert_eq!(next_load_window(&pinned, Some(32_768)), Some(8_192));
+    assert_eq!(next_load_window(&pinned, None), Some(8_192));
+    // No trained window reported: the wanted one stands.
+    let bare = serde_json::json!({ "parameters": "" }).to_string();
+    assert_eq!(next_load_window(&bare, Some(32_768)), Some(32_768));
+    assert_eq!(next_load_window("garbage", Some(32_768)), None);
 }
 
 #[test]

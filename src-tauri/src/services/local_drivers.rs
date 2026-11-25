@@ -5,7 +5,7 @@
 //! re-exports these names.
 
 use crate::services::ollama_client::{
-    model_context_length, model_has_capability, ollama_addr, ollama_status_read, sanitize_alias,
+    expected_context_length, model_context_length, model_has_capability, ollama_addr, ollama_status_read, sanitize_alias,
     validate_model_name, DEFAULT_OLLAMA_ADDR,
 };
 
@@ -565,22 +565,28 @@ pub(crate) fn loaded_models(ps_body: &str) -> Option<Vec<LoadedModel>> {
 /// (262 144 for `qwen3-coder`), so its context % and its compaction measured
 /// against a window the server never gave — Ollama runs it at 32 768, or what
 /// the context setting says, and silently cuts the rest. A config `limit` wins
-/// over that discovery (checked on 2.3.2). A model not loaded yet has no
-/// window to report and is left to OpenCode's own figure.
+/// over that discovery (checked on 2.3.2). A requested model not loaded
+/// yet carries `requested_window`, the window its first load will get
+/// ([`expected_context_length`]); without one it is left to OpenCode's own
+/// figure.
 pub(crate) fn opencode_ollama_config(
     addr: &str,
     loaded: &[LoadedModel],
     requested: Option<&str>,
+    requested_window: Option<u64>,
 ) -> String {
     let mut names: Vec<&str> = loaded.iter().map(|m| m.name.as_str()).collect();
+    let mut unloaded = None;
     if let Some(r) = requested.filter(|r| !r.is_empty() && !names.contains(r)) {
         names.push(r);
+        unloaded = Some(r);
     }
     let window = |name: &str| {
         loaded
             .iter()
             .find(|m| m.name == name)
             .and_then(|m| m.context)
+            .or_else(|| requested_window.filter(|_| unloaded == Some(name)))
     };
     let models: serde_json::Map<String, serde_json::Value> = names
         .iter()
@@ -612,7 +618,10 @@ pub(crate) fn opencode_ollama_config(
 pub(crate) fn opencode_loaded_models_config(requested: Option<&str>) -> Option<String> {
     let loaded = loaded_models(&ollama_status_read("/api/ps").ok()?)?;
     let addr = ollama_addr().ok()?;
-    Some(opencode_ollama_config(&addr, &loaded, requested))
+    let requested_window = requested
+        .filter(|r| !r.is_empty() && !loaded.iter().any(|m| m.name == *r))
+        .and_then(expected_context_length);
+    Some(opencode_ollama_config(&addr, &loaded, requested, requested_window))
 }
 
 /// The inline OpenCode config an assistant chat merges its own settings into:
@@ -622,7 +631,7 @@ pub(crate) fn opencode_loaded_models_config(requested: Option<&str>) -> Option<S
 pub(crate) fn opencode_assistant_provider(requested: &str) -> String {
     opencode_loaded_models_config(Some(requested)).unwrap_or_else(|| {
         let addr = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
-        opencode_ollama_config(&addr, &[], Some(requested))
+        opencode_ollama_config(&addr, &[], Some(requested), None)
     })
 }
 
@@ -678,8 +687,9 @@ pub(crate) fn local_catalog_path(model: &str) -> std::path::PathBuf {
 ///
 /// The field set is Ollama's own for that generated file — the shape its
 /// authors established Codex accepts — with the two model-dependent facts read
-/// off `/api/show` rather than assumed: the context window, and whether any
-/// reasoning level may be offered at all.
+/// off Ollama rather than assumed: the context window (the one Ollama runs the
+/// model with, [`served_context_length`]), and whether any reasoning level may
+/// be offered at all.
 pub(crate) fn write_local_catalog(model: &str, thinking: Option<bool>) -> Result<std::path::PathBuf, String> {
     validate_model_name(model)?;
     let path = local_catalog_path(model);
@@ -690,11 +700,24 @@ pub(crate) fn write_local_catalog(model: &str, thinking: Option<bool>) -> Result
     let body = local_catalog_json(
         model,
         thinking,
-        model_context_length(model),
+        served_context_length(model),
         model_has_capability(model, "vision") == Some(true),
     );
     std::fs::write(&path, body).map_err(|e| format!("catalog write: {e}"))?;
     Ok(path)
+}
+
+/// The window Ollama runs `model` with: as loaded now, else as its next load
+/// will give it, else its trained window. The trained one alone made Codex
+/// compact against 262 144 tokens for a `qwen3-coder` Ollama ran at 32 768 and
+/// silently cut; it stays only as the last resort it was before.
+fn served_context_length(model: &str) -> Option<u64> {
+    ollama_status_read("/api/ps")
+        .ok()
+        .and_then(|body| loaded_models(&body))
+        .and_then(|loaded| loaded.into_iter().find(|m| m.name == model)?.context)
+        .or_else(|| expected_context_length(model))
+        .or_else(|| model_context_length(model))
 }
 
 /// The catalog document itself — pure, so the shape Codex is handed is a unit

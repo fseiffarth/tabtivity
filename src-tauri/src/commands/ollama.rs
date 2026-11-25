@@ -2804,12 +2804,16 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
 
     // The same entitlement, for the context window: the user's choice, else
     // [`spawned_context_length`]. A value set in the environment is left alone.
+    // Either way the window is remembered, so a local OpenCode tab can be told
+    // it before its model is loaded (`local_drivers::opencode_loaded_models_config`).
+    let mut spawned_context = std::env::var(CONTEXT_LENGTH_VAR).ok().and_then(|v| v.trim().parse::<u32>().ok());
     if std::env::var_os(CONTEXT_LENGTH_VAR).is_none() {
         if let Some(n) = configured_context(
             crate::services::ollama_client::configured_context_length(),
             max_vram_total(),
         ) {
             cmd.env(CONTEXT_LENGTH_VAR, n.to_string());
+            spawned_context = Some(n);
         }
     }
 
@@ -2826,6 +2830,7 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
     // the 8 s deadline is still *ours* and still running, and forgetting it here
     // is precisely how one outlives the app.
     record_owned_server(OwnedServer::Process(pid));
+    crate::services::ollama_client::record_spawned_context(spawned_context.filter(|n| *n > 0));
 
     let deadline = Instant::now() + Duration::from_secs(8);
     if wait_for_ollama(deadline) {
