@@ -17,7 +17,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 import { ProjectDialog } from "../../components/projects/ProjectDialog";
-import { readProjectDialogMemory } from "../../components/projects/projectDialogMemory";
+import { readProjectDialogMemory, writeProjectDialogMemory } from "../../components/projects/projectDialogMemory";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import type { ProjectEntry } from "../../types";
@@ -96,6 +96,32 @@ describe("New Project: Local models only", () => {
     ]);
     const call = invoke.mock.calls.find((c) => c[0] === "set_project_agent_privacy");
     expect(call?.[1]).toEqual({ projectId: "p1", localModelsOnly: true, cutNetwork: false });
+  });
+
+  it("keeps the setting on a container project the window receives", async () => {
+    stubBackend();
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "set_project_sandbox") return Promise.resolve({ outcome: "applied", spec: { enabled: true } });
+      if (cmd === "sandbox_preflight") return Promise.resolve({ status: "ok", image: "img", build_command: null });
+      return base(cmd, args);
+    });
+    writeProjectDialogMemory("new", { tierChoice: "container" });
+    const made: ProjectEntry[] = [];
+    await openNew((p) => {
+      made.push(p);
+    });
+    await typeName("secret");
+    await act(async () => {
+      fireEvent.click(localSwitch());
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+    expect(invoke.mock.calls.some((c) => c[0] === "set_project_sandbox")).toBe(true);
+    expect(made).toHaveLength(1);
+    expect(made[0].agent_privacy).toEqual({ local_models_only: true, cut_network: false });
+    expect(made[0].sandbox).toEqual({ enabled: true });
   });
 
   it("is not stored when the switch is off", async () => {

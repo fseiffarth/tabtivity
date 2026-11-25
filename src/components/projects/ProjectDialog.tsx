@@ -1195,7 +1195,9 @@ export function ProjectDialog({
             });
           }
           const spec = outcome.outcome === "applied" ? outcome.spec : undefined;
-          created = spec ? { ...project, sandbox: spec } : project;
+          // From `created`, not `project`: the privacy step above already put
+          // `agent_privacy` on it, and the store must get both.
+          created = spec ? { ...created, sandbox: spec } : created;
           // Same preflight the pill's toggle runs: a missing image becomes a
           // one-click build in a fresh tab rather than an error at the first
           // spawn (house convention — never a copy-it-yourself message).
