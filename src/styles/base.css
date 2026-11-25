@@ -251,7 +251,7 @@ body {
   .skeleton-row,
   .tab-new-btn.empty-hint,
   .tab.install-pending::before,
-  .tab-status-mark.working,
+  .tab-status-mark.working .working-dot,
   .pill-status-bar.working,
   .print-progress-steps > i.next,
   .cal-block.arrived,

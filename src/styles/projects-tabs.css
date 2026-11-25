@@ -2047,7 +2047,7 @@
 /* ── Tab status ring ─────────────────────────────────────────────────────
    A tab shows agent state as a RING, drawn on an `::after` overlay so it never
    changes the tab's width and the text stays crisp. Three states from two
-   colours and a stroke style, read at rest (`--status-*`; an agent's ▶ breathes on top):
+   colours and a stroke style, read at rest (`--status-*`; an agent's ••• walks on top):
    - working        (green, DOTTED): PTY producing sustained output.
    - finished       (green, solid): agent rang the bell having simply finished —
      the same work as above, now complete, hence the same colour with the dots
@@ -2109,7 +2109,7 @@
 .tab.finished { --tab-status-color: var(--status-done); }
 .tab.interrupted { --tab-status-color: var(--status-interrupted); }
 
-/* The glyph leading the label (`TabStatusMark`): ▶ working, ? decision,
+/* The glyph leading the label (`TabStatusMark`): ••• working (▶ for a command), ? decision,
    ✓ finished, ■ interrupted — the ring's state named, in the ring's own colour, so it no longer
    has to be read from hue and stroke alone. Static, like the ring. */
 .tab-status-mark {
@@ -2132,23 +2132,28 @@
   color: var(--status-shell-working);
 }
 
-/* An agent's ▶ breathes while its turn runs: motion ON TOP of the dotted ring
-   and the glyph, which still say "working" at rest, so nothing has to be watched
-   to be read (the pulse this vocabulary dropped was the only working/done cue).
-   Agent turns only — a shell command's ▶ holds still. Opacity alone, so on the
-   GPU path the compositor runs it without a repaint; `.pill-status-bar.working`
-   shares the keyframes. Off on the CPU paint path, under Energy Saver (which
-   also covers a blurred window, where a paused loop would freeze mid-dim) and
-   under reduced motion (`base.css`), where the mark stands at full strength. */
-.tab-status-mark.working:not(.shell) {
-  animation: agent-working-breathe 1.6s ease-in-out infinite;
+/* An agent's turn is "•••" (`WorkingDots`) with a light walking through it:
+   motion ON TOP of the dotted ring and the dots, which still say "working" at
+   rest, so nothing has to be watched to be read. Paused, the dots stand at full
+   strength — the SAME shape, only the light stops — so the window going to the
+   background or onto battery changes as little as possible. (A fade on the
+   whole ▶ used to snap from dim to full there, which read as the indicator
+   changing.) Agent turns only — a shell command's ▶ holds still. Opacity alone,
+   so on the GPU path the compositor runs it without a repaint;
+   `.pill-status-bar.working` marches on the same 1.2 s beat. Off on the CPU
+   paint path, under Energy Saver (which also covers a blurred window, where a
+   paused loop would freeze mid-dim) and under reduced motion (`base.css`). */
+.tab-status-mark.working:not(.shell) .working-dot {
+  animation: agent-working-walk 1.2s ease-in-out infinite;
 }
-@keyframes agent-working-breathe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+.tab-status-mark.working:not(.shell) .working-dot:nth-child(2) { animation-delay: 0.2s; }
+.tab-status-mark.working:not(.shell) .working-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes agent-working-walk {
+  0%, 60%, 100% { opacity: 0.3; }
+  20% { opacity: 1; }
 }
-:root[data-software-paint] .tab-status-mark.working,
-:root[data-energy-saver="on"] .tab-status-mark.working {
+:root[data-software-paint] .tab-status-mark.working .working-dot,
+:root[data-energy-saver="on"] .tab-status-mark.working .working-dot {
   animation: none;
 }
 /* The marks' fixed cells in a tab strip (`TabStatusMark`'s `slots`): an agent
@@ -2199,7 +2204,7 @@
    A strip of little bars along the pill's bottom edge — ONE PER NON-IDLE TAB of
    that project, so the switcher shows both what a project's tabs are doing and
    how many are doing it. Same three states, and the same reading, as the tab
-   status ring (`--status-*`), all read at rest (an agent's working bar breathes on top):
+   status ring (`--status-*`), all read at rest (an agent's working bar marches on top):
    - working        (green, BROKEN into dots): PTY producing sustained output.
    - finished       (green, unbroken): agent finished, tab not yet seen.
    - needs-decision (amber, unbroken): agent waiting on a decision.
@@ -2314,10 +2319,17 @@
   --pill-status-dot: var(--status-shell-working);
 }
 
-/* An agent's working bar breathes with its tab's ▶ (`agent-working-breathe`,
-   same gates); the dots still say "working" when it holds still. */
+/* An agent's working bar marches on its tab's beat (1.2 s, same gates): the
+   dots step one tile along, so at rest they are the same row, standing still.
+   `steps(7)`: one pixel a step, seven repaints of a 6px strip per cycle rather
+   than one per frame (background-position is not a compositor property). */
 .pill-status-bar.working:not(.shell) {
-  animation: agent-working-breathe 1.6s ease-in-out infinite;
+  animation: pill-working-march 1.2s steps(7) infinite;
+}
+@keyframes pill-working-march {
+  /* From the bar's resting `center`, so the paused bar is one of its frames. */
+  from { background-position: 50% 50%; }
+  to { background-position: calc(50% + 7px) 50%; }
 }
 :root[data-software-paint] .pill-status-bar.working,
 :root[data-energy-saver="on"] .pill-status-bar.working {
@@ -2337,7 +2349,7 @@
 }
 
 /* The agent-status vocabulary reads at rest (see the `--status-*` block); the
-   one motion in it, an agent's working ▶ and bar breathing, is decoration with
+   one motion in it, an agent's walking dots and marching bar, is decoration with
    its own gates beside its rules above. */
 :root[data-energy-saver="on"] .tab-new-btn.empty-hint,
 :root[data-software-paint] .tab-new-btn.empty-hint,

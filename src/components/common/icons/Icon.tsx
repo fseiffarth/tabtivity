@@ -749,6 +749,21 @@ export function PlayMark() {
   );
 }
 
+/** An agent turn's working mark: "•••", three dots a light walks through
+ *  (`.working-dot` in projects-tabs.css). Paused (window in the background,
+ *  Energy Saver, the CPU paint path, reduced motion) the dots stand at full
+ *  strength, so holding still keeps the shape and only the light stops. Drawn
+ *  for the same reason as {@link PlayMark}: no font fallback can recolour it. */
+export function WorkingDots() {
+  return (
+    <svg viewBox="0 0 10 10" width="1em" height="1em" aria-hidden="true" focusable="false" style={{ display: "inline-block", verticalAlign: "-0.05em" }}>
+      <circle className="working-dot" cx="1.4" cy="5" r="1.4" fill="currentColor" />
+      <circle className="working-dot" cx="5" cy="5" r="1.4" fill="currentColor" />
+      <circle className="working-dot" cx="8.6" cy="5" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
 /** Tabby, the chat assistant: a hexagon (the app mark's node shape) with a
  *  face — two dot eyes, a nose and a smile — so it reads as a character, not
  *  as the app mark. Not a speech bubble — the panel's Remarks button
