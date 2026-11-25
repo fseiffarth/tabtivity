@@ -1706,11 +1706,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             // The scope decides which `.claude.json` the spawn reads — the
             // fence's staged copy carries trust Tabtivity recorded, the host
             // file does not — so the probe needs it, not just the folder.
+            // A remote project's tab runs Claude on its host, whose own
+            // `.claude.json` answers: the host is named so the backend asks it.
             return await invoke<boolean>("claude_folder_trusted", {
               cwd,
               projectId: projectId ?? null,
               sandbox,
               localOnly,
+              remoteHost: remoteHostId ?? null,
             });
           } catch {
             // An older backend does not expose the probe — preserve the

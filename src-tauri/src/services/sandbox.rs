@@ -1824,8 +1824,14 @@ pub fn claude_folder_trusted(cwd: &str, scope_id: Option<&str>) -> bool {
     candidates
         .iter()
         .filter_map(|candidate| std::fs::read(candidate).ok())
-        .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .any(|value| trust_accepted_for(&value, cwd))
+        .any(|bytes| claude_json_trusts(&bytes, cwd))
+}
+
+/// Whether the `.claude.json` held in `bytes` records Claude's trust answer
+/// for `cwd`. Unparsable bytes trust nothing. A remote tab's answer is read
+/// from the host's file (`remote_transcript::claude_host_folder_trusted`).
+pub(crate) fn claude_json_trusts(bytes: &[u8], cwd: &str) -> bool {
+    serde_json::from_slice::<serde_json::Value>(bytes).is_ok_and(|value| trust_accepted_for(&value, cwd))
 }
 
 /// Pure core of [`claude_folder_trusted`].
@@ -1946,6 +1952,17 @@ mod tests {
         assert!(!trust_accepted_for(&value, "/p/c"));
         assert!(!trust_accepted_for(&value, "/p/missing"));
         assert!(!trust_accepted_for(&serde_json::json!({}), "/p/a"));
+    }
+
+    #[test]
+    fn a_claude_json_read_as_bytes_trusts_only_what_it_parses_to() {
+        // The host's `.claude.json` arrives as bytes over SFTP; a cut or
+        // unparsable copy must never read as trusted.
+        let bytes = br#"{"projects": {"/srv/p": {"hasTrustDialogAccepted": true}}}"#;
+        assert!(claude_json_trusts(bytes, "/srv/p"));
+        assert!(!claude_json_trusts(bytes, "/srv/q"));
+        assert!(!claude_json_trusts(&bytes[..bytes.len() - 2], "/srv/p"));
+        assert!(!claude_json_trusts(b"", "/srv/p"));
     }
     use super::*;
 

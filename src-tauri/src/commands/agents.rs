@@ -2289,15 +2289,29 @@ pub async fn remember_model_rows(agent: String, scope: String, rows: crate::serv
 /// and grows into the megabytes, and this is asked once per new Claude tab —
 /// parsing it inline would jank the window at launch. `sandbox` and
 /// `local_only` are accepted for older callers; the answer is the scope
-/// home's either way (`services::agent_home`).
+/// home's either way (`services::agent_home`). A tab of a remote project
+/// (`remote_host`: `primary` or a worker id; not `local_only`) runs Claude on
+/// that host, whose own `.claude.json` answers
+/// (`services::remote_transcript::claude_host_folder_trusted`): this machine's
+/// trust for a folder at the same path made the tab answer the host's dialog
+/// `No, exit` by itself.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn claude_folder_trusted(
     cwd: String,
     project_id: Option<String>,
     sandbox: Option<bool>,
     local_only: Option<bool>,
+    remote_host: Option<String>,
+    ctx: Ctx,
 ) -> bool {
-    let _ = (sandbox, local_only);
+    let _ = sandbox;
+    if let (Some(project), false) = (project_id.as_deref(), local_only == Some(true)) {
+        let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+        let host = remote_host.as_deref().unwrap_or(crate::services::remote::PRIMARY_HOST);
+        if let Some(trusted) = crate::services::remote_transcript::claude_host_folder_trusted(pool, project, host).await {
+            return trusted;
+        }
+    }
     app_core::rt::spawn_blocking(move || {
         crate::services::sandbox::claude_folder_trusted(&cwd, project_id.as_deref())
     })
