@@ -2526,7 +2526,9 @@ export function ProjectPill({
               title: t("pill.stopLocalCopyDoneTitle", { name: project.name }),
               body: outcome.moveError
                 ? t("pill.stopLocalCopyMoveFailed", { path: outcome.keptAt, error: outcome.moveError })
-                : outcome.keptAt
+                : outcome.originalKeptAt
+                  ? t("pill.stopLocalCopyCopiedBody", { path: outcome.keptAt, original: outcome.originalKeptAt })
+                  : outcome.keptAt
                   ? t("pill.stopLocalCopyDoneBody", { path: outcome.keptAt })
                   : t("pill.stopLocalCopyNoFolder"),
               error: !!outcome.moveError,

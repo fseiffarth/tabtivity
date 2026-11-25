@@ -90,7 +90,9 @@ plain remote project **Stop keeping a local copy…** shows what only the
 local copy holds (commits or changes the host lacks, unsent file-sync edits,
 tabs running on this computer) and is refused until that is empty; the old
 folder is kept (moved out of the app's state folder as `<name> (local copy)`
-when it lived there), never deleted. On a remote-only project **Keep a local
+when it lived there), never deleted. If that name is on another drive the
+folder is copied there and the original stays where it was, for you to delete
+once you have checked the copy. On a remote-only project **Keep a local
 copy…** picks a folder and git lockstep fills it from the host. Neither is
 offered on a VM project.
 

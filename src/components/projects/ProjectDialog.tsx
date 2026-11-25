@@ -2053,6 +2053,11 @@ export function ProjectDialog({
             />
           </label>
         )}
+        {kind === "import" && !isRemoteProject && importSource === "folder" && mode === "move" && (
+          <div className="project-dialog-error" role="alert" data-testid="import-move-danger">
+            {t("projectDialog.modeMoveDanger")}
+          </div>
+        )}
 
         {kind === "import" && isRemoteProject && !hostClone && (
           <div className="project-dialog-path">

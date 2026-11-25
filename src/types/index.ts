@@ -1767,6 +1767,8 @@ export interface UnpairOutcome {
   moved: boolean;
   /** The move out failed; the folder is still at `keptAt`. */
   moveError?: string | null;
+  /** Copied to another drive: the copy is at `keptAt`, the original stays here. */
+  originalKeptAt?: string | null;
 }
 
 /** One project's outcome in `export_project_set`. */
