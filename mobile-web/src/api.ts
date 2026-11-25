@@ -1087,8 +1087,10 @@ export interface AskedQuestion {
  * `role` its kind, and `subagent` the handle that reads its own conversation
  * (`getTranscript`) — absent until its CLI has recorded where that lives. */
 export interface TranscriptEntry {
-  /** `interrupted`: the user cut the turn off; `text` is the CLI's own words. */
-  kind: "prompt" | "answer" | "agent" | "interrupted";
+  /** `interrupted`: the user cut the turn off; `text` is the CLI's own words.
+   * `thinking`: the model's reasoning, only in the desktop Chat's read of a
+   * local-model tab (`agent_tab_transcript`'s `thinking`); the phone never gets one. */
+  kind: "prompt" | "answer" | "agent" | "interrupted" | "thinking";
   text: string;
   /** On a slash-command `prompt`: what it left set, as the CLI confirmed it
    * (Claude's `/model` → `Fable 5.2`, `/effort` → `high`). */

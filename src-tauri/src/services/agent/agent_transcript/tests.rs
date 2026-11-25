@@ -1923,7 +1923,7 @@ fn only_a_tab_that_runs_remotely_has_its_opencode_store_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("opencode.db");
     let tab_dir = dir.path().to_string_lossy().into_owned();
-    let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10);
+    let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10, false);
     assert_eq!(read(true).reason.as_deref(), Some("unsupported"));
     assert_eq!(read(false).reason.as_deref(), Some("no_transcript"));
 }

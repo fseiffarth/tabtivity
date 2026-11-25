@@ -2883,6 +2883,27 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A local model's reasoning (`thinking` turn): no bubble, a folded muted
+   line on the agent's side; opened, the text under a thin rule. */
+.terminal-reader-thinking {
+  align-self: flex-start;
+  max-width: min(760px, 82%);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.terminal-reader-thinking > summary {
+  cursor: var(--cur-pointer, pointer);
+  padding: 2px 0;
+  font-style: italic;
+}
+.terminal-reader-thinking > p {
+  margin: 4px 0 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border-subtle);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .terminal-reader-plan-head {
   display: block;
   margin-bottom: 4px;

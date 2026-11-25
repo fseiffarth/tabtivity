@@ -664,6 +664,16 @@ const Turn = memo(function Turn({ turn, lead, cutLabel, planLabel, interruptedLa
       </div>
     );
   }
+  if (turn.kind === "thinking") {
+    // A local model's reasoning (only a local-model tab's read carries it):
+    // folded under one muted line in its place in the turn, a click opens it.
+    return (
+      <details className="terminal-reader-thinking">
+        <summary>{t("terminal.reader.thinking")} <UntestedTag id="terminal.reader.thinking" /></summary>
+        <p>{turn.text}{turn.cut && "…"}</p>
+      </details>
+    );
+  }
   if (turn.questions) return <AskedQuestions questions={turn.questions} time={time} asking={turn.asking} busy={asyncBusy} sending={asyncSending}
     pick={pickAsync && ((question, row) => { void pickAsync(turn.key, question, row); })} />;
   return (
@@ -2331,7 +2341,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         setReadSinceShown(true);
         return false;
       }
-      const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch })
+      // A local model's reasoning is shown in the chat (`thinking`); no other read asks for it.
+      const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch, thinking: args.localModel === true })
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
       await learnPaths(next.entries);
       if (cancelled) return next.watched === true;
@@ -2357,7 +2368,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       if (!current) return false;
       const args = readerRequest(scope, current, cwd, subVersion, subLimit, subToken, chatId, remoteHost);
       if (!args) return false;
-      const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch })
+      const next = await invoke<SessionTranscript>("agent_tab_transcript", { ...args, watch, thinking: args.localModel === true })
         .catch((): SessionTranscript => ({ available: false, reason: "read_failed", entries: [], truncated: false }));
       await learnPaths(next.entries);
       if (cancelled) return next.watched === true;

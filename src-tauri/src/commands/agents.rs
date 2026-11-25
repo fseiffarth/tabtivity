@@ -1326,7 +1326,8 @@ pub async fn agent_tab_artifact(
 /// `available: false` with the reason, never an error. `remote_host` is the
 /// host (`primary` or a worker id) a remote project's tab runs on, whose
 /// conversation is on that host (`services::remote_transcript`); unset for a
-/// tab that runs here.
+/// tab that runs here. `thinking` adds a local-model OpenCode tab's reasoning
+/// as `thinking` entries (the desktop Chat's read; nothing else asks).
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_transcript(
@@ -1342,6 +1343,7 @@ pub async fn agent_tab_transcript(
     watch: Option<String>,
     chat: Option<String>,
     remote_host: Option<String>,
+    thinking: Option<bool>,
     ctx: Ctx,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
@@ -1403,6 +1405,7 @@ pub async fn agent_tab_transcript(
                 subagent.as_deref(),
                 version.as_deref(),
                 limit.unwrap_or(DEFAULT_LIMIT),
+                thinking == Some(true),
             )
         } else {
             agent_transcript::agent_session_transcript(
@@ -1554,6 +1557,7 @@ pub async fn agent_next_prompt(
         None,
         None,
         remote_host,
+        None,
         ctx,
     )
     .await;

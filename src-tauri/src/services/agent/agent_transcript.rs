@@ -111,8 +111,10 @@ pub(crate) const MAX_SUBAGENT_DEPTH: usize = 8;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptEntry {
     /// `prompt` (the user's), `answer` (the agent's text), `agent` (a
-    /// subagent it spawned; `text` is what it was sent to do) or
-    /// `interrupted` (the user cut the turn off; `text` is the CLI's own words).
+    /// subagent it spawned; `text` is what it was sent to do),
+    /// `interrupted` (the user cut the turn off; `text` is the CLI's own words)
+    /// or `thinking` (the model's reasoning, only in a read that asks for it:
+    /// a local-model OpenCode tab's desktop Chat, [`local_opencode_transcript`]).
     pub kind: String,
     pub text: String,
     /// The record's own timestamp, as written (RFC 3339), when it has one.
@@ -485,7 +487,7 @@ pub fn agent_session_transcript(
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
         let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_transcript(&db, runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit, false);
     }
     if matches!(cmd, "gemini" | "agy") {
         if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
@@ -571,7 +573,7 @@ pub fn stored_chat_transcript(
             return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_transcript(&db, runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit, false);
     }
     let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
         return AgentTranscript::unavailable("no_transcript");
@@ -1216,6 +1218,9 @@ fn fresh_codex_session(project_id: Option<&str>, launch_id: &str) -> Option<Agen
 /// names its recorded session; a tab from before it had one is read by folder.
 /// Such a tab runs on this machine even in a remote project (its spawn is
 /// `local_only`), so the project being remote does not put its store away.
+/// `thinking` adds the model's reasoning as `thinking` entries (the desktop
+/// Chat asks for it; the phone, the handoff and the next-prompt reads do not).
+#[allow(clippy::too_many_arguments)]
 pub fn local_opencode_transcript(
     project_id: Option<&str>,
     tab_dir: Option<&str>,
@@ -1224,13 +1229,14 @@ pub fn local_opencode_transcript(
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
+    thinking: bool,
 ) -> AgentTranscript {
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
     let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
-    opencode_transcript(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
+    opencode_transcript(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT), thinking)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1243,6 +1249,7 @@ fn opencode_transcript(
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
+    thinking: bool,
 ) -> AgentTranscript {
     let Some(dir) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
         return AgentTranscript::unavailable("no_session");
@@ -1253,7 +1260,7 @@ fn opencode_transcript(
     if !db.is_file() {
         return AgentTranscript::unavailable("no_transcript");
     }
-    crate::services::opencode_store::session_transcript(db, dir, since, own, subagent, version, limit)
+    crate::services::opencode_store::session_transcript_with(db, dir, since, own, subagent, version, limit, thinking)
         .unwrap_or_else(|| AgentTranscript::unavailable("read_failed"))
 }
 
@@ -2429,7 +2436,7 @@ pub(crate) fn agent_entry(task: &str, kind: Option<&str>, at: Option<String>) ->
 /// its kind's bound. `None` when nothing is left to show. Shared by every
 /// reader, whatever the agent keeps its conversation in.
 pub(crate) fn transcript_entry(role: &str, raw: &str, at: Option<String>) -> Option<TranscriptEntry> {
-    let bound = if role == "answer" { MAX_ANSWER_CHARS } else { MAX_PROMPT_CHARS };
+    let bound = if matches!(role, "answer" | "thinking") { MAX_ANSWER_CHARS } else { MAX_PROMPT_CHARS };
     let mut entry = TranscriptEntry {
         kind: role.to_string(),
         text: clean_text(raw)?,

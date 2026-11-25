@@ -467,6 +467,7 @@ fn read_conversation(req: &Request) -> Result<agent_transcript::AgentTranscript,
             None,
             None,
             MAX_LIMIT,
+            false,
         )
     } else {
         agent_transcript::agent_session_transcript(

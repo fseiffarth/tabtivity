@@ -6440,6 +6440,7 @@ export const enSource = {
   "terminal.reader.subagentDone": "done",
   "terminal.reader.subagentDoneAt": "done · {time}",
   "terminal.reader.finished": "Finished",
+  "terminal.reader.thinking": "Thinking",
   "terminal.reader.finishedTook": "Finished · took {time}",
   "terminal.reader.subagentStarting": "starting…",
   "terminal.reader.subagentFactsWorking": "working {time}",

@@ -6255,6 +6255,7 @@ export const dict: Dict = {
   "terminal.reader.subagentDone": "fertig",
   "terminal.reader.subagentDoneAt": "fertig · {time}",
   "terminal.reader.finished": "Fertig",
+  "terminal.reader.thinking": "Gedanken",
   "terminal.reader.finishedTook": "Fertig · dauerte {time}",
   "terminal.reader.subagentStarting": "startet…",
   "terminal.reader.subagentFactsWorking": "arbeitet {time}",
