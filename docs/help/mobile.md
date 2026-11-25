@@ -518,7 +518,13 @@ marked.
 
 - **Load** puts a model into memory and keeps it there; Ollama decides GPU or
   CPU. The desktop's Models & agents menu shows the load while it runs.
-- **Unload** frees the memory at once, without asking.
+- **Unload** frees the memory at once, without asking, and the desktop's
+  suggestions and autocomplete leave the model unloaded until it is loaded
+  again (help topic `local-models`).
+- While a model is in memory, Home's header shows its name in a green pill
+  (**+N** when more are loaded), and the Local models row names it too; tap
+  the pill to open the list. Both follow a load or unload on the desktop
+  within 30 seconds.
 - With Ollama stopped, **Start Ollama** starts it — only in ways that need no
   password on the desktop. If it was started as Tabtivity's own server,
   quitting Tabtivity stops it again.

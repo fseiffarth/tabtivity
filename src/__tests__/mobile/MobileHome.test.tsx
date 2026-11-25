@@ -187,6 +187,38 @@ describe("Mobile home — project list states", () => {
   });
 });
 
+describe("Mobile home — local model pill", () => {
+  const model = (name: string, state: string) => ({ name, size: 1, parameter_size: null, quantization: null, state, for_tabs: false, remote: false });
+  function serveModels(models: unknown[]) {
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/local-models")) return new Response(JSON.stringify({ server: "running", can_start: false, start_failed: false, models }), { status: 200 });
+      if (url.startsWith("/api/v1/alerts")) return new Response(JSON.stringify({ alerts: { enabled: false, items: [] } }), { status: 200 });
+      if (url.startsWith("/api/v1/activity")) return new Response(JSON.stringify({ tabs: [], desktop_available: true }), { status: 200 });
+      return new Response(JSON.stringify({ projects: [{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }] }), { status: 200 });
+    });
+  }
+
+  it("names the model in memory in the header, and opens the Local models sheet on a tap", async () => {
+    serveModels([model("qwen3.8:27b", "loaded"), model("llama3:latest", "loaded"), model("gemma3:4b", "idle")]);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    const pill = await screen.findByRole("button", { name: "Local model in memory on the desktop: llama3, qwen3.8:27b" });
+    expect(pill.className).toBe("home-model");
+    expect(pill.textContent).toContain("llama3");
+    expect(pill.textContent).toContain("+1");
+    fireEvent.click(pill);
+    expect(await screen.findByRole("dialog", { name: "Local models" })).toBeTruthy();
+  });
+
+  it("shows no pill while no model is in memory", async () => {
+    serveModels([model("gemma3:4b", "idle")]);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Ollama models on the desktop/ }).textContent).toContain("0 loaded · 1 installed"));
+    expect(screen.queryByRole("button", { name: /^Local model in memory/ })).toBeNull();
+  });
+});
+
 describe("Mobile home — box layout", () => {
   const rows = [
     { id: "p1", label: "Alpha", status: "active", live_sessions: 1 },

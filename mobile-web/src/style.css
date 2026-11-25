@@ -385,6 +385,12 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .home-vpn { position:relative; flex:0 0 auto; padding:2px 6px; border:1px solid #34384a; border-radius:999px; color:#98a0b4; font-size:var(--fs-caption); font-weight:650; letter-spacing:.04em; text-decoration:line-through; }
 .home-vpn.up { border-color:transparent; background:#1d3a2c; color:#55d187; text-decoration:none; }
 .home-vpn > .untested { position:absolute; top:-12px; right:-4px; margin:0; text-decoration:none; }
+/* A local model in memory on the desktop (`LocalModelsSection`): its name on
+   the up tunnel's green, cut short before it crowds the header's buttons. */
+.home-model { position:relative; display:inline-flex; align-items:center; gap:5px; flex:0 1 auto; min-width:0; max-width:11em; min-height:28px; padding:2px 8px; border:0; border-radius:999px; background:#1d3a2c; color:#55d187; font-size:var(--fs-caption); font-weight:650; }
+.home-model-dot { flex:0 0 auto; width:7px; height:7px; border-radius:50%; background:currentColor; }
+.home-model-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.home-model > .untested { position:absolute; top:-12px; right:-4px; margin:0; }
 .home-settings,.home-head-button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; background:transparent; color:#d7d3f5; }
 .home-head-button { position:relative; border-radius:var(--r-md); }
 .home-head-button[aria-pressed="true"] { background:#2e2b48; color:#e7e9f2; }

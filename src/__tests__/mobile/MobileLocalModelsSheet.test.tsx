@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeLocalModels, type LocalModelList, type LocalModelRow } from "../../../mobile-web/src/api";
 import { formatBytes } from "../../lib/formatBytes";
-import { FAST_POLL, SLOW_POLL, keepAliveKey, placementKey, pollDelay, sortModels, summary } from "../../../mobile-web/src/localModels";
+import { FAST_POLL, SLOW_POLL, keepAliveKey, loadedNames, placementKey, pollDelay, shortModelName, sortModels, summary } from "../../../mobile-web/src/localModels";
 import { LocalModelsSection, LocalModelsSheet } from "../../../mobile-web/src/screens/LocalModelsSheet";
 import { BRAND } from "../../lib/brand";
 
@@ -104,7 +104,13 @@ describe("local models — pure helpers", () => {
   });
 
   it("summarises the list for Home", () => {
-    expect(summary(listOf([LOADED, IDLE, CLOUD]))).toEqual({ key: "summary", loaded: 1, installed: 3 });
+    expect(summary(listOf([LOADED, IDLE, CLOUD]))).toEqual({ key: "summaryNamed", names: ["qwen3.5:9b"], installed: 3 });
+    expect(summary(listOf([IDLE, CLOUD]))).toEqual({ key: "summary", loaded: 0, installed: 2 });
+    // A cloud row is never one in memory, and a stopped server holds none.
+    expect(loadedNames(listOf([LOADED, { ...CLOUD, state: "loaded" }]))).toEqual(["qwen3.5:9b"]);
+    expect(loadedNames(listOf([LOADED], { server: "stopped" }))).toEqual([]);
+    expect(shortModelName("llama3:latest")).toBe("llama3");
+    expect(shortModelName("qwen3.5:9b")).toBe("qwen3.5:9b");
     expect(summary(listOf([], { server: "stopped" }))).toEqual({ key: "serverStopped" });
     expect(summary(listOf([], { server: "unreachable" }))).toEqual({ key: "unreachable" });
   });
@@ -432,17 +438,35 @@ describe("local models — the Home row", () => {
     // The page flips back into view before the first read answers.
     await act(async () => { fireEvent(document, new Event("visibilitychange")); });
     const button = await screen.findByRole("button", { name: /Ollama models on the desktop/ });
-    await waitFor(() => expect(button.textContent).toContain("1 loaded · 2 installed"));
+    await waitFor(() => expect(button.textContent).toContain("qwen3.5:9b in memory · 2 installed"));
     await act(async () => { releaseFirst(json(listOf([LOADED, IDLE, CLOUD]))); });
     await act(async () => {});
-    expect(button.textContent).toContain("1 loaded · 2 installed");
+    expect(button.textContent).toContain("qwen3.5:9b in memory · 2 installed");
+  });
+
+  it("reports the loaded models, follows the desktop on a slow clock, and opens on request", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    let models = [LOADED, IDLE];
+    serve(() => json(listOf(models)));
+    const onLoaded = vi.fn();
+    const view = render(<LocalModelsSection onLoaded={onLoaded} />);
+    await tick(500);
+    expect(onLoaded).toHaveBeenLastCalledWith(["qwen3.5:9b"]);
+    // Unloaded on the desktop: the next slow read says so.
+    models = [{ ...LOADED, state: "idle" }, IDLE];
+    await tick(30_000);
+    expect(onLoaded).toHaveBeenLastCalledWith([]);
+    expect(screen.getByRole("button", { name: /Ollama models on the desktop/ }).textContent).toContain("0 loaded · 2 installed");
+    view.rerender(<LocalModelsSection onLoaded={onLoaded} openRequest={1} />);
+    await tick(500);
+    expect(screen.getByRole("dialog", { name: "Local models" })).toBeTruthy();
   });
 
   it("captions the row with the counts and opens the sheet", async () => {
     serve(() => json(listOf([LOADED, IDLE, CLOUD])));
     render(<LocalModelsSection />);
     const button = await screen.findByRole("button", { name: /Ollama models on the desktop/ });
-    await waitFor(() => expect(button.textContent).toContain("1 loaded · 3 installed"));
+    await waitFor(() => expect(button.textContent).toContain("qwen3.5:9b in memory · 3 installed"));
     fireEvent.click(button);
     expect(await screen.findByRole("dialog", { name: "Local models" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CloseIcon } from "../glyphs";
 import { ApiError, getLocalModels, localModelAction, wasApplied, type LocalModelAction, type LocalModelList, type LocalModelRow } from "../api";
-import { keepAliveKey, placementKey, pollDelay, sortModels, summary } from "../localModels";
+import { keepAliveKey, loadedNames, placementKey, pollDelay, shortModelName, sortModels, summary } from "../localModels";
+import { useVisiblePoll } from "../visiblePoll";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
@@ -41,6 +42,9 @@ export function localModelsCaption(list: LocalModelList | null, failure: string 
   if (failure) return t(failureKey(failure));
   if (!list) return t("mobile.localModels.row");
   const line = summary(list);
+  if (line.key === "summaryNamed") {
+    return t("mobile.localModels.summaryNamed", { names: line.names.map(shortModelName).join(", "), installed: line.installed });
+  }
   return line.key === "summary"
     ? t("mobile.localModels.summary", { loaded: line.loaded, installed: line.installed })
     : t(`mobile.localModels.${line.key}`);
@@ -279,12 +283,23 @@ export function LocalModelsSheet({ onClose, onChange }: {
  * the request, which drops it — it says to open the app; with a window whose
  * page lacks the request (`unknown_request`), to update the desktop app.
  */
-export function LocalModelsSection() {
+export function LocalModelsSection({ onLoaded, openRequest = 0 }: {
+  /** The models in memory on the desktop, as each read finds them (empty
+   * when none, or when the list could not be read): Home's header pill. */
+  onLoaded?: (names: string[]) => void;
+  /** Bumped by Home's header pill: open the sheet. */
+  openRequest?: number;
+} = {}) {
   const t = useT();
   const [list, setList] = useState<LocalModelList | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [hidden, setHidden] = useState(true);
   const [open, setOpen] = useState(false);
+  const reported = useRef(onLoaded);
+  useEffect(() => { reported.current = onLoaded; });
+  const loadedKey = failure ? "" : loadedNames(list).join("\n");
+  useEffect(() => { reported.current?.(loadedKey ? loadedKey.split("\n") : []); }, [loadedKey]);
+  useEffect(() => { if (openRequest > 0) setOpen(true); }, [openRequest]);
   /** The read on its way. Each new read (the page coming back into view, or
    * the sheet reporting a fresher list) aborts it, so an older answer that
    * lands late cannot overwrite a newer one. */
@@ -296,22 +311,23 @@ export function LocalModelsSection() {
     setHidden(code === "local_models_disabled" || code === "not_found" || next?.server === "not_installed");
   }, []);
 
+  const read = useCallback(() => {
+    reading.current?.abort();
+    const controller = new AbortController();
+    reading.current = controller;
+    getLocalModels(controller.signal).then(
+      (next) => { if (!controller.signal.aborted) take(next, null); },
+      (reason: unknown) => {
+        if (controller.signal.aborted) return;
+        const code = codeOf(reason);
+        // A 404 here is a sidecar older than the routes, and a body that
+        // is not a list one whose catch-all answered: no feature, no row.
+        take(null, reason instanceof ApiError && reason.status === 404 || code === "malformed_response" ? "not_found" : code);
+      },
+    );
+  }, [take]);
+
   useEffect(() => {
-    const read = () => {
-      reading.current?.abort();
-      const controller = new AbortController();
-      reading.current = controller;
-      getLocalModels(controller.signal).then(
-        (next) => { if (!controller.signal.aborted) take(next, null); },
-        (reason: unknown) => {
-          if (controller.signal.aborted) return;
-          const code = codeOf(reason);
-          // A 404 here is a sidecar older than the routes, and a body that
-          // is not a list one whose catch-all answered: no feature, no row.
-          take(null, reason instanceof ApiError && reason.status === 404 || code === "malformed_response" ? "not_found" : code);
-        },
-      );
-    };
     read();
     const onVisible = () => { if (document.visibilityState === "visible") read(); };
     document.addEventListener("visibilitychange", onVisible);
@@ -319,7 +335,11 @@ export function LocalModelsSection() {
       reading.current?.abort();
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [take]);
+  }, [read]);
+  // Read again on a slow clock while the page is shown and the sheet is shut
+  // (the sheet reads on its own), so the caption and Home's pill follow a
+  // load or unload made on the desktop. A feature found off stays off.
+  useVisiblePoll(read, 30_000, { enabled: !open && !hidden, immediate: false, catchUp: false }, [read]);
 
   // The sheet keeps the caption current while it is open; a row it found
   // switched off stays until the sheet is closed, so the dialog keeps a place.

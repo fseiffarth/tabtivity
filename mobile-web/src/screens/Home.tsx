@@ -21,6 +21,7 @@ import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
 import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
+import { shortModelName } from "../localModels";
 import { CliOverviewSection } from "./CliOverviewSheet";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
 import { DesktopSwitchButton } from "../shell/DesktopFrame";
@@ -127,6 +128,10 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
   const [foldedBoxes, setFoldedBoxes] = useState<string[]>(() => readOrder("homeFoldedBoxes"));
   /** The layout button's sheet: list, grid or boxes. */
   const [layoutSheet, setLayoutSheet] = useState(false);
+  /** The desktop's models in memory, as the Local models section last read
+   *  them: the header's pill. A tap on it opens that section's sheet. */
+  const [loadedModels, setLoadedModels] = useState<string[]>([]);
+  const [modelsOpen, setModelsOpen] = useState(0);
   const toggleBox = (id: string) => {
     const next = foldedBoxes.includes(id) ? foldedBoxes.filter((box) => box !== id) : [id, ...foldedBoxes];
     setFoldedBoxes(next);
@@ -402,6 +407,7 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
   const rootLabel = rootRow ? `${t("mobile.home.openRoot")}${rootWaiting > 0 ? ` · ${t("mobile.home.awaitingApproval", { count: rootWaiting })}` : ""}` : "";
   const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
   const vpnLabel = t(vpn === "up" ? "mobile.home.vpnUp" : "mobile.home.vpnDown");
+  const modelLabel = t("mobile.home.modelLoaded", { names: loadedModels.map(shortModelName).join(", ") });
   const LayoutGlyph = HOME_LAYOUTS.find(([id]) => id === layout)?.[2] ?? ListIcon;
   /** One button for the three layouts, drawn as the one in use; its sheet
    *  holds the choice. Active and Search share it. */
@@ -438,6 +444,15 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
         <span aria-hidden="true">{t("mobile.home.vpn")}</span>
         {isUntested("mobile.home.vpnLamp") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       </span>}
+      {/* A local model in memory on the desktop, by name, green like an up
+          tunnel: it holds GPU memory, so it is worth seeing at a glance. A
+          tap opens the Local models sheet (Unload is there). */}
+      {!offline && loadedModels.length > 0 && <button className="home-model" aria-haspopup="dialog" aria-label={modelLabel} title={modelLabel} onClick={() => setModelsOpen((count) => count + 1)}>
+        <span className="home-model-dot" aria-hidden="true" />
+        <span className="home-model-name" aria-hidden="true">{shortModelName(loadedModels[0])}</span>
+        {loadedModels.length > 1 && <span aria-hidden="true">{t("mobile.home.modelMore", { count: loadedModels.length - 1 })}</span>}
+        {isUntested("mobile.home.modelPill") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+      </button>}
       {/* Another linked desktop (`shell/`): shown when there is one to switch
           to, or inside one's frame, where it asks the shell for its picker. */}
       <DesktopSwitchButton />
@@ -572,7 +587,7 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
     <h2 className="home-section-head">{t("mobile.home.desktopHead")}</h2>
     <div className="home-desktop">
       <SendToDesktop />
-      <LocalModelsSection />
+      <LocalModelsSection onLoaded={setLoadedModels} openRequest={modelsOpen} />
       <CliOverviewSection />
     </div>
     {/* What this phone does, as against what the desktop is doing, behind
