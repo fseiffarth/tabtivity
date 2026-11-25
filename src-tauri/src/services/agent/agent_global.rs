@@ -30,7 +30,10 @@
 //! user wired into their agents themselves (rtk's `rtk init -g`, say) reaches
 //! every Tabtivity agent too. One click, the one direction that is safe.
 //! Tabtivity's own session hooks are filtered out of what it imports; they are
-//! registered per home anyway. Every read and write into a home is relative
+//! registered per home anyway. A scope's local-model home
+//! (`agent_home::is_local_model_home`) gets the layer without rtk
+//! ([`without_rtk`]): its files, its `@` import lines and its hook entries are
+//! left out there, by the user's choice (2026-11-25). Every read and write into a home is relative
 //! to a directory handle (`services::home_io`): the home is agent-writable
 //! and the apply runs unfenced. AppHandle-free.
 
@@ -146,9 +149,13 @@ pub fn apply_to_home(state_dir: &Path, home: &Path) -> io::Result<()> {
         .read()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
+    // Local models get no rtk: its output rewriting and its instructions
+    // cost a small model more than the tokens they save.
+    let no_rtk = crate::services::agent_home::is_local_model_home(home);
     let files: Vec<String> = layer_files(&layer)
         .into_iter()
         .filter(|rel| !MERGED.iter().any(|(m, _)| m == rel))
+        .filter(|rel| !(no_rtk && rel.split('/').any(is_rtk_name)))
         .collect();
     if files.is_empty() && previous.files.is_empty() && previous.merged.is_empty() && !has_merged(&layer) {
         return Ok(());
@@ -160,7 +167,10 @@ pub fn apply_to_home(state_dir: &Path, home: &Path) -> io::Result<()> {
             continue;
         };
         let src = layer.join(rel);
-        let Ok(bytes) = std::fs::read(&src) else { continue };
+        let Ok(mut bytes) = std::fs::read(&src) else { continue };
+        if no_rtk && rel.ends_with(".md") {
+            bytes = without_rtk_imports(&bytes);
+        }
         let current = dst.read();
         if current.as_deref() != Some(bytes.as_slice()) {
             if let Some(own) = current.filter(|_| !previous.files.contains(rel)) {
@@ -196,7 +206,9 @@ pub fn apply_to_home(state_dir: &Path, home: &Path) -> io::Result<()> {
     }
     let mut merged = BTreeMap::new();
     for (rel, format) in MERGED {
-        let fragment = read_fragment(&layer.join(rel), *format);
+        let fragment = read_fragment(&layer.join(rel), *format)
+            .and_then(|f| if no_rtk { without_rtk(&f) } else { Some(f) })
+            .filter(|f| f.as_object().is_none_or(|o| !o.is_empty()));
         let before = previous.merged.get(*rel);
         if fragment.is_none() && before.is_none() {
             continue;
@@ -223,6 +235,78 @@ pub fn apply_to_home(state_dir: &Path, home: &Path) -> io::Result<()> {
         manifest_file.write(&body)?;
     }
     Ok(())
+}
+
+/// Whether a file or folder name is rtk's: `rtk`, `RTK.md`, `rtk.ts`,
+/// `rtk-hook-gemini.sh`, `rtk_…`.
+fn is_rtk_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "rtk" || ["rtk-", "rtk_", "rtk."].iter().any(|p| name.starts_with(p))
+}
+
+/// Whether a command line or path names rtk: a word whose leaf is rtk's
+/// (`rtk hook claude`, `exec /usr/bin/rtk hook gemini`,
+/// `~/.gemini/hooks/rtk-hook-gemini.sh`).
+fn names_rtk(text: &str) -> bool {
+    text.split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '"' | '\'' | '(' | ')' | '`'))
+        .any(|word| is_rtk_name(word.rsplit(['/', '\\']).next().unwrap_or(word)))
+}
+
+/// An instructions file without its `@` import lines of rtk's (`@RTK.md`).
+fn without_rtk_imports(bytes: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let import = line.trim_start().strip_prefix('@');
+        if !import.is_some_and(names_rtk) {
+            out.push_str(line);
+        }
+    }
+    out.into_bytes()
+}
+
+/// A layer fragment with rtk's entries taken out (`None`: nothing left).
+/// Below the top level, an object holding a string that names rtk is one of
+/// its entries (a hook, a status line, a plugin record) and goes whole; so
+/// does an array element that lost a part to this (a matcher group whose
+/// only hook was rtk's), a key named for rtk, and a container left empty.
+fn without_rtk(value: &Value) -> Option<Value> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum At {
+        Top,
+        Field,
+        Element,
+    }
+    fn strip(value: &Value, at: At) -> Option<Value> {
+        match value {
+            Value::String(s) if names_rtk(s) => None,
+            Value::Array(items) if !items.is_empty() => {
+                let kept: Vec<Value> = items.iter().filter_map(|v| strip(v, At::Element)).collect();
+                (!kept.is_empty()).then_some(Value::Array(kept))
+            }
+            Value::Object(map) if !map.is_empty() => {
+                if at != At::Top && map.values().any(|v| v.as_str().is_some_and(names_rtk)) {
+                    return None;
+                }
+                let mut out = serde_json::Map::new();
+                let mut lost = false;
+                for (k, v) in map {
+                    match strip(v, At::Field).filter(|_| !is_rtk_name(k)) {
+                        Some(v) => {
+                            out.insert(k.clone(), v);
+                        }
+                        None => lost = true,
+                    }
+                }
+                if at == At::Top {
+                    return Some(Value::Object(out));
+                }
+                (!out.is_empty() && !(at == At::Element && lost)).then_some(Value::Object(out))
+            }
+            _ => Some(value.clone()),
+        }
+    }
+    strip(value, At::Top)
 }
 
 fn has_merged(layer: &Path) -> bool {
@@ -1604,6 +1688,77 @@ mod tests {
         let vibe_hooks = vibe["hooks"].as_array_of_tables().unwrap();
         assert_eq!(vibe_hooks.len(), 1);
         assert_eq!(vibe_hooks.get(0).unwrap()["name"].as_str(), Some("rtk-rewrite"));
+    }
+
+    #[test]
+    fn a_local_model_home_gets_the_layer_without_rtk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let layer = global_dir_in(&state);
+        let homes = state.join("agent-homes");
+        let scope = homes.join("p1");
+        let local = crate::services::agent_home::local_model_home_in(&state, "p1");
+        std::fs::create_dir_all(&scope).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        // What `rtk init -g` leaves, imported into the layer — first applied
+        // as an older build did, so the local home already holds it all.
+        write(&layer.join(".claude/CLAUDE.md"), "mine\n@RTK.md\nmore\n"); // privacy-check: ok — an @-import line, not an address
+        write(&layer.join(".claude/RTK.md"), "rtk");
+        write(&layer.join(".codex/AGENTS.md"), "codex\n@/home/u/.codex/RTK.md\n");
+        write(&layer.join(".gemini/hooks/rtk-hook-gemini.sh"), "#!/bin/bash\nexec rtk hook gemini");
+        write(&layer.join(".config/opencode/plugins/rtk.ts"), "x");
+        write(&layer.join(".claude/skills/s/SKILL.md"), "skill");
+        let pre = json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]});
+        let stop = json!({"hooks": [{"type": "command", "command": "mine"}]});
+        write(
+            &layer.join(".claude/settings.json"),
+            &json!({"model": "opus", "hooks": {"PreToolUse": [pre.clone()], "Stop": [stop.clone()]}}).to_string(),
+        );
+        write(
+            &layer.join(".gemini/settings.json"),
+            &json!({"hooks": {"BeforeTool": [{"matcher": "run_shell_command", "hooks": [
+                {"type": "command", "command": "~/.gemini/hooks/rtk-hook-gemini.sh"}
+            ]}]}})
+            .to_string(),
+        );
+        write(&layer.join(".cursor/hooks.json"), r#"{"version": 1, "hooks": {"preToolUse": [{"command": "rtk hook cursor", "matcher": "Shell"}]}}"#);
+        write(
+            &layer.join(".vibe/hooks.toml"),
+            "[[hooks]]\nname = \"rtk-rewrite\"\ntype = \"pre_tool\"\nmatch = \"bash\"\ncommand = \"rtk hook vibe\"\n",
+        );
+        write(&local.join(".vibe/hooks.toml"), "[[hooks]]\nname = \"own\"\ntype = \"post_agent\"\ncommand = \"x\"\n");
+        let older = local.with_file_name("older");
+        std::fs::rename(&local, &older).unwrap();
+        apply_to_home(&state, &older).unwrap();
+        std::fs::rename(&older, &local).unwrap();
+        assert!(local.join(".claude/RTK.md").is_file());
+
+        apply_to_home(&state, &scope).unwrap();
+        apply_to_home(&state, &local).unwrap();
+
+        // The scope's own home keeps all of it.
+        assert!(scope.join(".claude/RTK.md").is_file());
+        assert!(scope.join(".config/opencode/plugins/rtk.ts").is_file());
+        assert_eq!(std::fs::read_to_string(scope.join(".claude/CLAUDE.md")).unwrap(), "mine\n@RTK.md\nmore\n"); // privacy-check: ok
+        assert_eq!(read_json(&scope.join(".claude/settings.json")).unwrap()["hooks"]["PreToolUse"], json!([pre]));
+
+        // The local-model home: no rtk file, import, hook or plugin; the rest is there.
+        for gone in [".claude/RTK.md", ".gemini/hooks/rtk-hook-gemini.sh", ".config/opencode/plugins/rtk.ts"] {
+            assert!(!local.join(gone).exists(), "{gone}");
+        }
+        assert!(local.join(".claude/skills/s/SKILL.md").is_file());
+        assert_eq!(std::fs::read_to_string(local.join(".claude/CLAUDE.md")).unwrap(), "mine\nmore\n");
+        assert_eq!(std::fs::read_to_string(local.join(".codex/AGENTS.md")).unwrap(), "codex\n");
+        assert_eq!(
+            read_json(&local.join(".claude/settings.json")).unwrap(),
+            json!({"model": "opus", "hooks": {"Stop": [stop]}})
+        );
+        assert_eq!(read_json(&local.join(".gemini/settings.json")).unwrap(), json!({}));
+        assert_eq!(read_json(&local.join(".cursor/hooks.json")).unwrap(), json!({"version": 1}));
+        let vibe: toml_edit::DocumentMut =
+            std::fs::read_to_string(local.join(".vibe/hooks.toml")).unwrap().parse().unwrap();
+        let names: Vec<_> = vibe["hooks"].as_array_of_tables().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["own"]);
     }
 
     #[test]

@@ -275,6 +275,11 @@ The import also takes the hook and plugin files the other CLIs read
 user wired into their agents on their side — `rtk init -g --agent …` — reaches
 every agent. Tabtivity never installs or registers such a tool itself: it comes
 from the user's own setup, through this import (2026-09-26).
+Local-model homes (`<scope>.local`) get the layer without rtk: its files,
+its `@RTK.md` import lines and every hook entry naming it are left out
+there, and taken back out of a local home an older build filled; the user
+chose it (2026-11-25) — its rewritten output and instructions cost a small
+model more than they save.
 At every spawn, before Tabtivity's hooks are registered, its plain files are
 copied over the home's (a scope file replaced the first time is kept in
 `.tabtivity-global-backup/`) and its fragments of the files the CLIs write
