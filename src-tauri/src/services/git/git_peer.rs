@@ -637,16 +637,15 @@ pub fn unquote_git_path(raw: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-/// The paths git names in
-/// `error: The following untracked working tree files would be overwritten by merge:`
-/// — the real cause of most blocked fast-forwards (#28p D1/D2), and the input to the
-/// identical-content retry. The list is TAB-indented and terminated by git's
-/// "Please move or remove them…" line. Pure.
-pub fn parse_untracked_overwrite_paths(stderr: &str) -> Vec<String> {
+/// The indented path lists git prints under every message containing `marker`
+/// (TAB-indented, ended by the first non-indented line — git's "Please …" footer).
+/// A stderr can carry several blocks (tracked and untracked collisions together);
+/// all of the matching ones are read. Pure.
+fn overwrite_list(stderr: &str, marker: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut in_list = false;
     for line in stderr.lines() {
-        if line.contains("untracked working tree files would be overwritten") {
+        if line.contains(marker) {
             in_list = true;
             continue;
         }
@@ -656,11 +655,169 @@ pub fn parse_untracked_overwrite_paths(stderr: &str) -> Vec<String> {
         // The list is the run of indented lines; anything else ends it.
         let trimmed = line.trim_start_matches(['\t', ' ']);
         if trimmed.len() == line.len() || trimmed.is_empty() {
-            break;
+            in_list = false;
+            continue;
         }
         out.push(unquote_git_path(trimmed.trim_end()));
     }
     out
+}
+
+/// The paths git names in
+/// `error: The following untracked working tree files would be overwritten by merge:`
+/// — the real cause of most blocked fast-forwards (#28p D1/D2), and the input to the
+/// identical-content retry. The list is TAB-indented and terminated by git's
+/// "Please move or remove them…" line. Pure.
+pub fn parse_untracked_overwrite_paths(stderr: &str) -> Vec<String> {
+    overwrite_list(stderr, "untracked working tree files would be overwritten")
+}
+
+/// The paths git names in
+/// `error: Your local changes to the following files would be overwritten by merge:`
+/// — tracked files that differ from HEAD (staged or not) and that the incoming commit
+/// also changes. The same TAB-indented list as the untracked block, ended by "Please
+/// commit your changes or stash them…"; git prints both blocks in one stderr when both
+/// kinds collide. Pure.
+pub fn parse_tracked_overwrite_paths(stderr: &str) -> Vec<String> {
+    overwrite_list(
+        stderr,
+        "local changes to the following files would be overwritten",
+    )
+}
+
+/// A path's `<mode, blob>` as git lists it in a tree or in the index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitBlob {
+    pub mode: String,
+    pub sha: String,
+}
+
+/// Parse `git ls-tree -r -z`: NUL-terminated `<mode> SP <type> SP <sha> TAB <path>`.
+/// Blobs and gitlinks are kept (a gitlink's mode can never match a file's, so it reads as
+/// different, never as absent). Pure.
+pub fn parse_ls_tree_blobs(stdout: &[u8]) -> HashMap<String, GitBlob> {
+    let mut out = HashMap::new();
+    for rec in stdout.split(|&b| b == 0).filter(|r| !r.is_empty()) {
+        let rec = String::from_utf8_lossy(rec);
+        let Some((meta, path)) = rec.split_once('\t') else {
+            continue;
+        };
+        let cols: Vec<&str> = meta.split(' ').collect();
+        if cols.len() != 3 || !matches!(cols[1], "blob" | "commit") {
+            continue;
+        }
+        out.insert(
+            path.to_string(),
+            GitBlob {
+                mode: cols[0].to_string(),
+                sha: cols[2].to_string(),
+            },
+        );
+    }
+    out
+}
+
+/// Parse `git ls-files -s -z`: NUL-terminated `<mode> SP <sha> SP <stage> TAB <path>`.
+/// A path in a merge conflict (any stage but 0, or listed twice) maps to `None`: its
+/// index content is not one blob, so nothing can be proven about it. Pure.
+pub fn parse_ls_files_stage(stdout: &[u8]) -> HashMap<String, Option<GitBlob>> {
+    let mut out: HashMap<String, Option<GitBlob>> = HashMap::new();
+    for rec in stdout.split(|&b| b == 0).filter(|r| !r.is_empty()) {
+        let rec = String::from_utf8_lossy(rec);
+        let Some((meta, path)) = rec.split_once('\t') else {
+            continue;
+        };
+        let cols: Vec<&str> = meta.split(' ').collect();
+        if cols.len() != 3 {
+            continue;
+        }
+        let entry = (cols[2] == "0").then(|| GitBlob {
+            mode: cols[0].to_string(),
+            sha: cols[1].to_string(),
+        });
+        match out.get(path) {
+            Some(_) => out.insert(path.to_string(), None),
+            None => out.insert(path.to_string(), entry),
+        };
+    }
+    out
+}
+
+/// Which of a blocked fast-forward's tracked paths hold nothing the fast-forward
+/// would lose (#28r), split by [`classify_tracked_dirt`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DirtVerdict {
+    /// Provably identical to the incoming commit (and nothing staged is at risk).
+    pub identical: Vec<String>,
+    /// Anything else, including everything that could not be proven.
+    pub differing: Vec<String>,
+    /// The identical paths whose index entry is not yet the incoming blob: staging
+    /// them is what lets git's two-way merge accept the path.
+    pub to_stage: Vec<String>,
+}
+
+/// The identity predicate behind absorbing tracked dirt losslessly. A path is
+/// **identical** only when all of these are proven:
+///
+/// * the working file is the incoming commit's blob (`worktree` holds its
+///   `hash-object` name), or it is deleted (`deleted`) and the incoming commit does
+///   not carry it either;
+/// * the index holds nothing that would be lost: its entry is HEAD's or the incoming
+///   commit's (mode and blob), never a third staged version, a conflict or a staged
+///   deletion of a path the target keeps.
+///
+/// Everything else — an unreadable hash, a gitlink, a missing fact — is *differing*:
+/// the safe direction, as in `reset_collisions`. The file mode is checked on the
+/// index after staging ([`stage_identical`]), where git has computed it. Pure.
+pub fn classify_tracked_dirt(
+    paths: &[String],
+    target: &HashMap<String, GitBlob>,
+    head: &HashMap<String, GitBlob>,
+    index: &HashMap<String, Option<GitBlob>>,
+    deleted: &HashSet<String>,
+    worktree: &HashMap<String, String>,
+) -> DirtVerdict {
+    let mut verdict = DirtVerdict::default();
+    for p in paths {
+        let staged = match index.get(p) {
+            Some(None) => {
+                verdict.differing.push(p.clone());
+                continue;
+            }
+            Some(Some(b)) => Some(b),
+            None => None,
+        };
+        let (want, have) = (target.get(p), head.get(p));
+        let index_ok = staged == have || staged == want;
+        let worktree_ok = match want {
+            Some(t) => {
+                t.mode != "160000"
+                    && !deleted.contains(p)
+                    && worktree.get(p).is_some_and(|h| *h == t.sha)
+            }
+            None => deleted.contains(p),
+        };
+        if index_ok && worktree_ok {
+            if want.is_some() && staged != want {
+                verdict.to_stage.push(p.clone());
+            }
+            verdict.identical.push(p.clone());
+        } else {
+            verdict.differing.push(p.clone());
+        }
+    }
+    verdict
+}
+
+/// The `Desynchronized` detail for a fast-forward blocked by tracked edits that differ
+/// from the incoming commit: names only those, never the identical ones the pass
+/// would have absorbed. Pure.
+pub fn blocked_detail_tracked(branch: &str, differing: &[String]) -> String {
+    format!(
+        "'{branch}' can't fast-forward: {} tracked file(s) on the peer have uncommitted changes that differ from the incoming commit{}",
+        differing.len(),
+        name_list(differing, 3, ": "),
+    )
 }
 
 /// The `Desynchronized` detail for a fast-forward git refused to perform (#28p D2).
@@ -1781,6 +1938,10 @@ async fn transfer_and_apply(
                                         );
                                     }
                                     forget_synced_paths(manifest, project_id, &colliding).await;
+                                    // #28r: tracked edits byte-identical to the incoming
+                                    // commit were staged and absorbed. Nothing was lost
+                                    // (the bytes on disk never changed), so no local_loss.
+                                    result.absorbed += parse_tracked_overwrite_paths(&stderr).len();
                                     result.applied += 1;
                                 }
                                 FfRetry::ClearedButFailed(cleared) => {
@@ -1807,6 +1968,14 @@ async fn transfer_and_apply(
                                 }
                                 FfRetry::Refused => {
                                     result.blocked = Some(blocked_detail(&src_ref.name, &stderr));
+                                }
+                                FfRetry::Differing(differing) => {
+                                    result.blocked =
+                                        Some(blocked_detail_tracked(&src_ref.name, &differing));
+                                }
+                                FfRetry::AbsorbFailed(retry_stderr) => {
+                                    result.blocked =
+                                        Some(blocked_detail(&src_ref.name, &retry_stderr));
                                 }
                             }
                         }
@@ -1864,6 +2033,13 @@ async fn transfer_and_apply(
         }
     }
 
+    if result.absorbed > 0 {
+        eprintln!(
+            "lockstep: {}: fast-forward absorbed {} byte-identical tracked path(s)",
+            project_id, result.absorbed
+        );
+    }
+
     // 5. #28q: if the mirror's HEAD moved above, say what that cost the working tree.
     //    Scoped to this apply, so a caller that runs a checkout of its own around it
     //    (`checkout_lockstep`) audits that separately and neither reports the other's.
@@ -1918,6 +2094,9 @@ impl TransferResult {
 #[derive(Default)]
 struct TransferResult {
     applied: usize,
+    /// Tracked paths with uncommitted edits byte-identical to the incoming commit that
+    /// a fast-forward absorbed (#28r) — lossless, so nothing is filed as lost.
+    absorbed: usize,
     diverged: Vec<String>,
     /// Branches where the dest is ahead and a non-forced pass left it alone (the
     /// other leg's fast-forward) — what a local-authoritative pass must reset.
@@ -1993,7 +2172,8 @@ fn retry_ff_clearing_identical(
     stale_residue: &HashSet<String>,
 ) -> FfRetry {
     let paths = parse_untracked_overwrite_paths(stderr);
-    if paths.is_empty() {
+    let tracked = parse_tracked_overwrite_paths(stderr);
+    if paths.is_empty() && tracked.is_empty() {
         return FfRetry::Refused;
     }
     if !paths
@@ -2002,19 +2182,41 @@ fn retry_ff_clearing_identical(
     {
         return FfRetry::Refused;
     }
+    // #28r: tracked edits a byte-sync that outran the commit left behind. Proven by
+    // reads alone first, so a path that differs leaves the index and the tree exactly
+    // as found.
+    let mut staged: Vec<String> = Vec::new();
+    if !tracked.is_empty() {
+        let verdict = read_dirt_verdict(dst_peer, dst_peer, src_sha, &tracked);
+        if !verdict.differing.is_empty() {
+            return FfRetry::Differing(verdict.differing);
+        }
+        if let Err(bad) = stage_identical(dst_peer, src_sha, &verdict.to_stage) {
+            return FfRetry::Differing(bad);
+        }
+        staged = verdict.to_stage;
+    }
     for p in &paths {
         // `:(literal)` so a path with glob metacharacters (`*`, `[`, `?`) is matched as
         // itself and can never widen into a pathspec that removes more than it names.
         let _ = dst_peer.run(&["clean", "-f", "-x", "--", &format!(":(literal){p}")]);
     }
-    let landed = dst_peer
-        .run(&["merge", "--ff-only", src_sha])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if landed {
-        FfRetry::Cleared(paths)
-    } else {
-        FfRetry::ClearedButFailed(paths)
+    match dst_peer.run(&["merge", "--ff-only", src_sha]) {
+        Ok(o) if o.status.success() => FfRetry::Cleared(paths),
+        other => {
+            // Nothing the tracked pass staged is wanted without the fast-forward: put
+            // the index back to HEAD's entries (the bytes were never touched).
+            unstage(dst_peer, &staged);
+            if paths.is_empty() {
+                let why = match other {
+                    Ok(o) => String::from_utf8_lossy(&o.stderr).to_string(),
+                    Err(e) => e,
+                };
+                FfRetry::AbsorbFailed(why)
+            } else {
+                FfRetry::ClearedButFailed(paths)
+            }
+        }
     }
 }
 
@@ -2034,6 +2236,13 @@ enum FfRetry {
     /// The named paths were cleaned and the fast-forward *still* failed: they are gone
     /// and nothing rewrote them. The one path here that leaves the mirror short a file.
     ClearedButFailed(Vec<String>),
+    /// #28r: tracked edits were in the way and at least one differs from the incoming
+    /// commit (or could not be proven equal). The names are the differing paths only;
+    /// nothing was touched.
+    Differing(Vec<String>),
+    /// #28r: only tracked, byte-identical edits were in the way; they were staged, the
+    /// fast-forward still failed, and the index was put back. Holds git's stderr.
+    AbsorbFailed(String),
 }
 
 /// Whether the dest's on-disk `path` already holds exactly the bytes `<sha>:<path>`
@@ -2045,6 +2254,112 @@ fn blob_matches_worktree(peer: &Peer, sha: &str, path: &str) -> bool {
         return false;
     };
     peer.answer(&["hash-object", "--", path]) == Some(incoming)
+}
+
+/// Paths per call when reading or staging a long list: the host is reached over SSH,
+/// so a read costs a round trip per chunk, not per path, while an argument list stays
+/// far below any `ARG_MAX`.
+const DIRT_CHUNK: usize = 200;
+
+/// `<head…> -- <paths>` over `paths` in chunks; the concatenated stdout, or `None` when
+/// any chunk failed (an unanswered read proves nothing). `literal` prefixes every path
+/// with `:(literal)` for the commands that read pathspecs (never for `ls-tree`).
+fn git_over_paths(peer: &Peer, head: &[&str], paths: &[String], literal: bool) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    for chunk in paths.chunks(DIRT_CHUNK) {
+        let mut args: Vec<String> = head.iter().map(|a| a.to_string()).collect();
+        args.push("--".to_string());
+        args.extend(chunk.iter().map(|p| {
+            if literal {
+                format!(":(literal){p}")
+            } else {
+                p.clone()
+            }
+        }));
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        out.extend(peer.stdout(&argv)?);
+    }
+    Some(out)
+}
+
+/// Decide, for tracked `paths` on `wt_peer`, which hold nothing a move of the checked-out
+/// branch to `target_sha` would lose (#28r; see [`classify_tracked_dirt`]). The incoming
+/// tree is read on `target_peer` (the dest once the objects arrived, the source before
+/// they have); everything about the working tree and the index on `wt_peer`. A read that
+/// fails makes every path *differing*. A handful of batched calls, never one per path.
+fn read_dirt_verdict(target_peer: &Peer, wt_peer: &Peer, target_sha: &str, paths: &[String]) -> DirtVerdict {
+    let (Some(target), Some(head), Some(index), Some(deleted)) = (
+        git_over_paths(target_peer, &["ls-tree", "-r", "-z", target_sha], paths, false),
+        git_over_paths(wt_peer, &["ls-tree", "-r", "-z", "HEAD"], paths, false),
+        git_over_paths(wt_peer, &["ls-files", "-s", "-z"], paths, true),
+        git_over_paths(wt_peer, &["ls-files", "-d", "-z"], paths, true),
+    ) else {
+        return DirtVerdict {
+            differing: paths.to_vec(),
+            ..DirtVerdict::default()
+        };
+    };
+    let deleted: HashSet<String> = deleted
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).to_string())
+        .collect();
+    // `hash-object` of a missing file fails its whole chunk, so only present files go in.
+    let present: Vec<String> = paths.iter().filter(|p| !deleted.contains(*p)).cloned().collect();
+    let worktree = hash_objects(wt_peer, &present);
+    classify_tracked_dirt(
+        paths,
+        &parse_ls_tree_blobs(&target),
+        &parse_ls_tree_blobs(&head),
+        &parse_ls_files_stage(&index),
+        &deleted,
+        &worktree,
+    )
+}
+
+/// Put the index entries of `paths` back to HEAD's (a path-limited reset, which never
+/// writes the working tree). Best effort: a failed restore is only a staged copy of
+/// bytes that are already on disk.
+fn unstage(peer: &Peer, paths: &[String]) {
+    for chunk in paths.chunks(DIRT_CHUNK) {
+        let mut args: Vec<String> = ["reset", "-q", "--"].iter().map(|a| a.to_string()).collect();
+        args.extend(chunk.iter().map(|p| format!(":(literal){p}")));
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        let _ = peer.run(&argv);
+    }
+}
+
+/// Stage `paths` (`add`, through the peer's hardened runner) so the fast-forward's
+/// two-way merge finds each index entry equal to the incoming tree. Then verify what git
+/// recorded — mode included, which `hash-object` cannot see — equals the incoming entry;
+/// anything else is unstaged again and returned (the file mode differs, or the add
+/// itself failed). The working-tree bytes are never written by this.
+fn stage_identical(peer: &Peer, target_sha: &str, paths: &[String]) -> Result<(), Vec<String>> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    if git_over_paths(peer, &["add"], paths, true).is_none() {
+        unstage(peer, paths);
+        return Err(paths.to_vec());
+    }
+    let want = git_over_paths(peer, &["ls-tree", "-r", "-z", target_sha], paths, false)
+        .map(|o| parse_ls_tree_blobs(&o));
+    let have = git_over_paths(peer, &["ls-files", "-s", "-z"], paths, true)
+        .map(|o| parse_ls_files_stage(&o));
+    let bad: Vec<String> = match (want, have) {
+        (Some(want), Some(have)) => paths
+            .iter()
+            .filter(|p| have.get(*p).and_then(Option::as_ref) != want.get(*p))
+            .cloned()
+            .collect(),
+        _ => paths.to_vec(),
+    };
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        unstage(peer, paths);
+        Err(bad)
+    }
 }
 
 /// Which of a blocked ff's colliding untracked paths are provably disposable
@@ -3486,14 +3801,23 @@ async fn force_apply(
                 };
                 let where_ = if to_remote { "host" } else { "mirror" };
                 if dest.dirty_tracked {
-                    let dirty = dirty_tracked_paths(&dest_peer);
-                    return Err(format!(
-                        "Refusing: the {where_} has uncommitted changes to {} tracked file(s) \
-                         on '{name}'{}. Resetting would discard them, and no backup can hold \
-                         them. Commit or stash them there, then retry.",
-                        dirty.len(),
-                        name_list(&dirty, 5, ": "),
-                    ));
+                    // #28r: an edit byte-identical to the target's version loses nothing
+                    // under the reset, so only the ones that differ refuse it. A dirty
+                    // tree git cannot list (`None`) stays a refusal, as before.
+                    let listed = dirty_tracked_paths(&dest_peer);
+                    let differing = (!listed.is_empty()).then(|| {
+                        read_dirt_verdict(&source_peer, &dest_peer, &target.sha, &listed).differing
+                    });
+                    if differing.as_ref().is_none_or(|d| !d.is_empty()) {
+                        let dirty = differing.unwrap_or_default();
+                        return Err(format!(
+                            "Refusing: the {where_} has uncommitted changes to {} tracked file(s) \
+                             on '{name}'{}. Resetting would discard them, and no backup can hold \
+                             them. Commit or stash them there, then retry.",
+                            dirty.len(),
+                            name_list(&dirty, 5, ": "),
+                        ));
+                    }
                 }
                 let collisions = reset_collisions(&source_peer, &dest_peer, &target.sha);
                 if !collisions.is_empty() {
