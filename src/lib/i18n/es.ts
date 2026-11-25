@@ -7916,6 +7916,8 @@ export const dict: Dict = {
   "projectSettings.migration": "Migración",
   "projectSettings.migrationHelp": "Actualiza un proyecto antiguo al estado actual de {app} — nuevos archivos de estructura, plantillas de docs de agentes, valores predeterminados de .gitignore y campos de la entrada del proyecto (de los que derivan las etiquetas de tipo).",
   "projectSettings.migrateProject": "Migrar proyecto…",
+  "projectSettings.gitHosting": "Alojamiento Git",
+  "projectSettings.gitHostingHelp": "La URL de perfil y el token de acceso propios de este proyecto, usados en lugar de Configuración → Alojamiento Git para sus push y pull.",
   "migrate.title": "Migrar proyecto",
   "migrate.help": "Cada paso siguiente es un cambio que haría la migración. Acéptalos o recházalos individualmente — no se escribe nada hasta aplicar, y el contenido existente nunca se sobrescribe.",
   "migrate.loading": "Inspeccionando el proyecto…",

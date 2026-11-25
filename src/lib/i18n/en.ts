@@ -8215,6 +8215,8 @@ export const enSource = {
   "projectSettings.migration": "Migration",
   "projectSettings.migrationHelp": "Update an older project to the current {app} state — new scaffold files, agent-doc templates, .gitignore defaults, and project-entry fields (which the type tags derive from).",
   "projectSettings.migrateProject": "Migrate project…",
+  "projectSettings.gitHosting": "Git hosting",
+  "projectSettings.gitHostingHelp": "This project's own profile URL and access token, used instead of Settings → Git Hosting for its pushes and pulls.",
   "migrate.title": "Migrate project",
   "migrate.help": "Each step below is one change migration would make. Accept or decline them individually — nothing is written until you apply, and existing content is never overwritten.",
   "migrate.loading": "Inspecting project…",

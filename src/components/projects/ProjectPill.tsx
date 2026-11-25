@@ -9,7 +9,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   resolveProjectDirectory,
-  type GitHostingInfo,
   type GitProvider,
   type ProjectEntry,
   type PublishFrom,
@@ -30,8 +29,8 @@ import { PythonInterpreterWindow } from "./PythonInterpreterWindow";
 import { useGitDirtyStore } from "../../stores/gitDirty";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
 import { providerName, gitTypeLabel } from "./projectTypeTags";
-import { guessProvider, PublishWindow } from "./PublishWindow";
-import { GitTokenScopes, tokenPageUrl } from "../common/GitTokenScopes";
+import { PublishWindow } from "./PublishWindow";
+import { GitHostingWindow } from "./GitHostingWindow";
 import { ProjectHoverCard, projectDescription, useProjectHoverCard } from "./ProjectHoverCard";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { ActivityCalendar } from "./ActivityCalendar";
@@ -50,7 +49,6 @@ import { useRemoteMachinesStore, type DroppedGlobalMachine } from "../../stores/
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { KeepLocalCopyDialog, StopLocalCopyDialog } from "./LocalCopyDialogs";
 import { Dropdown } from "../common/Dropdown";
-import { PasswordInput } from "../common/PasswordInput";
 import { FolderPickerDialog } from "../common/FolderPickerDialog";
 import { AsyncConfirmDialog, useDialogs } from "../common/PromptDialogs";
 import { RemoteConnMenu } from "../header/RemoteConnMenu";
@@ -404,145 +402,6 @@ function RenameWindow({
   );
 }
 
-
-function GitHostingWindow({
-  project,
-  onClose,
-}: {
-  project: ProjectEntry;
-  onClose: () => void;
-}) {
-  const t = useT();
-  const modalRef = useModalFocus(onClose);
-  const getProjectGitHosting = useProjectsStore((s) => s.getProjectGitHosting);
-  const setProjectGitHosting = useProjectsStore((s) => s.setProjectGitHosting);
-  const [info, setInfo] = useState<GitHostingInfo | null>(null);
-  const [profileUrl, setProfileUrl] = useState("");
-  const [newToken, setNewToken] = useState("");
-  const [clearToken, setClearToken] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    void getProjectGitHosting(project.id)
-      .then((i) => {
-        if (cancelled) return;
-        setInfo(i);
-        setProfileUrl(i.profile_url ?? "");
-      })
-      .catch((e) => !cancelled && setError(String(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, [project.id, getProjectGitHosting]);
-
-  // A typed token always wins over a "remove" request, so clearing only applies
-  // when the user hasn't also entered a replacement.
-  const effectiveClear = clearToken && !newToken.trim();
-
-  const tokenStatus = (() => {
-    if (newToken.trim()) return t("pill.tokenStatusWillSet");
-    if (effectiveClear) return t("pill.tokenStatusWillRemove");
-    if (info?.has_token) return t("pill.tokenStatusHasToken");
-    if (info?.has_global_token) return t("pill.tokenStatusInherits");
-    return t("pill.tokenStatusNone");
-  })();
-
-  const save = async () => {
-    setSaving(true);
-    setError("");
-    try {
-      await setProjectGitHosting(project.id, {
-        profileUrl: profileUrl.trim() || null,
-        token: newToken.trim() || null,
-        clearToken: effectiveClear,
-      });
-      onClose();
-    } catch (err) {
-      setError(String(err));
-      setSaving(false);
-    }
-  };
-
-  const globalUrl = info?.global_profile_url ?? "";
-  // Which provider's token page to link to: the URL field being edited (live,
-  // so it updates as the user types) wins, else the field it inherits, else
-  // the project's own best guess.
-  const tokenProvider: GitProvider = (profileUrl || globalUrl).toLowerCase().includes("gitlab")
-    ? "gitlab"
-    : guessProvider(project);
-
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="settings-title-row">
-          <h2>{t("pill.gitHostingTitle", { name: project.name })}</h2>
-          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
-        </div>
-        <div className="project-dialog-path">{t("pill.gitHostingDesc")}</div>
-
-        <label>
-          {t("git.profileUrl")}
-          <input
-            type="text"
-            value={profileUrl}
-            placeholder={
-              globalUrl ? t("pill.inheritsGlobal", { url: globalUrl }) : t("git.profileUrlPlaceholder")
-            }
-            onChange={(e) => setProfileUrl(e.target.value)}
-          />
-        </label>
-
-        <label>
-          {info?.has_token ? t("pill.replaceToken") : t("git.accessToken")}
-          <PasswordInput
-            value={newToken}
-            placeholder={info?.has_token ? t("pill.enterNewToken") : t("git.tokenPlaceholder")}
-            onChange={(e) => {
-              setNewToken(e.target.value);
-              if (e.target.value) setClearToken(false);
-            }}
-          />
-        </label>
-        <span className="ssh-optional-hint">
-          {t("pill.getTokenHint")}{" "}
-          <button
-            type="button"
-            className="inline-link-btn"
-            onClick={() =>
-              void invoke("open_external_url", {
-                url: tokenPageUrl(tokenProvider, profileUrl || globalUrl),
-              })
-            }
-          >
-            {t("pill.getTokenCta", { provider: providerName(tokenProvider) })}
-          </button>
-        </span>
-        <GitTokenScopes provider={tokenProvider} />
-        <div className="project-dialog-path">{tokenStatus}</div>
-        {info?.has_token && !newToken.trim() && (
-          <label className="settings-switch-row">
-            <span>{t("pill.removeProjectToken")}</span>
-            <Toggle
-              checked={clearToken}
-              onChange={(e) => setClearToken(e.target.checked)}
-            />
-          </label>
-        )}
-
-        {error && <ErrorNote className="project-dialog-error" error={error} />}
-        <div className="project-dialog-actions">
-          <button type="button" onClick={onClose} disabled={saving}>{t("common.cancel")}</button>
-          <button type="button" onClick={() => void save()} disabled={saving || !info}>
-            {saving ? t("common.saving") : t("common.save")}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
 
 /**
  * Edit a project's container spec — image/Dockerfile source, network, resource

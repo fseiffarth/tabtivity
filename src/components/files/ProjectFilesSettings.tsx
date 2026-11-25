@@ -15,6 +15,7 @@ import {
 import { useSettingsStore } from "../../stores/settings";
 import { VIEWER_PREF_TYPES } from "../../lib/viewers/fileUtils";
 import { PythonInterpreterWindow } from "../projects/PythonInterpreterWindow";
+import { GitHostingWindow } from "../projects/GitHostingWindow";
 import { ProjectMigrationDialog } from "../projects/ProjectMigrationDialog";
 import { SpellDictionaryPicker } from "./SpellDictionaryPicker";
 import { UntestedTag } from "../common/UntestedTag";
@@ -298,6 +299,7 @@ export function ProjectFilesSettingsDialog({
   } = filters;
   const [showPython, setShowPython] = useState(false);
   const [showMigrate, setShowMigrate] = useState(false);
+  const [showGitHosting, setShowGitHosting] = useState(false);
 
   const alertsOn = settings?.files_alerts ?? true;
   const alertSources = settings?.files_alerts_sources ?? {};
@@ -404,6 +406,31 @@ export function ProjectFilesSettingsDialog({
               >
                 {project.python_interpreter ? <><CheckIcon />{" "}</> : ""}
                 {t("projectSettings.pythonInterpreter")}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* The project's own git hosting (profile URL + token), the same
+            window as the pill menu's "Git hosting…". Any git project: the
+            pill offers it once published, but a token set early does no harm. */}
+        {project && project.git_type !== "none" && (
+          <>
+            <SettingsSection
+              title={
+                <>
+                  {t("projectSettings.gitHosting")} <UntestedTag id="projectSettings.gitHosting" />
+                </>
+              }
+              help={t("projectSettings.gitHostingHelp")}
+            />
+            <div className="settings-link-row">
+              <button
+                type="button"
+                className="settings-btn"
+                onClick={() => setShowGitHosting(true)}
+              >
+                {t("pill.gitHostingEllipsis")}
               </button>
             </div>
           </>
@@ -662,6 +689,9 @@ export function ProjectFilesSettingsDialog({
     {/* Sibling for the same reason as the interpreter picker above. */}
     {showMigrate && project && (
       <ProjectMigrationDialog project={project} onClose={() => setShowMigrate(false)} />
+    )}
+    {showGitHosting && project && (
+      <GitHostingWindow project={project} onClose={() => setShowGitHosting(false)} />
     )}
     </>,
     document.body,

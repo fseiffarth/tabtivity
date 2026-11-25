@@ -339,6 +339,7 @@ export const UNTESTED = {
   "devTodo.title": { area: "files", what: "ProjectFilesView · Todo view (dev build): todo/*.md groups, task boxes write back to the file" },
   "projectRemarks.addMenu": { area: "files", what: "FileTree · Add file remark…" },
   "projectRemarks.addTitle": { area: "files", what: "AddRemarkDialog · Add file remark" },
+  "projectSettings.gitHosting": { area: "files", what: "ProjectFilesSettings · Git hosting… (the pill menu's per-project profile URL and token)" },
   "projectSettings.migration": { area: "files", what: "ProjectFilesSettings · Migration" },
   "projectSettings.spellAddLanguage": { area: "files", what: "SpellDictionaryPicker · Add a language" },
   "projectSettings.spellLanguage": { area: "files", what: "SpellDictionaryPicker · Spelling dictionary" },
