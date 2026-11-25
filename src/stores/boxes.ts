@@ -10,6 +10,8 @@ import { isBoxColor } from "../lib/theme/boxColor";
 import { isPathWithin } from "../lib/paths";
 import { isLocalModelsOnly } from "../lib/projects/localModelsOnly";
 import { isHostPinned } from "../lib/projectTabHost";
+import { localMirrorRootFor } from "../lib/remote/fileSide";
+import type { CwdMove } from "./tabs/types";
 import type { useT } from "../lib/i18n";
 
 // Re-exported, not redeclared: the PTY-id parser needs the same constant and
@@ -161,12 +163,11 @@ export async function restoreBoxScope(scope: string): Promise<void> {
     // Member roots are places a restored agent tab may keep as its cwd: the
     // per-member Claude tab starts there on purpose, and resetting it to the
     // box folder put the agent in the wrong directory on every relaunch.
-    const agentRoots = boxMembersOfScope(
-      scope,
-      useBoxesStore.getState().boxes,
-      useProjectsStore.getState().projects,
-    ).map((m) => m.dir);
-    if (!(await hydrateScopeFromDisk(scope, folder, { agentRoots }))) seedShell();
+    const projects = useProjectsStore.getState().projects;
+    const agentRoots = boxMembersOfScope(scope, useBoxesStore.getState().boxes, projects).map((m) => m.dir);
+    if (!(await hydrateScopeFromDisk(scope, folder, { agentRoots, cwdMoves: remoteMemberCwdMoves(box, projects) }))) {
+      seedShell();
+    }
   } catch {
     seedShell();
   }
@@ -645,6 +646,11 @@ export type SearchRow =
  * no local copy) are left out, as the backend leaves them out of the box's
  * roots (`compute_box_allowed_roots`): a tab started in one is refused, so no
  * surface should offer it as a place to start.
+ *
+ * A remote member's root is its local copy (`localMirrorRootFor`: its own
+ * mirror, else `<directory>/mirror`), the tree its box tabs run in and the
+ * backend's root for it (`box_store::member_projects_in`), never its
+ * `directory`, which is the project's state folder.
  */
 export function boxMembersOfScope(
   scope: string,
@@ -658,8 +664,29 @@ export function boxMembersOfScope(
     .map((id) => projects.find((p) => p.id === id))
     .filter((p): p is NonNullable<typeof p> => !!p)
     .filter((p) => !isLocalModelsOnly(p) && !isHostPinned(p))
-    .map((p) => ({ id: p.id, name: p.name, dir: resolveProjectDirectory(p) }))
+    .map((p) => ({ id: p.id, name: p.name, dir: localMirrorRootFor(p) ?? resolveProjectDirectory(p) }))
     .filter((m) => m.dir.length > 0);
+}
+
+/**
+ * Where a box's saved tabs move on restore: each remote member's `directory`
+ * (its state folder) to its local copy. Until 2026-11-25 a member tab of a
+ * remote project started in the state folder, which is no box root any more
+ * (`box_store::compute_box_allowed_roots`), so a tab saved there would be
+ * refused at spawn.
+ */
+export function remoteMemberCwdMoves(
+  box: ProjectBox | undefined,
+  projects: readonly import("../types").ProjectEntry[],
+): CwdMove[] {
+  if (!box) return [];
+  return box.member_ids
+    .map((id) => projects.find((p) => p.id === id))
+    .flatMap((p) => {
+      const to = localMirrorRootFor(p);
+      const from = resolveProjectDirectory(p);
+      return to && from ? [{ from, to }] : [];
+    });
 }
 
 /** One member of the active box with its resolved root, as [`boxMembersOfScope`] lists them. */
@@ -672,9 +699,8 @@ export type BoxMemberDir = ReturnType<typeof boxMembersOfScope>[number];
  * `null` is "the whole box": the box folder (and anything below it, e.g. a
  * member link) or a directory under no member. `boxFolder` joins the contest as
  * a root of its own, so a member root that happens to be an ancestor of the box
- * folder does not claim it. A remote member's tabs run in its local copy, which
- * `members` does not carry as a root (same table as `boxMembersOfScope`), so
- * they get `null` too — remoteness is not guessed from paths.
+ * folder does not claim it. A remote member's root in `members` is its local
+ * copy (`boxMembersOfScope`), so a tab running there belongs to it.
  */
 export function memberOfCwd(cwd: string, members: readonly BoxMemberDir[], boxFolder = ""): BoxMemberDir | null {
   if (!cwd) return null;

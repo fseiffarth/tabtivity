@@ -11,7 +11,8 @@ import { envName } from "../../lib/brand";
 import { ASSISTANT_SCOPE, readAssistantLaunch } from "../../lib/assistant";
 import { restoredTaskName } from "../../lib/agents/autoTabName";
 import { readCockpitMeta } from "../../lib/cockpit/agentNotes";
-import type { SavedTabEntry, TabEntry, TabKind } from "./types";
+import type { CwdMove, SavedTabEntry, TabEntry, TabKind } from "./types";
+import { isPathWithin } from "../../lib/paths";
 import { nextKey } from "./ids";
 import { FILES_TAB_CMD, cmdToKind, isRelaunchableLocalTab, isResumableAgentTab, resumeArgsOf } from "./tabKinds";
 
@@ -125,6 +126,20 @@ export function withoutLegacyRunGlyph(label: string): string {
   return label.replace(/^▶[︎️]?\s+/u, "");
 }
 
+/**
+ * A saved cwd that is exactly a folder it no longer belongs in, moved to where
+ * it goes instead; anything else as saved. A box scope moves a remote member's
+ * state folder to its local copy, where the member's box tabs run and which is
+ * the box's root for it (a tab saved in the state folder would be refused at
+ * spawn). Exact only: a legacy remote entry's folder is the user's home, and
+ * "under it" would move every tab of the box.
+ */
+export function movedCwd(cwd: string | undefined, moves: readonly CwdMove[] | undefined): string | undefined {
+  if (!cwd || !moves) return cwd;
+  const same = (a: string, b: string) => isPathWithin(a, b) && isPathWithin(b, a);
+  return moves.find(({ from, to }) => from && to && same(cwd, from))?.to ?? cwd;
+}
+
 /** The live entry a saved tab restores as — THE one place a `SavedTabEntry`
  * becomes a `TabEntry`: `loadFromLayout` maps every saved tab through it,
  * and `adoptSyncOutcome` a tab another client of this backend created
@@ -134,8 +149,9 @@ export function withoutLegacyRunGlyph(label: string): string {
  * from the file. */
 export function restoreSavedTab(
   t: SavedTabEntry,
-  ctx: { defaultCwd: string; scope: string; agentRoots: readonly string[] },
+  ctx: { defaultCwd: string; scope: string; agentRoots: readonly string[]; cwdMoves?: readonly CwdMove[] },
 ): TabEntry {
+  const savedCwd = movedCwd(t.cwd, ctx.cwdMoves);
   const kind =
     t.kind ??
     cmdToKind(t.cmd || (t.type === "files" ? FILES_TAB_CMD : ""));
@@ -221,8 +237,8 @@ export function restoreSavedTab(
     // backend rewrites at the spawn anyway and which is no project directory.
     cwd:
       isAgent && ctx.defaultCwd && ctx.scope !== ASSISTANT_SCOPE
-        ? restoredAgentCwd(t.cwd, ctx.defaultCwd, ctx.agentRoots)
-        : t.cwd || ctx.defaultCwd,
+        ? restoredAgentCwd(savedCwd, ctx.defaultCwd, ctx.agentRoots)
+        : savedCwd || ctx.defaultCwd,
     kind,
     sessionId,
     // The binding into agent_tasks.json. Kept from the layout when it has one,

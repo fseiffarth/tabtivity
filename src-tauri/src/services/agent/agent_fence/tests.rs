@@ -867,12 +867,14 @@ fn roots_cover_plain_multi_box_and_box_scope() {
     for expected in [
         "/work/p1",
         "/boxes/a",
-        "/remote/p2",
         "/mirrors/p2",
         "/boxes/b",
     ] {
         assert!(p1_roots.contains(&PathBuf::from(expected)), "{p1_roots:?}");
     }
+    // A remote member's `directory` (its state folder, or a legacy entry's
+    // home) is never a sibling root: only its local copy is.
+    assert!(!p1_roots.contains(&PathBuf::from("/remote/p2")), "{p1_roots:?}");
     let box_roots = compute_fence_roots(&boxes, &projects, "box:a", false).unwrap();
     assert!(box_roots.contains(&PathBuf::from("/boxes/a")));
     assert!(compute_fence_roots(&boxes, &projects, "ghost", false).is_none());
@@ -915,7 +917,9 @@ fn a_remote_only_project_contributes_no_local_root() {
     };
     let p1_roots = compute_fence_roots(&boxes, &projects, "p1", true).unwrap();
     assert!(!leaked(&p1_roots), "{p1_roots:?}");
-    assert!(p1_roots.contains(&PathBuf::from("/state/remote-projects/pl")), "a plain Remote member is unchanged");
+    // A plain Remote member's state folder is no root either; its local copy
+    // reaches a spawn through `box_store::box_allowed_roots`.
+    assert!(!p1_roots.iter().any(|r| r.starts_with("/state/remote-projects/pl")), "{p1_roots:?}");
     let box_roots = crate::services::box_store::compute_box_allowed_roots(&boxes, &projects, "a").unwrap();
     assert!(!leaked(&box_roots), "{box_roots:?}");
     let attach = attach_roots(&boxes, &projects, "p1", state).unwrap();

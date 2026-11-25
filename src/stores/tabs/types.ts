@@ -719,6 +719,15 @@ export type DetachedEditPayload =
  */
 export interface LoadFromLayoutOptions {
   agentRoots?: readonly string[];
+  /** Saved cwds to move before anything else reads them (`movedCwd`): a box
+   *  scope's remote members' state folders to their local copies. */
+  cwdMoves?: readonly CwdMove[];
+}
+
+/** A folder a saved tab's cwd no longer belongs in, and where it goes instead. */
+export interface CwdMove {
+  from: string;
+  to: string;
 }
 
 export interface SavedTabEntry {
