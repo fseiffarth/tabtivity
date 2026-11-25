@@ -433,6 +433,26 @@ pub struct TurnReadings {
     pub prompts: Vec<AgentTabPrompts>,
 }
 
+/// Exactly the inputs used to read and identify a local agent's rows. A host
+/// tab's hooks and transcripts are on its own machine.
+#[derive(Debug, PartialEq, Eq)]
+struct ReadingTab {
+    tmux_name: String,
+    uid: String,
+    cmd: String,
+}
+
+fn reading_tabs(tabs: &[ResolvedTab]) -> Vec<ReadingTab> {
+    tabs.iter()
+        .filter(|tab| tab.public.kind == "agent" && !tab.place.on_host())
+        .filter_map(|tab| Some(ReadingTab {
+            tmux_name: tab.tmux_name.clone(),
+            uid: tab.session_id.as_ref().filter(|uid| !uid.is_empty())?.clone(),
+            cmd: tab.cmd.clone(),
+        }))
+        .collect()
+}
+
 /// The newest turn record of a tab: the shared root's and, for a project
 /// tab, the project's own slice (where a fenced agent's hook writes) — the
 /// one with the later stamp wins. The record is `<state> <epoch seconds>`.
@@ -459,13 +479,13 @@ pub(super) fn turn_record(state_dir: &Path, project_id: &str, uid: &str) -> Opti
 /// names a model or has subagents at work; every agent tab with a transcript
 /// gets its newest prompts.
 pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -> TurnReadings {
+    read_turns(state_dir, project_id, &reading_tabs(tabs))
+}
+
+fn read_turns(state_dir: &Path, project_id: &str, tabs: &[ReadingTab]) -> TurnReadings {
     let mut readings = TurnReadings::default();
-    // A host tab's hooks record on the host: no local `.turn` record or
-    // transcript is its, whatever its session id says.
-    for tab in tabs.iter().filter(|t| t.public.kind == "agent" && !t.place.on_host()) {
-        let Some(uid) = tab.session_id.as_deref().filter(|id| !id.is_empty()) else {
-            continue;
-        };
+    for tab in tabs {
+        let uid = &tab.uid;
         let model = agent_session::agent_session_model(&tab.cmd, Some(project_id), uid);
         let subagents = agent_transcript::running_subagents(&tab.cmd, Some(project_id), uid);
         let record = turn_record(state_dir, project_id, uid);
@@ -578,18 +598,6 @@ pub fn schedule_summaries(
         .collect()
 }
 
-/// `Activity` with no window: the readings of every project's agent tabs.
-pub fn activity(state_dir: &Path, catalog: &super::discovery::Catalog) -> TurnReadings {
-    let mut all = TurnReadings::default();
-    for project in &catalog.projects {
-        let readings = turn_readings(state_dir, &project.raw_id, &project.tabs);
-        all.statuses.extend(readings.statuses);
-        all.timings.extend(readings.timings);
-        all.prompts.extend(readings.prompts);
-    }
-    all
-}
-
 /// The project pill's git dot, probed here rather than read off the pills:
 /// `gitDirtyState`'s ladder (untracked or unstaged ▸ staged ▸ unpushed),
 /// none for a clean tree or no repo. Blocking — one hardened git spawn (a
@@ -619,7 +627,33 @@ pub const READING_TTL: Duration = Duration::from_secs(10);
 #[derive(Debug, Default)]
 pub struct ReadingCache {
     git: HashMap<String, (Instant, Option<&'static str>)>,
-    readings: HashMap<String, (Instant, TurnReadings)>,
+    readings: HashMap<String, Arc<TurnSlot>>,
+}
+
+/// Concurrent polls for the same inputs await one disk read. Replacing the
+/// slot detaches an older worker, which can only fill its own cell.
+#[derive(Debug, Default)]
+pub(super) struct TurnSlot {
+    tabs: Vec<ReadingTab>,
+    result: tokio::sync::OnceCell<(Instant, TurnReadings)>,
+}
+
+impl TurnSlot {
+    pub(super) async fn read(self: &Arc<Self>, state_dir: &Path, project_id: &str) -> TurnReadings {
+        if self.tabs.is_empty() {
+            return TurnReadings::default();
+        }
+        let result = self.result.get_or_try_init(|| {
+            let slot = self.clone();
+            let dir = state_dir.to_owned();
+            let id = project_id.to_owned();
+            tokio::task::spawn_blocking(move || {
+                let rows = read_turns(&dir, &id, &slot.tabs);
+                (Instant::now(), rows)
+            })
+        }).await;
+        result.map(|(_, rows)| rows.clone()).unwrap_or_default()
+    }
 }
 
 impl ReadingCache {
@@ -632,16 +666,21 @@ impl ReadingCache {
         self.git.insert(raw_id.to_string(), (now, dot));
     }
 
-    /// The project's turn readings, taken now when the cached ones are stale.
-    pub fn readings(&mut self, state_dir: &Path, project: &ResolvedProject, now: Instant) -> TurnReadings {
-        if let Some((at, readings)) = self.readings.get(&project.raw_id) {
-            if now.duration_since(*at) < READING_TTL {
-                return readings.clone();
+    pub(super) fn turn_slot(&mut self, raw_id: &str, tabs: &[ResolvedTab], now: Instant) -> Arc<TurnSlot> {
+        let inputs = reading_tabs(tabs);
+        if let Some(slot) = self.readings.get(raw_id) {
+            let fresh = slot.result.get().is_none_or(|(at, _)| now.duration_since(*at) < READING_TTL);
+            if fresh && slot.tabs == inputs {
+                return slot.clone();
             }
         }
-        let readings = turn_readings(state_dir, &project.raw_id, &project.tabs);
-        self.readings.insert(project.raw_id.clone(), (now, readings.clone()));
-        readings
+        let slot = Arc::new(TurnSlot { tabs: inputs, result: Default::default() });
+        self.readings.insert(raw_id.to_owned(), slot.clone());
+        slot
+    }
+
+    pub(super) fn invalidate_turns(&mut self, raw_id: &str) {
+        self.readings.remove(raw_id);
     }
 }
 
@@ -2211,6 +2250,34 @@ mod tests {
             place: super::super::discovery::TabPlace::Here,
             location: "local".into(),
         }
+    }
+
+    #[test]
+    fn overlapping_polls_share_a_slot_until_inputs_change_it_expires_or_the_tab_is_seen() {
+        let now = Instant::now();
+        let mut cache = ReadingCache::default();
+        let mut tabs = [tab("claude", Some("first"))];
+        let old = cache.turn_slot("project", &tabs, now);
+        assert!(Arc::ptr_eq(&old, &cache.turn_slot("project", &tabs, now)));
+
+        // The same tmux tab now hosts a different agent session. The earlier
+        // read finishes last, after the replacement has published its result.
+        tabs[0].session_id = Some("next".into());
+        let current = cache.turn_slot("project", &tabs, now);
+        assert!(!Arc::ptr_eq(&old, &current));
+        current.result.set((now, TurnReadings::default())).unwrap();
+        old.result.set((now, TurnReadings::default())).unwrap();
+        assert!(Arc::ptr_eq(&current, &cache.turn_slot("project", &tabs, now)));
+
+        let expired = cache.turn_slot("project", &tabs, now + READING_TTL);
+        assert!(!Arc::ptr_eq(&current, &expired));
+        cache.invalidate_turns("project");
+        let after_seen = cache.turn_slot("project", &tabs, now + READING_TTL);
+        assert!(!Arc::ptr_eq(&expired, &after_seen));
+
+        tabs[0].public.kind = "shell".into();
+        let no_agent = cache.turn_slot("project", &tabs, now + READING_TTL);
+        assert!(no_agent.tabs.is_empty());
     }
 
     /// A host tab names nothing on this machine: its transcript is

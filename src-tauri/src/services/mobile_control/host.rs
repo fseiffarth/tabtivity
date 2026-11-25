@@ -36,7 +36,7 @@ use super::{
     config::{verify_tailscale_serve, HostConfig},
     deadline,
     diverged,
-    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedProject, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     files_zip,
     git_overview,
@@ -833,11 +833,9 @@ async fn headless_git_dot(state: &HostState, raw_id: &str, root: &std::path::Pat
 }
 
 /// A project's agent readings with no window, from the cache while fresh.
-fn headless_readings(state: &HostState, project: &super::discovery::ResolvedProject) -> headless::TurnReadings {
-    state
-        .readings
-        .lock_ok()
-        .readings(&state.config.state_dir, project, Instant::now())
+async fn headless_readings(state: &HostState, project: &ResolvedProject) -> headless::TurnReadings {
+    let slot = state.readings.lock_ok().turn_slot(&project.raw_id, &project.tabs, Instant::now());
+    slot.read(&state.config.state_dir, &project.raw_id).await
 }
 
 /// Today as the desktop-local `YYYY-MM-DD` the board's date columns read.
@@ -1158,7 +1156,7 @@ async fn projects(
     // Each row's agent tabs by state, from the readings the activity list
     // uses. Tmux session names are unique server-wide, so one map serves all.
     let agent_statuses = if listed.iter().any(|p| p.tabs.iter().any(|t| t.public.kind == "agent")) {
-        let (_, statuses, _) = activity_readings(&state, &catalog_snapshot).await;
+        let (_, statuses, _) = activity_readings(&state, listed.iter().copied()).await;
         statuses
             .into_iter()
             .map(|status| (status.tmux_session, status.status))
@@ -1257,17 +1255,23 @@ fn activity_rank(status: &str) -> u8 {
 /// Every agent tab's status and prompt rows in one desktop round trip, and
 /// whether the desktop answered. Without a window they come from the hooks'
 /// turn records and the tabs' transcripts (headless owner plan, H1b).
-async fn activity_readings(
+async fn activity_readings<'a>(
     state: &HostState,
-    catalog_snapshot: &Catalog,
+    projects: impl Iterator<Item = &'a ResolvedProject>,
 ) -> (bool, Vec<super::protocol::AgentTabStatus>, Vec<super::protocol::AgentTabPrompts>) {
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Activity { request_id }).await {
         Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
         response if desktop_down(&response) => {
-            let readings = headless::activity(&state.config.state_dir, catalog_snapshot);
-            (false, readings.statuses, readings.prompts)
+            let mut statuses = Vec::new();
+            let mut prompts = Vec::new();
+            for project in projects {
+                let readings = headless_readings(state, project).await;
+                statuses.extend(readings.statuses);
+                prompts.extend(readings.prompts);
+            }
+            (false, statuses, prompts)
         }
         _ => (false, vec![], vec![]),
     }
@@ -1285,7 +1289,7 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
     let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
-    let (desktop_available, statuses, prompts) = activity_readings(&state, &catalog_snapshot).await;
+    let (desktop_available, statuses, prompts) = activity_readings(&state, catalog_snapshot.projects.iter()).await;
     // Tmux session names are unique across the whole server, so one map covers
     // every project's tabs.
     let statuses = statuses
@@ -1445,7 +1449,7 @@ async fn project(
                 .into_iter()
                 .map(|choice| choice.public)
                 .collect();
-            let readings = headless_readings(&state, project);
+            let readings = headless_readings(&state, project).await;
             let schedules = headless::schedule_summaries(state_dir, &project.raw_id, &project.tabs, chrono::Local::now());
             let git = if is_git_project(project) {
                 headless_git_dot(&state, &project.raw_id, &project.root).await.map(str::to_string)
@@ -6732,7 +6736,8 @@ fn mark_tab_seen(state: &HostState, project_id: Option<String>, tmux_session: St
     // and a turn the phone watched finish must not come back as `done` once
     // the window is closed.
     if let Some(uid) = uid {
-        headless::mark_seen(&state.config.state_dir, uid, now_ms() / 1000);
+        off_worker(|| headless::mark_seen(&state.config.state_dir, uid, now_ms() / 1000));
+        state.readings.lock_ok().invalidate_turns(&project_id);
     }
     let socket = state.config.control_dir.join("desktop-control.sock");
     tokio::spawn(async move {

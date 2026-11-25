@@ -3651,6 +3651,79 @@ async fn the_activity_list_answers_an_empty_list_when_no_desktop_classifies_tabs
     assert!(!body.contains(crate::brand::TMUX_PREFIX));
 }
 
+#[tokio::test]
+async fn project_list_activity_and_detail_share_headless_readings() {
+    use crate::services::agent_turn::TURN_SUFFIX;
+    let host = Fixture::bare();
+    let (owner, owner_id) = host.pair_device(&signing_key(91)).await;
+    let (guest, _) = host.pair_device(&signing_key(92)).await;
+    let state_dir = &host.state.config.state_dir;
+    let live = state_dir.join("live_sessions");
+    std::fs::create_dir_all(&live).unwrap();
+    let mut projects = Vec::new();
+    for scope in ["shared", "private"] {
+        let root = host.root.join(scope);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut entry = json!({
+            "id": scope, "name": scope, "directory": root, "status": "active",
+            "git_type": "none", crate::brand::MOBILE_ACCESS_KEY: true,
+        });
+        if scope == "private" {
+            entry[crate::brand::MOBILE_DEVICES_KEY] = json!([owner_id]);
+        }
+        projects.push(entry);
+        let mut tabs = Vec::new();
+        for i in 0..2 {
+            let uid = format!("{scope}-{i}");
+            tabs.push(json!({
+                "cmd": "claude", "kind": "agent", "label": uid, "cwd": root,
+                "sessionId": uid, "tmuxSession": format!("{SLUG}-{scope}--agent-abcdef12{i}"),
+            }));
+            std::fs::write(live.join(format!("{uid}{TURN_SUFFIX}")), "working 100").unwrap();
+        }
+        let sessions = state_dir.join("sessions").join(scope);
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("terminals.json"), json!({ "tabLayout": tabs }).to_string()).unwrap();
+    }
+    std::fs::write(state_dir.join("projects.json"), json!(projects).to_string()).unwrap();
+
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=shared", &owner)).await;
+    let list = json(&body);
+    let rows = list["projects"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{body}");
+    assert_eq!(rows[0]["agents"]["working"], 2);
+    let detail = format!("/api/v1/projects/{}", rows[0]["id"].as_str().unwrap());
+
+    // Only the search result is warm. Activity should pick up the other
+    // project's new decision and keep the shared project's original reading.
+    std::fs::write(live.join(format!("shared-0{TURN_SUFFIX}")), "done 110").unwrap();
+    std::fs::write(live.join(format!("private-0{TURN_SUFFIX}")), "decision 110").unwrap();
+    let (_, _, body) = host.send(get_as("/api/v1/activity", &owner)).await;
+    let activity = json(&body);
+    let tabs = activity["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 4, "{body}");
+    assert_eq!(tabs[0]["agent_status"], "question", "{body}");
+    assert_eq!(tabs.iter().filter(|t| t["agent_status"] == "working").count(), 3);
+
+    let (_, _, body) = host.send(get_as(&detail, &owner)).await;
+    let overview = json(&body);
+    let tabs = overview["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 2, "{body}");
+    assert!(tabs.iter().all(|t| t["agent_status"] == "working"), "{body}");
+
+    let (_, _, body) = host.send(get_as("/api/v1/activity", &guest)).await;
+    let activity = json(&body);
+    let tabs = activity["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 2, "{body}");
+    assert!(tabs.iter().all(|r| r["project_label"] == "shared"), "{body}");
+
+    mark_tab_seen(&host.state, Some("shared".into()), format!("{SLUG}-shared--agent-abcdef120"), Some("shared-0"));
+    let (_, _, body) = host.send(get_as(&detail, &guest)).await;
+    let overview = json(&body);
+    let seen = overview["tabs"].as_array().unwrap().iter().find(|t| t["done_at"] == 110_000).unwrap();
+    assert!(seen.get("agent_status").is_none(), "{body}");
+}
+
 #[test]
 fn the_activity_list_puts_a_waiting_session_first_and_a_finished_one_last() {
     assert!(activity_rank("question") < activity_rank("working"));
