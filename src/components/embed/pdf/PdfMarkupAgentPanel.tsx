@@ -9,6 +9,7 @@
  * round draws over the writing.
  */
 import { useT, type TranslationKey } from "../../../lib/i18n";
+import { basename } from "../../../lib/paths";
 import { UntestedTag } from "../../common/UntestedTag";
 import { CloseIcon } from "../../common/icons/Icon";
 import { TabStatusMark } from "../../tabs/TabLocalityBadges";
@@ -50,7 +51,7 @@ export function PdfMarkupAgentPanel({
    *  until reloaded once. */
   const reloadLeads = markup.stale && !markup.reloaded;
   const anything =
-    !!round || markup.stale || markup.autoReloaded || markup.storage === "unsaved" || markup.changed || markup.leftOut > 0
+    !!round || markup.stale || markup.outdated !== null || markup.autoReloaded || markup.storage === "unsaved" || markup.changed || markup.leftOut > 0
     || !!markup.askElsewhere || !!roundUndo.note || roundUndo.noUndo !== null || markup.ticks.marks.length > 0
     || markup.questions.asks.length > 0 || !!markup.questions.failure;
   return (
@@ -100,6 +101,23 @@ export function PdfMarkupAgentPanel({
           </div>
         )}
         {markup.stale && !(round?.phase === "finished") && <p>{t(said("pdfMarkup.stale", "pdfMarkup.picture.stale"))}</p>}
+        {markup.outdated && (
+          <div className="file-viewer-pdf-markup-panel-row">
+            <p>
+              {t("pdfMarkup.outdated", { files: markup.outdated.map((file) => basename(file)).join(", ") })}{" "}
+              <UntestedTag id="desktop.markup.texRebuild" />
+            </p>
+            <button
+              type="button"
+              className="file-viewer-zoom-btn file-viewer-zoom-text"
+              onClick={markup.rebuild}
+              disabled={busy}
+              title={t("pdfMarkup.rebuildTitle")}
+            >
+              {t("pdfMarkup.rebuild")}
+            </button>
+          </div>
+        )}
         {markup.autoReloaded && !markup.stale && (
           <p className="file-viewer-pdf-markup-auto-reloaded">
             {t(said("pdfMarkup.autoReloaded", "pdfMarkup.picture.autoReloaded"))} <UntestedTag id="desktop.markup.autoReload" />

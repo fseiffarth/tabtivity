@@ -15,10 +15,15 @@ const mocks = vi.hoisted(() => ({
   holdPhonePrompt: vi.fn(),
   loadLayer: vi.fn(),
   saveLayer: vi.fn(async () => true),
+  rebuildTexSource: vi.fn(async () => {}),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("../../stores/agents/agentPrompts", () => ({ queuePromptForTab: mocks.queuePromptForTab }));
 vi.mock("../../lib/agents/phoneHolds", () => ({ holdPhonePrompt: mocks.holdPhonePrompt }));
+vi.mock("../../lib/viewers/tex/openTexWorkspace", async (original) => ({
+  ...(await original<typeof import("../../lib/viewers/tex/openTexWorkspace")>()),
+  rebuildTexSource: mocks.rebuildTexSource,
+}));
 vi.mock("../../../mobile-web/src/markup/store", async (original) => ({
   ...(await original<typeof import("../../../mobile-web/src/markup/store")>()),
   loadLayer: mocks.loadLayer,
@@ -61,7 +66,7 @@ function agentTab(key: string, scheduleTargetId: string, label: string): TabEntr
   return { key, label, cmd: "claude", cwd: "/home/u/paper", kind: "agent", scheduleTargetId } as TabEntry;
 }
 
-function Harness({ onReload = () => {} }: { onReload?: () => void }) {
+function Harness({ onReload = () => {}, onMarkup }: { onReload?: () => void; onMarkup?: (markup: ReturnType<typeof usePdfMarkup>) => void }) {
   const markup = usePdfMarkup({
     projectId: "p1",
     scope: "p1",
@@ -72,6 +77,7 @@ function Harness({ onReload = () => {} }: { onReload?: () => void }) {
     docSize: 9_000,
     docVersion: 0,
   });
+  onMarkup?.(markup);
   return <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={onReload} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={onReload} /></>;
 }
 
@@ -96,6 +102,7 @@ beforeEach(() => {
   mocks.loadLayer.mockReset();
   mocks.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: 9_000, modified: 1_790_000_000 }, saved: 1 });
   mocks.saveLayer.mockClear();
+  mocks.rebuildTexSource.mockClear();
   useTabsStore.setState({ tabsByScope: { p1: [agentTab("t1", "s1", "Claude")] } });
   useActivityStore.setState({ busyByTab: {}, attentionByTab: {} });
   useSettingsStore.setState({ settings: null });
@@ -293,6 +300,71 @@ describe("desktop markup Submit", () => {
     expect(submitButton().disabled).toBe(true);
     fireEvent.click(submitButton());
     expect(mocks.invoke.mock.calls.some(([command]) => command === "pdf_markup_submit")).toBe(false);
+  });
+
+  it("keeps Submit off while the file on disk is newer than the pages shown, until Reload", async () => {
+    let markup: ReturnType<typeof usePdfMarkup> | null = null;
+    render(<Harness onMarkup={(m) => (markup = m)} />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    act(() => markup!.markStale());
+    expect(submitButton().disabled).toBe(true);
+    expect(submitButton().title).toBe("The PDF changed on disk — Reload to see it under your marks.");
+    // The hook refuses too, whatever calls it.
+    await act(async () => {
+      await markup!.submit();
+    });
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "pdf_markup_submit")).toBe(false);
+    act(() => markup!.beforeReload());
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it("rebuilds a PDF older than its .tex sources and keeps Submit off until the new pages are read", async () => {
+    let status = { has_map: true, pdf_newer_than_map: false, newer_sources: ["/home/u/paper/main.tex"] };
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "file_mtime") return 1_790_000_000;
+      if (command === "synctex_status") return status;
+      return null;
+    });
+    let markup: ReturnType<typeof usePdfMarkup> | null = null;
+    render(<Harness onMarkup={(m) => (markup = m)} />);
+    await waitFor(() => expect(mocks.rebuildTexSource).toHaveBeenCalledWith("/home/u/paper/main.tex", "p1"));
+    await waitFor(() => expect(submitButton().title).toBe("The PDF is older than main.tex — rebuilding it; Submit waits for the new pages."));
+    expect(submitButton().disabled).toBe(true);
+    // Rebuild retries; the build wrote a current map.
+    status = { ...status, newer_sources: [] };
+    act(() => markup!.rebuild());
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    expect(mocks.rebuildTexSource).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks again on Submit: a source saved since rebuilds first and sends nothing", async () => {
+    let newer: string[] = [];
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "file_mtime") return 1_790_000_000;
+      if (command === "synctex_status") return { has_map: true, pdf_newer_than_map: false, newer_sources: newer };
+      return null;
+    });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    newer = ["/home/u/paper/ch1.tex"];
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.rebuildTexSource).toHaveBeenCalledWith("/home/u/paper/ch1.tex", "p1"));
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "pdf_markup_submit")).toBe(false);
+    await waitFor(() => expect(submitButton().disabled).toBe(true));
+  });
+
+  it("trusts no map the PDF outgrew: Submit goes on", async () => {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "file_mtime") return 1_790_000_000;
+      if (command === "synctex_status") return { has_map: true, pdf_newer_than_map: true, newer_sources: ["/home/u/paper/main.tex"] };
+      if (command === "pdf_markup_submit") return { prompt: "Look at the marked copy.", marked: null };
+      return null;
+    });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
+    expect(mocks.rebuildTexSource).not.toHaveBeenCalled();
   });
 
   it("leaves the marks unsent when the prompt is too long to queue", async () => {
