@@ -87,6 +87,7 @@ import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentRea
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
+import { TerminalLocalAutoModeCard } from "./TerminalLocalAutoModeCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalMcpStaleCard } from "./TerminalMcpStaleCard";
 import { noteMcpStale } from "../../stores/agents/mcpStale";
@@ -2920,6 +2921,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     )}
     {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
+    )}
+    {paneKind === "local_agent" && !attachOnly && !undoClearOffered && !signIn && !signInDone && host && (
+      <TerminalLocalAutoModeCard host={host} ptyId={id} />
     )}
     {agentPane && !attachOnly && !signIn && !signInDone && <TerminalLimitHandoff ptyId={id} visible={visible} cwd={cwd} />}
     {agentPane && !attachOnly && !signIn && !signInDone && host && (

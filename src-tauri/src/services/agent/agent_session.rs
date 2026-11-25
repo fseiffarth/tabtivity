@@ -1650,6 +1650,10 @@ pub fn read_live_session_for(project_id: Option<&str>, uid: &str) -> Option<Stri
 /// `clear` or `compact`. Written by the hook on every start, before the id.
 pub const LIVE_SOURCE_SUFFIX: &str = ".src";
 
+/// Suffix of the record beside the session record holding the permission mode
+/// Claude's `Stop` payload last reported (`permission_mode`).
+pub const LIVE_MODE_SUFFIX: &str = ".mode";
+
 /// The `source` words Claude's `SessionStart` payload can carry. Anything else
 /// in the record is discarded: the file is written by a hook parsing
 /// attacker-visible JSON.
@@ -1926,7 +1930,7 @@ pub fn read_live_mode_for(project_id: Option<&str>, uid: &str) -> Option<String>
     let mut best: Option<(std::time::SystemTime, String)> = None;
     let mut consider = |dir: &std::path::Path| {
         if let Some(mode) = read_live_mode_in(dir, uid) {
-            let stamp = std::fs::metadata(dir.join(format!("{uid}.mode")))
+            let stamp = std::fs::metadata(dir.join(format!("{uid}{LIVE_MODE_SUFFIX}")))
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
             if best.as_ref().is_none_or(|(t, _)| stamp >= *t) {
@@ -1942,11 +1946,11 @@ pub fn read_live_mode_for(project_id: Option<&str>, uid: &str) -> Option<String>
 }
 
 /// Testable core of [`read_live_mode_for`] against an explicit directory.
-fn read_live_mode_in(dir: &std::path::Path, uid: &str) -> Option<String> {
+pub(crate) fn read_live_mode_in(dir: &std::path::Path, uid: &str) -> Option<String> {
     if !is_uuid_shaped(uid) {
         return None;
     }
-    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}.mode")))?;
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_MODE_SUFFIX}")))?;
     let mode = raw.trim().to_string();
     if is_permission_mode(&mode) {
         Some(mode)

@@ -21,6 +21,7 @@ import { noteActivityDigests, type ActivityDigest } from "../../lib/terminal/act
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { noteAutoNameRoll, startAutoTabNames } from "../../stores/agents/autoTabNames";
 import { useAgentResumeCostStore, type ResumeCost } from "../../stores/agents/agentResumeCost";
+import { useAgentPermissionModeStore } from "../../stores/agents/agentPermissionMode";
 import type { AgentTurnState } from "../../stores/activity";
 import {
   usePowerStore,
@@ -947,9 +948,16 @@ export function AppShell() {
         noteAutoNameRoll(ev.payload.id, ev.payload.source);
       }),
     );
+    // The permission mode Claude's hook last recorded for a tab (read only):
+    // a local-model tab in auto mode shows why its commands are refused.
+    const unlistenMode = subscribeTauri(() =>
+      listen<{ id: string; mode: string }>("agent-permission-mode", (ev) => {
+        useAgentPermissionModeStore.getState().note(ev.payload.id, ev.payload.mode);
+      }),
+    );
     // Agent tabs take the name of their first prompt (Settings → Agents).
     const stopAutoNames = startAutoTabNames();
-    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); stopAutoNames(); };
+    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); unlistenMode(); stopAutoNames(); };
   }, []);
 
   // The running-task indicators recompute on demand — a chunk, a keystroke, a

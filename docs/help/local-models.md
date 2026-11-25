@@ -177,6 +177,11 @@ chats.
   system service, **Apply to the service…** opens a terminal with the `sudo`
   command (a systemd drop-in), which restarts the service and unloads every
   model. `OLLAMA_KEEP_ALIVE` set in your environment wins.
+- **Claude Code on a local model refuses every command** ("auto mode's
+  check had no usable answer"): the tab is in Claude Code's auto mode, whose
+  safety check runs on the same local model and gets no usable answer. The tab
+  shows a card while its last turn ended in auto mode; press **Shift+Tab** in
+  the terminal to switch to another mode (Tabtivity never picks the mode).
 - **Integrated GPU ignored**: some Ollama versions need `OLLAMA_IGPU_ENABLE=1`
   in the server's environment; the Models & agents menu offers the fix.
 - **Server won't start**: run `ollama serve` in a terminal to see its error.
