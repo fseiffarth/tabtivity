@@ -1109,6 +1109,17 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
     })
 }
 
+/// A local-model tab (`PtyOptions::local_model`) started through a launcher no
+/// lane can name a server to: `ollama launch claude|opencode …`, since `ollama`
+/// has no registry row. Vibe is not one: its tool-tagged models take the
+/// servers through `VIBE_MCP_SERVERS` ([`is_local_model`]). Such a tab gets no
+/// lane at all. The env pairs alone would arm the Claude hook's tab-naming and
+/// tab-message reminders (`agent_session`) for tools the model was never given.
+fn unwired_local_model(opts: &PtyOptions) -> bool {
+    opts.local_model && !is_local_model(opts)
+        && matches!(super::agent_registry::mcp_wiring(basename(&opts.cmd)), McpWiring::None)
+}
+
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
 /// Every lane's token ([`LANE_TOKEN_ENVS`]) is taken, so no lane is left out;
 /// the guard holds their hashes ([`Session::id`]), never the tokens.
@@ -1257,6 +1268,7 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         return false;
     }
     let root_agent = is_root_agent(opts, agent_spawn);
+    if unwired_local_model(opts) { return root_agent; }
     let Some(runtime) = runtime else { return root_agent };
     let trusted = Trusted::read(state, opts.project_id.as_deref());
     if root_agent && runtime.serves_root {

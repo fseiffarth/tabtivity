@@ -55,6 +55,35 @@ fn a_non_git_project_gets_no_push_lane() {
     assert!(wired(&repo).contains("/mcp/git"), "{}", wired(&repo));
 }
 
+/// A local-model tab behind `ollama launch` takes no MCP config, so it gets no
+/// lane: no env pair arms the Claude hook's tab-naming reminder for tools the
+/// model never got. A local tab whose own CLI is wired (OpenCode's direct
+/// fallback line) and an ordinary tab keep theirs.
+#[test]
+fn an_ollama_launch_tab_gets_no_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path();
+    let project = state.join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(state.join("settings.json"), "{}").unwrap();
+    let entry = json!({"id":"p","name":"P","status":"active","position":0,"local_file":"","directory":project.to_string_lossy()});
+    std::fs::write(state.join("projects.json"), json!([entry]).to_string()).unwrap();
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
+    let lanes = |cmd: &str, args: &[&str], local: bool| {
+        let mut o = opts(cmd, args, Some("p"));
+        o.id = "p:local-lane".into();
+        o.local_model = local;
+        grant_lanes(&mut o, true, Some(&serving), &TokenStore::default(), state);
+        o.env.keys().filter(|k| k.ends_with("_MCP_TOKEN") || k.ends_with("_MCP_URL")).cloned().collect::<Vec<_>>()
+    };
+    let uuid = "0b9f3c2e-4d5a-4f6b-8c7d-9e0f1a2b3c4d";
+    for args in [&["launch", "claude", "--model", "qwen3:8b", "--", "--session-id", uuid][..], &["launch", "opencode", "--model", "qwen3:8b"][..]] {
+        assert!(lanes("ollama", args, true).is_empty(), "{args:?}");
+    }
+    assert!(lanes("opencode", &["--model", "ollama/qwen3:8b"], true).iter().any(|k| k == HELP_TOKEN_ENV), "a wired local CLI keeps its lanes");
+    assert!(lanes("claude", &[], false).iter().any(|k| k == HELP_TOKEN_ENV), "an ordinary tab keeps its lanes");
+}
+
 /// Gap 19: the push binding records the `.git` entry git discovery
 /// finds at spawn — none for a repo-less folder — so a repo made later is
 /// told apart (`git_push_mcp::repo_changed`).

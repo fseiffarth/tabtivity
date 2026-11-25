@@ -23,7 +23,10 @@ takes a server. `root_mcp::wire_named_cli` is the one function every lane calls.
 | `None` | everyone else | env pair only → `tabtivity-mcp` | — |
 
 Tool-tagged local Vibe models keep their own path (`VIBE_MCP_SERVERS`, the
-`is_local_model` branch of each `apply_*_to_spawn_with`).
+`is_local_model` branch of each `apply_*_to_spawn_with`). Any other local-model
+tab whose launcher has no form (`ollama launch claude|opencode …`) gets no lane
+at all (`root_mcp::unwired_local_model`): the env pair alone made the Claude
+hook ask the model to name its tab with tools it was never given.
 
 Rules each form keeps:
 
