@@ -109,16 +109,14 @@ describe("the chat in the side panel under Diffs and Data", () => {
     await waitFor(() => expect(panel().contains(stream())).toBe(true));
   });
 
-  it("offers the switch on Chat too, where it only flips the setting", async () => {
+  it("leaves the switch out on Chat and offers it once another view is picked", async () => {
     settings({});
     render(<Pane host={host} start={null} />);
     await screen.findByText("fix the parser");
+    expect(screen.queryByRole("button", { name: "Conversation in the side panel" })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     fireEvent.click(toggle());
     expect(useSettingsStore.getState().settings?.reader_side_chat).toBe(true);
-    await waitFor(() => expect(toggle().getAttribute("aria-pressed")).toBe("true"));
-    expect(host.contains(stream())).toBe(true);
-    expect(useReaderSideChatStore.getState().claims).toEqual([]);
-    fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     await waitFor(() => expect(panel().contains(stream())).toBe(true));
   });
 

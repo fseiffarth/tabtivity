@@ -48,8 +48,8 @@ function clockTime(at: number, use24h: boolean): string {
  * The switch for the chat in the side panel (`reader_side_chat`, remembered),
  * beside the view tabs and drawn as one of them: pressed, Diffs, Data and
  * Terminal put the tab's conversation in the side panel
- * (`components/layout/ReaderSideChat`); on Chat it stays where it is, and
- * the switch only says where it goes once another view is picked.
+ * (`components/layout/ReaderSideChat`); on Chat it stays where it is, so the
+ * switch is left out there and returns once another view is picked.
  */
 function SideChatSwitch() {
   const t = useT();
@@ -456,7 +456,8 @@ export function TerminalPromptStrip({
             {reader.onHost === "copilot" && <UntestedTag id="terminal.reader.hostTab.copilot" />}
             {reader.onHost === "opencode" && <UntestedTag id="terminal.reader.hostTab.opencode" />}
           </div>
-          {reader.sideChat && <SideChatSwitch />}
+          {/* On Chat the chat stays where it is, so the switch has nothing to do. */}
+          {reader.sideChat && !(reader.open && !reader.changes?.open && !reader.files?.open) && <SideChatSwitch />}
         </> : <>
         {reader?.changes && (
           <button
