@@ -26,7 +26,7 @@ import { isOpenCodeTab, openCodePickKeys, readOpenCodeNotice, readOpenCodePicker
 import { readPromptSuggestion } from "../../../mobile-web/src/terminal/promptSuggestion";
 import { queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
 import { agentFamily } from "../../../shared/agentComposer";
-import { inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
+import { codexComposerFrame, inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 
 /**
  * What the desktop Reader (`TerminalReaderView`) reads off the pane's live
@@ -99,6 +99,22 @@ const STRAY_SCREEN_ROWS = 40;
  * found, and the phone reads the same tail. */
 export const READER_ROWS = 300;
 
+/** A Codex repaint can leave just the caret and the start of its shortcut
+ * row. Use the live caret at the composer column and the footer three rows
+ * below it to distinguish that frame from output quoting the same hint. */
+function clippedCodexFrame(buffer: ReadableBufferLike, lines: readonly ReadableLine[]): number {
+  const { baseY, cursorX, cursorY } = buffer;
+  if (baseY === undefined || cursorY === undefined || cursorX !== 2) return lines.length;
+  const row = baseY + cursorY;
+  const at = (offset: number) => buffer.getLine(row + offset)?.translateToString(true).trim();
+  if (lines[lines.length - 1]?.key !== `r${row + 3}` || at(0) !== "" || at(1) !== "" || at(2) !== ""
+    || !/^← for agents · \? for(?: shortcuts)?$/u.test(at(3) ?? "")) {
+    return lines.length;
+  }
+  const start = lines.findIndex((line) => Number.parseInt(line.key.slice(1), 10) >= row);
+  return start < 0 ? lines.length : start;
+}
+
 const TRANSCRIPT_WRITE_WARNING = /^\s*⚠\uFE0F?\s*Transcript writes are failing\b/u;
 const CLAUDE_TURN_DONE = /^[✢✳✶✻✽*]\s+.+\sfor\s.+\s·\s+done\b/u;
 
@@ -115,14 +131,22 @@ function readUnsavedReply(echo: ReadableLine | undefined, tail: ReadableLine[], 
 
 /** Reads `buffer` (the pane's active xterm buffer, `columns` wide) for
  * `agentLabel`'s TUI. */
-export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, columns?: number): ReaderLive {
+export function readReaderLive(
+  buffer: ReadableBufferLike, agentLabel: string, columns?: number, { steering = false } = {},
+): ReaderLive {
   const { lines } = readableScreen(buffer, READER_ROWS);
-  const status = sessionStatus(lines, agentLabel);
   // The input box and the rows under it are the TUI's frame, not output; the
   // tail after the last echoed prompt is what the session draws now.
   // A page that names its own keys (`Press enter to save`) holds no input box,
   // whatever line of it reads as one.
-  const frameStart = pressHintShown(lines) ? lines.length : inputFrameStart(lines, agentLabel);
+  const page = pressHintShown(lines);
+  const recoverCodex = steering && !page && agentFamily(agentLabel) === "codex";
+  const composer = recoverCodex ? codexComposerFrame(lines) : null;
+  const parsedFrameStart = page ? lines.length : composer?.start ?? inputFrameStart(lines, agentLabel);
+  const recovered = recoverCodex && parsedFrameStart === lines.length
+    ? clippedCodexFrame(buffer, lines) : lines.length;
+  const frameStart = Math.min(parsedFrameStart, recovered);
+  const status = sessionStatus(lines, agentLabel, composer) ?? (recovered < lines.length ? {} : null);
   const screen = lines.slice(0, frameStart);
   let start = 0;
   screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });

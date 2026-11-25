@@ -6,6 +6,26 @@ function plainBuffer(rows: string[]): ReadableBufferLike {
   return { length: rows.length, getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }) };
 }
 
+it("uses the caret and clipped Codex hint to recover the composer during steering", () => {
+  const buffer = {
+    ...plainBuffer(["• Done.", "", "", "", "", "  ← for agents · ? for"]),
+    baseY: 0, cursorX: 2, cursorY: 2,
+  };
+  expect(readReaderLive(buffer, "Codex", 100, { steering: true })).toMatchObject({ status: {}, stray: false, question: null });
+  expect(readReaderLive({ ...buffer, cursorX: 0 }, "Codex", 100, { steering: true })).toMatchObject({ status: null, stray: true });
+  expect(readReaderLive(buffer, "Codex")).toMatchObject({ status: null, stray: true });
+});
+
+it("reads Codex status below a tall numbered draft during steering", () => {
+  const buffer = plainBuffer(["• Done.", "", "› 1. First line",
+    ...Array.from({ length: 8 }, (_, index) => `  next line ${index}`),
+    "", "  gpt-5.4 high · ~/work", "  ⚠ 1 warning · f2 to view"]);
+  expect(readReaderLive(buffer, "Codex", 100, { steering: true })).toMatchObject({
+    status: { model: "gpt-5.4", effort: "high", path: "~/work" }, stray: false, question: null,
+  });
+  expect(readReaderLive(buffer, "Codex").status).toBeNull();
+});
+
 describe("readReaderLive on an idle Claude Code box under a wrapping terminal", () => {
   const WIDTH = 76;
   const rows: [string, boolean][] = [

@@ -732,6 +732,31 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it("can send after steering hands off a Codex prompt with a clipped terminal footer", async () => {
+    useTabsStore.setState({ tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex" }] } });
+    const term = fakeTerminal(["• Done.", "", "", "", "", "  ← for agents · ? for"]);
+    Object.assign(term.buffer.active, { baseY: 0, cursorX: 2, cursorY: 2 });
+    registerTerminal("p:agent-1", term);
+    try {
+      sendSteeringPrompt.mockResolvedValue(undefined);
+      reader(host);
+      await screen.findByText("fix the parser");
+      expect((screen.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(true);
+      act(() => {
+        const steering = useKeyboardSteeringStore.getState();
+        steering.enter();
+        if (openReaderComposer("p:agent-1", "tabs")) steering.handOff("prompt");
+      });
+      const box = screen.getByRole("textbox");
+      fireEvent.change(box, { target: { value: "steered prompt" } });
+      await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+      expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ cmd: "codex" }), "steered prompt");
+    } finally {
+      act(() => useKeyboardSteeringStore.getState().exit());
+      unregisterTerminal("p:agent-1", term);
+    }
+  });
+
   it("empties the chat on a clear while the cleared session is still what is read", async () => {
     reader(host);
     await screen.findByText("fix the parser");

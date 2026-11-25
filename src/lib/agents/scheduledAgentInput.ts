@@ -45,6 +45,8 @@ export interface ScheduledAgentInput {
 }
 
 export interface SubmitOptions {
+  /** Editor keys that replace an existing draft before the first submission. */
+  draftReset?: string;
   /** Called at the message, after any prefix commands have settled. */
   beforeMessage?: () => void;
   /** Slash commands submitted one at a time, in order, before the message. */
@@ -152,6 +154,7 @@ export async function submitScheduledAgentMessage(
     .filter((writes) => writes.length > 0);
 
   const submissions = [...prefaceWrites, messageWrites];
+  if (options.draftReset) submissions[0][0] = options.draftReset;
   submissions[0] = [...(input.dialogCloseKeys?.() ?? []), ...submissions[0]];
   for (let submission = 0; submission < submissions.length; submission += 1) {
     // Only the message counts as a prompt asked; a prefix command still stamps

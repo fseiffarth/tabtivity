@@ -75,6 +75,9 @@ export interface ReadableLineLike {
 
 export interface ReadableBufferLike {
   readonly length: number;
+  readonly baseY?: number;
+  readonly cursorX?: number;
+  readonly cursorY?: number;
   getLine(row: number): ReadableLineLike | undefined;
 }
 

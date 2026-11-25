@@ -1887,6 +1887,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * would take typing that goes to steering, so it stands aside — steering's
    * Prompt key shows it again with the keyboard (`registerReaderComposer`). */
   const steering = useKeyboardSteeringStore((state) => state.active || state.handedTo !== null);
+  const steeringPrompt = useKeyboardSteeringStore((state) => state.active || state.handedTo === "prompt");
   const agentLabel = tab ? agentTabLabel(tab) : "";
   /** The tab's lamp says it asks (its hooks, else the screen). */
   const lampAsking = useActivityStore((state) => state.attentionByTab[ptyId] === "decision");
@@ -2043,7 +2044,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         const writes = term.onWriteParsed(() => { settle ??= setTimeout(read, LIVE_SETTLE_MS); });
         subscribed = { term, dispose: () => writes.dispose() };
       }
-      const next = readReaderLive(term.buffer.active, agentLabel, term.cols);
+      const next = readReaderLive(term.buffer.active, agentLabel, term.cols, { steering: steeringPrompt });
       if (next.working) workingSeenAt.current = Date.now();
       setLive((previous) => (sameReaderLive(previous, next) ? previous : next));
     };
@@ -2055,7 +2056,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       if (settle) clearTimeout(settle);
       subscribed?.dispose();
     };
-  }, [visible, ptyId, agentLabel]);
+  }, [visible, ptyId, agentLabel, steeringPrompt]);
 
   // An answered dialog is clickable again once it is redrawn as something
   // else, or — the keys did not land — after a short wait.
