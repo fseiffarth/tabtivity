@@ -424,6 +424,7 @@ export const UNTESTED = {
   "ollama.modelLocationTitle": { area: "layout", what: "SettingsSubPanels · Model download location" },
   "ollama.contextTitle": { area: "layout", what: "Ollama panel · Context window setting for the server the app starts" },
   "ollama.keepAliveTitle": { area: "layout", what: "Ollama panel · Keep a model loaded after its last use (OLLAMA_KEEP_ALIVE): a spawned server gets it at start (Restart after a change); a systemd service via the \"Apply to the service…\" drop-in; does an idle OpenCode local-model tab keep its model past 5 min?" },
+  "ollama.sizeAtLeast": { area: "layout", what: "SettingsSubPanels · Browse the Ollama registry → Download ≥ 8/16/32 GB: keeps models whose largest variant downloads at least that much (sizes load per row, cloud-only models drop out); scrolling keeps loading pages until the list fills or End of results" },
   "ollama.restart": { area: "layout", what: "Ollama panel · Restart Ollama beside Refresh" },
   "projectSwitcher.addProjectsToBox": { area: "layout", what: "ProjectSwitcher · Add projects to Box" },
   "projectSwitcher.hpcPipeline": { area: "layout", what: "ProjectSwitcher · HPC pipeline…" },

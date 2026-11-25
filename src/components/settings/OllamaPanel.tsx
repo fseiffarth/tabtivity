@@ -11,6 +11,7 @@ import {
 import { formatBytes as fmtBytes } from "../../lib/formatBytes";
 import { placementLabel } from "../../lib/agents/ollamaPlacement";
 import { UntestedTag } from "../common/UntestedTag";
+import type { UntestedId } from "../../lib/untested";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
@@ -109,43 +110,42 @@ const REGISTRY_RUNS = ["local", "cloud"] as const;
  *  only for the host the pull started on (`hf.rs` `model_row`). */
 const HF_REALM_MISMATCH = /realm host "huggingface\.co" does not match original host "hf\.co"/i;
 
-/** TEMP diagnostic for the filter chips (see `diagChip` in the panel): the
- *  trace lives here, not in the panel, so a remount mid-click keeps it. */
-const chipDiagBus = {
-  run: null as null | { t0: number; lines: string[]; timer: number },
-  last: [] as string[],
-  subs: new Set<(lines: string[]) => void>(),
-  eventIds: new WeakMap<Event, number>(),
-  nextId: 0,
-};
-function chipDiagNote(line: string) {
-  const bus = chipDiagBus;
-  let run = bus.run;
-  if (!run) {
-    // A fixed window from the first note, not a quiet gap: a revert that lands
-    // seconds later (a remount, a late state write) must still be inside it.
-    const fresh = { t0: performance.now(), lines: [] as string[], timer: 0 };
-    fresh.timer = window.setTimeout(() => {
-      bus.last = fresh.lines;
-      bus.run = null;
-      for (const sub of bus.subs) sub(fresh.lines);
-    }, 5000);
-    run = bus.run = fresh;
-  }
-  run.lines.push(`+${Math.round(performance.now() - run.t0)}ms ${line}`);
-}
-function chipDiagEvent(ev: Event): string {
-  let id = chipDiagBus.eventIds.get(ev);
-  if (id === undefined) {
-    id = ++chipDiagBus.nextId;
-    chipDiagBus.eventIds.set(ev, id);
-  }
-  const m = ev as MouseEvent & { pointerType?: string };
-  return `ev#${id} ${ev.type} trusted=${ev.isTrusted} detail=${m.detail} pointer=${m.pointerType || "-"} t=${ev.timeStamp.toFixed(1)}`;
-}
-
 /** Download-size caps, Ollama's `s=` search param (GB; "over64" is the top bucket). */
 const REGISTRY_DOWNLOAD_SIZES = ["8", "16", "32", "64", "over64"] as const;
+
+/** Download-size floors ("≥ 8 GB"), applied here: ollama.com's `s=` has no "at
+ *  least" bucket but `over64` (its others are caps). A floor
+ *  fetches unfiltered pages and keeps a model whose largest variant downloads
+ *  at least that much (`largestTag`'s size, in the GiB the cards print). */
+const REGISTRY_DOWNLOAD_FLOORS = ["min8", "min16", "min32"] as const;
+const downloadFloorGb = (key: string): number | null => (key.startsWith("min") ? Number(key.slice(3)) : null);
+
+/** Billions of parameters a size tag names ("70b", "e4b", "135m", "8x7b",
+ *  "30b-a3b" → 30), or null when it names none. */
+function tagParamsB(tag: string): number | null {
+  const m = /^e?(?:(\d+(?:\.\d+)?)x)?(\d+(?:\.\d+)?)([mbt])/i.exec(tag);
+  if (!m) return null;
+  const n = Number(m[2]) * (m[1] ? Number(m[1]) : 1);
+  const unit = m[3].toLowerCase();
+  return unit === "m" ? n / 1000 : unit === "t" ? n * 1000 : n;
+}
+
+/** A registry row's biggest download: its largest local parameter tag, else
+ *  its last tag, else the bare row's own `latest`/`cloud`. */
+function largestTag(m: RegistryModel): string {
+  let best: string | null = null;
+  let bestB = -1;
+  for (const s of m.sizes) {
+    const b = /cloud/i.test(s) ? null : tagParamsB(s);
+    if (b !== null && b > bestB) {
+      best = s;
+      bestB = b;
+    }
+  }
+  if (best) return best;
+  if (m.sizes.length > 0) return m.sizes[m.sizes.length - 1];
+  return m.capabilities.includes("cloud") ? "cloud" : "latest";
+}
 
 /** Sort options for the registry browser, Ollama's own `o=` orders: every
  *  lazy-loaded page arrives already in order. */
@@ -294,7 +294,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const [regQueryLive, setRegQueryLive] = useState(""); // debounced
   const [regTypes, setRegTypes] = useState<Set<string>>(new Set()); // empty = any
   const [regRuns, setRegRuns] = useState(""); // "" = either, else a REGISTRY_RUNS value
-  const [regDownload, setRegDownload] = useState(""); // "" = any, else a REGISTRY_DOWNLOAD_SIZES value
+  const [regDownload, setRegDownload] = useState(""); // "" = any, else a REGISTRY_DOWNLOAD_SIZES/_FLOORS value
   const [sortBy, setSortBy] = useState<SortKey>("popular");
   const [regSource, setRegSource] = useState<RegistrySource>("ollama");
   // Hugging Face pages by cursor, not number: the next page's token.
@@ -671,53 +671,23 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // every page arrives filtered and in order and scrolling just appends.
   const regCapabilities = [...regTypes, regRuns].filter(Boolean);
   const regFilterKey = `${regSource}|${regCapabilities.join(",")}|${regDownload}|${sortBy}`;
-
-  // ── TEMP diagnostic: filter chips that toggle back in the cockpit window ──
-  // Records, for 5 s after a chip click, every native click the document
-  // sees on a chip, every run of a chip's handler (same event ids, so a
-  // handler run twice for one event shows) and every filter-state change, each
-  // tagged with this panel instance's id (a remount shows as a new id). The
-  // trace renders under the filter row. Remove once the cause is found.
-  const diagPanelId = useRef(Math.random().toString(36).slice(2, 6));
-  const [chipDiag, setChipDiag] = useState<string[]>(chipDiagBus.last);
-  useEffect(() => {
-    chipDiagBus.subs.add(setChipDiag);
-    return () => {
-      chipDiagBus.subs.delete(setChipDiag);
-    };
-  }, []);
-  const diagNote = (line: string) => chipDiagNote(`panel=${diagPanelId.current} ${line}`);
-  const diagEvent = chipDiagEvent;
-  const diagChip = (key: string, ev: Event) => {
-    const stack = (new Error().stack ?? "")
-      .split("\n")
-      .slice(2, 6)
-      .map((l) => l.trim().replace(/\(?https?:\/\/[^/]+\//, "("))
-      .join(" < ");
-    diagNote(`handler "${key}" ${diagEvent(ev)} | ${stack}`);
-  };
-  useEffect(() => {
-    const onDoc = (ev: Event) => {
-      const chip = ev.target instanceof Element ? ev.target.closest(".ollama-filters .seg > button") : null;
-      if (chip) diagNote(`document ${diagEvent(ev)} on "${chip.textContent ?? ""}"`);
-    };
-    for (const type of ["pointerdown", "click"]) document.addEventListener(type, onDoc, true);
-    return () => {
-      for (const type of ["pointerdown", "click"]) document.removeEventListener(type, onDoc, true);
-    };
-    // Mount-only: `diagNote` reads refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useEffect(() => {
-    if (chipDiagBus.run) diagNote(`state ${regFilterKey}`);
-  }, [regFilterKey]);
-  useEffect(() => {
-    // Only inside a click's trace: a remount mid-click shows, an open does not.
-    if (chipDiagBus.run) diagNote("mounted");
-    return () => {
-      if (chipDiagBus.run) diagNote("unmounted");
-    };
-  }, []);
+  // A download floor filters here, on each row's largest variant's size: rows
+  // show once that size is in, and the next page waits until it is.
+  const regFloorGb = regSource === "ollama" ? downloadFloorGb(regDownload) : null;
+  const sizeProbe = (m: RegistryModel) => tagInfo[`${m.name}:${largestTag(m)}`];
+  const shownModels =
+    regFloorGb === null
+      ? regModels
+      : regModels.filter((m) => {
+          const info = sizeProbe(m);
+          return typeof info === "object" && info.size_bytes >= regFloorGb * 1024 ** 3;
+        });
+  const sizesPending =
+    regFloorGb !== null &&
+    regModels.some((m) => {
+      const info = sizeProbe(m);
+      return info === undefined || info === "loading";
+    });
 
   // Fetch one page of ollama.com/search results. `reset` replaces the list
   // (new query/filter/sort); otherwise it appends, de-duping by name across
@@ -746,7 +716,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           : await invoke<RegistrySearchPage>("search_ollama_registry", {
               query: regQueryLive.trim(),
               capabilities: regCapabilities,
-              size: regDownload,
+              size: regFloorGb === null ? regDownload : "",
               sort: sortBy,
               page,
             });
@@ -785,7 +755,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // re-armed after every page: observing fires once with the current state, so
   // a page that still leaves the sentinel visible (a short page, a tall window)
   // pulls the next one instead of stalling.
-  const canLoadMore = !regLoading && !regDone && regPage > 0;
+  const canLoadMore = !regLoading && !regDone && regPage > 0 && !sizesPending;
   loadMoreRef.current = () => {
     if (canLoadMore) void loadRegistryPage(regPage + 1, false);
   };
@@ -814,14 +784,17 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // models) carry their parameter count and size only in the registry manifest,
   // not the search HTML — so fetch those few eagerly, or the card would show a
   // bare "pull"/"cloud" button with no parameters and no size to judge fit by.
+  // A download floor needs every row's largest variant's size the same way.
   useEffect(() => {
     for (const m of regModels) {
       if (m.sizes.length === 0) {
         fetchTagInfo(`${m.name}:${m.capabilities.includes("cloud") ? "cloud" : "latest"}`);
+      } else if (regFloorGb !== null) {
+        fetchTagInfo(`${m.name}:${largestTag(m)}`);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [regModels]);
+  }, [regModels, regFloorGb]);
 
   // "Load on Tabtivity start" — which models `stores/agents/ollamaAutoload` warms into
   // memory at launch. Both controls write straight through: the per-model switch
@@ -1054,7 +1027,11 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     const isCloud = m.capabilities.includes("cloud");
     const hasSizes = m.sizes.length > 0;
     const picked = variantPick[m.name];
-    const tag = hasSizes ? (picked && m.sizes.includes(picked) ? picked : m.sizes[0]) : isCloud ? "cloud" : "latest";
+    // A size filter matches a model by one variant: ollama.com's `> 64 GB` and
+    // a floor by its biggest, so the picker opens on that one, not the smallest.
+    const bigFirst = regSource === "ollama" && (regDownload === "over64" || regFloorGb !== null);
+    const fallback = bigFirst ? largestTag(m) : m.sizes[0];
+    const tag = hasSizes ? (picked && m.sizes.includes(picked) ? picked : fallback) : isCloud ? "cloud" : "latest";
     const fullName = `${m.name}:${tag}`;
     const isInstalled = installedNames.has(fullName);
     const busyKey = `${fullName}:pull`;
@@ -1154,7 +1131,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     label: string,
     anyActive: boolean,
     onAny: () => void,
-    items: { key: string; label: string; active: boolean; toggle: () => void }[],
+    items: { key: string; label: string; active: boolean; toggle: () => void; untested?: UntestedId }[],
   ) => (
     <div className="ollama-filter-group">
       <span className="ollama-filter-label">{label}</span>
@@ -1163,10 +1140,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           type="button"
           className={anyActive ? "active" : ""}
           aria-pressed={anyActive}
-          onClick={(e) => {
-            diagChip(`${label}/any`, e.nativeEvent);
-            onAny();
-          }}
+          onClick={() => onAny()}
         >
           {t("ollama.any")}
         </button>
@@ -1176,12 +1150,10 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             type="button"
             className={it.active ? "active" : ""}
             aria-pressed={it.active}
-            onClick={(e) => {
-              diagChip(it.key, e.nativeEvent);
-              it.toggle();
-            }}
+            onClick={() => it.toggle()}
           >
             {it.label}
+            {it.untested && <UntestedTag id={it.untested} />}
           </button>
         ))}
       </div>
@@ -1634,10 +1606,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                 type="button"
                 className={regSource === src ? "active" : ""}
                 aria-pressed={regSource === src}
-                onClick={(e) => {
-                  diagChip(`source/${src}`, e.nativeEvent);
-                  setRegSource(src);
-                }}
+                onClick={() => setRegSource(src)}
               >
                 {t(`ollama.source.${src}`)}
               </button>
@@ -1670,11 +1639,21 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           t("ollama.filterDownload"),
           regDownload === "",
           () => setRegDownload(""),
-          REGISTRY_DOWNLOAD_SIZES.map((cap) => ({
-            key: cap,
-            label: cap === "over64" ? t("ollama.sizeOver", { gb: 64 }) : t("ollama.sizeUpTo", { gb: cap }),
-            active: regDownload === cap,
-            toggle: () => setRegDownload((prev) => (prev === cap ? "" : cap)),
+          [
+            ...REGISTRY_DOWNLOAD_SIZES.filter((cap) => cap !== "over64").map((cap) => ({
+              key: cap,
+              label: t("ollama.sizeUpTo", { gb: cap }),
+            })),
+            ...REGISTRY_DOWNLOAD_FLOORS.map((floor) => ({
+              key: floor,
+              label: t("ollama.sizeAtLeast", { gb: floor.slice(3) }),
+              untested: "ollama.sizeAtLeast" as const,
+            })),
+            { key: "over64", label: t("ollama.sizeOver", { gb: 64 }) },
+          ].map((it) => ({
+            ...it,
+            active: regDownload === it.key,
+            toggle: () => setRegDownload((prev) => (prev === it.key ? "" : it.key)),
           })),
         )}
         <label className="ollama-sort-label" title={t("ollama.sortBy")}>
@@ -1687,17 +1666,6 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           />
         </label>
       </div>
-      {chipDiag.length > 0 && (
-        <div className="ollama-chip-diag">
-          <div className="ollama-chip-diag-head">
-            {t("ollama.chipDiag")} · panel={diagPanelId.current}
-            <button type="button" className="ollama-action-btn" onClick={() => setChipDiag([])}>
-              {t("common.close")}
-            </button>
-          </div>
-          <pre>{chipDiag.join("\n")}</pre>
-        </div>
-      )}
 
       {regError && (
         <div className="ollama-reg-error">
@@ -1714,15 +1682,16 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       )}
 
       <div className="settings-list">
-        {regModels.map(registryCard)}
+        {shownModels.map(registryCard)}
 
-        {/* Lazy-load sentinel + status line. */}
-        {regLoading && <div className="ollama-empty">{t("common.loading")}</div>}
-        {!regLoading && !regError && regModels.length === 0 && (
+        {/* Lazy-load sentinel + status line. A floor that hides a whole page
+            keeps loading the next, so "none" waits for the last page. */}
+        {(regLoading || sizesPending) && <div className="ollama-empty">{t("common.loading")}</div>}
+        {!regLoading && !sizesPending && !regError && shownModels.length === 0 && (regDone || regFloorGb === null) && (
           <div className="ollama-empty">{t("ollama.noModelsFound")}</div>
         )}
         <div ref={sentinelRef} aria-hidden="true" />
-        {regDone && regModels.length > 0 && (
+        {regDone && shownModels.length > 0 && (
           <div className="ollama-empty">{t("ollama.endOfResults")}</div>
         )}
       </div>
