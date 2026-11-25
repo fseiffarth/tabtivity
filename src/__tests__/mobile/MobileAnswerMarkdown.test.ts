@@ -128,6 +128,15 @@ describe(`${BRAND.display} Mobile Focus formats a prompt's Markdown`, () => {
     expect(dom(answerHtml("first line\nsecond line")).querySelector("br")).toBeNull();
   });
 
+  it("keeps leading plus signs in prompts while formatting other list markers", () => {
+    const host = dom(promptHtml("+ add **settings**\n- keep the list\n  + follow up"));
+    expect([...host.querySelectorAll("p")].map((p) => p.textContent))
+      .toEqual(["+ add settings", "+ follow up"]);
+    expect(host.querySelector("strong")?.textContent).toBe("settings");
+    expect([...host.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["keep the list"]);
+    expect(dom(answerHtml("+ add settings")).querySelector("li")?.textContent).toBe("add settings");
+  });
+
   it("shows a prompt's own HTML as text", () => {
     const host = dom(promptHtml('<img src=x onerror=alert(1)>\n<a href="https://evil.example">x</a>'));
     expect(host.querySelector("a, img")).toBeNull();
