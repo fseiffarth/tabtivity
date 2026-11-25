@@ -88,7 +88,10 @@ dedicated GPU, otherwise system RAM. Sizes are approximate download sizes.
 
 For autocomplete, a small model (1.5b–3b) answers fastest even on a big
 machine. For agent tabs other than Mistral, the model must support tool
-calling; the Models & agents menu tags models without it "no tools".
+calling; the Models & agents menu tags models without it "no tools". A
+Mistral tab runs on any model: on a model with tool calling it can read
+files, edit and run commands in the project; on a "no tools" model it only
+chats.
 
 ## 4. Load a model onto the GPU
 

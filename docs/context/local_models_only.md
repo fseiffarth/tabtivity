@@ -144,7 +144,8 @@ removed by `--unsetenv` in the Linux fence and `env_remove` on the PTY
 **Vibe** gets a per-project home, `vibe_local/<alias>.<project key>`, instead of the
 `vibe_local/<alias>` every scope shares (gap 30), and the gate writes its
 `config.toml` itself (`local_drivers::vibe_local_config`: the verified model on the
-verified endpoint, one provider, tools off), so the config that runs is the one that
+verified endpoint, one provider, Vibe's tools on only when that endpoint reports the
+model's `tools` capability, `Probe::tools`), so the config that runs is the one that
 was checked, not what the renderer's `prepare_local_agent` call left.
 
 Refusals start with `Local models only: "<project>" is set to Local models only, so

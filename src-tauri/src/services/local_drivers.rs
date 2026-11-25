@@ -42,8 +42,9 @@ pub(crate) struct LocalDriver {
     /// on arrival. Every entry below is `true`, because every entry is a coding
     /// agent; the flag is explicit rather than assumed because `vibe` — which is
     /// deliberately *not* in this list — takes the opposite route and turns
-    /// tools off (`enabled_tools = ["__no_tools__"]` in `prepare_local_agent`),
-    /// which is exactly why it still works on a completion-only model.
+    /// tools off on a model without the `tools` capability
+    /// (`enabled_tools = ["__no_tools__"]`, [`vibe_local_config`]), which is
+    /// exactly why it still works on a completion-only model.
     pub(crate) needs_tools: bool,
     /// Extra **fallback** args that switch the agent's reasoning off, for the
     /// agents that send a reasoning effort whether or not the model can take
@@ -319,13 +320,31 @@ pub(crate) fn vibe_model_block(model: &str, alias: &str) -> String {
     )
 }
 
+/// The line that turns every Vibe tool off: no tool is named `__no_tools__`, and
+/// Vibe's `enabled_tools` is an allowlist of name globs.
+const VIBE_NO_TOOLS: &str = "enabled_tools = [\"__no_tools__\"]\n";
+
 /// A whole `config.toml` for a local `vibe` tab on `model` at `addr`: the
-/// model active, tools off, one Ollama provider and nothing else.
-pub(crate) fn vibe_local_config(model: &str, alias: &str, addr: &str) -> String {
-    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
+/// model active, one Ollama provider and nothing else. `tools` is whether the
+/// model reports Ollama's `tools` capability: with it, Vibe keeps its own tools
+/// (no `enabled_tools` line: Vibe reads an empty allowlist as all of them);
+/// without it they are off, since such a model refuses any request that carries
+/// a tool list.
+pub(crate) fn vibe_local_config(model: &str, alias: &str, addr: &str, tools: bool) -> String {
+    let mut cfg = format!("active_model = \"{alias}\"\n");
+    if !tools {
+        cfg.push_str(VIBE_NO_TOOLS);
+    }
     cfg.push_str(&vibe_provider_block(addr));
     cfg.push_str(&vibe_model_block(model, alias));
     cfg
+}
+
+/// Whether a local `vibe` home's `config.toml` keeps Vibe's own tools on: what
+/// [`vibe_local_config`] writes for a tool model. Any `enabled_tools` line
+/// (an older build's tools-off config included) reads as off.
+pub(crate) fn vibe_config_keeps_tools(text: &str) -> bool {
+    !text.lines().any(|l| l.trim_start().starts_with("enabled_tools"))
 }
 
 /// The environment names whose value, set in a project's or the user's Claude settings,

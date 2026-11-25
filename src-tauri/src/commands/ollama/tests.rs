@@ -476,9 +476,7 @@ fn write_agent_config(base: &std::path::Path, model: &str) -> (std::path::PathBu
     let vibe_home = base.join(&alias);
     std::fs::create_dir_all(&vibe_home).unwrap();
     let config_path = vibe_home.join("config.toml");
-    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
-    cfg.push_str(&ollama_provider_block());
-    cfg.push_str(&ollama_model_block(model, &alias));
+    let cfg = vibe_local_config(model, &alias, DEFAULT_OLLAMA_ADDR, false);
     std::fs::write(&config_path, &cfg).unwrap();
     (vibe_home, alias)
 }
@@ -585,8 +583,9 @@ fn a_missing_binary_is_not_reported_as_a_model_problem() {
 #[test]
 fn every_local_driver_needs_tools() {
     // vibe is the deliberate exception and is deliberately not in this
-    // list — it turns tools off (`enabled_tools = ["__no_tools__"]`), which
-    // is exactly why it still runs on a completion-only model. If an entry
+    // list — it turns tools off on a model without them
+    // (`enabled_tools = ["__no_tools__"]`), which is exactly why it still runs
+    // on a completion-only model. If an entry
     // here ever stops needing tools, this assertion is where to say so.
     assert!(LOCAL_DRIVERS.iter().all(|d| d.needs_tools));
 }
@@ -1175,6 +1174,22 @@ fn prepare_local_agent_config_structure() {
         cfg.contains(&format!("alias = \"{alias}\"")),
         "model alias must appear"
     );
+}
+
+/// A model with Ollama's `tools` capability keeps Vibe's own tools: no
+/// `enabled_tools` line at all, which Vibe reads as every tool. Without the
+/// capability (or when Ollama cannot say) the line turns them all off.
+#[test]
+fn vibe_tools_follow_the_models_tools_capability() {
+    let on = vibe_local_config("qwen3:8b", "qwen3-8b", DEFAULT_OLLAMA_ADDR, true);
+    let off = vibe_local_config("qwen3:8b", "qwen3-8b", DEFAULT_OLLAMA_ADDR, false);
+    assert!(!on.contains("enabled_tools"), "{on}");
+    assert!(on.starts_with("active_model = \"qwen3-8b\"\n\n[[providers]]"), "{on}");
+    assert!(off.contains("enabled_tools = [\"__no_tools__\"]"), "{off}");
+    assert_eq!(off.replace("enabled_tools = [\"__no_tools__\"]\n", ""), on, "the tools line is the only difference");
+    assert!(vibe_config_keeps_tools(&on));
+    assert!(!vibe_config_keeps_tools(&off));
+    assert!(!vibe_config_keeps_tools("active_model = \"x\"\n  enabled_tools = []\n"), "any tool list reads as off");
 }
 
 // ── friendly error mapping: broken Ollama runner (#vibe 500) ─────────────

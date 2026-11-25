@@ -682,9 +682,9 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_excluded_models: Option<Vec<String>>,
     /// Local model names given the root MCP tools by the 🧠 menu's "MCP" chips.
-    /// Opt-in: a local-model (Mistral Vibe) tab otherwise runs with tools off
-    /// (`enabled_tools = ["__no_tools__"]`), which is what keeps a
-    /// completion-only model working. Read at spawn by `services::root_mcp`.
+    /// Opt-in: a local-model (Mistral Vibe) tab otherwise gets no MCP tools, and
+    /// Vibe's own tools only on a model with the `tools` capability
+    /// (`local_drivers::vibe_local_config`). Read at spawn by `services::root_mcp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_mcp_models: Option<Vec<String>>,
     /// Kept so older files round-trip; read by nothing. A server's model

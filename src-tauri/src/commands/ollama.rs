@@ -4124,25 +4124,32 @@ pub struct LocalAgentPrep {
 /// Creates `~/.local/share/tabtivity/vibe_local/{alias}/config.toml` with:
 /// - `active_model = "{alias}"` so vibe selects the correct model even when
 ///   the `VIBE_ACTIVE_MODEL` env var is shadowed by the global `~/.vibe/config.toml`.
-/// - `enabled_tools = ["__no_tools__"]` to disable tool calls for local models.
-///   A root-console tab whose model wears the 🧠 menu's "MCP" chip gets the
-///   root MCP tools back through Vibe's env layer (`services::root_mcp`).
+/// - Vibe's own tools on for a model Ollama says has the `tools` capability,
+///   and off (`enabled_tools = ["__no_tools__"]`) for any other, or when Ollama
+///   cannot say: a completion-only model refuses a request carrying tools
+///   (`local_drivers::vibe_local_config`). A tab whose model wears the 🧠 menu's
+///   "MCP" chip gets the MCP tools through Vibe's env layer (`services::root_mcp`).
 /// - A single provider + model block for this Ollama model.
 ///
 /// Each Ollama tab gets its own VIBE_HOME subdirectory so there is no shared
 /// mutable config state and `active_model` is always unambiguous.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String> {
+    // The capability read is HTTP: off the runtime.
+    app_core::rt::blocking("prepare_local_agent", move || prepare_local_agent_blocking(model)).await?
+}
+
+/// The blocking body of [`prepare_local_agent`].
+fn prepare_local_agent_blocking(model: String) -> Result<LocalAgentPrep, String> {
     validate_model_name(&model)?;
     let alias = sanitize_alias(&model);
     let vibe_home = app_vibe_local_dir_for(&alias)?;
     std::fs::create_dir_all(&vibe_home).map_err(|e| format!("create vibe_local dir: {e}"))?;
 
     let config_path = vibe_home.join("config.toml");
-
-    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
-    cfg.push_str(&ollama_provider_block());
-    cfg.push_str(&ollama_model_block(&model, &alias));
+    let addr = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
+    let tools = model_supports_tools(&model) == Some(true);
+    let cfg = crate::services::local_drivers::vibe_local_config(&model, &alias, &addr, tools);
 
     std::fs::write(&config_path, cfg).map_err(|e| format!("write vibe_local config: {e}"))?;
     crate::services::agent_session::register_vibe_hook_in(&vibe_home)

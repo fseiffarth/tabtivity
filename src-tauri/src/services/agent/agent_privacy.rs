@@ -465,6 +465,11 @@ pub struct Probe<'a> {
     pub pins_claude: bool,
     /// Whether this platform's sandbox can cut the network ([`cut_platform`]).
     pub can_cut: bool,
+    /// Whether Ollama at `addr` says `model` has the `tools` capability
+    /// (`ollama_client::capabilities_of_at`; could not ask reads as no). Decides
+    /// only whether a Mistral tab keeps Vibe's own tools
+    /// ([`crate::services::local_drivers::vibe_local_config`]).
+    pub tools: &'a dyn Fn(&str, &str) -> bool,
 }
 
 /// Why a verified Claude Code tab is refused where its settings cannot be pinned.
@@ -637,8 +642,9 @@ pub fn vibe_home_in(share_dir: &Path, alias: &str, project: &str) -> PathBuf {
     share_dir.join("vibe_local").join(format!("{alias}.{}", crate::storage::project_key(project)))
 }
 
-/// Change a verified spawn's options to what the gate stands behind.
-fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), String> {
+/// Change a verified spawn's options to what the gate stands behind. `tools`:
+/// a Mistral tab's model has the `tools` capability ([`Probe::tools`]).
+fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path, tools: bool) -> Result<(), String> {
     scrub_env(&mut opts.env);
     // Only picks the home without logins; the gate alone grants.
     opts.local_model = true;
@@ -652,7 +658,7 @@ fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), St
     if v.driver == "vibe" {
         let alias = crate::services::ollama_client::sanitize_alias(&v.model);
         let home = vibe_home_in(share_dir, &alias, &v.project);
-        write_vibe_home(&home, &v.model, &alias, &v.pinned_endpoint())?;
+        write_vibe_home(&home, &v.model, &alias, &v.pinned_endpoint(), tools)?;
         opts.env.insert("VIBE_HOME".to_string(), home.to_string_lossy().into_owned());
         opts.env.insert("VIBE_ACTIVE_MODEL".to_string(), alias);
     }
@@ -662,7 +668,7 @@ fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), St
 /// Create `home` and write the one config it needs: the verified model on the
 /// verified endpoint, written here and not by the renderer's own
 /// `prepare_local_agent` call, so what runs is what was checked.
-fn write_vibe_home(home: &Path, model: &str, alias: &str, endpoint: &str) -> Result<(), String> {
+fn write_vibe_home(home: &Path, model: &str, alias: &str, endpoint: &str, tools: bool) -> Result<(), String> {
     let fail = |e: std::io::Error| format!("{REFUSAL}: could not prepare the Mistral home ({e}), so this agent was not started.");
     if let Some(parent) = home.parent() {
         std::fs::create_dir_all(parent).map_err(fail)?;
@@ -673,7 +679,7 @@ fn write_vibe_home(home: &Path, model: &str, alias: &str, endpoint: &str) -> Res
     if std::fs::symlink_metadata(&config).is_ok_and(|m| !m.file_type().is_file()) {
         let _ = std::fs::remove_file(&config);
     }
-    std::fs::write(&config, crate::services::local_drivers::vibe_local_config(model, alias, endpoint)).map_err(fail)
+    std::fs::write(&config, crate::services::local_drivers::vibe_local_config(model, alias, endpoint, tools)).map_err(fail)
 }
 
 /// Whether the record marks the project remote or VM. A `null` value is absent,
@@ -706,7 +712,7 @@ const VIBE_ENV_KEPT: &[&str] = &["VIBE_HOME", "VIBE_ACTIVE_MODEL", "VIBE_MCP_SER
 /// `VIBE_*` override but the two the frontend sets, a `VIBE_HOME` that is one of
 /// Tabtivity's `vibe_local/<alias>[.<key>]` homes, and a `config.toml` there that
 /// is exactly what `local_drivers::vibe_local_config` writes for one model on a
-/// loopback Ollama. A bare `vibe` (Mistral's cloud CLI), a home of the user's, a
+/// loopback Ollama (with Vibe's tools on or off: either is a config it writes). A bare `vibe` (Mistral's cloud CLI), a home of the user's, a
 /// hand-edited config or a label with none of it is not local. The label, when
 /// present, must name the same model. `share_dir` is `storage::home_share_dir()`.
 pub fn local_vibe_launch(opts: &PtyOptions, share_dir: &Path) -> Option<VibeLaunch> {
@@ -747,7 +753,8 @@ pub fn local_vibe_launch(opts: &PtyOptions, share_dir: &Path) -> Option<VibeLaun
         && opts.env.get(crate::app_env!("LOCAL_MODEL")).is_none_or(|l| l.trim() == model);
     // The whole file, not a few lines of it: a second provider, a tool list or an
     // `api_base` further down would all pass a line scan.
-    (consistent && text == crate::services::local_drivers::vibe_local_config(&model, &alias, &endpoint)).then_some(VibeLaunch { model, endpoint })
+    let written = |tools| text == crate::services::local_drivers::vibe_local_config(&model, &alias, &endpoint, tools);
+    (consistent && (written(false) || written(true))).then_some(VibeLaunch { model, endpoint })
 }
 
 /// The gate over given lists; [`gate`] is this against the live state.
@@ -769,7 +776,8 @@ pub fn gate_with(
     }
     let remote = projects.iter().find(|p| p.id == subject.id).is_some_and(remote_or_vm);
     let verified = vet(&opts, subject, probe, remote)?;
-    apply(&mut opts, &verified, share_dir)?;
+    let tools = verified.driver == "vibe" && (probe.tools)(&verified.endpoint, &verified.model);
+    apply(&mut opts, &verified, share_dir, tools)?;
     note_verified(&opts.id, &verified);
     Ok(opts)
 }
@@ -787,9 +795,11 @@ pub fn gate(opts: PtyOptions) -> Result<PtyOptions, String> {
     let host = crate::services::ollama_client::host_setting(&settings).0.map(str::to_string);
     let endpoint = move || crate::services::mail_ai::resolve_endpoint(host.as_deref());
     let local = |addr: &str, model: &str| crate::services::ollama_client::tab_model_is_local_at(addr, model);
+    let tools = |addr: &str, model: &str| crate::services::ollama_client::capabilities_of_at(addr, model).iter().any(|c| c == "tools");
     let probe = Probe {
         endpoint: &endpoint,
         local: &local,
+        tools: &tools,
         ambient_host: std::env::var("OLLAMA_HOST").ok().filter(|h| !h.trim().is_empty()),
         pins_claude: claude_pinned_platform(),
         can_cut: cut_platform(),

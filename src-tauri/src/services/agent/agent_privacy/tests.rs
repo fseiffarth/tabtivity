@@ -67,17 +67,19 @@ struct World {
     ambient: Option<String>,
     pins_claude: bool,
     can_cut: bool,
+    tools: bool,
 }
 
 impl World {
     fn healthy() -> Self {
-        World { local: Ok(()), endpoint: Ok("127.0.0.1:11434".into()), ambient: None, pins_claude: true, can_cut: true }
+        World { local: Ok(()), endpoint: Ok("127.0.0.1:11434".into()), ambient: None, pins_claude: true, can_cut: true, tools: false }
     }
 
     fn gate(&self, opts: PtyOptions, projects: &ProjectsList, share: &Path) -> Result<PtyOptions, String> {
         let endpoint = || self.endpoint.clone();
         let local = |_: &str, _: &str| self.local;
-        let probe = Probe { endpoint: &endpoint, local: &local, ambient_host: self.ambient.clone(), pins_claude: self.pins_claude, can_cut: self.can_cut };
+        let tools = |_: &str, _: &str| self.tools;
+        let probe = Probe { endpoint: &endpoint, local: &local, ambient_host: self.ambient.clone(), pins_claude: self.pins_claude, can_cut: self.can_cut, tools: &tools };
         gate_with(opts, projects, &probe, share)
     }
 }
@@ -377,7 +379,7 @@ fn spawns_outside_every_locked_project_and_shells_pass_untouched() {
     shell.agent = false;
     assert!(World::healthy().gate(shell, &projects, tmp.path()).is_ok());
     // No Ollama needed for an unrelated project.
-    let down = World { local: Err(crate::services::ollama_client::MODEL_NOT_RUNNING), endpoint: Err("x".into()), ambient: None, pins_claude: true, can_cut: true };
+    let down = World { local: Err(crate::services::ollama_client::MODEL_NOT_RUNNING), endpoint: Err("x".into()), ambient: None, pins_claude: true, can_cut: true, tools: false };
     assert!(down.gate(opts("claude", &[], Some("open"), &open), &projects, tmp.path()).is_ok());
 }
 
@@ -401,6 +403,16 @@ fn a_vibe_tab_gets_a_home_and_config_of_its_own_per_project() {
     let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
     assert!(config.contains("api_base = \"http://127.0.0.1:11434/v1\"") && config.contains("name = \"qwen3:8b\""), "{config}");
     assert_eq!(config.matches("[[providers]]").count(), 1, "one provider and no cloud default");
+    assert!(config.contains("enabled_tools = [\"__no_tools__\"]"), "a model without tools: Vibe's tools off");
+    assert!(local_vibe_launch(&out, &share).is_some(), "the gate's config is one it vouches for");
+    // A model with the `tools` capability keeps Vibe's tools, and that config
+    // is vouched for too.
+    let mut tooled = opts("vibe", &[], Some("lock"), &tmp.path().join("secret"));
+    tooled.env.insert(crate::app_env!("LOCAL_MODEL").into(), "qwen3:8b".into());
+    let out = World { tools: true, ..World::healthy() }.gate(tooled, &projects, &share).unwrap();
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(!config.contains("enabled_tools"), "{config}");
+    assert!(local_vibe_launch(&out, &share).is_some());
     assert_ne!(vibe_home_in(&share, &alias, "lock"), vibe_home_in(&share, &alias, "other"));
     // A disagreeing alias, no model, or a stray flag refuses.
     let mut bad = opts("vibe", &[], Some("lock"), &tmp.path().join("secret"));

@@ -542,7 +542,7 @@ export interface Settings {
    *  menu's "Root" chips. Opt-out: unset means every model is offered there. */
   root_excluded_models?: string[];
   /** Local (Ollama) model names given the root MCP tools by the 🧠 menu's
-   *  "MCP" chips. Opt-in: other local-model tabs run with tools off. Read at
+   *  "MCP" chips. Opt-in: other local-model tabs get no MCP tools. Read at
    *  spawn by the backend (`services::root_mcp`). */
   ollama_mcp_models?: string[];
   /** Prefix chips per agent command for the side panel's agent composer; unset
