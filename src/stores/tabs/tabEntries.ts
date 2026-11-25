@@ -159,7 +159,9 @@ export function restoreSavedTab(
   // A local-model OpenCode tab saved before it had a key gets one now, and
   // the `--continue` that gives it takes it back to its folder's newest
   // session once (`opencode_session::resolve`), until a prompt records its own.
-  const sessionId = t.sessionId ?? (localLaunch && t.cmd === "opencode" ? crypto.randomUUID() : undefined);
+  // A local Claude Code tab saved before then gets one too: its relaunch was a
+  // fresh conversation anyway, and from here on it is a readable one.
+  const sessionId = t.sessionId ?? (localLaunch && (t.cmd === "opencode" || localLaunch.driver === "claude") ? crypto.randomUUID() : undefined);
   // Resumable agent tabs (Claude with a sessionId) respawn with their
   // resume flag so the prior conversation comes back; everyone else starts
   // fresh with no args.

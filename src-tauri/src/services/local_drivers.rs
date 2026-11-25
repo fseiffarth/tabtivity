@@ -291,6 +291,13 @@ pub(crate) fn local_launch_line_ok(driver: &str, model: &str, cmd: &str, args: &
 /// for any other line. What a local-models-only project (`services::
 /// agent_privacy`) checks a spawn's own argv with, never a renderer's claim.
 pub(crate) fn identify_local_launch(cmd: &str, args: &[String]) -> Option<(&'static str, String)> {
+    // A local Claude Code tab's line carries its conversation behind `--`
+    // ([`claude_session_tail_ok`]); the line in front of it is judged as any.
+    if let Some(cut) = args.iter().position(|a| a == "--") {
+        let (line, tail) = (&args[..cut], &args[cut + 1..]);
+        return identify_local_launch(cmd, line)
+            .filter(|(driver, _)| *driver == "claude" && claude_session_tail_ok(tail));
+    }
     let candidates = args.iter().flat_map(|arg| {
         let bare = arg.strip_prefix("ollama/").unwrap_or(arg);
         [arg.as_str(), bare]
@@ -303,6 +310,24 @@ pub(crate) fn identify_local_launch(cmd: &str, args: &[String]) -> Option<(&'sta
         }
     }
     None
+}
+
+/// Whether `tail` (what follows `--` on `ollama launch claude --model <m>`,
+/// handed to Claude Code as is) is only the tab's conversation: the
+/// `--session-id <uuid>` the ＋ menu adds, or the `--resume <uuid>` the spawn's
+/// resolver turns it into, optionally followed by the `--permission-mode
+/// <mode>` it re-applies (`agent_session::resolve_claude_session`). Never
+/// persisted: a saved `localLaunch` stays the plain line
+/// ([`local_launch_line_ok`]) and the restore adds the tail from the tab's key.
+pub(crate) fn claude_session_tail_ok(tail: &[String]) -> bool {
+    use crate::services::agent_session::{is_permission_mode, is_uuid_shaped};
+    match tail {
+        [flag, id] if flag == "--session-id" || flag == "--resume" => is_uuid_shaped(id),
+        [flag, id, mode_flag, mode] if flag == "--resume" => {
+            is_uuid_shaped(id) && mode_flag == "--permission-mode" && is_permission_mode(mode)
+        }
+        _ => false,
+    }
 }
 
 /// The `vibe` provider stanza for an Ollama at `addr` (`host:port`): the

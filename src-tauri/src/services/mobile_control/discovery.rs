@@ -1192,20 +1192,24 @@ pub(super) fn agent_label_for(cmd: &str, label: &str, local_launch: Option<&Valu
 
 /// The command a tab's transcript is read as: its own, except that a
 /// local-model tab driving OpenCode (`ollama launch opencode …`) reads as
-/// `opencode` — found by folder, it needs no launch id. The other local
-/// drivers keep their `ollama` line: Claude's and Codex's transcripts need the
-/// launch id a local tab never mints. The window's `agentTranscriptFor` makes
-/// the same call.
+/// `opencode` — found by folder, it needs no launch id — and one driving
+/// Claude Code reads as `claude` once it carries the launch id its line passes
+/// on (`-- --session-id`). The other local drivers keep their `ollama` line:
+/// Codex's transcript needs a launch id a local tab never mints. The window's
+/// `readerAgent` makes the same call.
 fn transcript_cmd_of(tab: &SavedTab) -> &str {
     let driver = tab
         .local_launch
         .as_ref()
         .and_then(|launch| launch.get("driver"))
         .and_then(Value::as_str);
-    if tab.kind == "local_agent" && driver == Some("opencode") {
-        "opencode"
-    } else {
-        &tab.cmd
+    // A local-model tab's `cmd` is its launcher. OpenCode's sessions are
+    // found by folder; Claude Code's by the key its line carries, and only
+    // a tab that has one says which conversation is its own.
+    match driver {
+        Some("opencode") if tab.kind == "local_agent" => "opencode",
+        Some("claude") if tab.kind == "local_agent" && tab.session_id.is_some() => "claude",
+        _ => &tab.cmd,
     }
 }
 

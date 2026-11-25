@@ -334,15 +334,37 @@ export function isRelaunchableLocalTab(
 }
 
 /**
+ * The local drivers whose launch line hands the tab's key on to the agent
+ * behind `ollama launch`'s `--`: Claude Code takes it as `--session-id`, so
+ * its transcript is the tab's own and the backend's resolver can turn it into
+ * `--resume` (`agent_session::resolve_claude_session`). Never part of the
+ * persisted line (`localLaunch.args`), which stays the plain one the backend
+ * re-validates; the tail is rebuilt from `sessionId`.
+ */
+export function localSessionTail(driver: string | undefined, sessionId: string): string[] {
+  return driver === "claude" ? ["--", "--session-id", sessionId] : [];
+}
+
+/** Whether a local-model tab on `driver` gets a key of its own: OpenCode
+ * (its session is bound to it) and Claude Code (`localSessionTail`). */
+export function localDriverKeyed(driver: string | undefined): boolean {
+  return driver === "opencode" || driver === "claude";
+}
+
+/**
  * The args a restore respawns this tab on — the one answer for the layout
  * load, a reopen, a relaunch and a move. A local-model tab that also resumes
  * keeps its launch line in front: OpenCode's model picks its provider and its
- * interface, and the backend turns the flag behind it into the tab's session.
+ * interface, and the backend turns the flag behind it into the tab's session;
+ * Claude Code's key follows the line (`localSessionTail`).
  */
 export function resumeArgsOf(
   tab: { kind: TabKind; cmd: string; sessionId?: string; resumeArgs?: string[]; localLaunch?: LocalLaunch },
 ): string[] {
   const launch = isRelaunchableLocalTab(tab) && tab.localLaunch ? tab.localLaunch.args : [];
+  if (launch.length && tab.sessionId && tab.cmd === "ollama") {
+    return [...launch, ...localSessionTail(tab.localLaunch?.driver, tab.sessionId)];
+  }
   if (!isResumableAgentTab(tab) || !tab.sessionId) return [...launch];
   const resume = tab.cmd in RESUMABLE_AGENTS ? RESUMABLE_AGENTS[tab.cmd](tab.sessionId) : tab.resumeArgs ?? [];
   return [...launch, ...resume];

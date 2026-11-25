@@ -17,7 +17,7 @@ import { ReaderScheduleButton } from "./ReaderScheduleButton";
 import { chatsOffered } from "../../lib/agents/agentChats";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
-import { readerRequest, type SessionTranscript } from "../../lib/agents/agentReader";
+import { readerAgent, readerRequest, type SessionTranscript } from "../../lib/agents/agentReader";
 import { exportFileName, promptsMarkdown, sessionHtml, sessionMarkdown, trailPrompts, transcriptPrompts, type ExportWords } from "../../lib/agents/prompt/export";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
 import { useProjectsStore } from "../../stores/projects";
@@ -450,6 +450,7 @@ export function TerminalPromptStrip({
             <UntestedTag id="terminal.reader.topbar" />
             <UntestedTag id="terminal.reader.flipPill" />
             {reader.onHost === "claude" && <UntestedTag id="terminal.reader.hostTab" />}
+            {tab?.kind === "local_agent" && readerAgent(tab) === "claude" && <UntestedTag id="terminal.reader.localClaude" />}
             {reader.onHost === "codex" && <UntestedTag id="terminal.reader.hostTab.codex" />}
             {reader.onHost === "agy" && <UntestedTag id="terminal.reader.hostTab.agy" />}
             {reader.onHost === "muse" && <UntestedTag id="terminal.reader.hostTab.muse" />}

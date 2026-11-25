@@ -125,13 +125,16 @@ describe("Mobile bridge — local-model agents", () => {
 
   it("starts a driver on the model with its launch line recorded", async () => {
     expect(await create({ local: "agent-local:claude" })).toMatchObject({ status: "created", tmux_session: `${BRAND.slug}-new` });
-    expect(made).toHaveBeenLastCalledWith(expect.objectContaining({
+    const spec = made.mock.lastCall?.[0] as Omit<TabEntry, "key">;
+    expect(spec).toMatchObject({
       label: "qwen3:8b · Claude Code",
       cmd: "ollama",
-      args: ["launch", "claude", "--model", "qwen3:8b"],
       kind: "local_agent",
       localLaunch: { driver: "claude", model: "qwen3:8b", args: ["launch", "claude", "--model", "qwen3:8b"] },
-    }));
+    });
+    // Its key goes to Claude behind the launcher, so the phone's Chat reads it.
+    expect(spec.sessionId).toBeTruthy();
+    expect(spec.args).toEqual(["launch", "claude", "--model", "qwen3:8b", "--", "--session-id", spec.sessionId]);
     // The model was already on the GPU: nothing to load.
     expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "load_ollama_model")).toBe(false);
   });
