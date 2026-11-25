@@ -346,6 +346,26 @@ fn asks_with_nothing_to_do_are_skipped_without_a_request() {
 }
 
 #[test]
+fn a_model_the_user_unloaded_is_not_loaded_back() {
+    let chat = |_: &str, _: &str, _: Duration, _: &ollama::Abort| -> Result<String, String> { panic!("no request may be sent") };
+    let caps = |_: &str, _: &str| -> Vec<String> { panic!("no probe may be sent") };
+    let backend = Ollama { caps: &caps, pinned: &not_pinned, chat: &chat };
+    // A name no other test uses: the hold is process-wide.
+    let settings = suggest_on("held-by-unload");
+    ollama::hold_unloaded("held-by-unload:latest");
+    let mut running = ended_turn();
+    running.entries.pop();
+    for (phase, turn) in [(Phase::Warm, &running), (Phase::Final, &ended_turn())] {
+        let answer = suggest_with(&settings, &ask("test-held", phase), turn, &backend);
+        assert_eq!(answer.status, Status::Skipped, "{phase:?}");
+    }
+    let draft = complete("test-held", "run the whole ");
+    assert_eq!(suggest_with(&settings, &draft, &ended_turn(), &backend).status, Status::Skipped);
+    ollama::release_hold("held-by-unload");
+    assert!(!ollama::is_held("held-by-unload"));
+}
+
+#[test]
 fn the_role_wins_over_the_default_model() {
     let mut settings = suggest_on(" qwen3:4b ");
     settings.ollama_model = Some("llama3".into());

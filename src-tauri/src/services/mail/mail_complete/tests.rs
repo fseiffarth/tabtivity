@@ -270,6 +270,20 @@ fn a_bad_slot_or_draft_is_skipped_before_anything_is_asked() {
 }
 
 #[test]
+fn a_mail_model_the_user_unloaded_is_skipped_before_anything_is_asked() {
+    let slots = Slots::default();
+    let log = Mutex::new(Vec::new());
+    // A name no other test uses: the hold is process-wide.
+    let mut settings = on();
+    settings.ollama_roles.as_mut().unwrap().insert("mail".to_string(), "mail-held-by-unload".to_string());
+    ollama::hold_unloaded("mail-held-by-unload");
+    let answer = done(gate_with(&slots, &settings, &ask("a", Some("Thanks for the slides")), &log, false, Ok(account())));
+    ollama::release_hold("mail-held-by-unload");
+    assert_eq!(answer, MailComplete::status(Status::Skipped));
+    assert!(log.lock().unwrap().is_empty(), "nothing is probed for a held model: {:?}", log.lock().unwrap());
+}
+
+#[test]
 fn each_refusal_stops_the_chain_before_the_next_probe() {
     let slots = Slots::default();
     let draft = Some("Thanks for the slides");

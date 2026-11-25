@@ -108,9 +108,15 @@ calling; the Models & agents menu tags models without it "no tools".
    your approval; clearing its conversations ends that for new tabs. Close
    the model's tabs first: the menu names any that are still open. Settings
    and logins are kept.
-6. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
+6. **Unload** frees a model's memory, and it stays unloaded: prompt
+   suggestions, prompt and mail autocomplete and the editor's automatic
+   completions skip it rather than load it back. **Load** it again (here or
+   from the phone) to bring them back; restarting Tabtivity does too. What
+   you start yourself — a Local Model tab, a mail summary, a completion you
+   ask for — still loads it.
+7. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
    load automatically at launch (not in Energy Saver mode unless you allow it).
-7. From a paired phone, Home → **Local models** loads and unloads installed
+8. From a paired phone, Home → **Local models** loads and unloads installed
    models too (help topic `mobile`, "Local models from the phone").
 
 ## 5. Open a Local Model tab

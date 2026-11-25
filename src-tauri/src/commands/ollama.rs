@@ -602,11 +602,19 @@ fn keep_alive_of(
 }
 
 
-/// Unload a model from memory without deleting it (sets keep_alive=0).
+/// Unload a model from memory without deleting it (sets keep_alive=0), and
+/// hold it there: suggestions, autocomplete and the editor's automatic
+/// completions no longer load it back ([`hold_unloaded`]) until a Load.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stop_ollama_model(model: String) -> Result<(), String> {
     let body = serde_json::json!({"model": model, "keep_alive": 0}).to_string();
-    app_core::rt::try_blocking("unload", move || ollama_http("POST", "/api/generate", Some(&body)).map(drop)).await
+    app_core::rt::try_blocking("unload", move || {
+        // Held before the request: a warm-up checking in between must not
+        // reload what is being unloaded.
+        hold_unloaded(&model);
+        ollama_http("POST", "/api/generate", Some(&body)).map(drop)
+    })
+    .await
 }
 
 // ── Interrupted-pull tracking ─────────────────────────────────────────────
@@ -1041,6 +1049,7 @@ pub async fn load_ollama_model(
 fn run_load(ctx: &CoreCtx, model: &str, device: LoadDevice) -> Result<(), String> {
     // A load is the model's first run (an empty generate): none while AI is off.
     crate::services::ai_switch::check()?;
+    release_hold(model);
     ctx.emit(
         "ollama-load-progress",
         serde_json::json!({ "model": model, "status": "loading" }),
@@ -4023,6 +4032,10 @@ pub async fn complete_text(
         let sentence = mode == CompletionMode::Sentence && trailing_comment_intent(&prefix, &language).is_none();
         let fim = uses_fim(insert == Some(true));
         let automatic = trigger.as_deref() == Some("auto");
+        // An automatic completion never loads a model the user unloaded.
+        if automatic && is_held(&model) {
+            return Err(MODEL_HELD.to_string());
+        }
         for use_fim in if fim { vec![true, false] } else { vec![false] } {
             let CompletionPlan { endpoint, mut body, reference_bytes, references_dropped } = completion_plan(
                 &prefix, &suffix, &model, &language, mode, &references, file_name.as_deref(), use_fim,

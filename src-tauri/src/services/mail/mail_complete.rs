@@ -124,8 +124,8 @@ pub enum Status {
     Ok,
     /// A warm-up finished.
     Warmed,
-    /// Nothing to do: a bad slot, a draft not worth completing, or a newer
-    /// request in the slot took over.
+    /// Nothing to do: a bad slot, a draft not worth completing, a newer
+    /// request in the slot took over, or a model the user unloaded.
     Skipped,
     /// A warm-up too soon after the last, or while a run is in flight.
     Busy,
@@ -648,6 +648,10 @@ impl Slots {
         let Some(model) = mail_ai::mail_model_from(settings) else {
             return Gated::Done(MailComplete::refused(Status::NoModel, mail_ai::NO_MODEL.to_string()));
         };
+        // A model the user unloaded stays unloaded (`ollama_client::is_held`).
+        if ollama::is_held(&model) {
+            return done(Status::Skipped);
+        }
         // 5. The store, and whether it is the locked stand-in.
         match (probes.store_locked)() {
             Ok(false) => {}

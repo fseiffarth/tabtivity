@@ -36,6 +36,21 @@ fn the_context_setting_overrides_the_automatic_window() {
 /// Only the offered keep-alive choices reach an environment or a drop-in;
 /// anything else is Ollama's default.
 #[test]
+fn an_unload_holds_the_model_until_a_load_under_either_spelling() {
+    // Names no other test uses: the hold is process-wide.
+    hold_unloaded(" held-spelling ");
+    assert!(is_held("held-spelling:latest"));
+    assert!(is_held("held-spelling"));
+    assert!(!is_held("held-spelling:7b"));
+    release_hold("held-spelling:latest");
+    assert!(!is_held("held-spelling"));
+    hold_unloaded("hf.co/org/held-repo:Q4");
+    assert!(is_held("hf.co/org/held-repo:Q4"));
+    assert!(!is_held("hf.co/org/held-repo"));
+    release_hold("hf.co/org/held-repo:Q4");
+}
+
+#[test]
 fn only_the_offered_keep_alive_choices_reach_ollama() {
     assert_eq!(configured_keep_alive(Some("30m")), Some("30m"));
     assert_eq!(configured_keep_alive(Some(" 1h ")), Some("1h"));
