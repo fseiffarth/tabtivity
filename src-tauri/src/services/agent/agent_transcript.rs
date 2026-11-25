@@ -1036,6 +1036,84 @@ pub(crate) fn codex_host_transcript_at(main: &Path, version: Option<&str>, limit
     read_transcript_in(main, TranscriptKind::Codex, &Spawns::None, false, version, limit)
 }
 
+/// Where a Codex subagent's own records start in its rollout `file` at `path`,
+/// as a byte offset. A spawned agent's rollout is a fork: after its own
+/// `session_meta` it repeats the spawning thread's conversation (that thread's
+/// `session_meta`, every turn up to the `spawn_agent` call, a `turn_aborted`,
+/// the "you are now a newly spawned child agent" note), and its `session_meta`
+/// names the 0-based line its own history starts on
+/// (`subagent_history_start_ordinal`, Codex 0.159–0.172 at least). Read from
+/// there, a subagent's Chat and Diffs show what it did, not its parent's
+/// conversation. 0 for a rollout without one (a tab's own thread). Remembered
+/// per path once settled: what Codex wrote before that line never changes.
+pub(crate) fn codex_own_history_start(path: &Path, file: &mut std::fs::File) -> u64 {
+    type Starts = std::collections::HashMap<PathBuf, u64>;
+    static STARTS: std::sync::LazyLock<std::sync::Mutex<Starts>> = std::sync::LazyLock::new(Default::default);
+    const STARTS_MAX: usize = 256;
+    if let Some(&start) = STARTS.lock_ok().get(path) {
+        return start;
+    }
+    let Some((start, settled)) = scan_own_history_start(file) else {
+        return 0;
+    };
+    if settled {
+        let mut starts = STARTS.lock_ok();
+        if starts.len() >= STARTS_MAX {
+            starts.clear();
+        }
+        starts.insert(path.to_path_buf(), start);
+    }
+    start
+}
+
+/// Longest `session_meta` line [`scan_own_history_start`] reads: it carries
+/// Codex's base instructions, tens of KiB.
+const SESSION_META_MAX: u64 = 4 * 1024 * 1024;
+
+/// [`codex_own_history_start`]'s scan: the offset, and whether it is final —
+/// not while the first line or the inherited lines are still being written
+/// (then the offset is the end of what is there: nothing of the subagent's
+/// own yet).
+fn scan_own_history_start(file: &mut std::fs::File) -> Option<(u64, bool)> {
+    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut first = Vec::new();
+    BufReader::new(Read::by_ref(file).take(SESSION_META_MAX)).read_until(b'\n', &mut first).ok()?;
+    if !first.ends_with(b"\n") {
+        // Too long to be a `session_meta` worth reading; or not finished yet,
+        // when nothing after it is either.
+        let too_long = first.len() as u64 >= SESSION_META_MAX;
+        return Some(if too_long { (0, true) } else { (first.len() as u64, false) });
+    }
+    let ordinal = serde_json::from_slice::<Value>(&first)
+        .ok()
+        .filter(|value| value.get("type").and_then(Value::as_str) == Some("session_meta"))
+        .and_then(|value| value.pointer("/payload/subagent_history_start_ordinal").and_then(Value::as_u64))
+        .unwrap_or(0);
+    if ordinal == 0 {
+        return Some((0, true));
+    }
+    // Line 0 is read; find the end of line `ordinal - 1`.
+    let mut offset = first.len() as u64;
+    let mut lines = 1u64;
+    file.seek(SeekFrom::Start(offset)).ok()?;
+    let mut chunk = vec![0u8; 64 * 1024];
+    while lines < ordinal {
+        let read = file.read(&mut chunk).ok()?;
+        if read == 0 {
+            return Some((offset, false));
+        }
+        for (index, _) in chunk[..read].iter().enumerate().filter(|(_, byte)| **byte == b'\n') {
+            lines += 1;
+            if lines == ordinal {
+                return Some((offset + index as u64 + 1, true));
+            }
+        }
+        offset += read as u64;
+    }
+    Some((offset, true))
+}
+
 /// A spawned thread's rollout: the path its row names, taken only when it is
 /// a file under the scope's `.codex/sessions` whose name ends in the thread's id.
 fn codex_rollout(project_id: Option<&str>, thread: &crate::services::codex_store::SpawnedThread) -> Option<PathBuf> {
@@ -1261,7 +1339,11 @@ fn read_transcript_in(
             ..Default::default()
         });
     }
-    let (text, mut truncated) = agent_session::read_conversation_tail(&mut file, meta.len(), tail_bytes(limit))?;
+    let from = match kind {
+        TranscriptKind::Codex => codex_own_history_start(path, &mut file),
+        TranscriptKind::Claude | TranscriptKind::Copilot => 0,
+    };
+    let (text, mut truncated) = agent_session::read_conversation_tail_from(&mut file, meta.len(), tail_bytes(limit), from)?;
     let lines: Vec<&str> = text.lines().collect();
     let mut usage = match kind {
         TranscriptKind::Codex => codex_usage(&lines),

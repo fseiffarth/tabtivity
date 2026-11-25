@@ -438,7 +438,13 @@ pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usiz
     if version == Some(current.as_str()) {
         return Some(AgentChanges::unchanged(current));
     }
-    let (text, cut) = crate::services::agent_session::read_conversation_tail(&mut file, meta.len(), TAIL_BYTES)?;
+    // A Codex subagent's rollout opens with its parent's conversation: not
+    // its changes.
+    let from = match kind {
+        Store::Codex => agent_transcript::codex_own_history_start(path, &mut file),
+        Store::Claude | Store::Copilot => 0,
+    };
+    let (text, cut) = crate::services::agent_session::read_conversation_tail_from(&mut file, meta.len(), TAIL_BYTES, from)?;
     let mut changes = Vec::new();
     for line in text.lines() {
         // Most records are no change: only parse the ones that may be.

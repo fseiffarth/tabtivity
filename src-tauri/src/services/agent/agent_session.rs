@@ -803,13 +803,26 @@ const SCAN_CHUNK: u64 = 1024 * 1024;
 /// flag says the window starts after the file's first byte. The scan reaches
 /// back at most [`REPLAY_SCAN_FACTOR`] times `budget`.
 pub(crate) fn read_conversation_tail(file: &mut std::fs::File, len: u64, budget: u64) -> Option<(String, bool)> {
+    read_conversation_tail_from(file, len, budget, 0)
+}
+
+/// [`read_conversation_tail`] of the part of the file from byte `from` on — a
+/// line start, such as where a Codex subagent's own records begin
+/// (`agent_transcript::codex_own_history_start`). The flag says the window
+/// starts after `from`.
+pub(crate) fn read_conversation_tail_from(
+    file: &mut std::fs::File,
+    len: u64,
+    budget: u64,
+    from: u64,
+) -> Option<(String, bool)> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
-    let start = conversation_tail_start(file, len, budget)?;
+    let start = conversation_tail_start(file, len, budget)?.max(from);
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut reader = BufReader::new(file);
     let mut line = Vec::new();
     let mut text = String::new();
-    if start > 0 {
+    if start > from {
         // Whatever came before the seek point is missing from the first line.
         reader.read_until(b'\n', &mut line).ok()?;
     }
@@ -822,7 +835,7 @@ pub(crate) fn read_conversation_tail(file: &mut std::fs::File, len: u64, budget:
             text.push_str(&String::from_utf8_lossy(&line));
         }
     }
-    Some((text, start > 0))
+    Some((text, start > from))
 }
 
 /// Where [`read_conversation_tail`]'s window starts: walking back line by line
