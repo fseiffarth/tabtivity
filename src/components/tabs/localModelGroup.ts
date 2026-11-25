@@ -5,7 +5,7 @@ import type { TranslationKey } from "../../lib/i18n";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import type { AddMenuEntry, AddMenuGroup } from "./AddTabMenuList";
 import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
-import { offeredLocalAgents } from "../../lib/projects/localModelsOnly";
+import { CUT_ONLY_DRIVERS, offeredLocalAgents } from "../../lib/projects/localModelsOnly";
 
 /**
  * Where the "tabs" local model sits right now, as far as the "+" menu cares:
@@ -141,7 +141,8 @@ export function localModelMenuGroup(opts: {
   localModelOffInRoot: string | undefined;
   localDrivers: LocalDriverInfo[];
   /** The scope is a Local models only project: the drivers the backend gate
-   *  refuses there (OpenCode, `driversForLockedProject`) are not offered. */
+   *  refuses there (`driversForLockedProject`) are not offered, and a cut-only one
+   *  (OpenCode) says it runs without network. */
   lockedProject?: boolean;
   /** The locked project has Cut network on: only the drivers verified with the
    *  network cut are offered, and Mistral is not. */
@@ -159,14 +160,20 @@ export function localModelMenuGroup(opts: {
   // `heavy_harness` cautions, it never withholds — see
   // lib/agents/localDrivers.ts. The row stays pickable because which local
   // models cope is not something the backend can probe.
+  // In a locked project that keeps its network a cut-only driver still runs, in a
+  // sandbox of its own with no network (`agent_privacy::CUT_ONLY_DRIVERS`).
+  const cutAlone = (d: LocalDriverInfo) => Boolean(opts.lockedProject) && !opts.cutNetwork && CUT_ONLY_DRIVERS.includes(d.id);
   const driverRow = (d: LocalDriverInfo, model: string): AddMenuEntry => ({
     key: d.id,
     label: d.label,
     ...DRIVER_UNTESTED[d.id],
+    ...(cutAlone(d) ? { untested: "localModelsOnly.cutOnlyDriver" } : {}),
     color: TAB_ACCENT["local_agent"],
     caution: d.heavy_harness
       ? t("newTabMenu.localDriverHeavyHarness", { agent: d.label })
-      : undefined,
+      : cutAlone(d)
+        ? t("newTabMenu.localDriverCutAlone", { agent: d.label })
+        : undefined,
     onPick: () => opts.onLaunch(d.id, d.label, model),
   });
   const drivers = (heavy: boolean, model: string) =>

@@ -1,4 +1,5 @@
 import type { ProjectEntry } from "../../types";
+import { IS_HOST_LINUX } from "../platform";
 
 /**
  * Local-models-only projects (`services::agent_privacy` on the backend): the
@@ -29,14 +30,15 @@ export function isCutNetwork(project: Pick<ProjectEntry, "agent_privacy"> | null
 }
 
 /**
- * The local drivers (`list_local_drivers` ids) the backend gate refuses in a Local
- * models only project that keeps its network (`agent_privacy::vet`): OpenCode
- * re-reads a project config the agent writes mid-session and merges its provider and
- * model lists over the launch settings. With Cut network on its only way out is the
- * local lane, which judges every model, so it starts there. Hiding is a courtesy;
- * the spawn is refused either way.
+ * The local drivers (`list_local_drivers` ids) that run only with their network cut in a
+ * Local models only project (`agent_privacy::CUT_ONLY_DRIVERS`): OpenCode re-reads a
+ * project config the agent writes mid-session and merges its provider and model lists
+ * over the launch settings, so its only way out must be the local lane, which judges
+ * every model. In a project that keeps its network such a tab gets a cut sandbox of its
+ * own; where the sandbox cannot cut (only Linux can) the gate refuses it, and the menus
+ * hide it. Hiding is a courtesy; the spawn is refused either way.
  */
-export const LOCKED_REFUSED_DRIVERS: readonly string[] = ["opencode"];
+export const CUT_ONLY_DRIVERS: readonly string[] = ["opencode"];
 
 /**
  * The drivers that were run with the network cut (`agent_privacy::CUT_VERIFIED_DRIVERS`;
@@ -46,9 +48,15 @@ export const LOCKED_REFUSED_DRIVERS: readonly string[] = ["opencode"];
 export const CUT_VERIFIED_DRIVERS: readonly string[] = ["opencode", "claude", "codex"];
 
 /** `drivers` without the ones a Local models only project refuses; with `cut`, only
- *  the ones verified with the network cut. */
-export function driversForLockedProject<T extends { id: string }>(drivers: readonly T[], cut = false): T[] {
-  return drivers.filter((d) => (cut ? CUT_VERIFIED_DRIVERS.includes(d.id) : !LOCKED_REFUSED_DRIVERS.includes(d.id)));
+ *  the ones verified with the network cut. `canCut`: whether the host's sandbox can cut a
+ *  tab's network (`agent_privacy::cut_platform`, Linux), without which the cut-only
+ *  drivers are refused. */
+export function driversForLockedProject<T extends { id: string }>(
+  drivers: readonly T[],
+  cut = false,
+  canCut = IS_HOST_LINUX,
+): T[] {
+  return drivers.filter((d) => (cut ? CUT_VERIFIED_DRIVERS.includes(d.id) : canCut || !CUT_ONLY_DRIVERS.includes(d.id)));
 }
 
 /** Whether the Mistral (vibe) row is offered: not with Cut network on (not verified there). */

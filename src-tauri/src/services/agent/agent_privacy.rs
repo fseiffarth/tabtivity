@@ -483,24 +483,26 @@ pub const fn claude_pinned_platform() -> bool {
     cfg!(target_os = "linux")
 }
 
-/// The local drivers a Local models only project that keeps its network does not
-/// start. OpenCode re-reads its project config while it runs and merges the arrays
-/// of a file the agent writes (providers, `enabled_providers`, models) over the
-/// launch settings; measured on 2.2.6 (`docs/context/local_models_only.md`), the
-/// inline config cannot pin that. With Cut network on its only way out is the local
-/// lane, which judges every model, so it starts there (phase 2).
-/// The frontend's `LOCKED_REFUSED_DRIVERS` (`localModelsOnly.ts`) hides the same
-/// rows; this is what refuses them.
-const REFUSED_DRIVERS: &[&str] = &["opencode"];
+/// The local drivers that run only with their network cut in a Local models only
+/// project. OpenCode re-reads its project config while it runs and merges the
+/// arrays of a file the agent writes (providers, `enabled_providers`, models) over
+/// the launch settings; measured on 2.2.6 (`docs/context/local_models_only.md`), the
+/// inline config cannot pin that. With no network its only way out is the local
+/// lane, which judges every model. So in a project that keeps its network such a
+/// tab gets a cut fence of its own ([`Verified::cut`]) while the project's other
+/// tabs keep theirs; where the sandbox cannot cut ([`cut_platform`]) it is refused.
+/// The frontend's `CUT_ONLY_DRIVERS` (`localModelsOnly.ts`) is the same list.
+const CUT_ONLY_DRIVERS: &[&str] = &["opencode"];
 
-/// Why a verified-looking launch of a refused driver (see [`REFUSED_DRIVERS`])
-/// stops, naming the local agents that can still run in such a project: derived
-/// from the driver registry, Claude Code only where its settings can be pinned.
+/// Why a launch of a cut-only driver (see [`CUT_ONLY_DRIVERS`]) stops where the
+/// sandbox cannot cut its network, naming the local agents that can still run in
+/// such a project: derived from the driver registry, Claude Code only where its
+/// settings can be pinned.
 fn driver_not_pinnable(driver: &str, pins_claude: bool) -> String {
     let label = driver_label(driver);
     format!(
-        "{label} cannot be kept on the local model in a Local models only project that keeps its network: it reads a project config file again while it runs, so a file the agent writes could add a cloud provider and model. It does start when the project's Cut network is on, because its only way out is then the relay, which checks every model. Local agents that can run here: {}.",
-        agents_that_can_run_locked(pins_claude, false).join(", ")
+        "{label} cannot be kept on the local model in a Local models only project on this operating system: it reads a project config file again while it runs, so a file the agent writes could add a cloud provider and model, and only the Linux sandbox can cut its network so that the relay, which checks every model, is its only way out. Local agents that can run here: {}.",
+        agents_that_can_run_locked(pins_claude, false, false).join(", ")
     )
 }
 
@@ -510,7 +512,7 @@ fn driver_not_verified_cut(driver: &str, pins_claude: bool) -> String {
     format!(
         "{} has not been verified with the network cut (some agents hang on an update check or a login probe there, or are not installed to test), so it does not start in a project with Cut network on. Local agents that can run here: {}.",
         driver_label(driver),
-        agents_that_can_run_locked(pins_claude, true).join(", ")
+        agents_that_can_run_locked(pins_claude, true, true).join(", ")
     )
 }
 
@@ -522,15 +524,16 @@ fn driver_label(driver: &str) -> &str {
 }
 
 /// The labels of the local agents a Local models only project can start: with the
-/// network on, every driver of the registry that is not refused
-/// ([`REFUSED_DRIVERS`]) and Mistral (`vibe`), which keeps its own launch path;
-/// with Cut network on (`cut`), the drivers verified with the network cut
-/// ([`CUT_VERIFIED_DRIVERS`]). Claude Code only where its settings can be pinned.
-pub fn agents_that_can_run_locked(pins_claude: bool, cut: bool) -> Vec<&'static str> {
+/// network on, every driver of the registry (a cut-only one, [`CUT_ONLY_DRIVERS`],
+/// only where the sandbox can cut, `can_cut`) and Mistral (`vibe`), which keeps its
+/// own launch path; with Cut network on (`cut`), the drivers verified with the
+/// network cut ([`CUT_VERIFIED_DRIVERS`]). Claude Code only where its settings can
+/// be pinned.
+pub fn agents_that_can_run_locked(pins_claude: bool, cut: bool, can_cut: bool) -> Vec<&'static str> {
     let drivers = crate::services::local_drivers::LOCAL_DRIVERS
         .iter()
         .filter(|d| {
-            let allowed = if cut { CUT_VERIFIED_DRIVERS.contains(&d.id) } else { !REFUSED_DRIVERS.contains(&d.id) };
+            let allowed = if cut { CUT_VERIFIED_DRIVERS.contains(&d.id) } else { can_cut || !CUT_ONLY_DRIVERS.contains(&d.id) };
             allowed && (d.id != "claude" || pins_claude)
         })
         .map(|d| d.label);
@@ -600,12 +603,14 @@ fn vet(opts: &PtyOptions, subject: &Locked, probe: &Probe<'_>, remote_project: b
             program(&opts.cmd)
         ));
     };
-    if subject.cut_network {
-        if !CUT_VERIFIED_DRIVERS.contains(&driver.as_str()) {
-            return no(&driver_not_verified_cut(&driver, probe.pins_claude));
-        }
-    } else if REFUSED_DRIVERS.contains(&driver.as_str()) {
+    // A cut-only driver in a project that keeps its network runs in a cut fence of
+    // its own; it is verified with the network cut, so the cut check below holds it.
+    let cut = subject.cut_network || CUT_ONLY_DRIVERS.contains(&driver.as_str());
+    if cut && !probe.can_cut {
         return no(&driver_not_pinnable(&driver, probe.pins_claude));
+    }
+    if cut && !CUT_VERIFIED_DRIVERS.contains(&driver.as_str()) {
+        return no(&driver_not_verified_cut(&driver, probe.pins_claude));
     }
     if driver == "claude" && !probe.pins_claude {
         return no(CLAUDE_NOT_PINNABLE);
@@ -632,7 +637,7 @@ fn vet(opts: &PtyOptions, subject: &Locked, probe: &Probe<'_>, remote_project: b
             },
         )
     })?;
-    Ok(Verified { project: subject.id.clone(), driver, model, endpoint, cut: subject.cut_network })
+    Ok(Verified { project: subject.id.clone(), driver, model, endpoint, cut })
 }
 
 /// The Mistral (`vibe`) home of `project` for `alias`: apart from the shared
@@ -861,9 +866,14 @@ pub fn fence_cut(project: &str, tab: &str) -> Result<bool, String> {
 
 /// The tabs of `project` the gate verified under a Cut network setting other than
 /// `cut`: their fence keeps the old one until they are opened again. The dialog
-/// offers to restart these; nothing restarts them silently.
+/// offers to restart these; nothing restarts them silently. A cut-only driver's
+/// tab ([`CUT_ONLY_DRIVERS`]) is cut whatever the setting, so it is never one.
 pub fn restart_for_cut_in(tabs: &HashMap<String, Verified>, project: &str, cut: bool) -> Vec<String> {
-    let mut out: Vec<String> = tabs.iter().filter(|(_, v)| v.project == project && v.cut != cut).map(|(t, _)| t.clone()).collect();
+    let mut out: Vec<String> = tabs
+        .iter()
+        .filter(|(_, v)| v.project == project && v.cut != cut && !CUT_ONLY_DRIVERS.contains(&v.driver.as_str()))
+        .map(|(t, _)| t.clone())
+        .collect();
     out.sort();
     out
 }
@@ -909,10 +919,10 @@ pub fn unstamped_reason(subject: &Locked, cmd: &str, pins_claude: bool) -> Strin
         .or((name == "vibe").then_some("vibe"));
     match driver {
         Some(id) if subject.cut_network && !CUT_VERIFIED_DRIVERS.contains(&id) => driver_not_verified_cut(id, pins_claude),
-        Some(id) if !subject.cut_network && REFUSED_DRIVERS.contains(&id) => driver_not_pinnable(id, pins_claude),
+        Some(id) if !subject.cut_network && !cut_platform() && CUT_ONLY_DRIVERS.contains(&id) => driver_not_pinnable(id, pins_claude),
         _ => format!(
             "`{name}` was not started as a local-model tab. Open a local model from the \u{ff0b} menu. Local agents that can run here: {}.",
-            agents_that_can_run_locked(pins_claude, subject.cut_network).join(", ")
+            agents_that_can_run_locked(pins_claude, subject.cut_network, cut_platform()).join(", ")
         ),
     }
 }

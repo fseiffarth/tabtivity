@@ -1,6 +1,6 @@
 # Local-models-only projects — plan
 
-> **Status (screened against code 2026-11-22):** Phases 1 and 2 are in code: `services/agent/agent_privacy.rs` (gate, `cut_platform`, `CUT_VERIFIED_DRIVERS`), `commands/agent_privacy.rs`, `AgentPrivacyDialog.tsx`, `services/local_lane/{relay,server,policy,http}.rs`, `--unshare-net` in `agent_fence.rs`. Open: phase 3 (macOS Seatbelt network denial; Cut network is refused there), phase 4b (VM projects; refused; 4a containers done 2026-11-24), a real-namespace run of the cut fence. As built: `docs/context/local_models_only.md`, `docs/local_models_only_handoff.md`. Decisions D1–D4 at the end stand. Not live-tested unless the doc/todo says so.
+> **Status (screened against code 2026-11-22):** Phases 1 and 2 are in code: `services/agent/agent_privacy.rs` (gate, `cut_platform`, `CUT_VERIFIED_DRIVERS`), `commands/agent_privacy.rs`, `AgentPrivacyDialog.tsx`, `services/local_lane/{relay,server,policy,http}.rs`, `--unshare-net` in `agent_fence.rs`. Since 2026-11-25 an OpenCode tab in a locked project that keeps its network gets a cut fence of its own instead of a refusal (`CUT_ONLY_DRIVERS`). Open: phase 3 (macOS Seatbelt network denial; Cut network is refused there), phase 4b (VM projects; refused; 4a containers done 2026-11-24), a real-namespace run of the cut fence. As built: `docs/context/local_models_only.md`, `docs/local_models_only_handoff.md`. Decisions D1–D4 at the end stand. Not live-tested unless the doc/todo says so.
 
 ## Intent
 

@@ -1018,36 +1018,46 @@ fn claude_is_refused_where_the_sandbox_cannot_pin_its_settings() {
 }
 
 #[test]
-fn opencode_is_refused_in_a_locked_project_whichever_way_it_gets_to_the_gate() {
+fn opencode_runs_in_a_cut_fence_of_its_own_in_a_locked_project_that_keeps_its_network() {
     let tmp = tempfile::tempdir().unwrap();
     let projects = locked_registry(tmp.path());
     let cwd = tmp.path().join("secret");
     let line = ["--model", "ollama/qwen3:8b"];
-    // Its own project (window, phone, restore and schedule all arrive here), the root
-    // console with a cwd inside, and another project (a box tab) with a cwd inside.
+    // Where the sandbox can cut: started, recorded as cut (the fence takes its network and
+    // opens the lane), pinned to the relay's address and quiet, though the project is not cut.
+    let out = World::healthy().gate(opts("opencode", &line, Some("lock"), &cwd), &projects, tmp.path()).unwrap();
+    let v = verified_launch(&out.id).unwrap();
+    assert!(v.cut && v.driver == "opencode", "{v:?}");
+    assert_eq!(out.env["OLLAMA_HOST"], v.pinned_endpoint());
+    assert_eq!(out.env.get("OPENCODE_DISABLE_AUTOUPDATE").map(String::as_str), Some("1"));
+    let locked = locked_projects(&projects);
+    assert_eq!(fence_cut_in(&locked, "lock", Some(&v)), Ok(true));
+    // The project's other local agents keep the network.
+    let codex = World::healthy()
+        .gate(opts("codex", &["--oss", "-c", "oss_provider=\"ollama\"", "-m", "qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path())
+        .unwrap();
+    assert!(!verified_launch(&codex.id).unwrap().cut);
+    // Where it cannot cut, refused from its own project, the root console with a cwd
+    // inside, and another project (a box tab) with a cwd inside, naming what can run.
+    let no_cut = World { can_cut: false, ..World::healthy() };
     for project in [Some("lock"), None, Some("open")] {
-        let err = World::healthy().gate(opts("opencode", &line, project, &cwd), &projects, tmp.path()).unwrap_err();
+        let err = no_cut.gate(opts("opencode", &line, project, &cwd), &projects, tmp.path()).unwrap_err();
         assert!(err.starts_with(REFUSAL) && err.contains("\"Secret\""), "{project:?}: {err}");
         assert!(err.contains("OpenCode") && err.contains("cannot be kept on the local model"), "{project:?}: {err}");
-        // It names what can still run there, derived from the drivers.
         for label in ["Pi", "Claude Code", "Codex", "Mistral"] {
             assert!(err.contains(label), "{label} missing: {err}");
         }
+        assert!(!err.contains("run here: OpenCode") && !err.contains(", OpenCode"), "{err}");
     }
-    // The refusal does not depend on Ollama or the model: a verified-looking line is
-    // refused with the same words when Ollama is down.
-    let down = World { local: Err(crate::services::ollama_client::MODEL_NOT_RUNNING), ..World::healthy() };
-    let err = down.gate(opts("opencode", &line, Some("lock"), &cwd), &projects, tmp.path()).unwrap_err();
-    assert!(err.contains("cannot be kept on the local model"), "{err}");
     // Where Claude cannot be pinned it is not offered as an alternative.
-    let no_claude = World { pins_claude: false, ..World::healthy() };
+    let no_claude = World { pins_claude: false, can_cut: false, ..World::healthy() };
     let err = no_claude.gate(opts("opencode", &line, Some("lock"), &cwd), &projects, tmp.path()).unwrap_err();
     assert!(!err.contains("Claude Code"), "{err}");
-    // A project that is not locked still runs it; the shell-tab shim, which never
+    // A project that is not locked runs it with its network; the shell-tab shim, which never
     // passed the gate and so has no stamp, is refused at the fence.
     let open = tmp.path().join("open");
-    assert!(World::healthy().gate(opts("opencode", &line, Some("open"), &open), &projects, tmp.path()).is_ok());
-    let locked = locked_projects(&projects);
+    let plain = World::healthy().gate(opts("opencode", &line, Some("open"), &open), &projects, tmp.path()).unwrap();
+    assert!(verified_launch(&plain.id).is_none_or(|v| v.project != "lock"));
     let shim = opts("opencode", &line, Some("lock"), &cwd);
     assert!(fence_gate_in(&locked, &shim, "lock").unwrap_err().starts_with(REFUSAL));
 }
@@ -1061,19 +1071,24 @@ fn a_cli_typed_into_a_shell_tab_is_refused_in_the_gates_words() {
         let shim = opts(cmd, &[], Some("lock"), &cwd);
         fence_gate_in(locked, &shim, "lock").unwrap_err()
     };
-    // Network on: OpenCode gets the gate's text, with the agents that can run (not OpenCode).
+    // Network on: where the sandbox can cut, OpenCode runs (cut on its own), so it gets the
+    // general text and is on the list; elsewhere the gate's text, without it.
     let err = refused(&plain, "opencode");
-    assert!(err.starts_with(REFUSAL) && err.contains("OpenCode cannot be kept on the local model"), "{err}");
+    if cut_platform() {
+        assert!(err.contains("`opencode` was not started as a local-model tab") && err.contains("OpenCode"), "{err}");
+    } else {
+        assert!(err.starts_with(REFUSAL) && err.contains("OpenCode cannot be kept on the local model"), "{err}");
+        assert!(!err.contains("Local agents that can run here: OpenCode"), "{err}");
+    }
     for label in ["Pi", "Codex", "Mistral"] {
         assert!(err.contains(label), "{label}: {err}");
     }
-    assert!(!err.contains("Local agents that can run here: OpenCode"), "{err}");
     // Any other CLI: the general text plus the same list.
     let err = refused(&plain, "gemini");
     assert!(err.contains("`gemini` was not started as a local-model tab") && err.contains("Local agents that can run here: "), "{err}");
-    assert!(err.contains("Pi") && !err.contains("OpenCode,"), "{err}");
+    assert!(err.contains("Pi") && err.contains("OpenCode") == cut_platform(), "{err}");
     // A path to the program is the program.
-    assert!(refused(&plain, "/usr/bin/opencode").contains("cannot be kept on the local model"));
+    assert_eq!(refused(&plain, "/usr/bin/opencode").contains("cannot be kept on the local model"), !cut_platform());
     // Cut network on: OpenCode is allowed, so it gets the general text and is on the list;
     // an unverified driver is named as such.
     let err = refused(&cut, "opencode");
@@ -1091,17 +1106,19 @@ fn a_cli_typed_into_a_shell_tab_is_refused_in_the_gates_words() {
 
 #[test]
 fn the_agents_a_locked_project_can_run_are_derived_from_the_driver_registry() {
-    let with_claude = agents_that_can_run_locked(true, false);
-    let without = agents_that_can_run_locked(false, false);
+    let with_claude = agents_that_can_run_locked(true, false, false);
+    let without = agents_that_can_run_locked(false, false, false);
     assert!(!with_claude.contains(&"OpenCode") && !without.contains(&"OpenCode"));
+    // Where the sandbox can cut, the cut-only drivers run (each in a cut fence of its own).
+    assert!(agents_that_can_run_locked(false, false, true).contains(&"OpenCode"));
     assert!(with_claude.contains(&"Claude Code") && !without.contains(&"Claude Code"));
     // Every other registry driver is on the list, whatever the registry holds today.
     for d in crate::services::local_drivers::LOCAL_DRIVERS.iter().filter(|d| d.id != "opencode" && d.id != "claude") {
         assert!(without.contains(&d.label), "{} missing from {without:?}", d.label);
     }
     assert!(without.contains(&"Mistral (vibe)"));
-    // The refused drivers are exactly the ones the gate turns away: nothing on the list is refused.
-    for id in REFUSED_DRIVERS {
+    // Without a cut, the cut-only drivers are exactly the ones the gate turns away.
+    for id in CUT_ONLY_DRIVERS {
         let label = crate::services::local_drivers::LOCAL_DRIVERS.iter().find(|d| d.id == *id).unwrap().label;
         assert!(!with_claude.contains(&label), "{label}");
     }
@@ -1148,13 +1165,13 @@ fn with_cut_network_on_the_verified_drivers_start_and_the_rest_are_refused_by_na
     let err = World::healthy().gate(vibe, &projects, tmp.path()).unwrap_err();
     assert!(err.contains("Mistral (vibe)") && err.contains("has not been verified"), "{err}");
     // Every verified driver is a driver the registry has (or vibe), and the network-on list
-    // still refuses OpenCode.
+    // has OpenCode only where the sandbox can cut.
     for id in CUT_VERIFIED_DRIVERS {
         assert!(*id == "vibe" || crate::services::local_drivers::LOCAL_DRIVERS.iter().any(|d| d.id == *id), "{id}");
     }
-    assert!(agents_that_can_run_locked(true, true).contains(&"OpenCode"));
-    assert!(!agents_that_can_run_locked(false, true).contains(&"Claude Code"));
-    assert!(!agents_that_can_run_locked(true, false).contains(&"OpenCode"));
+    assert!(agents_that_can_run_locked(true, true, true).contains(&"OpenCode"));
+    assert!(!agents_that_can_run_locked(false, true, true).contains(&"Claude Code"));
+    assert!(!agents_that_can_run_locked(true, false, false).contains(&"OpenCode"));
     // Without a cut platform nothing starts in a cut project, whatever the driver.
     let no_cut = World { can_cut: false, ..World::healthy() };
     assert!(no_cut.gate(opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path()).is_err());
@@ -1230,6 +1247,8 @@ fn changing_cut_network_names_the_running_tabs_on_the_other_setting() {
         ("lock:a".to_string(), rec("lock", false)),
         ("lock:b".to_string(), rec("lock", true)),
         ("other:c".to_string(), rec("other", false)),
+        // OpenCode is cut whatever the setting, so switching it off leaves it be.
+        ("lock:d".to_string(), Verified { driver: "opencode".into(), ..rec("lock", true) }),
     ]
     .into();
     assert_eq!(restart_for_cut_in(&tabs, "lock", true), vec!["lock:a".to_string()]);
@@ -1439,9 +1458,9 @@ fn ts_list(name: &str) -> Vec<String> {
 #[test]
 fn the_frontends_driver_lists_are_the_backends() {
     // The menus (desktop and phone) hide what the gate refuses; two lists with nothing
-    // tying them would drift. The frontend's list of what a locked project with its network
-    // on refuses, and of what a cut project starts, are the backend's.
-    assert_eq!(ts_list("LOCKED_REFUSED_DRIVERS"), REFUSED_DRIVERS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    // tying them would drift. The frontend's list of the drivers that run only cut, and of
+    // what a cut project starts, are the backend's.
+    assert_eq!(ts_list("CUT_ONLY_DRIVERS"), CUT_ONLY_DRIVERS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
     assert_eq!(ts_list("CUT_VERIFIED_DRIVERS"), CUT_VERIFIED_DRIVERS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
 }
 

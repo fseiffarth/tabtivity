@@ -6984,6 +6984,7 @@ export const dict: Dict = {
   "newTabMenu.noLocalAgentHint": "Kein lokaler Agent installiert — installiere einen im Menü „Modelle & Agenten“",
   "newTabMenu.localModelNoToolsHint": "{model} kann keine Tool-aufrufenden Agenten ausführen — wähle im Menü „Modelle & Agenten“ ein Modell mit Tool-Unterstützung",
   "newTabMenu.localDriverHeavyHarness": "{agent} ist auf ein gehostetes Spitzenmodell ausgelegt: Jede Anfrage wird in einen großen System-Prompt gepackt, daher kann ein lokales Modell seltsam antworten oder abschweifen, auch wenn es dieselbe Frage für sich genommen gut beantwortet.",
+  "newTabMenu.localDriverCutAlone": "{agent} läuft hier ohne Netzwerk: In einem Projekt mit „Nur lokale Modelle“ liest es eine Konfigurationsdatei erneut, die der Agent schreiben könnte, deshalb erreicht seine Sandbox nur das lokale Modell, über ein Relay, das jedes Modell prüft. Web-Abrufe und Paket-Downloads darin schlagen fehl.",
   "newTabMenu.noLocalModelHint": "Kein lokales Modell festgelegt — wähle eines in der App-Leiste",
   "newTabMenu.localModelOffInRootHint": "{model} ist in der Root-Konsole aus — schalte seinen Root-Chip in der App-Leiste ein",
   "newTabMenu.checkingLocalModelGpu": "Prüfe, ob {model} auf der GPU liegt…",

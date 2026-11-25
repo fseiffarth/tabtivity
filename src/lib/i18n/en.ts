@@ -7207,6 +7207,7 @@ export const enSource = {
   "newTabMenu.noLocalAgentHint": "No local agent installed — install one in the Models & agents menu",
   "newTabMenu.localModelNoToolsHint": "{model} can't run tool-calling agents — pick a tool-capable model in the Models & agents menu",
   "newTabMenu.localDriverHeavyHarness": "{agent} was built around a hosted frontier model: it wraps every turn in a large system prompt, so a local model may answer oddly or ramble even when it handles the same question well on its own.",
+  "newTabMenu.localDriverCutAlone": "{agent} runs here without network: in a Local models only project it rereads a config file the agent could write, so its sandbox reaches only the local model, through a relay that checks every model. Web fetches and package downloads inside it fail.",
   "newTabMenu.noLocalModelHint": "No local model set — pick one in the app bar",
   "newTabMenu.localModelOffInRootHint": "{model} is off in the root console — turn on its Root chip in the app bar",
   "newTabMenu.checkingLocalModelGpu": "Checking whether {model} is on the GPU…",

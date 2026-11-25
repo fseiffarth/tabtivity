@@ -5,7 +5,8 @@ only** is read by no cloud model: only an agent on an installed local Ollama
 model starts in it, nothing in Tabtivity hands its files to a cloud model, and
 no other tab's fence can see its folder. The switch below it, **Cut network**
 (phase 2, Linux), takes the network away from the project's local tabs: their fence
-has none, and the only way out is a relay in the app (see "Cut network" below). On
+has none, and the only way out is a relay in the app (see "Cut network" below). An
+OpenCode tab gets that cut fence on its own even with the switch off (see the gate below). On
 macOS and Windows it is stored in the record's shape and refused.
 
 The code is `services/agent/agent_privacy.rs` (all of it `AppHandle`-free), the
@@ -110,17 +111,22 @@ A subject spawn is allowed only when `vet` accepts it:
   not needed because the argv itself is what runs;
 - Cut network not recorded on the project, or `Probe::can_cut` (`cut_platform`, Linux);
   when it is recorded and the platform cannot cut, the project is closed to agents;
-- the driver is allowed for the project's mode. **Network on:** not **OpenCode**
-  (`agent_privacy::REFUSED_DRIVERS`): a launch line that would be OpenCode's is refused,
-  before Ollama is asked, with "OpenCode cannot be kept on the local model in a Local models
-  only project that keeps its network" and the local agents that can run
-  (`agents_that_can_run_locked(pins_claude, cut)`: the `LOCAL_DRIVERS` labels but OpenCode,
-  Claude Code only where it can be pinned, and Mistral (vibe)). **Cut network on:** only
+- the driver is allowed for the project's mode. **Network on:** every driver, but a
+  cut-only one (**OpenCode**, `agent_privacy::CUT_ONLY_DRIVERS`) runs in a cut fence of its
+  own: the gate records `Verified::cut = true` for that tab, so it gets `--unshare-net`, the
+  local lane, the relay address as `OLLAMA_HOST` and `cut_quiet_env`, while the project's other
+  tabs keep their network (2026-11-25, never live). Where the sandbox cannot cut
+  (`cut_platform`: not Linux) it is refused, before Ollama is asked, with "OpenCode cannot be kept
+  on the local model in a Local models only project on this operating system" and the local
+  agents that can run (`agents_that_can_run_locked(pins_claude, cut, can_cut)`: the
+  `LOCAL_DRIVERS` labels, the cut-only ones only with `can_cut`, Claude Code only where it can be
+  pinned, and Mistral (vibe)). Such a tab is cut whatever the project's switch, so
+  `restart_for_cut_in` never lists it. **Cut network on:** only
   `CUT_VERIFIED_DRIVERS` (OpenCode, Claude Code, Codex; the per-driver table below); any other
   driver is refused naming itself ("has not been verified with the network cut"). Every route
   into a locked project passes `vet` or the fence's stamp check (window, phone, restore,
   schedule, a box tab or the root console with a cwd inside, the shell-tab shim). The ＋ menus
-  follow (`driversForLockedProject(drivers, cut)`, `LOCKED_REFUSED_DRIVERS` and
+  follow (`driversForLockedProject(drivers, cut, canCut = IS_HOST_LINUX)`, `CUT_ONLY_DRIVERS` and
   `CUT_VERIFIED_DRIVERS` in `localModelsOnly.ts`, `vibeOfferedInLockedProject`; the phone's
   sheet lists all rows, as it does the cloud ones, and gets the backend's text);
 - `OLLAMA_HOST` of the Tabtivity process, if set, is loopback;
@@ -210,7 +216,7 @@ prompts):
 | CLI | Re-reads mid-session? | What pins it |
 | --- | --- | --- |
 | Claude Code 2.1.319 | **Yes**, project `.claude/settings.json`, `.claude/settings.local.json` and the user's `~/.claude/settings.json` (the agent home's, writable in the fence). An `env.ANTHROPIC_BASE_URL` moved the next `POST /v1/messages`; so did `env.HTTP_PROXY`/`HTTPS_PROXY` (the whole request goes through the proxy even to a loopback base URL) and `env.CLAUDE_CODE_USE_BEDROCK` + `ANTHROPIC_BEDROCK_BASE_URL` (the request went to the attacker as `/model/<m>/invoke-with-response-stream`). | A **managed-settings file** (`local_drivers::claude_managed_settings`), written by the backend into `<state>/claude_managed/<digest>/claude-code/managed-settings.json` (content-addressed, `home_io` handles, pinned by inode and re-checked last by `verify_control_pins`) and bound read-only into the fence at Claude's machine-wide path `/etc/claude-code/managed-settings.json`. It outranks project and user settings. It pins `env` (`ANTHROPIC_BASE_URL` to the verified endpoint, the model variables `ollama launch claude` sets, the proxy and `CLAUDE_CODE_USE_*` variables emptied, `NO_PROXY` to loopback), `model`, `availableModels: [model]` and `allowedProviders: ["customEndpoint"]` (Claude Code refuses a session on any other provider; the custom endpoint is admitted only at the value this file pins). Built from what the gate recorded for the tab (driver, model, endpoint), not from the argv. |
-| OpenCode 2.2.6 | **Yes**: a project `opencode.json` / `.opencode/opencode.json` written mid-session moved the next request when the provider came from a project file (`opencode mini --standalone`). | **Nothing holds it, so OpenCode is refused in a locked project until Phase 2.** An inline `OPENCODE_CONFIG_CONTENT` (which fix round 3 gave a verified tab) pinned the `ollama` provider's endpoint, but config arrays merge as a union: a project file that adds a provider and sets `enabled_providers`, `model`, `small_model` or a per-agent `model` still lists and uses its own (`opencode models --standalone`, review 3). The only closure would be to create the files in the project to mask them, which the app must not do. The inline-config code in `apply` is removed (it is in git history, `17f447d3`); `local_drivers::opencode_ollama_config` stays, since `launch_prep` builds the loaded-models config with it for every other OpenCode tab. |
+| OpenCode 2.2.6 | **Yes**: a project `opencode.json` / `.opencode/opencode.json` written mid-session moved the next request when the provider came from a project file (`opencode mini --standalone`). | **Nothing holds it at launch, so OpenCode runs only in a cut fence in a locked project** (its own one when the project keeps its network; refused where the sandbox cannot cut): a provider a written file adds has no network, and the relay judges every model it asks the local Ollama for. An inline `OPENCODE_CONFIG_CONTENT` (which fix round 3 gave a verified tab) pinned the `ollama` provider's endpoint, but config arrays merge as a union: a project file that adds a provider and sets `enabled_providers`, `model`, `small_model` or a per-agent `model` still lists and uses its own (`opencode models --standalone`, review 3). The only closure would be to create the files in the project to mask them, which the app must not do. The inline-config code in `apply` is removed (it is in git history, `17f447d3`); `local_drivers::opencode_ollama_config` stays, since `launch_prep` builds the loaded-models config with it for every other OpenCode tab. |
 | Codex 0.167.0 | **No** (measured): `.codex/config.toml` written mid-session with another `model`/`model_provider`/`openai_base_url` changed nothing; later requests kept the launch model on the launch endpoint. The provider keys in a project file are ignored at start anyway. | Nothing needed. |
 | Pi, Droid, Cline, OpenClaw, Vibe | Not installed, not measured. | The spawn-time masks only. Vibe's home is pinned read-only. |
 
@@ -366,8 +372,8 @@ The ＋ menus, the allowed-agents list and the phone's sheet follow it (`offered
 **The phone's ＋ sheet** (`NewTabSheet`, `localChoiceRows`) reads the same rule as the desktop menus:
 `PublicProject` (`mobile_control::discovery`) carries `local_models_only` and `cut_network` as plain booleans,
 absent when off (read with `agent_privacy::privacy_of_value`, so a malformed record counts as locked, as in
-the gate). In a locked project the sheet lists the local model's agents (OpenCode only with the cut on, and then
-only the verified drivers) and shells, not the cloud agents, their cloud sessions, the API and sign-in rows;
+the gate). In a locked project the sheet lists the local model's agents (OpenCode where the host can cut, Linux; with
+the cut on only the verified drivers) and shells, not the cloud agents, their cloud sessions, the API and sign-in rows;
 `cloudRowsOffered`, `offeredLocalAgents` are the one shared TS rule. `the_frontends_driver_lists_are_the_backends`
 ties the Rust and TS driver lists. The baked PWA needs `npm run mobile:bundle` to carry the sheet change.
 
