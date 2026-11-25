@@ -7,6 +7,8 @@ import { AGENT_TAB_ACTIONS } from "../shortcuts/shortcuts";
 import type { CloudLaunch } from "../agents/cloudSessions";
 import type { SignInLaunch } from "../agents/signInLaunch";
 import { envName } from "../brand";
+import { unverifiedCliTag } from "../agents/unverifiedClis";
+import type { UntestedId } from "../untested";
 
 /**
  * A static entry in the "new tab" add menu. Shared by the main-window `TabBar`
@@ -44,6 +46,9 @@ export interface StaticMenuItem {
   // (`TabEntry.apiKey`): the "+" menu's plain rows set `false`, its API
   // section `true`; unset leaves it to the Manage CLIs switch.
   apiKey?: boolean;
+  // A built-in no `verify-cli` check covers yet (`lib/agents/unverifiedClis`):
+  // its "+" menu row wears this untested pill.
+  untested?: UntestedId;
 }
 
 // Only Claude and Gemini accept a caller-supplied session UUID at launch
@@ -64,6 +69,7 @@ export const AGENT_ITEMS: StaticMenuItem[] = AGENT_CLI_ROWS.map((row) => ({
   cmd: row.bin,
   kind: "agent",
   ...AGENT_ITEM_EXTRAS[row.bin],
+  ...(unverifiedCliTag(row.id) ? { untested: unverifiedCliTag(row.id) } : {}),
 }));
 
 export const SHELL_ITEMS: StaticMenuItem[] = [

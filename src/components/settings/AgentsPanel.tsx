@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { SettingsCard, SettingsHeader, SettingsList } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
+import { unverifiedCliTag } from "../../lib/agents/unverifiedClis";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
 import { AppToolsSettings } from "../agents/AppToolsSettings";
@@ -628,6 +629,7 @@ export function AgentsPanel({
       <div className="agents-card-head">
         <div className="agents-card-title">
           <span className="agents-card-name">{a.label}</span>
+          {unverifiedCliTag(a.id) && <UntestedTag id={unverifiedCliTag(a.id)!} />}
           {a.installed ? (
             <AgentsStatus tone="ok">{t("agents.installed")}</AgentsStatus>
           ) : (

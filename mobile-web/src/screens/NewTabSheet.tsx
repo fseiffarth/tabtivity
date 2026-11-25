@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDownIcon, CloseIcon } from "../glyphs";
 import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type HostMachineRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
+import { unverifiedCliTagByLabel } from "../../../src/lib/agents/unverifiedClis";
 import { useT } from "../../../src/lib/i18n";
 import { cloudRowsOffered } from "../../../src/lib/projects/localModelsOnly";
 import { useBackLayer } from "../backStack";
@@ -188,7 +189,7 @@ export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, s
         {creates && <>
         {shells && here && <button className="primary" disabled={busy} onClick={() => onPick("shell")}>{t("mobile.newTab.shell")}</button>}
         <div className="new-tab-agents">{agents.map((agent) => <div className="agent-create" key={agent.id}>
-          <button disabled={busy || stuck} onClick={() => pickAgent(agent)}>{agent.label}</button>
+          <button disabled={busy || stuck} onClick={() => pickAgent(agent)}>{agent.label}{isUntested(unverifiedCliTagByLabel(agent.label)) && <span className="untested">{t("mobile.newTab.untested")}</span>}</button>
           {!headless && agent.modes.map((mode) => <button className="mode" disabled={busy || stuck} key={mode} onClick={() => pickAgent(agent, mode)}>{mode}</button>)}
           {onDefault && <DefaultStar starred={agent.id === defaultTarget} label={agent.label} onClick={() => onDefault(agent.id, agent.label)} />}
         </div>)}</div>

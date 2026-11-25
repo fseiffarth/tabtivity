@@ -155,6 +155,7 @@ export function agentMenuEntries(opts: {
     label: item.label,
     color: TAB_ACCENT[item.kind],
     shortcut: chordByKey.get(item.cmd),
+    untested: item.untested,
     onPick: () => {
       const location = defaultMachine(item.cmd);
       if (location === undefined) opts.pick(onOwnLogin(item));
