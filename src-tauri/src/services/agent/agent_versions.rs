@@ -123,7 +123,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "claude",
-        version: "2.1.331",
+        version: "2.1.332",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
@@ -148,7 +148,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "antigravity",
-        version: "1.5.16",
+        version: "1.5.17",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
@@ -163,7 +163,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "vibe",
-        version: "3.1.4",
+        version: "3.1.5",
         surface: "§1.5 — hooks.toml session hooks, --resume <id> and the unified store, VIBE_ACTIVE_MODEL, .vibe/AGENTS.md",
     },
 ];
@@ -845,7 +845,7 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.331")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.332")).0, DriftState::Match);
         // A recipe with no recorded check — the honest answer is "nobody has
         // verified this", not a tick.
         assert_eq!(drift_in(&[], "muse", Some("1.3.0")).0, DriftState::Unverified);

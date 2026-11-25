@@ -825,6 +825,17 @@ Claude's `/fast` — different thing.
   start-up no longer waits for the model list. Not exercised: a live tab, the
   phone, a real sign-in.
 
+- **2.1.332 (2026-11-25, Linux).** Four stub turns, including default and
+  plan-mode resumes, returned success. The session hook's field reads matched
+  JSON on all 18 payloads. A separate forced tool call fired PostToolUse, and
+  a failed call fired PostToolUseFailure. The API-key `/usage` result had the
+  same envelope keys as the previous subscription capture. A signed-in
+  `/usage` returned session and weekly meters with zero turns and zero cost. Replayed Bash approvals and AskUserQuestion kept their
+  choices and selection. Top-level help was identical. Upstream added beta
+  MCP-provided skills, a PreSkillShellCommand hook (registering it on older
+  versions opens a startup dialog), and a footer for model changes triggered
+  by flagged messages. [Claude Code release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.332)
+
 **Verify**
 
 ```sh
@@ -2734,6 +2745,15 @@ it); `agy acp` forwards subagent approvals and questions; quota refreshed
 during long turns; thinking and each tool timed separately in the status line.
 [Antigravity release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.5.16)
 
+**1.5.17 (2026-11-25, Linux).** A pinned copy against the Gemini stub
+resumed by ID and with `--continue`. The dedicated two-window probe saw
+the already-open warning and the history. The 30 matching frames from the
+80- and 42-column runs replayed identically through the readers. All three
+prompt/answer pairs decoded and the store schemas matched 1.5.16. Upstream
+added mouse selection in the fullscreen composer and changed Orchestrator
+to run a single agent when planner and executor share both model and effort.
+[Antigravity release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.5.17)
+
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
@@ -2828,7 +2848,22 @@ older types per step, `pre_llm`/`post_llm` around each model call
 hook extracts only `session_id`). A closed port still fires no `post_agent`.
 Changelog items near what Tabtivity reads, not exercised: Mistral Large 4 is
 the default model (Tabtivity pins none for Vibe); hooks get 2 s rather than 5
-s at quit (`session_end` writes one small file); `/goal` and `/loop`. Re-checked **3.1.4** (2026-11-22, the agent install's copy, against the saved 3.1.3 runs): `resume.py` 11/11 pass with the same facts (`unified/<id>/CURRENT` still written although local sessions now run on the "Session API" engine by default); `turn_hooks.py` and `apierr` fire the same hook sequence with the same keys. `--help` adds `--approval-policy`; `--agent` no longer names the approval policies but still accepts them (Tabtivity passes neither, and its local-model `config.toml` sets only `active_model` and `enabled_tools`). Changelog items near what Tabtivity reads, not exercised: Shift+Tab cycles approval policies only; Ctrl+X opens the status rail and no longer cuts (Tabtivity sends Vibe no Ctrl+X); Esc before the first answer puts the prompt back in the box; Ctrl+D or `/exit` mid-reply no longer ends the turn (resume carries it on); hooks with `match` select agents only. Cursor 2026.09.28 keeps `-p/--print`,
+s at quit (`session_end` writes one small file); `/goal` and `/loop`. Re-checked **3.1.4** (2026-11-22, the agent install's copy, against the saved 3.1.3 runs): `resume.py` 11/11 pass with the same facts (`unified/<id>/CURRENT` still written although local sessions now run on the "Session API" engine by default); `turn_hooks.py` and `apierr` fire the same hook sequence with the same keys. `--help` adds `--approval-policy`; `--agent` no longer names the approval policies but still accepts them (Tabtivity passes neither, and its local-model `config.toml` sets only `active_model` and `enabled_tools`). Changelog items near what Tabtivity reads, not exercised: Shift+Tab cycles approval policies only; Ctrl+X opens the status rail and no longer cuts (Tabtivity sends Vibe no Ctrl+X); Esc before the first answer puts the prompt back in the box; Ctrl+D or `/exit` mid-reply no longer ends the turn (resume carries it on); hooks with `match` select agents only.
+
+**Vibe 3.1.5 (2026-11-25, Linux).** Two tabs resumed their own session IDs,
+the unified store held both records, and the user instructions reached the
+stub model. A fresh tab with `VIBE_ACTIVE_MODEL` sent the selected alias
+to the provider. The first probe ended while the model-check prompt was
+queued during initialization. Wait for its reply before reading the request
+log. Top-level help now documents interactive `--model` and `--thinking` for
+new sessions. With both flags set, the TUI showed the requested model and
+reasoning level and the stub received the selected model. The release adds
+a cross-folder Sessions browser, `/cd` to
+move a conversation, and editable scheduled loops. Bare `--resume` opens
+the browser. Tabtivity's per-tab restore supplies the explicit ID.
+[Vibe release notes](https://github.com/mistralai/mistral-vibe/releases/tag/v3.1.5)
+
+Cursor 2026.09.28 keeps `-p/--print`,
 `--continue` and its chats under `~/.cursor`. Aider 0.86.2 (latest) needs
 only its binary name and `aider.chat/install.sh`, still served. Droid, OpenClaw and OpenCode are also `LOCAL_DRIVERS` (Ollama-backed
 tabs via `ollama launch <agent>`).
