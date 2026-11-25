@@ -1304,3 +1304,20 @@ fn the_agent_folder_swap_survives_a_tmux_wrap() {
     assert!(cmd.contains("export HOME="), "cmd: {cmd}");
     assert!(cmd.contains("tmux"), "cmd: {cmd}");
 }
+
+/// A caller that parses git's own messages runs the host git in English: `env` words,
+/// every argument still quoted by `shell_quote`, bounded or not.
+#[test]
+fn a_host_git_call_can_be_pinned_to_the_c_locale() {
+    let args = vec!["merge".to_string(), "--ff-only".to_string(), "a b'c".to_string()];
+    assert_eq!(
+        bounded_remote_git_command_c_locale("/srv/p", &args, None),
+        "cd '/srv/p' && env LC_ALL=C LANGUAGE= git 'merge' '--ff-only' 'a b'\\''c'"
+    );
+    assert_eq!(
+        bounded_remote_git_command_c_locale("/srv/p", &args, Some(150)),
+        "cd '/srv/p' && env LC_ALL=C LANGUAGE= timeout -k 10 150 git 'merge' '--ff-only' 'a b'\\''c'"
+    );
+    // The plain builders are unchanged.
+    assert_eq!(bounded_remote_git_command("/srv/p", &args, None), remote_git_command("/srv/p", &args));
+}

@@ -258,12 +258,10 @@ impl Peer {
             // `commit` in the background, in a tree a fenced agent can write — its
             // `.git/config` and `.git/hooks/` included.
             // Bounded (#2349): a FIFO the agent planted must not hang lockstep.
-            Peer::Local(dir) => {
-                crate::services::git_bounded::output(crate::services::git_hardened::hookless_git_command_in(dir, args))
-            }
+            Peer::Local(dir) => crate::services::git_bounded::output(local_git_command(dir, args)),
             // The same hardening on the host: these are the same background verbs,
             // in a host tree whatever runs there can write. Hooks off, as above.
-            Peer::Remote(spec) => ssh_exec::run_git_remote(spec, &remote_git_args(args)),
+            Peer::Remote(spec) => ssh_exec::run_git_remote_c_locale(spec, &remote_git_args(args)),
         }
     }
 
@@ -278,6 +276,17 @@ impl Peer {
             .map(|out| String::from_utf8_lossy(&out).trim().to_string())
             .filter(|s| !s.is_empty())
     }
+}
+
+/// The hardened, hooks-off `git <args>` in `dir` with git's messages pinned to English
+/// (`LC_ALL=C`, no `LANGUAGE`): lockstep reads what git *says* (the paths a blocked
+/// `merge --ff-only` names, "not possible to fast-forward"), and a translated message
+/// parses as nothing, which silently disables the absorb and the untracked clearing. The
+/// host's git gets the same through `ssh_exec::run_git_remote_c_locale`.
+fn local_git_command(dir: &Path, args: &[&str]) -> std::process::Command {
+    let mut cmd = crate::services::git_hardened::hookless_git_command_in(dir, args);
+    cmd.env("LC_ALL", "C").env_remove("LANGUAGE");
+    cmd
 }
 
 /// The paths of a NUL-separated git listing (`-z`), `/`-separated.
@@ -2319,7 +2328,14 @@ fn read_dirt_verdict(
         .collect();
     // `hash-object` of a missing file fails its whole chunk, so only present files go in.
     let present: Vec<String> = paths.iter().filter(|p| !deleted.contains(*p)).cloned().collect();
-    let worktree = hash_objects(wt_peer, &present);
+    // A reset rewrites the file with what checkout would write, so only the bytes on disk
+    // may decide it (a clean filter or eol rule can make a different file hash equal);
+    // a fast-forward writes nothing, and `git add` stores what it hashes.
+    let worktree = if rewrites_worktree {
+        hash_objects_raw(wt_peer, &present)
+    } else {
+        hash_objects(wt_peer, &present)
+    };
     let (target, index) = (parse_ls_tree_blobs(&target), parse_ls_files_stage(&index));
     let mut verdict = classify_tracked_dirt(
         paths,
@@ -2331,7 +2347,14 @@ fn read_dirt_verdict(
     );
     if rewrites_worktree && !verdict.identical.is_empty() {
         let kept = verdict.identical.clone();
-        let bad = worktree_mode_mismatches(wt_peer, &kept, &target, &index);
+        let mut bad = worktree_mode_mismatches(wt_peer, &kept, &target, &index);
+        // Only a path the incoming commit carries is written by the reset.
+        let written: Vec<String> = kept.iter().filter(|p| target.contains_key(*p)).cloned().collect();
+        for p in checkout_may_convert(wt_peer, &written) {
+            if !bad.contains(&p) {
+                bad.push(p);
+            }
+        }
         if !bad.is_empty() {
             verdict.identical.retain(|p| !bad.contains(p));
             verdict.to_stage.retain(|p| !bad.contains(p));
@@ -2339,6 +2362,53 @@ fn read_dirt_verdict(
         }
     }
     verdict
+}
+
+/// The `paths` a checkout might write other than as the blob's own bytes: any of the
+/// attributes `filter`, `ident`, `working-tree-encoding`, `eol` is set, `text` is set to
+/// anything but unspecified/unset, or `core.autocrlf` is on. With none of those git writes
+/// the blob verbatim, so equal raw bytes are what the reset would leave. Everything is
+/// refused when the attributes or the setting cannot be read. (Attributes the *incoming*
+/// commit changes are not known here; see the handoff.)
+fn checkout_may_convert(peer: &Peer, paths: &[String]) -> Vec<String> {
+    let all = || paths.to_vec();
+    let autocrlf_off = match peer.run(&["config", "--get", "core.autocrlf"]) {
+        Ok(o) if o.status.code() == Some(1) => true,
+        Ok(o) if o.status.success() => matches!(
+            String::from_utf8_lossy(&o.stdout).trim().to_ascii_lowercase().as_str(),
+            "" | "false" | "no" | "off" | "0" | "input"
+        ),
+        _ => false,
+    };
+    if !autocrlf_off {
+        return all();
+    }
+    let Some(raw) = git_over_paths(
+        peer,
+        &["check-attr", "-z", "filter", "ident", "working-tree-encoding", "eol", "text"],
+        paths,
+        false,
+    ) else {
+        return all();
+    };
+    // `<path> NUL <attr> NUL <value> NUL` triples.
+    let mut bad: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut fields = raw.split(|&b| b == 0);
+    while let (Some(path), Some(attr), Some(value)) = (fields.next(), fields.next(), fields.next()) {
+        let (path, attr, value) = (
+            String::from_utf8_lossy(path).to_string(),
+            String::from_utf8_lossy(attr),
+            String::from_utf8_lossy(value),
+        );
+        seen.insert(path.clone());
+        let plain = value == "unspecified" || (attr == "text" && value == "unset");
+        if !plain {
+            bad.insert(path);
+        }
+    }
+    // A path git did not answer for proves nothing.
+    paths.iter().filter(|p| bad.contains(*p) || !seen.contains(*p)).cloned().collect()
 }
 
 /// The identical `paths` whose working-tree entry is not of the incoming entry's mode
@@ -2971,9 +3041,23 @@ async fn pairing_conflicts(
 /// mis-assigned: the missing hashes then read as "not provably identical", which
 /// [`pairing_collisions`] treats as a conflict — the safe direction.
 fn hash_objects(peer: &Peer, paths: &[String]) -> HashMap<String, String> {
+    hash_objects_with(peer, paths, false)
+}
+
+/// [`hash_objects`] over the bytes on disk, no clean filter / eol / ident conversion
+/// (`--no-filters`): the name of the file as it is, not of what `git add` would store.
+fn hash_objects_raw(peer: &Peer, paths: &[String]) -> HashMap<String, String> {
+    hash_objects_with(peer, paths, true)
+}
+
+fn hash_objects_with(peer: &Peer, paths: &[String], raw: bool) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for chunk in paths.chunks(100) {
-        let mut args: Vec<String> = vec!["hash-object".to_string(), "--".to_string()];
+        let mut args: Vec<String> = vec!["hash-object".to_string()];
+        if raw {
+            args.push("--no-filters".to_string());
+        }
+        args.push("--".to_string());
         args.extend(chunk.iter().cloned());
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
         let Ok(o) = peer.run(&argv) else { continue };

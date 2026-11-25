@@ -42,7 +42,7 @@ Spec: `docs/git_sync_lossless_ff_plan.md`. Gates skipped at user's request.
 - `result.absorbed` (new `TransferResult` field) is logged with `eprintln!` like the other
   lockstep notes; see Flagged.
 
-## Observed git stderr (git 2.x, LC_ALL=C set by the test; see the review section: the peer runner does not pin C)
+## Observed git stderr (git 2.x, LC_ALL=C set by the test; the peer runner now pins C itself, see the review section)
 
 ```
 error: Your local changes to the following files would be overwritten by merge:
@@ -84,7 +84,7 @@ Clippy, `--no-default-features` build and the other gates were not run.
 
 ## Review (second agent)
 
-Fixed (1 confirmed bug, 2 regression tests; `git_peer` suite 105 passed, `the_force_reset_predicate_refuses_*`):
+Fixed (1 confirmed bug, 2 regression tests; `git_peer` suite passes, `the_force_reset_predicate_refuses_*`):
 
 - Force-reset path accepted a dirty file whose `hash-object` equals the target's blob even when
   `reset --hard` would rewrite it differently: `hash-object` follows a symlink (a link to a
@@ -94,19 +94,31 @@ Fixed (1 confirmed bug, 2 regression tests; `git_peer` suite 105 passed, `the_fo
   must also have the working-tree mode (`diff-files --raw -z`, else the index entry's) equal to
   the target entry's, unreadable = differing.
 
+Also fixed after the user's follow-up:
+
+- Force reset and filters (stricter than plan decision 2, on purpose: "lossless" outranks its
+  wording). On the `rewrites_worktree` path a file counts as identical only when `reset --hard`
+  would write back the bytes already on disk: the worktree is hashed with `hash-object
+  --no-filters` (raw bytes), and `checkout_may_convert` refuses any path with a `filter`,
+  `ident`, `working-tree-encoding`, `eol` attribute, a `text` attribute other than
+  unspecified/unset, or with `core.autocrlf` on (or when those cannot be read). Raw equality
+  alone is not enough: under `eol=crlf` an LF file equals the blob yet checks out as CRLF. The
+  fast-forward path keeps the filtered hash (it writes no file; `git add` stores what it hashes).
+  Tests: `the_force_reset_predicate_refuses_bytes_a_clean_filter_would_normalise`,
+  `..._a_smudge_would_rewrite`, `..._everything_under_autocrlf_true`; each failed before.
+- Locale: every `Peer::run` now runs git under `LC_ALL=C` with `LANGUAGE` removed (local:
+  `local_git_command`; host: `ssh_exec::run_git_remote_c_locale`, which prefixes the existing
+  quoted command with the plain words `env LC_ALL=C LANGUAGE=`, bounded or not). Pinning all of
+  `Peer::run` was the one obvious place; it only makes git's own messages English. Tests:
+  `the_local_peer_runs_git_in_the_c_locale` (env of the command) and
+  `a_host_git_call_can_be_pinned_to_the_c_locale` (the host command string). A real German-git run
+  was not possible (no git translations installed).
+
 Flagged for user (review):
 
-- Locale: the local `Peer::run` does not pin `LC_ALL=C` (only the checkpoint runner does; the
-  remote host never is), contrary to the first handoff. Under a non-English git both stderr
-  parsers return nothing, so `retry_ff_clearing_identical` returns `Refused` and the feature is
-  silently inert (fail closed, as the untracked retry already was). Pinning C on lockstep peers
-  (or deriving the blocking set from `diff --name-only HEAD <target>` instead of stderr) is a
-  design change, left to you.
-- Force reset and filters: equality is by filtered `hash-object`, but `reset --hard` writes
-  `smudge(blob)`. A worktree file that cleans to the target blob yet differs from what the blob
-  checks out to (CRLF file under `eol=lf`/`text=auto`, `ident`, a lossy clean filter, LFS
-  without the filter installed reads as different, so safe) would be rewritten by the reset.
-  The fast-forward path never rewrites it. Decision 2 prescribes the hash, so not changed.
+- Force reset and attributes: `checkout_may_convert` reads the dest's *current* attributes. A
+  `.gitattributes` the incoming commit itself adds or changes is not known before the objects
+  arrive, so a conversion it introduces on a file that is otherwise raw-identical is not seen.
 - Merge-stderr paths are `trim`med, so a tracked path with leading or trailing spaces is parsed
   as a different path; that fails closed (the retry fails and the index is put back), but such a
   project stays Desynchronized.

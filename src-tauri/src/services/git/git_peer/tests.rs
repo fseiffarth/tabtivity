@@ -2926,3 +2926,86 @@ fn the_force_reset_predicate_refuses_a_symlink_to_the_incoming_bytes() {
     assert_eq!(v.differing, lines(&["a.txt"]));
     assert!(v.identical.is_empty());
 }
+
+/// The dest of [`force_reset_pair`] with a `.gitattributes` that is not part of any
+/// commit (`reset --hard` leaves it), for the smudge tests below.
+#[cfg(unix)]
+fn force_reset_pair_with_attrs(tmp: &Path, attrs: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let (src, dst, sha) = force_reset_pair(tmp);
+    std::fs::write(dst.join(".gitattributes"), attrs).unwrap();
+    (src, dst, sha)
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_bytes_a_clean_filter_would_normalise() {
+    // `* text eol=lf`: a CRLF working file cleans to the target's LF blob, so the
+    // filtered hash matches — but `reset --hard` writes the LF blob and the CRLF bytes
+    // on disk are gone. Only the raw bytes may decide a path the reset rewrites.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_bytes_a_clean_filter_would_normalise");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair_with_attrs(tmp.path(), "* text eol=lf\n");
+    std::fs::write(dst.join("a.txt"), "a2\r\n").unwrap();
+    std::fs::write(dst.join("b.txt"), "b2\n").unwrap();
+    let paths = lines(&["a.txt", "b.txt"]);
+    // The fast-forward never rewrites the file: the filtered hash still serves it.
+    let ff = read_dirt_verdict(&Peer::Local(src.clone()), &Peer::Local(dst.clone()), &sha, &paths, false);
+    assert!(ff.identical.contains(&"a.txt".to_string()), "{ff:?}");
+    let v = read_dirt_verdict(&Peer::Local(src), &Peer::Local(dst), &sha, &paths, true);
+    assert!(v.differing.contains(&"a.txt".to_string()), "{v:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_bytes_a_smudge_would_rewrite() {
+    // `* text eol=crlf`: the LF working file *is* the target's blob byte for byte, but the
+    // checkout would write CRLF. A path under any conversion attribute is refused.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_bytes_a_smudge_would_rewrite");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair_with_attrs(tmp.path(), "a.txt text eol=crlf\n");
+    std::fs::write(dst.join("a.txt"), "a2\n").unwrap();
+    std::fs::write(dst.join("b.txt"), "b2\n").unwrap();
+    let v = read_dirt_verdict(
+        &Peer::Local(src),
+        &Peer::Local(dst),
+        &sha,
+        &lines(&["a.txt", "b.txt"]),
+        true,
+    );
+    assert_eq!(v.differing, lines(&["a.txt"]), "{v:?}");
+    assert_eq!(v.identical, lines(&["b.txt"]), "{v:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_everything_under_autocrlf_true() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_everything_under_autocrlf_true");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair(tmp.path());
+    crate::test_util::git(&dst, &["config", "core.autocrlf", "true"]);
+    std::fs::write(dst.join("b.txt"), "b2\n").unwrap();
+    let v = read_dirt_verdict(&Peer::Local(src), &Peer::Local(dst), &sha, &lines(&["b.txt"]), true);
+    assert_eq!(v.differing, lines(&["b.txt"]), "{v:?}");
+}
+
+#[test]
+fn the_local_peer_runs_git_in_the_c_locale() {
+    // The stderr parsers match git's English wording; a user's own `LANGUAGE`/`LC_ALL`
+    // must not reach the child (`Command::get_envs`: `None` = removed).
+    let cmd = local_git_command(Path::new("."), &["merge", "--ff-only", "x"]);
+    let envs: HashMap<String, Option<String>> = cmd
+        .get_envs()
+        .map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
+        .collect();
+    assert_eq!(envs.get("LC_ALL"), Some(&Some("C".to_string())));
+    assert_eq!(envs.get("LANGUAGE"), Some(&None));
+}
