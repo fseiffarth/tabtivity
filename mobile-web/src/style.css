@@ -378,19 +378,19 @@ small { color:#9498aa; }
 button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padding:0; border:0; background:transparent; color:inherit; text-align:start; }
 .home-logo-frame { position:relative; }
 .home-brand-dot { position:absolute; top:-1px; right:-2px; width:9px; height:9px; border-radius:50%; background:var(--warn,#f5b94a); box-shadow:0 0 0 2px #0b0d13; }
-.home-header > .lamp { flex:0 0 auto; margin:0 var(--sp-2); }
-.home-offline { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; padding:4px 10px; border-radius:999px; background:#3b2027; color:#ffb4c0; font-size:var(--fs-caption); font-weight:650; }
-/* The desktop machine's OpenVPN tunnel (`status.vpn`), beside the link's lamp:
-   filled green while it is up, dim and struck through while it is down. */
-.home-vpn { position:relative; flex:0 0 auto; padding:2px 6px; border:1px solid #34384a; border-radius:999px; color:#98a0b4; font-size:var(--fs-caption); font-weight:650; letter-spacing:.04em; text-decoration:line-through; }
-.home-vpn.up { border-color:transparent; background:#1d3a2c; color:#55d187; text-decoration:none; }
-.home-vpn > .untested { position:absolute; top:-12px; right:-4px; margin:0; text-decoration:none; }
-/* A local model in memory on the desktop (`LocalModelsSection`): its name on
-   the up tunnel's green, cut short before it crowds the header's buttons. */
-.home-model { position:relative; display:inline-flex; align-items:center; gap:5px; flex:0 1 auto; min-width:0; max-width:11em; min-height:28px; padding:2px 8px; border:0; border-radius:999px; background:#1d3a2c; color:#55d187; font-size:var(--fs-caption); font-weight:650; }
-.home-model-dot { flex:0 0 auto; width:7px; height:7px; border-radius:50%; background:currentColor; }
-.home-model-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.home-model > .untested { position:absolute; top:-12px; right:-4px; margin:0; }
+/* The status line under the bar: the link's lamp, the local model in memory
+   (or the link's word), the desktop's OpenVPN tunnel — one quiet line, no
+   pills. A tap opens the Local models sheet where the desktop offers them. */
+.home-status { position:relative; display:flex; align-items:center; gap:6px; width:100%; min-width:0; min-height:28px; margin:0 0 var(--sp-1); padding:2px 4px 6px; border:0; border-radius:var(--r-sm); background:transparent; color:#98a0b4; font-size:var(--fs-foot); font-weight:500; text-align:start; }
+.home-status > .lamp { flex:0 0 auto; width:8px; height:8px; box-shadow:none; }
+.home-status.offline { color:#ffb4c0; font-weight:650; }
+.home-status-text { display:flex; gap:4px; min-width:0; }
+.home-status-model { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.home-status-vpn { display:inline-flex; flex:0 0 auto; align-items:center; gap:4px; color:#ffd36b; white-space:nowrap; }
+.home-status-vpn.up { color:#98a0b4; }
+.home-status-sep { margin-inline-end:2px; color:#98a0b4; }
+.home-status > svg { flex:0 0 auto; }
+.home-status > .untested,.home-status-vpn > .untested { margin:0; }
 .home-settings,.home-head-button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; background:transparent; color:#d7d3f5; }
 .home-head-button { position:relative; border-radius:var(--r-md); }
 .home-head-button[aria-pressed="true"] { background:#2e2b48; color:#e7e9f2; }
@@ -2439,24 +2439,28 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
 .home-screen > .projects-row h1 { flex:1 1 auto; margin:0 0 0 2px; font-size:var(--fs-headline); letter-spacing:-.01em; }
 .home-layout-button,.home-back { position:relative; display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; border-radius:var(--r-md); background:transparent; color:var(--ink-muted); }
 .home-layout-button > .untested { position:absolute; top:-6px; right:-4px; }
+/* Favorites beside the Projects heading: a place to go, drawn as a chip. */
+.home-favorites-chip { position:relative; display:inline-flex; flex:0 0 auto; align-items:center; gap:5px; min-height:32px; padding:0 10px; border:1px solid #2b3040; border-radius:999px; background:transparent; color:#d7d3f5; font-size:var(--fs-foot); font-weight:600; }
+.home-favorites-chip > svg { color:#ffd36b; }
+.home-favorites-chip > .untested { position:absolute; top:-10px; right:-4px; margin:0; }
 /* A view other than Active: ‹ and its title in place of the start page. */
 .home-subview-head { display:flex; align-items:center; gap:var(--sp-1); margin:var(--sp-2) 0 var(--sp-2) -10px; }
 .home-subview-head h1 { flex:1 1 auto; margin:0; font-size:var(--fs-title); font-weight:700; }
 .home-back { color:#d7d3f5; }
-/* The agent tiles: waiting, working, done unseen. A count of none stays
-   plain; a lit tile takes its state's colours. */
-.home-glance { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--sp-2); margin-top:var(--sp-3); }
+/* The agent counts: waiting, working, done unseen, as one segmented bar.
+   A count of none stays plain; a lit segment takes its state's colours, and
+   amber (waiting) is the one that asks for the reader. */
+.home-glance { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--sp-1); margin-top:var(--sp-1); padding:var(--sp-1); border-radius:14px; background:var(--surface-group); }
 .home-glance > .untested { position:absolute; top:-8px; right:0; }
-.home-glance-tile { display:grid; align-content:space-between; gap:2px; min-width:0; min-height:76px; padding:10px 12px; border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); color:var(--ink-muted); text-align:left; }
-.home-glance-top { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-1); }
-.home-glance-top strong { min-height:1.15em; color:#e7e9f2; font-size:var(--fs-large); font-weight:700; line-height:1.15; font-variant-numeric:tabular-nums; }
-.home-glance-glyph { display:grid; font-size:1rem; }
-.home-glance-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-foot); font-weight:600; }
-.home-glance-tile.waiting.lit { border-color:#5a4823; background:#2a2414; color:#e9d9a8; }
-.home-glance-tile.waiting.lit :is(strong,.home-glance-glyph) { color:#ffd36b; }
-.home-glance-tile.working.lit { border-color:#23432f; background:#122219; color:#b9dcc6; }
+.home-glance-tile { display:flex; align-items:center; justify-content:center; gap:6px; min-width:0; min-height:40px; padding:0 6px; border:0; border-radius:10px; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:500; }
+.home-glance-tile strong { color:inherit; font-size:var(--fs-body); font-weight:700; font-variant-numeric:tabular-nums; }
+.home-glance-glyph { display:grid; font-size:.75rem; }
+.home-glance-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.home-glance-tile.waiting.lit { background:#2a2414; color:#e7e9f2; }
+.home-glance-tile.waiting.lit strong { color:#ffd36b; }
+.home-glance-tile.working.lit { background:#122219; color:#e7e9f2; }
 .home-glance-tile.working.lit :is(strong,.home-glance-glyph) { color:#6fe29c; }
-.home-glance-tile.done.lit .home-glance-glyph { color:#91e6a9; }
+.home-glance-tile.done.lit { background:#0b0d13; color:#e7e9f2; }
 /* Needs you: each row its own card. */
 .home-needs > .home-group { gap:var(--sp-2); background:transparent; }
 .home-needs > .home-group > * + * { border-top:0; }
@@ -2522,7 +2526,7 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
   .home-section-head,.project-group-head { font-size:var(--fs-headline); font-weight:650; letter-spacing:-.01em; text-transform:none; }
 
   /* Home, portrait: Needs you as a row of tiles, projects as the grid. */
-  .home-glance-tile { border:0; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft); }
+  .home-glance { border-radius:var(--r-card); box-shadow:var(--soft); }
   .home-needs > .home-group { grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
   .home-needs .home-group-row,.home-needs .home-group-more { border:0; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft); }
   .home-needs .home-group-more { grid-column:1 / -1; }
@@ -2665,7 +2669,8 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
 
   /* The panel is the compact column: a list, whatever layout was chosen. */
   .tabbed.split .home-header { padding-inline:6px 0; }
-  .tabbed.split .home-glance-tile { min-height:64px; padding:8px 10px; background:#0b0d13; box-shadow:none; }
+  .tabbed.split .home-glance { box-shadow:none; }
+  .tabbed.split .home-glance-label { font-size:var(--fs-foot); }
   .tabbed.split .home-needs > .home-group { grid-template-columns:minmax(0,1fr); gap:6px; }
   .tabbed.split .home-needs .home-group-row,.tabbed.split .home-needs .home-group-more { border-radius:14px; background:#0b0d13; box-shadow:none; }
   .tabbed.split .home-needs .home-needs-row,.tabbed.split .home-needs .mobile-alert-row { min-height:var(--hit); padding:8px 12px; }

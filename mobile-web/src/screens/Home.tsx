@@ -37,8 +37,8 @@ import { AppMark } from "../AppMark";
 import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
-import { AssistantIcon } from "../../../src/components/common/icons/Icon";
-import { ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, DiamondIcon, EyeIcon, FolderIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, PencilIcon, PlusIcon, SearchIcon, StarIcon } from "../glyphs";
+import { AssistantIcon, ShieldIcon } from "../../../src/components/common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, DiamondIcon, EyeIcon, FolderIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, PencilIcon, PlusIcon, SearchIcon, StarIcon } from "../glyphs";
 import { createGroup, groupOf, isFavorite, isHidden, moveToGroup, placeInSection, readProjectSorting, renameGroup, sectionProjects, setFavorite, setHidden, shiftGroup, toggleFolded, ungroup, writeProjectSorting, type ProjectGroup, type ProjectSorting, type SectionKey } from "../projectGroups";
 import { GroupNameSheet } from "../components/GroupNameSheet";
 import { useTapHolds } from "../newTabDefault";
@@ -129,9 +129,12 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
   /** The layout button's sheet: list, grid or boxes. */
   const [layoutSheet, setLayoutSheet] = useState(false);
   /** The desktop's models in memory, as the Local models section last read
-   *  them: the header's pill. A tap on it opens that section's sheet. */
+   *  them: the header's status line. A tap on it opens that section's sheet. */
   const [loadedModels, setLoadedModels] = useState<string[]>([]);
   const [modelsOpen, setModelsOpen] = useState(0);
+  /** Whether the desktop offers local models at all: only then does the
+   *  header's status line open their sheet. */
+  const [modelsOffered, setModelsOffered] = useState(false);
   const toggleBox = (id: string) => {
     const next = foldedBoxes.includes(id) ? foldedBoxes.filter((box) => box !== id) : [id, ...foldedBoxes];
     setFoldedBoxes(next);
@@ -416,10 +419,43 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
     {isUntested("mobile.home.projectGrid") && <span className="untested">{t("mobile.newTab.untested")}</span>}
     {isUntested("mobile.home.boxLayout") && <span className="untested">{t("mobile.newTab.untested")}</span>}
   </button>;
+  /** The status line under the bar: the link's lamp, then the loaded
+   *  model's name — or the link's word when none is loaded — then the
+   *  tunnel. A dead link says nothing about the model or the tunnel, so
+   *  both go with it, and so does the tap. */
+  const vpnShown = !offline && vpn;
+  const statusParts = [
+    !offline && loadedModels.length > 0 ? modelLabel : connection,
+    vpnShown ? vpnLabel : "",
+  ].filter(Boolean).join(" · ");
+  const statusContents = <>
+    <span className={offline ? "lamp off" : "lamp"} aria-hidden="true" />
+    <span className="home-status-text" aria-hidden="true">
+      {!offline && loadedModels.length > 0
+        ? <><span className="home-status-model">{shortModelName(loadedModels[0])}</span>{loadedModels.length > 1 && <span>{t("mobile.home.modelMore", { count: loadedModels.length - 1 })}</span>}</>
+        : <span className="home-status-model">{connection}</span>}
+    </span>
+    {vpnShown && <span className={vpn === "up" ? "home-status-vpn up" : "home-status-vpn"} aria-hidden="true">
+      <span className="home-status-sep">·</span>
+      <ShieldIcon size="15px" />
+      {t(vpn === "up" ? "mobile.home.vpnOn" : "mobile.home.vpnOff")}
+      {isUntested("mobile.home.vpnLamp") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+    </span>}
+    {!offline && loadedModels.length > 0 && isUntested("mobile.home.modelPill") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+  </>;
+  const statusLine = !offline && modelsOffered
+    ? <button className="home-status" aria-haspopup="dialog" aria-label={statusParts} title={t("mobile.localModels.heading")} onClick={() => setModelsOpen((count) => count + 1)}>
+      {statusContents}
+      <ChevronDownIcon size="16px" />
+    </button>
+    : <div className={offline ? "home-status offline" : "home-status"} role="group" aria-label={statusParts}>{statusContents}</div>;
   return <main className={assistantId ? "screen home-screen has-fab" : "screen home-screen"} data-steer-pane={split ? "list" : undefined}>
-    {/* A slim bar: the mark and name, the link's lamp — worded only when the
-        link is down, where it is news — and the gear for this phone's own
-        settings. The global views live in the tab bar at the bottom. */}
+    {/* Two quiet rows. The bar: the mark and name, one search, the gear for
+        this phone's own settings. Under it, one status line says what the
+        desktop is doing — the link's lamp, the local model in memory (or the
+        link's own word when none is) and the OpenVPN tunnel; a tap opens the
+        Local models sheet (Unload is there). The global views
+        live in the tab bar at the bottom. */}
     <header className="home-header">
       {/* The root console is no project row: when this phone may reach it, the
           mark and name open it, with a dot while its agents' proposals wait
@@ -434,36 +470,18 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
           <span className="home-logo-frame" aria-hidden="true"><AppMark className="home-logo" /></span>
           <strong>{BRAND.display}</strong>
         </div>}
-      {offline
-        ? <span className="home-offline" role="img" aria-label={connection}><span className="lamp off" aria-hidden="true" /><span aria-hidden="true">{connection}</span></span>
-        : <span className="lamp" role="img" aria-label={connection} title={connection} />}
-      {/* The desktop machine's OpenVPN tunnel, when it has a VPN config: a
-          word, since a second bare lamp would not say what it is for. A dead
-          link says nothing about the tunnel, so the pill goes with it. */}
-      {!offline && vpn && <span className={vpn === "up" ? "home-vpn up" : "home-vpn"} role="img" aria-label={vpnLabel} title={vpnLabel}>
-        <span aria-hidden="true">{t("mobile.home.vpn")}</span>
-        {isUntested("mobile.home.vpnLamp") && <span className="untested">{t("mobile.newTab.untested")}</span>}
-      </span>}
-      {/* A local model in memory on the desktop, by name, green like an up
-          tunnel: it holds GPU memory, so it is worth seeing at a glance. A
-          tap opens the Local models sheet (Unload is there). */}
-      {!offline && loadedModels.length > 0 && <button className="home-model" aria-haspopup="dialog" aria-label={modelLabel} title={modelLabel} onClick={() => setModelsOpen((count) => count + 1)}>
-        <span className="home-model-dot" aria-hidden="true" />
-        <span className="home-model-name" aria-hidden="true">{shortModelName(loadedModels[0])}</span>
-        {loadedModels.length > 1 && <span aria-hidden="true">{t("mobile.home.modelMore", { count: loadedModels.length - 1 })}</span>}
-        {isUntested("mobile.home.modelPill") && <span className="untested">{t("mobile.newTab.untested")}</span>}
-      </button>}
       {/* Another linked desktop (`shell/`): shown when there is one to switch
           to, or inside one's frame, where it asks the shell for its picker. */}
       <DesktopSwitchButton />
-      {/* The views that are no project list: a tap goes in, a second (or ‹)
-          comes back. Agents is reached through Needs you's tiles. */}
-      <button className="home-head-button" aria-pressed={view === "search"} aria-label={t("mobile.home.viewSearch")} title={t("mobile.home.viewSearch")} onClick={() => choose(view === "search" ? "active" : "search")}><SearchIcon size="22px" /></button>
-      <button className="home-head-button" aria-pressed={view === "favorites"} aria-label={t("mobile.home.viewFavorites")} title={t("mobile.home.viewFavorites")} onClick={() => choose(view === "favorites" ? "active" : "favorites")}><StarIcon size="22px" />{isUntested("mobile.home.headerViews") && <span className="untested">{t("mobile.newTab.untested")}</span>}</button>
+      {/* Search is the one view the bar opens; a tap goes in, a second (or
+          ‹) comes back. Favorites sits beside the Projects heading, and
+          Agents is reached through Needs you's counts. */}
+      <button className="home-head-button" aria-pressed={view === "search"} aria-label={t("mobile.home.viewSearch")} title={t("mobile.home.viewSearch")} onClick={() => choose(view === "search" ? "active" : "search")}><SearchIcon size="22px" />{isUntested("mobile.home.headerViews") && <span className="untested">{t("mobile.newTab.untested")}</span>}</button>
       <button className="home-settings" aria-haspopup="dialog" aria-expanded={deviceSheet} aria-label={t("mobile.home.thisDevice")} title={t("mobile.home.thisDevice")} onClick={() => { setTipsAreOff(tipsOff()); setDeviceSheet(true); }}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
       </button>
     </header>
+    {statusLine}
     {view !== "active" && <div className="home-subview-head">
       <button className="home-back" onClick={() => choose("active")} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="22px" /></button>
       <h1>{t(SUBVIEW_TITLE[view])}</h1>
@@ -482,9 +500,9 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
       {view === "active" && <NeedsYou onTabs={setActivityTabs} alerts={alerts} onAlerts={setAlerts} seen={seen} open={openAgentTab} todo={todo} mail={mail} showAgents={() => choose("agents")} />}
       {view === "active" && <div className="projects-row">
         <h1>{t("mobile.home.projectsTitle")}{tier !== "phone" && isUntested("mobile.tablet") && <span className="untested">{t("mobile.newTab.untested")}</span>}</h1>
-        {/* The header's 🔍 again, where the list is: a reader scrolled past
-            the header reaches the search without scrolling back up. */}
-        <button className="home-layout-button" aria-label={t("mobile.home.searchAll")} title={t("mobile.home.searchAll")} onClick={() => choose("search")}><SearchIcon size="22px" />{isUntested("mobile.home.projectsSearch") && <span className="untested">{t("mobile.newTab.untested")}</span>}</button>
+        {/* Favorites — the files starred in any project's library — beside
+            the heading, as a chip: it is a place to go, like the list. */}
+        <button className="home-favorites-chip" onClick={() => choose("favorites")}><StarIcon size="15px" /><span>{t("mobile.home.viewFavorites")}</span>{isUntested("mobile.home.favoritesChip") && <span className="untested">{t("mobile.newTab.untested")}</span>}</button>
         {layoutButton}
         <button
           className="primary new-tab"
@@ -587,7 +605,7 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
     <h2 className="home-section-head">{t("mobile.home.desktopHead")}</h2>
     <div className="home-desktop">
       <SendToDesktop />
-      <LocalModelsSection onLoaded={setLoadedModels} openRequest={modelsOpen} />
+      <LocalModelsSection onLoaded={setLoadedModels} onOffered={setModelsOffered} openRequest={modelsOpen} />
       <CliOverviewSection />
     </div>
     {/* What this phone does, as against what the desktop is doing, behind

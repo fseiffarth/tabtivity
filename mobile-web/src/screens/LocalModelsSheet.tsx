@@ -283,11 +283,14 @@ export function LocalModelsSheet({ onClose, onChange }: {
  * the request, which drops it — it says to open the app; with a window whose
  * page lacks the request (`unknown_request`), to update the desktop app.
  */
-export function LocalModelsSection({ onLoaded, openRequest = 0 }: {
+export function LocalModelsSection({ onLoaded, onOffered, openRequest = 0 }: {
   /** The models in memory on the desktop, as each read finds them (empty
-   * when none, or when the list could not be read): Home's header pill. */
+   * when none, or when the list could not be read): Home's status line. */
   onLoaded?: (names: string[]) => void;
-  /** Bumped by Home's header pill: open the sheet. */
+  /** Whether the section is drawn (the desktop offers local models): only
+   * then does Home's status line open the sheet. */
+  onOffered?: (offered: boolean) => void;
+  /** Bumped by Home's status line: open the sheet. */
   openRequest?: number;
 } = {}) {
   const t = useT();
@@ -296,7 +299,9 @@ export function LocalModelsSection({ onLoaded, openRequest = 0 }: {
   const [hidden, setHidden] = useState(true);
   const [open, setOpen] = useState(false);
   const reported = useRef(onLoaded);
-  useEffect(() => { reported.current = onLoaded; });
+  const offeredTo = useRef(onOffered);
+  useEffect(() => { reported.current = onLoaded; offeredTo.current = onOffered; });
+  useEffect(() => { offeredTo.current?.(!hidden); }, [hidden]);
   const loadedKey = failure ? "" : loadedNames(list).join("\n");
   useEffect(() => { reported.current?.(loadedKey ? loadedKey.split("\n") : []); }, [loadedKey]);
   useEffect(() => { if (openRequest > 0) setOpen(true); }, [openRequest]);
