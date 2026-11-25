@@ -1657,6 +1657,7 @@ export const dict: Dict = {
   "errors.keyringLocked": "Der Systemschlüsselbund ist gesperrt oder nicht verfügbar. Entsperre ihn und versuche es erneut.",
   "errors.notGitRepo": "Dieser Ordner ist kein Git-Repository.",
   "errors.pushRejected": "Das Remote hat Commits, die dir noch fehlen. Erst pullen, dann erneut pushen.",
+  "errors.workflowPermission": "Das Token darf keine Workflow-Dateien ändern, dieser Push tut das aber (.github/workflows/). Gib dem Token „Workflows: Read and write“ (klassisches Token: den Scope workflow) in Einstellungen → Git-Hosting oder im Menü „Git-Hosting…“ des Projekts.",
   "errors.localChanges": "Du hast nicht committete Änderungen, die dabei überschrieben würden. Committe oder verwirf sie zuerst.",
   "errors.mergeConflict": "Git ist auf einen Merge-Konflikt gestoßen. Löse die Konflikte in den Dateien und committe dann.",
   "errors.authFailed": "Die Anmeldung wurde abgelehnt. Prüfe Kontoname und Passwort oder Token.",

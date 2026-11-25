@@ -1657,6 +1657,7 @@ export const dict: Dict = {
   "errors.keyringLocked": "El llavero del sistema está bloqueado o no disponible. Desbloquéalo e inténtalo de nuevo.",
   "errors.notGitRepo": "Esta carpeta no es un repositorio Git.",
   "errors.pushRejected": "El remoto tiene commits que tú aún no tienes. Haz pull primero y luego vuelve a hacer push.",
+  "errors.workflowPermission": "El token no puede cambiar archivos de workflow y este push lo hace (.github/workflows/). Da al token «Workflows: Read and write» (token clásico: el scope workflow) en Configuración → Alojamiento Git o en el menú «Alojamiento Git…» del proyecto.",
   "errors.localChanges": "Tienes cambios sin confirmar que esto sobrescribiría. Confírmalos o descártalos primero.",
   "errors.mergeConflict": "Git encontró un conflicto de fusión. Resuelve los archivos en conflicto y luego confirma.",
   "errors.authFailed": "Se rechazó el inicio de sesión. Comprueba el nombre de la cuenta y la contraseña o el token.",

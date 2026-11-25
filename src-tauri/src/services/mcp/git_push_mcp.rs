@@ -579,6 +579,19 @@ pub(crate) fn classify_remote_error(stderr: &str) -> Category {
     }
 }
 
+/// GitHub's refusal of a push that adds or changes a file under
+/// `.github/workflows/` from a token without the workflow permission. The
+/// token signed in fine, so the generic "server-side hook" reading misleads:
+/// the fix is a token permission.
+pub(crate) fn workflow_permission_refused(output: &str) -> bool {
+    let s = output.to_ascii_lowercase();
+    s.contains("to create or update workflow") && s.contains("without `workflow` scope")
+}
+
+/// The message for a push or tag the remote refused for lacking the
+/// workflow permission ([`workflow_permission_refused`]).
+pub(crate) const WORKFLOW_PERMISSION_MESSAGE: &str = "The token lacks the workflow permission this push needs (it changes a file under .github/workflows/). Ask the user to give the token Workflows: read and write (classic token: the workflow scope) in Settings → Git Hosting, or in this project's Git hosting… menu.";
+
 struct RemoteView { sha: Option<String>, default_branch: Option<String> }
 
 /// One `ls-remote --symref` for the branch and the remote's `HEAD`, with the
@@ -899,8 +912,10 @@ fn transport(dir: &Path, plan: &Plan, auth: &GitAuth) -> Result<String, Failure>
     if ran.output.status.success() {
         return Ok(output);
     }
-    let category = classify_remote_error(&format!("{stdout}\n{stderr}"));
+    let text = format!("{stdout}\n{stderr}");
+    let category = classify_remote_error(&text);
     let message = match category {
+        Category::RemoteRejected if workflow_permission_refused(&text) => WORKFLOW_PERMISSION_MESSAGE,
         Category::AuthFailed => "The remote refused the stored credentials. Ask the user to check the token in Settings → Git Hosting.",
         Category::Network => "The remote could not be reached; try again later.",
         Category::Diverged => "The remote moved in the meantime; pull or rebase first, then ask again.",
@@ -2087,6 +2102,15 @@ mod tests {
         update(id, |p| { apply_plan(p, plan); p.status = Status::Pending; });
     }
     fn propose_policy() -> ProjectPolicy { ProjectPolicy { level: Some(Level::Propose), protected: vec![], confirmed_url: None } }
+
+    #[test]
+    fn a_workflow_permission_refusal_is_named_as_such() {
+        let github = "To https://github.com/o/r\n ! [remote rejected] develop -> develop (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/security.yml` without `workflow` scope)\nerror: failed to push some refs to 'https://github.com/o/r'";
+        assert_eq!(classify_remote_error(github), Category::RemoteRejected);
+        assert!(workflow_permission_refused(github));
+        assert!(workflow_permission_refused(&github.replace("a Personal Access Token", "an OAuth App")));
+        assert!(!workflow_permission_refused(" ! [remote rejected] develop -> develop (pre-receive hook declined)"));
+    }
 
     #[test]
     fn refspec_is_the_approved_sha_onto_one_branch_fast_forward_only() {

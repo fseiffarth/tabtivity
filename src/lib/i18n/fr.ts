@@ -1657,6 +1657,7 @@ export const dict: Dict = {
   "errors.keyringLocked": "Le trousseau du système est verrouillé ou indisponible. Déverrouillez-le, puis réessayez.",
   "errors.notGitRepo": "Ce dossier n'est pas un dépôt Git.",
   "errors.pushRejected": "Le distant a des commits que vous n'avez pas encore. Faites d'abord un pull, puis poussez à nouveau.",
+  "errors.workflowPermission": "Le jeton ne peut pas modifier les fichiers de workflow, et ce push le fait (.github/workflows/). Donnez au jeton « Workflows: Read and write » (jeton classique : le scope workflow) dans Paramètres → Hébergement Git ou dans le menu « Hébergement Git… » du projet.",
   "errors.localChanges": "Vous avez des modifications non validées que cela écraserait. Validez-les ou abandonnez-les d'abord.",
   "errors.mergeConflict": "Git a rencontré un conflit de fusion. Résolvez les fichiers en conflit, puis validez.",
   "errors.authFailed": "La connexion a été refusée. Vérifiez le nom du compte et le mot de passe ou le jeton.",

@@ -1657,6 +1657,7 @@ export const dict: Dict = {
   "errors.keyringLocked": "Il portachiavi di sistema è bloccato o non disponibile. Sbloccalo, poi riprova.",
   "errors.notGitRepo": "Questa cartella non è un repository Git.",
   "errors.pushRejected": "Il remoto ha commit che tu non hai ancora. Fai prima pull, poi di nuovo push.",
+  "errors.workflowPermission": "Il token non può modificare i file di workflow, e questo push lo fa (.github/workflows/). Dai al token «Workflows: Read and write» (token classico: lo scope workflow) in Impostazioni → Hosting Git o nel menu «Hosting Git…» del progetto.",
   "errors.localChanges": "Hai modifiche non committate che verrebbero sovrascritte. Committale o scartale prima.",
   "errors.mergeConflict": "Git ha trovato un conflitto di merge. Risolvi i file in conflitto, poi fai commit.",
   "errors.authFailed": "L'accesso è stato rifiutato. Controlla il nome dell'account e la password o il token.",

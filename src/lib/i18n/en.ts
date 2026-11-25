@@ -1591,6 +1591,7 @@ export const enSource = {
   "errors.keyringLocked": "The system keyring is locked or unavailable. Unlock it, then try again.",
   "errors.notGitRepo": "This folder isn't a Git repository.",
   "errors.pushRejected": "The remote has commits you don't have yet. Pull first, then push again.",
+  "errors.workflowPermission": "The token can't change workflow files, and this push does (.github/workflows/). Give the token Workflows: read and write (a classic token: the workflow scope) in Settings → Git Hosting or the project's Git hosting… menu.",
   "errors.localChanges": "You have uncommitted changes this would overwrite. Commit or discard them first.",
   "errors.mergeConflict": "Git hit a merge conflict. Resolve the conflicted files, then commit.",
   "errors.authFailed": "Sign-in was rejected. Check the account name and the password or token.",
