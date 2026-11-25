@@ -923,10 +923,10 @@ async fn a_streamed_pull_is_confined_before_it_opens_the_host_file() {
 /// that still names skipped files reads too.
 #[test]
 fn a_pull_outcome_is_camel_case() {
-    let json = serde_json::to_value(PullOutcome { pulled: 2 }).unwrap();
+    let json = serde_json::to_value(PullOutcome { pulled: 2, ..Default::default() }).unwrap();
     assert_eq!(json, serde_json::json!({ "pulled": 2 }));
     let old: PullOutcome = serde_json::from_str(r#"{"pulled":3,"skippedTooLarge":[]}"#).unwrap();
-    assert_eq!(old, PullOutcome { pulled: 3 });
+    assert_eq!(old, PullOutcome { pulled: 3, ..Default::default() });
 }
 
 #[test]

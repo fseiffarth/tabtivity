@@ -151,15 +151,15 @@ describe("acting", () => {
   it("takes the host's copy of each named file, and of nothing else", async () => {
     desktopWith([row("a.txt"), row("b.txt")]);
     await expect(resolve("pull", ["a.txt"])).resolves.toEqual({ status: "sync_resolved", done: 1, failed: 0, skipped: 0 });
-    expect(calls("sync_pull")).toEqual([{ projectId: "p", relPath: "a.txt" }]);
+    expect(calls("sync_pull")).toEqual([{ projectId: "p", relPath: "", relPaths: ["a.txt"] }]);
   });
 
   it("forces a diverged file over the host, and never a new one", async () => {
     desktopWith([row("old.txt"), row("new.txt", { state: "localnew", host_mtime: null })]);
     await resolve("push", ["old.txt", "new.txt"]);
     expect(calls("sync_push")).toEqual([
-      { projectId: "p", relPath: "old.txt", force: true },
-      { projectId: "p", relPath: "new.txt", force: false },
+      { projectId: "p", relPath: "", force: true, relPaths: ["old.txt"] },
+      { projectId: "p", relPath: "", force: false, relPaths: ["new.txt"] },
     ]);
   });
 
@@ -346,7 +346,7 @@ describe("the receipt of a preview (gap 97)", () => {
     desktopWith([row("a.txt"), row("b.txt", { host_mtime: null })]);
     await resolve("pull", ["a.txt"]);
     await resolve("delete_local", ["b.txt"]);
-    expect(calls("sync_pull")).toEqual([{ projectId: "p", relPath: "a.txt" }]);
+    expect(calls("sync_pull")).toEqual([{ projectId: "p", relPath: "", relPaths: ["a.txt"] }]);
     expect(calls("sync_apply_delete")).toEqual([{ projectId: "p", relPath: "b.txt", side: "local" }]);
   });
 });
