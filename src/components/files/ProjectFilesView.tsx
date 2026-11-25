@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -6,7 +6,7 @@ import { subscribeTauri } from "../../hooks/useTauriListener";
 import { invokeTrusted } from "../../lib/execTrust";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { GitHistory } from "./GitHistory";
-import { GitChangeTree, type ChangeScope } from "./GitChangeTree";
+import { GitChangeGroup } from "./GitChangeTree";
 import { GitPushProposals } from "../agents/GitPushMcp";
 import {
   FileSourceSwitch,
@@ -46,7 +46,7 @@ import { usePoll, type PollRun } from "../../lib/usePoll";
 import { SyncHandoffButton } from "../embed/SyncHandoffButton";
 import { collectHandoffFiles } from "../../lib/viewers/syncHandoffCollect";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
-import type { SortKey } from "../../lib/viewers/fileUtils";
+import type { TreeSortKey } from "./useFileTreeRows";
 import {
   readGitBarSnapshot,
   writeGitBarSnapshot,
@@ -55,8 +55,9 @@ import {
 } from "../../lib/projects/fileViewSnapshots";
 import { basename, dirname } from "../../lib/paths";
 import { readDownloadsShown, writeDownloadsShown, type DownloadsHost } from "../../lib/projects/downloadsShown";
-import { projectTypeTags } from "../projects/projectTypeTags";
+import { projectTypeTags, providerName } from "../projects/projectTypeTags";
 import { ScaffoldTagPopover } from "./ScaffoldTagPopover";
+import { AgentPrivacyDialog } from "../projects/AgentPrivacyDialog";
 import { PublishWindow } from "../projects/PublishWindow";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
 import { IdeHeaderButton } from "../projects/IdeMenuItems";
@@ -86,6 +87,7 @@ import {
   slurmCancel,
   slurmJobOut,
   openLogTab,
+  SLURM_STATE_CODE,
   type SlurmJob,
 } from "../../lib/remote/hpc/slurm";
 import { useHpcJobsStore } from "../../stores/remote/hpc/hpcJobs";
@@ -113,7 +115,8 @@ import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
 import { SideViewKey } from "./SideViewKey";
-import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, ArrowUpRightIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowLeftIcon, EyeIcon, MinusIcon, PlusIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -342,6 +345,9 @@ export interface ProjectFilesViewProps {
   resizeHandle?: React.ReactNode;
   pin?: React.ReactNode;
   hidden?: React.ReactNode;
+  /** Panel-only: drawn over the whole viewer, which stays mounted under it
+   *  (the Reader's chat beside Diffs or Data, `ReaderSideChat`). */
+  cover?: React.ReactNode;
   /** Panel-only bottom frame chrome, rendered outside the scrollable viewer. */
   footer?: React.ReactNode;
 
@@ -385,6 +391,7 @@ export function ProjectFilesView({
   resizeHandle,
   pin,
   hidden,
+  cover,
   footer,
   compact,
   view: hostView,
@@ -495,7 +502,7 @@ export function ProjectFilesView({
   const [mobileAccessError, setMobileAccessError] = useState<string | null>(null);
   // Kept here (not in the pane): the pane unmounts while the view shows Git or
   // Search, and the chosen sort must survive the trip back to Files.
-  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortKey, setSortKey] = useState<TreeSortKey>("name");
   const [descending, setDescending] = useState(false);
 
   // The Mobile host is machine-wide, but enabling its deliberately narrow
@@ -550,7 +557,6 @@ export function ProjectFilesView({
     () => readGitBarSnapshot(projectDir)?.unpushed ?? [],
   );
   const [publishContext, setPublishContext] = useState<string | null>(null);
-  const [openTree, setOpenTree] = useState<"add" | "commit" | "push" | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [receipt, setReceipt] = useState<{ context: string; text: string } | null>(null);
   const [gitBusy, setGitBusy] = useState(false);
@@ -579,6 +585,8 @@ export function ProjectFilesView({
   const [scaffoldMissing, setScaffoldMissing] = useState(false);
   // The "no scaffold" tag's popover (missing defaults + Repair), anchored under the tag.
   const [scaffoldTagMenu, setScaffoldTagMenu] = useState<{ x: number; y: number } | null>(null);
+  // The "local only" tag opens the project's Agent privacy switch.
+  const [showAgentPrivacy, setShowAgentPrivacy] = useState(false);
   const [scaffoldProbe, setScaffoldProbe] = useState(0);
   // Nested-repo detection: when the browsed folder lives in a git repo distinct
   // from the project's own repo, `nestedRoot` holds that repo's root and the git
@@ -587,7 +595,6 @@ export function ProjectFilesView({
   const [nestedRoot, setNestedRoot] = useState<string | null>(null);
   const [preferProjectRepo, setPreferProjectRepo] = useState(false);
   const commitRef = useRef<HTMLTextAreaElement>(null);
-  const actionBarRef = useRef<HTMLDivElement>(null);
   const barScheduler = useRef<CoalescedRun | null>(null);
 
   const localFile = project?.local_file;
@@ -640,28 +647,6 @@ export function ProjectFilesView({
   const refreshGit = (dir: string) => {
     if (dir === effectiveGitRoot && gitContextKey === gitContextKeyRef.current) barScheduler.current?.request();
   };
-
-  // The change tree is click-opened and persistent; close it on Escape or a
-  // click anywhere outside the action bar (which contains both the toggles and
-  // the tree itself).
-  useEffect(() => {
-    if (!openTree) return;
-    const onDown = (e: MouseEvent) => {
-      if (!actionBarRef.current?.contains(e.target as Node)) setOpenTree(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpenTree(null);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [openTree]);
-
-  const treeScope: ChangeScope | null =
-    openTree === "add" ? "unstaged" : openTree === "commit" ? "staged" : openTree === "push" ? "unpushed" : null;
 
   // Detect a nested git repo: if the folder currently browsed in the file tree
   // lives inside a git repo distinct from the project's own repo, re-root the
@@ -729,7 +714,6 @@ export function ProjectFilesView({
   useEffect(() => {
     if (previousGitContext.current === gitContextKey) return;
     previousGitContext.current = gitContextKey;
-    setOpenTree(null);
     setGitError(null);
     setGitReadError(null);
     setGitRecovery(null);
@@ -908,6 +892,8 @@ export function ProjectFilesView({
     }
     return m;
   }, [scopeTabs, scope]);
+  // The tab in front, so its session's row reads as the current one.
+  const currentTabKey = useTabsStore((s) => (s.scope === scope ? s.activeKey : null));
 
   // Open a host session in a tab: reveal the owning tab if one exists; bring an
   // agent session back as its agent tab (`lib/remote/hostSessionTab`), so it keeps
@@ -1335,6 +1321,7 @@ export function ProjectFilesView({
               setScaffoldTagMenu({ x: r.left, y: r.bottom + 4 });
             }
           : undefined,
+        onLocalOnlyClick: projectId ? () => setShowAgentPrivacy(true) : undefined,
       })
     : [];
 
@@ -1527,6 +1514,21 @@ export function ProjectFilesView({
   const networkBehind = networkBranch ? networkBranch.behind ?? 0 : exchange ? 0 : gitStatus?.behind ?? 0;
   const canPublishRepo = exchange?.state === "no_remote" && project && projectId &&
     !onNestedRepo && !selectedGitWorktree;
+  // The Git footer's actions, and the one of them that is the view's primary:
+  // the next step a change has to take (commit what is staged, push what is
+  // committed, add what is changed), then pull, then release.
+  const gitCanAdd = !!gitStatus && gitStatus.unstaged + gitStatus.untracked > 0;
+  const gitCanCommit = !!gitStatus && gitStatus.staged > 0;
+  const gitCanPush = (!exchange && networkAhead > 0) || destinations.length > 0;
+  const gitCanPull = networkBehind > 0;
+  // Release: only once everything is pushed and nothing is incoming, on a
+  // local project's own repo, and not when the tip already carries a tag.
+  const gitCanRelease = !!gitStatus && !onNestedRepo && !project?.remote && gitStatus.has_remote && !gitStatus.head_tagged &&
+    networkAhead === 0 && networkBehind === 0 && (!exchange || (!!networkBranch && destinations.length === 0 && !!networkBranch.upstream));
+  const gitPrimary = gitCanCommit ? "commit" : gitCanPush ? "push" : gitCanAdd ? "add" : gitCanPull ? "pull" : gitCanRelease ? "release" : null;
+  const gitBtn = (action: NonNullable<typeof gitPrimary>) => `settings-btn sm git-action-btn${gitPrimary === action ? " primary" : ""}`;
+  // The inline change lists re-read whenever the status they summarise moves.
+  const gitChangesKey = JSON.stringify([gitStatus, unpushedCommits]);
   const actionLabel = (dest: GitBranchDestination) => {
     const destination = `${dest.remote}/${dest.branch}`;
     if (dest.action === "publish") return t("projectFilesView.publishBranchTo", { destination });
@@ -1735,6 +1737,122 @@ export function ProjectFilesView({
           ? GIT_STATE_COLOR.unpushed
           : null;
 
+  // The header's tags. With a host tag (SSH) on the row, the Git tag goes and
+  // the provider tag shortens to the provider's name, so the project name is
+  // not the first thing to truncate; the hover card keeps the full set.
+  const headerTags = typeTags.some((tag) => tag.key === "ssh")
+    ? typeTags
+        .filter((tag) => tag.key !== "git")
+        .map((tag) => (tag.key === "provider" ? { ...tag, label: providerName(project?.git_provider ?? project?.detected_provider) } : tag))
+    : typeTags;
+
+  // The project's settings: the header row's last button (the docked viewer,
+  // which has no header row, ends its view strip with it instead).
+  const settingsButton = projectId ? (
+    <button
+      type="button"
+      className="side-panel-mobile-btn side-panel-settings-btn"
+      onClick={() => setShowSettings(true)}
+      title={t("projectFilesView.projectSettingsTitle")}
+      aria-label={t("projectFilesView.projectSettingsTitle")}
+    >
+      <GearIcon />
+    </button>
+  ) : null;
+
+  // The Files view's actions, at the right end of its one toolbar row (the
+  // tree draws the row: breadcrumb and folder total on its left). The search
+  // fold and ↻ act on the tree, which is only mounted in this view; import,
+  // open in the file manager and the Downloads toggle act on the browsed
+  // folder. Same chrome as every other toolbar button — see `toolbar-btn`.
+  const filesActions = (
+    <>
+      <button
+        type="button"
+        className={`toolbar-btn toolbar-btn--sm toolbar-btn--icon${searchOpen ? " active" : ""}`}
+        aria-pressed={searchOpen}
+        aria-expanded={searchOpen}
+        data-steering-search-toggle
+        onClick={() => setSearchOpen((v) => !v)}
+        title={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
+        aria-label={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
+      >
+        <SearchIcon />
+      </button>
+      <button
+        type="button"
+        className="toolbar-btn toolbar-btn--sm toolbar-btn--icon"
+        onClick={() => setRefreshNonce((n) => n + 1)}
+        title={t("fileTree.refreshTitle")}
+        aria-label={t("common.refresh")}
+      >
+        <RefreshIcon />
+      </button>
+      {importDrop.canImport && (
+        <button
+          type="button"
+          className="toolbar-btn toolbar-btn--sm toolbar-btn--icon"
+          aria-haspopup="menu"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setImportMenu({ x: r.left, y: r.bottom + 2 });
+          }}
+          title={t("projectFilesView.importTitle")}
+          aria-label={t("projectFilesView.importTitle")}
+        >
+          <ArrowDownIcon />
+        </button>
+      )}
+      {importMenu && (
+        <ContextMenuPortal
+          x={importMenu.x}
+          y={importMenu.y}
+          onClose={() => setImportMenu(null)}
+        >
+            <button
+              onClick={() => {
+                setImportMenu(null);
+                void importDrop.importViaDialog();
+              }}
+            >
+              {t("projectFilesView.importFiles")}
+            </button>
+            <button
+              onClick={() => {
+                setImportMenu(null);
+                void importDrop.importFolderViaDialog();
+              }}
+            >
+              {t("projectFilesView.importFolder")}
+            </button>
+        </ContextMenuPortal>
+      )}
+      {projectDir && !hostPinned && (
+        <button
+          type="button"
+          className="toolbar-btn toolbar-btn--sm toolbar-btn--icon"
+          onClick={openInOsBrowser}
+          title={t("projectFilesView.openInFileManagerTitle")}
+          aria-label={t("projectFilesView.openInFileManagerTitle")}
+        >
+          <ArrowUpRightIcon />
+        </button>
+      )}
+      {!activeBox && projectDir && (
+        <button
+          type="button"
+          className={`toolbar-btn toolbar-btn--sm toolbar-btn--icon${showDownloads ? " active" : ""}`}
+          aria-pressed={showDownloads}
+          onClick={() => setShowDownloads(!showDownloads)}
+          title={t("projectFilesView.showDownloadsTitle")}
+          aria-label={t("projectFilesView.showDownloadsTitle")}
+        >
+          <InboxIcon />
+        </button>
+      )}
+    </>
+  );
+
   return (
     <div
       className={`${containerClassName}${importDrop.dropActive ? " drop-active" : ""}${importDrop.dropFlash ? " drop-flash" : ""}`}
@@ -1743,14 +1861,15 @@ export function ProjectFilesView({
       {...importDrop.handlers}
     >
       {resizeHandle}
+      {cover}
       {importDrop.conflictModal}
       {dialogs}
       {/* Compact (docked subwindow) viewer: only the project-name/tags/source-
-          switch/git-bar header is stripped — the tree's find-files search stays
-          topmost. The Files/Git/Search/Apps toolbar (± diverged, sessions, jobs,
-          import, open-in-OS, downloads, settings) renders in both modes, so a
-          subwindow file viewer behaves identically to the side panel / Files
-          (Project) tab except for that header row. */}
+          switch header row is stripped. The view strip and each view's own
+          toolbar row (the Files view's: breadcrumb, import, open-in-OS,
+          downloads) render in both modes, the settings button moving to the
+          strip's end, so a subwindow file viewer behaves identically to the
+          side panel / Files (Project) tab except for that header row. */}
       {!compact && (
       <div className="side-panel-header">
         {pin}
@@ -1797,9 +1916,9 @@ export function ProjectFilesView({
             labels only — no interactivity — so they deliberately look nothing
             like the source switch below: a neutral chip whose kind colour is
             only its lamp (`--tag-color`). */}
-        {!activeBox && typeTags.length > 0 && (
+        {!activeBox && headerTags.length > 0 && (
           <span className="side-panel-type-tags">
-            {typeTags.map((tag) => {
+            {headerTags.map((tag) => {
               // The SSH tag carries a right-click menu (connect / manage · remote
               // machines); the rest stay pure labels.
               const isSsh = tag.key === "ssh" && !!project?.remote && !!projectId;
@@ -1904,6 +2023,7 @@ export function ProjectFilesView({
             <MobileAccessIcon on={mobileAccessOn} />
           </button>
         )}
+        {settingsButton}
         {mobilePicker && mobileHostConnected && mobileEligible && (
           <MobileAccessPicker
             x={mobilePicker.x}
@@ -1917,6 +2037,9 @@ export function ProjectFilesView({
           />
         )}
         {mobileAccessError && <ErrorNote className="side-panel-mobile-access-error" role="alert" error={mobileAccessError} />}
+        {showAgentPrivacy && project && (
+          <AgentPrivacyDialog project={project} onClose={() => setShowAgentPrivacy(false)} />
+        )}
         {scaffoldTagMenu && projectId && (
           <ScaffoldTagPopover
             projectId={projectId}
@@ -2037,11 +2160,12 @@ export function ProjectFilesView({
           host has never seen is invisible in the remote tree, so this count is
           where its existence first shows up), the live tmux sessions, the
           queued jobs. */}
-      {/* The two rows share one container: on a narrow panel (a container query
-          in files-panel.css) the tabs drop to their glyph and the actions join
-          their row, so the head is one row shorter. */}
+      {/* The strip's container: on a narrow panel (a container query in
+          files-panel.css) the tabs drop to their glyph, the active one keeping
+          its label. A view's actions are not here: each view has at most one
+          toolbar row of its own (the Files view's is the tree's breadcrumb
+          row, `filesActions` at its end). */}
       <div className="side-panel-toolbars">
-      <div className="side-panel-toolbars-row">
       <div className="side-panel-toolbar side-panel-views">
         {availableSidePanelViews(viewGates).map(({ view: v, labelKey, Icon }, i) => {
           const count =
@@ -2088,106 +2212,9 @@ export function ProjectFilesView({
             </button>
           );
         })}
-      </div>
-
-      {/* Row 2: everything that acts rather than switches the view — smaller,
-          icon-only. */}
-      <div className="side-panel-toolbar side-panel-actions">
-        {/* The tree's search + refresh, hoisted out of the tree itself. Files
-            view only: both act on the tree, and the tree is only mounted there
-            (a ↻ in the Git view would bump a counter nothing is listening to).
-            Same chrome as every other toolbar button — see `toolbar-btn`. */}
-        {view === "files" && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm${searchOpen ? " active" : ""}`}
-            aria-pressed={searchOpen}
-            aria-expanded={searchOpen}
-            onClick={() => setSearchOpen((v) => !v)}
-            title={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
-            aria-label={searchOpen ? t("fileTree.hideSearch") : t("fileTree.showSearch")}
-          >
-            <SearchIcon />
-          </button>
-        )}
-        {view === "files" && (
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            onClick={() => setRefreshNonce((n) => n + 1)}
-            title={t("fileTree.refreshTitle")}
-            aria-label={t("common.refresh")}
-          >
-            <RefreshIcon />
-          </button>
-        )}
-        {importDrop.canImport && (
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            onClick={(e) => {
-              const r = e.currentTarget.getBoundingClientRect();
-              setImportMenu({ x: r.left, y: r.bottom + 2 });
-            }}
-            title={t("projectFilesView.importTitle")}
-          >
-            <ArrowDownIcon />
-          </button>
-        )}
-        {importMenu && (
-          <ContextMenuPortal
-            x={importMenu.x}
-            y={importMenu.y}
-            onClose={() => setImportMenu(null)}
-          >
-              <button
-                onClick={() => {
-                  setImportMenu(null);
-                  void importDrop.importViaDialog();
-                }}
-              >
-                {t("projectFilesView.importFiles")}
-              </button>
-              <button
-                onClick={() => {
-                  setImportMenu(null);
-                  void importDrop.importFolderViaDialog();
-                }}
-              >
-                {t("projectFilesView.importFolder")}
-              </button>
-          </ContextMenuPortal>
-        )}
-        {projectDir && !hostPinned && (
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            onClick={openInOsBrowser}
-            title={t("projectFilesView.openInFileManagerTitle")}
-          >
-            ⧉
-          </button>
-        )}
-        {!activeBox && projectDir && (
-          <button
-            className={`toolbar-btn toolbar-btn--sm${showDownloads ? " active" : ""}`}
-            aria-pressed={showDownloads}
-            onClick={() => {
-              setShowDownloads(!showDownloads);
-              // The section lives in the files view; jump there when revealing it.
-              if (!showDownloads) setView("files");
-            }}
-            title={t("projectFilesView.showDownloadsTitle")}
-          >
-            <InboxIcon />
-          </button>
-        )}
-        {projectId && (
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            onClick={() => setShowSettings(true)}
-            title={t("projectFilesView.projectSettingsTitle")}
-          >
-            <GearIcon />
-          </button>
-        )}
-      </div>
+        {/* The compact (docked) viewer has no header row: the project's
+            settings ride at the end of the view strip there instead. */}
+        {compact && settingsButton}
       </div>
       </div>
 
@@ -2248,6 +2275,7 @@ export function ProjectFilesView({
             projectId={onNestedRepo ? undefined : project?.remote ? projectId ?? undefined : undefined}
             remote={!onNestedRepo && !!project?.remote}
             hostPinned={hostPinned}
+            site={source === "local" ? "mirror" : "host"}
             authProjectId={onNestedRepo ? undefined : projectId ?? undefined}
             onChanged={() => effectiveGitRoot && refreshGit(effectiveGitRoot)}
             onWorktreeChanged={onGitWorktreeChanged}
@@ -2255,6 +2283,43 @@ export function ProjectFilesView({
             selectionBusy={gitBusy}
             connected={active && !remoteBlocked}
             pullRequest={pullRequest}
+            upstream={networkBranch && (networkBranch.ahead !== null || networkBranch.behind !== null)
+              ? t("projectFilesView.branchCounts", {
+                  destination: networkBranch.upstream ?? networkBranch.branch,
+                  ahead: networkBranch.ahead ?? 0,
+                  behind: networkBranch.behind ?? 0,
+                })
+              : undefined}
+            // The files behind Add / Commit / Push, inline above the history
+            // (they were popovers off the footer's carets until 2026-11-22).
+            // Read only while the repo is reachable: a remote read over a dead
+            // session would hang.
+            changes={!activeBox && gitStatus?.is_repo && projectDir && active && !remoteBlocked && (
+              <div className="git-change-groups">
+                {gitCanAdd && (
+                  <GitChangeGroup key={gitContextKey + "unstaged"} contextKey={gitContextKey} title={t("gitChangeTree.groupUnstaged")}
+                    meta={String(gitStatus.unstaged + gitStatus.untracked)}
+                    projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="unstaged" refreshKey={gitChangesKey}
+                    disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
+                )}
+                {gitCanCommit && (
+                  <GitChangeGroup key={gitContextKey + "staged"} contextKey={gitContextKey} title={t("gitChangeTree.groupStaged")}
+                    meta={String(gitStatus.staged)}
+                    projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="staged" refreshKey={gitChangesKey}
+                    disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
+                )}
+                {gitCanPush && canReviewOutgoing && (
+                  <GitChangeGroup key={gitContextKey + "unpushed"} contextKey={gitContextKey}
+                    title={networkBranch?.upstream
+                      ? t("gitChangeTree.groupOutgoingTo", { destination: networkBranch.upstream })
+                      : t("gitChangeTree.groupOutgoing")}
+                    meta={networkAhead > 0 ? t(networkAhead === 1 ? "gitChangeTree.commitsOne" : "gitChangeTree.commitsMany", { count: networkAhead }) : undefined}
+                    projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope="unpushed" refreshKey={gitChangesKey}
+                    comparisonCheckout={networkBranch?.checkout} comparisonHead={networkBranch?.head} comparisonTracking={comparisonTracking}
+                    disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />
+                )}
+              </div>
+            )}
           />
         </div>
         {/* Add / Commit / Push live at the FOOT of the panel, below the history
@@ -2262,10 +2327,10 @@ export function ProjectFilesView({
             sits, and out of the scroll area so they stay reachable however far
             down the log you are. The commit box is rendered above the buttons
             for that reason too: the footer grows upward, so the confirm stays
-            the bottom-most thing. Its change-tree popover opens upward
-            (`.git-action-bar` in files-panel.css). */}
+            the bottom-most thing. One of the buttons is the primary
+            (`gitPrimary`); the files each acts on are listed inline above. */}
         {!activeBox && gitStatus?.is_repo && (
-          <div ref={actionBarRef} className="git-action-bar">
+          <div className="sp-foot git-action-bar">
             {commitMsg !== null && (
               <textarea
                 ref={commitRef}
@@ -2273,53 +2338,35 @@ export function ProjectFilesView({
                 onChange={(e) => setCommitMsg(e.target.value)}
                 rows={7}
                 className="git-commit-input"
+                data-steering-field
               />
             )}
             {commitMsg !== null ? (
               <>
-                <button className="git-action-btn git-action-btn--commit" disabled={gitBusy} onClick={handleCommitConfirm} title={t("projectFilesView.confirmCommitTitle")}>
+                <button className="settings-btn sm primary git-action-btn" disabled={gitBusy} onClick={handleCommitConfirm} title={t("projectFilesView.confirmCommitTitle")}>
                   <span data-testid="commit-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.staged }} />
-                  <span className="git-btn-glyph">↵</span><span className="git-btn-label">{t("projectFilesView.confirm")}</span>
+                  <CheckIcon /><span className="git-btn-label">{t("projectFilesView.confirm")}</span>
                 </button>
-                <button className="git-action-btn git-action-btn--back" disabled={gitBusy} onClick={() => setCommitMsg(null)} title={t("projectFilesView.goBackTitle")}>
-                  <span className="git-btn-glyph">←</span><span className="git-btn-label">{t("projectFilesView.back")}</span>
+                <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => setCommitMsg(null)} title={t("projectFilesView.goBackTitle")}>
+                  <ArrowLeftIcon /><span className="git-btn-label">{t("projectFilesView.back")}</span>
                 </button>
               </>
             ) : (
               <>
-                {gitStatus.unstaged + gitStatus.untracked > 0 && (
-                  <div className="git-action git-action--add">
-                    <button className="git-action-btn git-action-btn--add" disabled={gitBusy} onClick={handleAdd} title={t("projectFilesView.stageAllTitle", { count: gitStatus.unstaged + gitStatus.untracked })}>
-                      <span data-testid="add-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.modified }} />
-                      <span className="git-btn-glyph">⊕</span><span className="git-btn-label">{t("projectFilesView.add", { count: gitStatus.unstaged + gitStatus.untracked })}</span>
-                    </button>
-                    <button className="git-action-toggle" disabled={gitBusy} aria-label={t("projectFilesView.showChangedFiles")} aria-expanded={openTree === "add"} title={t("projectFilesView.showChangedFiles")} onClick={() => setOpenTree((prev) => (prev === "add" ? null : "add"))}>
-                      {openTree === "add" ? "▾" : "▴"}
-                    </button>
-                  </div>
+                {gitCanAdd && (
+                  <button className={gitBtn("add")} disabled={gitBusy} onClick={handleAdd} title={t("projectFilesView.stageAllTitle", { count: gitStatus.unstaged + gitStatus.untracked })}>
+                    <span data-testid="add-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.modified }} />
+                    <PlusIcon /><span className="git-btn-label">{t("projectFilesView.add", { count: gitStatus.unstaged + gitStatus.untracked })}</span>
+                  </button>
                 )}
-                {gitStatus.staged > 0 && (
-                  <div className="git-action git-action--commit">
-                    <button className="git-action-btn git-action-btn--commit" disabled={gitBusy} onClick={handleCommitOpen} title={t("projectFilesView.commitStagedTitle", { count: gitStatus.staged })}>
-                      <span data-testid="commit-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.staged }} />
-                      <span className="git-btn-glyph"><CheckIcon /></span><span className="git-btn-label">{t("projectFilesView.commit", { count: gitStatus.staged })}</span>
-                    </button>
-                    <button className="git-action-toggle" disabled={gitBusy} aria-label={t("projectFilesView.showStagedFiles")} aria-expanded={openTree === "commit"} title={t("projectFilesView.showStagedFiles")} onClick={() => setOpenTree((prev) => (prev === "commit" ? null : "commit"))}>
-                      {openTree === "commit" ? "▾" : "▴"}
-                    </button>
-                  </div>
-                )}
-                {networkBranch && (networkBranch.ahead !== null || networkBranch.behind !== null) && (
-                  <div className="git-branch-status">
-                    {t("projectFilesView.branchCounts", {
-                      destination: networkBranch.upstream ?? networkBranch.branch,
-                      ahead: networkBranch.ahead ?? 0,
-                      behind: networkBranch.behind ?? 0,
-                    })}
-                  </div>
+                {gitCanCommit && (
+                  <button className={gitBtn("commit")} disabled={gitBusy} onClick={handleCommitOpen} title={t("projectFilesView.commitStagedTitle", { count: gitStatus.staged })}>
+                    <span data-testid="commit-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.staged }} />
+                    <CheckIcon /><span className="git-btn-label">{t("projectFilesView.commit", { count: gitStatus.staged })}</span>
+                  </button>
                 )}
                 {exchange?.state === "detached" && (
-                  <button className="git-action-btn" disabled={gitBusy} onClick={() => void handleCreateBranch()}>
+                  <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => void handleCreateBranch()}>
                     {t("projectFilesView.detachedCreateBranch")} <UntestedTag id="gitBranchExchange" />
                   </button>
                 )}
@@ -2330,62 +2377,47 @@ export function ProjectFilesView({
                   <span className="git-branch-status">{t("projectFilesView.noRemoteBranch", { branch: exchange.branch })}</span>
                 )}
                 {canPublishRepo && (
-                  <button className="git-action-btn" disabled={gitBusy} onClick={() => setPublishContext(gitContextKey)}>
+                  <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => setPublishContext(gitContextKey)}>
                     {t("pill.publishEllipsis")} <UntestedTag id="gitBranchExchange" />
                   </button>
                 )}
-                {((!exchange && networkAhead > 0) || destinations.length > 0) && (
-                  <div className="git-action git-action--push">
-                    <button className="git-action-btn git-action-btn--push" disabled={gitBusy || gitRecovery !== null} onClick={handlePush} title={exchange ? undefined : t(networkAhead === 1 ? "projectFilesView.pushCommitOneTitle" : "projectFilesView.pushCommitManyTitle", { count: networkAhead })}>
-                      <span data-testid="push-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.unpushed }} />
-                      <span className="git-btn-glyph"><ArrowUpIcon /></span>
-                      <span className="git-btn-label">{destinations.length > 1
-                        ? t("projectFilesView.choosePushTarget")
-                        : destinations[0] ? actionLabel(destinations[0]) : t("projectFilesView.push", { count: networkAhead })}</span>
-                      {exchange && <UntestedTag id="gitBranchExchange" />}
-                    </button>
-                    {canReviewOutgoing && (
-                      <button className="git-action-toggle" disabled={gitBusy} aria-label={t("projectFilesView.showUnpushedFiles")} aria-expanded={openTree === "push"} title={t("projectFilesView.showUnpushedFiles")} onClick={() => setOpenTree((prev) => (prev === "push" ? null : "push"))}>
-                        {openTree === "push" ? "▾" : "▴"}
-                      </button>
-                    )}
-                  </div>
+                {gitCanPush && (
+                  <button className={gitBtn("push")} disabled={gitBusy || gitRecovery !== null} onClick={handlePush} title={exchange ? undefined : t(networkAhead === 1 ? "projectFilesView.pushCommitOneTitle" : "projectFilesView.pushCommitManyTitle", { count: networkAhead })}>
+                    <span data-testid="push-bar" className="git-step-dot" style={{ background: GIT_STATE_COLOR.unpushed }} />
+                    <ArrowUpIcon />
+                    <span className="git-btn-label">{destinations.length > 1
+                      ? t("projectFilesView.choosePushTarget")
+                      : destinations[0] ? actionLabel(destinations[0]) : t("projectFilesView.push", { count: networkAhead })}</span>
+                    {exchange && <UntestedTag id="gitBranchExchange" />}
+                  </button>
                 )}
-                {/* No caret, so no `.git-action` group: the preview it opens is
-                    GitHistory's pull panel, above. */}
-                {networkBehind > 0 && (
+                {/* The preview it opens is GitHistory's pull panel, above. */}
+                {gitCanPull && (
                   <button
-                    className="git-action-btn git-action-btn--pull"
+                    className={gitBtn("pull")}
                     disabled={gitBusy}
                     onClick={() => setPullRequest((n) => n + 1)}
                     title={t("projectFilesView.pullTitle", { count: networkBehind })}
                   >
-                    <span className="git-btn-glyph"><ArrowDownIcon /></span><span className="git-btn-label">{t("projectFilesView.pull", { count: networkBehind })}</span>
+                    <ArrowDownIcon /><span className="git-btn-label">{t("projectFilesView.pull", { count: networkBehind })}</span>
                   </button>
                 )}
-                {/* Release: only once everything is pushed and nothing is
-                    incoming, on a local project's own repo, and not when the
-                    tip already carries a tag. */}
-                {!onNestedRepo && !project?.remote && gitStatus.has_remote && !gitStatus.head_tagged && networkAhead === 0 && networkBehind === 0 && (!exchange || (networkBranch && destinations.length === 0 && networkBranch.upstream)) && (
-                  <button className="git-action-btn git-action-btn--release" disabled={gitBusy} onClick={() => void handleRelease()} title={t("projectFilesView.releaseTitle")}>
-                    <span className="git-btn-glyph"><TagIcon /></span><span className="git-btn-label">{t("projectFilesView.release")}</span>
+                {gitCanRelease && (
+                  <button className={gitBtn("release")} disabled={gitBusy} onClick={() => void handleRelease()} title={t("projectFilesView.releaseTitle")}>
+                    <TagIcon /><span className="git-btn-label">{t("projectFilesView.release")}</span>
                     <UntestedTag id="gitRelease" />
                   </button>
                 )}
-                {treeScope && projectDir && (treeScope !== "unpushed" || canReviewOutgoing) && <GitChangeTree key={gitContextKey + treeScope} projectDir={effectiveGitRoot} worktree={selectedGitWorktree} scope={treeScope} comparisonCheckout={treeScope === "unpushed" ? networkBranch?.checkout : undefined}
-                  comparisonHead={treeScope === "unpushed" ? networkBranch?.head : undefined}
-                  comparisonTracking={treeScope === "unpushed" ? comparisonTracking : undefined}
-                  disabled={gitBusy || commitMsg !== null} onBusy={setGitBusy} onChanged={() => refreshGit(effectiveGitRoot)} />}
               </>
             )}
             {exchange?.state === "error" && (
               <>
                 <ErrorNote className="git-action-error" error={t("projectFilesView.branchComparisonFailed", { error: exchange.error })} />
-                <button className="git-action-btn" disabled={gitBusy} onClick={() => refreshGit(effectiveGitRoot)}>{t("projectFilesView.retryGitStatus")}</button>
+                <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => refreshGit(effectiveGitRoot)}>{t("projectFilesView.retryGitStatus")}</button>
               </>
             )}
             {gitRecovery !== null && (
-              <button className="git-action-btn" disabled={gitBusy} onClick={() => void handlePushRecovery()}>{t("projectFilesView.fetchPushTarget")}</button>
+              <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => void handlePushRecovery()}>{t("projectFilesView.fetchPushTarget")}</button>
             )}
             {gitError && <ErrorNote className="git-action-error" error={gitError} />}
             {!gitError && receipt?.context === gitContextKey && <span role="status" className="git-action-receipt">{receipt.text}</span>}
@@ -2395,9 +2427,9 @@ export function ProjectFilesView({
           </div>
         )}
         {!activeBox && !gitStatus?.is_repo && gitReadError && (
-          <div className="git-action-bar">
+          <div className="sp-foot git-action-bar">
             <ErrorNote className="git-action-error" error={t("projectFilesView.gitStatusFailed", { error: gitReadError })} />
-            <button className="git-action-btn" disabled={gitBusy} onClick={() => refreshGit(effectiveGitRoot)}>{t("projectFilesView.retryGitStatus")}</button>
+            <button className="settings-btn sm git-action-btn" disabled={gitBusy} onClick={() => refreshGit(effectiveGitRoot)}>{t("projectFilesView.retryGitStatus")}</button>
           </div>
         )}
         {project && projectId && publishContext === gitContextKey && (
@@ -2416,21 +2448,8 @@ export function ProjectFilesView({
       )}
 
       {view === "orange" && (
-        <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
-          {orangeError && (
-            <div className="project-files-sync-result" role="alert">
-              <ErrorNote as="span" error={orangeError} />
-              <button
-                className="file-tree-up"
-                onClick={() => setOrangeError(null)}
-                title={t("common.close")}
-                aria-label={t("common.close")}
-              >
-                <CloseIcon />
-              </button>
-            </div>
-          )}
-          <div className="orange-take-newer">
+        <div className="side-panel-scroll sp-list-view diverged-view" style={{ flex: 1, overflowY: "auto" }}>
+          <div className="sp-toolbar orange-take-newer">
             <label className="tmux-scope-toggle" title={t("projectFilesView.takeNewerAutoTitle")}>
               <input
                 type="checkbox"
@@ -2450,39 +2469,40 @@ export function ProjectFilesView({
               {t("projectFilesView.takeNewerAuto")}
               <UntestedTag id="projectFilesView.takeNewerAuto" />
             </label>
-            {takeNewer && !anyAutoSync && (
-              <span className="orange-take-newer-note">{t("projectFilesView.takeNewerAutoNoAuto")}</span>
-            )}
           </div>
+          {takeNewer && !anyAutoSync && (
+            <p className="sp-note">{t("projectFilesView.takeNewerAutoNoAuto")}</p>
+          )}
+          {orangeError && (
+            <div className="project-files-sync-result" role="alert">
+              <ErrorNote as="span" error={orangeError} />
+              <button
+                className="file-tree-up"
+                onClick={() => setOrangeError(null)}
+                title={t("common.close")}
+                aria-label={t("common.close")}
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          )}
           {orangeFiles.length === 0 && newLocalFiles.length === 0 ? (
-            <div className="side-panel-orange-empty">{t("projectFilesView.noDivergedFiles")}</div>
+            <p className="sp-note">{t("projectFilesView.noDivergedFiles")}</p>
           ) : (
             <>
               {/* Bulk "…for all" resolution: take one side for every diverged
                   file at once. Both are destructive to the losing side — and by
                   definition every file here has content on BOTH sides — so each
                   goes through the shared transfer confirmation, which names the
-                  losing files rather than only counting them. Header + icon
-                  buttons (not a text button per row) so the bar stays compact. */}
+                  losing files rather than only counting them. Icon buttons in
+                  the group's head (not a text button per row) so it stays one
+                  line. */}
               {orangeFiles.length > 0 && (
-              <div className="orange-bulk-bar">
-                <span className="orange-bulk-count">
-                  {t("projectFilesView.divergedCount", { count: orangeFiles.length })}
-                </span>
+              <>
+              <div className="sp-head orange-head">
+                <span>{t("projectFilesView.divergedCount", { count: orangeFiles.length })}</span>
                 <UntestedTag id="projectFilesView.3" />
-                <label
-                  className="tmux-scope-toggle orange-bulk-exclude"
-                  title={t("projectFilesView.excludeBothChangedTitle")}
-                >
-                  <input
-                    type="checkbox"
-                    checked={excludeBothChanged}
-                    onChange={(e) => setExcludeBothChanged(e.target.checked)}
-                  />
-                  {t("projectFilesView.excludeBothChanged")}
-                  <UntestedTag id="projectFilesView.excludeBothChanged" />
-                </label>
-                <div className="orange-file-actions">
+                <div className="sp-head-end orange-file-actions">
                   <button
                     type="button"
                     className="orange-file-act orange-file-act--icon orange-file-act--remote"
@@ -2637,17 +2657,32 @@ export function ProjectFilesView({
                   <UntestedTag id="projectFilesView.deleteAll" />
                 </div>
               </div>
+              <label
+                className="tmux-scope-toggle orange-bulk-exclude"
+                title={t("projectFilesView.excludeBothChangedTitle")}
+              >
+                <input
+                  type="checkbox"
+                  checked={excludeBothChanged}
+                  onChange={(e) => setExcludeBothChanged(e.target.checked)}
+                />
+                {t("projectFilesView.excludeBothChanged")}
+                <UntestedTag id="projectFilesView.excludeBothChanged" />
+              </label>
+              </>
               )}
               {orangeFiles.map((rel) => {
                 const rowHostMtime = syncMap?.[rel]?.hostMtime;
                 const rowLocalMtime = syncMap?.[rel]?.localMtime;
                 const rowHostChecked = syncMap?.[rel]?.hostChecked ?? false;
+                const rowHostDiverged = syncMap?.[rel]?.hostDiverged ?? false;
+                const rowLocalDiverged = syncMap?.[rel]?.localDiverged ?? false;
                 const mtimeCue = mtimeDivergenceCue(
                   t,
                   rowHostMtime,
                   rowLocalMtime,
-                  syncMap?.[rel]?.hostDiverged ?? false,
-                  syncMap?.[rel]?.localDiverged ?? false,
+                  rowHostDiverged,
+                  rowLocalDiverged,
                   rowHostChecked,
                 );
                 // "Remote only" / "Local only": the other side has no file at
@@ -2666,40 +2701,62 @@ export function ProjectFilesView({
                 // transfer, nothing to merge — the only sensible action left is
                 // to stop tracking the entry.
                 const goneBoth = noHostFile && noLocalFile;
+                // The row's chip: which side moved, as one letter (the cue's
+                // word is its title and the second line). Gone on both: D;
+                // only the host's copy moved or is left: R; the local one: L;
+                // both changed: B.
+                const chip = goneBoth ? "D"
+                  : noHostFile ? "L"
+                  : noLocalFile ? "R"
+                  : rowHostDiverged && rowLocalDiverged ? "B"
+                  : rowHostDiverged ? "R"
+                  : rowLocalDiverged ? "L"
+                  : "=";
+                const chipColor = chip === "B" ? "var(--warning)"
+                  : mtimeCue.tone === "remote" ? "var(--warning)"
+                  : mtimeCue.tone === "local" ? "var(--success)"
+                  : "var(--text-secondary)";
                 return (
-                  <div key={rel} className="orange-file-row" title={rel}>
-                <button
-                  type="button"
-                  className="orange-file-name"
-                  disabled={!mirrorRoot || goneBoth}
-                  title={mirrorRoot && !goneBoth ? t("projectFilesView.openFileTitle", { rel }) : rel}
-                  onClick={() => {
-                    if (!mirrorRoot) return;
-                    const abs = `${mirrorRoot}/${rel}`;
-                    // Open the diverged file in the three-way merge viewer
-                    // (local mirror ⇄ merged ⇄ remote host, PyCharm-style), so
-                    // the user can take changes from either side per block and
-                    // resolve the divergence in one place.
-                    openLinkedFile(undefined, dirname(abs), {
-                      path: abs,
-                      viewer: "syncmerge",
-                      label: basename(abs),
-                    });
-                  }}
-                >
-                  <span className="orange-file-dot" aria-hidden="true">±</span>
-                  {rel}
-                </button>
-                {mtimeCue && (
-                  <span
-                    className={`orange-mtime-badge orange-mtime-badge--${mtimeCue.tone}`}
-                    title={mtimeCue.title}
-                  >
-                    {mtimeCue.text}
-                  </span>
-                )}
+                  <div key={rel} className="sp-row sp-row--two orange-file-row" title={rel}>
+                    <span className="sp-row-state">
+                      <span className="sp-chip" style={{ color: chipColor }} title={mtimeCue.text}>{chip}</span>
+                    </span>
+                    <span className="sp-row-act" />
+                    <button
+                      type="button"
+                      className="sp-row-main orange-file-name"
+                      disabled={!mirrorRoot || goneBoth}
+                      title={mirrorRoot && !goneBoth ? t("projectFilesView.openFileTitle", { rel }) : rel}
+                      onClick={() => {
+                        if (!mirrorRoot) return;
+                        const abs = `${mirrorRoot}/${rel}`;
+                        // Open the diverged file in the three-way merge viewer
+                        // (local mirror ⇄ merged ⇄ remote host, PyCharm-style), so
+                        // the user can take changes from either side per block and
+                        // resolve the divergence in one place.
+                        openLinkedFile(undefined, dirname(abs), {
+                          path: abs,
+                          viewer: "syncmerge",
+                          label: basename(abs),
+                        });
+                      }}
+                    >
+                      <span className="sp-row-text">
+                        <span className="sp-row-name">{rel}</span>
+                        <span className="sp-row-sub">
+                          <span
+                            className={`orange-mtime-badge orange-mtime-badge--${mtimeCue.tone}`}
+                            title={mtimeCue.title}
+                          >
+                            {mtimeCue.text}
+                          </span>
+                          {" · "}
+                          {mtimeCue.title.split("\n").join(" · ")}
+                        </span>
+                      </span>
+                    </button>
                 {goneBoth ? (
-                  <div className="orange-file-actions">
+                  <div className="sp-row-meta orange-file-actions">
                     {/* Deselecting drops the row to state "none" immediately and
                         stops tracking; the manifest keeps an inert unselected
                         marker (the backend prune only runs for entries still
@@ -2721,7 +2778,7 @@ export function ProjectFilesView({
                     </button>
                   </div>
                 ) : (
-                <div className="orange-file-actions">
+                <div className="sp-row-meta orange-file-actions">
                   <button
                     type="button"
                     className="orange-file-act orange-file-act--icon orange-file-act--remote"
@@ -2838,12 +2895,10 @@ export function ProjectFilesView({
                   the manifest has seen. */}
               {newLocalFiles.length > 0 && (
                 <>
-                  <div className="orange-bulk-bar">
-                    <span className="orange-bulk-count">
-                      {t("projectFilesView.newLocalCount", { count: newLocalFiles.length })}
-                    </span>
+                  <div className="sp-head orange-head">
+                    <span>{t("projectFilesView.newLocalCount", { count: newLocalFiles.length })}</span>
                     <UntestedTag id="projectFilesView.4" />
-                    <div className="orange-file-actions">
+                    <div className="sp-head-end orange-file-actions">
                       <button
                         type="button"
                         className="orange-file-act orange-file-act--icon orange-file-act--local"
@@ -2873,10 +2928,14 @@ export function ProjectFilesView({
                     </div>
                   </div>
                   {newLocalFiles.map((rel) => (
-                    <div key={rel} className="orange-file-row" title={rel}>
+                    <div key={rel} className="sp-row orange-file-row" title={rel}>
+                      <span className="sp-row-state">
+                        <span className="sp-chip" title={t("projectFilesView.newLocalChipTitle")}>N</span>
+                      </span>
+                      <span className="sp-row-act" />
                       <button
                         type="button"
-                        className="orange-file-name"
+                        className="sp-row-main orange-file-name"
                         disabled={!mirrorRoot}
                         title={
                           mirrorRoot
@@ -2895,12 +2954,9 @@ export function ProjectFilesView({
                           });
                         }}
                       >
-                        <span className="orange-file-dot orange-file-dot--new" aria-hidden="true">
-                          +
-                        </span>
-                        {rel}
+                        <span className="sp-row-name">{rel}</span>
                       </button>
-                      <div className="orange-file-actions">
+                      <div className="sp-row-meta orange-file-actions">
                         <button
                           type="button"
                           className="orange-file-act orange-file-act--icon orange-file-act--local"
@@ -2942,22 +2998,24 @@ export function ProjectFilesView({
       )}
 
       {view === "sessions" && (
-        <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
+        <div className="side-panel-scroll sp-list-view sessions-view" style={{ flex: 1, overflowY: "auto" }}>
           {!remoteBlocked && (
-            <label
-              className="tmux-scope-toggle"
-              title={t("projectFilesView.tmuxScopeOff") + t("projectFilesView.tmuxScopeOn")}
-            >
-              <input
-                type="checkbox"
-                checked={showAllSessions}
-                onChange={(e) => setShowAllSessions(e.target.checked)}
-              />
-              {t("projectFilesView.allHostSessions")}
-            </label>
+            <div className="sp-toolbar">
+              <label
+                className="tmux-scope-toggle"
+                title={t("projectFilesView.tmuxScopeOff") + t("projectFilesView.tmuxScopeOn")}
+              >
+                <input
+                  type="checkbox"
+                  checked={showAllSessions}
+                  onChange={(e) => setShowAllSessions(e.target.checked)}
+                />
+                {t("projectFilesView.allHostSessions")}
+              </label>
+            </div>
           )}
           {sessionRows.length === 0 ? (
-            <div className="side-panel-orange-empty">
+            <p className="sp-note">
               {t(
                 remoteBlocked
                   ? "projectFilesView.connectToListSessions"
@@ -2965,7 +3023,7 @@ export function ProjectFilesView({
                     ? "projectFilesView.noSessionsOnHosts"
                     : "projectFilesView.noSessionsForProject",
               )}
-            </div>
+            </p>
           ) : (
             sessionGroups.map(({ hostId, hostLabel, rows: hostRows, kindGroups }) => (
               <section
@@ -2973,70 +3031,96 @@ export function ProjectFilesView({
                 key={hostId}
                 aria-label={t("projectFilesView.persistentSessionsOnHostAria", { host: hostLabel })}
               >
-                <div className="tmux-machine-group-title">
+                {/* The machine is the group's head, its bulk kills at the end. */}
+                <div className="sp-head tmux-machine-head">
                   <span className="tmux-machine-group-name">{hostLabel}</span>
+                  <span className="sp-count">{hostRows.length}</span>
                   <UntestedTag id="projectFilesView.8" />
-                  <button
-                    type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.killClosedSessionsTitle")}
-                    aria-label={t("projectFilesView.killClosedSessionsAria", { host: hostLabel })}
-                    disabled={!hostRows.some((r) => isClosedSession(hostId, r.session))}
-                    onClick={() =>
-                      void killHostSessions(
-                        hostId,
-                        hostLabel,
-                        hostRows.filter((r) => isClosedSession(hostId, r.session)),
-                        true,
-                      )
-                    }
-                  >
-                    {t("projectFilesView.killClosedSessions")}
-                  </button>
-                  <button
-                    type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.killAllSessionsTitle")}
-                    aria-label={t("projectFilesView.killAllSessionsAria", { host: hostLabel })}
-                    onClick={() => void killHostSessions(hostId, hostLabel, hostRows, false)}
-                  >
-                    {t("projectFilesView.killAllSessions")}
-                  </button>
+                  <span className="sp-head-end tmux-machine-actions">
+                    <button
+                      type="button"
+                      className="btn-quiet is-danger"
+                      title={t("projectFilesView.killClosedSessionsTitle")}
+                      aria-label={t("projectFilesView.killClosedSessionsAria", { host: hostLabel })}
+                      disabled={!hostRows.some((r) => isClosedSession(hostId, r.session))}
+                      onClick={() =>
+                        void killHostSessions(
+                          hostId,
+                          hostLabel,
+                          hostRows.filter((r) => isClosedSession(hostId, r.session)),
+                          true,
+                        )
+                      }
+                    >
+                      {t("projectFilesView.killClosedSessions")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-quiet is-danger"
+                      title={t("projectFilesView.killAllSessionsTitle")}
+                      aria-label={t("projectFilesView.killAllSessionsAria", { host: hostLabel })}
+                      onClick={() => void killHostSessions(hostId, hostLabel, hostRows, false)}
+                    >
+                      {t("projectFilesView.killAllSessions")}
+                    </button>
+                  </span>
                 </div>
                 {kindGroups.map(({ kind, rows }) => (
                   <div className="tmux-kind-group" key={kind}>
-                    <div className="tmux-kind-group-title">{t(SESSION_KIND_LABEL[kind])}</div>
+                    <div className="sp-head tmux-kind-head">
+                      <span>{t(SESSION_KIND_LABEL[kind])}</span>
+                      <span className="sp-count">{rows.length}</span>
+                    </div>
                     {rows.map(({ session: s }) => {
-                      const owned = sessionOwners.has(`${hostId} ${s.name}`);
+                      const ownerKey = sessionOwners.get(`${hostId} ${s.name}`);
+                      const owned = ownerKey !== undefined;
+                      const current = owned && ownerKey === currentTabKey;
                       return (
                         <div
                           key={`${hostId} ${s.name}`}
-                          className="orange-file-row"
+                          className={`sp-row sp-row--two orange-file-row${current ? " selected" : ""}`}
+                          aria-current={current ? "true" : undefined}
                           onMouseEnter={(e) => handleSessionRowMouseEnter(e, hostId, s.name)}
                           onMouseLeave={handleSessionRowMouseLeave}
                         >
+                          <span className="sp-row-state tmux-attached" aria-hidden="true">
+                            {s.attached ? <DotIcon /> : <RingIcon />}
+                          </span>
+                          <span className="sp-row-act" />
                           <button
                             type="button"
-                            className="orange-file-name"
+                            className="sp-row-main orange-file-name"
                             title={t(
                               owned ? "projectFilesView.revealTabRunning" : "projectFilesView.attachTo",
                               { name: s.name },
                             )}
                             onClick={() => void openSession(hostId, s.name)}
                           >
-                            <span className="orange-file-dot" aria-hidden="true">
-                              {s.attached ? <DotIcon /> : <RingIcon />}
+                            <span className="sp-row-text">
+                              <span className="sp-row-name tmux-session-label">{sessionDisplayName(t, s.name)}</span>
+                              <span className="sp-row-sub">
+                                <span className={`sp-status${s.working ? " sp-status--running" : ""}`}>
+                                  {s.working
+                                    ? s.currentCommand
+                                      ? t("projectFilesView.tooltipWorking", { command: s.currentCommand })
+                                      : t("projectFilesView.workingTitle")
+                                    : t("projectFilesView.tooltipIdle")}
+                                </span>
+                                {owned && (
+                                  <span className="tmux-session-meta">
+                                    {t(current ? "projectFilesView.currentMeta" : "projectFilesView.openMeta")}
+                                  </span>
+                                )}
+                                {current && (
+                                  <UntestedTag id="projectFilesView.currentSession" />
+                                )}
+                              </span>
                             </span>
-                            {s.working && (
-                              <span className="tmux-work-dot" aria-hidden="true" title={t("projectFilesView.workingTitle")} />
-                            )}
-                            <span className="tmux-session-label">{sessionDisplayName(t, s.name)}</span>
-                            {owned && <span className="tmux-session-meta">{t("projectFilesView.openMeta")}</span>}
                           </button>
-                          <div className="orange-file-actions">
+                          <div className="sp-row-meta orange-file-actions">
                             <button
                               type="button"
-                              className="orange-file-act"
+                              className="btn-quiet"
                               title={t("projectFilesView.renameSessionTitle")}
                               onClick={() => void renameSession(hostId, s.name)}
                             >
@@ -3044,7 +3128,7 @@ export function ProjectFilesView({
                             </button>
                             <button
                               type="button"
-                              className="orange-file-act"
+                              className="btn-quiet is-danger tmux-kill"
                               title={t("projectFilesView.killSessionTitle")}
                               aria-label={t("projectFilesView.killSessionAria", { name: s.name })}
                               onClick={() => void killSession(hostId, s.name)}
@@ -3123,55 +3207,121 @@ export function ProjectFilesView({
       })()}
 
       {view === "jobs" && (
-        <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
-          <div className="side-panel-jobs-head">
+        <div className="side-panel-scroll sp-list-view jobs-view" style={{ flex: 1, overflowY: "auto" }}>
+          <div className="sp-toolbar">
             <UntestedTag id="projectFilesView.6" />
+            {wsRows.length > 0 && project?.hpc?.logs_dir && (
+              <span className="sp-toolbar-end">
+                <button
+                  type="button"
+                  className="toolbar-btn toolbar-btn--sm"
+                  title={t("projectFilesView.pullLogsTitle", { dir: project.hpc.logs_dir })}
+                  onClick={() => void pullProjectLogs()}
+                >
+                  <ArrowDownIcon /> {t("projectFilesView.pullLogs")}
+                </button>
+              </span>
+            )}
           </div>
-          {wsRows.length > 0 && (
-            <>
-              <div className="side-panel-orange-note">
-                {t("projectFilesView.workspacesNote")}
-                {project?.hpc?.logs_dir && (
+          {/* The queue first: it is what moves (polled every 7 s); the
+              workspaces below change in days. */}
+          <div className="sp-head jobs-head">
+            <span>{t("projectFilesView.jobsQueue")}</span>
+            {jobRows.length > 0 && (
+              <span className="sp-head-meta">
+                {t("projectFilesView.jobsQueueMeta", {
+                  running: jobRows.filter((j) => j.state === "RUNNING").length,
+                  pending: jobRows.filter((j) => j.state === "PENDING").length,
+                })}
+              </span>
+            )}
+          </div>
+          {jobRows.length === 0 ? (
+            <p className="sp-note">
+              {t(
+                remoteBlocked
+                  ? "projectFilesView.connectToListJobs"
+                  : "projectFilesView.noQueuedJobs",
+              )}
+            </p>
+          ) : (
+            jobRows.map((j) => {
+              const code = SLURM_STATE_CODE[j.state] ?? j.state.slice(0, 2);
+              const color = j.state === "RUNNING" ? "var(--success)"
+                : j.state === "PENDING" ? "var(--warning)"
+                : j.state === "FAILED" ? "var(--danger)"
+                : undefined;
+              return (
+                <div key={j.id} className="sp-row sp-row--two orange-file-row" title={`${j.id} ${j.name}`}>
+                  <span className="sp-row-state">
+                    <span className="sp-chip jobs-state-chip" title={j.state} style={color ? { color } : undefined}>{code}</span>
+                  </span>
+                  <span className="sp-row-act">
+                    <button
+                      type="button"
+                      className="btn-quiet jobs-icon-btn"
+                      title={t("projectFilesView.watchJobTitle", { id: j.id })}
+                      aria-label={t("projectFilesView.watch")}
+                      onClick={() => void watchJob(j.id, j.name)}
+                    >
+                      <EyeIcon />
+                    </button>
+                  </span>
                   <button
                     type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.pullLogsTitle", { dir: project.hpc.logs_dir })}
-                    onClick={() => void pullProjectLogs()}
+                    className="sp-row-main orange-file-name"
+                    title={t("projectFilesView.watchJobTitle", { id: j.id })}
+                    onClick={() => void watchJob(j.id, j.name)}
                   >
-                    {t("projectFilesView.pullLogs")}
+                    <span className="sp-row-text">
+                      <span className="sp-row-name">{j.name || j.id}</span>
+                      <span className="sp-row-sub">
+                        {j.id} · {j.state}
+                        {j.nodes ? ` · ${j.nodes} node${j.nodes === "1" ? "" : "s"}` : ""}
+                        {j.reason && j.reason !== "(None)" ? ` · ${j.reason}` : ""}
+                      </span>
+                    </span>
                   </button>
-                )}
+                  <span className="sp-row-meta">
+                    {j.time}
+                    <button
+                      type="button"
+                      className="btn-quiet is-danger jobs-icon-btn"
+                      title={t("projectFilesView.cancelJobTitle")}
+                      aria-label={t("projectFilesView.cancelJobAria", { id: j.id })}
+                      onClick={() => void cancelJob(j.id, j.name)}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </span>
+                </div>
+              );
+            })
+          )}
+          {wsRows.length > 0 && (
+            <>
+              <div className="sp-head jobs-head">
+                <span>{t("projectFilesView.workspacesNote")}</span>
               </div>
               {wsRows.map((ws) => {
                 const here = projectWs?.id === ws.id && projectWs?.path === ws.path;
+                const sub = [here ? t("projectFilesView.thisProject") : "", ws.filesystem ?? ""].filter(Boolean).join(" · ");
                 return (
-                  <div key={`${ws.filesystem ?? ""}/${ws.id}`} className="orange-file-row" title={ws.path}>
-                    <span className="orange-file-name" style={{ cursor: "var(--cur-default, default)" }}>
-                      <span className="orange-file-dot" aria-hidden="true">{here ? <DotIcon /> : <RingIcon />}</span>
-                      {ws.id}
-                      <span className={`tmux-session-meta hpc-ws-remaining tone-${expiryTone(ws)}`}>
-                        {[
-                          here ? t("projectFilesView.thisProject") : "",
-                          ws.filesystem ?? "",
-                          remainingLabel(ws),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                  <div key={`${ws.filesystem ?? ""}/${ws.id}`} className={`sp-row${sub ? " sp-row--two" : ""} orange-file-row`} title={ws.path}>
+                    <span className="sp-row-state jobs-ws-here" aria-hidden="true">{here ? <DotIcon /> : <RingIcon />}</span>
+                    <span className="sp-row-act" />
+                    <span className="sp-row-main">
+                      <span className="sp-row-text">
+                        <span className="sp-row-name">{ws.id}</span>
+                        {sub && <span className="sp-row-sub">{sub}</span>}
                       </span>
                     </span>
-                    <div className="orange-file-actions">
-                      <button
-                        type="button"
-                        className="orange-file-act"
-                        title={t("projectFilesView.extendWorkspaceTitle")}
-                        onClick={() => void extendWs(ws)}
-                      >
-                        {t("projectFilesView.extend")}
-                      </button>
+                    <span className="sp-row-meta">
+                      <span className={`hpc-ws-remaining tone-${expiryTone(ws)}`}>{remainingLabel(ws)}</span>
                       {!here && project?.remote && (
                         <button
                           type="button"
-                          className="orange-file-act"
+                          className="btn-quiet"
                           disabled={wsBusy}
                           title={t("projectFilesView.moveHereTitle")}
                           onClick={() => void moveProjectTo(ws)}
@@ -3179,65 +3329,22 @@ export function ProjectFilesView({
                           {t("projectFilesView.moveHere")}
                         </button>
                       )}
-                    </div>
+                      <button
+                        type="button"
+                        className="btn-quiet"
+                        title={t("projectFilesView.extendWorkspaceTitle")}
+                        onClick={() => void extendWs(ws)}
+                      >
+                        {t("projectFilesView.extend")}
+                      </button>
+                    </span>
                   </div>
                 );
               })}
             </>
           )}
-          {jobRows.length === 0 ? (
-            <div className="side-panel-orange-empty">
-              {t(
-                remoteBlocked
-                  ? "projectFilesView.connectToListJobs"
-                  : "projectFilesView.noQueuedJobs",
-              )}
-            </div>
-          ) : (
-            jobRows.map((j) => (
-              <div key={j.id} className="orange-file-row" title={`${j.id} ${j.name}`}>
-                <button
-                  type="button"
-                  className="orange-file-name"
-                  title={t("projectFilesView.watchJobTitle", { id: j.id })}
-                  onClick={() => void watchJob(j.id, j.name)}
-                >
-                  <span className="orange-file-dot" aria-hidden="true">
-                    {j.state === "RUNNING" ? <DotIcon /> : <RingIcon />}
-                  </span>
-                  {j.name || j.id}
-                  <span className="tmux-session-meta">
-                    {j.id} · {j.state}
-                    {j.time ? ` · ${j.time}` : ""}
-                    {j.nodes ? ` · ${j.nodes} node${j.nodes === "1" ? "" : "s"}` : ""}
-                    {j.reason && j.reason !== "(None)" ? ` · ${j.reason}` : ""}
-                  </span>
-                </button>
-                <div className="orange-file-actions">
-                  <button
-                    type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.watchJobTitle", { id: j.id })}
-                    onClick={() => void watchJob(j.id, j.name)}
-                  >
-                    {t("projectFilesView.watch")}
-                  </button>
-                  <button
-                    type="button"
-                    className="orange-file-act"
-                    title={t("projectFilesView.cancelJobTitle")}
-                    aria-label={t("projectFilesView.cancelJobAria", { id: j.id })}
-                    onClick={() => void cancelJob(j.id, j.name)}
-                  >
-                    <CloseIcon />
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
         </div>
       )}
-
       {view === "files" && (
         <ProjectFilesPane
           scope={scope}
@@ -3274,6 +3381,7 @@ export function ProjectFilesView({
           searchOpen={searchOpen}
           onSearchOpenChange={setSearchOpen}
           refreshNonce={refreshNonce}
+          toolbarActions={filesActions}
         />
       )}
       {view === "remarks" && projectId && (
@@ -3300,50 +3408,85 @@ export function ProjectFilesView({
 
       {view === "clis" && <CliOverviewView active={active} />}
 
-      {view === "windows" && (
-        <div className="side-panel-scroll" style={{ flex: 1, overflowY: "auto", padding: 4 }}>
-          <div className="file-tree-empty" style={{ paddingBottom: 4 }}>
-            <UntestedTag id="projectFilesView.7" />
+      {view === "windows" && (() => {
+        // One app row: its window icon and name, then Close app (a live
+        // process) or Remove from list (a row whose process is gone).
+        const appRow = (w: (typeof scopedWindows)[number]) => (
+          <div key={w.id} className="sp-row sp-row--plain apps-row">
+            <span className="sp-row-main" title={w.exec}>
+              <span className="apps-row-icon"><WindowIcon /></span>
+              <span className="sp-row-name apps-row-name">
+                {basename(w.exec) || w.exec}
+                {w.file && <span className="apps-row-file"> {basename(w.file)}</span>}
+              </span>
+            </span>
+            <span className="sp-row-meta">
+              <button
+                type="button"
+                className="btn-quiet apps-row-btn"
+                onClick={() => closeApp(w.id)}
+                title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
+                aria-label={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
+              >
+                {w.pid > 0 ? <CloseIcon /> : <MinusIcon />}
+              </button>
+            </span>
           </div>
-          {/* A desktop that parks nothing is said once for the list; a
-              parking desktop under Wayland explains each row it still can't
-              hide (no window id = not an XWayland window). Linux only: the
-              Windows/macOS backends always park, and an older backend or the
-              browser client gives no usable answer (null → silence). */}
-          {scopedWindows.length > 0 && workspaceCaps?.canPark === false && IS_LINUX && (
-            <div className="file-tree-empty" style={{ paddingBottom: 4 }}>
-              {t("projectFilesView.noParkingNote")} <UntestedTag id="projectFilesView.noParkingNote" />
+        );
+        // A desktop that parks splits the list by what a project switch does
+        // to each row (`rowStaysVisible`); one that parks nothing, or gives no
+        // usable answer, keeps the single list.
+        const parks = workspaceCaps?.canPark === true;
+        const staying = parks ? scopedWindows.filter((w) => rowStaysVisible(workspaceCaps, w.window_id) === "wayland") : [];
+        const hidden = parks ? scopedWindows.filter((w) => rowStaysVisible(workspaceCaps, w.window_id) !== "wayland") : [];
+        return (
+          <div className="side-panel-scroll sp-list-view apps-view" style={{ flex: 1, overflowY: "auto" }}>
+            <div className="sp-toolbar">
+              <UntestedTag id="projectFilesView.7" />
             </div>
-          )}
-          {scopedWindows.length === 0 ? (
-            <div className="file-tree-empty">{t("projectFilesView.noOpenedWindows")}</div>
-          ) : (
-            scopedWindows.map((w) => (
-              <Fragment key={w.id}>
-                <div className="file-entry">
-                  <span className="file-icon"><WindowIcon /></span>
-                  <span className="file-name" title={w.exec}>
-                    {basename(w.exec) || w.exec}
-                    {w.file && <span style={{ color: "var(--text-muted)" }}> {basename(w.file)}</span>}
-                  </span>
-                  <button
-                    className="tab-close"
-                    onClick={() => closeApp(w.id)}
-                    title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
-                  >
-                    <CloseIcon />
-                  </button>
-                </div>
-                {rowStaysVisible(workspaceCaps, w.window_id) === "wayland" && (
-                  <div className="file-tree-empty" style={{ paddingTop: 0 }}>
-                    {t("projectFilesView.waylandStaysVisible")} <UntestedTag id="projectFilesView.waylandStaysVisible" />
-                  </div>
+            {/* A desktop that parks nothing is said once for the list; a
+                parking desktop under Wayland says once, under the section of
+                the rows it still can't hide (no window id = not an XWayland
+                window), why they stay. Linux only: the Windows/macOS backends
+                always park, and an older backend or the browser client gives
+                no usable answer (null → silence). */}
+            {scopedWindows.length > 0 && workspaceCaps?.canPark === false && IS_LINUX && (
+              <p className="sp-note">
+                {t("projectFilesView.noParkingNote")} <UntestedTag id="projectFilesView.noParkingNote" />
+              </p>
+            )}
+            {scopedWindows.length === 0 ? (
+              <p className="sp-note">{t("projectFilesView.noOpenedWindows")}</p>
+            ) : parks ? (
+              <>
+                {hidden.length > 0 && (
+                  <section className="apps-section" data-section="hidden">
+                    <div className="sp-head">
+                      <span>{t("projectFilesView.appsHiddenOnSwitch")}</span>
+                      <span className="sp-head-end">{hidden.length}</span>
+                    </div>
+                    {hidden.map(appRow)}
+                  </section>
                 )}
-              </Fragment>
-            ))
-          )}
-        </div>
-      )}
+                {staying.length > 0 && (
+                  <section className="apps-section" data-section="staying">
+                    <div className="sp-head">
+                      <span>{t("projectFilesView.appsStayOnScreen")}</span>
+                      <span className="sp-head-end">{staying.length}</span>
+                    </div>
+                    <p className="sp-note">
+                      {t("projectFilesView.waylandXwaylandOnly")} <UntestedTag id="projectFilesView.waylandStaysVisible" />
+                    </p>
+                    {staying.map(appRow)}
+                  </section>
+                )}
+              </>
+            ) : (
+              scopedWindows.map(appRow)
+            )}
+          </div>
+        );
+      })()}
       {view !== "files" && footer}
       {showSettings && project && localFile && (
         <ProjectFilesSettingsDialog

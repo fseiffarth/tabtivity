@@ -21,6 +21,7 @@ import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
 import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
+import { shortModelName } from "../localModels";
 import { CliOverviewSection } from "./CliOverviewSheet";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
 import { DesktopSwitchButton } from "../shell/DesktopFrame";
@@ -98,8 +99,11 @@ const HOME_LAYOUTS: [HomeLayout, TranslationKey, ComponentType<IconProps>][] = [
  *  agent tiles lead into them, and ‹ (or the phone's back) comes home. */
 const SUBVIEW_TITLE: Record<Exclude<HomeView, "active">, TranslationKey> = { agents: "mobile.home.agentsTitle", favorites: "mobile.home.viewFavorites", search: "mobile.home.viewSearch" };
 
-export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
+export function Home({ open, openTab, tabby, todo, mail, selectedId, vpn }: {
   open: (id: string) => void;
+  /** The desktop machine's OpenVPN tunnel, for the header's pill; null where
+   * it has no VPN config or no status has said yet. */
+  vpn?: "up" | "down" | null;
   /** The project open beside this list (the split tier): its row is marked. */
   selectedId?: string;
   /** Opens Tabby's one chat (the FAB): the assistant scope is no row here. */
@@ -124,6 +128,10 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
   const [foldedBoxes, setFoldedBoxes] = useState<string[]>(() => readOrder("homeFoldedBoxes"));
   /** The layout button's sheet: list, grid or boxes. */
   const [layoutSheet, setLayoutSheet] = useState(false);
+  /** The desktop's models in memory, as the Local models section last read
+   *  them: the header's pill. A tap on it opens that section's sheet. */
+  const [loadedModels, setLoadedModels] = useState<string[]>([]);
+  const [modelsOpen, setModelsOpen] = useState(0);
   const toggleBox = (id: string) => {
     const next = foldedBoxes.includes(id) ? foldedBoxes.filter((box) => box !== id) : [id, ...foldedBoxes];
     setFoldedBoxes(next);
@@ -358,7 +366,12 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
   const [seen, setSeen] = useState<SeenDone>(() => readSeenDone());
   const openAgentTab = (projectId: string, tab: ActivityTab) => {
     if (tab.agent_status === "done") setSeen(markDoneSeen(tab.id, tab.done_at));
-    openTab(projectId, tab);
+    // A tab with no live session here — ended, started before the project's
+    // Mobile switch, or on a host the desktop is not connected to — opens its
+    // project: its card there restarts it, or says why it cannot. A terminal
+    // opened on it would only report the session gone.
+    if (!tab.available) open(projectId);
+    else openTab(projectId, tab);
   };
   /** One project row's opener — tile, name and caption, agent counts, open
    *  tabs — the same in every layout. `caption` replaces the scope line (a
@@ -393,6 +406,8 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
   const rootWaiting = rootRow?.pending_reviews ?? 0;
   const rootLabel = rootRow ? `${t("mobile.home.openRoot")}${rootWaiting > 0 ? ` · ${t("mobile.home.awaitingApproval", { count: rootWaiting })}` : ""}` : "";
   const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
+  const vpnLabel = t(vpn === "up" ? "mobile.home.vpnUp" : "mobile.home.vpnDown");
+  const modelLabel = t("mobile.home.modelLoaded", { names: loadedModels.map(shortModelName).join(", ") });
   const LayoutGlyph = HOME_LAYOUTS.find(([id]) => id === layout)?.[2] ?? ListIcon;
   /** One button for the three layouts, drawn as the one in use; its sheet
    *  holds the choice. Active and Search share it. */
@@ -422,6 +437,22 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
       {offline
         ? <span className="home-offline" role="img" aria-label={connection}><span className="lamp off" aria-hidden="true" /><span aria-hidden="true">{connection}</span></span>
         : <span className="lamp" role="img" aria-label={connection} title={connection} />}
+      {/* The desktop machine's OpenVPN tunnel, when it has a VPN config: a
+          word, since a second bare lamp would not say what it is for. A dead
+          link says nothing about the tunnel, so the pill goes with it. */}
+      {!offline && vpn && <span className={vpn === "up" ? "home-vpn up" : "home-vpn"} role="img" aria-label={vpnLabel} title={vpnLabel}>
+        <span aria-hidden="true">{t("mobile.home.vpn")}</span>
+        {isUntested("mobile.home.vpnLamp") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+      </span>}
+      {/* A local model in memory on the desktop, by name, green like an up
+          tunnel: it holds GPU memory, so it is worth seeing at a glance. A
+          tap opens the Local models sheet (Unload is there). */}
+      {!offline && loadedModels.length > 0 && <button className="home-model" aria-haspopup="dialog" aria-label={modelLabel} title={modelLabel} onClick={() => setModelsOpen((count) => count + 1)}>
+        <span className="home-model-dot" aria-hidden="true" />
+        <span className="home-model-name" aria-hidden="true">{shortModelName(loadedModels[0])}</span>
+        {loadedModels.length > 1 && <span aria-hidden="true">{t("mobile.home.modelMore", { count: loadedModels.length - 1 })}</span>}
+        {isUntested("mobile.home.modelPill") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+      </button>}
       {/* Another linked desktop (`shell/`): shown when there is one to switch
           to, or inside one's frame, where it asks the shell for its picker. */}
       <DesktopSwitchButton />
@@ -556,7 +587,7 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
     <h2 className="home-section-head">{t("mobile.home.desktopHead")}</h2>
     <div className="home-desktop">
       <SendToDesktop />
-      <LocalModelsSection />
+      <LocalModelsSection onLoaded={setLoadedModels} openRequest={modelsOpen} />
       <CliOverviewSection />
     </div>
     {/* What this phone does, as against what the desktop is doing, behind

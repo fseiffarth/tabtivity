@@ -27,12 +27,14 @@ vi.mock("../../lib/agents/readerLive", async (importOriginal) => {
   };
 });
 
+import { invoke } from "@tauri-apps/api/core";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { SteeringPromptOverlay } from "../../components/layout/SteeringPromptOverlay";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import { _clearScheduledAgentInputsForTest, registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { readSlashCommands } from "../../../mobile-web/src/slashCommands";
+import { useActivityStore } from "../../stores/activity";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -48,8 +50,7 @@ const menu = () => document.querySelector(".steering-prompt-dialog .terminal-rea
 const writeMock = vi.mocked(writePtyInput);
 const decode = (value: Uint8Array) => new TextDecoder().decode(value);
 
-function openBox() {
-  const entry = { key: "t1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", scheduleTargetId: "target" } as TabEntry;
+function openBox(entry = { key: "t1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", scheduleTargetId: "target" } as TabEntry) {
   useTabsStore.setState({ scope: "p", tabs: [entry], activeKey: entry.key });
   registerScheduledAgentInput("target", {
     ptyId: "p:t1",
@@ -143,6 +144,7 @@ describe("steering prompt box suggestions", () => {
     try {
       const input = openBox();
       expect(input.placeholder).toContain("run the tests");
+      expect(document.querySelector(".suggestion-source-chip .suggestion-source-name")?.textContent).toBe("Claude");
       fireEvent.keyDown(input, { key: "Tab" });
       expect(box()?.value).toBe("run the tests");
       expect(writeMock).not.toHaveBeenCalled();
@@ -156,6 +158,55 @@ describe("steering prompt box suggestions", () => {
       expect(box()?.value).toBe("commit this");
     } finally {
       unregisterTerminal("p:t1", term);
+    }
+  });
+
+  it("shows the local model's suggestion where the CLI draws none, Tab takes it, nothing is sent", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockImplementation(((command: string) => Promise.resolve(command === "agent_next_prompt"
+      ? { text: "run the tests", turnKey: "e1", status: "ok" }
+      : undefined)) as never);
+    // A fresh tab: earlier cases left a draft (and a send) on `t1`.
+    useActivityStore.setState({ busyByTab: {} });
+    try {
+      const input = openBox({ key: "t9", label: "Codex", cmd: "codex", cwd: "/p", kind: "agent", scheduleTargetId: "target", sessionId: "s-1" } as TabEntry);
+      await vi.waitFor(() => expect(box()?.placeholder).toContain("run the tests"));
+      expect(input.getAttribute("aria-label")).toContain("Local model suggests");
+      // No model named (an older backend): the chip says "Local model".
+      expect(document.querySelector(".suggestion-source-chip .suggestion-source-name")?.textContent).toBe("Local model");
+      expect(invokeMock).toHaveBeenCalledWith("agent_next_prompt", expect.objectContaining({ agent: "codex", sessionId: "s-1", phase: "final" }));
+      fireEvent.keyDown(input, { key: "Tab" });
+      expect(box()?.value).toBe("run the tests");
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(invokeMock.mock.calls.filter(([command]) => command === "agent_next_prompt")).toHaveLength(1);
+    } finally {
+      invokeMock.mockReset();
+      invokeMock.mockResolvedValue(undefined);
+    }
+  });
+
+  it("draws how a typed prompt goes on after it; Tab takes it in, nothing is sent", async () => {
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockImplementation(((command: string, args?: { phase?: string }) => Promise.resolve(command !== "agent_next_prompt" ? undefined
+      : args?.phase === "complete" ? { text: " and commit it", status: "ok", model: "qwen3:4b" }
+      : { text: null, status: "ok" })) as never);
+    useActivityStore.setState({ busyByTab: {} });
+    try {
+      const input = openBox({ key: "t10", label: "Codex", cmd: "codex", cwd: "/p", kind: "agent", scheduleTargetId: "target", sessionId: "s-2" } as TabEntry);
+      fireEvent.change(input, { target: { value: "fix the lint" } });
+      await vi.waitFor(() => expect(document.querySelector(".steering-prompt-dialog .prompt-ghost-rest")?.textContent).toBe(" and commit it"));
+      expect(invokeMock).toHaveBeenCalledWith("agent_next_prompt", expect.objectContaining({ agent: "codex", sessionId: "s-2", phase: "complete", draft: "fix the lint" }));
+      expect(document.querySelector(".steering-prompt-head .suggestion-source-name")?.textContent).toBe("qwen3:4b");
+      fireEvent.keyDown(input, { key: "Tab" });
+      expect(box()?.value).toBe("fix the lint and commit it");
+      expect(writeMock).not.toHaveBeenCalled();
+      // A `/` command is the menu's, never completed.
+      fireEvent.change(input, { target: { value: "/model opus now" } });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(invokeMock.mock.calls.filter(([command, args]) => command === "agent_next_prompt" && (args as { phase?: string }).phase === "complete" && (args as { draft?: string }).draft?.startsWith("/"))).toHaveLength(0);
+    } finally {
+      invokeMock.mockReset();
+      invokeMock.mockResolvedValue(undefined);
     }
   });
 });

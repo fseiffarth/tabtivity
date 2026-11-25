@@ -105,6 +105,17 @@ function reviewTabRow(tail: readonly ReadableLine[], context: number): number | 
  * screen, a diff or a command, stays as drawn.
  */
 export function questionParts(tail: readonly ReadableLine[], question: SelectPrompt): QuestionParts {
+  // A notice cut out of the screen behind it: its title asks, its text is
+  // the context, both as read.
+  if (question.body) {
+    const key = tail[question.start]?.key ?? "body";
+    const line = (text: string, index: number): ReadableLine => ({ key: `${key}:${index}`, text, spans: [{ text }] });
+    return {
+      ...NO_QUESTION_PARTS,
+      ask: question.title ? [line(question.title, -1)] : [],
+      context: question.body.map(line),
+    };
+  }
   let ask = withoutEdgeBlanks(tail.slice(question.question, question.start));
   let context = withoutEdgeBlanks(tail.slice(question.context, question.question).map(withoutScrollbar));
   if (question.navigation) {

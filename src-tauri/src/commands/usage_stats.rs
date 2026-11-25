@@ -83,15 +83,19 @@ pub struct TokenReport {
 pub async fn usage_token_stats(project_id: String) -> Result<TokenReport, String> {
     app_core::rt::blocking("usage_token_stats", move || {
         let state_dir = crate::storage::state_dir();
-        let scanned = crate::services::token_stats::scan(&state_dir, &known_scope_ids());
+        let mut scanned = crate::services::token_stats::scan(&state_dir, &known_scope_ids());
+        let mut sources: Vec<String> = crate::services::token_stats::SOURCES.iter().map(|s| s.to_string()).collect();
+        // Claude's trace spans (experimental): their own leaf beside `claude`,
+        // never added into it.
+        if crate::services::claude_otel::enabled() {
+            crate::services::claude_otel::fold_into(&mut scanned.stats, &crate::services::claude_otel::snapshot(&state_dir));
+            sources.push(crate::services::claude_otel::CLI.to_string());
+        }
         TokenReport {
             hours: scanned.stats.hourly_for(&project_id),
             days: scanned.stats.daily_for(&project_id),
             partial: scanned.partial,
-            sources: crate::services::token_stats::SOURCES
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            sources,
         }
     })
     .await

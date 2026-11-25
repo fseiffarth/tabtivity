@@ -33,8 +33,8 @@
  *   - Agents whose mode is not on Shift+Tab: Amp (Ctrl+S), Goose and
  *     mini-SWE-agent (a slash command each), Aider (the prompt prefix is the
  *     mode). A walk of Shift+Tab presses would never reach one of theirs.
- *   - Kimi Code, Cursor agent, Grok Build — their mode readouts are known
- *     from source only; they wait for a live capture.
+ *   - Kimi Code, Grok Build — their mode readouts are known from source
+ *     only; they wait for a live capture.
  * See `docs/mobile_focus_cli_survey.md` for what each CLI draws.
  */
 
@@ -206,7 +206,23 @@ const COPILOT: ModeFamily = {
   ],
 };
 
-const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE, ANTIGRAVITY, COPILOT];
+/** Cursor agent: the mode row over its model (`Plan (shift+tab to cycle)`)
+ * and Shift+Tab's cycle — agent, Plan, Debug, Ask, round again — walked on
+ * 2026.11.22 with the legacy backtab. The agent's own mode draws no row, so it
+ * is `silent`. The approval setting at the model row's right end (`Run
+ * Everything`, `Auto-review`) is not on the cycle and is not a choice. The
+ * three modes are `labelled`: their words are other families' too. */
+const CURSOR: ModeFamily = {
+  agent: /cursor/iu,
+  choices: [
+    { value: "agent", label: "mobile.mode.agent", description: "mobile.mode.agentHint", silent: true },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", labelled: true },
+    { value: "debug", label: "mobile.mode.debug", description: "mobile.mode.debugHint", labelled: true },
+    { value: "ask", label: "mobile.mode.ask", description: "mobile.mode.askHint", labelled: true },
+  ],
+};
+
+const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE, ANTIGRAVITY, COPILOT, CURSOR];
 
 function claims(choice: Pick<ModeChoice, "value" | "aliases">, mode: string) {
   return choice.value === mode || (choice.aliases?.includes(mode) ?? false);

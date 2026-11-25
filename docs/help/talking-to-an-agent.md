@@ -1,7 +1,7 @@
 ---
 id: talking-to-an-agent
 title: Talking to an agent (dictation, read-aloud, hands-free)
-keywords: [voice, dictate, dictation, microphone, mic, speech, speech model, whisper, read aloud, read-aloud, speak, voice language, hands-free, handsfree, headset, stop word, go on, go tabby, los, chime, barge-in, talk, correct, correction, scratch that, replace, undo, Tabby plan, Tabby goal]
+keywords: [voice, navigate, Tabby navigate, Tabby help, dictate, dictation, microphone, mic, speech, speech model, whisper, read aloud, read-aloud, speak, voice language, hands-free, handsfree, headset, stop word, go on, go tabby, los, chime, barge-in, talk, correct, correction, scratch that, replace, undo, Tabby plan, Tabby goal]
 related: [agent-clis, mobile, keyboard, settings-and-appearance]
 ---
 
@@ -82,8 +82,13 @@ Turn on **Hands-free voice in the Chat** in Settings → Experimental, then the
 2. Say **"stop"** (or "stopp"), press the stop key or click the line in that
    moment, and the prompt stays in the box unsent. Otherwise it is sent.
    "go Tabby" still sends at once.
-3. While the agent works, the mic rests. Once its turn is over and the answer
-   has been read aloud (with read-aloud on), the mic listens again.
+3. While the agent works, the mic stays on, but only what starts with
+   **"Tabby"** counts: a chime and "Sent — say Tabby for your next prompt"
+   say so. "Tabby, and add a test, go Tabby" queues a next prompt; "Tabby"
+   alone waits for the prompt you say next; other talk is dropped. Once the
+   turn is over and the answer has been read aloud (with read-aloud on), you
+   dictate without "Tabby" again. A click on the mic or typing in the box
+   ends the "Tabby" rule at once.
 4. When the agent asks a question, it is read out with its numbered choices;
    say **"two"**, **"option two"** or **"die Zweite"** to pick one.
 
@@ -93,6 +98,21 @@ you are heard while it reads, and talking over the voice stops it.
 
 Keyboard steering hides the Chat's box and its chips, but hands-free goes on
 listening: a small mic on the steering badge says so.
+
+## Moving by voice
+
+With the mic on in a Chat of the main window, say **"Tabby navigate"** — it is
+never typed — then where to go: **"project Alpha"** or **"box Papers"** (asked
+back: answer yes or no), **"the waiting tab"**, **"the working tab"** or **"the
+done tab"** (say it again for the next one, in the order the status keys walk
+them; the Back key returns), a tab of this project by name or number ("tab
+two"), or an agent ("Claude tab"). The window goes there and the mic follows
+into that Chat: with Hands-free on it first reads your last prompt there and
+the answer, then listens for "Tabby …"; without, you just go on dictating
+there. Root tabs and Tabby's own chats are never a target. A tab that shows its
+terminal instead of a Chat, or lives in a popout window, is named aloud and
+the mic stays off there. **"stop"**, ten quiet seconds or a click on the mic
+end navigation. **"Tabby help"** says what you can say, in navigation too.
 
 ## On the phone
 

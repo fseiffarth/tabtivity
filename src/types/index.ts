@@ -649,6 +649,10 @@ export interface Settings {
    *  mail — and is the kind of thing to have answered before the feature runs,
    *  not after; the chip's tooltip says nothing reads it so far. */
   ollama_roles?: Record<string, string>;
+  /** Whether the Suggestions model also completes a prompt while it is being
+   *  typed (`lib/agents/nextPrompt`, backend `agent_next_prompt` `complete`).
+   *  Unset is on; `false` leaves the turn-end suggestion alone. */
+  prompt_autocomplete?: boolean;
   /** Missing provider retains Ollama; prose keeps its existing Ollama role. */
   code_completion_provider?: "ollama" | "copilot";
   /** The automatic autocomplete trigger's idle delay per provider, in ms; one
@@ -738,6 +742,9 @@ export interface Settings {
    *  rather than the OS voice (unset: yes). */
   voice_model?: string;
   voice_lang?: string;
+  /** The candidate languages `detect` picks among: app language codes, 1 to 5
+   *  (unset: the UI language and English). */
+  voice_detect_langs?: string[];
   voice_gpu?: boolean;
   voice_headset?: boolean;
   voice_pause_ms?: number;
@@ -749,6 +756,9 @@ export interface Settings {
   voice_hands_free?: boolean;
   /** EXPERIMENTAL: per-turn checkpoints of an agent tab's folder (`lib/agents/checkpoints`). */
   turn_checkpoints?: boolean;
+  /** EXPERIMENTAL: Claude's trace spans as a second, separate token source in the
+   *  recap (`services::claude_otel`, `docs/claude_otel_tokens_plan.md`). */
+  claude_otel_tokens?: boolean;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */
@@ -814,6 +824,10 @@ export interface Settings {
    *  a restart (`docs/done/gpu_compositing_plan.md`). Like `terminal_webgl`, never
    *  carried by Debug mode. */
   gpu_compositing?: boolean;
+  /** When a renderer crash on the GPU path turned `gpu_compositing` off (ISO
+   *  time, written by the backend). `GpuFallbackHost` asks once whether to turn
+   *  it back on; either answer clears it (`null`). */
+  gpu_compositing_fallback?: string | null;
   /** EXPERIMENTAL, default OFF. The markdown relationship graph: adds a "Graph"
    *  mode to the markdown viewer that crawls the viewed document's local-file
    *  links (markdown targets recursively, everything else as a leaf) and renders
@@ -883,6 +897,11 @@ export interface Settings {
    *  toggle and the connect path would otherwise read "nothing saved" over a
    *  perfectly good saved credential (see `lib/keyring.ts`). */
   vpn_saved_configs?: string[];
+  /** The `.ovpn` configs with **Keep connected** on (the VPN menu's switch). The
+   *  backend reads it at each connect and starts the tunnel with the options that
+   *  stop OpenVPN from ending itself on an idle, ping or session timer. Off by
+   *  default: it overrides what the VPN's operator asked the client to do. */
+  vpn_keep_connected?: string[];
   /** When true, the header's OpenVPN indicator is shown. Default ON (unset →
    *  shown); the first-run `RemoteFeaturesPrompt` or Settings switch it off. */
   vpn_enabled?: boolean;
@@ -943,6 +962,12 @@ export interface Settings {
    *  the pointer rests on the edge rail and closes on mouse-leave, with no reflow.
    *  Unset → off. */
   side_panel_auto_hide?: boolean;
+  /** An agent tab's Reader on Diffs or Data draws its chat in the side panel
+   *  (opened over its own view while it does) instead of the one status line
+   *  over the docked composer. The switch is a button in that composer's line
+   *  (`stores/agents/readerSideChat`). Unset → off. Rides in the backend's
+   *  `extra` catch-all. */
+  reader_side_chat?: boolean;
   /** @deprecated Read-only fallback for {@link Settings.side_panel_open}; nothing
    *  writes it any more (it rides in the backend's `extra` catch-all). */
   side_panel_pinned?: boolean;
@@ -1456,6 +1481,9 @@ export interface AgentPrivacy {
   cut_network?: boolean;
 }
 
+/** A Tabtivity MCP lane a project can switch off (`project_lanes::LANES`). */
+export type ProjectMcpLane = "cockpit" | "help" | "schedule" | "git" | "markup" | "print" | "tabs";
+
 export interface ProjectEntry {
   agent_privacy?: AgentPrivacy;
   schedule_mcp?: "off" | "propose" | "apply";
@@ -1463,6 +1491,9 @@ export interface ProjectEntry {
    *  messages gets the host's fixed notice queued once it is idle. Absent = off. */
   tab_messages_wake?: boolean;
   git_push_mcp?: GitPushMcpPolicy;
+  /** The Tabtivity MCP lanes this project's agent tabs are not handed
+   *  (`services::project_lanes`); absent or empty = every lane on. */
+  mcp_off?: ProjectMcpLane[];
   id: string;
   name: string;
   /** "current" | "active" | "inactive" */
@@ -1736,6 +1767,8 @@ export interface UnpairOutcome {
   moved: boolean;
   /** The move out failed; the folder is still at `keptAt`. */
   moveError?: string | null;
+  /** Copied to another drive: the copy is at `keptAt`, the original stays here. */
+  originalKeptAt?: string | null;
 }
 
 /** One project's outcome in `export_project_set`. */

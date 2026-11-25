@@ -140,6 +140,8 @@ fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> 
     if admin.is_none() {
         crate::services::claude_token::inject_launch(opts);
     }
+    // Claude's trace spans as a token source (experimental, off by default).
+    crate::services::claude_otel::inject_launch(opts, scope_id);
     #[cfg(unix)]
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
@@ -199,6 +201,9 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
 /// names, sorted.
 #[cfg(any(unix, test))]
 fn drop_carriers(env: &mut std::collections::HashMap<String, String>) -> Vec<String> {
+    // The trace exporter's other variables go with its bearer: an exporter
+    // without its token would only be refused.
+    crate::services::claude_otel::drop_with_carrier(env);
     let carriers: Vec<String> = env
         .keys()
         .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))

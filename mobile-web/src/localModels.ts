@@ -49,15 +49,33 @@ export function pollDelay(list: LocalModelList | null, inFlight: boolean): numbe
   return list.server === "starting" || list.models.some((model) => model.state === "loading") ? FAST_POLL : SLOW_POLL;
 }
 
+/** The desktop's models in memory right now, by name (cloud ones are never
+ * loaded): what Home's header pill and the row's caption name. Empty for a
+ * server that is not running. */
+export function loadedNames(list: LocalModelList | null): string[] {
+  if (!list || list.server !== "running") return [];
+  return sortModels(list.models).filter((model) => model.state === "loaded" && !model.remote).map((model) => model.name);
+}
+
+/** A model's name as the phone shows it: without Ollama's default `:latest`. */
+export function shortModelName(name: string): string {
+  return name.endsWith(":latest") ? name.slice(0, -":latest".length) : name;
+}
+
 export type Summary =
   | { key: "summary"; loaded: number; installed: number }
+  | { key: "summaryNamed"; names: string[]; installed: number }
   | { key: "serverStopped" | "starting" | "unreachable" | "notInstalled" };
 
 /** The Home row's caption for a list. */
 export function summary(list: LocalModelList): Summary {
   switch (list.server) {
-    case "running":
-      return { key: "summary", loaded: list.models.filter((model) => model.state === "loaded").length, installed: list.models.length };
+    case "running": {
+      const names = loadedNames(list);
+      return names.length > 0
+        ? { key: "summaryNamed", names, installed: list.models.length }
+        : { key: "summary", loaded: 0, installed: list.models.length };
+    }
     case "starting": return { key: "starting" };
     case "stopped": return { key: "serverStopped" };
     case "not_installed": return { key: "notInstalled" };

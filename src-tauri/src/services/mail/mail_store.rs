@@ -237,6 +237,38 @@ pub struct MailStore {
     _scratch: Option<tempfile::TempDir>,
 }
 
+/// The operations a sync or search backfill can perform in one transaction.
+pub(crate) struct HeaderWriter<'a> {
+    store: &'a MailStore,
+    conn: &'a Connection,
+}
+
+impl HeaderWriter<'_> {
+    pub(crate) fn ingest(&self, header: &mut MailHeader, reply_to: Option<&str>) -> Result<bool, String> {
+        MailStore::retain_header_id(self.conn, header)?;
+        let inserted = self.store.upsert_header_on(self.conn, header)?;
+        self.store.set_reply_key_on(self.conn, &header.id, reply_to)?;
+        Ok(inserted)
+    }
+
+    pub(crate) fn folder_max_uid(&self, folder_id: &str) -> Result<Option<u32>, String> {
+        MailStore::folder_max_uid_on(self.conn, folder_id)
+    }
+
+    pub(crate) fn set_sync_counts(&self, folder_id: &str, total: u32, unread: u32) -> Result<(), String> {
+        MailStore::set_server_counts_on(self.conn, folder_id, total, unread)?;
+        MailStore::refresh_counts_on(self.conn, folder_id)
+    }
+
+    pub(crate) fn note_indexed(&self, folder_id: &str, total: u32, unread: u32) -> Result<(), String> {
+        MailStore::note_indexed_on(self.conn, folder_id, total, unread)
+    }
+
+    pub(crate) fn set_filter_priority(&self, id: &str, priority: MailPriority, rule: &str) -> Result<bool, String> {
+        self.store.set_priority_on(self.conn, id, Some(priority), MailPrioritySource::Filter, rule)
+    }
+}
+
 impl std::fmt::Debug for MailStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MailStore")
@@ -247,6 +279,14 @@ impl std::fmt::Debug for MailStore {
 }
 
 impl MailStore {
+    pub(crate) fn write_headers<T>(&self, write: impl FnOnce(&HeaderWriter<'_>) -> Result<T, String>) -> Result<T, String> {
+        let mut conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let result = write(&HeaderWriter { store: self, conn: &tx })?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(result)
+    }
+
     /// Open (creating if needed) an **unencrypted** store rooted at `dir`.
     pub fn open(dir: &Path) -> Result<Self, String> {
         Self::open_with_keys(dir, None)
@@ -1017,6 +1057,10 @@ impl MailStore {
     /// the server's remainder only moves when a sync next measures it.
     pub fn refresh_counts(&self, folder_id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        Self::refresh_counts_on(&conn, folder_id)
+    }
+
+    fn refresh_counts_on(conn: &Connection, folder_id: &str) -> Result<(), String> {
         conn.execute(
             "UPDATE folders SET
                total  = total_unindexed
@@ -1035,13 +1079,18 @@ impl MailStore {
     /// index lacks is kept as the difference, never below zero: rows the server
     /// has since expunged, or read elsewhere past the tail, make the index
     /// overshoot, and an overshoot is not a negative remainder.
-    pub fn set_server_counts(
+    #[cfg(test)]
+    fn set_server_counts(
         &self,
         folder_id: &str,
         server_total: u32,
         server_unread: u32,
     ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        Self::set_server_counts_on(&conn, folder_id, server_total, server_unread)
+    }
+
+    fn set_server_counts_on(conn: &Connection, folder_id: &str, server_total: u32, server_unread: u32) -> Result<(), String> {
         conn.execute(
             "UPDATE folders SET
                total_unindexed  = MAX(0, ?2
@@ -1074,8 +1123,7 @@ impl MailStore {
 
     /// A move retains the local id (and encrypted body, marks and attachments),
     /// while the server gives it a new mailbox-scoped UID. Sync must reuse it.
-    pub fn retain_header_id(&self, header: &mut MailHeader) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+    fn retain_header_id(conn: &Connection, header: &mut MailHeader) -> Result<(), String> {
         let id: Option<String> = conn
             .query_row(
                 "SELECT id FROM messages WHERE folder_id = ?1 AND uid = ?2",
@@ -1092,8 +1140,13 @@ impl MailStore {
 
     /// Insert or update one header row. Returns `true` when the row was new,
     /// which is what the sync summary counts as a new message.
-    pub fn upsert_header(&self, header: &MailHeader) -> Result<bool, String> {
+    #[cfg(test)]
+    pub(crate) fn upsert_header(&self, header: &MailHeader) -> Result<bool, String> {
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        self.upsert_header_on(&conn, header)
+    }
+
+    fn upsert_header_on(&self, conn: &Connection, header: &MailHeader) -> Result<bool, String> {
         let existed: bool = conn
             .query_row(
                 "SELECT 1 FROM messages WHERE id = ?1",
@@ -1567,8 +1620,13 @@ impl MailStore {
     /// `upsert_header`, so `MailHeader` — the wire contract — does not grow a
     /// field nothing displays. A no-op once the key is in place, which on a
     /// re-sync is every row.
-    pub fn set_reply_key(&self, message_id: &str, in_reply_to: Option<&str>) -> Result<(), String> {
+    #[cfg(test)]
+    pub(crate) fn set_reply_key(&self, message_id: &str, in_reply_to: Option<&str>) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        self.set_reply_key_on(&conn, message_id, in_reply_to)
+    }
+
+    fn set_reply_key_on(&self, conn: &Connection, message_id: &str, in_reply_to: Option<&str>) -> Result<(), String> {
         let key = in_reply_to
             .map(normalize_rfc_id)
             .filter(|id| !id.is_empty())
@@ -1824,6 +1882,10 @@ impl MailStore {
     /// ask for.
     pub fn folder_max_uid(&self, folder_id: &str) -> Result<Option<u32>, String> {
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        Self::folder_max_uid_on(&conn, folder_id)
+    }
+
+    fn folder_max_uid_on(conn: &Connection, folder_id: &str) -> Result<Option<u32>, String> {
         let max: Option<i64> = conn
             .query_row(
                 "SELECT MAX(uid) FROM messages WHERE folder_id = ?1",
@@ -1880,13 +1942,18 @@ impl MailStore {
     /// the server has since expunged can make the index overshoot, and an
     /// overshoot is not a negative remainder (the same rule as
     /// `set_server_counts`).
-    pub fn note_indexed(
+    #[cfg(test)]
+    fn note_indexed(
         &self,
         folder_id: &str,
         inserted: u32,
         inserted_unseen: u32,
     ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        Self::note_indexed_on(&conn, folder_id, inserted, inserted_unseen)
+    }
+
+    fn note_indexed_on(conn: &Connection, folder_id: &str, inserted: u32, inserted_unseen: u32) -> Result<(), String> {
         conn.execute(
             "UPDATE folders SET
                total_unindexed  = MAX(0, total_unindexed - ?2),
@@ -1962,6 +2029,17 @@ impl MailStore {
         reason: &str,
     ) -> Result<bool, String> {
         let conn = self.conn.lock().map_err(|_| "mail store is poisoned")?;
+        self.set_priority_on(&conn, message_id, priority, source, reason)
+    }
+
+    fn set_priority_on(
+        &self,
+        conn: &Connection,
+        message_id: &str,
+        priority: Option<MailPriority>,
+        source: MailPrioritySource,
+        reason: &str,
+    ) -> Result<bool, String> {
         let Some(account_id) = conn
             .query_row(
                 "SELECT account_id FROM messages WHERE id = ?1",

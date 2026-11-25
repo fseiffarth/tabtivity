@@ -36,6 +36,21 @@ fn the_context_setting_overrides_the_automatic_window() {
 /// Only the offered keep-alive choices reach an environment or a drop-in;
 /// anything else is Ollama's default.
 #[test]
+fn an_unload_holds_the_model_until_a_load_under_either_spelling() {
+    // Names no other test uses: the hold is process-wide.
+    hold_unloaded(" held-spelling ");
+    assert!(is_held("held-spelling:latest"));
+    assert!(is_held("held-spelling"));
+    assert!(!is_held("held-spelling:7b"));
+    release_hold("held-spelling:latest");
+    assert!(!is_held("held-spelling"));
+    hold_unloaded("hf.co/org/held-repo:Q4");
+    assert!(is_held("hf.co/org/held-repo:Q4"));
+    assert!(!is_held("hf.co/org/held-repo"));
+    release_hold("hf.co/org/held-repo:Q4");
+}
+
+#[test]
 fn only_the_offered_keep_alive_choices_reach_ollama() {
     assert_eq!(configured_keep_alive(Some("30m")), Some("30m"));
     assert_eq!(configured_keep_alive(Some(" 1h ")), Some("1h"));
@@ -411,15 +426,36 @@ fn completion_backend_window_is_utf8_safe() {
 }
 
 #[test]
-fn partial_file_match_takes_the_layer_and_its_chunks_only() {
-    let main = "sha256-ab12-partial";
-    assert!(is_partial_file_of("sha256-ab12-partial", main));
-    assert!(is_partial_file_of("sha256-ab12-partial-0", main));
-    assert!(is_partial_file_of("sha256-ab12-partial-15", main));
-    assert!(!is_partial_file_of("sha256-ab12-partial-", main));
-    assert!(!is_partial_file_of("sha256-ab12-partial-x", main));
-    assert!(!is_partial_file_of("sha256-ab12", main));
-    assert!(!is_partial_file_of("sha256-ab123-partial", main));
+fn partial_blob_cleanup_removes_only_the_selected_layers_main_file_and_numeric_chunks() {
+    let temp = tempfile::tempdir().unwrap();
+    let orphan = temp.path().join("orphan");
+    let paused = temp.path().join("paused");
+    let remove = ["sha256-ab12-partial", "sha256-ab12-partial-0", "sha256-ab12-partial-15"];
+    let keep = [
+        "sha256-ab12", "sha256-ab12-partial-", "sha256-ab12-partial-x",
+        "sha256-ab123-partial", "sha256-ab123-partial-0",
+    ];
+    for dir in [&orphan, &paused] {
+        std::fs::create_dir(dir).unwrap();
+        for name in remove.iter().chain(&keep) {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+    }
+
+    let selected = orphan.join("sha256-ab12-partial");
+    assert!(remove_partial_blob(&selected, std::slice::from_ref(&paused)).is_err());
+    assert!(selected.exists());
+    remove_partial_blob(&selected, std::slice::from_ref(&orphan)).unwrap();
+    delete_partials_for_digests(&["sha256:ab12".into()], std::slice::from_ref(&paused));
+
+    for dir in [&orphan, &paused] {
+        for name in remove {
+            assert!(!dir.join(name).exists(), "{name} remained in {dir:?}");
+        }
+        for name in keep {
+            assert!(dir.join(name).is_file(), "{name} was removed from {dir:?}");
+        }
+    }
 }
 
 #[test]

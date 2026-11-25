@@ -100,21 +100,29 @@ fn remote_mirror_in(parent: &Path, name: &str, id: &str, list: &ProjectsList) ->
     } else {
         safe
     };
+    let taken = |candidate: &Path| {
+        fs::symlink_metadata(candidate).is_ok()
+            || find_project_conflict(
+                list,
+                &ProjectSite::Local {
+                    dir: &candidate.to_string_lossy(),
+                },
+                None,
+            )
+            .is_some()
+    };
     let candidate = parent.join(&leaf);
-    let taken = candidate.exists()
-        || find_project_conflict(
-            list,
-            &ProjectSite::Local {
-                dir: &candidate.to_string_lossy(),
-            },
-            None,
-        )
-        .is_some();
-    if taken {
-        parent.join(format!("{leaf}-{}", &id[..id.len().min(8)]))
-    } else {
-        candidate
+    if !taken(&candidate) {
+        return candidate;
     }
+    // The id-suffixed name can be taken too (the same bundle imported again
+    // after its project was removed keeps its id): never hand out a folder that
+    // is there, since an import unpacks into it and a pairing writes into it.
+    let tagged = format!("{leaf}-{}", &id[..id.len().min(8)]);
+    std::iter::once(parent.join(&tagged))
+        .chain((2..10_000u32).map(|n| parent.join(format!("{tagged}-{n}"))))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or_else(|| parent.join(format!("{tagged}-{}", uuid_v4())))
 }
 
 /// The default local mirror location for a new remote (SSH) project: a readable
@@ -820,7 +828,7 @@ fn move_fresh_tree_with(
 /// skipped one still removes its source). Entries, bytes and depth are
 /// bounded like [`tree_copy`]'s; a bound hit fails the copy, and every caller
 /// removes the source only after a copy that returned `Ok`.
-fn copy_tree_core(src: &Path, dst: &Path, keep_git: bool) -> Result<(), String> {
+pub(crate) fn copy_tree_core(src: &Path, dst: &Path, keep_git: bool) -> Result<(), String> {
     copy_tree_core_with(src, dst, keep_git, CopyLimits::DEFAULT)
 }
 
@@ -1972,13 +1980,9 @@ pub fn set_project_sandbox_blocking(
         );
     }
 
-    // A local-models-only project runs no container yet
-    // (`services::agent_privacy`).
-    if enabled {
-        if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
-            return Err(refusal);
-        }
-    }
+    // A local-models-only project may have a container: its shells run there,
+    // its local-model tabs host-bound in the fence, and no agent in the
+    // container (`agent_privacy::CONTAINER_AGENT`).
 
     // Existing spec: the `projects.json` mirror in the state dir is the ONLY
     // source. There used to be a `project.json` fallback for entries predating the
@@ -2069,13 +2073,6 @@ pub fn set_project_sandbox_spec(
     clean(&mut spec.memory);
     clean(&mut spec.cpus);
     clean(&mut spec.network);
-    if spec.enabled {
-        if let Ok(entry) = crate::services::remote::project_entry(&project_id) {
-            if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
-                return Err(refusal);
-            }
-        }
-    }
     // Refuse `host` (and any non-name) here, where the user can see the error —
     // `services::sandbox::harden_opts` additionally drops an invalid network at
     // spawn, so a spec written before this check still can't remove isolation.
@@ -2127,6 +2124,19 @@ pub fn set_project_schedule_mcp(project_id: String, level: String) -> Result<(),
         entry.extra.insert("schedule_mcp".into(), serde_json::Value::String(level));
         Ok(())
     })
+}
+
+/// The project's per-lane MCP switches (`services::project_lanes`): `off` is
+/// the full list of lanes switched off, empty for all on. Returns the stored
+/// list. Authority stays in projects.json; never copied into the tree.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_project_mcp_off(project_id: String, off: Vec<String>) -> Result<Vec<String>, String> {
+    let off = crate::services::project_lanes::normalise(&off)?;
+    patch_project_entry(&project_id, |entry| {
+        crate::services::project_lanes::store(entry, &off);
+        Ok(())
+    })?;
+    Ok(off.into_iter().map(str::to_string).collect())
 }
 
 /// The agent-push policy (`services::git_push_mcp`): level and protected
@@ -4837,6 +4847,9 @@ pub fn import_project_blocking(mut req: ImportProjectRequest) -> Result<ProjectE
     {
         return Err("Copy and move imports require manual validation".to_string());
     }
+    // Before a copy or move: `finish_import` writes its project over the
+    // folder's `project.json`, so one it would refuse stops the import here.
+    project_json_to_adopt(&source.join("project.json"))?;
 
     let target = match req.mode.as_str() {
         "keep" => source,
@@ -5551,7 +5564,18 @@ fn detach_finish_blocking(prep: DetachPrep) -> Result<ProjectEntry, String> {
 /// the size cap would lose its time and description. One that does not parse
 /// is replaced by a blank project, as it always was.
 fn project_json_to_adopt(path: &Path) -> Result<Option<Project>, String> {
-    Ok(storage::read_tree_json_text(path)?.map(|text| serde_json::from_str(&text).unwrap_or_default()))
+    let Some(text) = storage::read_tree_json_text(path)? else {
+        return Ok(None);
+    };
+    // One that does not read as this app's project file is another tool's
+    // (or a damaged one): the import would write over it, so it stops instead.
+    serde_json::from_str(&text).map(Some).map_err(|e| {
+        format!(
+            "{} is not a project file this app wrote ({e}); importing would replace it, so \
+             nothing was changed. Rename or move it first.",
+            path.display()
+        )
+    })
 }
 
 /// The `project.json` extend or detach moves, or a fresh one when there is

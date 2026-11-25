@@ -387,6 +387,31 @@ describe("steering over dialogs", () => {
     expect(steering()).toMatchObject({ active: true, level: "tabs", region: null, handedTo: null });
   });
 
+  it("the chord over a dialog whose field has the caret drops the caret; Enter on the field hands it the keys", async () => {
+    function App() {
+      return <Dialog id="d" autoFocus onClose={() => {}} />;
+    }
+    render(
+      <>
+        <Keyboard />
+        <App />
+      </>,
+    );
+    // The field has the caret when the chord comes up: steering walks the
+    // dialog, so the caret goes (it would look typeable while letters steer).
+    expect(document.activeElement?.id).toBe("d-name");
+    on();
+    await settle();
+    expect(steering()).toMatchObject({ level: "region", region: "overlay", handedTo: null });
+    expect(document.activeElement?.id).not.toBe("d-name");
+    expect(regionCursor()?.id).toBe("d-name");
+
+    // Enter on the field hands it the keyboard again.
+    press({ key: "Enter" });
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
+    expect(document.activeElement?.id).toBe("d-name");
+  });
+
   it("a dialog that ignores Escape is closed by its ×", async () => {
     function App() {
       const [open, setOpen] = useState(true);
@@ -624,15 +649,31 @@ describe("the active tab's card", () => {
 
 describe("the agent tab's subagents", () => {
   /** An agent tab's pane, as `TerminalView` draws it: the prompt strip's top
-   *  bar holding the Subagents list (portaled there by the Chat), then the
-   *  Chat, which shows an open subagent's bar. */
+   *  bar, then the Chat, which shows an open subagent's bar and, under the
+   *  chat, its dock — the pills of the subagents at work and the done pill
+   *  holding the Subagents list. Over Diffs (`topBar`) the list is the top
+   *  bar's instead (portaled there by the Chat). */
   beforeEach(() => {
     useTabsStore.getState().addTab({ label: "agent", cmd: "bash", cwd: "/p", kind: "shell" });
   });
 
-  function Pane({ agents = 2 }: { agents?: number }) {
+  function Pane({ agents = 2, running = 1, topBar = false }: { agents?: number; running?: number; topBar?: boolean }) {
     const [listOpen, setListOpen] = useState(false);
     const [opened, setOpened] = useState<number | null>(null);
+    const list = listOpen && (
+      <div className="terminal-reader-subagent-list">
+        {Array.from({ length: agents }, (_, i) => (
+          <button type="button" key={i} id={`agent-${i}`} onClick={() => { setOpened(i); setListOpen(false); }}>
+            agent {i}
+          </button>
+        ))}
+      </div>
+    );
+    const toggle = (className: string) => (
+      <button type="button" id="toggle" className={className} aria-expanded={listOpen} onClick={() => setListOpen((was) => !was)}>
+        Subagents
+      </button>
+    );
     return (
       <>
         <div className="subwindow focused" />
@@ -641,20 +682,10 @@ describe("the agent tab's subagents", () => {
             <div className="terminal-prompt-strip">
               <button type="button" id="other">other</button>
               <span className="reader-topbar-navigation">
-                {agents > 0 && (
+                {topBar && agents > 0 && (
                   <nav className="terminal-reader-subagent-index">
-                    <button type="button" id="toggle" className="terminal-reader-subagent-toggle" aria-expanded={listOpen} onClick={() => setListOpen((was) => !was)}>
-                      Subagents
-                    </button>
-                    {listOpen && (
-                      <div className="terminal-reader-subagent-list">
-                        {Array.from({ length: agents }, (_, i) => (
-                          <button type="button" key={i} id={`agent-${i}`} onClick={() => { setOpened(i); setListOpen(false); }}>
-                            agent {i}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    {toggle("terminal-reader-subagent-toggle")}
+                    {list}
                   </nav>
                 )}
               </span>
@@ -662,11 +693,42 @@ describe("the agent tab's subagents", () => {
             <div className="terminal-reader">
               {opened !== null && (
                 <nav className="terminal-reader-subagent-bar">
-                  <button type="button" id="sub-back" className="terminal-reader-subagent-nav" onClick={() => setOpened(null)}>‹</button>
-                  <strong id="sub-title">agent {opened}</strong>
+                  <div className="terminal-reader-subagent-title">
+                    <small className="terminal-reader-subagent-path">
+                      <button type="button" id="sub-back" className="terminal-reader-subagent-up" onClick={() => setOpened(null)}>Main</button>
+                      <b>Explore</b>
+                    </small>
+                    <strong id="sub-title">agent {opened}</strong>
+                  </div>
                 </nav>
               )}
               <button type="button" id="chat-link">a link in the chat</button>
+              {!topBar && (running > 0 || agents > running || opened !== null) && (
+                <div className="terminal-reader-agent-dock">
+                  <div className="terminal-reader-working terminal-reader-agent-dock-working" role="status">
+                    <span>Agent is working…</span>
+                    <button type="button" id="stop" className="terminal-reader-stop">Stop</button>
+                  </div>
+                  <nav className="terminal-reader-agents">
+                    <div className="terminal-reader-agents-scroll">
+                      {opened !== null && (
+                        <button type="button" id="main-pill" className="terminal-reader-agent-pill main" onClick={() => setOpened(null)}>Main</button>
+                      )}
+                      {Array.from({ length: running }, (_, i) => (
+                        <button type="button" key={i} id={`pill-${i}`} className="terminal-reader-agent-pill" onClick={() => setOpened(i)}>
+                          pill {i}
+                        </button>
+                      ))}
+                    </div>
+                    {agents > running && (
+                      <div className="terminal-reader-agents-done">
+                        {toggle("terminal-reader-agent-pill done terminal-reader-subagent-toggle")}
+                        {list}
+                      </div>
+                    )}
+                  </nav>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -674,7 +736,7 @@ describe("the agent tab's subagents", () => {
     );
   }
 
-  it("G opens the list on its first subagent; Enter opens it and the cursor moves to its bar", async () => {
+  it("G opens the dock's list on its first subagent; Enter opens it and the cursor moves to its bar", async () => {
     render(
       <>
         <Keyboard />
@@ -688,10 +750,14 @@ describe("the agent tab's subagents", () => {
     expect(regionCursor()?.id).toBe("agent-0");
     press({ key: "ArrowDown" });
     expect(regionCursor()?.id).toBe("agent-1");
-    // The walk keeps to the subagent controls: on round to the toggle.
+    // The walk keeps to the subagent controls — never the dock's Stop — and
+    // goes round through the pills and the done pill.
+    press({ key: "ArrowDown" });
+    expect(regionCursor()?.id).toBe("pill-0");
     press({ key: "ArrowDown" });
     expect(regionCursor()?.id).toBe("toggle");
-    press({ key: "ArrowUp" });
+    press({ key: "ArrowDown" });
+    press({ key: "ArrowDown" });
     press({ key: "Enter" });
     await settle();
     expect(document.getElementById("sub-title")?.textContent).toBe("agent 1");
@@ -749,11 +815,45 @@ describe("the agent tab's subagents", () => {
     expect(document.querySelector(".terminal-reader-subagent-list")).toBeNull();
   });
 
+  it("G walks the dock's pills when none has finished (no done pill)", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane agents={2} running={2} />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    await settle();
+    expect(steering()).toMatchObject({ level: "region", region: "subagents" });
+    expect(regionCursor()?.id).toBe("pill-0");
+    press({ key: "ArrowDown" });
+    expect(regionCursor()?.id).toBe("pill-1");
+    press({ key: "Enter" });
+    await settle();
+    expect(document.getElementById("sub-title")?.textContent).toBe("agent 1");
+  });
+
+  it("G still finds the top bar's list over Diffs", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane topBar />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    await settle();
+    expect(steering()).toMatchObject({ level: "region", region: "subagents" });
+    expect(regionCursor()?.id).toBe("agent-0");
+    expect(regionCursor()?.closest(".reader-topbar-navigation")).not.toBeNull();
+  });
+
   it("G does nothing on a tab without subagents, and the legend lists it only with them", () => {
     render(
       <>
         <Keyboard />
-        <Pane agents={0} />
+        <Pane agents={0} running={0} />
       </>,
     );
     on();

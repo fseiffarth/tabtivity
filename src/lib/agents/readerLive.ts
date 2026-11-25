@@ -1,6 +1,6 @@
 import { agentWork, type WorkFacts } from "../../../mobile-web/src/terminal/agentBusy";
-import { isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
-import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
+import { chatTurns, isLiveEcho } from "../../../mobile-web/src/terminal/chatTurns";
+import { readableScreen, readableText, type ReadableBufferLike, type ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
 import { questionParts } from "../../../mobile-web/src/terminal/questionParts";
 import { boxHidesDialog } from "../../../mobile-web/src/terminal/liveDialog";
 import {
@@ -22,11 +22,11 @@ import {
   type SelectPrompt,
 } from "../../../mobile-web/src/terminal/selectPrompt";
 import { isAntigravityTab, readAntigravityEffort, readAntigravityPicker, type AntigravityEffort } from "../../../mobile-web/src/terminal/antigravity";
-import { isOpenCodeTab, openCodePickKeys, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
+import { isOpenCodeTab, openCodePickKeys, readOpenCodeNotice, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
 import { readPromptSuggestion } from "../../../mobile-web/src/terminal/promptSuggestion";
 import { queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
 import { agentFamily } from "../../../shared/agentComposer";
-import { inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
+import { codexComposerFrame, inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 
 /**
  * What the desktop Reader (`TerminalReaderView`) reads off the pane's live
@@ -78,6 +78,9 @@ export interface ReaderLive {
   /** OpenCode mini's footer counts prompts waiting: the one sign of a queue
    * its screen gives, so its queue buttons follow this. */
   openCodeQueued: boolean;
+  /** Claude's transcript-write warning and the last reply still on screen. */
+  transcriptWriteFailed?: true;
+  unsavedReply?: { prompt: string; text: string };
 }
 
 export const NO_LIVE: ReaderLive = {
@@ -96,16 +99,54 @@ const STRAY_SCREEN_ROWS = 40;
  * found, and the phone reads the same tail. */
 export const READER_ROWS = 300;
 
+/** A Codex repaint can leave just the caret and the start of its shortcut
+ * row. Use the live caret at the composer column and the footer three rows
+ * below it to distinguish that frame from output quoting the same hint. */
+function clippedCodexFrame(buffer: ReadableBufferLike, lines: readonly ReadableLine[]): number {
+  const { baseY, cursorX, cursorY } = buffer;
+  if (baseY === undefined || cursorY === undefined || cursorX !== 2) return lines.length;
+  const row = baseY + cursorY;
+  const at = (offset: number) => buffer.getLine(row + offset)?.translateToString(true).trim();
+  if (lines[lines.length - 1]?.key !== `r${row + 3}` || at(0) !== "" || at(1) !== "" || at(2) !== ""
+    || !/^← for agents · \? for(?: shortcuts)?$/u.test(at(3) ?? "")) {
+    return lines.length;
+  }
+  const start = lines.findIndex((line) => Number.parseInt(line.key.slice(1), 10) >= row);
+  return start < 0 ? lines.length : start;
+}
+
+const TRANSCRIPT_WRITE_WARNING = /^\s*⚠\uFE0F?\s*Transcript writes are failing\b/u;
+const CLAUDE_TURN_DONE = /^[✢✳✶✻✽*]\s+.+\sfor\s.+\s·\s+done\b/u;
+
+/** Only read a reply below a visible submitted prompt and above Claude's
+ * completion line. The footer warning can also appear before a turn ends. */
+function readUnsavedReply(echo: ReadableLine | undefined, tail: ReadableLine[], agentLabel: string): ReaderLive["unsavedReply"] {
+  if (!echo) return undefined;
+  const end = tail.findIndex((line) => CLAUDE_TURN_DONE.test(line.text));
+  if (end < 0) return undefined;
+  const answers = chatTurns(tail.slice(0, end), agentLabel).filter((turn) => turn.answer);
+  const answer = answers[answers.length - 1]?.answer;
+  return answer && { prompt: echo.text.trimStart().slice(2), text: readableText(answer) };
+}
+
 /** Reads `buffer` (the pane's active xterm buffer, `columns` wide) for
  * `agentLabel`'s TUI. */
-export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, columns?: number): ReaderLive {
+export function readReaderLive(
+  buffer: ReadableBufferLike, agentLabel: string, columns?: number, { steering = false } = {},
+): ReaderLive {
   const { lines } = readableScreen(buffer, READER_ROWS);
-  const status = sessionStatus(lines, agentLabel);
   // The input box and the rows under it are the TUI's frame, not output; the
   // tail after the last echoed prompt is what the session draws now.
   // A page that names its own keys (`Press enter to save`) holds no input box,
   // whatever line of it reads as one.
-  const frameStart = pressHintShown(lines) ? lines.length : inputFrameStart(lines, agentLabel);
+  const page = pressHintShown(lines);
+  const recoverCodex = steering && !page && agentFamily(agentLabel) === "codex";
+  const composer = recoverCodex ? codexComposerFrame(lines) : null;
+  const parsedFrameStart = page ? lines.length : composer?.start ?? inputFrameStart(lines, agentLabel);
+  const recovered = recoverCodex && parsedFrameStart === lines.length
+    ? clippedCodexFrame(buffer, lines) : lines.length;
+  const frameStart = Math.min(parsedFrameStart, recovered);
+  const status = sessionStatus(lines, agentLabel, composer) ?? (recovered < lines.length ? {} : null);
   const screen = lines.slice(0, frameStart);
   let start = 0;
   screen.forEach((line, index) => { if (isLiveEcho(line, agentLabel)) start = index + 1; });
@@ -119,7 +160,8 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // Claude Code hides its input box while a dialog is up: with one on screen
   // the rows above it are output, however a list in them is marked.
   const question = hooksPage ?? (tail.length > 0 && !boxHidesDialog(agentLabel, !noFrame)
-    ? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
+    ? (isOpenCodeTab(agentLabel) ? readOpenCodeNotice(tail) : null)
+      ?? readSelectPrompt(tail, agentLabel, columns) ?? readReviewStep(tail, agentLabel)
       ?? (noFrame && !agentWork(lines) ? readStrayDialog(tail, columns) : null)
     : null);
   if (question) {
@@ -152,8 +194,12 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   // `inputFrameStart` answers the screen's length when it finds no input box
   // (or the box-like row is a dialog's highlighted option).
   const stray = !working && noFrame && lines.some((line) => line.text.trim() !== "");
+  const transcriptWriteFailed = agentFamily(agentLabel) === "claude" && !noFrame
+    && lines.slice(frameStart).some((line) => TRANSCRIPT_WRITE_WARNING.test(line.text));
   return {
     ...NO_LIVE, working, status, stray, screen: stray ? strayScreen(lines.map((line) => line.text)) : [],
+    transcriptWriteFailed: transcriptWriteFailed || undefined,
+    unsavedReply: transcriptWriteFailed && !working ? readUnsavedReply(screen[start - 1], tail, agentLabel) : undefined,
     openCodeQueued: agentFamily(agentLabel) === "opencode" && queuedHintShown(lines.map((line) => line.text), "opencode"),
     // Only an idle box holds one; a busy row means a turn is running.
     suggestion: working ? "" : readPromptSuggestion(lines, agentLabel),
@@ -189,6 +235,9 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.screen.join("\n") === b.screen.join("\n")
     && a.suggestion === b.suggestion
     && a.openCodeQueued === b.openCodeQueued
+    && a.transcriptWriteFailed === b.transcriptWriteFailed
+    && a.unsavedReply?.prompt === b.unsavedReply?.prompt
+    && a.unsavedReply?.text === b.unsavedReply?.text
     && sameStatus(a.status, b.status);
 }
 

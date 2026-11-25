@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -57,6 +57,11 @@ describe("AgentSchedulesView order and model tag", () => {
     expect(names()).toEqual(["Claude", "Codex"]);
     expect((await screen.findByTestId("agent-model")).textContent).toBe("Opus 4.1");
     expect(screen.getAllByTestId("agent-model")).toHaveLength(1);
+    // The last prompt is a detail: it shows once the row is opened.
+    await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "agent_tab_last_prompt")).toBe(true));
+    expect(screen.queryByTestId("agent-last-prompt")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show details of Claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show details of Codex" }));
     expect((await screen.findByTestId("agent-last-prompt")).textContent).toBe("last prompt: fix the failing tests");
     expect(screen.getAllByTestId("agent-last-prompt")).toHaveLength(1);
     const promptCall = vi.mocked(invoke).mock.calls.find(([name]) => name === "agent_tab_last_prompt");
@@ -118,6 +123,45 @@ describe("AgentSchedulesView order and model tag", () => {
   });
 });
 
+describe("AgentSchedulesView rows", () => {
+  it("shows the status word and opens a row's details and actions only on its chevron", async () => {
+    useActivityStore.setState({ busyByTab: { "p:agent-1": true } });
+    await act(async () => { render(<AgentSchedulesView scope="p" active />); });
+    const row = screen.getByTestId("agent-prompts-tab");
+    expect(within(row).getByText("Working").className).toContain("sp-status--running");
+    expect(within(row).getByText("claude")).toBeTruthy();
+    // Collapsed: name, sub-line and status only; every action waits inside.
+    const chevron = screen.getByRole("button", { name: "Show details of Claude" });
+    expect(chevron.getAttribute("aria-expanded")).toBe("false");
+    for (const name of ["Go to", "Prompt", "Continue", "Schedules", "Rename tab"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    expect(screen.queryByTestId("agent-details")).toBeNull();
+
+    fireEvent.click(chevron);
+    const open = screen.getByRole("button", { name: "Hide details of Claude" });
+    expect(open.getAttribute("aria-expanded")).toBe("true");
+    const details = screen.getByTestId("agent-details");
+    for (const name of ["Go to", "Prompt", "Continue", "Schedules", "Rename tab"]) {
+      expect(within(details).getByRole("button", { name })).toBeTruthy();
+    }
+    expect(within(details).getByText("No schedules")).toBeTruthy();
+
+    fireEvent.click(open);
+    expect(screen.queryByTestId("agent-details")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Go to" })).toBeNull();
+  });
+
+  it("marks a tab that cannot be resumed in muted text, not as an error", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...agent, sessionId: undefined }] } }));
+    await act(async () => { render(<AgentSchedulesView scope="p" active />); });
+    const marker = screen.getByTestId("agent-non-resumable");
+    expect(marker.textContent).toBe("not resumable");
+    expect(marker.closest(".danger-text")).toBeNull();
+    expect(marker.closest(".sp-row-sub")).not.toBeNull();
+  });
+});
+
 describe("AgentSchedulesView prompt chart", () => {
   it("keeps only the scope's agent tabs and no prompt list of its own", async () => {
     await act(async () => { render(<AgentSchedulesView scope="p" active />); });
@@ -148,6 +192,7 @@ describe("AgentSchedulesView prompt chart", () => {
 
   it("keeps the per-tab composer and its prefix send path", async () => {
     await act(async () => { render(<AgentSchedulesView scope="p" active />); });
+    fireEvent.click(screen.getByRole("button", { name: "Show details of Claude" }));
     fireEvent.click(screen.getByRole("button", { name: "Prompt" }));
     fireEvent.click(screen.getByRole("button", { name: "/clear" }));
     fireEvent.change(screen.getByLabelText("Ask Claude…"), { target: { value: "Check it" } });

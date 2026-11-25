@@ -161,6 +161,7 @@ async function click(name: string) {
 
 describe("ProjectDialog · remote-only", () => {
   beforeEach(() => {
+    localStorage.clear(); // ProjectDialog reopens on its last answers (projectDialogMemory)
     invoke.mockReset();
     Object.assign(session, {
       typedSignIn: "",

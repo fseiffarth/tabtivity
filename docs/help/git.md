@@ -91,8 +91,9 @@ their pushes can then reach only that repository.
 
 ## Letting agents push, tag releases and read CI
 
-A local Claude, Codex or tool-capable Local Model tab gets the
-`tabtivity-git` tools. The agent asks; Tabtivity pushes with your stored token
+A local Claude, Codex or tool-capable Local Model tab in a git project gets
+the `tabtivity-git` tools. A project folder that is not a git repository gets
+none; once you make it one, tabs opened from then on get them. The agent asks; Tabtivity pushes with your stored token
 outside the agent's sandbox, so the agent never sees it.
 
 - **git_push** pushes the checked-out branch, fast-forward only, to its

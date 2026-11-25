@@ -151,6 +151,21 @@ const CATALOG: Record<string, CatalogEntry[]> = {
     { command: "/init", description: "mobile.slash.cmd.initAgents" },
     { command: "/exit", description: "mobile.slash.cmd.exit", vars: { name: "OpenCode" } },
   ],
+  // The commands 2026.11.22's own `/` menu lists (`cursor/tui_screens.py`).
+  cursor: [
+    { command: "/model", description: "mobile.slash.cmd.model", args: true },
+    { command: "/plan", description: "mobile.slash.cmd.plan", args: true },
+    { command: "/goal", description: "mobile.slash.cmd.goal", args: true },
+    { command: "/ask", description: "mobile.slash.cmd.ask" },
+    { command: "/clear", description: "mobile.slash.cmd.newConversation" },
+    { command: "/summarize", description: "mobile.slash.cmd.compact" },
+    { command: "/resume", description: "mobile.slash.cmd.resume" },
+    { command: "/add-dir", description: "mobile.slash.cmd.addDir", args: true },
+    { command: "/config", description: "mobile.slash.cmd.settings" },
+    { command: "/help", description: "mobile.slash.cmd.help", args: true },
+    { command: "/logout", description: "mobile.slash.cmd.logout" },
+    { command: "/quit", description: "mobile.slash.cmd.exit", vars: { name: "Cursor" } },
+  ],
   aider: [
     { command: "/add", description: "mobile.slash.cmd.add", args: true },
     { command: "/drop", description: "mobile.slash.cmd.drop", args: true },

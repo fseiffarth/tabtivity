@@ -42,6 +42,11 @@ export type CompletionModel = {
   context_length?: number | null;
 };
 
+/** An empty capability list means Ollama could not report capabilities. */
+export function supportsCompletion(model: { capabilities?: string[] }): boolean {
+  return !model.capabilities?.length || model.capabilities.includes("completion");
+}
+
 /** Share concurrent lookups and expire even an empty result quickly. Errors are
  * never cached. The endpoint/policy key keeps settings changes isolated. */
 export function modelLookupCache() {

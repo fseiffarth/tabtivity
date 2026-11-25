@@ -42,9 +42,10 @@ Read this first; keep it current when a decision or an open point changes.
   answers is `501 server_no_window` (`host::server_window_codes`) and the
   phone names the browser client instead of "start the desktop"; Mail,
   From the desktop, the ⎇/locality moves and Diverged are left out. A
-  local project's agent starts in a linked worktree with no window. Still
-  window-only on a server: mail, alerts, Tabby's model switch, the moves,
-  Diverged and mode/cloud/local/API-key/sign-in launches (#2438).
+  local project's agent starts in a linked worktree with no window, and
+  (`develop`, 2026-11) a project's cloud session too. Still window-only on
+  a server: mail, alerts, Tabby's model switch, the moves, Diverged and
+  mode/local/API-key/sign-in launches (#2438).
 - **Browser client caught up with `develop`'s commands (2026-11-03,
   #2443).** Every command and event `develop` added since 2026-10-11 was
   audited for the daemon: image paste, ▶ run in background, PDF page

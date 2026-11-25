@@ -29,9 +29,26 @@ import { useRemoteStatusStore, type ConnState } from "../remoteStatus";
  * demand precisely because of (1): by the time a project is torn down its lamps are
  * already gone, so it is not a record of who is holding what.
  */
+/** Why a tunnel is gone, as far as OpenVPN's last lines say (`openvpn_exit_reason`). */
+export type VpnEndKind = "inactive" | "ping_exit" | "session_timeout" | "auth" | "server_halt" | "unknown";
+const END_KINDS: readonly string[] = ["inactive", "ping_exit", "session_timeout", "auth", "server_halt"];
+
+/** A tunnel that died on its own: when the reconcile noticed, and the reason. */
+export interface VpnEnd {
+  at: number;
+  kind: VpnEndKind;
+  /** OpenVPN's last line; null when none was kept (a terminal-tab tunnel). */
+  line: string | null;
+}
+
 interface VpnStatusStore {
   /** Tunnel state per config path. A config absent from the map is `off`. */
   byConfig: Record<string, ConnState>;
+  /**
+   * The configs whose tunnel **died on its own** and has not come up since, with
+   * why. A deliberate disconnect leaves nothing here; a new connect clears it.
+   */
+  ended: Record<string, VpnEnd>;
   /** Project ids currently holding each config's tunnel — the refcount. */
   holders: Record<string, string[]>;
   /**
@@ -74,8 +91,16 @@ function forget(s: VpnStatusStore, config: string) {
   return { byConfig, holders };
 }
 
+/** `ended` without the configs `live` holds: a tunnel that is (coming) up again
+ *  is no longer one that ended. The same object when nothing changes. */
+function withoutLive(ended: Record<string, VpnEnd>, live: Record<string, unknown>): Record<string, VpnEnd> {
+  if (!Object.keys(ended).some((config) => config in live)) return ended;
+  return Object.fromEntries(Object.entries(ended).filter(([config]) => !(config in live)));
+}
+
 export const useVpnStatusStore = create<VpnStatusStore>((set) => ({
   byConfig: {},
+  ended: {},
   holders: {},
   reconciled: false,
 
@@ -86,7 +111,8 @@ export const useVpnStatusStore = create<VpnStatusStore>((set) => ({
         return forget(s, config);
       }
       if (s.byConfig[config] === state) return {};
-      return { byConfig: { ...s.byConfig, [config]: state } };
+      const byConfig = { ...s.byConfig, [config]: state };
+      return { byConfig, ended: withoutLive(s.ended, byConfig) };
     }),
 
   acquire: (config, projectId) =>
@@ -135,7 +161,7 @@ export const useVpnStatusStore = create<VpnStatusStore>((set) => ({
       dropped = Object.keys(s.byConfig).filter(
         (config) => s.byConfig[config] === "connected" && !(config in byConfig),
       );
-      return { byConfig, reconciled: true };
+      return { byConfig, ended: withoutLive(s.ended, byConfig), reconciled: true };
     });
     for (const config of dropped) {
       onTunnelDropped(config);
@@ -143,8 +169,27 @@ export const useVpnStatusStore = create<VpnStatusStore>((set) => ({
       // leaving them behind would make a later reconnect look already-held.
       useVpnStatusStore.getState().releaseAll(config);
     }
+    await Promise.all(dropped.map(noteTunnelEnd));
   },
 }));
+
+/**
+ * Record why a tunnel that died on its own is gone, for the VPN menu to say: a
+ * lamp that only goes dark leaves the user guessing, and the commonest cause
+ * (the VPN's idle timer) has a switch that prevents it. Skipped when the tunnel
+ * came back while the backend was being asked.
+ */
+async function noteTunnelEnd(config: string): Promise<void> {
+  const at = Date.now();
+  const end = await invoke<{ kind?: string; line?: string | null } | null>("openvpn_exit_reason", { config }).catch(
+    () => null,
+  );
+  const kind = (end?.kind && END_KINDS.includes(end.kind) ? end.kind : "unknown") as VpnEndKind;
+  const line = typeof end?.line === "string" && end.line ? end.line : null;
+  useVpnStatusStore.setState((s) =>
+    config in s.byConfig ? {} : { ended: { ...s.ended, [config]: { at, kind, line } } },
+  );
+}
 
 /**
  * React to a tunnel that died without being asked to (see `refresh`).

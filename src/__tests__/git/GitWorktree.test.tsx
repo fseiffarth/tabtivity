@@ -96,15 +96,25 @@ async function pillFor(path: string): Promise<HTMLElement> {
   return pill as HTMLElement;
 }
 
+async function openWorktrees() {
+  await userEvent.setup().click(await screen.findByRole("button", { name: /^Worktrees/, expanded: false }));
+}
+
+async function openBranches() {
+  await userEvent.setup().click(await screen.findByRole("button", { name: /^Branches/, expanded: false }));
+}
+
 async function renderHistory() {
   await act(async () => {
     render(<GitHistory projectDir="/p" />);
   });
+  await openWorktrees();
 }
 
 describe("#23 git worktrees", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     worktrees = WORKTREES;
     setupInvoke();
   });
@@ -113,13 +123,24 @@ describe("#23 git worktrees", () => {
     vi.unstubAllGlobals();
   });
 
-  it("lists the worktrees", async () => {
-    await renderHistory();
-    expect(await screen.findByText("Worktrees")).toBeTruthy();
-    // main worktree (branch "main") and the linked "feature" worktree.
-    // Scope to the worktree pill: "feature" also appears as a branch pill.
-    const featurePill = (await screen.findByTitle(`/p/${NAMES.worktreesDir}/feature`)) as HTMLElement;
-    expect(featurePill.textContent).toContain("feature");
+  it("starts both lists collapsed and remembers them independently per repository", async () => {
+    const { rerender } = render(<GitHistory projectDir="/p" />);
+    const user = userEvent.setup();
+    expect(await screen.findByRole("button", { name: /^Branches/, expanded: false })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /^Worktrees/, expanded: false })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Select worktree feature" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "spare" })).toBeNull();
+
+    await openBranches();
+    await openWorktrees();
+    expect(await screen.findByRole("button", { name: "Select worktree feature" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^Worktrees/, expanded: true }));
+
+    rerender(<GitHistory projectDir="/other" />);
+    expect(await screen.findByRole("button", { name: /^Branches/, expanded: false })).toBeTruthy();
+    rerender(<GitHistory projectDir="/p" />);
+    expect(await screen.findByRole("button", { name: /^Branches/, expanded: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Worktrees/, expanded: false })).toBeTruthy();
   });
 
   it("create form sends git_worktree_add with camelCase args", async () => {
@@ -325,30 +346,35 @@ describe("#23 git worktrees", () => {
     expect(within(pill).queryByRole("button", { name: /Remove worktree/ })).toBeNull();
   });
 
-  it("a remote project can manage the mirror's worktrees too", async () => {
+  it("a remote project's view follows the Local/Remote switch", async () => {
     // I2: `projectDir` for a remote project is the LOCAL MIRROR, but the commands
     // resolved remoteness from it and ran on the host — so a path picked from a
     // local file tree was created on the login node, and the mirror's own repo
-    // could never have its worktrees managed at all. There is no side switch for
-    // a local project, where there is only one side to be on.
-    const user = userEvent.setup();
+    // could never have its worktrees managed at all. The side is the parent's
+    // file-source switch: the view used to open on the host whatever that said.
+    let view!: ReturnType<typeof render>;
     await act(async () => {
-      render(<GitHistory projectDir="/p" projectId="pid" remote />);
+      view = render(<GitHistory projectDir="/p" projectId="pid" remote site="host" />);
     });
-    await screen.findByText("Worktrees");
+    await openWorktrees();
+    expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", { projectDir: "/p", site: "host" });
+    expect(screen.getByText("Remote")).toBeTruthy();
     mockInvoke.mockClear();
-    await user.click(screen.getByTitle("Side"));
-    await user.click(screen.getByRole("option", { name: "Mirror" }));
-    expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", {
-      projectDir: "/p",
-      site: "mirror",
+    await act(async () => {
+      view.rerender(<GitHistory projectDir="/p" projectId="pid" remote site="mirror" />);
     });
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", { projectDir: "/p", site: "mirror" }));
+    expect(mockInvoke).toHaveBeenCalledWith("git_log", { projectDir: "/p", worktree: { path: "", site: "mirror" }, limit: 20, skip: 0 });
+    expect(screen.getByText("Local")).toBeTruthy();
   });
 
-  it("a local project is offered no side switch", async () => {
-    await renderHistory();
-    await screen.findByText("Worktrees");
-    expect(screen.queryByTitle("Side")).toBeNull();
+  it("a local project has one side whatever the switch says", async () => {
+    await act(async () => {
+      render(<GitHistory projectDir="/p" site="mirror" />);
+    });
+    await openWorktrees();
+    expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", { projectDir: "/p", site: "host" });
+    expect(screen.queryByText("Local")).toBeNull();
   });
 
   it("a failing worktree probe does not blank the commit list", async () => {
@@ -365,6 +391,7 @@ describe("#23 git worktrees", () => {
 describe("selected worktree context", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     worktrees = WORKTREES;
     mockInvoke.mockImplementation((cmd: string, args: Record<string, unknown> = {}) => {
       const selection = args.worktree as { path: string; site: string } | undefined;
@@ -380,11 +407,13 @@ describe("selected worktree context", () => {
     const user = userEvent.setup();
     const onWorktreeChanged = vi.fn();
     await act(async () => { render(<GitHistory projectDir="/p" onWorktreeChanged={onWorktreeChanged} />); });
+    await openWorktrees();
+    await openBranches();
     await user.click(screen.getByRole("button", { name: "Select worktree feature" }));
     await screen.findByText("feature history");
     const worktree = { path: `/p/${NAMES.worktreesDir}/feature`, site: "host" };
     expect(onWorktreeChanged).toHaveBeenLastCalledWith(worktree);
-    expect(mockInvoke).toHaveBeenCalledWith("git_log", { projectDir: "/p", worktree, limit: 100, skip: 0 });
+    expect(mockInvoke).toHaveBeenCalledWith("git_log", { projectDir: "/p", worktree, limit: 20, skip: 0 });
     expect(screen.getByRole("button", { name: "feature" }).className).toContain("current");
     await user.click(screen.getByRole("button", { name: "spare" }));
     expect(mockInvoke).toHaveBeenCalledWith("git_checkout", { projectDir: "/p", worktree, target: "spare" });
@@ -395,6 +424,7 @@ describe("selected worktree context", () => {
   it("a branch in another worktree jumps there without checking it out", async () => {
     const user = userEvent.setup();
     await renderHistory();
+    await openBranches();
     await user.click(screen.getByRole("button", { name: "feature Used in feature" }));
     await screen.findByText("feature history");
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "git_checkout")).toBe(false);
@@ -405,9 +435,8 @@ describe("selected worktree context", () => {
 
   it("a mirror selection uses explicit mirror context throughout", async () => {
     const user = userEvent.setup();
-    await act(async () => { render(<GitHistory projectDir="/p" remote projectId="pid" />); });
-    await user.click(screen.getByTitle("Side"));
-    await user.click(screen.getByRole("option", { name: "Mirror" }));
+    await act(async () => { render(<GitHistory projectDir="/p" remote projectId="pid" site="mirror" />); });
+    await openWorktrees();
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_branches", { projectDir: "/p", worktree: { path: "", site: "mirror" } }));
     await user.click(screen.getByRole("button", { name: "Select worktree feature" }));
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_merge_state", { projectDir: "/p", worktree: { path: `/p/${NAMES.worktreesDir}/feature`, site: "mirror" } }));
@@ -426,6 +455,7 @@ describe("selected worktree context", () => {
     const user = userEvent.setup();
     let rerender!: ReturnType<typeof render>["rerender"];
     await act(async () => { ({ rerender } = render(<GitHistory projectDir="/p" />)); });
+    await openWorktrees();
     const previous = mockInvoke.getMockImplementation()!;
     let answer!: (value: typeof COMMITS) => void;
     mockInvoke.mockImplementation((cmd: string, args: Record<string, unknown>) => {

@@ -4,16 +4,18 @@ import {
   centerTexWorkspace,
   compileTexWorkspace,
   hasTexCompiler,
+  queueTexCompile,
   requestTexCenter,
   requestTexCompile,
 } from "../../../stores/viewers/texCenter";
 import { resolveTexRoot } from "./tex";
 import { basename, dirname } from "../../paths";
 import { openTabInScope } from "../../tabs/tabScopeContext";
+import { isFileTab } from "../../tabs/fileTab";
 
 /** Whether a tab is THE workspace tab of the main document `root`. */
 const isWorkspaceFor = (root: string) => (t: TabEntry) =>
-  t.kind === "embed" && t.viewer === "texworkspace" && t.embedPath === root;
+  isFileTab(t, root, "texworkspace");
 
 /**
  * The single open-a-LaTeX-file policy: open (or focus) the ONE "TeX workspace"
@@ -86,7 +88,7 @@ export async function openTexWorkspace(
   // A CHILD editor tab (a drop, a followed link) never matches: its `embedPath`
   // is not the root the click resolved to.
   const isLegacyEditor = (t: TabEntry) =>
-    t.kind === "embed" && t.viewer === "tex" && t.embedPath === root;
+    t.viewer === "tex" && isFileTab(t, root, "tex");
   const existing = scopeTabs.find((t) => isWorkspaceFor(root)(t) || isLegacyEditor(t));
   if (existing) {
     if (isLegacyEditor(existing)) store.setTabViewer(existing.key, "texworkspace");
@@ -221,4 +223,25 @@ export async function recompileTexSource(sourcePath: string): Promise<boolean> {
   if (compileTexWorkspace(sourcePath) || compileTexWorkspace(root)) return true;
   requestTexCompile(root, sourcePath);
   return true;
+}
+
+/**
+ * Rebuild the document `sourcePath` belongs to for a PDF in Mark up whose
+ * sources are newer than its pages: through a mounted editor when there is
+ * one, else the workspace is focused — or opened (in `scope`) when this window
+ * has none — on its main document and the build queued for its editor
+ * (`queueTexCompile`), which runs it once the file has loaded.
+ */
+export async function rebuildTexSource(sourcePath: string, scope?: string | null): Promise<void> {
+  const root = await resolveTexRoot(sourcePath).catch(() => sourcePath);
+  if (compileTexWorkspace(sourcePath) || compileTexWorkspace(root)) return;
+  if (await focusTexWorkspaceForSource(root, root)) {
+    if (compileTexWorkspace(root)) return;
+    // Mounts on the next render here, or renders in a popout.
+    queueTexCompile(root);
+    requestTexCompile(root, root);
+    return;
+  }
+  queueTexCompile(root);
+  await openTexWorkspace(root, undefined, undefined, scope);
 }

@@ -138,6 +138,72 @@ describe("local autocomplete (#45)", () => {
     setup();
   });
 
+  it("loads the configured local model from the toolbar and refreshes residency", async () => {
+    autocompleteOn = true;
+    roles = { autocomplete: "coder" };
+    let loaded = false;
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "ollama_status") return Promise.resolve(loaded ? "loaded" : "idle");
+      if (cmd === "list_ollama_models_detailed") return Promise.resolve([
+        { name: "other", running: false, capabilities: ["completion"] },
+        { name: "coder", running: loaded, capabilities: ["completion", "insert"] },
+      ]);
+      if (cmd === "load_ollama_model") {
+        loaded = true;
+        return Promise.resolve();
+      }
+      return original(cmd, args);
+    });
+    try {
+      await renderTextView();
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Load local model" })); });
+      expect(mockInvoke).toHaveBeenCalledWith("load_ollama_model", { model: "coder", device: "auto" });
+      expect(screen.queryByRole("button", { name: "Load local model" })).toBeNull();
+      expect(screen.queryByText("No local model loaded")).toBeNull();
+      expect(mockUpdateSettings).not.toHaveBeenCalled();
+    } finally {
+      roles = undefined;
+    }
+  });
+
+  it.each([["idle", "models"], ["stopped", "ollama"]])(
+    "opens the right Models section directly from the toolbar when Ollama is %s",
+    async (status, section) => {
+      autocompleteOn = true;
+      const original = mockInvoke.getMockImplementation()!;
+      mockInvoke.mockImplementation((cmd: string, args: unknown) =>
+        cmd === "ollama_status" ? Promise.resolve(status) : original(cmd, args));
+      await renderTextView();
+      const { useModelsOverlayStore } = await import("../../stores/modelsOverlay");
+      const { useRootOverlayStore } = await import("../../stores/rootOverlay");
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Manage local models…" })); });
+      expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "models" });
+      expect(useModelsOverlayStore.getState().modelsSection).toBe(section);
+      expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "load_ollama_model")).toBe(false);
+    },
+  );
+
+  it("routes to Ollama setup if only cloud and embedding models are installed", async () => {
+    autocompleteOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "ollama_status") return Promise.resolve("idle");
+      if (cmd === "list_ollama_models_detailed") return Promise.resolve([
+        { name: "cloud", running: false, remote: true, capabilities: ["completion"] },
+        { name: "embeddings", running: false, capabilities: ["embedding"] },
+      ]);
+      return original(cmd, args);
+    });
+    await renderTextView();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Load local model" })); });
+    expect(screen.getByRole("alert").textContent).toContain("No installed local model supports autocomplete.");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Manage local models…" })); });
+    const { useModelsOverlayStore } = await import("../../stores/modelsOverlay");
+    expect(useModelsOverlayStore.getState().modelsSection).toBe("ollama");
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "load_ollama_model")).toBe(false);
+  });
+
   it("offers Copilot without a local model and cycles the actual returned items without another request", async () => {
     autocompleteOn = true;
     copilotOn = true;
@@ -155,6 +221,7 @@ describe("local autocomplete (#45)", () => {
     const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
     await waitFor(() => expect(el.value).toBe(SOURCE));
     expect(screen.getByRole("button", { name: /Autocomplete/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Load local model" })).toBeNull();
     expect(screen.queryByText("Sentence")).toBeNull();
     el.selectionStart = el.selectionEnd = SOURCE.length;
     await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });

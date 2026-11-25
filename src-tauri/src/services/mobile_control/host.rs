@@ -36,7 +36,7 @@ use super::{
     config::{verify_tailscale_serve, HostConfig},
     deadline,
     diverged,
-    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedProject, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     files_zip,
     git_overview,
@@ -53,13 +53,14 @@ use super::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
         LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobileMarkupTick, MobilePromptInput, MobileSchedule,
         MobileScheduleInput, PromptMutation, ScheduleMutation, SyncDirection, SyncOp,
-        TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
+        TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_COMPLETE_BYTES, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
     },
     presence,
     project_docs,
     pty_bridge::{self, TerminalRegistry},
     remarks,
+    request_body,
     scheduler,
     serve,
     shell_mask,
@@ -371,6 +372,19 @@ struct MailReplyBody {
     body: String,
     #[serde(default)]
     offset: u32,
+}
+
+/// Body of a reply-completion ask (`…/complete`): the draft typed so far, the
+/// folder page that issued the opaque ids, or `warm` instead of a draft.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MailCompleteBody {
+    #[serde(default)]
+    draft: Option<String>,
+    #[serde(default)]
+    offset: u32,
+    #[serde(default)]
+    warm: bool,
 }
 
 /// Body of an alert row's ✓. The opaque row handle and nothing else: what the
@@ -830,11 +844,9 @@ async fn headless_git_dot(state: &HostState, raw_id: &str, root: &std::path::Pat
 }
 
 /// A project's agent readings with no window, from the cache while fresh.
-fn headless_readings(state: &HostState, project: &super::discovery::ResolvedProject) -> headless::TurnReadings {
-    state
-        .readings
-        .lock_ok()
-        .readings(&state.config.state_dir, project, Instant::now())
+async fn headless_readings(state: &HostState, project: &ResolvedProject) -> headless::TurnReadings {
+    let slot = state.readings.lock_ok().turn_slot(&project.raw_id, &project.tabs, Instant::now());
+    slot.read(&state.config.state_dir, &project.raw_id).await
 }
 
 /// Today as the desktop-local `YYYY-MM-DD` the board's date columns read.
@@ -1110,13 +1122,18 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
     .into_iter()
     .map(|origin| json!({ "origin": origin }))
     .collect();
+    // The machine's OpenVPN tunnel, for Home's lamp: read off the pidfiles,
+    // since the tunnel registry is the window's. Only the word crosses, never
+    // a config's path or name; null where no config is stored.
+    let vpn = crate::services::openvpn::disk_tunnel_up(&state.config.state_dir)
+        .map(|up| if up { "up" } else { "down" });
     (
         StatusCode::OK,
         Json(
             // `server`: this host is a server daemon, which never has a window
             // (`server_window_codes`): the phone words its "no window" notes
             // for a server and leaves out what only a window answers.
-            json!({ "desktop_available": desktop_available, "server": state.web.on_server(), "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops }),
+            json!({ "desktop_available": desktop_available, "server": state.web.on_server(), "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops, "vpn": vpn }),
         ),
     )
 }
@@ -1158,7 +1175,7 @@ async fn projects(
     // Each row's agent tabs by state, from the readings the activity list
     // uses. Tmux session names are unique server-wide, so one map serves all.
     let agent_statuses = if listed.iter().any(|p| p.tabs.iter().any(|t| t.public.kind == "agent")) {
-        let (_, statuses, _) = activity_readings(&state, &catalog_snapshot).await;
+        let (_, statuses, _) = activity_readings(&state, listed.iter().copied()).await;
         statuses
             .into_iter()
             .map(|status| (status.tmux_session, status.status))
@@ -1257,17 +1274,23 @@ fn activity_rank(status: &str) -> u8 {
 /// Every agent tab's status and prompt rows in one desktop round trip, and
 /// whether the desktop answered. Without a window they come from the hooks'
 /// turn records and the tabs' transcripts (headless owner plan, H1b).
-async fn activity_readings(
+async fn activity_readings<'a>(
     state: &HostState,
-    catalog_snapshot: &Catalog,
+    projects: impl Iterator<Item = &'a ResolvedProject>,
 ) -> (bool, Vec<super::protocol::AgentTabStatus>, Vec<super::protocol::AgentTabPrompts>) {
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Activity { request_id }).await {
         Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
         response if desktop_down(&response) => {
-            let readings = headless::activity(&state.config.state_dir, catalog_snapshot);
-            (false, readings.statuses, readings.prompts)
+            let mut statuses = Vec::new();
+            let mut prompts = Vec::new();
+            for project in projects {
+                let readings = headless_readings(state, project).await;
+                statuses.extend(readings.statuses);
+                prompts.extend(readings.prompts);
+            }
+            (false, statuses, prompts)
         }
         _ => (false, vec![], vec![]),
     }
@@ -1285,7 +1308,7 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
     let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
-    let (desktop_available, statuses, prompts) = activity_readings(&state, &catalog_snapshot).await;
+    let (desktop_available, statuses, prompts) = activity_readings(&state, catalog_snapshot.projects.iter()).await;
     // Tmux session names are unique across the whole server, so one map covers
     // every project's tabs.
     let statuses = statuses
@@ -1352,7 +1375,7 @@ async fn new_project(State(state): State<HostState>, headers: HeaderMap, body: B
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(request) = serde_json::from_slice::<NewProjectBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<NewProjectBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let create = state.spawner.new_project.clone();
@@ -1445,7 +1468,7 @@ async fn project(
                 .into_iter()
                 .map(|choice| choice.public)
                 .collect();
-            let readings = headless_readings(&state, project);
+            let readings = headless_readings(&state, project).await;
             let schedules = headless::schedule_summaries(state_dir, &project.raw_id, &project.tabs, chrono::Local::now());
             let git = if is_git_project(project) {
                 headless_git_dot(&state, &project.raw_id, &project.root).await.map(str::to_string)
@@ -1718,7 +1741,7 @@ async fn create_tab(
     // Parsed only after the request is authenticated and same-origin: as a
     // `Json<T>` extractor this ran first, so an unauthenticated caller got a
     // 422 naming the fields of the desktop-bridge protocol.
-    let Ok(mut request) = serde_json::from_slice::<CreateTabRequest>(&body) else {
+    let Ok(mut request) = request_body::parse_json::<CreateTabRequest>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     // `like_tab` names a tmux session, which only the sidecar may: the tab
@@ -1938,7 +1961,7 @@ fn headless_create_error(refusal: headless::CreateRefusal) -> (StatusCode, Json<
             headless::CreateRefusal::DesktopUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             headless::CreateRefusal::WorktreeNotFound => StatusCode::NOT_FOUND,
             headless::CreateRefusal::LaunchFailed(_) | headless::CreateRefusal::Persist(_) => StatusCode::BAD_GATEWAY,
-            headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) => StatusCode::BAD_REQUEST,
+            headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) | headless::CreateRefusal::Cloud(_) => StatusCode::BAD_REQUEST,
             headless::CreateRefusal::NotAttachable => StatusCode::CONFLICT,
         },
         refusal.code(),
@@ -2076,7 +2099,7 @@ async fn reopen_tab(
     let request = if body.is_empty() {
         ReopenTabRequest::default()
     } else {
-        match serde_json::from_slice::<ReopenTabRequest>(&body) {
+        match request_body::parse_json::<ReopenTabRequest>(&body) {
             Ok(request) => request,
             Err(_) => return api_error(StatusCode::BAD_REQUEST, "invalid_request"),
         }
@@ -2487,7 +2510,7 @@ async fn diverged_preview(
     if !diverged::sync_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "sync_off");
     }
-    let Ok(preview_body) = serde_json::from_slice::<DivergedPreviewBody>(&body) else {
+    let Ok(preview_body) = request_body::parse_json::<DivergedPreviewBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Some(op) = preview_body.previewed_op() else {
@@ -2554,7 +2577,7 @@ async fn diverged_resolve(
     if !diverged::sync_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "sync_off");
     }
-    let Ok(DivergedResolveBody { op, files, token }) = serde_json::from_slice(&body) else {
+    let Ok(DivergedResolveBody { op, files, token }) = request_body::parse_json(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let paths = match diverged_paths(&state, &raw_id, &files) {
@@ -2663,14 +2686,19 @@ async fn launch_options(
     .await;
     if desktop_down(&response) {
         // No window: the ＋ sheet offers what the owner can start — the
-        // project folder, a shell or a plain agent (headless owner plan,
-        // H3), and a local project's agent in one of its linked worktrees
-        // (`headless::create_tab_at`). Cloud sessions, sign-ins, local models
-        // and API-key agents wait for the window, so none is listed.
+        // project folder, a shell, a plain agent (headless owner plan, H3),
+        // a project's cloud sessions, and a local project's agent in one of
+        // its linked worktrees (`headless::create_tab_at`). Sign-ins, local
+        // models and API-key agents wait for the window, so none is listed.
+        let cloud = if project.public.kind == ScopeKind::Project && !project.pinned {
+            headless::cloud_options(&headless::agents(&state.config.state_dir, &host_key(&state), &*state.spawner.installed))
+        } else {
+            Vec::new()
+        };
         let worktrees: Vec<_> = launch_worktrees(&state, project).await.into_iter().map(|wt| wt.row).collect();
         return (
             StatusCode::OK,
-            Json(json!({ "worktrees": worktrees, "cloud": [], "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
+            Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
         );
     }
     match response {
@@ -2897,7 +2925,7 @@ async fn alerts_resolve(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(request) = serde_json::from_slice::<AlertResolveBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<AlertResolveBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if request.alert_id.is_empty() || request.alert_id.len() > 128 {
@@ -2997,7 +3025,7 @@ async fn push_put(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(request) = serde_json::from_slice::<PushBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<PushBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let stored = state
@@ -3079,7 +3107,7 @@ async fn secrets_challenge(State(state): State<HostState>, headers: HeaderMap, b
     if crate::services::server::vault::vault().is_none() {
         return api_error(StatusCode::NOT_FOUND, "not_a_server");
     }
-    let Ok(request) = serde_json::from_slice::<SecretsChallengeBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<SecretsChallengeBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     match state.auth.lock_ok().action_challenge(&device_id, &request.action) {
@@ -3101,7 +3129,7 @@ struct SignedActionBody {
 /// The pairing key's signature over an action nonce (user decision
 /// 2026-10-03): a session cookie alone is refused with `signature_required`.
 fn check_signed_action(state: &HostState, device_id: &str, action: &str, body: &[u8]) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    let request = serde_json::from_slice::<SignedActionBody>(body).map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
+    let request = request_body::parse_json::<SignedActionBody>(body).map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
     let (Some(nonce), Some(signature)) = (request.nonce, request.signature) else {
         return Err(api_error(StatusCode::FORBIDDEN, "signature_required"));
     };
@@ -3145,7 +3173,7 @@ async fn secrets_enrol(State(state): State<HostState>, headers: HeaderMap, body:
     let Some(vault) = crate::services::server::vault::vault() else {
         return api_error(StatusCode::NOT_FOUND, "not_a_server");
     };
-    let Ok(request) = serde_json::from_slice::<SecretsEnrolBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<SecretsEnrolBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let keys = {
@@ -3236,7 +3264,7 @@ async fn secrets_recover(State(state): State<HostState>, headers: HeaderMap, bod
     let Some(vault) = crate::services::server::vault::vault() else {
         return api_error(StatusCode::NOT_FOUND, "not_a_server");
     };
-    let Ok(request) = serde_json::from_slice::<SecretsRecoverBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<SecretsRecoverBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let code = zeroize::Zeroizing::new(request.code);
@@ -3275,7 +3303,7 @@ async fn secrets_unlock_finish(State(state): State<HostState>, headers: HeaderMa
     let Some(vault) = crate::services::server::vault::vault() else {
         return api_error(StatusCode::NOT_FOUND, "not_a_server");
     };
-    let Ok(request) = serde_json::from_slice::<SecretsFinishBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<SecretsFinishBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let keys = state.auth.lock_ok().secrets_device_keys();
@@ -3439,7 +3467,7 @@ async fn calendar_mutate(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(action) = serde_json::from_slice::<CalendarAction>(&body) else {
+    let Ok(action) = request_body::parse_json::<CalendarAction>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Some(month) = query.month.filter(|value| valid_calendar_month(value)) else {
@@ -3509,7 +3537,7 @@ async fn todo_mutate(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(action) = serde_json::from_slice::<TodoAction>(&body) else {
+    let Ok(action) = request_body::parse_json::<TodoAction>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let valid = match &action {
@@ -3756,7 +3784,7 @@ async fn local_models_mutate(
     if local_models_closed(&state, &headers) {
         return api_error(StatusCode::FORBIDDEN, "local_models_disabled");
     }
-    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&body) else {
+    let Ok(body) = request_body::parse_json::<serde_json::Value>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let action = match local_models::parse_action(&body) {
@@ -3868,7 +3896,7 @@ async fn mail_mark(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(mark) = serde_json::from_slice::<MailMarkBody>(&body) else {
+    let Ok(mark) = request_body::parse_json::<MailMarkBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !valid_mail_id(&folder_id) || !valid_mail_id(&message_id) || mark.offset > 100_000 {
@@ -3903,7 +3931,7 @@ async fn mail_reply(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(reply) = serde_json::from_slice::<MailReplyBody>(&body) else {
+    let Ok(reply) = request_body::parse_json::<MailReplyBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !valid_mail_id(&folder_id) || !valid_mail_id(&message_id) || reply.offset > 100_000 {
@@ -3930,6 +3958,86 @@ async fn mail_reply(
         )
         .await,
     )
+}
+
+/// `POST /api/v1/mail/folders/{folder_id}/messages/{message_id}/complete`
+/// `{ "draft"?, "offset"?, "warm"? }` — how the reply being typed on the phone
+/// goes on, by the local mail model (`services::mail_complete`). Only the
+/// window can answer: it resolves the opaque ids against its own copy of the
+/// original, and the sidecar never sees mail. With no window (or a wedged one)
+/// there is no completion and no error: `unavailable`. Answers `text`, `status`
+/// and the `model` that wrote the text — no id, path or reason. A draft the
+/// engine writes no completion for is `skipped` without asking the window.
+async fn mail_complete(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((folder_id, message_id)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    use crate::services::mail_complete::Status;
+    if let Err(error) = section_guard(&headers, &state, "mail") {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Ok(request) = request_body::parse_json::<MailCompleteBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let draft = request.draft.unwrap_or_default();
+    if !valid_mail_id(&folder_id)
+        || !valid_mail_id(&message_id)
+        || request.offset > 100_000
+        || (request.warm && !draft.is_empty())
+    {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    if draft.len() > MAX_MAIL_COMPLETE_BYTES {
+        return api_error(StatusCode::PAYLOAD_TOO_LARGE, "draft_too_long");
+    }
+    let answer = |status: Status, text: Option<&str>, model: Option<&str>| {
+        // The engine's cleaned line, cleaned again here whoever answered, and
+        // only beside `ok`; the model is credited only beside text.
+        let text = text
+            .filter(|_| status == Status::Ok)
+            .and_then(crate::services::next_prompt::clean_completion);
+        let model = text.as_ref().and(model).and_then(crate::services::next_prompt::clean_model);
+        let mut body = json!({ "text": text, "status": status });
+        if let Some(model) = model {
+            body["model"] = json!(model);
+        }
+        (StatusCode::OK, Json(body))
+    };
+    // A draft the engine writes no completion for never leaves this process.
+    if !request.warm
+        && (draft.chars().count() > crate::services::next_prompt::MAX_DRAFT_CHARS
+            || crate::services::next_prompt::draft_tail(&draft).is_none())
+    {
+        return answer(Status::Skipped, None, None);
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::MailComplete {
+            request_id: new_request_id(),
+            folder_id,
+            message_id,
+            offset: request.offset,
+            draft,
+            warm: request.warm,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::MailComplete { text, outcome, model }) => {
+            // Only a status word the engine knows crosses.
+            let status = serde_json::from_value::<Status>(json!(outcome)).unwrap_or(Status::Unavailable);
+            answer(status, text.as_deref(), model.as_deref())
+        }
+        Ok(DesktopResponse::Error { code, .. }) if code.ends_with("_not_found") => api_error(StatusCode::NOT_FOUND, &code),
+        // No window, a wedged one, its own error, an answer of another kind.
+        _ => answer(Status::Unavailable, None, None),
+    }
 }
 
 async fn tab(
@@ -3981,7 +4089,7 @@ async fn rename_tab(
     struct RenameBody {
         label: String,
     }
-    let Ok(request) = serde_json::from_slice::<RenameBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<RenameBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Some(label) = clean_tab_label(&request.label) else {
@@ -4064,7 +4172,7 @@ async fn color_tab(
         #[serde(default)]
         color: Option<String>,
     }
-    let Ok(request) = serde_json::from_slice::<ColorBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<ColorBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Ok(color) = clean_tab_color(request.color.as_deref()) else {
@@ -4144,7 +4252,7 @@ async fn sent_prompt(
     struct PromptBody {
         message: String,
     }
-    let Ok(request) = serde_json::from_slice::<PromptBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<PromptBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let message = request.message.trim();
@@ -4209,7 +4317,7 @@ fn held_message(body: &Bytes) -> Result<String, (StatusCode, Json<serde_json::Va
     struct HeldBody {
         message: String,
     }
-    let Ok(request) = serde_json::from_slice::<HeldBody>(body) else {
+    let Ok(request) = request_body::parse_json::<HeldBody>(body) else {
         return Err(api_error(StatusCode::BAD_REQUEST, "invalid_request"));
     };
     let message = request.message.trim();
@@ -4393,7 +4501,7 @@ async fn sign_in_callback(
     struct CallbackBody {
         url: String,
     }
-    let Ok(request) = serde_json::from_slice::<CallbackBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<CallbackBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     // The listener is on this machine; a host tab's CLI waits on the host's.
@@ -4440,7 +4548,7 @@ async fn sign_in_tab(
         alternate: bool,
         idempotency_key: String,
     }
-    let Ok(body) = serde_json::from_slice::<SignInBody>(&body) else {
+    let Ok(body) = request_body::parse_json::<SignInBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if body.idempotency_key.len() < 16 || body.idempotency_key.len() > 128 {
@@ -4514,7 +4622,7 @@ async fn teleport_tab(
         session: String,
         idempotency_key: String,
     }
-    let Ok(body) = serde_json::from_slice::<TeleportBody>(&body) else {
+    let Ok(body) = request_body::parse_json::<TeleportBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if body.idempotency_key.len() < 16
@@ -4586,7 +4694,7 @@ async fn order_tab(
         anchor: String,
         place: TabPlace,
     }
-    let Ok(request) = serde_json::from_slice::<OrderBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<OrderBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if request.anchor == tab_id {
@@ -5189,6 +5297,153 @@ async fn agent_transcript(
     }
 }
 
+/// `?phase=warm|final` (`final` when absent). Anything else is refused.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct NextPromptQuery {
+    phase: Option<String>,
+}
+
+/// Entries read for a next-prompt suggestion: enough for a long turn whole.
+const NEXT_PROMPT_LIMIT: usize = 400;
+
+/// `GET /api/v1/tabs/{tab_id}/next-prompt?phase=warm|final` — the
+/// local-model "what's next" suggestion for the agent tab's newest turn
+/// (`services::next_prompt`), for the phone's composer. With the window open
+/// the window answers it (`DesktopRequest::AgentNextPrompt`, one run per turn
+/// for both screens); with none, the CLI's own transcript is read off the tab
+/// record and the loopback Ollama run happens here, cached per turn. Answers only `text`,
+/// `status` and the `model` that wrote the text — no turn key, no id, no path —
+/// and always a status, never an error, once the tab resolves.
+async fn tab_next_prompt(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<NextPromptQuery>,
+) -> impl IntoResponse {
+    use crate::services::next_prompt::Phase;
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    // `complete` carries a draft: it is the POST's alone.
+    let Some(phase) = Phase::parse(query.phase.as_deref().unwrap_or("final")).filter(|phase| *phase != Phase::Complete) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_phase");
+    };
+    next_prompt_for(&state, &phone, &tab_id, phase, None).await
+}
+
+/// `POST /api/v1/tabs/{tab_id}/next-prompt` `{ "draft": "…" }` — how the
+/// prompt being typed in the phone's composer goes on, by the same local
+/// model (`services::next_prompt`, `complete`): `text` is what to append,
+/// one inert capped line. Answered like the GET (through the window when it
+/// is open), and like it only with `text`, `status` and `model`. The draft
+/// goes to the loopback Ollama and nowhere else; one past the engine's
+/// bound is `skipped` unsent.
+async fn tab_complete_prompt(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    use crate::services::next_prompt::Phase;
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct CompleteBody {
+        draft: String,
+    }
+    let Ok(request) = request_body::parse_json::<CompleteBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    next_prompt_for(&state, &phone, &tab_id, Phase::Complete, Some(request.draft)).await
+}
+
+/// The answer of both next-prompt routes: the window's when it is open, else
+/// this process's own run.
+async fn next_prompt_for(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+    phase: crate::services::next_prompt::Phase,
+    draft: Option<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use crate::services::next_prompt::{self, Ask, NextPrompt, Phase, Status};
+    let (project_id, tab) = match agent_tab(state, phone, tab_id) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let answer = |prompt: NextPrompt| {
+        // The engine's cleaned line, cleaned again here whoever answered: a
+        // continuation keeps the one space it may open with.
+        let text = prompt.text.as_deref().and_then(|line| {
+            if phase == Phase::Complete { next_prompt::clean_completion(line) } else { next_prompt::clean(line) }
+        });
+        let prompt = NextPrompt { text, ..prompt };
+        // Credited only beside text, as one inert capped line.
+        let model = prompt.text.as_ref().and(prompt.model.as_deref()).and_then(next_prompt::clean_model);
+        let mut body = json!({ "text": prompt.text, "status": prompt.status });
+        if let Some(model) = model {
+            body["model"] = json!(model);
+        }
+        (StatusCode::OK, Json(body))
+    };
+    if phase == Phase::Warm && tab.local_model {
+        return answer(NextPrompt::status(Status::Skipped));
+    }
+    // A draft the engine writes no completion for never leaves this process.
+    if phase == Phase::Complete && draft.as_deref().and_then(next_prompt::draft_tail).is_none() {
+        return answer(NextPrompt::status(Status::Skipped));
+    }
+    // With the window open it answers: the window's composer asks the same
+    // session, so a turn both screens watch runs the model once (user,
+    // 2026-11-22), and this process does not talk to Ollama.
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::AgentNextPrompt {
+            request_id: new_request_id(),
+            project_id: project_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            phase: phase.word().to_string(),
+            draft: draft.clone(),
+        },
+    )
+    .await;
+    if !desktop_down(&response) {
+        return match response {
+            Ok(DesktopResponse::AgentNextPrompt { text, outcome, model }) => {
+                // Only a status word the engine knows crosses.
+                let status = serde_json::from_value::<Status>(json!(outcome)).unwrap_or(Status::Unavailable);
+                answer(NextPrompt { text, model, ..NextPrompt::status(status) })
+            }
+            Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found" => api_error(StatusCode::NOT_FOUND, &code),
+            _ => answer(NextPrompt::status(Status::Unavailable)),
+        };
+    }
+    // No window: the CLI's own transcript, read here off the tab record, and
+    // the loopback Ollama run in this process.
+    let key = format!("phone\u{1f}{project_id}\u{1f}{}", tab.tmux_name);
+    let prompt = tokio::task::spawn_blocking(move || {
+        let ask = Ask { key: &key, agent: &tab.cmd, phase, local_model: tab.local_model, draft: draft.as_deref() };
+        // A completion goes on from the ended turn read a moment ago, if any.
+        if let Some(kept) = next_prompt::complete_kept_blocking(&ask) {
+            return kept;
+        }
+        let transcript = headless::transcript(&project_id, &tab, None, None, Some(NEXT_PROMPT_LIMIT));
+        next_prompt::suggest_blocking(&ask, &transcript)
+    })
+    .await
+    .unwrap_or_else(|_| NextPrompt::status(Status::Unavailable));
+    answer(prompt)
+}
+
 /// `GET /api/v1/tabs/{tab_id}/uncommitted` — the files the agent tab's
 /// conversation changed that are still not committed, for the chat screen's
 /// Commit chip (`chat_uncommitted`). Answered here, window open or not: the
@@ -5573,6 +5828,8 @@ async fn phone_transcript(
         mask_waiting_tools(&mut transcript, &folders);
     }
     transcript.context_card = None;
+    // Every command the session ran, unmasked: the desktop's Data tab only.
+    transcript.shells_run.clear();
     transcript.cwd = None;
     transcript.running_cwds.clear();
     if let Some(prompt) = transcript.cut_prompt.as_mut() {
@@ -5672,7 +5929,7 @@ async fn schedule_create(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(schedule) = serde_json::from_slice::<MobileScheduleInput>(&body) else {
+    let Ok(schedule) = request_body::parse_json::<MobileScheduleInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let (status, body) =
@@ -5700,7 +5957,7 @@ async fn schedule_update(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(schedule) = serde_json::from_slice::<MobileScheduleInput>(&body) else {
+    let Ok(schedule) = request_body::parse_json::<MobileScheduleInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     schedule_mutation(
@@ -5910,7 +6167,7 @@ async fn prompt_create(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(prompt) = serde_json::from_slice::<MobilePromptInput>(&body) else {
+    let Ok(prompt) = request_body::parse_json::<MobilePromptInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let (status, body) =
@@ -5935,7 +6192,7 @@ async fn prompt_update(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(prompt) = serde_json::from_slice::<MobilePromptInput>(&body) else {
+    let Ok(prompt) = request_body::parse_json::<MobilePromptInput>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     prompt_mutation(
@@ -5978,7 +6235,7 @@ async fn prompt_send(
     if let Err(error) = ai_off_guard(&state) {
         return error;
     }
-    let Ok(send) = serde_json::from_slice::<PromptSendBody>(&body) else {
+    let Ok(send) = request_body::parse_json::<PromptSendBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     // The tab is resolved here, before the generic mutation path, so a tab id
@@ -6180,7 +6437,7 @@ async fn move_tab_worktree(
     if let Err(error) = ai_off_guard(&state) {
         return error;
     }
-    let Ok(MoveWorktreeBody { worktree }) = serde_json::from_slice::<MoveWorktreeBody>(&body) else {
+    let Ok(MoveWorktreeBody { worktree }) = request_body::parse_json::<MoveWorktreeBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if worktree.is_empty() || worktree.len() > 128 {
@@ -6302,7 +6559,7 @@ async fn move_tab_location(
     if let Err(error) = ai_off_guard(&state) {
         return error;
     }
-    let Ok(MoveLocationBody { location: asked }) = serde_json::from_slice::<MoveLocationBody>(&body) else {
+    let Ok(MoveLocationBody { location: asked }) = request_body::parse_json::<MoveLocationBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let Ok(snapshot) = catalog(&state, &phone) else {
@@ -6442,7 +6699,7 @@ async fn remember_model_rows(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let Ok(rows) = serde_json::from_slice::<crate::services::model_rows::Rows>(&body) else {
+    let Ok(rows) = request_body::parse_json::<crate::services::model_rows::Rows>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let (cli, source, scope) = match model_rows_cli(&state, &phone, &tab_id) {
@@ -6484,7 +6741,7 @@ async fn switch_assistant_model(
     if let Err(error) = ai_off_guard(&state) {
         return error;
     }
-    let Ok(SwitchModelBody { model }) = serde_json::from_slice::<SwitchModelBody>(&body) else {
+    let Ok(SwitchModelBody { model }) = request_body::parse_json::<SwitchModelBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if model.is_empty() || model.len() > 128 || !crate::services::local_drivers::model_name_ok(&model) {
@@ -6524,7 +6781,8 @@ fn mark_tab_seen(state: &HostState, project_id: Option<String>, tmux_session: St
     // and a turn the phone watched finish must not come back as `done` once
     // the window is closed.
     if let Some(uid) = uid {
-        headless::mark_seen(&state.config.state_dir, uid, now_ms() / 1000);
+        off_worker(|| headless::mark_seen(&state.config.state_dir, uid, now_ms() / 1000));
+        state.readings.lock_ok().invalidate_turns(&project_id);
     }
     let socket = state.config.control_dir.join("desktop-control.sock");
     tokio::spawn(async move {
@@ -6952,7 +7210,7 @@ async fn attach_desktop_image(
     if !desktop_images_open(&state.config.state_dir) {
         return desktop_image_error("desktop_images_off");
     }
-    let Ok(request) = serde_json::from_slice::<AttachDesktopImageBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<AttachDesktopImageBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !desktop_images::valid_id(&request.image_id) {
@@ -7454,6 +7712,39 @@ async fn inbox_file(
     response
 }
 
+/// `DELETE /api/v1/tabs/{tab_id}/inbox/{name}` — drop one file the phone sent
+/// into this tab's project inbox (a hold on its card in the chat → Delete).
+/// The same guards as an outbox delete (`outbox_delete`): the session and the
+/// exact origin, and only a leaf `inbox::read` would serve is removed.
+async fn inbox_delete(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((tab_id, name)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let root = match inbox_root(&state, &phone, &tab_id) {
+        Ok(root) => root,
+        Err(error) => return error,
+    };
+    if !inbox::valid_stored_name(&name) {
+        return api_error(StatusCode::NOT_FOUND, "file_not_found");
+    }
+    let removed = tokio::task::spawn_blocking(move || inbox::remove(&root, &name))
+        .await
+        .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
+    match removed {
+        Ok(()) => (StatusCode::OK, Json(json!({ "removed": true }))),
+        Err(outbox::OutboxError::Io(_)) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "delete_failed"),
+        Err(error) => outbox_error(error),
+    }
+}
+
 /// How long the phone may keep an inbox picture (`inbox_file`) or a
 /// versioned outbox one (`outbox_bytes`): this device only, a day.
 const INBOX_FILE_CACHE: &str = "private, max-age=86400, immutable";
@@ -7485,7 +7776,7 @@ async fn markup_submit(
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin");
     }
-    let Ok(request) = serde_json::from_slice::<markup::MarkupRequest>(&body) else {
+    let Ok(request) = request_body::parse_json::<markup::MarkupRequest>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, markup::MarkupError::Invalid.code());
     };
     if let Err(error) = markup::validate(&request) {
@@ -8052,7 +8343,7 @@ async fn markup_answer(
         ask_id: String,
         answers: Vec<super::protocol::MobileMarkupAnswer>,
     }
-    let Ok(request) = serde_json::from_slice::<AnswerBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<AnswerBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !valid_ask_id(&request.ask_id) {
@@ -8110,7 +8401,7 @@ async fn markup_dismiss(
     struct DismissBody {
         ask_id: String,
     }
-    let Ok(request) = serde_json::from_slice::<DismissBody>(&body) else {
+    let Ok(request) = request_body::parse_json::<DismissBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     if !valid_ask_id(&request.ask_id) {
@@ -8158,6 +8449,21 @@ fn has_host_files(project: &super::discovery::ResolvedProject) -> bool {
         && project.public.kind == ScopeKind::Project
         && project.host == super::discovery::ProjectHost::Remote
         && project.primary_host.as_ref().is_some_and(|spec| host_files::root_of(spec).is_some())
+}
+
+/// The rows of a listing the desktop side panel folds under "Hidden by
+/// extension" — the project's `panel_hidden_endings` on its trusted
+/// `projects.json` entry, never the in-folder `project.json` — as the names
+/// the phone folds into its Hidden section. None where the registry has no
+/// such project (a box) or cannot be read.
+fn hidden_ext_of(raw_id: &str, rel: &str, names: &[String]) -> Vec<String> {
+    let Ok(entry) = crate::services::remote::project_entry(raw_id) else { return Vec::new() };
+    let list = |key: &str| -> Vec<String> {
+        entry.extra.get(key).and_then(|value| value.as_array())
+            .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    };
+    files::hidden_by_ending(&list("panel_hidden_endings"), &list("panel_shown_paths"), rel, names.iter().map(String::as_str))
 }
 
 /// Whether a file-browser request asks for the remote side (`?on=host`).
@@ -8236,7 +8542,8 @@ fn files_rel(
 /// **Upload here** may write into this folder (`project_files_upload`): the
 /// switch is on and no segment of the folder starts with a dot. `remarks`
 /// says whether the reader may write remarks into a PDF of it
-/// (`project_files_remarks`).
+/// (`project_files_remarks`). `hidden_ext` names the rows the desktop side
+/// panel hides by ending (`hidden_ext_of`), which the phone folds away.
 ///
 /// `&on=host` lists the remote side instead: the project's tree on its
 /// primary host (`host_files`), with host-side tokens and never `uploads`.
@@ -8260,10 +8567,14 @@ async fn project_files_list(
             Err(error) => return error,
         };
         let key = state.auth.lock_ok().host_key().to_vec();
+        let (rule_id, rule_rel) = (raw_id.clone(), rel.clone());
         return match state.host_files.list(&spec, known, rel, key, raw_id).await {
             // Read-only: Upload here never writes to the host.
             Ok(listing) => {
+                let names: Vec<String> = listing.entries.iter().map(|entry| entry.name.clone()).collect();
+                let hidden_ext = deadline::local(move || Ok(hidden_ext_of(&rule_id, &rule_rel, &names))).await.unwrap_or_default();
                 let mut answer = json!(listing);
+                answer["hidden_ext"] = json!(hidden_ext);
                 answer["uploads"] = json!(false);
                 answer["remarks"] = json!(false);
                 (StatusCode::OK, Json(answer))
@@ -8287,10 +8598,17 @@ async fn project_files_list(
     let docs_root = rel.is_empty().then(|| root.clone());
     // A directory walk that opens every kept file to type it: off the
     // executor, under the local deadline (a stalled mount answers `timeout`).
-    let listed = deadline::local(move || files::list(&root, &rel, &key, &raw_id)).await;
+    let listed = deadline::local(move || {
+        let listing = files::list(&root, &rel, &key, &raw_id)?;
+        let names: Vec<String> = listing.entries.iter().map(|entry| entry.name.clone()).collect();
+        let hidden_ext = hidden_ext_of(&raw_id, &rel, &names);
+        Ok((listing, hidden_ext))
+    })
+    .await;
     match listed {
-        Ok(listing) => {
+        Ok((listing, hidden_ext)) => {
             let mut answer = json!(listing);
+            answer["hidden_ext"] = json!(hidden_ext);
             if let Some(root) = docs_root {
                 if let Ok(docs) = deadline::local(move || Ok(project_docs::status(&root))).await {
                     answer["docs"] = json!(docs);
@@ -8842,7 +9160,7 @@ async fn project_files_remarks(
         Ok(rel) => rel,
         Err(error) => return error,
     };
-    let Ok(request) = serde_json::from_slice::<remarks::RemarksRequest>(&body) else {
+    let Ok(request) = request_body::parse_json::<remarks::RemarksRequest>(&body) else {
         return remarks_error(remarks::RemarksError::Invalid);
     };
     let key = state.auth.lock_ok().host_key().to_vec();
@@ -9033,6 +9351,10 @@ fn router(state: HostState) -> Router {
             "/api/v1/mail/folders/{folder_id}/messages/{message_id}/reply",
             post(mail_reply),
         )
+        .route(
+            "/api/v1/mail/folders/{folder_id}/messages/{message_id}/complete",
+            post(mail_complete).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/api/v1/activity", get(activity))
         .route("/api/v1/projects", get(projects).post(new_project))
         .route("/api/v1/projects/{project_id}", get(project))
@@ -9098,6 +9420,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/tabs/{tab_id}/status", get(agent_status))
         .route("/api/v1/tabs/{tab_id}/transcript", get(agent_transcript))
+        .route("/api/v1/tabs/{tab_id}/next-prompt", get(tab_next_prompt).post(tab_complete_prompt))
         .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
         .route("/api/v1/tabs/{tab_id}/changes", get(tab_changes))
         .route("/api/v1/tabs/{tab_id}/named-files", get(tab_named_files))
@@ -9109,7 +9432,7 @@ fn router(state: HostState) -> Router {
             "/api/v1/tabs/{tab_id}/inbox",
             get(inbox_described).merge(post(inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
         )
-        .route("/api/v1/tabs/{tab_id}/inbox/{name}", get(inbox_file))
+        .route("/api/v1/tabs/{tab_id}/inbox/{name}", get(inbox_file).delete(inbox_delete))
         .route(
             "/api/v1/projects/{project_id}/inbox",
             post(project_inbox_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE)),

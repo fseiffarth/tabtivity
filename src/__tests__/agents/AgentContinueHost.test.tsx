@@ -327,6 +327,87 @@ describe("auto-continue", () => {
     expect(writes.join("")).not.toContain("continue");
   });
 
+  it("says what holds a due continue, and that it was missed once given up", async () => {
+    const { writes } = seedReadyTerminal();
+    useActivityStore.setState({ busyByTab: { "p:agent-1": true }, attentionByTab: {} });
+
+    await act(async () => {
+      render(<AgentContinueHost />);
+    });
+    vi.setSystemTime(new Date(2026, 8, 1, 18, 22));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(useAgentContinueStore.getState().byTarget[KEY]?.holding).toBe("busy");
+
+    // Past the catch-up hour: given up, and the reason kept beside the next arm.
+    vi.setSystemTime(new Date(2026, 8, 1, 19, 30));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(writes.join("")).not.toContain("continue");
+    const status = useAgentContinueStore.getState().byTarget[KEY];
+    expect(status?.missed).toBe("busy");
+    expect(status?.holding).toBeUndefined();
+  });
+
+  describe("a Codex tab whose turn ended on its usage limit", () => {
+    // What `services::agent_usage::codex_panel` prints, and the notice Codex
+    // 0.172 leaves when the turn fails on the limit (no `Stop` hook fires).
+    const CODEX_PANEL = "Current session: 100% used · resets Sep 1, 2026, 4:20pm (UTC)\nCurrent week: 85% used · resets Sep 5, 2026, 9:00am (UTC)";
+    const NOTICE = [
+      "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit",
+      "https://chatgpt.com/settings/usage to purchase more credits or try again at 6:20 PM.",
+      "",
+      "› Ask Codex to do anything",
+      "  ? for shortcuts                                   85% context left",
+    ];
+
+    beforeEach(() => {
+      seedTabs(tab({ cmd: "codex", label: "Codex" }));
+      usageAnswer = { agent: "codex", label: "Codex", supported: true, raw: CODEX_PANEL, cached: false };
+    });
+
+    it("sends past the 'working' verdict the limit left standing", async () => {
+      const { writes } = seedReadyTerminal();
+      screen.lines = NOTICE;
+      useActivityStore.setState({ busyByTab: { "p:agent-1": true }, attentionByTab: {} });
+
+      await act(async () => {
+        render(<AgentContinueHost />);
+      });
+      const armed = useAgentContinueStore.getState().byTarget[KEY];
+      expect(armed?.source).toBe("panel");
+      expect(armed?.armedAt).toBe(Date.UTC(2026, 8, 1, 16, 21));
+
+      vi.setSystemTime(Date.UTC(2026, 8, 1, 16, 22));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(writes.join("")).toContain("continue");
+      expect(useAgentContinueStore.getState().byTarget[KEY]?.sent).toBe(1);
+    });
+
+    it("still never answers a question with it", async () => {
+      const { writes } = seedReadyTerminal();
+      screen.lines = NOTICE;
+      useActivityStore.setState({ busyByTab: {}, attentionByTab: { "p:agent-1": "decision" } });
+
+      await act(async () => {
+        render(<AgentContinueHost />);
+      });
+      vi.setSystemTime(Date.UTC(2026, 8, 1, 16, 22));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(writes.join("")).not.toContain("continue");
+      expect(useAgentContinueStore.getState().byTarget[KEY]?.holding).toBe("decision");
+    });
+  });
+
   it("forgets a target whose switch went off", async () => {
     invokeMock.mockImplementation(() => Promise.resolve(usageAnswer));
     await act(async () => {

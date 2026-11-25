@@ -133,6 +133,7 @@ export function stepSibling(path: readonly SubagentStep[], delta: number): reado
   if (!step) return path;
   const next = step.siblings[siblingPosition(step).index + delta];
   if (!next || siblingPosition(step).index < 0) return path;
-  // Its own spawn time, never the one stepped away from.
-  return [...path.slice(0, -1), { ...step, ...next, at: next.at }];
+  // The sibling as it is: nothing of the one stepped away from (its spawn
+  // time, that it ran or was a workflow run) but where the way up lands.
+  return [...path.slice(0, -1), { ...next, siblings: step.siblings, scrollTop: step.scrollTop }];
 }

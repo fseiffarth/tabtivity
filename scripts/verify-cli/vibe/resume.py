@@ -105,23 +105,27 @@ def launch(tab, args, steps, name=None, extra=None):
     t = common.Tui(common.out_dir("vibe", label, "resume", name or tab), [binp, *args], work, env,
                    size=(110, 36), keep=40)
     try:
-        for _ in range(40):
+        for _ in range(120):
             s = t.plain()
             if "trust" in s.lower() and ("folder" in s.lower() or "directory" in s.lower()):
                 t.keys("Enter")
             time.sleep(0.5)
-            if ">" in s and "─" in s and "trust" not in s.lower():
+            if (">" in s and "─" in s and "trust" not in s.lower()
+                    and "Initializing…" not in s and "Resuming session…" not in s):
                 break
         time.sleep(2)
         t.cap("start")
         for s in steps:
-            if s.startswith("sleep:"):
+            if s.startswith("wait:"):
+                t.wait(s[5:], 60)
+            elif s.startswith("sleep:"):
                 time.sleep(float(s[6:]))
             elif s.startswith("key:"):
                 t.keys(s[4:])
                 time.sleep(3)
             else:
                 t.type(s)
+                t.wait(s, 2)
                 t.keys("Enter")
                 time.sleep(7)
         t.cap("end")
@@ -165,10 +169,11 @@ try:
           f"{a} -> {record('A')}")
 
     n = len(requests())
-    launch("B", [], ["model check"], name="B3", extra={"VIBE_ACTIVE_MODEL": "stub-two"})
+    launch("B", [], ["model check", "wait:stub answer done"], name="B3", extra={"VIBE_ACTIVE_MODEL": "stub-two"})
     models = sorted({q.get("model") for q in requests()[n:]} - {None})
     check("VIBE_ACTIVE_MODEL picks the model the request names", models == ["stub-two"], f"{models}")
 finally:
     stub.terminate()
 
 print(f"{sum(ok for _, ok in results)}/{len(results)} passed")
+sys.exit(0 if all(ok for _, ok in results) else 1)

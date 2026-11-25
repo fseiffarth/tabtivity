@@ -135,7 +135,14 @@ fn read_search_state(settings: &Settings) -> SearchState {
     search_state(settings, keyring, key_stored)
 }
 
-fn cli_options(logins: &[crate::services::agent_auth::LoginStatus], ollama_ready: bool) -> Vec<CliOption> {
+/// `claude_token`: whether a Claude spawn would run on the saved long-lived
+/// token (`services::claude_token`), asked only for a Claude without a login
+/// — a chat on it starts, so it is no reason to ask for a sign-in.
+fn cli_options(
+    logins: &[crate::services::agent_auth::LoginStatus],
+    ollama_ready: bool,
+    claude_token: impl Fn() -> bool,
+) -> Vec<CliOption> {
     AssistantCli::ALL
         .into_iter()
         .filter(|cli| assistant::is_offered(*cli))
@@ -146,6 +153,7 @@ fn cli_options(logins: &[crate::services::agent_auth::LoginStatus], ollama_ready
                     .iter()
                     .find(|l| l.id == cli.bin())
                     .is_some_and(|l| l.signed_in || l.api_key || l.uses_admin_key)
+                    || (cli.bin() == "claude" && claude_token())
             });
             let ready = installed && signed_in.unwrap_or(ollama_ready);
             let models = if cli == AssistantCli::Codex && installed {
@@ -183,7 +191,7 @@ pub async fn assistant_options() -> Result<AssistantOptions, String> {
         let ollama_ready = ollama_reachable && !local_models.is_empty();
         let defaults = settings.assistant_settings.as_ref();
         AssistantOptions {
-            clis: cli_options(&logins, ollama_ready),
+            clis: cli_options(&logins, ollama_ready, || crate::services::claude_token::status().in_use),
             local_models,
             ollama_reachable,
             default_cli: defaults.and_then(|a| a.default_cli.clone()),
@@ -607,7 +615,7 @@ mod tests {
             api_key_saved: false,
             wellknown_homes: Vec::new(),
         };
-        let options = cli_options(&[login("claude", true), login("codex", false)], true);
+        let options = cli_options(&[login("claude", true), login("codex", false)], true, || false);
         let ids: Vec<&str> = options.iter().map(|o| o.id.as_str()).collect();
         assert_eq!(ids, ["claude", "codex", "opencode_local", "claude_local"]);
         let claude = &options[0];
@@ -616,7 +624,11 @@ mod tests {
         assert_eq!(options[1].signed_in, Some(false));
         assert!(!options[1].ready);
         assert!(options[2].local && options[2].signed_in.is_none());
-        let no_ollama = cli_options(&[], false);
+        let no_ollama = cli_options(&[], false, || false);
         assert!(no_ollama.iter().filter(|o| o.local).all(|o| !o.ready));
+        // A Claude whose login is over but with a saved token still chats.
+        let on_token = cli_options(&[login("claude", false), login("codex", false)], true, || true);
+        assert_eq!(on_token[0].signed_in, Some(true));
+        assert_eq!(on_token[1].signed_in, Some(false), "the token is Claude's only");
     }
 }

@@ -13,6 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openFileEntry } from "../files/openFileEntry";
 import { openProjectFilesTab } from "../tabs/openProjectFilesTab";
+import { fileTabMatcher } from "../tabs/fileTab";
 import { useTabsStore } from "../../stores/tabs";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { linkBackKey, useLinkBackStore } from "../../stores/linkBack";
@@ -131,7 +132,7 @@ export function openPathLink(
   };
   const viewer = internalViewerFor(entry, ctx.disabled);
   const fileTab = () =>
-    tabsOf().find((t) => t.kind === "embed" && t.viewer === viewer && t.embedPath === entry.path);
+    (viewer ? tabsOf().find(fileTabMatcher(entry.path, viewer)) : undefined);
   const prior = fileTab();
   openFileEntry({
     entry,

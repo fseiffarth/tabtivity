@@ -2,28 +2,32 @@
  * The Reader's Files view under keyboard steering: the pure cursor / row /
  * action model (`TerminalReaderFiles` does the DOM and the props).
  *
- * The view lists files, then links, as one walkable list. The cursor is a
- * *key* (a file's path, a link's URL), never an index: the lists grow while the
+ * The view lists files, then links, then shell commands, as one walkable
+ * list. The cursor is a *key* (a file's path, a link's URL, a command's row
+ * key), never an index: the lists grow while the
  * agent talks, and a key survives rows arriving above it. Moving the cursor
  * opens nothing; only `o` / `v` act on the row it stands on.
  */
 
-export type RowKind = "file" | "link";
+export type RowKind = "file" | "link" | "shell";
+
+/** The sections in drawing order. */
+const SECTIONS: readonly RowKind[] = ["file", "link", "shell"];
 
 export interface Row {
   kind: RowKind;
-  /** The file's path or the link's URL. */
+  /** The file's path, the link's URL or the command's row key. */
   key: string;
 }
 
 /** What one key press asks the view to do besides moving the cursor. */
-export type FilesEffect = "show" | "openTab" | "openTabNew" | "openLink" | "scroll" | "out";
+export type FilesEffect = "show" | "showShell" | "openTab" | "openTabNew" | "openLink" | "scroll" | "out";
 
 export interface FilesDecision {
   /** The cursor's new key, when the press moved it. */
   cursor?: string;
   effect?: FilesEffect;
-  /** The row `show` / `openTab` / `openTabNew` / `openLink` act on. */
+  /** The row `show` / `showShell` / `openTab` / `openTabNew` / `openLink` act on. */
   row?: Row;
   /** Screens to scroll with `scroll` (negative = back). */
   pages?: number;
@@ -36,11 +40,17 @@ export interface FilesMods {
   repeat: boolean;
 }
 
-/** The walkable list: every file, then every link (the order the view draws). */
-export function rowsOf(files: readonly { entry: { path: string } }[], links: readonly { url: string }[]): Row[] {
+/** The walkable list: every file, then every link, then every shell command
+ *  (the order the view draws). */
+export function rowsOf(
+  files: readonly { entry: { path: string } }[],
+  links: readonly { url: string }[],
+  shells: readonly { key: string }[] = [],
+): Row[] {
   return [
     ...files.map((file) => ({ kind: "file" as const, key: file.entry.path })),
     ...links.map((link) => ({ kind: "link" as const, key: link.url })),
+    ...shells.map((shell) => ({ kind: "shell" as const, key: shell.key })),
   ];
 }
 
@@ -70,14 +80,15 @@ export function stepCursor(rows: readonly Row[], cursor: string | null, delta: -
 }
 
 /**
- * The first row of the previous (-1) / next (+1) section, Files then Links;
- * a section with no rows does not exist, so with one section (or none beyond
- * the cursor's) the cursor stays.
+ * The first row of the previous (-1) / next (+1) section, Files, Links, then
+ * Shell commands; a section with no rows does not exist (it is skipped), so
+ * with one section (or none beyond the cursor's) the cursor stays.
  */
 export function jumpSection(rows: readonly Row[], cursor: string | null, delta: -1 | 1): string | null {
   const here = rows.find((row) => row.key === cursor);
   if (!here) return rows[0]?.key ?? null;
-  const target: RowKind | null = delta > 0 ? (here.kind === "file" ? "link" : null) : here.kind === "link" ? "file" : null;
+  const present = SECTIONS.filter((kind) => rows.some((row) => row.kind === kind));
+  const target = present[present.indexOf(here.kind) + delta];
   if (!target) return here.key;
   return rows.find((row) => row.kind === target)?.key ?? here.key;
 }
@@ -110,12 +121,13 @@ export function decide(rows: readonly Row[], cursor: string | null, action: File
       const row = rows.find((r) => r.key === cursor);
       if (!row || mods.repeat) return {};
       if (row.kind === "link") return { effect: "openLink", row };
+      if (row.kind === "shell") return { effect: "showShell", row };
       return { effect: mods.shift ? "openTabNew" : "openTab", row };
     }
     case "viewOpenAlt": {
       const row = rows.find((r) => r.key === cursor);
       if (!row || mods.repeat || row.kind === "link") return {};
-      return { effect: "show", row };
+      return { effect: row.kind === "shell" ? "showShell" : "show", row };
     }
   }
 }

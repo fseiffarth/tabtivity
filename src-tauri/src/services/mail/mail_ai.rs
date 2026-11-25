@@ -44,7 +44,7 @@ pub const REMOTE_REFUSED: &str =
      127.0.0.1 to use it.";
 
 /// The reason an embedding-only model cannot answer a chat prompt.
-fn embedding_only_reason(model: &str) -> String {
+pub(crate) fn embedding_only_reason(model: &str) -> String {
     format!(
         "the model '{model}' is embedding-only, so it cannot write text — load a local \
          completion model for the mail assistant."
@@ -53,7 +53,7 @@ fn embedding_only_reason(model: &str) -> String {
 
 /// The reason an Ollama cloud model is refused (gap 25): a loopback Ollama
 /// forwards it to ollama.com, so the endpoint check alone would let mail out.
-fn cloud_model_reason(model: &str) -> String {
+pub(crate) fn cloud_model_reason(model: &str) -> String {
     format!(
         "the model '{model}' is an Ollama cloud model: it runs on ollama.com, not on this \
          machine, so the mail assistant refuses it — pick a local model for the brain menu's \
@@ -63,16 +63,14 @@ fn cloud_model_reason(model: &str) -> String {
 
 /// The reason a listener that is not Ollama's is refused (gap 50a): whoever
 /// binds the port while Ollama is down would be handed the mail and answer for
-/// the model.
-fn listener_refused_reason(addr: &str) -> String {
-    let why = ollama::owner_gate(addr).err().unwrap_or_default();
-    let why = why.strip_prefix(ollama::LISTENER_REFUSED).map(|r| r.trim_start_matches(": ")).unwrap_or(&why);
+/// the model. `why` is the owner gate's own reason.
+pub(crate) fn listener_refused_reason(why: &str) -> String {
     format!("the local mail assistant refused the Ollama endpoint: {why} Nothing about your mail was sent.")
 }
 
 /// The reason a model the local Ollama does not list (or whose list could not
 /// be read) is refused: nothing proves it runs here, so it fails closed.
-fn unlisted_model_reason(model: &str) -> String {
+pub(crate) fn unlisted_model_reason(model: &str) -> String {
     format!(
         "the model '{model}' is not one the local Ollama lists as installed, so the mail \
          assistant does not use it — pull it, or pick an installed model for the brain menu's \
@@ -81,7 +79,7 @@ fn unlisted_model_reason(model: &str) -> String {
 }
 
 /// The reason a hosted server refuses a model its administrator did not allow.
-fn model_not_allowed_reason(model: &str) -> String {
+pub(crate) fn model_not_allowed_reason(model: &str) -> String {
     format!(
         "the model '{model}' is not one the server's administrator allows — pick an \
          allowed model for the brain menu's Mail role."
@@ -115,34 +113,17 @@ pub fn mail_model() -> Result<String, String> {
 
 // ── Loopback enforcement ────────────────────────────────────────────────────
 
-/// The host portion of an already-resolved `host:port` (or `[ipv6]:port`).
-fn host_of_addr(addr: &str) -> &str {
-    if let Some(rest) = addr.strip_prefix('[') {
-        rest.split_once(']').map(|(h, _)| h).unwrap_or(rest)
-    } else {
-        addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr)
-    }
-}
-
-/// Resolve the configured host to a `host:port` **that is loopback**, or refuse.
-///
-/// It normalizes with `services::ollama_client::resolve_ollama_addr` (so `http://`
-/// prefixes, bare ports and IPv6 are handled exactly as the general transport
-/// handles them, and a `https://` host is refused for the same reason) and then
-/// re-checks the literal against `host_is_loopback` — never consulting
-/// `ollama_allow_remote_host`, which is what makes this stricter than the
+/// Resolve the configured host to a `host:port` **that is loopback**, or refuse
+/// with the mail wording. The rule is the shared one
+/// (`services::ollama_local::loopback_endpoint`): it never consults
+/// `ollama_allow_remote_host`, which is what makes it stricter than the
 /// setting. Takes the raw host string so the whole rule is a pure function.
 pub fn resolve_endpoint(raw: Option<&str>) -> Result<String, String> {
-    // `allow_remote = true` here means "don't let the general resolver reject a
-    // remote host on our behalf" — we want to make that refusal ourselves, with
-    // the mail-specific reason, rather than emit the general one that points at
-    // the very setting this path ignores.
-    let addr = ollama::resolve_ollama_addr(raw, true)?;
-    if ollama::host_is_loopback(host_of_addr(&addr)) {
-        Ok(addr)
-    } else {
-        Err(REMOTE_REFUSED.to_string())
-    }
+    use crate::services::ollama_local::{loopback_endpoint, LocalRefusal};
+    loopback_endpoint(raw).map_err(|refusal| match refusal {
+        LocalRefusal::Endpoint(reason) => reason,
+        _ => REMOTE_REFUSED.to_string(),
+    })
 }
 
 // ── The chat wrapper ────────────────────────────────────────────────────────
@@ -190,10 +171,7 @@ fn chat_with(settings: &Settings, system: &str, user: &str, opts: ChatOptions) -
     // embedding-without-completion is a refusal. Asked of the endpoint the
     // checks above judged, like the chat itself.
     let caps = ollama::capabilities_of_at(&addr, &model);
-    if !caps.is_empty()
-        && caps.iter().any(|c| c == "embedding")
-        && !caps.iter().any(|c| c == "completion")
-    {
+    if crate::services::ollama_local::embedding_only(&caps) {
         return Err(embedding_only_reason(&model));
     }
 
@@ -241,23 +219,21 @@ fn chat_with(settings: &Settings, system: &str, user: &str, opts: ChatOptions) -
 /// `/api/tags` (cached a minute — auto-classify calls this for every new
 /// mail) and fails closed on an unreadable list.
 fn preflight(settings: &Settings) -> Result<(String, String), String> {
+    use crate::services::ollama_local::{self, LocalRefusal};
     let model = mail_model_from(settings).ok_or_else(|| NO_MODEL.to_string())?;
-
-    // Loopback first — before capabilities, before the request, before anything
-    // reaches the network.
-    let addr = resolve_endpoint(ollama::host_setting(settings).0)?;
-    // On a hosted server, only a model the admin allows may be loaded on the
-    // one shared Ollama — the classifier an inbox sync runs included
-    // (`model_allowlist`, final review A1). Nothing off a server.
-    if crate::services::model_allowlist::check_model(&model).is_err() {
-        return Err(model_not_allowed_reason(&model));
-    }
-    match ollama::model_is_local_at(&addr, &model) {
-        Ok(()) => Ok((model, addr)),
-        Err(ollama::MODEL_NOT_RUNNING) => Err(NOT_RUNNING.to_string()),
-        Err(ollama::LISTENER_REFUSED) => Err(listener_refused_reason(&addr)),
-        Err("model_not_local") => Err(cloud_model_reason(&model)),
-        Err(_) => Err(unlisted_model_reason(&model)),
+    // The shared gate: loopback first — before the model list, before the
+    // request, before anything reaches the network — then the hosted server's
+    // allowlist (`model_allowlist`, final review A1: the classifier an inbox
+    // sync runs included), then the model's locality.
+    match ollama_local::preflight(settings, &model) {
+        Ok(addr) => Ok((model, addr)),
+        Err(LocalRefusal::Endpoint(reason)) => Err(reason),
+        Err(LocalRefusal::Remote) => Err(REMOTE_REFUSED.to_string()),
+        Err(LocalRefusal::NotAllowed) => Err(model_not_allowed_reason(&model)),
+        Err(LocalRefusal::NotRunning) => Err(NOT_RUNNING.to_string()),
+        Err(LocalRefusal::Listener(why)) => Err(listener_refused_reason(&why)),
+        Err(LocalRefusal::Cloud) => Err(cloud_model_reason(&model)),
+        Err(LocalRefusal::Unlisted) => Err(unlisted_model_reason(&model)),
     }
 }
 

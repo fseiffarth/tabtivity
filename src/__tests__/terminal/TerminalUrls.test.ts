@@ -171,6 +171,12 @@ describe("findSignInRequest", () => {
     expect(findSignInRequest(at(rows), COLS, 0, 2)).toEqual({ url: short, wantsCode: true });
   });
 
+  it("asks for the code under the short Console link (2.1.331, `auth login --console`)", () => {
+    const short = "https://platform.claude.com/oauth/authorize?T-a4fiX4fLxoaT1-tVfoJkN5tFZ72aJRw2OJTGRHs9FD0";
+    const rows = [row("If the browser didn't open, visit:"), row(short), row("Paste code here if prompted >")];
+    expect(findSignInRequest(at(rows), COLS, 0, 2)).toEqual({ url: short, wantsCode: true });
+  });
+
   it("asks for no code when the program does not", () => {
     const rows = [row("Opening https://claude.ai/oauth/authorize?client_id=abc&response_type=code in your browser")];
     expect(findSignInRequest(at(rows), COLS, 0, 0)?.wantsCode).toBe(false);

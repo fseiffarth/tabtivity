@@ -1,6 +1,7 @@
 import { chatTurns } from "../../../../mobile-web/src/terminal/chatTurns";
 import { readableScreen, readableText, type ReadableBufferLike } from "../../../../mobile-web/src/terminal/readableScreen";
 import { inputFrameStart } from "../../../../mobile-web/src/terminal/statusLine";
+import { antigravityDialogStart, isAntigravityTab } from "../../../../mobile-web/src/terminal/antigravity";
 import { foldPrompt } from "./adopt";
 
 /**
@@ -18,10 +19,16 @@ import { foldPrompt } from "./adopt";
  * that screen shows: the prompt typed into *this* pane, which is the case
  * the transcript route cannot cover for these agents. A pane that is hidden
  * receives no output, so its buffer is the screen it last showed.
+ *
+ * Antigravity draws its `Switch Model` dialog *under* its input box, rows
+ * marked `> ` like an echo, so the screen is cut where that dialog starts
+ * (`antigravityDialogStart`) — its highlighted model once named a tab.
  */
-export function lastPromptEcho(buffer: ReadableBufferLike): string | undefined {
+export function lastPromptEcho(buffer: ReadableBufferLike, agentLabel?: string): string | undefined {
   const { lines } = readableScreen(buffer);
-  const turns = chatTurns(lines.slice(0, inputFrameStart(lines)));
+  const dialog = isAntigravityTab(agentLabel) ? antigravityDialogStart(lines) : -1;
+  const shown = dialog >= 0 ? lines.slice(0, dialog) : lines;
+  const turns = chatTurns(shown.slice(0, inputFrameStart(shown)));
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
     if (turn.role !== "user" || !turn.prompt) continue;

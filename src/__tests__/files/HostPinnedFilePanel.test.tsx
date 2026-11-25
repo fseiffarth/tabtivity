@@ -202,13 +202,13 @@ describe("the git history of a host-pinned project", () => {
     setupInvoke();
   });
 
-  it("asks for no lockstep and offers no mirror worktree site", async () => {
+  it("asks for no lockstep and never reads a mirror repo", async () => {
     await act(async () => {
-      render(<GitHistory projectDir="/state/p1" projectId="p1" remote hostPinned connected />);
+      render(<GitHistory projectDir="/state/p1" projectId="p1" remote hostPinned site="mirror" connected />);
     });
     await waitFor(() => expect(calls("git_log").length).toBeGreaterThan(0));
     expect(calls("git_peer_status")).toHaveLength(0);
-    expect(document.querySelector(".git-worktree-site")).toBeNull();
+    expect(calls("git_log").every(([, args]) => !(args as { worktree?: unknown }).worktree)).toBe(true);
   });
 
   it("a plain remote project still does (control)", async () => {

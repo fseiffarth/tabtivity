@@ -1,8 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { wrapStep } from "../../lib/wrapStep";
 import { DialogShell } from "../common/PromptDialogs";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
+import { SuggestionSourceChip } from "../terminal/SuggestionSourceChip";
+import { PromptGhost } from "../terminal/PromptGhost";
 import { ReaderSlashMenu, slashMenuKey } from "../terminal/ReaderSlashMenu";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import {
@@ -19,6 +21,10 @@ import { pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop
 import { onParsedSettled } from "../../lib/terminal/parsedSettled";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { readReaderLive } from "../../lib/agents/readerLive";
+import { useLocalNextPrompt, usePromptComplete, useWorkEndKey } from "../../lib/agents/nextPrompt";
+import { projectIdOfScope } from "../../lib/terminal/ptyId";
+import { useProjectsStore } from "../../stores/projects";
+import { hostTabId } from "../../stores/tabs/tabLocation";
 import { isNewConversationCommand } from "../../lib/agents/typedClear";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
@@ -70,7 +76,8 @@ const drafts = new Map<string, string>();
  * with `/` opens its `/` menu under the box (`ReaderSlashMenu`: ↑/↓, Tab or
  * Enter on a picked row fills it, Esc closes it), and the empty box shows
  * Claude Code's own suggestion for the next prompt, read off the pane's
- * screen, as its placeholder — Tab or → takes it in.
+ * screen, as its placeholder — Tab or → takes it in; where the CLI draws
+ * none, the local model's (`lib/agents/nextPrompt`).
  *
  * Under the text, the phone composer's chips on Alt+keys (the letters type
  * text here): Alt+M lists the session's own `/model` picker, Alt+E the
@@ -217,10 +224,52 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     () => (slashClosed || picking || effortOpen || commitOpen ? [] : slashSuggestions(value, cli, usedSlash)),
     [slashClosed, picking, effortOpen, commitOpen, value, cli, usedSlash],
   );
-  /** Claude's suggestion while the box is empty, as its own CLI shows it:
-   * the placeholder, taken into the box by Tab or →, so the user still
-   * sends, edits or ignores it. */
-  const shownSuggestion = suggestion && !value && !busy && !working && !picking && !effortOpen && !commitOpen ? suggestion : "";
+  /** The local model's suggestion where the CLI draws none of its own
+   * (`lib/agents/nextPrompt`), asked once each time the agent is idle while
+   * the box is open. The box reads no transcript, so it warms nothing. */
+  const remoteHost = useProjectsStore((s) =>
+    hostTabId(target.tab, s.projects.find((p) => p.id === projectIdOfScope(target.scope))));
+  const idleTurn = useWorkEndKey(working);
+  const localSuggestion = useLocalNextPrompt({
+    scope: target.scope,
+    tab: target.tab,
+    remoteHost,
+    visible: true,
+    working,
+    turnKey: idleTurn,
+    warm: false,
+    screenSuggestion: suggestion,
+    composerEmpty: !value,
+  });
+  const offered = suggestion || localSuggestion.text;
+  /** Claude's suggestion (or the local model's) while the box is empty, as
+   * Claude's own CLI shows it: the placeholder, taken into the box by Tab or
+   * →, so the user still sends, edits or ignores it. */
+  const shownSuggestion = offered && !value && !busy && !working && !picking && !effortOpen && !commitOpen ? offered : "";
+  const suggestionLocal = !!shownSuggestion && !suggestion;
+  /** How the prompt being typed goes on, by the local Suggestions model
+   * (`usePromptComplete`): dim after the caret (`PromptGhost`), taken by Tab
+   * or → — and the rest of the offered suggestion while it is typed along.
+   * Not over a list or the `/` menu. */
+  const [caretAtEnd, setCaretAtEnd] = useState(true);
+  const readCaret = (box: HTMLTextAreaElement) =>
+    setCaretAtEnd(box.selectionStart === box.value.length && box.selectionEnd === box.value.length);
+  // A pick, a paste or a taken continuation moves the caret without a key.
+  useLayoutEffect(() => {
+    const box = input.current;
+    if (box) setCaretAtEnd(box.selectionStart === box.value.length && box.selectionEnd === box.value.length);
+  }, [value]);
+  const completion = usePromptComplete({
+    scope: target.scope,
+    tab: target.tab,
+    remoteHost,
+    visible: !busy && !picking && !effortOpen && !commitOpen && slashMenu.length === 0,
+    draft: value,
+    atEnd: caretAtEnd,
+    seed: shownSuggestion,
+    seedModel: localSuggestion.model,
+    seedLocal: suggestionLocal,
+  });
 
   /** OpenCode's picker is answered by typing a row's query into its search
    * field, and its walk (`OpenCodePickerWalk`) moves the dialog's highlight
@@ -394,6 +443,15 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     editValue(shownSuggestion);
     return true;
   };
+  /** Tab or → at the text's end takes the continuation drawn after it. */
+  const completionKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (!completion.text || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return false;
+    if (e.key !== "Tab" && e.key !== "ArrowRight") return false;
+    const box = e.currentTarget;
+    if (box.selectionStart !== value.length || box.selectionEnd !== value.length) return false;
+    editValue(value + completion.text);
+    return true;
+  };
   const runChip = (chip: Chip) => {
     if (chip !== "clear") setClearArmed(false);
     if (chip === "model") openModel();
@@ -561,22 +619,28 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         {(agent !== target.tab.label || model) && (
           <span className="steering-prompt-agent">{[agent !== target.tab.label ? agent : "", model].filter(Boolean).join(" · ")}</span>
         )}
+        {shownSuggestion ? <SuggestionSourceChip local={suggestionLocal} model={localSuggestion.model} />
+          : completion.text && <SuggestionSourceChip local={completion.local} model={completion.model} />}
         <UntestedTag id="steering.agentPrompt" />
         <UntestedTag id="steering.promptPaste" />
         <UntestedTag id="steering.promptAltGr" />
         {(slashMenu.length > 0 || shownSuggestion) && <UntestedTag id="steering.promptSuggestions" />}
+        {suggestionLocal && <UntestedTag id="agents.localNextPrompt" />}
+        {completion.text && <UntestedTag id="agents.promptAutocomplete" />}
       </h2>
       <textarea
         ref={input}
         className="file-paste-name steering-prompt-input"
         autoFocus
         rows={4}
-        aria-label={shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}` : t("steering.prompt.placeholder")}
+        aria-label={shownSuggestion ? `${t(suggestionLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion")}: ${shownSuggestion}` : t("steering.prompt.placeholder")}
         placeholder={shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion }) : t("steering.prompt.placeholder")}
         aria-invalid={!!error}
         aria-describedby={error ? errorId : undefined}
+        aria-description={completion.text ? t("terminal.reader.completion", { text: completion.text.trim() }) : undefined}
         value={value}
         disabled={busy}
+        onSelect={(e) => readCaret(e.currentTarget)}
         onPaste={onPaste}
         // A kept draft: the caret goes after it, not before.
         onFocus={(e) => {
@@ -593,7 +657,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
             return;
           }
           if (e.key !== "Alt") setClearArmed(false);
-          if (listKey(e) || slashKey(e) || suggestionKey(e)) {
+          if (listKey(e) || slashKey(e) || suggestionKey(e) || completionKey(e)) {
             // Taken here: the box's own Escape, Enter and Tab stand aside.
             e.preventDefault();
             return;
@@ -603,6 +667,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
           void submit();
         }}
       />
+      {completion.text && <PromptGhost box={input} typed={value} rest={completion.text} />}
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
       {(picking || effortOpen) && (
         <div ref={listRef} className="steering-prompt-list" role="listbox"

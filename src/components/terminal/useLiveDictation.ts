@@ -2,7 +2,7 @@ import { useRef, useState, type Dispatch, type MutableRefObject, type RefObject,
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import type { Language } from "../../lib/i18n";
 import { draftChange, ProvisionalDraft, rebaseRange, replaceDictated, shiftOffset, type DraftRange, type Splice } from "../../lib/voice/provisionalDraft";
-import { mayEditDraft } from "../../lib/voice/voiceCommands";
+import { mayAskHelp, mayEditDraft, mayNavigate } from "../../lib/voice/voiceCommands";
 
 /** What `useReaderVoice` asks of the composer while it dictates: the words of
  * a segment still being said are written into the draft as they are heard
@@ -32,8 +32,8 @@ export function useLiveDictation({ draftRef, setDraft, boxRef, language, record 
   draftRef: MutableRefObject<string>;
   setDraft: Dispatch<SetStateAction<string>>;
   boxRef: RefObject<HTMLTextAreaElement | null>;
-  /** The language spoken edits are matched in. */
-  language: Language;
+  /** The language spoken edits are matched in, read when a partial is judged. */
+  language: () => Language;
   record(before: string, after: string): void;
 }) {
   const spans = useRef(new ProvisionalDraft());
@@ -150,10 +150,12 @@ export function useLiveDictation({ draftRef, setDraft, boxRef, language, record 
     show(segment, text) {
       sync();
       const clean = sanitizeVoiceTranscript(text);
-      // A spoken send is no text; a spoken edit, while it may still turn out
-      // one, is held back like a navigation is.
+      // A spoken send is no text; a spoken edit, "{assistant} navigate" or
+      // "{assistant} help", while it may still turn out one, is held back:
+      // the Heard line shows it, the draft never does.
       const words = spokenSend(clean) ?? clean;
-      if (!words || mayEditDraft(clean, languageRef.current)) {
+      const lang = languageRef.current();
+      if (!words || mayEditDraft(clean, lang) || mayNavigate(clean, lang) || mayAskHelp(clean, lang)) {
         hide(segment);
         return false;
       }

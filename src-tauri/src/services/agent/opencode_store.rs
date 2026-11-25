@@ -159,6 +159,25 @@ pub fn session_transcript(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
+    session_transcript_with(db, directory, since, own, subagent, version, limit, false)
+}
+
+/// [`session_transcript`], with each finished `reasoning` part as a
+/// `thinking` entry when `thinking` is set — the desktop Chat of a
+/// local-model tab, where the model's reasoning is the user's own machine
+/// talking. Its fingerprint differs from a read without, so a version seen
+/// by one never answers `unchanged` to the other.
+#[allow(clippy::too_many_arguments)]
+pub fn session_transcript_with(
+    db: &Path,
+    directory: &str,
+    since: Option<i64>,
+    own: Option<&str>,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+    thinking: bool,
+) -> Option<AgentTranscript> {
     let conn = open_store(db)?;
     let session = match tab_session(&conn, directory, since, own, subagent)? {
         TabSession::Id(id) => id,
@@ -171,7 +190,10 @@ pub fn session_transcript(
             })
         }
     };
-    let current = fingerprint(&conn, &session)?;
+    let mut current = fingerprint(&conn, &session)?;
+    if thinking {
+        current.push_str(":thinking");
+    }
     if version == Some(current.as_str()) {
         return Some(AgentTranscript {
             available: true,
@@ -180,7 +202,7 @@ pub fn session_transcript(
             ..Default::default()
         });
     }
-    let (mut entries, mut truncated) = read_entries(&conn, &session)?;
+    let (mut entries, mut truncated) = read_entries(&conn, &session, thinking)?;
     let children = children(&conn, &session);
     let spawned: Vec<String> = children.iter().filter_map(|entry| entry.subagent.clone()).collect();
     insert_by_time(&mut entries, children, truncated);
@@ -209,6 +231,7 @@ pub fn session_transcript(
         tokens: None,
         shells: Vec::new(),
         waiting_tools: Vec::new(),
+        shells_run: Vec::new(),
         context_card: None,
         cwd: None,
         running_cwds: Vec::new(),
@@ -593,11 +616,11 @@ fn fingerprint(conn: &Connection, session: &str) -> Option<String> {
 }
 
 /// The session's newest [`MESSAGE_TAIL`] messages as turns, oldest first, and
-/// whether older messages exist beyond them.
-fn read_entries(conn: &Connection, session: &str) -> Option<(Vec<TranscriptEntry>, bool)> {
+/// whether older messages exist beyond them. `thinking`: reasoning parts too.
+fn read_entries(conn: &Connection, session: &str, thinking: bool) -> Option<(Vec<TranscriptEntry>, bool)> {
     if v2_session(conn, session) {
         let (messages, truncated) = v2_messages(conn, session, MESSAGE_TAIL)?;
-        let entries = messages.iter().flat_map(|(created, message)| v2_message_entries(message, *created)).collect();
+        let entries = messages.iter().flat_map(|(created, message)| v2_message_entries(message, *created, thinking)).collect();
         return Some((entries, truncated));
     }
     let mut stmt = conn
@@ -619,19 +642,21 @@ fn read_entries(conn: &Connection, session: &str) -> Option<(Vec<TranscriptEntry
     let Some(oldest) = messages.first().map(|(_, at, _)| *at) else {
         return Some((Vec::new(), truncated));
     };
-    // Text parts only, filtered in SQL: a session's tool parts carry whole
-    // file reads and command outputs this never shows.
+    // Text parts only (and reasoning ones when asked), filtered in SQL: a
+    // session's tool parts carry whole file reads and command outputs this
+    // never shows.
     let mut stmt = conn
         .prepare(
             "SELECT message_id, time_created, data FROM part
               WHERE session_id = ?1 AND time_created >= ?2
-                AND json_extract(data, '$.type') = 'text'
+                AND (json_extract(data, '$.type') = 'text'
+                     OR (?3 AND json_extract(data, '$.type') = 'reasoning'))
               ORDER BY time_created, id",
         )
         .ok()?;
     let mut parts: std::collections::HashMap<String, Vec<(i64, Value)>> = Default::default();
     for row in stmt
-        .query_map(rusqlite::params![session, oldest], |row| {
+        .query_map(rusqlite::params![session, oldest, thinking], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
         })
         .ok()?
@@ -646,7 +671,7 @@ fn read_entries(conn: &Connection, session: &str) -> Option<(Vec<TranscriptEntry
         let Ok(message) = serde_json::from_str::<Value>(data) else {
             continue;
         };
-        entries.extend(message_entries(&message, *created, parts.get(id).map(Vec::as_slice).unwrap_or(&[])));
+        entries.extend(message_entries(&message, *created, parts.get(id).map(Vec::as_slice).unwrap_or(&[]), thinking));
     }
     Some((entries, truncated))
 }
@@ -692,14 +717,16 @@ fn v2_messages(conn: &Connection, session: &str, tail: i64) -> Option<(Vec<(i64,
     Some((messages, truncated))
 }
 
-fn v2_message_entries(message: &Value, created: i64) -> Vec<TranscriptEntry> {
+fn v2_message_entries(message: &Value, created: i64, thinking: bool) -> Vec<TranscriptEntry> {
     match message["type"].as_str() {
         Some("user") => transcript_entry("prompt", message["text"].as_str().unwrap_or_default(), Some(epoch_ms_to_iso(created)))
             .into_iter().collect(),
         Some("assistant") if message.pointer("/time/completed").is_some_and(|t| !t.is_null()) => {
             let mut entries: Vec<_> = message["content"].as_array().into_iter().flatten()
-                .filter(|part| part["type"] == "text")
-                .filter_map(|part| transcript_entry("answer", part["text"].as_str()?, Some(epoch_ms_to_iso(created))))
+                .filter_map(|part| {
+                    let role = part_role(part, thinking)?;
+                    transcript_entry(role, part["text"].as_str()?, Some(epoch_ms_to_iso(created)))
+                })
                 .collect();
             // V2 errors use a tagged public schema instead of V1's envelope.
             if let Some(text) = message.pointer("/error/message").and_then(Value::as_str) {
@@ -722,16 +749,28 @@ fn part_text(part: &Value) -> Option<&str> {
     part.get("text").and_then(Value::as_str)
 }
 
+/// The entry kind an assistant part is shown as: a text part an `answer`, a
+/// reasoning part `thinking` when the read asks for it; anything else none.
+fn part_role(part: &Value, thinking: bool) -> Option<&'static str> {
+    match part.get("type").and_then(Value::as_str)? {
+        "text" => Some("answer"),
+        "reasoning" if thinking => Some("thinking"),
+        _ => None,
+    }
+}
+
 /// The turns one message contributes: a user message is one prompt (its text
-/// parts joined); an assistant message is one answer per finished text part.
+/// parts joined); an assistant message is one answer per finished text part,
+/// and with `thinking` one `thinking` entry per finished reasoning part.
 /// A compaction summary is OpenCode's note to itself, not an answer.
-fn message_entries(message: &Value, created: i64, parts: &[(i64, Value)]) -> Vec<TranscriptEntry> {
+fn message_entries(message: &Value, created: i64, parts: &[(i64, Value)], thinking: bool) -> Vec<TranscriptEntry> {
     match message.get("role").and_then(Value::as_str) {
         Some("user") => {
             let text = parts
                 .iter()
                 .map(|(_, part)| part)
                 .filter(|part| is_written(part))
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
                 .filter_map(part_text)
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -753,11 +792,12 @@ fn message_entries(message: &Value, created: i64, parts: &[(i64, Value)]) -> Vec
                 .filter(|(_, part)| is_written(part))
                 .filter(|(_, part)| completed || part.pointer("/time/end").is_some_and(|t| !t.is_null()))
                 .filter_map(|(part_created, part)| {
+                    let role = part_role(part, thinking)?;
                     let at = part
                         .pointer("/time/start")
                         .and_then(Value::as_i64)
                         .unwrap_or(*part_created);
-                    transcript_entry("answer", part_text(part)?, Some(epoch_ms_to_iso(at)))
+                    transcript_entry(role, part_text(part)?, Some(epoch_ms_to_iso(at)))
                 })
                 .chain(failure)
                 .collect()
@@ -895,6 +935,59 @@ mod tests {
         // Opening the read-only adapter creates no persistent views or tables.
         let views: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'view'", [], |r| r.get(0)).unwrap();
         assert_eq!(views, 0);
+    }
+
+    #[test]
+    fn a_thinking_read_keeps_finished_reasoning_parts_in_their_place() {
+        use serde_json::json;
+        let (db, conn) = store();
+        let dir = "/work/local";
+        session(&conn, "ses", None, dir, 100, None);
+        message(&conn, "m1", "ses", 1_000, json!({"role": "user"}));
+        part(&conn, "p1", "m1", "ses", 1_000, json!({"type": "text", "text": "why?"}));
+        message(&conn, "m2", "ses", 2_000, json!({"role": "assistant", "time": {"created": 2_000, "completed": 5_000}}));
+        part(&conn, "p2", "m2", "ses", 2_001, json!({"type": "reasoning", "text": "The user asks why.", "time": {"start": 2_001, "end": 2_050}}));
+        part(&conn, "p3", "m2", "ses", 2_100, json!({"type": "tool", "state": {"output": "huge"}}));
+        part(&conn, "p4", "m2", "ses", 2_200, json!({"type": "text", "text": "Because.", "time": {"start": 2_200, "end": 2_300}}));
+        // A turn still streaming: its unfinished reasoning waits like its text.
+        message(&conn, "m3", "ses", 6_000, json!({"role": "user"}));
+        part(&conn, "p5", "m3", "ses", 6_000, json!({"type": "text", "text": "and then?"}));
+        message(&conn, "m4", "ses", 7_000, json!({"role": "assistant", "time": {"created": 7_000}}));
+        part(&conn, "p6", "m4", "ses", 7_001, json!({"type": "reasoning", "text": "half a thought", "time": {"start": 7_001}}));
+
+        let plain = session_transcript(&db, dir, None, None, None, None, 120).unwrap();
+        assert_eq!(kinds(&plain), [("prompt", "why?"), ("answer", "Because."), ("prompt", "and then?")]);
+        let thinking = session_transcript_with(&db, dir, None, None, None, None, 120, true).unwrap();
+        assert_eq!(
+            kinds(&thinking),
+            [("prompt", "why?"), ("thinking", "The user asks why."), ("answer", "Because."), ("prompt", "and then?")]
+        );
+        // One read's version never passes for the other's.
+        assert_ne!(plain.version, thinking.version);
+        assert!(!session_transcript_with(&db, dir, None, None, None, plain.version.as_deref(), 120, true).unwrap().unchanged);
+        assert!(session_transcript_with(&db, dir, None, None, None, thinking.version.as_deref(), 120, true).unwrap().unchanged);
+    }
+
+    #[test]
+    fn a_thinking_read_of_a_v2_session_keeps_its_reasoning_content() {
+        use serde_json::json;
+        let (db, conn) = store();
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+               time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
+             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+               time_created INTEGER, time_updated INTEGER, data TEXT);
+             INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'v2', 20, 30, NULL, 'Test', 'build');",
+        ).unwrap();
+        for (seq, kind, data) in [
+            (1, "user", json!({"text": "question"})),
+            (2, "assistant", json!({"content": [{"type": "reasoning", "text": "pondering"}, {"type": "text", "text": "answer"}], "time": {"completed": 40}})),
+        ] {
+            conn.execute("INSERT INTO session_message VALUES (?1, 'ses_v2', ?2, ?3, ?3, ?3, ?4)",
+                rusqlite::params![format!("msg_{seq}"), kind, seq, data.to_string()]).unwrap();
+        }
+        let read = session_transcript_with(&db, "v2", None, Some("ses_v2"), None, None, 100, true).unwrap();
+        assert_eq!(kinds(&read), [("prompt", "question"), ("thinking", "pondering"), ("answer", "answer")]);
     }
 
     #[test]

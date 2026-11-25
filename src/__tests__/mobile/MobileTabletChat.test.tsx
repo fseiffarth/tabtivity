@@ -168,89 +168,117 @@ describe(`${BRAND.display} Mobile chat on a tablet`, () => {
       same();
     }
 
-    // The pane: docking and undocking it is a change of attributes only.
+    // The pane (an agent's overview, open unset) and its library: a change of
+    // attributes only.
     window_.set("split");
-    fireEvent.click(screen.getByRole("button", { name: "Show or hide files" }));
     same();
-    expect(main().hasAttribute("data-files-docked")).toBe(true);
-    expect(screen.getByRole("button", { name: "Show or hide files" }).getAttribute("aria-pressed")).toBe("true");
+    const toggle = () => screen.getByRole("button", { name: "Show or hide the session overview" });
+    expect(main().getAttribute("data-overview")).toBe("overview");
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Session overview" })).getByRole("button", { name: "Project files" }));
+    same();
+    expect(main().getAttribute("data-overview")).toBe("library");
     const pane = screen.getByRole("dialog", { name: "Files" });
     expect(pane.getAttribute("aria-modal")).toBe("false");
     expect(await within(pane).findByRole("button", { name: "Open the folder src" })).toBeTruthy();
-    expect(readFlag("chatFilesPane")).toBe(true);
+    expect(readFlag("chatOverviewPane")).toBe(true);
 
     // Turning the screen upright puts the pane away without touching the chat…
     window_.set("tablet");
     same();
     expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
-    expect(main().hasAttribute("data-files-docked")).toBe(false);
-    // …and landscape brings it back as this device left it.
+    expect(main().hasAttribute("data-overview")).toBe(false);
+    // …and landscape brings it back as this device left it: open, on the overview.
     window_.set("split");
     same();
-    expect(screen.getByRole("dialog", { name: "Files" })).toBeTruthy();
+    expect(main().getAttribute("data-overview")).toBe("overview");
 
-    fireEvent.click(screen.getByRole("button", { name: "Show or hide files" }));
+    fireEvent.click(toggle());
     same();
-    expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
-    expect(readFlag("chatFilesPane")).toBe(false);
+    expect(main().hasAttribute("data-overview")).toBe(false);
+    expect(screen.queryByRole("complementary", { name: "Session overview" })).toBeNull();
+    expect(readFlag("chatOverviewPane")).toBe(false);
   });
 
-  it("opens the pane at once where this device left it open, in landscape only", async () => {
-    writeFlag("chatFilesPane", true);
+  it("opens the pane at once where this device left it open, in landscape only; the old files pane's choice carries over once", async () => {
     stubTierWindow("tablet");
     await openChat();
     await screen.findByRole("button", { name: "Project menu" });
-    expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Session overview" })).toBeNull();
     cleanup();
 
+    // Unset, it is open.
     stubTierWindow("split");
     await openChat();
-    expect(await screen.findByRole("dialog", { name: "Files" })).toBeTruthy();
-    expect(main().hasAttribute("data-files-docked")).toBe(true);
+    expect(await screen.findByRole("complementary", { name: "Session overview" })).toBeTruthy();
+    expect(main().getAttribute("data-overview")).toBe("overview");
+    cleanup();
+
+    // A device that had closed the files pane finds the new pane closed, and
+    // the choice is the new flag's from then on.
+    localStorage.removeItem(storageKey("mobile.chatOverviewPane"));
+    writeFlag("chatFilesPane", false);
+    stubTierWindow("split");
+    await openChat();
+    await screen.findByRole("button", { name: "Show or hide the session overview" });
+    expect(main().hasAttribute("data-overview")).toBe(false);
+    expect(readFlag("chatOverviewPane", true)).toBe(false);
   });
 
-  it("leaves the chat's keys to the chat while the pane is docked: Escape and the arrows act in the pane only with the focus in it", async () => {
-    writeFlag("chatFilesPane", true);
+  it("leaves the chat's keys to the chat while the library is docked: Escape and the arrows act in it only with the focus in it", async () => {
     stubTierWindow("split");
     await openChat();
+    fireEvent.click(await screen.findByRole("button", { name: "Project files" }));
     const pane = await screen.findByRole("dialog", { name: "Files" });
     expect(pane.hasAttribute("data-docked")).toBe(true);
     const folder = await within(pane).findByRole("button", { name: "Open the folder src" });
 
-    // Escape in the composer is not the pane's: it stays, and so does the preference.
+    // Escape in the composer is not the library's: it stays, and so does the pane.
     composer().focus();
     fireEvent.keyDown(composer(), { key: "Escape" });
     expect(screen.getByRole("dialog", { name: "Files" })).toBe(pane);
-    expect(readFlag("chatFilesPane")).toBe(true);
-    // Nothing focused (a tap on the transcript): ↓ does not walk into the pane.
+    expect(main().getAttribute("data-overview")).toBe("library");
+    // Nothing focused (a tap on the transcript): ↓ does not walk into the library.
     composer().blur();
     fireEvent.keyDown(window, { key: "ArrowDown" });
     expect(pane.contains(document.activeElement)).toBe(false);
 
-    // With the focus in the pane its keys are its own.
+    // With the focus in the library its keys are its own: Escape steps back
+    // to the overview, and the pane stays open.
     folder.focus();
     fireEvent.keyDown(folder, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
-    expect(readFlag("chatFilesPane")).toBe(false);
+    expect(main().getAttribute("data-overview")).toBe("overview");
+    expect(readFlag("chatOverviewPane")).toBe(true);
   });
 
-  it("gives the chat its whole width while a markup view is tucked away, which hides the pane with it", async () => {
+  it("keeps an agent's overview while a markup view is tucked away; a shell's chat gets its whole width, its library hidden with the view", async () => {
     writeFlag("chatFilesPane", true);
     stubTierWindow("split");
     const file = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
-    render(<Terminal tab={{ id: "tab", label: "Claude", kind: "agent", available: true, viewer_busy: false }} project="p1" back={() => {}} markupBack={{ scope: { tab: "tab" }, file }} />);
+    // A tab of its own: a tucked-away view outlives the screen per tab (`awayMarkups`).
+    render(<Terminal tab={{ id: "tab-marked", label: "Claude", kind: "agent", available: true, viewer_busy: false }} project="p1" back={() => {}} markupBack={{ scope: { tab: "tab-marked" }, file }} />);
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
     expect(document.querySelector(".markup-away-notice")).toBeTruthy();
-    // The pane is open (and hidden with the tucked-away view), but leaves no empty strip.
+    // The overview is no markup host: it stays beside the chat.
+    expect(main().getAttribute("data-overview")).toBe("overview");
+    cleanup();
+
+    // A shell's pane is its library: open (and hidden with the tucked-away
+    // view), it leaves no empty strip.
+    render(<Terminal tab={{ id: "sh", label: "Shell", kind: "shell", available: true, viewer_busy: false }} project="p1" back={() => {}} markupBack={{ scope: { tab: "sh" }, file }} />);
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+    expect(document.querySelector(".markup-away-notice")).toBeTruthy();
     expect(document.querySelector(".markup-host.away .files-library")).toBeTruthy();
-    expect(main().hasAttribute("data-files-docked")).toBe(false);
+    expect(main().hasAttribute("data-overview")).toBe(false);
   });
 
   it("keeps the files open through a turn out of landscape while a markup view hangs on them", async () => {
     writeFlag("chatFilesPane", true);
     const window_ = stubTierWindow("split");
     const file = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
-    render(<Terminal tab={{ id: "tab", label: "Claude", kind: "agent", available: true, viewer_busy: false }} project="p1" back={() => {}} markupBack={{ scope: { tab: "tab" }, file }} />);
+    // A shell's pane opens with its library (an agent's opens on the overview).
+    render(<Terminal tab={{ id: "sh", label: "Shell", kind: "shell", available: true, viewer_busy: false }} project="p1" back={() => {}} markupBack={{ scope: { tab: "sh" }, file }} />);
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
     expect(document.querySelector(".markup-host.away .files-library")).toBeTruthy();
     // Upright, the bare pane would be put away; this one holds the view the
@@ -258,7 +286,7 @@ describe(`${BRAND.display} Mobile chat on a tablet`, () => {
     window_.set("tablet");
     expect(document.querySelector(".markup-away-notice")).toBeTruthy();
     expect(document.querySelector(".markup-host.away .files-library")).toBeTruthy();
-    expect(readFlag("chatFilesPane")).toBe(true);
+    expect(readFlag("chatOverviewPane")).toBe(true);
   });
 
   it("opens today's drawer from the files button on a portrait tablet and a phone, and a pane toggle only in landscape", async () => {
@@ -269,11 +297,12 @@ describe(`${BRAND.display} Mobile chat on a tablet`, () => {
     expect(button.getAttribute("aria-haspopup")).toBe("dialog");
     fireEvent.click(button);
     expect(screen.getByRole("dialog", { name: "Files" }).getAttribute("aria-modal")).toBe("true");
-    expect(main().hasAttribute("data-files-docked")).toBe(false);
-    expect(readFlag("chatFilesPane")).toBe(false);
+    expect(main().hasAttribute("data-overview")).toBe(false);
+    expect(readFlag("chatOverviewPane")).toBe(false);
     window_.set("split");
-    // Open as a drawer, landscape docks it where it stands.
-    expect(screen.getByRole("button", { name: "Show or hide files" }).getAttribute("aria-pressed")).toBe("true");
+    // Open as a drawer, landscape shows it as the library in the pane.
+    expect(screen.getByRole("button", { name: "Show or hide the session overview" }).getAttribute("aria-pressed")).toBe("true");
+    expect(main().getAttribute("data-overview")).toBe("library");
   });
 
   it("gives a tablet the header's model pill, queue pill and Chat | Terminal switch; a phone has none of them", async () => {
@@ -390,18 +419,24 @@ describe(`${BRAND.display} Mobile tablet queue pill`, () => {
 describe("the tablet chat stylesheet", () => {
   const block = CSS.slice(CSS.indexOf(`@media ${TABLET_QUERY} {`));
 
-  it("centres only the Chat view at 660px, caps the prompt bubble at 520px and leaves the colours to the theme rules", () => {
-    expect(block).toContain('.terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(14px,calc((100% - 660px) / 2)); }');
-    expect(block).toContain('.terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(0px,calc((100% - 660px) / 2)); }');
+  it("centres only the Chat view, at 660px upright and 700px (24px sides at least) in landscape, caps the prompt bubble at 520px and leaves the colours to the theme rules", () => {
+    const portrait = block.slice(0, block.indexOf(`@media ${SPLIT_QUERY} {`));
+    const split = CSS.slice(CSS.indexOf(`@media ${SPLIT_QUERY} {`));
+    expect(portrait).toContain('.terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(14px,calc((100% - 660px) / 2)); }');
+    expect(portrait).toContain('.terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(0px,calc((100% - 660px) / 2)); }');
+    expect(split).toContain('.terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(24px,calc((100% - 700px) / 2)); }');
+    expect(split).toContain('.terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(8px,calc((100% - 700px) / 2)); }');
+    expect(split).toContain('.terminal-screen.agent-tab[data-view="focus"] .readable-pinned-prompt { right:max(24px,calc((100% - 700px) / 2));');
     const bubble = /\.readable-turn\.user:not\(\.with-files\) \{([^}]*)\}/.exec(block)?.[1] ?? "";
     expect(bubble).toContain("max-width:min(88%,520px)");
     expect(bubble).not.toMatch(/background|border:|box-shadow|color/);
   });
 
-  it("docks the library as a 400px rounded panel only in landscape, and not once a file is open", () => {
+  it("docks the library as a 400px rounded panel in the pane's grid column only in landscape, and not once a file is open", () => {
     const split = CSS.slice(CSS.indexOf(`@media ${SPLIT_QUERY} {`));
-    expect(split).toMatch(/\[data-files-docked\] \.files-library:not\(\.files-split\) \{[^}]*width:400px/);
-    expect(split).toMatch(/\[data-files-docked\] \{ padding-right:424px; \}/);
-    expect(block.slice(0, block.indexOf(`@media ${SPLIT_QUERY} {`))).not.toContain("data-files-docked");
+    // 400px and the 12px to the window's edge.
+    expect(split).toContain('.terminal-screen[data-overview="library"] { --overview-col:412px; }');
+    expect(split).toMatch(/\[data-overview="library"\] \.files-library:not\(\.files-split\) \{[^}]*grid-column:-2 \/ -1;[^}]*border-radius:var\(--r-panel\)/);
+    expect(block.slice(0, block.indexOf(`@media ${SPLIT_QUERY} {`))).not.toContain("data-overview");
   });
 });

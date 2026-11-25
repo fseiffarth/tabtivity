@@ -553,10 +553,15 @@ function renderList(items: ListItem[]): string {
   return parts.join("");
 }
 
-/** `breaks`: a single line break inside a paragraph stays a break (`<br>`),
- * as in a chat message, instead of joining the lines into one. */
-export function renderMarkdown(src: string, { breaks = false }: { breaks?: boolean } = {}): string {
-  return renderBlocks(src, breaks);
+type MarkdownOptions = {
+  /** Keep single line breaks inside paragraphs. */
+  breaks?: boolean;
+  /** Keep a leading `+` as text in chat prompts. */
+  literalPlus?: boolean;
+};
+
+export function renderMarkdown(src: string, options: MarkdownOptions = {}): string {
+  return renderBlocks(src, options);
 }
 
 /** One heading of a document as the renderer sees it: `text` is the raw
@@ -574,18 +579,20 @@ export interface MarkdownHeading {
  *  headings or how a repeat is numbered. */
 export function markdownHeadings(src: string): MarkdownHeading[] {
   const out: MarkdownHeading[] = [];
-  renderBlocks(src, false, (h) => out.push(h));
+  renderBlocks(src, {}, (h) => out.push(h));
   return out;
 }
 
 function renderBlocks(
   src: string,
-  breaks: boolean,
+  options: MarkdownOptions,
   onHeading?: (heading: MarkdownHeading) => void,
   // Shared with nested blockquote bodies, so a heading inside a quote gets an
   // id unique across the whole document (and the TOC sees the same ids).
   headingId: (text: string) => string = headingIdAllocator(),
 ): string {
+  const { breaks, literalPlus } = options;
+  const keepsPlus = (line: string) => literalPlus && /^\s*\+\s/.test(line);
   // Drop NUL up front — it is the inline placeholder delimiter (`mark`), and
   // stripping it here is what makes a marker impossible to forge from document
   // text. A NUL in a file being viewed as markdown has nothing to render anyway.
@@ -696,17 +703,18 @@ function renderBlocks(
         quote.push(lines[i].replace(/^\s*>\s?/, ""));
         i++;
       }
-      out.push(renderBlockquote(quote, (body) => renderBlocks(body, breaks, onHeading, headingId)));
+      out.push(renderBlockquote(quote, (body) => renderBlocks(body, options, onHeading, headingId)));
       continue;
     }
 
     // List items (ordered/unordered/nested/task). Collect the whole list region,
     // tolerating a single blank line between items and indented continuations.
-    if (LIST_ITEM_RE.test(line)) {
+    if (!keepsPlus(line) && LIST_ITEM_RE.test(line)) {
       flushParagraph();
       const items: ListItem[] = [];
       while (i < lines.length) {
         const l = lines[i];
+        if (keepsPlus(l)) break;
         if (/^\s*$/.test(l)) {
           // A blank only continues the list if followed by another item or an
           // indented continuation line.

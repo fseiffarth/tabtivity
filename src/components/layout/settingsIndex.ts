@@ -143,7 +143,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   assistant: { labels: ["settings.assistantSwitch", "assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"] },
   voice: {
     aliases: "settings.searchAlias.voice",
-    labels: ["settings.voice.pause", "settings.voice.model", "settings.voice.lang", "settings.voice.rate", "settings.voice.natural", "settings.voice.headset", "settings.voice.gpu", "settings.voice.device"],
+    labels: ["settings.voice.pause", "settings.voice.model", "settings.voice.lang", "settings.voice.detectLangs", "settings.voice.rate", "settings.voice.natural", "settings.voice.headset", "settings.voice.gpu", "settings.voice.device"],
   },
   remoteFeatures: { labels: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"] },
   vm: { aliases: "settings.searchAlias.vm", labels: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"] },
@@ -159,7 +159,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   },
   resourceMonitor: { labels: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"] },
   experimental: {
-    labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.windowsSessionHost", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter", "settings.voiceHandsFree", "settings.turnCheckpoints"],
+    labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.windowsSessionHost", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter", "settings.voiceHandsFree", "settings.turnCheckpoints", "settings.claudeOtelTokens"],
   },
   git: { keywords: ["nav.git.blurb"], aliases: "settings.searchAlias.git", items: [{ id: "access-token", key: "git.accessToken" }] },
   vpn: { keywords: ["nav.vpn.blurb"], aliases: "settings.searchAlias.vpn" },

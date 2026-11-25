@@ -31,7 +31,7 @@ import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import { noteAgentTurn } from "../../stores/activity";
 import { setReaderDraft } from "../../lib/agents/readerDrafts";
-import type { VoiceStatus } from "../../lib/voice/desktopVoice";
+import { rememberSpokenLang, type VoiceStatus } from "../../lib/voice/desktopVoice";
 import type { Settings } from "../../types";
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "launch-1", launchedAt: 1000 };
@@ -105,7 +105,7 @@ describe("hands-free and read-aloud in the Chat", () => {
     expect(screen.queryByRole("button", { name: /Hands-free/ })).toBeNull();
   });
 
-  it("sends after the chime and the cancel window, then pauses the mic for the turn", async () => {
+  it("sends after the chime and the cancel window, then keeps the mic open behind the Tabby gate", async () => {
     const box = await open({ voice_hands_free: true, voice_hands_free_on: true });
     await startHandsFree();
     emit("voice:vad", { session: 11, segment: 1, state: "start" });
@@ -117,9 +117,11 @@ describe("hands-free and read-aloud in the Chat", () => {
     expect(sendSteeringPrompt).not.toHaveBeenCalled();
     await wait(1600);
     expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "fix the login");
-    expect(invoke).toHaveBeenCalledWith("voice_listen_pause", { session: 11, paused: true });
+    // The gate's chime and cue; the mic is neither paused nor stopped.
+    expect(chime).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Sent — say Tabby for your next prompt/)).toBeTruthy();
+    expect(invoke).not.toHaveBeenCalledWith("voice_listen_pause", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith("voice_listen_stop", expect.anything());
-    expect(screen.getByText(/Waiting for the agent/)).toBeTruthy();
   }, 15_000);
 
   it("an unfinished phrase cancels the send window and disarms subsequent finals", async () => {
@@ -205,20 +207,48 @@ describe("hands-free and read-aloud in the Chat", () => {
     expect(screen.queryByText(/Waiting for the agent/)).toBeNull();
   });
 
-  it("listens again only once the turn it sent is over", async () => {
-    await open({ voice_hands_free: true, voice_hands_free_on: true });
+  it("drops talk without the start word until the turn it sent is over", async () => {
+    const box = await open({ voice_hands_free: true, voice_hands_free_on: true });
     await startHandsFree();
     emit("voice:final", { session: 11, segment: 1, text: "fix the login" });
     await wait(1700);
     expect(sendSteeringPrompt).toHaveBeenCalledTimes(1);
     noteAgentTurn("p:agent-1", "working");
-    // An answer mid-turn, the agent still running tools: the mic stays paused.
+    // An answer mid-turn, the agent still running tools: the gate stays on.
     entries = [PROMPT, { kind: "answer", text: "Looking.", at: "2026-09-30T08:01:00Z" }];
     await wait(2600);
-    expect(invoke).not.toHaveBeenCalledWith("voice_listen_pause", { session: 11, paused: false });
+    emit("voice:vad", { session: 11, segment: 2, state: "start" });
+    emit("voice:partial", { session: 11, segment: 2, text: "what a mess" });
+    expect(box.value).toBe("");
+    emit("voice:final", { session: 11, segment: 2, text: "what a mess" });
+    expect(box.value).toBe("");
     noteAgentTurn("p:agent-1", "done");
     await wait(1500);
-    expect(invoke).toHaveBeenCalledWith("voice_listen_pause", { session: 11, paused: false });
+    // The turn is over: the gate is off and words go in the draft again.
+    expect(screen.queryByText(/say Tabby for your next prompt/)).toBeNull();
+    emit("voice:vad", { session: 11, segment: 3, state: "start" });
+    emit("voice:final", { session: 11, segment: 3, text: "now the tests" });
+    expect(box.value).toBe("now the tests");
+    expect(invoke).not.toHaveBeenCalledWith("voice_listen_pause", expect.anything());
+  }, 15_000);
+
+  it("judges an utterance begun behind the gate as gated, though the turn ends while it is said", async () => {
+    const box = await open({ voice_hands_free: true, voice_hands_free_on: true });
+    await startHandsFree();
+    emit("voice:final", { session: 11, segment: 1, text: "fix the login" });
+    await wait(1700);
+    expect(sendSteeringPrompt).toHaveBeenCalledTimes(1);
+    noteAgentTurn("p:agent-1", "working");
+    entries = [PROMPT, { kind: "answer", text: "Done.", at: "2026-09-30T08:01:00Z" }];
+    await wait(2600);
+    emit("voice:vad", { session: 11, segment: 2, state: "start" });
+    emit("voice:partial", { session: 11, segment: 2, text: "Tabby, now" });
+    noteAgentTurn("p:agent-1", "done");
+    await wait(1500);
+    emit("voice:final", { session: 11, segment: 2, text: "Tabby, now the tests" });
+    expect(box.value).toBe("now the tests");
+    // Settled: the gate is off, and the next words are plain dictation.
+    expect(screen.queryByText(/say Tabby for your next prompt/)).toBeNull();
   }, 15_000);
 
   it("keeps the draft unsent on a spoken stop in the window, however late it settles", async () => {
@@ -272,6 +302,21 @@ describe("hands-free and read-aloud in the Chat", () => {
     noteAgentTurn("p:agent-1", "working");
     await wait(500);
     expect(spoken().map(([, args]) => (args as { chunks: string[] }).chunks)).toEqual([["Agent is working."]]);
+  }, 15_000);
+
+  it("reads in the tab's last locked language under detect, else the app's", async () => {
+    await open({ voice_read_aloud: true, voice_lang: "detect" });
+    noteAgentTurn("p:agent-1", "done");
+    await wait(500);
+    noteAgentTurn("p:agent-1", "working");
+    await wait(500);
+    expect(spoken().slice(-1)[0]?.[1]).toEqual(expect.objectContaining({ lang: "en" }));
+    rememberSpokenLang("agent-1", "de");
+    noteAgentTurn("p:agent-1", "done");
+    await wait(500);
+    noteAgentTurn("p:agent-1", "working");
+    await wait(500);
+    expect(spoken().slice(-1)[0]?.[1]).toEqual(expect.objectContaining({ lang: "de" }));
   }, 15_000);
 
   it("says nothing of a turn already running when it opens", async () => {

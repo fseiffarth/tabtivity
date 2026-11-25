@@ -90,7 +90,9 @@ plain remote project **Stop keeping a local copy…** shows what only the
 local copy holds (commits or changes the host lacks, unsent file-sync edits,
 tabs running on this computer) and is refused until that is empty; the old
 folder is kept (moved out of the app's state folder as `<name> (local copy)`
-when it lived there), never deleted. On a remote-only project **Keep a local
+when it lived there), never deleted. If that name is on another drive the
+folder is copied there and the original stays where it was, for you to delete
+once you have checked the copy. On a remote-only project **Keep a local
 copy…** picks a folder and git lockstep fills it from the host. Neither is
 offered on a VM project.
 
@@ -123,6 +125,16 @@ way, because nothing would reach the host on its own.
 The tunnel is machine-wide, not per project: the header's OpenVPN button
 brings it up or down and can arm "Connect on launch" once saved credentials
 make the connect silent. Needs `openvpn` and polkit installed.
+
+If a tunnel is gone after the computer sat idle for a long time, the VPN has an
+idle timer. Turn on **Keep connected** for that config in the header's OpenVPN
+menu and connect again: OpenVPN then ignores the VPN's idle and session timers.
+It is off by default because it overrides what the VPN's operator asked for. A
+tunnel that ended on its own says when and why on its row in that menu.
+
+The phone's start page shows a **VPN** pill beside the connection lamp while the
+desktop has a VPN config: green while the tunnel is up, dim and struck through
+while it is down.
 
 ## Compute machines (workers)
 

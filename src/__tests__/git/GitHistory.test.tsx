@@ -55,7 +55,7 @@ describe("#7 git history view", () => {
 
   it("shows current branch, commit list with HEAD marked", async () => {
     await renderHistory();
-    expect(await screen.findByText(/⎇\s*main/)).toBeTruthy();
+    expect((await screen.findByTitle(/^Current branch/)).textContent).toContain("main");
     const headRow = (await screen.findByText("feat: add widget")).closest("button")!;
     expect(headRow.className).toContain("head");
     const olderRow = screen.getByText("fix: earlier bug").closest("button")!;
@@ -65,6 +65,7 @@ describe("#7 git history view", () => {
   it("clicking a non-current branch pill checks it out", async () => {
     const user = userEvent.setup();
     await renderHistory();
+    await user.click(await screen.findByRole("button", { name: /^Branches/, expanded: false }));
     await user.click(await screen.findByRole("button", { name: "feature" }));
     expect(mockInvoke).toHaveBeenCalledWith("git_checkout", { projectDir: "/p", target: "feature" });
   });
@@ -159,8 +160,8 @@ describe("lazy commit history", () => {
         const limit = args.limit as number;
         const skip = (args.skip as number) ?? 0;
         calls.push({ limit, skip });
-        // 150 commits in all: a full page, then a short one.
-        return Promise.resolve(page(skip, Math.min(limit, Math.max(0, 150 - skip))));
+        // A full page, then a short one.
+        return Promise.resolve(page(skip, Math.min(limit, Math.max(0, 30 - skip))));
       }
       if (cmd === "git_branches") return Promise.resolve(BRANCHES);
       return Promise.resolve(null);
@@ -169,19 +170,42 @@ describe("lazy commit history", () => {
     await act(async () => {
       render(<GitHistory projectDir="/p" />);
     });
-    expect(calls[0]).toEqual({ limit: 100, skip: 0 });
-    expect(screen.getByText("commit 99")).toBeTruthy();
-    expect(screen.queryByText("commit 100")).toBeNull();
+    expect(calls).toEqual([{ limit: 20, skip: 0 }]);
+    expect(screen.getByText("commit 19")).toBeTruthy();
+    expect(screen.queryByText("commit 20")).toBeNull();
 
     // jsdom has no IntersectionObserver, so the sentinel is reached by click —
     // the same path as a pane too short to ever scroll it into view.
     await user.click(screen.getByRole("button", { name: /Load older commits/ }));
-    expect(calls.some((c) => c.skip === 100 && c.limit === 100)).toBe(true);
-    expect(screen.getByText("commit 149")).toBeTruthy();
+    expect(calls[1]).toEqual({ limit: 20, skip: 20 });
+    expect(screen.getByText("commit 29")).toBeTruthy();
     // The short page is the end of the history: no row left to click.
     expect(screen.queryByRole("button", { name: /Load older commits/ })).toBeNull();
     // Each commit is rendered once, even though page boundaries overlap nothing.
-    expect(screen.getAllByText("commit 100").length).toBe(1);
+    expect(screen.getAllByText("commit 20").length).toBe(1);
+  });
+
+  it("fills the panel on open and continues paging when the button scrolls into view", async () => {
+    let intersect!: (entries: { intersectionRatio: number }[]) => void;
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: typeof intersect) { intersect = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    mockInvoke.mockImplementation((cmd: string, args: { skip: number }) =>
+      Promise.resolve(cmd === "git_log" ? page(args.skip, Math.min(20, 50 - args.skip)) : null));
+
+    try {
+      await renderHistory();
+      await act(async () => intersect([{ intersectionRatio: 1 }]));
+      expect(screen.getByText("commit 39")).toBeTruthy();
+      await act(async () => intersect([{ intersectionRatio: 0.75 }]));
+      expect(screen.queryByText("commit 40")).toBeNull();
+      await act(async () => intersect([{ intersectionRatio: 1 }]));
+      expect(screen.getByText("commit 49")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("a repo shorter than a page offers nothing to load", async () => {

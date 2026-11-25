@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import type { Terminal } from "@xterm/xterm";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -29,6 +30,8 @@ import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { envName } from "../../lib/brand";
+import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
+import { sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
 
 function Harness() {
   useKeyboard({ onTogglePanels: () => {} });
@@ -143,6 +146,43 @@ describe("steering prompt box", () => {
     fireEvent.keyDown(box()!, { key: "Enter" });
     await vi.waitFor(() => expect(box()).toBeNull());
     expect(writeMock.mock.calls.map(([, bytes]) => decode(bytes))).toContain("and then this");
+  });
+
+  it("replaces a Codex terminal draft on both sides of the caret before sending", async () => {
+    activeTab({ kind: "agent", cmd: "codex", label: "Codex", scheduleTargetId: "target" });
+    registerScheduledAgentInput("target", {
+      ptyId: "p:t1", agent: "codex", ready: () => true,
+      bracketedPaste: () => false, recordAuthorizedInput: vi.fn(),
+    });
+    const rows = ["• Done.", "", "› old first", "  old middle", "  old last", "", "  gpt-5.4 high · ~/work"];
+    const terminal = { rows: rows.length, buffer: { active: {
+      baseY: 0, cursorY: 3, length: rows.length,
+      getLine: (index: number) => ({ translateToString: () => rows[index] }),
+    } } } as unknown as Terminal;
+    registerTerminal("p:t1", terminal);
+    try {
+      render(<><Harness /><SteeringPromptOverlay /></>);
+      act(() => steering().enter());
+      press(" ");
+      fireEvent.change(box()!, { target: { value: "new prompt" } });
+      await act(async () => {
+        fireEvent.keyDown(box()!, { key: "Enter" });
+        await vi.waitFor(() => expect(writeMock).toHaveBeenCalledTimes(4));
+      });
+      expect(box()).toBeNull();
+      expect(writeMock.mock.calls.map(([, bytes]) => decode(bytes)))
+        .toEqual(["\u0001\u000b\u000b\u000b\u0015\u0015", "new prompt", "\t", "\r"]);
+
+      writeMock.mockClear();
+      await act(async () => {
+        steering().exit();
+        await sendSteeringPrompt(useTabsStore.getState().tabs[0], "normal chat prompt");
+      });
+      expect(writeMock.mock.calls.map(([, bytes]) => decode(bytes)))
+        .toEqual(["\u0001\u000b", "normal chat prompt", "\t", "\r"]);
+    } finally {
+      unregisterTerminal("p:t1", terminal);
+    }
   });
 
   it("keeps an unsent prompt for that tab's next open, and not after a send", async () => {

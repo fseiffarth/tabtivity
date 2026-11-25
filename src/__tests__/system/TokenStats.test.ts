@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  CLAUDE_OTEL_LEAF,
   cacheHitShare,
   cacheLifetimes,
   fetchTokenReport,
@@ -261,5 +262,30 @@ describe("split details", () => {
     const split = { fresh: 1, cacheWrite: 2, cacheRead: 3, output: 4, total: 0 };
     expect(subagentPart(split)).toBeNull();
     expect(cacheLifetimes(split)).toBeNull();
+  });
+});
+
+describe("the span source's own row", () => {
+  const counters = {
+    "tokens.in.claude.opus": 100,
+    "tokens.out.claude.opus": 10,
+    "tokens.in.claude_otel.opus": 130,
+    "tokens.out.claude_otel.opus": 15,
+    "tokens.sub_in.claude_otel.opus": 20,
+  };
+
+  it("files the trace spans beside Claude, never into it", () => {
+    const rows = foldTokens(counters, ["claude", "claude_otel"], ["claude"]);
+    const byCli = Object.fromEntries(rows.reported.map((r) => [r.cli, r]));
+    expect(Object.keys(byCli).sort()).toEqual(["claude", "claude_otel"]);
+    expect(byCli.claude.split.fresh).toBe(100);
+    expect(byCli.claude_otel.split.fresh).toBe(130);
+    expect(byCli.claude_otel.split.subFresh).toBe(20);
+    expect(CLAUDE_OTEL_LEAF).toBe("claude_otel");
+  });
+
+  it("is not reported as missing just because no tab counts name it", () => {
+    const rows = foldTokens({}, ["claude", "claude_otel"], ["claude"]);
+    expect(rows.notReported).toEqual([]);
   });
 });

@@ -324,6 +324,30 @@ describe("steering key caps on a window", () => {
     expect(cap().style.left).toBe("602px");
   });
 
+  it("pins G to the Chat dock's pills while none has finished (no done pill)", () => {
+    subwindow();
+    const pane = document.createElement("div");
+    pane.className = "center-pane";
+    pane.dataset.scopeKey = "p";
+    pane.dataset.tabKey = useTabsStore.getState().activeKey!;
+    document.body.append(pane);
+    place(pane, rect(0, 80, 800, 500));
+    pane.insertAdjacentHTML("beforeend", `
+      <div class="terminal-reader">
+        <div class="terminal-reader-agent-dock">
+          <nav class="terminal-reader-agents" id="dock-pills">
+            <div class="terminal-reader-agents-scroll"><button class="terminal-reader-agent-pill">Explore</button></div>
+          </nav>
+        </div>
+      </div>
+    `);
+    place(document.getElementById("dock-pills")!, rect(200, 500, 300, 28));
+    render(<SteeringLegend />);
+    act(() => useKeyboardSteeringStore.getState().enter());
+    expect(caps("subagents")).toEqual(["G"]);
+    expect(document.querySelector<HTMLElement>('.steering-cap-row[data-anchor="subagents"]')!.style.left).toBe("502px");
+  });
+
   it("gives the keys back to the bar when their control is not on screen", () => {
     subwindow();
     render(<SteeringLegend />);

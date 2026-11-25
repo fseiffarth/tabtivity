@@ -29,12 +29,34 @@
   - [x] 🤖 Automated test (`DiffNotes.test.ts`, `ReaderDiffNotes.test.tsx`)
   - [ ] 🖐️ Manual QA: in a Claude tab with a few edits open Diffs; click the **+**
     on an added range (Shift+click extends) and on a deleted line in two files,
-    in split, then unified; **Add to draft**: the Chat composer holds the prompt
+    in split, then unified; **Add to draft**: the field under Diffs holds the prompt
     (file:lines, the quoted diff, your note) and the notes are gone; nothing was
     sent. Check the **+** button over the first line-number gutter and the note
     box on a horizontally scrolled diff on the real paint path; **C** inside
     Diffs starts a note on the cursor card's first changed line. Repeat on a
     subagent's Diffs.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] **The Chat's input field docked under Diffs and Data** (implemented
+  2026-11-22, never live; frontend only). Plan `docs/agent_input_dock_plan.md`,
+  handoff `docs/agent_input_dock_handoff.md`; pill `terminal.reader.dock`.
+  - [x] 🤖 Automated test (`ReaderInputDock.test.tsx`, `TerminalReaderToolbar.test.tsx`,
+    `TerminalReaderChanges.test.tsx`, `ReaderDiffNotes.test.tsx`, `TerminalReaderView.test.tsx`)
+  - [ ] 🖐️ Manual QA: agent tab → Diffs: a one-line field under the diff cards;
+    click it: facts row and chips appear, Plan toggles and the dock stays open;
+    type, switch to Chat: same draft. Send from Diffs: the view stays, a status
+    line shows working and Stop. A diff note's **Add to draft**: Diffs stays,
+    the field opens. Data: the same field; `/` opens the slash menu over the
+    file viewer, not under it; Terminal: no field. A permission ask while in
+    Diffs: status line, disabled field, **Answer in Chat** switches with the
+    keyboard on the question's rows. Steering inside Diffs: Space opens the
+    docked field, Esc returns to the Diffs cursor, S/F still scroll the diffs.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -350,6 +372,8 @@
   `local_drivers::opencode_ollama_config` no longer limits the picker to the
   loaded ones. A config model's `limit.context` does still win (that is how
   the context % follows Ollama's window). Find 2.x's way to hide models.
+  2.4.1 (2026-11-23) still drops it, and now lists config-only providers in
+  the full TUI's picker, so a local tab shows every installed model there.
 - [ ] 🖐️ OpenCode 2 context % follows Ollama: open a local OpenCode tab on a
   model Ollama runs below its trained window (32 768, the context setting) and
   send a prompt: the sidebar/status % is measured against that window, not the
@@ -1513,6 +1537,28 @@ unchanged; the new agents are additive.
       window rather than stopping. Turn it on for a Gemini tab and confirm it
       says the CLI publishes no usage panel. Restart Tabtivity and confirm the
       switch comes back on and re-arms.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - **2026-11-24: a Codex limit went unanswered.** A Codex tab hit its 5-hour
+      limit at 18:48 ("try again at 8:35 PM"); its own rate-limit snapshot put
+      the reset at 20:35:51, yet no `continue` reached it before the user
+      restarted the tab at 23:10. The frontend state was not seen, so the gate
+      that held it is not proven. Changed: a limit notice as the last thing on
+      the screen now outweighs a "working" verdict (Codex ends a limit turn
+      without `Stop`, and its title timer keeps the verdict from expiring); a
+      due continue the tab cannot take shows why on the row, and one given up
+      after the catch-up hour stays noted ("the last continue was not sent: …").
+      Untested register: `agentContinue.hold`.
+    - [ ] 🖐️ Manual test — turn ⟳ Continue on for a Codex tab, let it hit its
+      limit, and confirm one `continue` lands within about two minutes of the
+      reset. If it does not, read the row: "waiting until the tab can take it:
+      …" or "the last continue was not sent: …" names the gate that held it.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)
@@ -3238,6 +3284,29 @@ unchanged; the new agents are additive.
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [ ] **Cloud sessions from the phone with no window** (built 2026-11-24,
+  uncommitted; never live). The Mobile host starts a project's cloud
+  session itself (`headless::CLOUD_LAUNCHES`, twin of `cloudSessions.ts`);
+  a cloud/sign-in tab no longer joins the owner's closed list or the
+  scheduler's relaunch (`workspace::is_one_shot`); a task led by `-` is
+  refused on desktop and phone.
+  - [ ] 🖐️ Manual test — Keep running when Tabtivity is closed on; quit the
+    window. Phone → a project → hold ＋: **Cloud sessions** is listed (not
+    under "Needs the window"). Claude → New session → "say hello" → Start:
+    a "Claude (cloud)" tab opens, shows `Created cloud session … View:
+    https://claude.ai/code/session_…`, and the session is on claude.ai/code.
+    Open existing starts `claude --teleport`'s picker. Close the tab: it is
+    not under Recently closed. Open the window: the cloud tab is not
+    restored.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [ ] **Follow a Claude cloud session live in a tab** (idea 2026-10-23, not
   started): the `+` menu's *open a cloud session* runs `claude --teleport`,
   which copies the session into the tab — the cloud session runs on and the
@@ -3299,8 +3368,8 @@ unchanged; the new agents are additive.
   voice: good enough, or is Piper needed?** Settings → Experimental →
   Hands-free, then the chip: ask, pause, the chime, the prompt goes after the
   window; once more, say "stop" in the window and the draft stays. The answer
-  is read, the mic listens again, and stays paused while the agent still
-  runs tools. Sit silent in a noisy room for a minute: nothing is sent.
+  is read, the mic dictates without "Tabby" again, and keeps the Tabby gate
+  while the agent still runs tools. Sit silent in a noisy room for a minute: nothing is sent.
   Ctrl+Shift+Q stops the voice and the agent keeps going. With a headset and
   Headset mode on, talking over the voice stops it. **Judge: is interrupting
   like this enough?** Start the mic in a second tab: the first stops, the
@@ -3372,6 +3441,27 @@ unchanged; the new agents are additive.
 - [ ] Talk over a natural voice through speakers: `webrtc-audio-processing`
   echo cancellation against the samples `piper.rs` plays (plan step 7);
   probe the crate on the three CI OSes first.
+- [x] "Tabby navigate" in the Chat mic (built 2026-11-22, not run live,
+  `docs/desktop_tabby_navigate_plan.md`): the shared mode
+  (`shared/voiceNavMode.ts`), the Tabby gate through a turn, the landing.
+  Pills `terminal.reader.voice.navigate`, `.tabbyGate`, `.help`.
+- [ ] 🖐️ Test gate, "Tabby navigate" (main window, Hands-free and read-aloud
+  on) — the nine steps of the plan's Verification: a spoken send then
+  "Tabby, and add a test, go Tabby" queues the second prompt while other talk
+  is dropped; "Tabby navigate", "project …", "yes" lands on its agent tab,
+  reads the last prompt and answer, then listens; "the done tab" twice walks
+  as the next-done key does and Back returns; "box …"; a root agent waiting is
+  never landed on; silence closes it after ~10 s; "Tabby help" in both places;
+  a popout's Chat says "Navigation works in the main window"; Hands-free off,
+  "Tabby navigate, tab two" jumps and the mic dictates there ungated.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 ### Send skill — `docs/context/agent_sessions.md`
 
@@ -3382,7 +3472,7 @@ unchanged; the new agents are additive.
   Copilot 1.0.107; not live.
 - [ ] 🖐️ Manual test — in a new Claude tab type `/tabtivity-send README.md`:
   the file goes to the screen you typed from (the desktop chat names it, or
-  the phone gets it). In a new Codex, Copilot and OpenCode tab, `/skills` (or
+  the phone gets it). In a new Codex, Copilot, OpenCode and Antigravity tab, `/skills` (or
   the CLI's skill list) shows `tabtivity-send` **once**. Ask any of them to
   "send me the output of `ls` on my phone": it pipes through `-n` rather than
   writing a file first. Tabby's (assistant) chat lists no such skill.

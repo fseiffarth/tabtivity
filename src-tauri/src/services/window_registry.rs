@@ -138,6 +138,10 @@ pub struct WindowRegistry {
     /// the screen its `detached_bounds` record names — what decides whether a
     /// reading of the window may become that record (`services::popout_screen`).
     pub detached_screens: crate::services::popout_screen::PopoutScreens,
+    /// Popouts whose renderer asked for the first-paint size nudge
+    /// (`detached_first_paint`) while their placement hop was running: the
+    /// nudge is owed, and paid as the hop ends.
+    pub detached_paint_owed: std::collections::HashSet<String>,
 }
 
 impl WindowRegistry {

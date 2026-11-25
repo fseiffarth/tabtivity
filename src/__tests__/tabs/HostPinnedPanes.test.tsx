@@ -37,7 +37,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   mockInvoke.mockImplementation((cmd: string) => {
     if (cmd === "list_agents") return Promise.resolve([{ id: "claude", bin: "claude", installed: true }]);
-    // A key saved for Claude's provider: the API section has a row to offer.
+    // A key saved for Claude's provider: the Agents group has an API row to offer.
     if (cmd === "agent_logins") return Promise.resolve([{ id: "claude", api_key_saved: true }]);
     return Promise.resolve(null);
   });
@@ -59,13 +59,14 @@ function renderMenu(hostPinned: boolean) {
   );
 }
 
+const apiRow = translateNow("newTabMenu.apiKeyEntry", { label: "Claude" });
 const groupLabels = () =>
   [...document.querySelectorAll(".tab-new-menu-group-label")].map((el) => el.textContent ?? "");
 
 describe("the popout's + menu on a host-pinned scope", () => {
   it("offers the local-model, API-key and Cloud rows on an ordinary project", async () => {
     renderMenu(false);
-    await waitFor(() => expect(groupLabels()).toContain(translateNow("newTabMenu.groupApiKey")));
+    await waitFor(() => expect(document.body.textContent).toContain(apiRow));
     expect(groupLabels()).toContain(translateNow("newTabMenu.groupLocalModel"));
     expect(document.body.textContent).toContain(translateNow("newTabMenu.cloudSession"));
   });
@@ -75,7 +76,7 @@ describe("the popout's + menu on a host-pinned scope", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Claude/ })).toBeTruthy());
     expect(groupLabels()).toContain(translateNow("newTabMenu.groupAgents"));
     expect(groupLabels()).toContain(translateNow("newTabMenu.groupShell"));
-    expect(groupLabels()).not.toContain(translateNow("newTabMenu.groupApiKey"));
+    expect(document.body.textContent).not.toContain(apiRow);
     expect(groupLabels()).not.toContain(translateNow("newTabMenu.groupLocalModel"));
     expect(document.body.textContent).not.toContain(translateNow("newTabMenu.cloudSession"));
     // Nothing probes the API keys or the local model for a menu that offers neither.

@@ -231,6 +231,19 @@ fn bwrap_masks_the_keyring_listing() {
     assert!(proc_mount < out.iter().position(|a| a == "/proc/keys").unwrap());
 }
 
+/// NixOS's programs all live behind `/run/current-system`: the private `/run`
+/// must not hide them, so the profile is bound back after it, read-only.
+#[test]
+fn bwrap_keeps_the_nixos_system_profile_under_its_private_run() {
+    let out = bwrap_args("/home/u", None, "/p", "sh", &[], &[], &[], &[]);
+    let run = out.windows(2).position(|w| w == ["--tmpfs", "/run"]).unwrap();
+    let profile = out
+        .windows(3)
+        .position(|w| w == ["--ro-bind-try", "/run/current-system", "/run/current-system"])
+        .unwrap();
+    assert!(run < profile);
+}
+
 fn proc_(argv0: &str, argv1: Option<&str>, host_ns: bool) -> ProcView {
     ProcView {
         argv0: argv0.to_string(),

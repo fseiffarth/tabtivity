@@ -25,7 +25,7 @@ and the new version through the same probe, then compare the two labels.
 | `hookdump.py <log> <event>` | A hook command that appends its event, pid, environment names (and the tab, Copilot and hook-depth values) and stdin payload to a JSONL log. Register it for every event to see which fire, with what. |
 | `stub_anthropic.py <port> <log>` | Anthropic Messages API (`ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`), streaming or not. `STUB:CALL`/`STUB:SEQ` as above (only in a request that offers tools), `STUB:ERR <status> <type>` answers that API error. Lets Claude run with no login and no paid turn. |
 | `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` anywhere in the current user turn (agy's `-p`
-adds a system message after the prompt) makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
+adds a system message after the prompt) makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first, `STUB:HOLD <secs>` beside a `STUB:CALL` waits before answering the tool's result (a screen mid-turn). `STUB_DECLS=<file>` writes the first request's tool declarations there. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
 | `parsers/frames.probe.ts` | Replays every frame of two labels through the app's own readers (Reader live view, model pickers, decision lamp, cold-resume dialog, Antigravity picker/effort, phone sign-in) and lists the frames and fields that read differently. See below. |
 
 Replay two labels:
@@ -61,7 +61,9 @@ gives its usage.
   where the prompt goes. `send_now.py <label> <bin>
   early|tool|typed|stream esc|chord|chord1` lands Esc or Claude's Ctrl+X
   Ctrl+S on a held, tool-running, typed or streaming turn, for whether the
-  queue goes at once and what the turn keeps (Send now).
+  queue goes at once and what the turn keeps (Send now). The login home's
+  settings apply (its `tui` too); `VERIFY_CLAUDE_TUI=default|fullscreen` pins
+  the renderer.
   `chat_send.py <label> <bin> [case…]` types prompts
   with the Chat's and the phone's exact writes (`agentInputWrites` and its
   pacing) — fresh, idle, two-line, long, while busy — and reads
@@ -70,7 +72,8 @@ gives its usage.
   Esc only (no turn); `expand` opens the folded `More models` row first. These need the login
   and make small paid haiku turns. `login.sh <label> <bin>` needs none: it
   draws `claude auth login`'s sign-in link in a scratch HOME at 120, 80 and 42
-  columns for the frame replay's `signIn` (2.1.330 shortened the link).
+  columns for the frame replay's `signIn` (2.1.330 shortened the link);
+  `login.sh <label> <bin> console` draws `--console`'s (shortened in 2.1.331).
   Binaries come from the agent install's `.local/share/claude/versions/<v>`.
   `turn_hooks.py <label> <bin> <port> [case…]` needs no login: a scratch
   HOME, `stub_anthropic.py`, a dumping hook on every turn-relevant event. It
@@ -83,7 +86,21 @@ gives its usage.
   screen). Its
   scratch work dir sits under the repo, so the TUI cases answer the repo
   `CLAUDE.md`'s external-imports question with its default.
-- **OpenCode** (`opencode/`): `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`
+  `otel.py <label> <bin> <stub-port> <otlp-port> [case…]` needs no login
+  either: it starts a loopback OTLP/HTTP receiver (`Receiver`, 127.0.0.1
+  only) and runs `-p` turns against the stub with Claude's trace export on
+  (the plain opt-in, protobuf, no beta flag, tools, every `OTEL_LOG_*`
+  content opt-in, a subagent, and `app`: the exact environment the app
+  injects). It dumps each POST body and `spans.txt` (name, ids, attributes,
+  resource) to `tmp/verify-cli/claude/<label>/otel/<case>/`: the span names
+  and attributes `services::claude_otel` reads
+  (`docs/claude_otel_tokens_plan.md`). `stub_anthropic.py` answers with the
+  cache tokens `STUB_CACHE_READ` / `STUB_CACHE_WRITE` name (the script sets 7
+  and 5).
+- **OpenCode** (`opencode/`): `round.sh <label> <bin> <port>` runs the whole
+  set below except `db.py` for one binary into `probe-<label>.log` (eight
+  ports from `<port>`); run old and new at once, ports 100 apart, and diff the
+  logs. `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`
   forces tool calls through the stub in a tab-like home. The session plugin
   is rebuilt from `opencode_session.rs` on every run. `hooks.py
   events|turn <label> <bin> <port>` lists a dumping plugin beside it (every
@@ -130,6 +147,9 @@ gives its usage.
   conversation; `format` whether a release runs the hook and sets
   `ANTIGRAVITY_AGENT` for tool commands (run it on every baseline).
   `stub_gemini.py` forces the tool calls (`STUB:CALL <tool> <json>`).
+  `steps.py <label> <bin> <port> [cols]` forces an `update_steps` call and
+  holds the turn, for the step checklist (1.5.16) above the input box, and
+  writes the tool declarations to `decls.json`.
   `queued.py <label> <bin> <port> <cols> [rows]` holds a turn, queues two
   prompts behind it and opens `/model` over them (`busy`, `queued`,
   `queued_model`), for the phone's footer read beside `Press up to edit queued
@@ -174,6 +194,11 @@ gives its usage.
   the stub reads) asks an async question while the turn works on, opens it
   (shift+←) and answers it; then one skipped (^]) and one left waiting as the
   turn ends. Frames, the rollout and the hook dumps land in `async_question/`.
+  `async_question.py <label> <bin> <port> [model] long [many|tall]` asks one
+  question taller than the picker's area (12 options at 80x12, multi-line
+  options at 60x16), resizes the pane after asking, and answers the last real
+  option by the app's walk, by digits and by paging (PageDown/PageUp); frames
+  and `answers.txt` (what Codex got back) land in `async_question_long/`.
 
 - **Copilot** (`copilot/`): `screens.sh <label> <bin> [port]` walks the folder
   trust question, idle, a stub-forced `create` approval at 110 and 60 columns
@@ -238,6 +263,28 @@ gives its usage.
   which answers offline. Don't use its `meta` provider from a probe: with
   `--base-url` at the stub, one turn was still answered by something that
   wasn't the stub.
+- **Cursor** (`cursor/`): no stub backend, so these use the real login and
+  small billed turns (budget them). `drive.py <label> <bin> <name> <folder>
+  [--step …] [-- args]` drives the TUI against the real `$HOME` in a scratch
+  project folder (git-init it, give it a project-level `.cursor/hooks.json`
+  running `hookdump.py`); the chats land in `~/.cursor/chats/<md5 of the
+  folder>/`, which no real tab reads. Never copy `~/.config/cursor/auth.json`.
+  `hooks.py <label> <bin>` writes the app's `beforeSubmitPrompt` hook (ignored
+  test `writes_the_cursor_hook_for_a_probe`) into such a folder and plays two tabs
+  with made-up keys (two prompts): each must record the chat of its own prompt,
+  a launch with no prompt, `--resume` and `--continue` record nothing, and
+  `--resume <id>` shows the tab's own prompt. The app's own store reader runs
+  over a real store with `CURSOR_PROBE_HOME=<home> CURSOR_PROBE_DIR=<folder>
+  cargo test -p tabtivity --lib reads_a_real_cursor_store -- --ignored
+  --nocapture`. `-p` ends every turn with a retry loop in 2026.11.22 (exit 1),
+  so use the TUI for turns. Get a build without installing it: the agent
+  install's `.local/share/cursor-agent/versions/<build>/cursor-agent`.
+  `tui_round.py <label> <bin> [--paid]` captures every TUI screen the Chat
+  reads (sign-in, trust page, idle box and drafts, the `/` menu, the Shift+Tab
+  modes, `/model`, the resume list and, with `--paid`, the approvals, busy
+  row, follow-ups box, Ctrl+C and the Chat's two-line send) in a scratch home
+  on the real login (only `XDG_CONFIG_HOME` points at it, nothing is copied,
+  `~/.cursor` is never read); `tui_screens.py` runs one scripted launch.
 
 ## Traps
 

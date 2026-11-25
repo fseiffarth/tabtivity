@@ -7,6 +7,8 @@ import {
   joinOpenCodeWraps,
   openCodeComposer,
   openCodeDialogCloseKeys,
+  openCodeModelKeys,
+  OPENCODE_MODEL_KEYS,
   mergeOpenCodePage,
   openCodeMiniRow,
   openCodePickKeys,
@@ -463,6 +465,30 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     expect(modelPickKeys(read!, read!.options[0], "OpenCode")).toEqual([CLEAR, "Big Pickle OpenCode Zen", "\r"]);
   });
 
+  it("reads the flat free list between the wrapped subtitle and the selected model's details", () => {
+    const page = readOpenCodePicker(lines(
+      "     Free models                  esc",
+      "     Connect a provider for access to", "     more models", "", "     Search", "",
+      " ┃   Tidepool Alpha Free", "     Big Pickle", "", "     Text · 1M · Reasoning",
+    ));
+    expect(page?.options.map(({ label, description }) => [label, description])).toEqual([
+      ["Tidepool Alpha Free", "Free"], ["Big Pickle", "Free"],
+    ]);
+    expect(isOpenCodeModelList("OpenCode", page?.title)).toBe(true);
+  });
+
+  it("reads the first provider directly under the 2.4 search header and the square current marker", () => {
+    const page = readOpenCodePicker([
+      ...lines("     Search models                esc", ""), heading("     Ollama (local)"),
+      ...lines(" ┃ ▪ stub", "", "     OpenAI", "     GPT-6.2 Astra", "", "     connect          favorite ctrl+f"),
+    ]);
+    expect(page?.options.map(({ label, description }) => [label, description])).toEqual([
+      ["stub", "Ollama (local)"], ["GPT-6.2 Astra", "OpenAI"],
+    ]);
+    expect(page?.current).toBe(0);
+    expect(isOpenCodeModelList("OpenCode", page?.title)).toBe(true);
+  });
+
   it("tells a heading at a frame's top from the highlighted row, which is bold too", () => {
     const read = readOpenCodePicker([
       ...lines("  Select model                                                 esc", "", "  Search", ""),
@@ -679,6 +705,21 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     expect(readOpenCodePicker(lines("  I opened   Select model to check", "", "  Search", "  Big Pickle"))).toBeNull();
   });
 
+  it("answers the filterless variant picker from its cursor, even after it leaves the current variant", () => {
+    const rows = [
+      "     Select variant                                 esc", "",
+      "   ▪ Default", "     low", " ┃   medium", "     high", "", "  ┃  Ask anything…",
+    ];
+    const page = readOpenCodeModelPage({ length: rows.length, getLine: (at) => ({ translateToString: () => rows[at] }) });
+    const send = vi.fn();
+    const walk = new OpenCodePickerWalk(send);
+    walk.read(page);
+    expect(walk.prompt()?.options.map(({ label }) => label)).toEqual(["Default", "low", "medium", "high"]);
+    expect(walk.prompt()?.options[0].keys).toEqual(["\u001b[A", "\u001b[A", "\r"]);
+    expect(walk.prompt()?.options[3].keys).toEqual(["\u001b[B", "\r"]);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("stops at the picker's key hints rather than listing them", () => {
     expect(readOpenCodePicker(fullPicker)?.options.some((option) => /ctrl\+/u.test(option.label)))
       .toBe(false);
@@ -725,6 +766,16 @@ describe(`${BRAND.display} Mobile OpenCode dialogs over the composer`, () => {
     expect(openCodeDialogCloseKeys([" ~/projects/app                 esc exit shell mode"])).toEqual([]);
     expect(openCodeDialogCloseKeys(["  press esc to close it"])).toEqual([]);
     expect(openCodeDialogCloseKeys([])).toEqual([]);
+  });
+
+  it("closes a notice before the model chip's palette keys, which it would swallow", () => {
+    // OpenCode 2.4.0's What's new notice: Ctrl+P and `model` vanished into
+    // it and Enter only closed it, so the picker never opened.
+    expect(openCodeModelKeys([
+      "                                 What's new in 2.4.0                                esc   ",
+      "                                 Built-In Desktop Browser",
+    ])).toEqual(["\u001b", ...OPENCODE_MODEL_KEYS]);
+    expect(openCodeModelKeys([" Build · DeepSeek V4.1 Flash Free OpenCode", " ~/proj:develop   ctrl+p commands"])).toEqual(OPENCODE_MODEL_KEYS);
   });
 });
 

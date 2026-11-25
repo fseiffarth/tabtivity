@@ -1,0 +1,261 @@
+/* side-panel-kit.css — the shared parts every side panel view is built from
+   (docs/files_panel_redesign_plan.md, "Shared kit"). One row grid, one section
+   head, one toolbar row, one footer, so names in a list start on one vertical
+   line whatever a row carries, and the twelve views read as one panel.
+
+   Tokens only. Buttons are not redefined here: a toolbar icon button is
+   `.toolbar-btn.toolbar-btn--sm`, a row action `.btn-quiet` (`.is-danger` for a
+   destructive one), a footer action `.settings-btn` / `.btn-primary`, a choice
+   of windows or modes `.seg`. */
+
+/* ── The one view toolbar row ─────────────────────────────────────────────
+   A view has at most one: context on the left (breadcrumb, branch, count),
+   actions on the right. */
+.sp-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 36px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+
+.sp-toolbar-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sp-toolbar-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Everything after it sits at the row's right edge. */
+.sp-toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ── The one row grid ─────────────────────────────────────────────────────
+   state · action · icon + name · trailing meta. The first two columns are
+   always present on every row of a list, empty or not; `.sp-row--plain` drops
+   both for a whole list whose rows never carry a state or an action — never
+   per row. */
+.sp-row {
+  display: grid;
+  grid-template-columns: var(--sp-row-cols, 16px 20px minmax(0, 1fr) auto);
+  column-gap: 6px;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+
+.sp-row--plain {
+  --sp-row-cols: minmax(0, 1fr) auto;
+}
+
+/* Title over a secondary line. */
+.sp-row--two {
+  min-height: 40px;
+}
+
+.sp-row:hover {
+  background-color: var(--pill-hover-bg);
+}
+
+.sp-row.selected,
+.sp-row.selected:hover {
+  background-color: var(--accent-soft);
+}
+
+/* Columns 1 and 2: fixed boxes, so an empty one still holds its width. */
+.sp-row-state,
+.sp-row-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 16px;
+}
+
+/* Column 3. Nested rows indent THIS cell (16px per level); the columns beside
+   it never move. */
+.sp-row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sp-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sp-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-row-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Column 4. */
+.sp-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── State chip (column 1) ────────────────────────────────────────────────
+   One letter on a neutral chip; the LETTER carries the state colour (set by
+   the caller, from a token), the `title` carries the word. Never colour alone. */
+.sp-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-secondary);
+}
+
+/* ── Status word (anything that runs) ─────────────────────────────────────
+   A 6px lamp plus the word. Always the word. */
+.sp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.sp-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sp-status--running { color: var(--success); }
+.sp-status--waiting { color: var(--warning); }
+.sp-status--failed { color: var(--danger); }
+
+/* ── Section head ─────────────────────────────────────────────────────────
+   Sentence case, no rule above it: 8px of air instead. A <button> when the
+   section folds (chevron first), a <div> when it does not. */
+.sp-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  margin-top: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+button.sp-head {
+  cursor: var(--cur-pointer, pointer);
+}
+
+.sp-head-meta {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.sp-head-end {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Small parts ──────────────────────────────────────────────────────── */
+.sp-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* Share bar: an entry's share of its section total. Data, not chrome, so it
+   reads the activity ramp and not the accent. */
+.sp-bar {
+  display: inline-block;
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--activity-0);
+  overflow: hidden;
+}
+
+.sp-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--activity-3);
+}
+
+/* One line of quiet text at the row inset: an empty state or a hint. */
+.sp-note {
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* A view's primary actions, pinned under its scrolling list. */
+.sp-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}

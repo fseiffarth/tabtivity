@@ -13,6 +13,7 @@ import type { WindowBounds } from "../../stores/tabs/types";
 import { useWindowsStore } from "../../stores/windows";
 import { reseedDetached } from "./detachedDropTargets";
 import { openTexWorkspace } from "../../lib/viewers/tex/openTexWorkspace";
+import { fileTabMatcher } from "../../lib/tabs/fileTab";
 
 /**
  * The embed-tab payload a dropped file becomes. Shared by every file-drop path —
@@ -273,6 +274,26 @@ export function commitFileDrop(
   const items: (FileDragItem | null)[] = multi ?? [null];
   const payloadFor = (f: FileDragItem | null) => fileEmbedPayload(d, f, projectCwd);
 
+  // Where this drop lands, as data, for a drop that moves an already-open tab
+  // there instead of adding one; null = no valid target (a stray drop).
+  const destination = (): FileDropDestination | null => {
+    const store = useTabsStore.getState();
+    if (detachedTarget) return { kind: "detached", ...detachedTarget };
+    if (detachBounds) return { kind: "newWindow", bounds: detachBounds };
+    if (!store.layout) {
+      return d.reorderGroup === EMPTY_GROUP_ID || d.overGroup === EMPTY_GROUP_ID ? { kind: "empty" } : null;
+    }
+    if (overTabBar) {
+      const groupId = d.reorderGroup as string;
+      return findGroup(store.layout, groupId) ? { kind: "bar", groupId, index: d.reorderIndex as number } : null;
+    }
+    if (overSplit) {
+      const groupId = d.overGroup as string;
+      return findGroup(store.layout, groupId) ? { kind: "split", groupId, edge: d.edge as DropEdge } : null;
+    }
+    return null;
+  };
+
   // A single `.tex` drop becomes the ONE TeX workspace tab for its document
   // rather than a bare editor embed — the same one-tab policy the FileTree
   // double-click uses. Resolving the build root is async, so we hand
@@ -288,48 +309,51 @@ export function commitFileDrop(
   if (!multi && d.viewer === "tex" && d.filePath) {
     const texPath = d.filePath;
     const store = useTabsStore.getState();
-    let place: ((tab: Omit<TabEntry, "key">) => void) | null;
-    let dest: FileDropDestination;
-    if (detachedTarget) {
-      dest = { kind: "detached", ...detachedTarget };
-      place = (tab) => {
-        const e = store.addTab(tab);
-        store.dockTabIntoDetached(detachedTarget.scope, detachedTarget.groupId, e.key, detachedTarget.target);
-        reseedDetached(detachedTarget.scope, detachedTarget.groupId, e.key);
-      };
-    } else if (detachBounds) {
-      dest = { kind: "newWindow", bounds: detachBounds };
-      place = (tab) => { store.detachNewTab(tab, detachBounds); };
-    } else if (!store.layout) {
-      if (d.reorderGroup === EMPTY_GROUP_ID || d.overGroup === EMPTY_GROUP_ID) {
-        dest = { kind: "empty" };
+    const dest = destination();
+    if (!dest) return;
+    let place: (tab: Omit<TabEntry, "key">) => void;
+    switch (dest.kind) {
+      case "detached":
+        place = (tab) => {
+          const e = store.addTab(tab);
+          store.dockTabIntoDetached(dest.scope, dest.groupId, e.key, dest.target);
+          reseedDetached(dest.scope, dest.groupId, e.key);
+        };
+        break;
+      case "newWindow":
+        place = (tab) => { store.detachNewTab(tab, dest.bounds); };
+        break;
+      case "empty":
         place = (tab) => { store.addTab(tab); };
-      } else {
-        return; // empty scope, no drop target
-      }
-    } else if (overTabBar) {
-      const targetGroup = d.reorderGroup as string;
-      if (!findGroup(store.layout, targetGroup)) return;
-      const slot = d.reorderIndex as number;
-      dest = { kind: "bar", groupId: targetGroup, index: slot };
-      place = (tab) => {
-        store.focusGroup(targetGroup);
-        const e = store.addTab(tab);
-        store.moveTab(e.key, targetGroup, slot);
-      };
-    } else if (overSplit) {
-      const targetGroup = d.overGroup as string;
-      if (!findGroup(store.layout, targetGroup)) return;
-      const edge = d.edge as DropEdge;
-      dest = { kind: "split", groupId: targetGroup, edge };
-      place = (tab) => { store.splitWithNewTab(tab, targetGroup, edge); };
-    } else {
-      return; // no valid target — a stray drop opens nothing
+        break;
+      case "bar":
+        place = (tab) => {
+          store.focusGroup(dest.groupId);
+          const e = store.addTab(tab);
+          store.moveTab(e.key, dest.groupId, dest.index);
+        };
+        break;
+      case "split":
+        place = (tab) => { store.splitWithNewTab(tab, dest.groupId, dest.edge); };
+        break;
     }
     void openTexWorkspace(texPath, place, {
       relocate: (key) => relocateExistingTab(key, dest),
     });
     return;
+  }
+
+  // Any other single file with a built-in viewer that already has a tab: that
+  // tab goes where the file was dropped (the TeX workspace's rule above), not a
+  // second copy of it. Only this scope's tabs are looked at — the ones
+  // `relocateExistingTab` can move.
+  if (!multi && d.viewer) {
+    const existing = useTabsStore.getState().tabs.find(fileTabMatcher(d.filePath, d.viewer));
+    if (existing) {
+      const dest = destination();
+      if (dest) relocateExistingTab(existing.key, dest);
+      return;
+    }
   }
 
   // Released over an open popout → dock the file as a new embed tab INTO it. We

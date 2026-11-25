@@ -14,8 +14,7 @@ import {
 } from "../../terminal/selectPrompt";
 import { liveModelPick, modelRowsOf, modelRowsStep, sameModelRows } from "../../terminal/modelRows";
 import {
-  openCodeDialogCloseKeys, openCodePickKeys, OpenCodePickerWalk, readOpenCodePickerPage,
-  OPENCODE_MODEL_KEYS,
+  openCodeDialogCloseKeys, openCodeModelKeys, openCodePickKeys, OpenCodePickerWalk, readOpenCodePickerPage,
 } from "../../terminal/openCodeMini";
 import {
   antigravityEffortKeys, readAntigravityEffort, readAntigravityPicker, type AntigravityEffort,
@@ -37,6 +36,20 @@ const SELECT_NEXT_WAIT = 700;
  * answering it, before the sheet takes it as dismissed (on the desktop, or by
  * the session itself). Longer than a redraw, short enough not to linger. */
 const PICKER_GONE_GRACE = 1_200;
+
+/** `step` with the highlighted row's "unavailable" reason from `live` laid on
+ * (Antigravity prints it only while the highlight is on that row). The merged
+ * list keeps the row it already held, so the reason stays on it for the rest
+ * of the opening. Returns `step` itself when there is nothing to add. */
+function withUnavailableRow(step: SelectStep, live: SelectPrompt): SelectStep {
+  const row = live.options[live.current];
+  if (!row?.unavailable) return step;
+  const at = step.options.findIndex((option) => option.number === row.number && option.label === row.label);
+  if (at < 0 || step.options[at].unavailable) return step;
+  const options = step.options.slice();
+  options[at] = { ...options[at], description: row.description, unavailable: true };
+  return { ...step, options };
+}
 
 /** The model sheet's reading of the picker on screen: OpenCode's walk, the rows
  * put together, and the reveal walk. */
@@ -125,7 +138,7 @@ export function useModelPicker({
    * the whole list. */
   const walking = reveal !== null;
   const listedStep = useMemo<SelectStep | null>(
-    () => (!pickerStep ? null : openCode ? pickerStep : mergeSelectRows(knownStep, pickerStep, walking)),
+    () => (!pickerStep ? null : openCode ? pickerStep : withUnavailableRow(mergeSelectRows(knownStep, pickerStep, walking), pickerStep)),
     [pickerStep, openCode, knownStep, walking],
   );
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -241,7 +254,7 @@ export function useModelPickerAnswers({
   setKnownStep, setRememberedStep, rememberedStep, setHeldPick, heldPick, sheetAnswered, keptStep,
   setReveal, reveal, revealStuck, effortFor, setEffortFor, setEffortStep, effortStep, sawPicker,
   clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, pickerStep,
-  listedStep, listSettled, modelPreview, pickerAt, effortSlider,
+  listedStep, listSettled, modelPreview, pickerAt, effortSlider, viewportRows,
 }: {
   tab: TabRow;
   pickModel: boolean;
@@ -279,6 +292,9 @@ export function useModelPickerAnswers({
   modelPreview: SelectStep | null;
   pickerAt: number | undefined;
   effortSlider: AntigravityEffort | null;
+  /** The rows on screen now: a dialog among them is closed before the
+   * picker's keys (`openCodeModelKeys`). */
+  viewportRows: MutableRefObject<() => string[]>;
 }) {
   /** The highlight has reached the model an Antigravity tap chose, so the
    * dialog has redrawn its slider for *that* model: a model with stops asks
@@ -297,7 +313,9 @@ export function useModelPickerAnswers({
       setEffortFor(null);
       return;
     }
-    if (deliver(["\r"]) && listedStep) setAnswered(listedStep);
+    // A model outside the account's plan takes no Enter: the dialog stays up
+    // and names why, which the sheet shows on the row.
+    if (!pickerStep.options[pickerStep.current]?.unavailable && deliver(["\r"]) && listedStep) setAnswered(listedStep);
     setEffortFor(null);
     // `deliver` is a fresh closure every render; the step runs on the frames.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -327,7 +345,7 @@ export function useModelPickerAnswers({
     setEffortStep(null);
     if (openCode) {
       clearPending();
-      if (!deliver(OPENCODE_MODEL_KEYS)) return;
+      if (!deliver(openCodeModelKeys(viewportRows.current()))) return;
     } else if (!sendAgentText("/model")) return;
     setModelSheet(true);
     // Refused for a tab whose CLI runs elsewhere: the sheet waits as before.

@@ -296,6 +296,14 @@ pub async fn openvpn_status(config: String) -> Result<bool, String> {
     Ok(openvpn::is_connected(&config))
 }
 
+/// Why the tunnel for `config` is gone (`services::openvpn::tunnel_end`): the
+/// reason its last lines name, for the VPN menu to show after a tunnel died on
+/// its own. `None` while it is up, or when this window never ran it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn openvpn_exit_reason(config: String) -> Result<Option<openvpn::TunnelEnd>, String> {
+    Ok(openvpn::tunnel_end(&config))
+}
+
 /// Every config whose tunnel is up right now, regardless of which project asked
 /// for it. A tunnel reroutes the whole machine, so the frontend tracks it as a
 /// machine-level object (`stores/remote/vpn/vpnStatus.ts`) rather than a per-project one; this

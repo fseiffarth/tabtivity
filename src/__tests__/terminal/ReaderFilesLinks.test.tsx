@@ -91,7 +91,7 @@ describe("Reader Data: Files and Links sections", () => {
 
   it("keeps the empty text with neither", () => {
     render(<TerminalReaderFiles {...base} files={[]} links={[]} onOpenLink={() => {}} />);
-    expect(screen.getByText("This conversation has not named any file or link yet.")).toBeTruthy();
+    expect(screen.getByText("This conversation has not named any file or link or run a command yet.")).toBeTruthy();
   });
 
   it("draws no Links section without onOpenLink", () => {

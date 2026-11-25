@@ -353,13 +353,14 @@ export function nextUsageReset(report: UsageReport, now: Date): UsageReset | nul
   return best;
 }
 
-/* ── The two windows a glance shows ────────────────────────────────────────── */
+/* ── The windows a glance shows ────────────────────────────────────────── */
 
 /** The rolling session window (Claude's 5-hour one) and the account's weekly
  *  window, when the panel names them. */
 export interface LimitMeters {
   session?: UsageMeter;
   week?: UsageMeter;
+  fable?: UsageMeter;
 }
 
 /**
@@ -373,5 +374,6 @@ export function limitMeters(report: UsageReport): LimitMeters {
   const session = report.meters.find((meter) => /\bsession\b|\b5\s?-?\s?h(?:ours?)?\b/iu.test(meter.label));
   const weekly = report.meters.filter((meter) => /\bweek(?:ly)?\b/iu.test(meter.label));
   const week = weekly.find((meter) => /\ball\b/iu.test(meter.label)) ?? weekly[0];
-  return { session, week };
+  const fable = weekly.find((meter) => /\bfable\b/iu.test(meter.label));
+  return { session, week, fable };
 }

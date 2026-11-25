@@ -88,12 +88,30 @@ export function commandLabel(command: SlashCommand): string {
   return command.setting ? `${typed} → ${command.setting}` : typed;
 }
 
+/** The words on a command's rule in both chats (desktop Reader and phone):
+ * a setting by its name and value (`Model: Fable 5.2`, `Effort: high`),
+ * anything else by its bare name (`clear`). `names` are the translated
+ * "Model" and "Effort". */
+export function readableCommandLabel(command: SlashCommand, names: { model: string; effort: string }): string {
+  const name = command.name === "/model" || command.name === "/models" ? names.model
+    : command.name === "/effort" ? names.effort : command.name.slice(1);
+  const value = command.setting || (commandArgsInline(command.args) ? command.args : "");
+  return value ? `${name}: ${value}` : name;
+}
+
 /** Whether a command's arguments ride on the divider beside its name: a
  * one-word setting does (`/model opus`, `/effort high`); anything with words
  * — the text of a `/goal` or `/plan` — is the reader's own message and reads
  * as a prompt bubble under it. */
 export function commandArgsInline(args: string): boolean {
   return args.length <= 24 && !/\s/.test(args);
+}
+
+/** Known session controls. Unrecognised commands remain individual events:
+ * a custom skill must never be presented as a lasting setting. */
+export function commandSettingKey(command: SlashCommand): string | null {
+  if (command.name === "/model" || command.name === "/models") return "model";
+  return ["/effort", "/plan", "/goal", "/permissions"].includes(command.name) ? command.name.slice(1) : null;
 }
 
 /** Consecutive slash commands drawn as one rule (`commandRuns`). */
@@ -110,23 +128,33 @@ export const COMMAND_SEPARATOR = " · ";
 /** Runs of slash commands sent one after another read as one line: a command
  * whose arguments ride on its rule (no bubble under it) folds into the
  * command right after it. A day chip between them (`breaks`) or a prompt
- * still sending ends the run; the run's last command keeps its bubble. */
-export function commandRuns(turns: readonly TranscriptTurn[], breaks: ReadonlySet<number> = new Set()): CommandRuns {
+ * still sending ends the run; the run's last command keeps its bubble. Model
+ * changes within a run show only the final choice, including `/models`.
+ * One-off actions always keep their own row and end a settings run. */
+export function commandRuns(
+  turns: readonly TranscriptTurn[],
+  breaks: ReadonlySet<number> = new Set(),
+  label: (command: SlashCommand) => string = commandLabel,
+): CommandRuns {
   const folded = new Set<number>();
   const lead = new Map<number, string>();
-  let run: { index: number; label: string }[] = [];
+  let run: { index: number; label: string; setting: string }[] = [];
   turns.forEach((turn, index) => {
     const command = turn.pending === undefined ? turn.command : null;
-    if (!command || breaks.has(index)) run = [];
-    if (!command) return;
+    const setting = command && commandSettingKey(command);
+    if (!setting || breaks.has(index)) run = [];
+    if (!command || !setting) return;
     if (run.length > 0) {
       for (const { index: at } of run) {
         folded.add(at);
         lead.delete(at);
       }
-      lead.set(index, run.map(({ label }) => label).join(COMMAND_SEPARATOR));
+      // Keep the final value of each setting. One-off actions never enter
+      // the run, so repeated actions remain separate historical events.
+      run = run.filter((entry) => entry.setting !== setting);
+      if (run.length > 0) lead.set(index, run.map(({ label }) => label).join(COMMAND_SEPARATOR));
     }
-    run = commandArgsInline(command.args) ? [...run, { index, label: commandLabel(command) }] : [];
+    run = commandArgsInline(command.args) ? [...run, { index, label: label(command), setting }] : [];
   });
   return { folded, lead };
 }

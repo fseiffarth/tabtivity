@@ -7,6 +7,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { inboxFileUrl, isMedia, sentName, type OutboxFile, type ViewerScope } from "../api";
 import { openingOutsideStrands } from "../platform";
 import { formatBytes } from "../../../src/lib/formatBytes";
+import { useTapHolds } from "../newTabDefault";
 
 /** Picture tiles an album shows before the last one reads "+N" (as `OutboxPost`). */
 const ALBUM_TILES = 4;
@@ -69,10 +70,11 @@ export function phoneInboxSource(tabId: string): InboxSource {
  * holds a picture's place, and one the inbox no longer holds says so.
  *
  * A tap opens the file in the viewer (`onOpen`), or downloads bytes the
- * phone cannot show. The desktop Chat draws the same album from its own
- * `source`, with its own untested pill (`tag`).
+ * phone cannot show; a hold on one file calls `onHold` (the phone chat's
+ * Save / Share / Delete menu). The desktop Chat draws the same album from its
+ * own `source`, with its own untested pill (`tag`), and no hold.
  */
-export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onSettle }: {
+export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onHold, onSettle }: {
   /** The phone's tab (names the route); not needed with a `source`. */
   tabId?: string;
   source?: InboxSource;
@@ -82,10 +84,17 @@ export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onSettle
   /** What the desktop said per leaf; absent = not answered yet. */
   files: ReadonlyMap<string, OutboxFile | null>;
   onOpen: (file: OutboxFile) => void;
+  onHold?: (file: OutboxFile) => void;
   onSettle?: () => void;
 }) {
   const t = useT();
   const from = source ?? phoneInboxSource(tabId ?? "");
+  const press = useTapHolds();
+  /** A card's tap opens (a download link follows itself); with `onHold` a
+   * hold asks what to do with that one file. */
+  const tapOf = (file: OutboxFile, opens: boolean) => onHold
+    ? press(() => { if (opens) onOpen(file); }, () => onHold(file))
+    : opens ? { onClick: () => onOpen(file) } : {};
   const [ratio, setRatio] = useState(4 / 3);
   const pictures: Array<{ leaf: string; file: OutboxFile | undefined }> = [];
   const others: Array<{ leaf: string; file: OutboxFile | null }> = [];
@@ -106,7 +115,7 @@ export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onSettle
       {tiles.map(({ leaf, file }, i) => {
         const url = file ? from.picture(file) : null;
         return file && url
-          ? <button key={leaf} type="button" className="outbox-post-picture" onClick={() => onOpen(file)} aria-label={t("mobile.outbox.open", { name: sentName(file) })} title={sentName(file)}>
+          ? <button key={leaf} type="button" className="outbox-post-picture" {...tapOf(file, true)} aria-label={t("mobile.outbox.open", { name: sentName(file) })} title={sentName(file)}>
               <img src={url} alt="" loading="lazy" decoding="async" onLoad={(event) => settle(event.currentTarget)} />
               {more > 0 && i === tiles.length - 1 && <span className="outbox-post-more" aria-hidden="true">+{more}</span>}
             </button>
@@ -127,9 +136,9 @@ export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onSettle
         <small>{formatBytes(file.size)}</small>
       </>;
       const label = t("mobile.outbox.open", { name: sentName(file) });
-      if (from.openable(file)) return <button key={leaf} type="button" className="outbox-post-file" onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{card}</button>;
+      if (from.openable(file)) return <button key={leaf} type="button" className="outbox-post-file" {...tapOf(file, true)} aria-label={label} title={sentName(file)}>{card}</button>;
       return from.download
-        ? <a key={leaf} className="outbox-post-file" href={from.download(file)} download={sentName(file)} aria-label={label}>{card}</a>
+        ? <a key={leaf} className="outbox-post-file" href={from.download(file)} download={sentName(file)} {...tapOf(file, false)} aria-label={label}>{card}</a>
         : <span key={leaf} className="outbox-post-file" title={sentName(file)}>{card}</span>;
     })}
     {tag !== undefined ? tag : isUntested("mobile.chat.inboxPreviews") && <small className="inbox-album-untested">{t("mobile.outbox.untested")}</small>}
@@ -139,9 +148,11 @@ export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onSettle
 /**
  * One file beside the composer, as a thumbnail: the picture itself (the
  * phone's own copy while it travels, then the inbox's), else its badge and
- * name. A file still on its way is dimmed; a landed one carries ✕.
+ * name. A file still on its way is dimmed; a landed one carries ✕, and a
+ * hold on it (`onView`) opens it in the viewer before it goes out. The press
+ * keeps the draft's focus, so the keyboard stays up.
  */
-export function ComposerThumb({ name, picture, kind, sending, onRemove, removeLabel }: {
+export function ComposerThumb({ name, picture, kind, sending, onRemove, removeLabel, onView, viewLabel }: {
   name: string;
   /** Where the picture loads from, when it is one. */
   picture?: string;
@@ -150,13 +161,21 @@ export function ComposerThumb({ name, picture, kind, sending, onRemove, removeLa
   sending: boolean;
   onRemove?: () => void;
   removeLabel: string;
+  /** Opens the landed file in the viewer, on a hold. */
+  onView?: () => void;
+  viewLabel?: string;
 }) {
   const [broken, setBroken] = useState(false);
+  const press = useTapHolds();
+  const hold = onView ? press(() => {}, onView) : undefined;
   return <div className={`composer-thumb${sending ? " sending" : ""}`} title={name} aria-busy={sending || undefined}>
     {picture && !broken
       ? <img src={picture} alt={name} decoding="async" onError={() => setBroken(true)} />
       : <span className="composer-thumb-file"><b aria-hidden="true">{kind ? fileBadge(kind) : "↓"}</b><small>{name}</small></span>}
     {sending && <span className="composer-thumb-progress" aria-hidden="true" />}
-    {onRemove && <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={onRemove} aria-label={removeLabel} title={removeLabel}><CloseIcon size="1em" /></button>}
+    {hold && <button type="button" className="composer-thumb-view" {...hold}
+      onPointerDown={(event) => { event.preventDefault(); hold.onPointerDown(event); }}
+      aria-label={viewLabel} title={viewLabel} />}
+    {onRemove && <button type="button" className="composer-thumb-remove" onPointerDown={(event) => event.preventDefault()} onClick={onRemove} aria-label={removeLabel} title={removeLabel}><CloseIcon size="1em" /></button>}
   </div>;
 }

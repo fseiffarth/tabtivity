@@ -569,7 +569,9 @@ pub async fn tick(ctx: &Context, now: DateTime<Local>) -> Vec<Event> {
             let Some(probe) = ctx.runner.probe(&target.tmux) else {
                 // The session is gone: start the tab again (H1b's detached
                 // spawn) and deliver on a later tick, once it is up and idle.
-                if target.kind() == "agent" && ctx.may_relaunch(&target.tmux) {
+                // A cloud or sign-in tab is never started again: its launch
+                // would open a second cloud session (`workspace::is_one_shot`).
+                if target.kind() == "agent" && !crate::services::workspace::is_one_shot(&target.tab) && ctx.may_relaunch(&target.tmux) {
                     // Where the window would run it: a remote project's local agent
                     // in the mirror, a container project's agent in its container
                     // (as before); one that belongs on a remote host or in a VM is

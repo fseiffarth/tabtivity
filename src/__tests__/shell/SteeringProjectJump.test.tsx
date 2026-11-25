@@ -26,6 +26,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
 import { useBoxSliceStore } from "../../stores/boxSlice";
+import { allGroups, useTabsStore } from "../../stores/tabs";
 import { noteProjectUsed } from "../../lib/projects/projectRecency";
 import { jumpStartRows } from "../../lib/projects/projectSearchRows";
 import type { ProjectBox, ProjectEntry } from "../../types";
@@ -95,6 +96,7 @@ const ORIGINAL = {
   projects: useProjectsStore.getState(),
   boxes: useBoxesStore.getState(),
   slice: useBoxSliceStore.getState(),
+  tabs: useTabsStore.getState(),
 };
 
 beforeEach(() => {
@@ -108,6 +110,7 @@ afterEach(() => {
   useProjectsStore.setState(ORIGINAL.projects, true);
   useBoxesStore.setState(ORIGINAL.boxes, true);
   useBoxSliceStore.setState(ORIGINAL.slice, true);
+  useTabsStore.setState(ORIGINAL.tabs, true);
   vi.restoreAllMocks();
 });
 
@@ -206,6 +209,28 @@ describe("steering project jump", () => {
     key("ArrowDown");
     key("Enter");
     expect(setActive).toHaveBeenCalledWith("bench");
+    expect(steering()).toMatchObject({ active: true, level: "tabs" });
+  });
+
+  it("a pick into a scope with no focused subwindow lands on its first one", async () => {
+    const { setActive } = renderJump();
+    let firstGroup: string | undefined;
+    // The switch swaps in the new project's tabs: its scope has a subwindow,
+    // but none is focused yet.
+    setActive.mockImplementationOnce(async () => {
+      useTabsStore.setState({ scope: "bench", tabs: [], layout: null, tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {} });
+      useTabsStore.getState().addTab({ label: "b1", cmd: "bash", cwd: "/bench", kind: "shell" });
+      firstGroup = allGroups(useTabsStore.getState().layout)[0]?.id;
+      useTabsStore.setState({ focusedGroupId: null, focusedGroupByScope: { bench: null } });
+    });
+    openJump("projects");
+    typeQuery("bench");
+    await act(async () => {
+      key("Enter");
+    });
+    expect(setActive).toHaveBeenCalledWith("bench");
+    expect(firstGroup).toBeDefined();
+    expect(useTabsStore.getState().focusedGroupId).toBe(firstGroup);
     expect(steering()).toMatchObject({ active: true, level: "tabs" });
   });
 

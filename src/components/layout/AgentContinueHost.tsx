@@ -5,7 +5,7 @@ import { localOccurrenceKey } from "../../lib/agents/agentSchedule";
 import { submitScheduledAgentMessage, scheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { lastPtyOutputAt, useActivityStore } from "../../stores/activity";
 import { recordScheduledDelivery } from "../../stores/agents/agentPrompts";
-import { continueKey, useAgentContinueStore } from "../../stores/agents/agentContinue";
+import { continueKey, useAgentContinueStore, type ContinueHold } from "../../stores/agents/agentContinue";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdsTimerLease } from "../../stores/timerLease";
@@ -121,9 +121,10 @@ function signature(): string {
 
 /**
  * The scheduler's gate: no turn in flight, no approval prompt on screen, and
- * output that has stopped moving.
+ * output that has stopped moving. `null` when the tab may take the continue,
+ * else what holds it.
  *
- * One deliberate difference. The scheduler reads a tab that has produced *no*
+ * Two deliberate differences. The scheduler reads a tab that has produced *no*
  * output at all as not-yet-settled and waits; here that means quiet. A tab
  * whose output the activity store has never seen — the ordinary state of a
  * restored agent tab until it prints something — is idle by every signal
@@ -131,13 +132,20 @@ function signature(): string {
  * this loop the whole window: a missed rollover is not retried in an hour, it
  * is retried at the *next* reset, hours later, which is exactly the wait the
  * switch exists to remove.
+ *
+ * And a limit notice as the last thing on the tab's screen (`limitShown`)
+ * outweighs a "working" verdict: the turn ended on that notice. Codex ends a
+ * turn that fails on its usage limit without its `Stop` hook, so the verdict
+ * its `UserPromptSubmit` left stands, and its timer-painted title keeps it from
+ * ever expiring for silence (`stores/activity`'s `HOOK_WORK_SILENCE_MS`). The
+ * question gate is not waived: a continue typed into a menu picks from it.
  */
-function deliverable(ptyId: string): boolean {
+function holdOf(ptyId: string, limitShown: boolean): ContinueHold | null {
   const activity = useActivityStore.getState();
-  if (activity.busyByTab[ptyId]) return false;
-  if (activity.attentionByTab[ptyId] === "decision") return false;
+  if (activity.attentionByTab[ptyId] === "decision") return "decision";
+  if (activity.busyByTab[ptyId] && !limitShown) return "busy";
   const lastOutput = lastPtyOutputAt(ptyId);
-  return lastOutput === undefined || Date.now() - lastOutput >= OUTPUT_SETTLE_MS;
+  return lastOutput === undefined || Date.now() - lastOutput >= OUTPUT_SETTLE_MS ? null : "notReady";
 }
 
 export function AgentContinueHost() {
@@ -187,6 +195,7 @@ export function AgentContinueHost() {
       patch(key, {
         phase: "armed",
         source: "panel",
+        holding: undefined,
         armedAt: reset.at.getTime() + CONTINUE_DELAY_MS,
         window: reset.label,
         resets: reset.resets,
@@ -212,6 +221,7 @@ export function AgentContinueHost() {
       useAgentContinueStore.getState().patch(key, {
         phase: "armed",
         source: "screen",
+        holding: undefined,
         armedAt: notice.at ? notice.at.getTime() + CONTINUE_DELAY_MS : now.getTime() + NOTICE_RETRY_MS,
         window: undefined,
         resets: notice.resets,
@@ -225,14 +235,24 @@ export function AgentContinueHost() {
     const send = async (binding: Binding, key: string, armedAt: number): Promise<void> => {
       const store = useAgentContinueStore.getState();
       const input = scheduledAgentInput(binding.scheduleTargetId);
-      if (!input || !input.ready() || !deliverable(input.ptyId)) {
+      const hold: ContinueHold | null = !input
+        ? "noInput"
+        : !input.ready()
+          ? "notReady"
+          : holdOf(input.ptyId, screenNotice(binding, new Date()) !== null);
+      if (hold) {
         // Not yet — stay armed and try again next tick, until the occurrence is
-        // too old to be worth answering.
-        if (Date.now() - armedAt <= CATCH_UP_MS) return;
-        store.patch(key, { phase: "reading", armedAt: undefined, checkAt: undefined });
+        // too old to be worth answering. Either way the row says what held it:
+        // a continue that silently never arrives is the one failure this
+        // switch must not have.
+        if (Date.now() - armedAt <= CATCH_UP_MS) {
+          if (store.byTarget[key]?.holding !== hold) store.patch(key, { holding: hold });
+          return;
+        }
+        store.patch(key, { phase: "reading", armedAt: undefined, checkAt: undefined, holding: undefined, missed: hold });
         return;
       }
-      store.patch(key, { phase: "sending" });
+      store.patch(key, { phase: "sending", holding: undefined });
       const sentAt = Date.now();
       let result: "delivered" | "failed" = "delivered";
       let error: string | undefined;
@@ -249,6 +269,7 @@ export function AgentContinueHost() {
         armedAt: undefined,
         error,
         lastSentAt: result === "delivered" ? sentAt : previous?.lastSentAt,
+        missed: result === "delivered" ? undefined : previous?.missed,
         sent: (previous?.sent ?? 0) + (result === "delivered" ? 1 : 0),
         checkAt: sentAt + (result === "delivered" ? REARM_AFTER_SEND_MS : RETRY_MS),
       });

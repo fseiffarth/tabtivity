@@ -2440,17 +2440,55 @@ pub async fn inspect_project_bundle(bundle_path: String) -> Result<set::Inspecte
 /// bundle is a whole project, and overlaying it on someone else's files is the
 /// one outcome nobody can undo.
 fn free_dir(parent: &Path, leaf: &str) -> PathBuf {
+    let free = |candidate: &Path| fs::symlink_metadata(candidate).is_err();
     let direct = parent.join(leaf);
-    if !direct.exists() {
+    if free(&direct) {
         return direct;
     }
     for n in 2..10_000 {
         let candidate = parent.join(format!("{leaf}-{n}"));
-        if !candidate.exists() {
+        if free(&candidate) {
             return candidate;
         }
     }
-    parent.join(format!("{leaf}-{}", storage::today_utc()))
+    parent.join(format!("{leaf}-{}", uuid_v4()))
+}
+
+/// Copy the session layout stored under `id`, if any, to a free
+/// `<file>.before-import[-n]` beside it before an import replaces it. A copy
+/// that fails stops the restore rather than lose the stored one.
+fn keep_stored_session(id: &str) -> Result<(), String> {
+    let stored = crate::services::terminal_service::state_session_path(id);
+    if fs::symlink_metadata(&stored).is_err() {
+        return Ok(());
+    }
+    let leaf = stored.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let backup = std::iter::once(format!("{leaf}.before-import"))
+        .chain((2..1000).map(|n| format!("{leaf}.before-import-{n}")))
+        .map(|name| stored.with_file_name(name))
+        .find(|p| fs::symlink_metadata(p).is_err())
+        .ok_or_else(|| format!("no free name to keep {} under", stored.display()))?;
+    let bytes = fs::read(&stored).map_err(|e| format!("read {}: {e}", stored.display()))?;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&backup)
+        .and_then(|mut f| f.write_all(&bytes))
+        .map_err(|e| format!("keep {}: {e}", backup.display()))
+}
+
+/// An import unpacks only into a folder it is about to create: one that is
+/// there already (made since its name was picked, or a link) is refused, so
+/// nothing in it is ever overwritten.
+fn fresh_destination(dir: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{}: {e}", dir.display())),
+        Ok(_) => Err(format!(
+            "{} already exists; the import unpacks only into a new folder, so nothing was changed",
+            dir.display()
+        )),
+    }
 }
 
 /// Unpack one bundle section into `dest`.
@@ -2507,8 +2545,17 @@ fn extract_section(
         if let Some(parent) = out.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
         }
-        let mut file =
-            fs::File::create(&out).map_err(|e| format!("write {}: {e}", out.display()))?;
+        // Create-new: the destination is fresh, so a file already there is
+        // one this archive wrote under the same name before (a hand-made zip);
+        // it is kept, never truncated.
+        let mut file = match fs::OpenOptions::new().write(true).create_new(true).open(&out) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                eprintln!("project_transfer: {section}/{} is in the bundle twice; the first kept", rel.display());
+                continue;
+            }
+            Err(e) => return Err(format!("write {}: {e}", out.display())),
+        };
         std::io::copy(&mut entry, &mut file).map_err(|e| e.to_string())?;
         apply_mode(&out, entry.unix_mode());
         files += 1;
@@ -2771,6 +2818,9 @@ pub fn import_project_export_blocking(
         // and the entry records none.
         let mirror = (!remote_only)
             .then(|| resolve_remote_mirror(req.mirror_parent.as_deref(), &name, &id, &list));
+        if let Some(mirror) = &mirror {
+            fresh_destination(Path::new(mirror))?;
+        }
         (state, mirror)
     } else {
         let parent = req
@@ -2782,6 +2832,7 @@ pub fn import_project_export_blocking(
             .unwrap_or_else(projects_root);
         fs::create_dir_all(&parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
         let dir = free_dir(&parent, &leaf);
+        fresh_destination(&dir)?;
         if let Some(conflict) = find_project_conflict(
             &list,
             &ProjectSite::Local {
@@ -2945,9 +2996,16 @@ pub fn import_project_export_blocking(
                 return Err(conflict_message(&conflict));
             }
         }
+        // The id was free when the bundle was opened; a project registered
+        // under it since (another import of the same bundle) is never replaced.
+        if list.iter().any(|p| p.id == entry.id) {
+            return Err(format!(
+                "a project with id '{}' was added during the import; nothing was replaced (the unpacked files are kept at {new_dir})",
+                entry.id
+            ));
+        }
         let mut entry = entry.clone();
         entry.position = next_position(list);
-        list.retain(|p| p.id != entry.id);
         list.push(entry.clone());
         Ok(entry)
     })?;
@@ -2965,6 +3023,9 @@ pub fn import_project_export_blocking(
                     // count how many tabs the sanitizer downgraded.
                     let before: Vec<String> =
                         session.tab_layout.iter().map(|t| t.cmd.clone()).collect();
+                    // A layout already stored under this id (a project removed
+                    // from the list, its state left) is kept beside, not lost.
+                    keep_stored_session(&id)?;
                     let stored = crate::services::terminal_service::adopt_untrusted_session(
                         &id, session,
                     )?;

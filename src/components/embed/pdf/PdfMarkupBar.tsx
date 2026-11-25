@@ -16,6 +16,7 @@ import { useT, type TranslationKey } from "../../../lib/i18n";
 import { type Layer, type MarkColor } from "../../../../mobile-web/src/markup/layer";
 import { colorsFor, type PressureCurve, type TextMarkMode } from "../../../../mobile-web/src/markup/pen";
 import { ROUND_KEYS as PHONE_ROUND_KEYS, undoSummary, type RoundPhase } from "../../../../mobile-web/src/markup/submitState";
+import { basename } from "../../../lib/paths";
 import { ConfirmDialog } from "../../common/PromptDialogs";
 import { UntestedTag } from "../../common/UntestedTag";
 import { PdfMarkupModel } from "./PdfMarkupModel";
@@ -231,6 +232,7 @@ export function agentBadge(markup: PdfMarkup): { count: number; attention: boole
   const attention =
     markup.tabDialog !== null ||
     markup.stale ||
+    markup.outdated !== null ||
     markup.storage === "unsaved" ||
     markup.askElsewhere !== null ||
     !!markup.questions.failure ||
@@ -251,7 +253,10 @@ export function PdfMarkupBar({
   const t = useT();
   const { target, targets } = markup;
   const busy = markup.sending;
-  const canSubmit = markup.sendable.length > 0 && target !== null && !busy && markup.edit.note === null;
+  // A changed file waits for Reload — the marks were drawn on the old pages —
+  // and a PDF older than its sources for its rebuild.
+  const canSubmit =
+    markup.sendable.length > 0 && target !== null && !busy && markup.edit.note === null && !markup.stale && !markup.outdated;
   const badge = agentBadge(markup);
   return (
     <div className="file-viewer-pdf-redact-bar file-viewer-pdf-markup-bar" role="group" aria-label={t("pdfMarkup.toggle")}>
@@ -328,7 +333,15 @@ export function PdfMarkupBar({
           className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-markup-submit"
           onClick={() => void markup.submit()}
           disabled={!canSubmit}
-          title={target ? t("pdfMarkup.submitTitle", { tab: target.label }) : t("pdfMarkup.noAgent")}
+          title={
+            markup.stale
+              ? t(markup.picture ? "pdfMarkup.picture.stale" : "pdfMarkup.stale")
+              : markup.outdated
+                ? t("pdfMarkup.outdated", { files: markup.outdated.map((file) => basename(file)).join(", ") })
+                : target
+                ? t("pdfMarkup.submitTitle", { tab: target.label })
+                : t("pdfMarkup.noAgent")
+          }
         >
           {t("mobile.markup.submit")}
         </button>

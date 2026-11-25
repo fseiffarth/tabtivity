@@ -113,3 +113,52 @@ describe("everything that is not a drop", () => {
     expect(useRemoteStatusStore.getState().byProject[PROJECT]?.ssh).toBe("connected");
   });
 });
+
+describe("a tunnel that dies unasked says why", () => {
+  const backendEnds = (reason: unknown) =>
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "openvpn_active") return Promise.resolve([]);
+      if (cmd === "openvpn_exit_reason") return Promise.resolve(reason);
+      return Promise.resolve();
+    });
+
+  beforeEach(() => {
+    useVpnStatusStore.setState({ ended: {} });
+    markVpnConnected(PROJECT, CONFIG);
+  });
+
+  it("records the backend's reason, and a new connect clears it", async () => {
+    backendEnds({ kind: "inactive", line: "SIGTERM[soft,inactive] received, process exiting" });
+    await useVpnStatusStore.getState().refresh();
+
+    expect(invokeMock).toHaveBeenCalledWith("openvpn_exit_reason", { config: CONFIG });
+    expect(useVpnStatusStore.getState().ended[CONFIG]).toMatchObject({
+      kind: "inactive",
+      line: "SIGTERM[soft,inactive] received, process exiting",
+    });
+
+    // The tunnel coming up again is the end of "it ended".
+    useVpnStatusStore.getState().setState(CONFIG, "connecting");
+    expect(useVpnStatusStore.getState().ended[CONFIG]).toBeUndefined();
+  });
+
+  it("reads a kind it does not know, or no answer, as no reason given", async () => {
+    backendEnds({ kind: "something_newer", line: "" });
+    await useVpnStatusStore.getState().refresh();
+    expect(useVpnStatusStore.getState().ended[CONFIG]).toMatchObject({ kind: "unknown", line: null });
+
+    useVpnStatusStore.setState({ ended: {} });
+    markVpnConnected(PROJECT, CONFIG);
+    backendEnds(null);
+    await useVpnStatusStore.getState().refresh();
+    expect(useVpnStatusStore.getState().ended[CONFIG]).toMatchObject({ kind: "unknown", line: null });
+  });
+
+  it("is not recorded for a tunnel the user disconnected", async () => {
+    backendEnds({ kind: "inactive", line: "x" });
+    disconnectVpnTunnel(CONFIG);
+    await useVpnStatusStore.getState().refresh();
+    expect(useVpnStatusStore.getState().ended[CONFIG]).toBeUndefined();
+    expect(invokeMock).not.toHaveBeenCalledWith("openvpn_exit_reason", { config: CONFIG });
+  });
+});

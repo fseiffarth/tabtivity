@@ -1,11 +1,13 @@
 import { PdfFileCover } from "./PdfFileCover";
-import { useState } from "react";
+import { useContext, useState } from "react";
 
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
 import { fileBadge, openableFile } from "./InboxPreview";
 import type { OutboxPost as Post } from "../terminal/outboxPosts";
+import { useTapHolds } from "../newTabDefault";
+import { SentFileHold } from "./SentFilesIndex";
 import { formatBytes } from "../../../src/lib/formatBytes";
 
 /** Picture tiles an album shows before the last one reads "+N". */
@@ -30,8 +32,8 @@ function sentAt(seconds: number) {
  * that is not a picture is a slim card in the same bubble.
  *
  * A tap opens the file the way the gallery does (full screen, the browser's
- * PDF view, or a download for bytes the phone cannot show); saving, sharing
- * and deleting stay in the gallery and the viewer.
+ * PDF view, or a download for bytes the phone cannot show); a hold on one
+ * file asks Save, Share or Delete for it (`SentFileHold`, in the chat).
  *
  * A lone picture's box is 4:3 until the picture says otherwise; `onSettle`
  * runs then, so a chat following its bottom follows the taller bubble too.
@@ -50,6 +52,13 @@ export function OutboxPost({ scope, post, onOpen, onSettle }: {
   const more = pictures.length - tiles.length;
   const time = sentAt(post.files[post.files.length - 1].modified);
   const untested = isUntested("mobile.outbox.chat");
+  const held = useContext(SentFileHold);
+  const press = useTapHolds();
+  /** A card's tap opens (a download link follows itself); in the chat a hold
+   * asks what to do with that one file. */
+  const tapOf = (file: OutboxFile, opens: boolean) => held
+    ? press(() => { if (opens) onOpen(file); }, () => held({ file, from: "agent" }))
+    : opens ? { onClick: () => onOpen(file) } : {};
   const settle = (image: HTMLImageElement) => {
     if (tiles.length !== 1 || !image.naturalWidth || !image.naturalHeight) return;
     setRatio(Math.min(WIDEST, Math.max(TALLEST, image.naturalWidth / image.naturalHeight)));
@@ -57,7 +66,7 @@ export function OutboxPost({ scope, post, onOpen, onSettle }: {
   };
   return <div className={others.length === 0 ? "readable-turn agent outbox-post pictures-only" : "readable-turn agent outbox-post"} role="group" aria-label={t("mobile.outbox.post", { count: post.files.length })}>
     {tiles.length > 0 && <div className={`outbox-post-album tiles-${tiles.length}`} style={tiles.length === 1 ? { aspectRatio: String(ratio) } : undefined}>
-      {tiles.map((file, i) => <button key={file.name} className="outbox-post-picture" onClick={() => onOpen(file)} aria-label={t("mobile.outbox.open", { name: sentName(file) })} title={sentName(file)}>
+      {tiles.map((file, i) => <button key={file.name} className="outbox-post-picture" {...tapOf(file, true)} aria-label={t("mobile.outbox.open", { name: sentName(file) })} title={sentName(file)}>
         <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" onLoad={(event) => settle(event.currentTarget)} />
         {more > 0 && i === tiles.length - 1 && <span className="outbox-post-more" aria-hidden="true">+{more}</span>}
       </button>)}
@@ -70,8 +79,8 @@ export function OutboxPost({ scope, post, onOpen, onSettle }: {
       </>;
       const label = t("mobile.outbox.open", { name: sentName(file) });
       return !openableFile(file)
-        ? <a key={file.name} className="outbox-post-file" href={outboxFileUrl(scope, file, true)} download={sentName(file)} aria-label={label}>{card}</a>
-        : <button key={file.name} className="outbox-post-file" onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{card}</button>;
+        ? <a key={file.name} className="outbox-post-file" href={outboxFileUrl(scope, file, true)} download={sentName(file)} {...tapOf(file, false)} aria-label={label}>{card}</a>
+        : <button key={file.name} className="outbox-post-file" {...tapOf(file, true)} aria-label={label} title={sentName(file)}>{card}</button>;
     })}
     <small className="outbox-post-meta">{untested && <em>{t("mobile.outbox.untested")} · </em>}{time}</small>
   </div>;

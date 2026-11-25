@@ -67,8 +67,8 @@ const MODE_CYCLE_LIMIT = 6;
  * context left and the account's 5-hour and weekly limits — plus, as the
  * phone's chips, the permission mode (a list walked with Shift+Tab, or one
  * press where the session's modes are unknown) and the reasoning effort (a
- * list sent as Claude's `/effort`; elsewhere the `/model` picker, whose next
- * step it is), and the folder the agent works in with the worktree it is —
+ * list sent as Claude's `/effort`; on Codex, the current model's reasoning
+ * levels; elsewhere the `/model` picker), and the folder and worktree —
  * the branch chip moves the agent to another worktree of the project
  * (`switchAgentWorktree`), its conversation along where its CLI allows. The status facts
  * come off the pane's live screen (`ReaderLive.status`); the limits from the
@@ -95,7 +95,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   /** A level was sent from the effort list: shown until the session says. */
   onEffortPicked: (effort: string) => void;
   visible: boolean;
-  typeKeys: (keys: string[]) => Promise<void>;
+  typeKeys: (keys: string[], canWrite?: (key: string) => boolean) => Promise<void>;
   /** Whether a session picker is up: the Reader then leaves it out of
    * its own answer buttons. */
   onPicking: (picking: boolean) => void;
@@ -169,13 +169,13 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     : [];
   useEffect(() => { onPicking(picking); }, [picking, onPicking]);
 
-  const openPicker = (command: "/model" | "/permissions" = "/model") => {
+  const openPicker = (command: "/model" | "/permissions" = "/model", options?: { effortOnly?: boolean }) => {
     if (picking) return;
     onStatusClose();
     closeModes();
     closeEffort();
     closeWorktrees();
-    session.open(command);
+    session.open(command, options);
   };
 
   // --- The permission mode ---------------------------------------------------
@@ -265,11 +265,9 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setEffortOpen(false);
     setEffortSending("");
   };
-  /** Claude takes the level as `/effort <level>`; every other CLI sets it on
-   * its `/model` picker's next step, so that picker opens instead. */
   const openEffort = () => {
     if (!claude) {
-      openPicker();
+      openPicker("/model", { effortOnly: codex });
       return;
     }
     onStatusClose();
@@ -365,15 +363,17 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const coldCache = !resumeCost && !live.working && !live.question ? coldPromptCache(usage?.cache, now) : null;
   const clock = new Date(now);
   const fromPanel = !!(limits.session || limits.week);
-  const shown = fromPanel ? limits : sessionLimits(usage, clock);
+  const selected = fromPanel ? limits : sessionLimits(usage, clock);
+  // A lone Fable row also serves as the compact weekly fallback on mobile.
+  const shown = selected.fable && selected.week === selected.fable ? { ...selected, week: undefined } : selected;
   const readTime = fromPanel ? new Date(readAt) : clock;
-  const limitFact = (meter: LimitMeters["session"], key: "mobile.facts.session" | "mobile.facts.week") => {
+  const limitFact = (meter: LimitMeters["session"], key: "session" | "week" | "fable") => {
     if (!meter) return null;
     const resetAt = meter.resets ? resolveResetAt(meter.resets, readTime) : null;
     if (resetAt && resetAt.getTime() <= clock.getTime()) return null;
     const left = meter.resets ? resetCountdown(meter.resets, clock, readTime) : "";
     const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
-    const percentText = t(key, { percent: Math.round(remaining) });
+    const percentText = t(`mobile.facts.${key}`, { percent: Math.round(remaining) });
     return (
       <button
         type="button"
@@ -384,7 +384,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         title={[meter.resets ? resetText(meter.resets, clock, readTime) : "", t("mobile.facts.limitToggle"), readAt < now - 180_000 ? t("agents.usage.readAge", { minutes: Math.floor((now - readAt) / 60_000) }) : ""].filter(Boolean).join("\n")}
       >
         {limitBars ? <>
-          {t(key === "mobile.facts.session" ? "mobile.facts.sessionLabel" : "mobile.facts.weekLabel")}
+          {t(`mobile.facts.${key}Label`)}
           <span className="terminal-reader-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span>
         </> : percentText}
         {left && <> · {t("mobile.facts.resetIn", { time: left })}</>}
@@ -628,6 +628,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         {tab.cmd === "opencode" && <UntestedTag id="agents.opencode.v2" />}
         {tab.cmd === "copilot" && <UntestedTag id="agents.copilot.reader" />}
         {tab.cmd === "muse" && <UntestedTag id="agents.muse.reader" />}
+        {tab.cmd === "cursor-agent" && <UntestedTag id="agents.cursor.reader" />}
         <UntestedTag id="terminal.reader.facts" />
         <UntestedTag id="terminal.reader.factsMore" />
         {shownPath && <span className="terminal-reader-fact terminal-reader-fact-path" title={shownPath}>{shortPath(shownPath)}</span>}
@@ -672,9 +673,10 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             <UntestedTag id="terminal.reader.cacheCold" />
           </span>
         )}
-        {limitFact(shown.session, "mobile.facts.session")}
-        {limitFact(shown.week, "mobile.facts.week")}
-        {(shown.session || shown.week) && <UntestedTag id="terminal.reader.limitBars" />}
+        {limitFact(shown.session, "session")}
+        {limitFact(shown.week, "week")}
+        {limitFact(shown.fable, "fable")}
+        {(shown.session || shown.week || shown.fable) && <UntestedTag id="terminal.reader.limitBars" />}
       </div>
       <div className="terminal-reader-facts-chips" ref={chipSlot} />
     </div>

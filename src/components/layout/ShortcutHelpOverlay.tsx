@@ -120,6 +120,8 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.queueMoves" />
               <UntestedTag id="steering.jumpBack" />
               <UntestedTag id="steering.tabKey" />
+              <UntestedTag id="steering.newTabPrompt" />
+              <UntestedTag id="steering.settingsSearch" />
             </h3>
             <p className="shortcut-help-intro">
               {t("shortcutHelp.steeringIntro", {

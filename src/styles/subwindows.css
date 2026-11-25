@@ -1381,6 +1381,10 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   outline: 3px solid var(--accent);
   outline-offset: -3px;
 }
+/* Diffs and Data stand inside the Reader, which wears the outline for them. */
+html[data-steer-region="card"] .subwindow.focused .terminal-sign-in .terminal-sign-in {
+  outline: none;
+}
 
 /* Floating label following the pointer during a tab drag. */
 .tab-drag-ghost {
@@ -1712,12 +1716,23 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   height: min(93vh, calc(100vh - 24px));
   max-height: min(93vh, calc(100vh - 24px));
 }
-/* The view strip: the shipped `.tab` strip, the cockpit's three views, the
-   apps, the system pages, a divider between each group, then Root. Roving
-   focus, no motion. */
-.root-view-strip {
+/* Root and the cockpit views sit next to the title, the apps against the
+   window controls, and the system views on the bar's centre: the spacers'
+   flex-grow is set inline from a measurement (`RootViewStrip`), 1 : 1 until
+   then. Two classes on
+   purpose: projects-tabs.css loads after this file, and its one-class
+   `.tab-strip { flex: 0 1 auto }` would otherwise win, so the strip would hug
+   its tabs and the spacers would get no room. */
+.root-view-strip.tab-strip {
   flex: 0 0 auto;
   align-items: center;
+}
+.root-view-strip.root-view-strip-expanded {
+  flex: 1 1 auto;
+}
+.root-view-spacer {
+  flex: 1 0 0;
+  min-width: 0;
 }
 .root-view-divider {
   align-self: stretch;
@@ -2868,6 +2883,27 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A local model's reasoning (`thinking` turn): no bubble, a folded muted
+   line on the agent's side; opened, the text under a thin rule. */
+.terminal-reader-thinking {
+  align-self: flex-start;
+  max-width: min(760px, 82%);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.terminal-reader-thinking > summary {
+  cursor: var(--cur-pointer, pointer);
+  padding: 2px 0;
+  font-style: italic;
+}
+.terminal-reader-thinking > p {
+  margin: 4px 0 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border-subtle);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .terminal-reader-plan-head {
   display: block;
   margin-bottom: 4px;
@@ -3163,10 +3199,46 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-top: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
 }
 .terminal-reader-command span {
-  font-family: var(--font-mono);
+  font-family: inherit;
+}
+.terminal-reader-command-body {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.terminal-reader-command-kind {
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.terminal-reader-command.session-setting .terminal-reader-command-kind {
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+}
+.terminal-reader-command.single-action::before,
+.terminal-reader-command.single-action::after {
+  border-top-style: dashed;
+}
+.terminal-reader-command-body .terminal-reader-time {
+  margin: 0;
 }
 .terminal-reader-command.interrupted {
   color: var(--status-interrupted);
+}
+/* The session's turn ended (`turnFinishedRule`): the tab strip's green ✓ on a
+   solid rule in the finished hue, so the end of the work reads at a glance. */
+.terminal-reader-command.finished {
+  color: var(--status-done);
+  font-weight: 600;
+}
+.terminal-reader-command.finished::before,
+.terminal-reader-command.finished::after {
+  border-top-color: color-mix(in srgb, var(--status-done) 45%, transparent);
 }
 .terminal-reader-day {
   justify-content: center;
@@ -3176,65 +3248,151 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-radius: var(--radius-full);
   background: var(--bg-subtle);
 }
-/* A subagent's card opens its conversation (the phone's `SubagentCard`); one
-   not openable yet stays a plain card. */
+/* A subagent's card opens its conversation (the phone's `SubagentCard`): an
+   outlined object on the chat ground, its state in a tile at the left (the
+   working dots, the tab strip's ✓, or nothing yet), the role and state on one
+   small line and the task on one line under it. One not openable yet is a
+   dashed outline with nothing to press. */
 .terminal-reader-subagent {
   align-self: flex-start;
   display: flex;
   align-items: center;
   gap: 10px;
   max-width: min(640px, 76%);
-  padding: 6px 10px;
+  padding: 7px 12px 7px 7px;
   font: inherit;
   font-size: var(--text-sm);
   text-align: left;
   color: inherit;
-  border: none;
-  border-left: 3px solid var(--accent);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius);
-  background: var(--bg-subtle);
   cursor: var(--cur-pointer, pointer);
 }
 .terminal-reader-subagent:hover:not(:disabled) { background: var(--bg-hover); }
-.terminal-reader-subagent:disabled { cursor: var(--cur-default, default); }
+.terminal-reader-subagent:disabled {
+  cursor: var(--cur-default, default);
+  background: transparent;
+  border-style: dashed;
+}
+.terminal-reader-subagent-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+.terminal-reader-subagent.running .terminal-reader-subagent-tile {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.terminal-reader-subagent.finished .terminal-reader-subagent-tile {
+  background: color-mix(in srgb, var(--status-done) 14%, transparent);
+}
+.terminal-reader-subagent:disabled .terminal-reader-subagent-tile { background: var(--bg-subtle); }
 .terminal-reader-subagent-body {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
-.terminal-reader-subagent small,
+.terminal-reader-subagent-body small {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.terminal-reader-subagent-body small b {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.terminal-reader-subagent-state { font-variant-numeric: tabular-nums; }
+.terminal-reader-subagent-task {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+.terminal-reader-subagent:disabled .terminal-reader-subagent-task { color: var(--text-secondary); }
 .terminal-reader-subagent-title small,
 .terminal-reader-subagent-list small {
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-secondary);
 }
-/* When it started, under its task rather than over the card's corner. */
-.terminal-reader-subagent .terminal-reader-time {
-  position: static;
-  align-self: flex-end;
-}
-/* One that has reported back: the tab strip's ✓ (`TabStatusMark`). */
-.terminal-reader-subagent .tab-status-mark { --tab-status-color: var(--status-done); }
+/* One that has reported back: the tab strip's ✓ (`TabStatusMark`), in its
+   card's tile, its pill or the done pill. */
+.terminal-reader-subagent .tab-status-mark,
+.terminal-reader-agent-pill .tab-status-mark { --tab-status-color: var(--status-done); }
 .terminal-reader-subagent-chevron {
   flex: none;
   font-size: var(--text-lg, 1.1rem);
   color: var(--text-muted);
 }
-/* Over the chat, outside its scroll: a subagent's bar (back up, its task,
-   ‹ n of m ›), or the session's Subagents list. */
-.terminal-reader-subagent-bar,
-.terminal-reader-subagent-index {
+/* Over the chat, outside its scroll: an opened subagent's header (its path
+   back to Main, its task, its facts), or an earlier chat's bar. Stepping
+   between subagents is the dock's pills, not this bar. */
+.terminal-reader-subagent-bar {
   flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 6px 14px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-subtle);
 }
-.terminal-reader-subagent-bar {
+/* A narrow pane puts the facts on a line of their own under the title. */
+.terminal-reader-subagent-bar:not(.terminal-reader-chat-bar) {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.terminal-reader-subagent-bar:not(.terminal-reader-chat-bar) .terminal-reader-subagent-title { flex-basis: 20em; }
+.terminal-reader-subagent-title small.terminal-reader-subagent-path {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
+  min-width: 0;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.terminal-reader-subagent-path b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.terminal-reader-subagent-up {
+  flex: none;
+  margin: 0 -2px;
+  padding: 0 var(--space-1);
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-subagent-up:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.terminal-reader-subagent-up:focus-visible { outline-offset: 0; }
+.terminal-reader-subagent-facts {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 .terminal-reader-subagent-nav {
   flex: none;
@@ -3338,13 +3496,26 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   background: var(--bg-hover);
 }
 .terminal-reader-subagent-caret.open { transform: rotate(180deg); }
+/* The Subagents list: a floating panel, down from the top bar's toggle (over
+   Diffs or Data) or up from the dock's done pill (over the chat). Above the
+   pinned prompt (z-index 1 in the stream). */
 .terminal-reader-subagent-list {
+  position: absolute;
+  z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  box-sizing: border-box;
+  width: min(420px, 80vw);
   max-height: min(40vh, 320px);
-  margin-top: 6px;
+  margin: 0;
+  padding: 6px;
   overflow-y: auto;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
 }
 /* Running above Finished, each under its own small heading. */
 .terminal-reader-subagent-group {
@@ -3355,27 +3526,33 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-subagent-group + .terminal-reader-subagent-group { margin-top: 6px; }
 .terminal-reader-subagent-head {
   margin: 0;
-  padding: 0 2px;
+  padding: 2px 8px;
   font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
 }
+/* Plain rows, a wash under the pointer; the task on one line. */
 .terminal-reader-subagent-list button {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 5px 10px;
+  min-width: 0;
+  padding: 5px 8px;
   font: inherit;
   font-size: var(--text-sm);
   text-align: left;
   color: inherit;
-  background: var(--bg-subtle);
+  background: none;
   border: none;
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-subagent-list button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .terminal-reader-subagent-list button:hover:not(:disabled) { background: var(--bg-hover); }
 .terminal-reader-subagent-list button:disabled { cursor: var(--cur-default, default); opacity: 0.7; }
@@ -3385,8 +3562,179 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 }
 .terminal-reader-subagent-list button.terminal-reader-subagent-earlier {
   align-items: center;
+  margin-top: 2px;
   color: var(--text-secondary);
-  border-left: none;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+}
+
+/* The dock (`ReaderSubagentDock`): pinned between the chat's scroll and the
+   facts row, on the chat's ground. The working chip, then a pill per subagent
+   at work, then the done pill at the right end; one line however narrow the
+   pane, the pills scrolling sideways under a hidden bar. */
+.terminal-reader-agent-dock {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 6px 18px;
+}
+.terminal-reader-agent-dock:empty { display: none; }
+/* The stream's working row, minus its stream-only layout. It keeps its width
+   while there is room; in a narrow pane its words ellipsise (the facts first)
+   so the pills keep at least the share `.terminal-reader-agents` asks for,
+   and Stop never shrinks. */
+.terminal-reader-working.terminal-reader-agent-dock-working {
+  align-self: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 4px 0 var(--space-3);
+  white-space: nowrap;
+}
+.terminal-reader-agent-dock-working:not(:has(.terminal-reader-stop)) { padding-right: var(--space-3); }
+.terminal-reader-agent-dock-working > :is(span:not(.terminal-reader-working-dots, .untested-tag), small) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.terminal-reader-agent-dock-working > small { flex: 0 100 auto; }
+.terminal-reader-agent-dock-working > :is(.terminal-reader-working-dots, .terminal-reader-stop) { flex: none; }
+.terminal-reader-agent-dock-sep {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  background: var(--border-color);
+}
+/* Gives way before the chip does, down to its floor. */
+.terminal-reader-agents {
+  flex: 1 50 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: min(50%, 220px);
+}
+/* The done pill alone needs no floor. */
+.terminal-reader-agents:not(:has(.terminal-reader-agents-scroll > *)) { min-width: auto; }
+.terminal-reader-agents-scroll {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.terminal-reader-agents-scroll::-webkit-scrollbar { display: none; }
+/* A workflow phase's name before its pills. */
+.terminal-reader-agents-phase {
+  flex: none;
+  padding: 0 2px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.terminal-reader-agents-phase:not(:first-child) { margin-left: 6px; }
+/* The list's anchor: outside the scroll, so the panel is not clipped and the
+   pill never scrolls away. */
+.terminal-reader-agents-done {
+  position: relative;
+  flex: none;
+  display: flex;
+  margin-left: auto;
+}
+.terminal-reader-agents-done .terminal-reader-subagent-list {
+  bottom: calc(100% + 6px);
+  right: 0;
+}
+.terminal-reader-agent-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 28px;
+  max-width: 280px;
+  padding: 0 var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 400;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  cursor: var(--cur-pointer, pointer);
+}
+.terminal-reader-agent-pill:hover:not(:disabled, .waiting, .selected) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+/* The base ring sits 2px outside; the scroll would clip it. */
+.terminal-reader-agent-pill:focus-visible { outline-offset: -2px; }
+.terminal-reader-agent-pill:disabled { cursor: var(--cur-default, default); }
+.terminal-reader-agent-pill b {
+  flex: none;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.terminal-reader-agent-pill-task {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.terminal-reader-agent-pill-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.terminal-reader-agent-pill.selected {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
+  border-color: var(--accent);
+}
+/* Started, not openable yet: an outline to wait on. */
+.terminal-reader-agent-pill.waiting {
+  background: transparent;
+  border-style: dashed;
+  cursor: var(--cur-default, default);
+}
+/* A subagent's pill shows its whole task while the row has room; only when
+   it runs out do the pills give way, the longest the most, each task
+   ellipsising before its role and time. The other pills hold their size. */
+.terminal-reader-agents-scroll > .terminal-reader-agent-pill:not(.main, .more, .compact) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: none;
+  overflow: hidden;
+}
+.terminal-reader-agent-pill.finished:not(.selected) b { color: var(--text-secondary); }
+/* Crowded: the role alone. */
+.terminal-reader-agent-pill.compact .terminal-reader-agent-pill-task { display: none; }
+.terminal-reader-agent-pill.main {
+  gap: 2px;
+  padding-left: var(--space-2);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+/* Its name is the conversation one level up: a nested one's task, cut short. */
+.terminal-reader-agent-pill.main > svg { flex: none; }
+.terminal-reader-agent-pill.main > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.terminal-reader-agents > .untested-tag { flex: none; }
+.terminal-reader-agent-pill.more { font-variant-numeric: tabular-nums; }
+.terminal-reader-agent-pill.done { font-weight: 600; }
+/* Steering's cursor wears the hover wash here too (its outline is
+   `.steer-cursor`'s own, drawn inside, so the scroll cannot clip it). */
+:is(.terminal-reader-agent-pill, .terminal-reader-subagent, .terminal-reader-subagent-up, .terminal-reader-subagent-toggle, .terminal-reader-subagent-list button).steer-cursor:not(.selected) {
+  background-color: var(--bg-hover);
 }
 /* The Diffs tab occupies the same pane as Chat and Terminal. */
 .terminal-changes {
@@ -3401,6 +3749,134 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   font-family: var(--font-sans);
   font-size: var(--text-sm);
 }
+/* Diffs and Data inside the Reader, a flex child in place of the chat (which
+   stays mounted, hidden). `z-index: 0`: its own stacking context, below the
+   composer's upward menus (`/`, Commit, the facts pickers). */
+.terminal-reader > .terminal-changes {
+  position: relative;
+  inset: auto;
+  z-index: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.terminal-reader.panel-open > :is(.terminal-reader-subagent-bar, .terminal-reader-subagent-index, .terminal-reader-stream-anchor) {
+  display: none;
+}
+/* The composer docked under the panel (`.terminal-reader-dock`, no box of its
+   own). At rest, one line: field, mic and Send; the facts row and the chips
+   stay mounted (steering's Alt keys click them) but are not drawn. Engaged or
+   holding a draft (`.dock-open`), it is Chat's whole dock. No transition. */
+.terminal-reader-dock { display: contents; }
+.terminal-reader.panel-open:not(.dock-open) :is(.terminal-reader-facts-wrap, .terminal-reader-chips) {
+  display: none;
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-composer {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input textarea {
+  min-height: 34px;
+  max-height: 34px;
+  padding: 7px 72px 7px 12px;
+  overflow: hidden;
+  border-radius: var(--radius);
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input::before { content: none; }
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-send { right: 4px; bottom: 3px; }
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-mic { right: 36px; bottom: 6px; }
+/* The one status line over the docked composer (`ReaderDockStatus`): the
+   working row's dots and Stop, or the question waiting, as a strip rather
+   than Chat's pill. The strip under it then has no top rule of its own. */
+.terminal-reader-dock-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 14px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+}
+.terminal-reader-dock-status > :is(.terminal-reader-dock-line, strong) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-reader-dock-status > strong { color: var(--text-primary); font-weight: 600; }
+.terminal-reader-dock-status > small {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.terminal-reader-dock-status > button { flex: none; margin-left: auto; }
+.terminal-reader-dock-status + .terminal-reader-dock > .terminal-reader-facts-wrap:first-child,
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-dock-status + .terminal-reader-dock .terminal-reader-composer {
+  border-top: none;
+}
+/* The dock's untested pill: top right in the open box, left of the mic at rest. */
+.terminal-reader-dock-tag {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+}
+.terminal-reader.panel-open:not(.dock-open) .terminal-reader-dock-tag {
+  top: 50%;
+  right: 64px;
+  transform: translateY(-50%);
+}
+/* The chat's place and its own element (`TerminalReaderView` streamHost):
+   neither draws a box, so the stream is the Reader's flex item wherever the
+   host sits — here, or in the side panel's slot. */
+.terminal-reader-stream-anchor,
+.terminal-reader-stream-host { display: contents; }
+/* The side panel's cover holding the chat (`ReaderSideChat`): over the
+   panel's view, under its resize sash (z-index 30); the Reader's ground and
+   ink, a narrower column of bubbles. */
+.reader-side-chat {
+  --prompt-strip-h: 36px;
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-main));
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+}
+.reader-side-chat-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+  background: var(--bg-side-panel);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.reader-side-chat-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.reader-side-chat-back { flex: none; }
+.reader-side-chat-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.reader-side-chat-body .terminal-reader-turns { padding: 10px; }
+.reader-side-chat-body .terminal-reader-turn { max-width: 94%; }
 .terminal-changes-body { display: flex; flex: 1; min-height: 0; }
 .terminal-changes-body > .terminal-changes-files {
   width: clamp(160px, 22%, 260px);
@@ -3568,6 +4044,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-files-link-meta > span { overflow: hidden; text-overflow: ellipsis; }
 .terminal-files-link-label { flex: 1 1 auto; min-width: 0; font-style: italic; }
 .terminal-files-link-meta > span:last-child { flex: none; }
+/* A shell command row: its first line in mono; the picked one whole in the viewer half. */
+.terminal-files-shell-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+.terminal-files-shell { display: flex; flex-direction: column; gap: var(--space-2); min-height: 0; padding: var(--space-3); overflow: auto; }
+.terminal-files-shell-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.terminal-files-shell-head > strong { flex: 1 1 auto; min-width: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.terminal-files-shell-head > small { color: var(--text-muted); }
 .terminal-changes-path {
   flex: 1 1 auto;
   min-width: 0;
@@ -3870,12 +4352,50 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
-/* The untested pill of Claude's suggestion, dimmed in the empty box as its
-   placeholder: top right, clear of Send and the mic. */
+/* How the local model thinks the prompt being typed goes on (`PromptGhost`):
+   a layer over the box that repeats the typed text unseen, so the dim rest
+   starts where the text ends and wraps as the box wraps it. The component
+   copies the box's font, padding and size; nothing here animates. */
+.prompt-ghost {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  pointer-events: none;
+  text-align: left;
+}
+.prompt-ghost-text {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.prompt-ghost-typed { visibility: hidden; }
+.prompt-ghost-rest { color: var(--text-muted); opacity: 0.8; }
+/* Who wrote the suggestion dimmed in the empty box (and its untested pills):
+   top right, clear of Send and the mic. */
 .terminal-reader-suggestion-tag {
   position: absolute;
   top: 4px;
   right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* "Suggested by": a reader chip that only labels — no hover, no pointer. */
+.terminal-reader-chip.suggestion-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  cursor: var(--cur-default, default);
+  pointer-events: auto;
+}
+.terminal-reader-chip.suggestion-source-chip:hover { color: var(--text-muted); background: var(--bg-subtle); }
+.terminal-reader-chip.suggestion-source-chip .untested-tag { margin-left: 0; }
+.suggestion-source-by { white-space: nowrap; }
+.suggestion-source-name {
+  max-width: 200px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 /* The phone composer's Send (`.send-icon` in mobile-web): a paper plane in
    an accent disc, faded while there is nothing to send. */
@@ -4028,11 +4548,24 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-view-tabs > button { padding: 4px 10px; font: inherit; font-weight: 500; color: var(--text-secondary); border: none; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
 .reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--text-primary); box-shadow: var(--shadow-1); }
 .reader-view-tabs > button:disabled { opacity: 0.45; cursor: var(--cur-not-allowed, not-allowed); }
+/* The chat-in-the-side-panel switch (`SideChatSwitch`): a one-segment
+   sibling of the view tabs, same ground and height; pressed, the lifted chip
+   of a picked view with the icon in accent. */
+.reader-side-chat-switch { display: inline-flex; align-items: center; flex: none; gap: 4px; padding: 3px; border-radius: var(--radius); background: var(--bg-subtle); }
+.reader-side-chat-switch > button { display: grid; place-items: center; padding: 4px 8px; font: inherit; color: var(--text-secondary); border: none; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
+.reader-side-chat-switch > button:hover { color: var(--text-primary); }
+.reader-side-chat-switch > button[aria-pressed="true"] { background: var(--bg-input); color: var(--accent); box-shadow: var(--shadow-1); }
+.reader-side-chat-switch svg { width: 16px; height: calc(1em * 1.25); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+/* Chat ⇄ Terminal in one pill: the mark says a click flips it. */
+.reader-view-tabs > .reader-view-flip { display: inline-flex; align-items: center; gap: 5px; }
+.reader-view-flip-mark { font-size: 0.85em; line-height: 1; color: var(--text-muted); }
 .reader-topbar .prompt-strip-reader { border-color: transparent; border-radius: var(--radius); }
 .reader-topbar .prompt-strip-panel { top: calc(100% + 6px); bottom: auto; height: min(560px, 65vh); max-height: 65vh; }
 .reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
-.reader-topbar .terminal-reader-subagent-index { position: relative; padding: 0; border: none; background: none; }
-.reader-topbar .terminal-reader-subagent-list { position: absolute; top: calc(100% + 6px); left: 0; width: min(420px, 80vw); margin: 0; padding: 6px; color: var(--text-primary); background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--radius); z-index: 2; }
+/* The Subagents and Workspaces menus, here only while Diffs or Data covers
+   the chat (the dock holds them otherwise). */
+.reader-topbar .terminal-reader-subagent-index { position: relative; }
+.reader-topbar .terminal-reader-subagent-list { top: calc(100% + 6px); left: 0; }
 .reader-schedule { display: inline-flex; align-items: center; gap: 5px; }
 .reader-schedule-count { min-width: 16px; padding: 0 5px; font-size: var(--text-sm); line-height: 16px; text-align: center; color: var(--text-on-accent, #fff); background: var(--accent); border-radius: 8px; }
 .reader-toolbar-error { max-width: 260px; color: var(--danger); font-size: var(--text-sm); }
@@ -4484,6 +5017,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   align-self: stretch;
   max-height: 24em;
 }
+.terminal-reader-unsaved-reply {
+  margin: 0;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .terminal-reader-question-ask {
   margin: 0;
   font-weight: 600;
@@ -4768,6 +5307,15 @@ button.terminal-reader-option:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Settings → Voice: the candidate languages of "detect", one checkbox each. */
+.settings-voice-langs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 12px;
 }
 
 /* Keep command copying outside the code block's horizontal scroll area. */

@@ -72,6 +72,7 @@ use crate::schema::mail::{
     CONTACTS_VERSION,
 };
 use crate::services::mail_ai;
+use crate::services::mail_complete::{self, MailComplete};
 use crate::services::mail_authres;
 use crate::services::mail_contacts;
 use crate::services::mail_crypt::{self, MailKeys};
@@ -137,6 +138,9 @@ const SYNC_HEADER_LIMIT: u32 = 200;
 /// local page over what is indexed — and the next sync's tail plus the next
 /// search's backfill keep growing it.
 const SERVER_SEARCH_MATCH_CAP: usize = 1000;
+/// Release the store lock between search batches so long queries leave room
+/// for interactive reads.
+const SEARCH_BACKFILL_BATCH: usize = 32;
 
 /// Keep the newest bounded set of server matches and tell the caller when
 /// older matches were omitted. The UI must never describe that page as a
@@ -2432,7 +2436,7 @@ async fn sync_inner(
             autoclassify && classify_budget > 0 && folder2.kind == MailFolderKind::Inbox;
         #[allow(clippy::type_complexity)]
         let (added, filed, candidates): (u32, u32, Vec<ClassifyCandidate>) =
-            app_core::rt::try_blocking("mail", move || {
+            app_core::rt::try_blocking("mail", move || store3.write_headers(|writer| {
                 let mut added = 0u32;
                 let mut filed = 0u32;
                 let mut candidates: Vec<ClassifyCandidate> = Vec::new();
@@ -2443,13 +2447,11 @@ async fn sync_inner(
                 // whole initial backlog is too. `None` is the folder's first sync, so
                 // nothing here is an arrival and nothing is filed: the existing pile
                 // is what the explicit "apply to existing" is for.
-                let prev_max_uid = store3.folder_max_uid(&folder2.id)?;
+                let prev_max_uid = writer.folder_max_uid(&folder2.id)?;
                 let is_arrival = |uid: u32| matches!(prev_max_uid, Some(m) if uid > m);
                 for h in headers {
                     let (mut row, in_reply_to) = header_row(&folder2, h);
-                    store3.retain_header_id(&mut row)?;
-                    let inserted = store3.upsert_header(&row)?;
-                    store3.set_reply_key(&row.id, in_reply_to.as_deref())?;
+                    let inserted = writer.ingest(&mut row, in_reply_to.as_deref())?;
                     if inserted {
                         added += 1;
                     }
@@ -2468,12 +2470,7 @@ async fn sync_inner(
                             // Provenance `filter`, so the model classifier below can
                             // never be mistaken for a keyword rule (#205). The reason
                             // is the rule's own name, which is what the UI shows.
-                            if store3.set_priority_ex(
-                                &row.id,
-                                Some(mark),
-                                crate::schema::mail::MailPrioritySource::Filter,
-                                &hit.rule_name,
-                            )? {
+                            if writer.set_filter_priority(&row.id, mark, &hit.rule_name)? {
                                 filed += 1;
                             }
                         } else if collect_for_model {
@@ -2489,10 +2486,9 @@ async fn sync_inner(
                         }
                     }
                 }
-                store3.set_server_counts(&folder2.id, server_total, server_unread)?;
-                store3.refresh_counts(&folder2.id)?;
+                writer.set_sync_counts(&folder2.id, server_total, server_unread)?;
                 Ok::<_, String>((added, filed, candidates))
-            })
+            }))
             .await?;
 
         // #205 classify hook: run the local model over the still-unmarked new
@@ -2723,21 +2719,23 @@ pub async fn mail_search(
                 let folder_id = folder_id.clone();
                 let backfilled = app_core::rt::blocking("mail", move || {
                     let store = store_of(&rt)?;
-                    let mut inserted = 0u32;
-                    let mut inserted_unseen = 0u32;
-                    for h in headers {
-                        let unseen = !h.seen;
-                        let (mut row, in_reply_to) = header_row(&folder, h);
-                        store.retain_header_id(&mut row)?;
-                        if store.upsert_header(&row)? {
-                            inserted += 1;
-                            if unseen {
-                                inserted_unseen += 1;
+                    // Release the connection between bounded batches so even a
+                    // broad search can share the store with inbox reads.
+                    let mut headers = headers.into_iter();
+                    while headers.len() > 0 {
+                        store.write_headers(|writer| {
+                            let mut inserted = 0u32;
+                            let mut inserted_unseen = 0u32;
+                            for h in headers.by_ref().take(SEARCH_BACKFILL_BATCH) {
+                                let (mut row, in_reply_to) = header_row(&folder, h);
+                                if writer.ingest(&mut row, in_reply_to.as_deref())? {
+                                    inserted += 1;
+                                    inserted_unseen += u32::from(!row.seen);
+                                }
                             }
-                        }
-                        store.set_reply_key(&row.id, in_reply_to.as_deref())?;
+                            writer.note_indexed(&folder_id, inserted, inserted_unseen)
+                        })?;
                     }
-                    store.note_indexed(&folder_id, inserted, inserted_unseen)?;
                     Ok::<_, String>(())
                 })
                 .await?;
@@ -3363,6 +3361,8 @@ pub async fn mail_filters_apply(
 const SUMMARIZE_BODY_CAP: usize = 8_000;
 const FORMALIZE_BODY_CAP: usize = 6_000;
 const EXTRACT_BODY_CAP: usize = 6_000;
+/// What a reply completion reads of the original (the engine shows the model less).
+const COMPLETE_BODY_CAP: usize = 8_000;
 
 /// One still-unmarked new inbox message the model may triage (#205). Carries the
 /// header fields the classifier reads — **subject, sender and preview only**,
@@ -3424,6 +3424,17 @@ async fn fetch_message_text(
     message_id: &str,
     byte_cap: usize,
 ) -> Result<(MailHeader, String), String> {
+    let (header, text, _crypto) = fetch_message_text_with_crypto(rt, message_id, byte_cap).await?;
+    Ok((header, text))
+}
+
+/// [`fetch_message_text`] that also reports what `apply_crypto` found, so a
+/// caller that must not hand an encrypted mail's plaintext on can tell.
+async fn fetch_message_text_with_crypto(
+    rt: &MailState,
+    message_id: &str,
+    byte_cap: usize,
+) -> Result<(MailHeader, String, Option<MailCryptoInfo>), String> {
     let id = message_id.to_string();
     let (account, folder, header) = on_store(rt, move |store| {
         let header = store
@@ -3447,21 +3458,54 @@ async fn fetch_message_text(
 
     let rt4 = rt.clone();
     let from_address = header.from.address.clone();
-    let text = app_core::rt::try_blocking("mail", move || {
+    let (text, crypto) = app_core::rt::try_blocking("mail", move || {
         // Decrypt → parse, the same ordering `mail_body` uses; the plaintext is
         // used here and dropped, never stored.
-        let (raw, _crypto) = apply_crypto(&rt4, raw, &from_address);
+        let (raw, crypto) = apply_crypto(&rt4, raw, &from_address);
         let parsed = mail_engine::parse_message(&raw).map_err(String::from)?;
         let text = parsed
             .text
             .clone()
             .or_else(|| parsed.html.as_deref().map(html_to_text))
             .unwrap_or_default();
-        Ok::<_, String>(truncate_bytes(&text, byte_cap))
+        Ok::<_, String>((truncate_bytes(&text, byte_cap), crypto))
     })
     .await?;
 
-    Ok((header, text))
+    Ok((header, text, crypto))
+}
+
+/// The mail being answered, for the reply completion: the body cache first
+/// (a hit is proof the mail was plain — `body_inner` caches nothing that had a
+/// crypto verdict), else the IMAP path. **D6:** a mail that arrived encrypted,
+/// decrypted or not, gives its headers and no body. Held in memory by the
+/// caller's slot, never written anywhere.
+async fn fetch_message_context(rt: &MailState, message_id: &str) -> Result<mail_complete::Original, String> {
+    let id = message_id.to_string();
+    let cached = on_store(rt, move |store| {
+        let header = store
+            .header(&id)?
+            .ok_or_else(|| format!("message '{id}' is not in the local index"))?;
+        let text = store.cached_body(&id, SANITIZER_VERSION)?.map(|(html, text, ..)| {
+            text.or_else(|| html.as_deref().map(html_to_text)).unwrap_or_default()
+        });
+        Ok::<_, String>((header, text))
+    })
+    .await?;
+    let (header, text, encrypted) = match cached {
+        (header, Some(text)) => (header, text, false),
+        (_, None) => {
+            let (header, text, crypto) = fetch_message_text_with_crypto(rt, message_id, COMPLETE_BODY_CAP).await?;
+            (header, text, crypto.is_some_and(|c| c.encrypted))
+        }
+    };
+    let body = (!encrypted).then(|| truncate_bytes(&text, COMPLETE_BODY_CAP));
+    Ok(mail_complete::Original::new(
+        &header.id,
+        &header.subject,
+        &from_display(&header.from),
+        body.as_deref(),
+    ))
 }
 
 /// How many new inbox messages one sync may hand the local classifier. On a
@@ -3582,6 +3626,108 @@ pub async fn mail_formalize_reply(
         )
     })
     .await
+}
+
+/// The reply completion's two entries ([`mail_ai_complete_warm`] and
+/// [`mail_ai_complete`]): every gate of `services::mail_complete` first, the
+/// original read (the body cache, else IMAP) only once they passed, then the
+/// run. A user-visible failure is a status, never an `Err`.
+async fn complete_inner(
+    rt: MailState,
+    slot: String,
+    account_id: String,
+    message_id: Option<String>,
+    subject: String,
+    to: Vec<String>,
+    draft: Option<String>,
+) -> Result<MailComplete, String> {
+    let gate_rt = rt.clone();
+    let (gate_slot, gate_message, gate_draft) = (slot, message_id.clone(), draft);
+    let gated = app_core::rt::try_blocking("mail", move || {
+        let store_locked = || {
+            store_of(&gate_rt).map_err(|_| ())?;
+            let runtime = gate_rt.lock().map_err(|_| ())?;
+            Ok(runtime.unlock_note.is_some())
+        };
+        let account = || {
+            account_by_id(&accounts_path(), &account_id)
+                .map(|account| mail_complete::Account::of(&account))
+                .map_err(|_| ())
+        };
+        let ask = mail_complete::Ask {
+            slot: &gate_slot,
+            message_id: gate_message.as_deref(),
+            subject: &subject,
+            to: &to,
+            draft: gate_draft.as_deref(),
+        };
+        Ok(mail_complete::gate(&ask, &mail_complete::Probes { store_locked: &store_locked, account: &account }))
+    })
+    .await?;
+    let mut ready = match gated {
+        mail_complete::Gated::Done(answer) => return Ok(answer),
+        mail_complete::Gated::Ready(ready) => *ready,
+    };
+    if ready.needs_original() {
+        let Some(id) = message_id.as_deref() else {
+            return Ok(MailComplete::status(mail_complete::Status::Unavailable));
+        };
+        // A completion is worth having only while the user still pauses; a
+        // warm-up has no such budget.
+        let fetched = if ready.is_warm() {
+            fetch_message_context(&rt, id).await
+        } else {
+            match tokio::time::timeout(mail_complete::FILL_BUDGET, fetch_message_context(&rt, id)).await {
+                Ok(fetched) => fetched,
+                Err(_) => Err(String::new()),
+            }
+        };
+        match fetched {
+            Ok(original) => ready = mail_complete::fill(ready, original),
+            Err(_) => return Ok(MailComplete::status(mail_complete::Status::Unavailable)),
+        }
+    }
+    app_core::rt::try_blocking("mail", move || Ok(mail_complete::run(ready))).await
+}
+
+/// Warm the local model with a reply's context, so the first completion reads
+/// only the draft. `account_id` is the **sending** account; `subject` and `to`
+/// are read only for a new mail (`message_id` null). Never an `Err` for what a
+/// user sees: the answer's `status` says (`services::mail_complete`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_ai_complete_warm(
+    ctx: Ctx,
+    slot: String,
+    account_id: String,
+    message_id: Option<String>,
+    subject: String,
+    to: Vec<String>,
+) -> Result<MailComplete, String> {
+    complete_inner(ctx.get::<MailState>().clone(), slot, account_id, message_id, subject, to, None).await
+}
+
+/// How the sentence being typed in a reply goes on: the rest of it, as ghost
+/// text for the composer (`MailComplete::text`). `draft` is the text before the
+/// caret and above the quoted original. **Never sends, never saves.**
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_ai_complete(
+    ctx: Ctx,
+    slot: String,
+    account_id: String,
+    message_id: Option<String>,
+    subject: String,
+    to: Vec<String>,
+    draft: String,
+) -> Result<MailComplete, String> {
+    complete_inner(ctx.get::<MailState>().clone(), slot, account_id, message_id, subject, to, Some(draft)).await
+}
+
+/// The composer closed: drop its slot (the original held in memory) and end
+/// its run.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mail_ai_complete_release(slot: String) -> Result<(), String> {
+    mail_complete::release(&slot);
+    Ok(())
 }
 
 /// #207 — extract a calendar event, anchored on the message `Date` and today so

@@ -93,6 +93,7 @@ import {
   textareaWrapWidth,
   textareaMirrorToViewport,
   textareaCaretMirrorOffsets,
+  textareaRangeMirrorRect,
 } from "./caretMirror";
 import { nextAcMode, acModeLabel, acDelayMs, effectiveAcTrigger } from "./editorPrefs";
 import { onCtrlWheelFont, useZoomModifierWheel } from "./fontZoom";
@@ -1753,8 +1754,17 @@ export function CodeEditor({
     if (view) syncScroll();
   }, [draft, syncScroll]);
 
-  // The landed-on line of the last `gotoLine` jump, banded for `JUMP_FLASH_MS`.
-  const [jumpFlash, setJumpFlash] = useState<{ line: number; nonce: number } | null>(null);
+  // Where the last `gotoLine` jump landed, banded for `JUMP_FLASH_MS`: the
+  // landed-on line, or — a PDF word matched in the draft — the row the caret is
+  // on, with the word itself boxed. `nonce` is this editor's own count, so a
+  // repeat jump restarts the fade (the store's resets once a jump is consumed).
+  const [jumpFlash, setJumpFlash] = useState<{
+    nonce: number;
+    line: number;
+    /** The matched word's row, measured at the jump; absent → the line's. */
+    row?: { top: number; height: number; word?: { left: number; width: number } };
+  } | null>(null);
+  const jumpFlashCount = useRef(0);
   // SyncTeX reverse search: on a new `gotoLine` nonce, place the caret at the
   // target line/column and scroll it to roughly the middle of the view. SyncTeX
   // reports a column (0 when it has none); we offset into the line by it, clamped
@@ -1785,13 +1795,28 @@ export function CodeEditor({
     // wrapped heights — so a target below several wrapped lines lands centred
     // instead of drifting up a row per wrap, which the old (line-1)·lineHeight
     // math got wrong for exactly the wide-prose files reverse search runs on.
-    const rowTop = word && wrap ? textareaCaretMirrorOffsets(el, offset).top : lineTop(line);
+    // A matched PDF word is measured where it sits, the same way the caret is:
+    // the band and box go on that row, not on a line top summed from the
+    // gutter's heights, so they can never part from the caret.
+    const wordRect = word && wrap ? textareaRangeMirrorRect(el, offset, offset + word.length) : null;
+    const rowTop = wordRect ? wordRect.top : lineTop(line);
     const target = rowTop - el.clientHeight / 2 + effectiveLineHeight / 2;
     el.scrollTop = Math.max(0, target);
     syncScroll();
-    // A band across the whole landed-on line, so a jump (a PDF Ctrl+click, an
-    // error row) says where it went: the gutter tint alone is easy to miss.
-    setJumpFlash({ line, nonce: gotoLine.nonce });
+    // A band across the landed-on row, so a jump (a PDF Ctrl+click, an error
+    // row) says where it went: the gutter tint alone is easy to miss.
+    jumpFlashCount.current += 1;
+    setJumpFlash({
+      nonce: jumpFlashCount.current,
+      line,
+      row: wordRect
+        ? {
+            top: wordRect.top,
+            height: wordRect.height,
+            word: wordRect.width > 0 ? { left: wordRect.left, width: wordRect.width } : undefined,
+          }
+        : undefined,
+    });
     onGotoApplied?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gotoLine?.nonce, loaded]);
@@ -2710,12 +2735,25 @@ export function CodeEditor({
             ref={jumpFlashRef}
             className="file-viewer-jump-flash"
             aria-hidden="true"
-            style={{
-              top: lineTop(jumpFlash.line),
-              height: wrap && lineHeights[jumpFlash.line - 1] ? lineHeights[jumpFlash.line - 1] : effectiveLineHeight,
-            }}
+            style={
+              jumpFlash.row
+                ? { top: jumpFlash.row.top, height: jumpFlash.row.height }
+                : {
+                    top: lineTop(jumpFlash.line),
+                    height: wrap && lineHeights[jumpFlash.line - 1] ? lineHeights[jumpFlash.line - 1] : effectiveLineHeight,
+                  }
+            }
           >
-            <UntestedTag id="fileViewer.jumpFlash" />
+            {jumpFlash.row?.word && (
+              <span
+                className="file-viewer-jump-word"
+                style={{ left: jumpFlash.row.word.left, width: jumpFlash.row.word.width }}
+              />
+            )}
+            <span className="file-viewer-jump-pills">
+              <UntestedTag id="fileViewer.jumpFlash" />
+              {jumpFlash.row?.word && <UntestedTag id="fileViewer.jumpWord" />}
+            </span>
           </div>
         )}
         {/* Indent guides. First of the layers, so the hairlines sit behind the

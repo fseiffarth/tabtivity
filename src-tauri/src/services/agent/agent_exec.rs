@@ -68,6 +68,8 @@ pub fn targets() -> Vec<&'static str> {
     let mut targets = crate::services::agent_api_keys::ENV_VARS.to_vec();
     // Claude's long-lived token, the fallback login (`claude_token`).
     targets.push(crate::services::claude_token::TOKEN_ENV);
+    // The bearer header of Claude's trace exporter (`claude_otel`, experimental).
+    targets.push(crate::services::claude_otel::HEADERS_VAR);
     targets
 }
 

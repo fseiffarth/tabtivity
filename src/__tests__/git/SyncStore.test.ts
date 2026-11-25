@@ -96,31 +96,47 @@ describe("sync store actions", () => {
     expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 3 });
   });
 
-  it("resolveAll collects the failures", async () => {
-    invokeMock.mockImplementation(((cmd: string, args?: { relPath?: string }) => {
+  it("resolveAll sends the whole list as one command and collects the failures", async () => {
+    invokeMock.mockImplementation(((cmd: string) => {
       if (cmd !== "sync_pull") return Promise.resolve([]);
-      if (args?.relPath === "data/bad.txt") return Promise.reject(new Error("gone"));
-      return Promise.resolve({ pulled: 1 });
+      return Promise.resolve({ pulled: 2, failed: 1, firstError: "gone" });
     }) as never);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(
-      await useSyncStore.getState().resolveAll("p1", ["a.txt", "data/big.bin", "data/bad.txt"], "host"),
-    ).toEqual({ failed: 1, firstError: "gone" });
-    // The local side pushes; nothing is pulled, nothing reported.
-    expect(await useSyncStore.getState().resolveAll("p1", ["a.txt"], "local")).toEqual({
+    const paths = ["a.txt", "data/big.bin", "data/bad.txt"];
+    expect(await useSyncStore.getState().resolveAll("p1", paths, "host")).toEqual({
+      failed: 1,
+      firstError: "gone",
+    });
+    const pulls = invokeMock.mock.calls.filter((c) => c[0] === "sync_pull");
+    expect(pulls).toHaveLength(1);
+    expect(pulls[0][1]).toEqual({ projectId: "p1", relPath: "", relPaths: paths });
+    // The local side pushes the list in one go; nothing pulled, nothing reported.
+    invokeMock.mockClear();
+    expect(await useSyncStore.getState().resolveAll("p1", paths, "local")).toEqual({
       failed: 0,
       firstError: null,
     });
-    // A push the backend refused per file (an Ok result) counts as a failure.
+    const pushes = invokeMock.mock.calls.filter((c) => c[0] === "sync_push");
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0][1]).toEqual({ projectId: "p1", relPath: "", force: true, relPaths: paths });
+    // A push the backend refused per file (an Ok result) counts as a failure,
+    // and so does an unforced file blocked by a host copy that moved.
     invokeMock.mockImplementation(((cmd: string) =>
       Promise.resolve(
         cmd === "sync_push"
-          ? { pushed: 0, conflicts: [], failed_total: 1, failed: ["a.txt"], first_error: "denied" }
+          ? { pushed: 0, conflicts: ["b.txt"], failed_total: 1, failed: ["a.txt"], first_error: "denied" }
           : [],
       )) as never);
-    expect(await useSyncStore.getState().resolveAll("p1", ["a.txt"], "local")).toEqual({
-      failed: 1,
+    expect(await useSyncStore.getState().resolveAll("p1", ["a.txt", "b.txt"], "local", false)).toEqual({
+      failed: 2,
       firstError: "denied",
+    });
+    // A command that fails whole fails every file of the list.
+    invokeMock.mockImplementation(((cmd: string) =>
+      cmd === "sync_push" ? Promise.reject(new Error("not connected")) : Promise.resolve([])) as never);
+    expect(await useSyncStore.getState().resolveAll("p1", ["a.txt", "b.txt"], "local")).toEqual({
+      failed: 2,
+      firstError: "not connected",
     });
     err.mockRestore();
   });

@@ -443,6 +443,11 @@ pub struct PublicTab {
     /// somewhere else to go.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub location_movable: bool,
+    /// An agent tab whose CLI has no chat view (not on
+    /// `agent_transcript::CHAT_AGENTS`): the phone opens it in, and keeps it
+    /// to, Terminal. A cloud or sign-in tab keeps its Focus screen.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_chat: bool,
     /// The tab runs on its project's remote host, and the phone reaches it
     /// through the desktop's ssh master for that host
     /// (`docs/done/mobile_remote_host_tabs_plan.md`): the phone wears a chip naming
@@ -2010,6 +2015,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         assistant_launch: None,
         worktree_movable: false,
         location_movable: false,
+        no_chat: false,
         on_host: false,
         host_label: None,
         host_down: false,
@@ -2271,6 +2277,11 @@ fn resolve_scope(
                 && source.kind == ScopeKind::Project
                 && source.host == ProjectHost::Remote
                 && places >= 2,
+            no_chat: agent
+                && chat.is_none()
+                && !tab.sign_in
+                && !tab.cloud
+                && !crate::services::agent_transcript::chat_offered(transcript_cmd_of(&tab)),
             on_host: on_host.is_some(),
             host_label: on_host.as_ref().map(machine_label),
             host_down: on_host.is_some() && host_reach.is_none(),

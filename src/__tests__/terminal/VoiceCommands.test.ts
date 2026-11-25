@@ -13,10 +13,12 @@ import {
   hasCommandWord,
   match,
   matchConfirm,
+  matchHelp,
   matchNavLeave,
   matchNavigate,
   matchReading,
   matchStartWord,
+  mayAskHelp,
   mayNavigate,
   matchesPhrase,
   resolveAmbiguity,
@@ -154,6 +156,21 @@ describe("matching an utterance (English)", () => {
   it("hears the command word split in two", () => {
     const split = `${WORD.slice(0, 3)} ${WORD.slice(3)}`;
     expect(said(match(`${split} projects`, "en", lists))).toBe("projects");
+  });
+
+  it("hears \"Tabby navigate\" in English whatever the language, as help", () => {
+    for (const lang of LANGS) {
+      expect(matchNavigate(`${BRAND.assistant} navigate, the done tab`, lang)).toEqual({ rest: "the done tab" });
+      expect(mayNavigate(`${BRAND.assistant} navi`, lang)).toBe(true);
+    }
+  });
+
+  // The desktop's spoken navigation names boxes: "box Papers" is the box,
+  // not a tab called "box Papers", in every language.
+  it.each(LANGS)("%s: \"box …\" resolves to openBox, not a tab", (lang) => {
+    const withBox: VoiceLists = { ...lists, boxes: [{ id: "b-papers", name: "Papers" }], tabs: [{ id: "t-papers", name: "box Papers" }] };
+    const phrase = templates(lang, "openBox")[0].replace("{box}", "Papers");
+    expect(said(match(phrase, lang, withBox, free))).toBe("openBox box=b-papers");
   });
 
   it("turns number words into numbers", () => {
@@ -600,6 +617,35 @@ describe("the start word and navigation", () => {
     expect(mayNavigate("taxi navigate", "en")).toBe(false);
     expect(mayNavigate(`${A} navigiere`, "de")).toBe(true);
     expect(mayNavigate(`${A} navi`, "de")).toBe(true);
+  });
+
+  it.each(LANGS)("%s: \"help\" is the start word and a help phrase, whole", (lang) => {
+    const phrases = translate(lang, "voice.help").split("|").map((phrase) => phrase.trim());
+    for (const phrase of phrases) {
+      expect(matchHelp(phrase, lang), phrase).toBe(true);
+      expect(matchHelp(`${phrase}?`, lang), phrase).toBe(true);
+      expect(mayAskHelp(phrase, lang), phrase).toBe(true);
+      const bare = phrase.split(" ").slice(1).join(" ");
+      // Without the start word only navigation mode asks.
+      expect(matchHelp(bare, lang), phrase).toBe(false);
+      expect(matchHelp(bare, lang, { bare: true }), phrase).toBe(true);
+      expect(matchHelp(`${phrase} with the login page`, lang), phrase).toBe(false);
+    }
+    // English is understood in every language, as the edits are.
+    expect(matchHelp(`${A} help`, lang)).toBe(true);
+    expect(matchHelp(A, lang)).toBe(false);
+    expect(matchHelp(`please ${A} help`, lang)).toBe(false);
+  });
+
+  it("holds an utterance back while it may still be a help", () => {
+    expect(mayAskHelp(`${A} he`, "en")).toBe(true);
+    expect(mayAskHelp(`${A} what can`, "en")).toBe(true);
+    expect(mayAskHelp(`${A} help please`, "en")).toBe(true);
+    expect(mayAskHelp(`${A} help me with the login page`, "en")).toBe(false);
+    expect(mayAskHelp(`${A} and add a test`, "en")).toBe(false);
+    expect(mayAskHelp("help", "en")).toBe(false);
+    expect(mayAskHelp(`${A} Hil`, "de")).toBe(true);
+    expect(matchHelp(`${A} hilf mir bitte`, "de")).toBe(true);
   });
 
   it.each(LANGS)("%s: a leave phrase is the whole utterance", (lang) => {

@@ -476,6 +476,51 @@ pub async fn host_tab_copy(
     Some(if mirror.remote.is_none() { HostCopy::NotYet } else { HostCopy::At(local) })
 }
 
+/// The largest host `.claude.json` read for its trust answer. It carries the
+/// login's per-folder state and can grow into the megabytes; a bigger one
+/// answers "not trusted".
+const MAX_CLAUDE_JSON_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Whether Claude on the host trusts the folder a tab of `project_id` on
+/// `host_id` runs in (always the project root, `spec.remote_path`), i.e. it
+/// will not open its folder-trust dialog there — the remote twin of
+/// [`crate::services::sandbox::claude_folder_trusted`]. The host's Claude
+/// reads its own `.claude.json` (below the host's agent home when the spec
+/// names one), never the scope home here, so a folder trusted on this machine
+/// at the same path says nothing about the host. `None` when the project
+/// names no remote host: the tab runs here. Rides only a connected pool;
+/// anything it cannot read answers `false` — the caller then types nothing
+/// into a launch that may be asking (the dialog's default is `No, exit`).
+pub async fn claude_host_folder_trusted(pool: &RemotePoolState, project_id: &str, host_id: &str) -> Option<bool> {
+    use crate::services::remote::{remote_target_for, remote_target_for_host, PRIMARY_HOST};
+    // Resolved as the spawn is (`ssh_exec::remote_target_of`): a worker id that
+    // no longer resolves runs on the primary.
+    let (target, host_id) = match remote_target_for_host(project_id, host_id) {
+        Some(target) => (target, host_id),
+        None if host_id != PRIMARY_HOST => (remote_target_for(project_id)?, PRIMARY_HOST),
+        None => return None,
+    };
+    let Some(sftp) = crate::services::remote::pooled_sftp_host(pool, project_id, host_id).await else {
+        return Some(false);
+    };
+    let home = target.spec.agent_home();
+    let cwd = target.spec.remote_path.trim_end_matches('/').to_string();
+    for rel in [".claude.json", ".claude/.claude.json"] {
+        let path = under(home.as_deref(), rel);
+        let Ok(Some(bytes)) = crate::services::sftp::read_file_up_to(&sftp, &path, MAX_CLAUDE_JSON_BYTES).await else {
+            continue;
+        };
+        let cwd = cwd.clone();
+        let trusted = app_core::rt::spawn_blocking(move || crate::services::sandbox::claude_json_trusts(&bytes, &cwd))
+            .await
+            .unwrap_or(false);
+        if trusted {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
 /// The [`MIRRORS`] entry of one host tab.
 fn mirror_key(project_id: &str, host_id: &str, launch_id: &str) -> String {
     format!("{}\n{}\n{launch_id}", crate::storage::project_key(project_id), crate::storage::project_key(host_id))

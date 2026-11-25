@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { aiIsOff } from "../../aiSwitch";
 import { listen } from "@tauri-apps/api/event";
 import type { AutocompleteMode } from "../../../types";
-import { CompletionCache, completionModels, completionModelOrder, completionWindow, missingRoleModel, pickCompletionModel, type CompletionModel } from "./autocomplete";
+import { CompletionCache, completionModels, completionModelOrder, completionWindow, missingRoleModel, pickCompletionModel, supportsCompletion, type CompletionModel } from "./autocomplete";
 import type { CompletionTiming } from "./completionTimings";
 import { referenceBudget, referenceSetId, trimReferences, type CompletionReference } from "./completionContext";
 import {
@@ -82,7 +82,7 @@ export class OllamaCompletionProvider implements CompletionProvider {
       const timing = this.options.timing;
       if (timing) timing.contextReady = performance.now();
       signal.throwIfAborted();
-      const loaded = detailed.filter((m) => m.running && (!m.capabilities?.length || m.capabilities.includes("completion")));
+      const loaded = detailed.filter((m) => m.running && supportsCompletion(m));
       if (!explicit) {
         const missing = missingRoleModel(loaded, document.language, this.options.role, this.options.preferredProse);
         if (missing) throw new Error(`role_not_loaded:${missing}`);

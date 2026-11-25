@@ -350,6 +350,10 @@ describe("replacing the chat", () => {
 
   it("Relaunch starts a fresh session of the same CLI", async () => {
     await show(await assistantTabsKey("a"));
+    // The head is the panel's one toolbar row: CLI and model first, Relaunch at its end.
+    const toolbar = screen.getByRole("button", { name: "CLI" }).closest(".sp-toolbar");
+    expect(toolbar).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Relaunch" }).closest(".sp-toolbar-end")?.parentElement).toBe(toolbar);
     fireEvent.click(screen.getByRole("button", { name: "Relaunch" }));
     await waitFor(() => expect(assistantTabs().map((t) => t.id)).toEqual(["fresh"]));
     expect(newChatCalls()).toEqual([{ cli: "claude", model: null }]);

@@ -19,6 +19,9 @@
 //!   a built-in editing tool (`edit`, `create`, GPT models' `apply_patch`)
 //!   committed — the git-style diff in `result.detailedContent`, one section
 //!   per file in `fileEdits` order. A call that failed lists nothing.
+//! - Cursor: the `diffString` of a `Write` or `StrReplace` tool result in the
+//!   chat's `store.db` (`services::cursor_session`), and what a delete removed
+//!   (`prevContent`).
 //!
 //! A diff is file content: it reaches the phone only through
 //! `mobile_control::chat_changes`, behind the "Project files on the phone"
@@ -157,6 +160,20 @@ pub fn agent_session_changes(
         let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
         return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
     }
+    if cmd == "cursor-agent" {
+        if subagent.is_some() {
+            return AgentChanges::unavailable("no_subagent");
+        }
+        let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
+            return AgentChanges::unavailable("no_session");
+        };
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return AgentChanges::unavailable("unsupported");
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        let own = crate::services::cursor_session::recorded(project_id, launch_id);
+        return crate::services::cursor_session::changes(&home, directory, since, own.as_ref(), version, limit);
+    }
     let kind = match cmd {
         "claude" => Store::Claude,
         "codex" => Store::Codex,
@@ -195,6 +212,19 @@ pub fn stored_chat_changes(
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
         return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
+    }
+    if cmd == "cursor-agent" {
+        if subagent.is_some() {
+            return AgentChanges::unavailable("no_subagent");
+        }
+        let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
+            return AgentChanges::unavailable("no_transcript");
+        };
+        if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            return AgentChanges::unavailable("no_transcript");
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        return crate::services::cursor_session::chat_changes(&home, directory, chat, version, limit);
     }
     let kind = match cmd {
         "claude" => Store::Claude,
@@ -438,7 +468,13 @@ pub fn read_changes(path: &Path, kind: Store, version: Option<&str>, limit: usiz
     if version == Some(current.as_str()) {
         return Some(AgentChanges::unchanged(current));
     }
-    let (text, cut) = crate::services::agent_session::read_conversation_tail(&mut file, meta.len(), TAIL_BYTES)?;
+    // A Codex subagent's rollout opens with its parent's conversation: not
+    // its changes.
+    let from = match kind {
+        Store::Codex => agent_transcript::codex_own_history_start(path, &mut file),
+        Store::Claude | Store::Copilot => 0,
+    };
+    let (text, cut) = crate::services::agent_session::read_conversation_tail_from(&mut file, meta.len(), TAIL_BYTES, from)?;
     let mut changes = Vec::new();
     for line in text.lines() {
         // Most records are no change: only parse the ones that may be.
@@ -713,7 +749,7 @@ pub(crate) fn hunks_only(diff: &str) -> &str {
 
 /// A whole file as one hunk — every line added (`add`, `write`) or removed
 /// (`delete`).
-fn whole_file(path: &str, kind: &str, content: &str, at: Option<String>) -> FileChange {
+pub(crate) fn whole_file(path: &str, kind: &str, content: &str, at: Option<String>) -> FileChange {
     let lines: Vec<&str> = content.lines().collect();
     let count = lines.len();
     let (mark, header) = if kind == "delete" {
@@ -734,7 +770,7 @@ fn whole_file(path: &str, kind: &str, content: &str, at: Option<String>) -> File
 }
 
 /// A change with its counts taken, its diff bounded.
-fn change(path: &str, kind: &str, mut diff: String, at: Option<String>) -> FileChange {
+pub(crate) fn change(path: &str, kind: &str, mut diff: String, at: Option<String>) -> FileChange {
     let (mut added, mut removed) = (0u32, 0u32);
     for line in diff.lines() {
         if line.starts_with('+') {

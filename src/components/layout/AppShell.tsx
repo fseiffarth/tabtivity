@@ -53,6 +53,7 @@ import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
 import { OpenExternalHost } from "../common/OpenExternalHost";
+import { GpuFallbackHost } from "../common/GpuFallbackHost";
 import { CalDavSyncHost } from "../calendar/CalDavSyncHost";
 import { PrinterNetworkDefaultsHost } from "../printing/PrinterNetworkDefaultsHost";
 import { PrintRequestsHost } from "../printing/PrintRequests";
@@ -114,6 +115,7 @@ import { useTimerStore } from "../../stores/timer";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { flushUsage } from "../../stores/usage";
+import { useReaderSideChatStore } from "../../stores/agents/readerSideChat";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { PrivacyCurtain } from "./PrivacyCurtain";
 import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
@@ -1076,8 +1078,12 @@ export function AppShell() {
     },
   });
 
+  // An agent tab's Reader on Diffs or Data with its chat switch on holds the
+  // panel open for its chat (`ReaderSideChat`), without touching the setting:
+  // when it lets go, the panel is closed or open as it was.
+  const sideChatHeld = useReaderSideChatStore((s) => s.claims.length > 0);
   const revealPanel =
-    panelTarget && !panelsHidden && (autoHide ? panelOpen : openSetting);
+    panelTarget && !panelsHidden && (sideChatHeld || (autoHide ? panelOpen : openSetting));
   // Docked: the open panel pushes the workspace aside. Auto-hide's overlay never does.
   const docked = revealPanel && !autoHide;
   const panelView = viewByScope?.[sidePanelViewKey(activeId, scope)] ?? lastPanelView;
@@ -1519,6 +1525,9 @@ export function AppShell() {
           (services::exec_trust), raised by a gated commit/push/build/format. */}
       <ExecTrustHost />
       <OpenExternalHost />
+      {/* The one ask after a GPU-path renderer crash turned GPU compositing
+          off (services::webkit_gpu); main window only. */}
+      <GpuFallbackHost />
       {/* CalDAV's scheduled sync (docs/caldav_plan.md Phase 2). Renders nothing,
           and starts no timer at all until an account exists — at the shell for
           the alarm ticker's reason: the surfaces that read a synced calendar

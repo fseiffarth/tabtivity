@@ -66,6 +66,20 @@ const MAX_TAIL_BYTES: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_LIMIT: usize = 120;
 /// The most entries one answer carries, whatever the caller asks for.
 pub const MAX_LIMIT: usize = 1000;
+
+/// The CLIs whose conversation is offered as a chat (the desktop Reader, the
+/// phone's Chat view): the ones verified against their CLI (user,
+/// 2026-11-25; Cursor, `cursor-agent`, with 2026.11.22). Every other agent —
+/// Gemini among them, though its store is read for other uses — gets Terminal
+/// only. Mistral (`vibe`) is on the list but has no transcript reader yet, so
+/// its chat still answers `unsupported`.
+/// The desktop's copy: `CHAT_AGENTS` in `src/lib/agents/agentReader.ts`.
+pub const CHAT_AGENTS: &[&str] = &["claude", "codex", "opencode", "copilot", "muse", "vibe", "agy", "cursor-agent"];
+
+/// Whether `cmd`'s conversation may be shown as a chat ([`CHAT_AGENTS`]).
+pub fn chat_offered(cmd: &str) -> bool {
+    CHAT_AGENTS.contains(&cmd)
+}
 /// Longest text of one prompt. The full prompt is the user's own words, so
 /// the bound is generous; a pasted log is cut and marked.
 const MAX_PROMPT_CHARS: usize = 6_000;
@@ -96,6 +110,10 @@ pub(crate) const MAX_WAITING_TOOLS: usize = 16;
 /// How many unanswered tool calls / asks the walk keeps at once (a bound on
 /// the per-record rescans, not on what is shown).
 const MAX_WALK_TOOLS: usize = 64;
+/// The most shell calls one read lists in [`AgentTranscript::shells_run`]
+/// (the newest), and the most characters their command lines carry together.
+pub(crate) const MAX_SHELLS_RUN: usize = 200;
+const MAX_SHELLS_RUN_CHARS: usize = 200_000;
 const MAX_WALK_ASKS: usize = 8;
 /// What one ask may hold: Claude's own tool takes 1-4 questions of 2-4 rows,
 /// so these are far past use; the file is the agent's, and an ask is sent
@@ -111,8 +129,10 @@ pub(crate) const MAX_SUBAGENT_DEPTH: usize = 8;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptEntry {
     /// `prompt` (the user's), `answer` (the agent's text), `agent` (a
-    /// subagent it spawned; `text` is what it was sent to do) or
-    /// `interrupted` (the user cut the turn off; `text` is the CLI's own words).
+    /// subagent it spawned; `text` is what it was sent to do),
+    /// `interrupted` (the user cut the turn off; `text` is the CLI's own words)
+    /// or `thinking` (the model's reasoning, only in a read that asks for it:
+    /// a local-model OpenCode tab's desktop Chat, [`local_opencode_transcript`]).
     pub kind: String,
     pub text: String,
     /// The record's own timestamp, as written (RFC 3339), when it has one.
@@ -302,6 +322,12 @@ pub struct AgentTranscript {
     /// masks every subject (`mobile_control`).
     #[serde(default, rename = "waitingTools", skip_serializing_if = "Vec::is_empty")]
     pub waiting_tools: Vec<WaitingTool>,
+    /// Every shell call the read covers, running or done, oldest first — the
+    /// newest [`MAX_SHELLS_RUN`], within [`MAX_SHELLS_RUN_CHARS`] together.
+    /// The desktop Reader's Data tab lists them. Desktop Reader only: the
+    /// phone's API strips it, a command line does not cross to the browser.
+    #[serde(default, rename = "shellsRun", skip_serializing_if = "Vec::is_empty")]
+    pub shells_run: Vec<RunningShell>,
     /// The newest `/context` card Claude printed (its `local_command` stdout,
     /// colour codes stripped). The fullscreen renderer draws it in the
     /// alternate screen, which keeps no scrollback, so the Reader's Context
@@ -398,6 +424,8 @@ struct ShellCalls {
     /// The other tool calls still waiting on their result ([`WaitingTool`]).
     tools: Vec<WaitingTool>,
     background: Vec<(RunningShell, String)>,
+    /// Every shell call read, in order ([`AgentTranscript::shells_run`]).
+    ran: Vec<RunningShell>,
 }
 
 /// What Claude's status line shows beside the model — context left, the
@@ -485,7 +513,7 @@ pub fn agent_session_transcript(
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
         let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_transcript(&db, runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit, false);
     }
     if matches!(cmd, "gemini" | "agy") {
         if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
@@ -513,6 +541,18 @@ pub fn agent_session_transcript(
         let home = crate::services::agent_home::scope_home(project_id);
         let own = crate::services::muse_session::recorded(project_id, launch_id);
         return crate::services::muse_session::transcript(&home, directory, since, own.as_ref(), version, limit);
+    }
+    if cmd == "cursor-agent" {
+        if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
+        let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
+            return AgentTranscript::unavailable("no_session");
+        };
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return AgentTranscript::unavailable("unsupported");
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        let own = crate::services::cursor_session::recorded(project_id, launch_id);
+        return crate::services::cursor_session::transcript(&home, directory, since, own.as_ref(), version, limit);
     }
     if cmd == "copilot" {
         return copilot_transcript(project_id, launch_id, subagent, version, limit);
@@ -555,12 +595,12 @@ pub fn stored_chat_transcript(
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
-    if matches!(cmd, "opencode" | "agy" | "muse") {
+    if matches!(cmd, "opencode" | "agy" | "muse" | "cursor-agent") {
         if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
             return AgentTranscript::unavailable("no_transcript");
         }
         let dir = tab_dir.unwrap_or_default();
-        if matches!(cmd, "agy" | "muse") {
+        if matches!(cmd, "agy" | "muse" | "cursor-agent") {
             if subagent.is_some() {
                 return AgentTranscript::unavailable("no_subagent");
             }
@@ -568,10 +608,13 @@ pub fn stored_chat_transcript(
             if cmd == "muse" {
                 return crate::services::muse_session::chat(&home, dir, chat, version, limit);
             }
+            if cmd == "cursor-agent" {
+                return crate::services::cursor_session::chat(&home, dir, chat, version, limit);
+            }
             return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_transcript(&db, runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit, false);
     }
     let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
         return AgentTranscript::unavailable("no_transcript");
@@ -604,6 +647,14 @@ pub fn stored_chat_watch_targets(
         } else {
             Vec::new()
         };
+    }
+    if cmd == "cursor-agent" {
+        let (Some(dir), None) = (tab_dir.filter(|dir| Path::new(dir).is_absolute()), subagent) else { return Vec::new() };
+        if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            return Vec::new();
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        return crate::services::cursor_session::chat_watch_targets(&home, dir, chat);
     }
     stored_chat_file(cmd, project_id, tab_dir, launch_id, chat, subagent)
         .map(|file| conversation_targets(cmd, &file, subagent.is_some()))
@@ -872,6 +923,30 @@ pub fn watch_targets(
     }
 }
 
+/// [`watch_targets`] for the tab launched as `cmd` working in `tab_dir`: the
+/// CLIs that keep their chats by folder (Cursor) need the folder and the launch
+/// moment, as [`agent_session_transcript`] does, to say which chat the tab reads.
+pub fn tab_watch_targets(
+    cmd: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    since: Option<i64>,
+    launch_id: &str,
+    subagent: Option<&str>,
+    local_model: bool,
+) -> Vec<crate::services::transcript_watch::Target> {
+    if cmd != "cursor-agent" {
+        return watch_targets(cmd, project_id, launch_id, subagent, local_model);
+    }
+    let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else { return Vec::new() };
+    if subagent.is_some() || project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+        return Vec::new();
+    }
+    let home = crate::services::agent_home::scope_home(project_id);
+    let own = crate::services::cursor_session::recorded(project_id, launch_id);
+    crate::services::cursor_session::watch_targets(&home, directory, since, own.as_ref())
+}
+
 /// [`watch_targets`] for a Claude or Codex conversation stored in `file`.
 fn conversation_targets(cmd: &str, file: &Path, subagent: bool) -> Vec<crate::services::transcript_watch::Target> {
     use crate::services::transcript_watch::{Rule, Target};
@@ -1013,19 +1088,19 @@ fn codex_transcript_at(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
-    let thread = thread.to_string();
+    let home = crate::services::agent_home::scope_home(project_id);
     let stores = crate::services::codex_store::state_dbs(Some(project_id.unwrap_or("root")));
     let Some(token) = subagent else {
-        let spawns = Spawns::Codex { stores: &stores, thread: &thread };
+        let spawns = Spawns::Codex { stores: &stores, home: &home, thread };
         return read_transcript_in(main, TranscriptKind::Codex, &spawns, false, version, limit);
     };
     let child = stores.iter().find_map(|db| {
-        crate::services::codex_store::descendant_threads(db, &thread, MAX_SUBAGENT_DEPTH)
+        crate::services::codex_store::descendant_threads(db, thread, MAX_SUBAGENT_DEPTH)
             .into_iter()
             .find(|child| subagent_token(&child.id) == token)
     })?;
     let rollout = codex_rollout(project_id, &child)?;
-    let spawns = Spawns::Codex { stores: &stores, thread: &child.id };
+    let spawns = Spawns::Codex { stores: &stores, home: &home, thread: &child.id };
     read_transcript_in(&rollout, TranscriptKind::Codex, &spawns, false, version, limit)
 }
 
@@ -1034,6 +1109,84 @@ fn codex_transcript_at(
 /// the host's state store, which is not copied: no subagent cards.
 pub(crate) fn codex_host_transcript_at(main: &Path, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
     read_transcript_in(main, TranscriptKind::Codex, &Spawns::None, false, version, limit)
+}
+
+/// Where a Codex subagent's own records start in its rollout `file` at `path`,
+/// as a byte offset. A spawned agent's rollout is a fork: after its own
+/// `session_meta` it repeats the spawning thread's conversation (that thread's
+/// `session_meta`, every turn up to the `spawn_agent` call, a `turn_aborted`,
+/// the "you are now a newly spawned child agent" note), and its `session_meta`
+/// names the 0-based line its own history starts on
+/// (`subagent_history_start_ordinal`, Codex 0.159–0.172 at least). Read from
+/// there, a subagent's Chat and Diffs show what it did, not its parent's
+/// conversation. 0 for a rollout without one (a tab's own thread). Remembered
+/// per path once settled: what Codex wrote before that line never changes.
+pub(crate) fn codex_own_history_start(path: &Path, file: &mut std::fs::File) -> u64 {
+    type Starts = std::collections::HashMap<PathBuf, u64>;
+    static STARTS: std::sync::LazyLock<std::sync::Mutex<Starts>> = std::sync::LazyLock::new(Default::default);
+    const STARTS_MAX: usize = 256;
+    if let Some(&start) = STARTS.lock_ok().get(path) {
+        return start;
+    }
+    let Some((start, settled)) = scan_own_history_start(file) else {
+        return 0;
+    };
+    if settled {
+        let mut starts = STARTS.lock_ok();
+        if starts.len() >= STARTS_MAX {
+            starts.clear();
+        }
+        starts.insert(path.to_path_buf(), start);
+    }
+    start
+}
+
+/// Longest `session_meta` line [`scan_own_history_start`] reads: it carries
+/// Codex's base instructions, tens of KiB.
+const SESSION_META_MAX: u64 = 4 * 1024 * 1024;
+
+/// [`codex_own_history_start`]'s scan: the offset, and whether it is final —
+/// not while the first line or the inherited lines are still being written
+/// (then the offset is the end of what is there: nothing of the subagent's
+/// own yet).
+fn scan_own_history_start(file: &mut std::fs::File) -> Option<(u64, bool)> {
+    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut first = Vec::new();
+    BufReader::new(Read::by_ref(file).take(SESSION_META_MAX)).read_until(b'\n', &mut first).ok()?;
+    if !first.ends_with(b"\n") {
+        // Too long to be a `session_meta` worth reading; or not finished yet,
+        // when nothing after it is either.
+        let too_long = first.len() as u64 >= SESSION_META_MAX;
+        return Some(if too_long { (0, true) } else { (first.len() as u64, false) });
+    }
+    let ordinal = serde_json::from_slice::<Value>(&first)
+        .ok()
+        .filter(|value| value.get("type").and_then(Value::as_str) == Some("session_meta"))
+        .and_then(|value| value.pointer("/payload/subagent_history_start_ordinal").and_then(Value::as_u64))
+        .unwrap_or(0);
+    if ordinal == 0 {
+        return Some((0, true));
+    }
+    // Line 0 is read; find the end of line `ordinal - 1`.
+    let mut offset = first.len() as u64;
+    let mut lines = 1u64;
+    file.seek(SeekFrom::Start(offset)).ok()?;
+    let mut chunk = vec![0u8; 64 * 1024];
+    while lines < ordinal {
+        let read = file.read(&mut chunk).ok()?;
+        if read == 0 {
+            return Some((offset, false));
+        }
+        for (index, _) in chunk[..read].iter().enumerate().filter(|(_, byte)| **byte == b'\n') {
+            lines += 1;
+            if lines == ordinal {
+                return Some((offset + index as u64 + 1, true));
+            }
+        }
+        offset += read as u64;
+    }
+    Some((offset, true))
 }
 
 /// A spawned thread's rollout: the path its row names, taken only when it is
@@ -1138,6 +1291,9 @@ fn fresh_codex_session(project_id: Option<&str>, launch_id: &str) -> Option<Agen
 /// names its recorded session; a tab from before it had one is read by folder.
 /// Such a tab runs on this machine even in a remote project (its spawn is
 /// `local_only`), so the project being remote does not put its store away.
+/// `thinking` adds the model's reasoning as `thinking` entries (the desktop
+/// Chat asks for it; the phone, the handoff and the next-prompt reads do not).
+#[allow(clippy::too_many_arguments)]
 pub fn local_opencode_transcript(
     project_id: Option<&str>,
     tab_dir: Option<&str>,
@@ -1146,13 +1302,14 @@ pub fn local_opencode_transcript(
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
+    thinking: bool,
 ) -> AgentTranscript {
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
     let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
-    opencode_transcript(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
+    opencode_transcript(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT), thinking)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1165,6 +1322,7 @@ fn opencode_transcript(
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
+    thinking: bool,
 ) -> AgentTranscript {
     let Some(dir) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
         return AgentTranscript::unavailable("no_session");
@@ -1175,7 +1333,7 @@ fn opencode_transcript(
     if !db.is_file() {
         return AgentTranscript::unavailable("no_transcript");
     }
-    crate::services::opencode_store::session_transcript(db, dir, since, own, subagent, version, limit)
+    crate::services::opencode_store::session_transcript_with(db, dir, since, own, subagent, version, limit, thinking)
         .unwrap_or_else(|| AgentTranscript::unavailable("read_failed"))
 }
 
@@ -1207,7 +1365,7 @@ enum Spawns<'a> {
     /// in this folder, naming the call.
     Claude(&'a Path),
     /// Codex: the threads `thread` spawned, per its state stores.
-    Codex { stores: &'a [PathBuf], thread: &'a str },
+    Codex { stores: &'a [PathBuf], home: &'a Path, thread: &'a str },
 }
 
 /// How much of a transcript's tail a read for `limit` entries takes: one
@@ -1261,7 +1419,11 @@ fn read_transcript_in(
             ..Default::default()
         });
     }
-    let (text, mut truncated) = agent_session::read_conversation_tail(&mut file, meta.len(), tail_bytes(limit))?;
+    let from = match kind {
+        TranscriptKind::Codex => codex_own_history_start(path, &mut file),
+        TranscriptKind::Claude | TranscriptKind::Copilot => 0,
+    };
+    let (text, mut truncated) = agent_session::read_conversation_tail_from(&mut file, meta.len(), tail_bytes(limit), from)?;
     let lines: Vec<&str> = text.lines().collect();
     let mut usage = match kind {
         TranscriptKind::Codex => codex_usage(&lines),
@@ -1275,8 +1437,13 @@ fn read_transcript_in(
     let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
     let context_card = newest_context_card(&lines, kind);
-    let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain);
+    let history = match spawns {
+        Spawns::Codex { home, thread, .. } => Some((*home, *thread)),
+        _ => None,
+    };
+    let (mut entries, calls, mut shell_calls) = parse_entries(&lines, kind, sidechain, history);
     let waiting_tools = shell_calls.tools.clone();
+    let shells_run = std::mem::take(&mut shell_calls.ran);
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
     let mut spawned_tokens: Vec<String> = Vec::new();
@@ -1303,7 +1470,7 @@ fn read_transcript_in(
                 }
             }
         }
-        Spawns::Codex { stores, thread } => {
+        Spawns::Codex { stores, thread, .. } => {
             let children = stores
                 .iter()
                 .map(|db| crate::services::codex_store::spawned_threads(db, thread))
@@ -1341,6 +1508,7 @@ fn read_transcript_in(
         tokens,
         shells,
         waiting_tools,
+        shells_run,
         context_card,
         cwd,
         running_cwds,
@@ -1788,6 +1956,7 @@ fn parse_entries(
     lines: &[&str],
     kind: TranscriptKind,
     sidechain: bool,
+    codex_history: Option<(&Path, &str)>,
 ) -> (Vec<TranscriptEntry>, Vec<(usize, String)>, ShellCalls) {
     // Branches Claude left: nothing on them is in its conversation any more.
     let rewound = if kind == TranscriptKind::Claude && !sidechain { claude_rewound(lines) } else { Default::default() };
@@ -1805,6 +1974,8 @@ fn parse_entries(
     let mut commands: std::collections::HashMap<String, RunningShell> = std::collections::HashMap::new();
     let mut backgrounded: Vec<(String, String)> = Vec::new();
     let mut ended = std::collections::HashSet::new();
+    // Every shell call in order, for the Data tab's list.
+    let mut ran: Vec<RunningShell> = Vec::new();
     // The tool calls that have their result: a spawn call without one is a
     // subagent still at work. A background spawn's result comes at once
     // (`async_launched`); what it does after is replayed in `agents`.
@@ -1828,6 +1999,8 @@ fn parse_entries(
     // whether the turn they wait in is still going.
     let mut async_asks: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut async_open: Vec<String> = Vec::new();
+    let mut unrecorded_turn = None;
+    let history = std::cell::OnceCell::new();
     for line in lines {
         let line = line.trim();
         if line.is_empty() {
@@ -1859,6 +2032,9 @@ fn parse_entries(
             runs.extend(claude_workflow_launch(&value));
         }
         if kind == TranscriptKind::Codex {
+            if value["type"] == "event_msg" && value["payload"]["type"] == "task_started" {
+                unrecorded_turn = value["payload"]["turn_id"].as_str().map(str::to_owned);
+            }
             for (call, index, answer) in codex_async_replies(&value) {
                 async_open.retain(|open| *open != call);
                 if let Some(entry) = async_asks.get(&call).and_then(|&at| entries.get_mut(at)) {
@@ -1900,6 +2076,9 @@ fn parse_entries(
         for record in records {
             match record {
                 Record::Turn(role, raw) => {
+                    if role == "prompt" {
+                        unrecorded_turn = None;
+                    }
                     if typed && role == "prompt" {
                         shells.clear();
                         tools.clear();
@@ -1907,6 +2086,16 @@ fn parse_entries(
                         turn_start = entries.len();
                     }
                     if role == "interrupted" {
+                        let turn = unrecorded_turn.take();
+                        if let (Some(turn), Some((home, thread)), Some(ts)) = (turn, codex_history, value["payload"]["started_at"].as_i64()) {
+                            if value["payload"]["turn_id"].as_str() == Some(&turn) {
+                                let rows = history.get_or_init(|| codex_input_history(home, thread));
+                                if let Some(Some(prompt)) = rows.as_ref().and_then(|rows| rows.get(&ts)) {
+                                    let sent_at = chrono::DateTime::from_timestamp(ts, 0).map(|time| time.to_rfc3339());
+                                    entries.extend(transcript_entry("prompt", prompt, sent_at));
+                                }
+                            }
+                        }
                         asked.clear();
                         tools.clear();
                     }
@@ -1936,6 +2125,12 @@ fn parse_entries(
                 Record::Shell { call, mut shell } => {
                     shell.at = at.clone();
                     commands.insert(call.clone(), shell.clone());
+                    ran.push(shell.clone());
+                    // Bounded as the walk goes: a long session's file must
+                    // not hold every command it ever ran in memory twice.
+                    if ran.len() >= MAX_SHELLS_RUN * 2 {
+                        ran.drain(..MAX_SHELLS_RUN);
+                    }
                     shells.push((call, shell));
                 }
                 Record::Tool { call, mut tool } => {
@@ -2010,7 +2205,25 @@ fn parse_entries(
         .filter(|(call, _)| !ended.contains(call))
         .filter_map(|(call, output)| Some((RunningShell { background: true, ..commands.remove(&call)? }, output)))
         .collect();
-    (entries, calls, ShellCalls { waiting, tools, background })
+    (entries, calls, ShellCalls { waiting, tools, background, ran: newest_shells(ran) })
+}
+
+/// The newest of `ran` that [`AgentTranscript::shells_run`] carries: at most
+/// [`MAX_SHELLS_RUN`], their command lines within [`MAX_SHELLS_RUN_CHARS`]
+/// together, oldest first.
+fn newest_shells(mut ran: Vec<RunningShell>) -> Vec<RunningShell> {
+    ran.drain(..ran.len().saturating_sub(MAX_SHELLS_RUN));
+    let mut chars = 0;
+    let keep = ran
+        .iter()
+        .rev()
+        .take_while(|shell| {
+            chars += shell.command.chars().count();
+            chars <= MAX_SHELLS_RUN_CHARS
+        })
+        .count();
+    ran.drain(..ran.len() - keep);
+    ran
 }
 
 /// Claude's background subagents (`Agent` calls whose result is only the
@@ -2324,7 +2537,7 @@ pub(crate) fn agent_entry(task: &str, kind: Option<&str>, at: Option<String>) ->
 /// its kind's bound. `None` when nothing is left to show. Shared by every
 /// reader, whatever the agent keeps its conversation in.
 pub(crate) fn transcript_entry(role: &str, raw: &str, at: Option<String>) -> Option<TranscriptEntry> {
-    let bound = if role == "answer" { MAX_ANSWER_CHARS } else { MAX_PROMPT_CHARS };
+    let bound = if matches!(role, "answer" | "thinking") { MAX_ANSWER_CHARS } else { MAX_PROMPT_CHARS };
     let mut entry = TranscriptEntry {
         kind: role.to_string(),
         text: clean_text(raw)?,
@@ -2910,6 +3123,35 @@ struct WorkflowRun {
     run: String,
     name: Option<String>,
     summary: Option<String>,
+}
+
+/// Codex writes submitted input here even when an early interrupt prevents
+/// the user message reaching the rollout. Match only an unambiguous row of
+/// this thread at the aborted turn's start second.
+fn codex_input_history(home: &Path, thread: &str) -> Option<std::collections::HashMap<i64, Option<String>>> {
+    use crate::services::home_io::HomeFile;
+    use std::io::{Read, Seek, SeekFrom};
+
+    #[derive(Deserialize)]
+    struct Input {
+        session_id: String,
+        ts: i64,
+        text: String,
+    }
+    let mut file = HomeFile::open_existing(home, ".codex/history.jsonl")?.open_read()?;
+    let start = file.metadata().ok()?.len().saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
+    let mut prompts = std::collections::HashMap::new();
+    for line in bytes.split(|&b| b == b'\n').skip(usize::from(start > 0)) {
+        if let Ok(row) = serde_json::from_slice::<Input>(line) {
+            if row.session_id == thread {
+                prompts.entry(row.ts).and_modify(|entry| *entry = None).or_insert(Some(row.text));
+            }
+        }
+    }
+    Some(prompts)
 }
 
 /// A Codex rollout record as a turn: the `response_item` messages — the

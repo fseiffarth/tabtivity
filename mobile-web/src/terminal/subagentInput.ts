@@ -363,17 +363,29 @@ export function subagentViewed(rows: readonly string[]): boolean {
   return !!list && !list[0].viewed;
 }
 
+/** The text in Claude's idle input box (its `❯` line, trimmed), or null
+ * when no input box is on screen. */
+export function inputBoxText(rows: readonly string[]): string | null {
+  const from = Math.max(1, rows.length - 30);
+  for (let index = rows.length - 2; index >= from; index -= 1) {
+    if (!rows[index].startsWith("❯") || !RULE.test(rows[index - 1]) || !RULE.test(rows[index + 1])) continue;
+    return rows[index].slice(1).replace(/\u00a0/gu, " ").trim();
+  }
+  return null;
+}
+
 /**
- * Sends the driver's message to the subagent `target` names (its description
- * and type, as the transcript's agent entry holds them), then views the
- * session again. Nothing is typed unless that subagent's row is the one
- * viewed. One the agent list no longer holds is opened from `/tasks`.
+ * The subagent `target` names (its description and type, as the transcript's
+ * agent entry holds them) viewed in Claude's TUI, the keyboard back in its
+ * box; null once it is, else why not. One the agent list no longer holds is
+ * opened from `/tasks` when `viaTasks` allows it.
  */
-export async function sendToSubagent(
-  driver: SubagentDriver,
+async function openSubagentView(
+  driver: Pick<SubagentDriver, "rows" | "key" | "command">,
   target: { task: string; role?: string },
-  timing: SubagentWalkTiming = TIMING,
-): Promise<SubagentSendResult> {
+  timing: SubagentWalkTiming,
+  viaTasks: boolean,
+): Promise<SubagentSendFailure | null> {
   const { list, until, settled, only, walk, enterList, viewing, view, leaveList } = listWalker(driver, timing);
   /** Esc while `/tasks` — its list, or a task's details — is up, which
    * closes it. */
@@ -441,17 +453,52 @@ export async function sendToSubagent(
   };
 
   const first = await settled(list);
-  if (first && first.filter((row) => rowMatches(row, target)).length > 1) return { ok: false, reason: "ambiguous" };
+  if (first && first.filter((row) => rowMatches(row, target)).length > 1) return "ambiguous";
   const listed = await fromList(first);
   if (listed === "failed") {
     await leaveList();
-    return { ok: false, reason: "not_opened" };
+    return "not_opened";
   }
   if (listed === "missing") {
+    if (!viaTasks) return "not_listed";
     const failed = await openFromTasks();
-    if (failed) return { ok: false, reason: failed };
+    if (failed) return failed;
   }
-  if (!(await leaveList())) return { ok: false, reason: "not_opened" };
+  return (await leaveList()) ? null : "not_opened";
+}
+
+/**
+ * Claude's TUI moved onto the subagent `target` names, so the terminal shows
+ * what the chat had open (the chat's switch to Terminal mode). Nothing is
+ * typed into the box: `/tasks`, for one the agent list no longer holds, only
+ * while the box is empty. Null once it is viewed, else why not.
+ */
+export async function viewSubagent(
+  driver: Pick<SubagentDriver, "rows" | "key" | "command">,
+  target: { task: string; role?: string },
+  timing: SubagentWalkTiming = TIMING,
+): Promise<SubagentSendFailure | null> {
+  const viewed = viewedSubagent(driver.rows());
+  if (viewed && isViewedSubagent(viewed, target)) return null;
+  // Only from the box: in a dialog or picker ↓ and Enter would answer it.
+  if (inputBoxText(driver.rows()) === null) return "not_opened";
+  return openSubagentView(driver, target, timing, inputBoxText(driver.rows()) === "");
+}
+
+/**
+ * Sends the driver's message to the subagent `target` names (its description
+ * and type, as the transcript's agent entry holds them), then views the
+ * session again. Nothing is typed unless that subagent's row is the one
+ * viewed. One the agent list no longer holds is opened from `/tasks`.
+ */
+export async function sendToSubagent(
+  driver: SubagentDriver,
+  target: { task: string; role?: string },
+  timing: SubagentWalkTiming = TIMING,
+): Promise<SubagentSendResult> {
+  const { list, settled, view, leaveList } = listWalker(driver, timing);
+  const failed = await openSubagentView(driver, target, timing, true);
+  if (failed) return { ok: false, reason: failed };
   if (!(await driver.type())) return { ok: false, reason: "send_failed" };
 
   // Back to the session, so what is typed next — here or in the terminal —

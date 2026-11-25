@@ -19,12 +19,17 @@ import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupBack, type MarkupNewTab, type MarkupTarget } from "../components/OutboxViewer";
 import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
-import { SentFilesIndex, type SentFile } from "../components/SentFilesIndex";
+import { SentFileHold, SentFilesIndex, useSentFileMenu, type SentFile } from "../components/SentFilesIndex";
 import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
-import { Fragment, memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChatTabsRail } from "../components/ChatTabsRail";
+import { ChatOverview, type OverviewMode } from "../components/ChatOverview";
+import { SubagentIndexGroups } from "../components/SubagentIndexGroups";
+import { RAIL_WIDE_QUERY, railLayout, railOffered, rememberRailTabs, rememberedRailTabs, sameRailTabs } from "../chatRail";
+import { useVisiblePoll } from "../visiblePoll";
+import { Fragment, memo, useContext, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   ANY_FILE_ACCEPT,
@@ -40,6 +45,7 @@ import {
   refreshProjectFile,
   sentName,
   getProjectDetail,
+  PROJECT_DETAIL_POLL,
   getTabWorktrees,
   moveTabWorktree,
   getTabLocations,
@@ -57,10 +63,13 @@ import {
   type TabWorktrees,
   type TabLocations,
   type AssistantModels,
+  deleteInboxFile,
+  completePrompt,
+  getNextPrompt,
 } from "../api";
 import { describeFailure } from "../connection";
 import { readDraft } from "../drafts";
-import { readFlag, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
+import { readFlag, readOverviewPane, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
 import { PHONE_LANDSCAPE_QUERY, useTier } from "../useTier";
 import { useMediaQuery } from "../useMediaQuery";
 import { readSpeechLang, speechTag, type SpeechLang } from "../speechLang";
@@ -70,6 +79,7 @@ import { liveModelPick } from "../terminal/modelRows";
 import { type TerminalControl } from "../terminal/protocol";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { readPromptSuggestion } from "../terminal/promptSuggestion";
+import { NEXT_PROMPT_CLAUDE_SETTLE_MS, NEXT_PROMPT_SETTLE_MS, useNextPrompt, usePageShown, usePromptCompletion, useWorkEndKey } from "../terminal/nextPrompt";
 import { readLiveQuestion } from "../terminal/liveDialog";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
@@ -104,14 +114,14 @@ import { useTapOutside } from "../tapOutside";
 import { fileKey, useViewableNamed } from "../terminal/chatFiles";
 import { linkPathsInHtml } from "../../../src/lib/terminal/pathCandidates";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
-import { commandArgsInline, commandLabel, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
+import { COMMAND_SEPARATOR, commandArgsInline, commandRuns, pinnedPromptText, readableCommandLabel, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { waitingQuestion } from "../terminal/askedQuestion";
 import { useAskedCard } from "./terminal/useAskedCard";
 import { isPermissionDialog, permissionSubject, permissionSubjectLabel } from "../terminal/permissionSubject";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, pendingPrompt, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
-import { inboxInPlace, inboxLeaves, inboxSegments, withoutInboxReferences } from "../terminal/inboxRefs";
+import { inboxInPlace, inboxLeaves, inboxSegments, markInboxGone, withoutInboxReferences } from "../terminal/inboxRefs";
 import { type ClearMark } from "../terminal/clearedSession";
 import { readHeld } from "../terminal/heldPrompts";
 import { ageLabel } from "../terminal/fileLabels";
@@ -246,6 +256,7 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
   columns?: number;
 }) {
   const { tap, menu } = useMessageMenu();
+  const t = useT();
   if (!chat) return <>{lines.map((line) => <ReadableRow key={line.key} line={line} />)}</>;
   return <>{chatTurns(lines, agent, columns).map((turn) => {
     const shown = turn.role === "user" ? (turn.prompt ?? turn.lines) : (turn.answer ?? turn.lines);
@@ -254,7 +265,7 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
     // screen rows are not one, and a tap on them opens nothing.
     const press = turn.role === "user" || turn.answer ? tap(`screen:${turn.key}`, () => readableText(shown)) : undefined;
     const command = turn.role === "user" ? slashCommand(readableText(shown)) : null;
-    if (command) return <Fragment key={turn.key}><CommandDivider command={command} label={promptLabel} press={press} /></Fragment>;
+    if (command) return <Fragment key={turn.key}><CommandDivider command={command} text={readableCommandLabel(command, { model: t("terminal.reader.model"), effort: t("terminal.reader.effortUnknown") })} label={promptLabel} press={press} /></Fragment>;
     return turn.role === "user"
       ? <div key={turn.key} className="readable-turn user" role="group" aria-label={promptLabel} data-prompt={readableText(shown)} {...press}>{rows}</div>
       : <div key={turn.key} className={turn.answer ? "readable-turn agent answer" : "readable-turn agent"} {...press}>{rows}</div>;
@@ -265,9 +276,12 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
  * a turn of the CLI's own dial, so its name reads as a rule across the chat.
  * A one-word setting rides on the rule (`/model opus`); the text of a `/goal`
  * or `/plan` is the reader's own words, so it follows as an ordinary prompt
- * bubble. Both keep the prompt's message menu. */
-function CommandDivider({ command, label, press, inbox, links }: {
+ * bubble. Both keep the prompt's message menu. Settings sent one after
+ * another share one rule (`commandRuns`), as in the desktop Reader. */
+function CommandDivider({ command, text, label, press, inbox, links }: {
   command: SlashCommand;
+  /** The words on the rule: this command's, after any it folded in. */
+  text: string;
   label: string;
   press?: TapHandlers;
   /** The stored chat's inbox: a `/design @inbox-picture` prompt's picture
@@ -279,7 +293,7 @@ function CommandDivider({ command, label, press, inbox, links }: {
   const withFiles = !!inbox && !!links && inboxLeaves(command.args).length > 0;
   return <>
     <div className="readable-command" role="separator" aria-label={label} data-prompt={command.args ? `${command.name} ${command.args}` : command.name} {...press}>
-      <span className="readable-command-text">{commandLabel(command)}</span>
+      <span className="readable-command-text">{text}</span>
     </div>
     {!inline && <div className={withFiles ? "readable-turn user command-args with-files" : "readable-turn user command-args"} role="group" aria-label={label} {...press}>
       {withFiles && links ? <PromptBody text={command.args} links={links} inbox={inbox} /> : <p className="transcript-text">{command.args}</p>}
@@ -317,6 +331,9 @@ const awayMarkups = new Map<string, MarkupBack>();
  * where they stand instead (`inboxSegments`). Both follow from the text
  * alone, so a shown bubble keeps its shape. */
 function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers; inbox?: ChatInbox }) {
+  // A hold on one of the files asks Save, Share or Delete (the chat's menu).
+  const held = useContext(SentFileHold);
+  const onHold = held ? (file: OutboxFile) => held({ file, from: "phone" }) : undefined;
   const leaves = useMemo(() => inbox ? inboxLeaves(text) : [], [inbox, text]);
   const segments = useMemo(() => leaves.length > 0 ? inboxSegments(text) : [], [leaves, text]);
   if (!inbox || leaves.length === 0) return <PromptText text={text} links={links} />;
@@ -325,11 +342,11 @@ function PromptBody({ text, links, inbox }: { text: string; links: LinkHandlers;
     const first = segments.findIndex((segment) => segment.kind === "files");
     return <>{segments.map((segment, i) => segment.kind === "words"
       ? <PromptText key={i} text={segment.text} links={links} />
-      : <InboxAlbum key={i} tabId={inbox.tabId} leaves={segment.leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} tag={i === first ? undefined : null} />)}</>;
+      : <InboxAlbum key={i} tabId={inbox.tabId} leaves={segment.leaves} files={inbox.files} onOpen={inbox.onOpen} onHold={onHold} onSettle={inbox.onSettle} tag={i === first ? undefined : null} />)}</>;
   }
   const words = withoutInboxReferences(text);
   return <>
-    <InboxAlbum tabId={inbox.tabId} leaves={leaves} files={inbox.files} onOpen={inbox.onOpen} onSettle={inbox.onSettle} />
+    <InboxAlbum tabId={inbox.tabId} leaves={leaves} files={inbox.files} onOpen={inbox.onOpen} onHold={onHold} onSettle={inbox.onSettle} />
     {words && <PromptText text={words} links={links} />}
   </>;
 }
@@ -429,6 +446,9 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   const t = useT();
   // A messenger's day chip over the first message of each day (`dayOpeners`).
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
+  // Slash commands sent one after another share one rule.
+  const commandText = useCallback((command: SlashCommand) => readableCommandLabel(command, { model: t("terminal.reader.model"), effort: t("terminal.reader.effortUnknown") }), [t]);
+  const runs = useMemo(() => commandRuns(turns, openers, commandText), [turns, openers, commandText]);
   const now = new Date();
   const dayLabels = { today: t("mobile.transcript.today"), yesterday: t("mobile.transcript.yesterday") };
   const timesUntested = isUntested("mobile.transcript.times");
@@ -450,9 +470,9 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
         </div>
       : turn.questions
       ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t(turn.asking ? "mobile.transcript.asyncWaiting" : "mobile.transcript.notAnswered")} untested={(turn.asking ? isUntested("mobile.transcript.asyncAsk") : isUntested("mobile.focus.askedCard")) ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)}
-          answer={turn.asking && asyncAsk ? { sending: asyncAsk.sending?.key === turn.key ? asyncAsk.sending : null, label: t("mobile.transcript.answering"), pick: (question, row) => asyncAsk.pick(turn.key, turn.questions?.[question]?.question ?? "", question, row) } : undefined} />
+          answer={turn.asking && asyncAsk ? { sending: asyncAsk.sending?.key === turn.key ? asyncAsk.sending : null, label: t("mobile.transcript.answering"), pick: (question, row) => (turn.questions?.[question] && asyncAsk.pick(turn.key, turn.questions[question], question, row)) } : undefined} />
       : turn.command
-      ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} inbox={inbox} links={links} />
+      ? !runs.folded.has(index) && <CommandDivider command={turn.command} text={[runs.lead.get(index), commandText(turn.command)].filter(Boolean).join(COMMAND_SEPARATOR)} label={promptLabel} press={tap(turn.key, () => turn.text)} inbox={inbox} links={links} />
       : turn.kind === "prompt"
       ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={index === 0 && taskLabel ? taskLabel : promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...tap(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
           <PromptBody text={turn.text} links={links} inbox={inbox} />
@@ -492,6 +512,7 @@ function viewAgentOf(tab: TabRow): string {
  * whole turns — and Terminal on a shell. Focus hands over to Terminal once the
  * agent turns out to have no stored session to read (`unsupported`). */
 function initialView(tab: TabRow): TerminalViewChoice {
+  if (tab.no_chat) return "terminal";
   return readTerminalView(viewAgentOf(tab)) ?? (tab.kind === "agent" ? "focus" : "terminal");
 }
 
@@ -557,6 +578,7 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
     [answered && "answered", index === tabFocus && "current"].filter(Boolean).join(" ") || undefined;
   return <>
     {prompt.source === "opencode" && isUntested("agents.opencode.questions") && <em>{t("mobile.focus.untested")}</em>}
+    {prompt.body && isUntested("agents.opencode.notice") && <em>{t("mobile.focus.untested")}</em>}
     {tabs.length > 0 && !stepped && <div className="question-tabs">
       {tabs.map((tab, index) => <span key={index} className={tab.answered ? "answered" : undefined}>{tab.answered && "✓ "}{tab.label}</span>)}
     </div>}
@@ -1241,30 +1263,81 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   splitRef.current = splitTier;
   /** The project's name, for the tablet header's line over the tab's. */
   const [projectName, setProjectName] = useState<string | null>(null);
-  /** Docked, the drawer is a pane beside the chat that stays open (`chatFilesPane`
-   * remembers it on this device); anywhere else it opens and closes as ever. */
-  const [filesOpen, setFilesOpen] = useState(() => splitTier && readFlag("chatFilesPane"));
+  /** An agent tab of a project (not Tabby's chat) has the session overview
+   * in the pane beside a landscape chat, which switches to the files library;
+   * any other tab's pane is the library alone. */
+  const overviewPane = tab.kind === "agent" && !!project && !bare;
+  /** The pane on the right of a landscape tablet's chat (`ChatOverview`),
+   * open or closed as this device left it (`chatOverviewPane`); a shell's
+   * opens with its library. */
+  const [paneOpen, setPaneOpen] = useState(() => splitTier && readOverviewPane());
+  /** The project's files (`ProjectFiles`): in landscape the library in that
+   * pane, anywhere else the drawer over the chat, opened and closed as ever. */
+  const [filesOpen, setFilesOpen] = useState(() => splitTier && !overviewPane && paneOpen);
+  const filesOpenRef = useRef(filesOpen);
+  filesOpenRef.current = filesOpen;
+  /** The library's own close: in an agent's pane, back to the overview; a
+   * shell's pane closes with it, and stays closed. */
   const closeFiles = useCallback(() => {
     setFilesOpen(false);
-    if (splitRef.current) writeFlag("chatFilesPane", false);
-  }, []);
-  const toggleFiles = () => {
-    const next = !filesOpen;
-    setFilesOpen(next);
-    if (splitTier) writeFlag("chatFilesPane", next);
+    if (splitRef.current && !overviewPane) {
+      setPaneOpen(false);
+      writeFlag("chatOverviewPane", false);
+    }
+  }, [overviewPane]);
+  /** The header's pane button. Closing puts the library away with it. */
+  const togglePane = () => {
+    const next = !paneOpen;
+    setPaneOpen(next);
+    writeFlag("chatOverviewPane", next);
+    setFilesOpen(next && !overviewPane);
   };
+  /** The overview's Project files (and a swipe over the output). */
+  const openFiles = useCallback(() => {
+    setFilesOpen(true);
+    if (splitRef.current) setPaneOpen(true);
+  }, []);
   // A turn of the screen brings the pane back as this device left it in
-  // landscape (a drawer already open stays, docked) and puts it away elsewhere, where it would be a full-screen
-  // drawer over the chat — unless a file or a markup view is open in it (or
-  // tucked away from it): that stays, as the drawer. Neither writes the preference.
+  // landscape (a drawer already open stays, as the library in it) and puts
+  // the files away elsewhere, where they would be a full-screen drawer over
+  // the chat — unless a file or a markup view is open in them (or tucked away
+  // from them): that stays, as the drawer. Neither writes the preference.
   const tierSeen = useRef(tier);
   useEffect(() => {
     if (tierSeen.current === tier) return;
     const was = tierSeen.current;
     tierSeen.current = tier;
-    if (tier === "split") setFilesOpen((open) => open || readFlag("chatFilesPane"));
-    else if (was === "split" && !document.querySelector(".markup-host.away, .markup-host .outbox-viewer")) setFilesOpen(false);
-  }, [tier]);
+    if (tier === "split") {
+      const open = readOverviewPane() || filesOpenRef.current;
+      setPaneOpen(open);
+      if (!overviewPane) setFilesOpen(open);
+    } else if (was === "split" && !document.querySelector(".markup-host.away, .markup-host .outbox-viewer")) setFilesOpen(false);
+  }, [tier, overviewPane]);
+  /** The project's tabs, for the rail beside a landscape tablet's chat and
+   * the strip under a portrait one's header (`ChatTabsRail`): read with the
+   * project's detail below, and while the rail is on screen at the project
+   * screen's cadence. The last list of the project stands in until then. */
+  const [railTabs, setRailTabs] = useState<readonly TabRow[] | null>(() => rememberedRailTabs(project));
+  const takeRailTabs = useCallback((tabs: readonly TabRow[] | undefined) => {
+    if (!project || !Array.isArray(tabs)) return;
+    rememberRailTabs(project, tabs);
+    setRailTabs((current) => sameRailTabs(current, tabs) ? current : tabs);
+  }, [project]);
+  /** The rail folded to its tiles: the stored preference (`chatRailFolded`),
+   * and under 1120 px always, without writing the preference. */
+  const [railFoldPref, setRailFoldPref] = useState(() => readFlag("chatRailFolded"));
+  const railFoldRef = useRef(railFoldPref);
+  railFoldRef.current = railFoldPref;
+  const toggleRailFold = useCallback(() => {
+    const next = !railFoldRef.current;
+    writeFlag("chatRailFolded", next);
+    setRailFoldPref(next);
+  }, []);
+  const railForced = !useMediaQuery(RAIL_WIDE_QUERY);
+  const railShown = tablet && !!openTab && railOffered(project, railTabs);
+  const openTabRef = useRef(openTab);
+  openTabRef.current = openTab;
+  const openRailTab = useCallback((row: TabRow) => openTabRef.current?.(row), []);
   /** The queue's sheet (a tablet's header pill): the moves the queued bubbles carry. */
   const [queueSheet, setQueueSheet] = useState(false);
   /** Turns asked for; grows with "Show earlier turns". */
@@ -1468,12 +1541,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }, [sessionFocus, transcript, pending, chatPosts, namedFiles, atBottom, subToken, subagentEntries]);
   useOutboxPoll({ tab, bare, setOutbox, setGallery, setOutboxOpen, setInboxOpen });
   useLimitsPoll({ tab, setLimitsNow, rememberLimits });
+  /** A file opened from the chat (a post, the overview, a transcript link,
+   * the markup banner) stands in a landscape agent chat's pane, not over the
+   * chat (`data-overview="file"`); Mark up still takes the whole screen. */
+  const filePaned = splitTier && overviewPane && markupAway === null && (outboxOpen !== null || inboxOpen !== null || askedFile !== null);
   const {
     openOutbox, renderPost, chatInbox, inboxScope, openSentFile, removeOutbox, removeAllOutbox,
   } = useOutboxViewers({
     tab, readableHost, atBottomRef, setOutbox, outboxScope, gallery, setGallery, outboxOpen,
     setOutboxOpen, inboxOpen, setInboxOpen, askedFile, markupAway, setMarkupAway, filesOpen,
-    inboxFiles, tabOutbox,
+    inboxFiles, tabOutbox, paned: filePaned,
   });
   const { visibleChunks, hiddenLines, showEarlier } = useEarlierOutput({
     readableHost, earlier, revealed, setRevealed, revealAnchor,
@@ -1556,13 +1633,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const contextLeft = status?.context ?? (storedUsage?.contextLeft != null ? `${storedUsage.contextLeft}%` : undefined);
   const limitTime = new Date(limitsNow);
   const fromPanel = !!(limits.session || limits.week);
-  const shownLimits = fromPanel ? limits : sessionLimits(storedUsage, limitTime);
+  const selectedLimits = fromPanel ? limits : sessionLimits(storedUsage, limitTime);
+  // A lone Fable row is also the weekly fallback; show it once, as Fable.
+  const shownLimits = selectedLimits.fable && selectedLimits.week === selectedLimits.fable ? { ...selectedLimits, week: undefined } : selectedLimits;
   const readTime = fromPanel ? new Date(limitsReadAt) : limitTime;
   const sessionReset = shownLimits.session?.resets ? resetCountdown(shownLimits.session.resets, limitTime, readTime) : "";
   const weekReset = shownLimits.week?.resets ? resetCountdown(shownLimits.week.resets, limitTime, readTime) : "";
+  const fableReset = shownLimits.fable?.resets ? resetCountdown(shownLimits.fable.resets, limitTime, readTime) : "";
   // A tap on either limit flips both between the percentage and a bar of
   // what is left; the phone keeps the choice.
-  const limitFact = (meter: LimitMeters["session"], reset: string, key: "mobile.facts.session" | "mobile.facts.week", label: "mobile.facts.sessionLabel" | "mobile.facts.weekLabel") => {
+  const limitFact = (meter: LimitMeters["session"], reset: string, key: "mobile.facts.session" | "mobile.facts.week" | "mobile.facts.fable", label: "mobile.facts.sessionLabel" | "mobile.facts.weekLabel" | "mobile.facts.fableLabel") => {
     if (!meter) return null;
     const resetAt = meter.resets ? resolveResetAt(meter.resets, readTime) : null;
     if (resetAt && resetAt.getTime() <= limitTime.getTime()) return null;
@@ -1588,7 +1668,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setKnownStep, setRememberedStep, rememberedStep, setHeldPick, heldPick, sheetAnswered, keptStep,
     setReveal, reveal, revealStuck, effortFor, setEffortFor, setEffortStep, effortStep, sawPicker,
     clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, pickerStep,
-    listedStep, listSettled, modelPreview, pickerAt, effortSlider,
+    listedStep, listSettled, modelPreview, pickerAt, effortSlider, viewportRows,
   });
   /** The hidden-link notice's button: the key the CLI hands its link over
    * on, answered by a clipboard copy the terminal above catches. */
@@ -2036,6 +2116,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           setFilesSides({ here: !!detail.files, host: !!detail.host_files, hostLabel: detail.host_label });
           setProjectName(detail.project?.label ?? null);
           setDesktopImagesOff(detail.desktop_images === false);
+          takeRailTabs(detail.tabs);
         })
         .catch(() => {});
     };
@@ -2045,15 +2126,45 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       controller.abort();
       document.removeEventListener("visibilitychange", read);
     };
-  }, [project]);
+  }, [project, takeRailTabs]);
+  // The other tabs' states, kept current while the rail is on screen: the
+  // project screen's poll at its cadence. Opening the chat and coming back to
+  // the page are the read above.
+  useVisiblePoll((signal) => project && getProjectDetail(project, signal).then((detail) => {
+    if (!signal.aborted) takeRailTabs(detail.tabs);
+  }), PROJECT_DETAIL_POLL, { enabled: railShown, immediate: false, catchUp: false }, [project]);
   const filesSwipe = filesLabel !== null && view === "focus";
   /** The drawer is on screen (what `filesOpen` asks, once the project allows it). */
   const filesShown = filesOpen && !!project && filesLabel !== null;
-  /** Landscape on a tablet: the drawer is a pane beside the chat. While a
-   * markup view is tucked away its hosts, this one too, are hidden
-   * (`.markup-host.away`), so the chat then keeps its whole width (`main`'s
-   * `data-files-docked` is left off). */
+  /** Landscape on a tablet: the drawer is the library in the pane beside the chat. */
   const filesDocked = splitTier && filesShown;
+  /** The pane button stands for an agent's overview, else for the library
+   * where the project offers it. */
+  const overviewOffered = splitTier && overviewPane;
+  const paneButton = overviewOffered || (splitTier && !!project && filesLabel !== null);
+  /** What the pane shows (`main`'s `data-overview`, which the stylesheet's
+   * grid reads): the library while it is up, else an agent's overview while
+   * the pane is open. While a markup view is tucked away its hosts, the
+   * library's too, are hidden (`.markup-host.away`): an agent's pane shows
+   * the overview meanwhile, any other tab's chat keeps its whole width. */
+  const paneAt: OverviewMode | undefined = filePaned ? "file"
+    : filesDocked && markupAway === null ? "library"
+    : overviewOffered && paneOpen ? "overview" : undefined;
+  /** The pane's way back: from a file, past the library it may have covered. */
+  const paneBack = useCallback(() => {
+    if (filePaned) {
+      setOutboxOpen(null);
+      setInboxOpen(null);
+      setAskedFile(null);
+    }
+    closeFiles();
+  }, [filePaned, closeFiles]);
+  /** Wider than the overview: the tabs rail folds meanwhile, without writing
+   * its preference. */
+  const paneWide = paneAt !== undefined && paneAt !== "overview";
+  const railFolded = railForced || paneWide;
+  /** `main`'s `data-rail`, which the stylesheet's grid reads. */
+  const railAt = railLayout(tier, railShown, railFoldPref || railFolded);
   /** Where the output is up for a swipe to read; `readableHost` is mounted
    * with it. */
   const readableShown = view === "focus" && (!altScreen || sessionFocus);
@@ -2064,9 +2175,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     // right→left pulls the files in from the right.
     return installFocusSwipe(stream, {
       onSwipeRight: () => backRef.current(),
-      onSwipeLeft: () => { if (filesSwipe) setFilesOpen(true); },
+      onSwipeLeft: () => { if (filesSwipe) openFiles(); },
     }, { leftEdge: true, rightEdge: filesSwipe });
-  }, [filesSwipe, filesShown, readableShown]);
+  }, [filesSwipe, filesShown, readableShown, openFiles]);
   /** Agent tabs read as a chat (`ReadableTurns`); a shell's output has no
    * turns to lay out. */
   const chat = tab.kind === "agent";
@@ -2074,7 +2185,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const focusLabel = chat ? "mobile.focus.chat" : "mobile.focus.reader";
   /** The Diffs view: an agent tab of a scope with a folder, on this machine
    * (`GET /tabs/{id}/changes` refuses Tabby's chats and host tabs). */
-  const diffsOffered = chat && !bare && !tab.on_host;
+  const diffsOffered = chat && !bare && !tab.on_host && !tab.no_chat;
   const diffsShown = diffsOpen && diffsOffered;
   /** The live screen after the last prompt echo — what the session is
    * drawing right now. Shown under the stored session while it holds a
@@ -2120,10 +2231,31 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * sent, and only once per suggestion — so the reader edits it or sends it as
    * they would take it with Tab in the CLI. `liveQuestion` is the chat's alone;
    * in the Terminal view a dialog on screen is no box, so it reads as "". */
-  const promptSuggestion = useMemo(
+  const screenSuggestion = useMemo(
     () => (tab.kind === "agent" && !liveQuestion && !liveBusy ? readPromptSuggestion(liveScreen, agentLabel) : ""),
     [tab.kind, liveQuestion, liveBusy, liveScreen, agentLabel],
   );
+  /** Where the CLI draws none (any but Claude, or a Claude turn it skipped
+   * one on), the desktop's local model's guess (`terminal/nextPrompt.ts`):
+   * asked once per ended turn, the turn fed to it ahead while the agent works
+   * and the stored session moves (Chat view: Terminal reads none) — not on a
+   * local-model tab, whose turn holds the GPU. A field holding only the
+   * suggestion still counts as empty. */
+  const pageShown = usePageShown();
+  const idleTurn = useWorkEndKey(liveBusy);
+  const localSuggestion = useNextPrompt({
+    // Not before the CLI has drawn its input box: an unpainted screen reads idle.
+    enabled: tab.kind === "agent" && !cloudTab && connected && cliReady && pageShown && !subagentTarget,
+    working: liveBusy,
+    turnKey: liveQuestion ? null : idleTurn,
+    progress: transcript?.version,
+    canWarm: () => tab.local_model !== true,
+    settleMs: agentKey === "claude" ? NEXT_PROMPT_CLAUDE_SETTLE_MS : NEXT_PROMPT_SETTLE_MS,
+    screenSuggestion,
+    composerEmpty: !draft || draft === suggestionRef.current.filled,
+    ask: (phase) => getNextPrompt(tab.id, phase),
+  });
+  const promptSuggestion = screenSuggestion || localSuggestion.text;
   const suggestionOffered = promptSuggestion && connected && !subagentTarget && pending.length === 0 && !editing ? promptSuggestion : "";
   useEffect(() => {
     const state = suggestionRef.current;
@@ -2148,6 +2280,30 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setDraft(suggestionOffered);
   }, [promptSuggestion, suggestionOffered]);
   const suggested = !!draft && draft === suggestionRef.current.filled;
+  /** What the field holds untouched is the local model's, not Claude's. */
+  const suggestedLocal = suggested && !screenSuggestion && draft === localSuggestion.text;
+  /** Who wrote what the field holds untouched: Claude, or the local model by
+   * name ("Local model" from a backend that names none). */
+  const suggestedBy = !suggested ? "" : suggestedLocal
+    ? localSuggestion.model || t("terminal.reader.suggestionSourceLocal")
+    : t("terminal.reader.suggestionSourceClaude");
+  /** How the prompt being typed goes on, by the desktop's local model
+   * (`usePromptCompletion`, `POST …/next-prompt`): a strip over the field
+   * that a tap appends to the draft — a phone has no Tab. Not for a field
+   * that still holds the untouched suggestion, the `/` menu, a prompt being
+   * edited, a subagent's box, while the mic writes, or while a local-model
+   * tab's own turn holds the GPU. */
+  const completion = usePromptCompletion({
+    enabled: tab.kind === "agent" && !cloudTab && connected && cliReady && pageShown && !subagentTarget && !suggested
+      && !editing && !listening && slashMenu.length === 0 && !(tab.local_model === true && liveBusy),
+    draft,
+    atEnd: true,
+    complete: (text) => completePrompt(tab.id, text),
+  });
+  /** The strip's words: the continuation, led by the word it finishes. */
+  const completionShown = !completion.text ? ""
+    : /^\s/u.test(completion.text) ? completion.text.trimStart()
+    : `${/\S*$/u.exec(draft)?.[0] ?? ""}${completion.text}`;
   /** A dialog the session is waiting on whose rows `readSelectPrompt` could
    * not read: the chat says so and offers the screen, rather than showing
    * nothing while the session waits. */
@@ -2202,6 +2358,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (row.from === "changed" || row.from === "named") openProjectFile(row.file);
     else openSentFile(row);
   }, [openProjectFile, openSentFile]);
+  /** A hold's Delete, on a card in the chat or in its Files list: a file the
+   * agent sent goes as the gallery's 🗑 takes it; one the phone sent leaves
+   * the project inbox, and its card says it is gone. */
+  const removeChatFile = useCallback(async ({ file, from }: SentFile) => {
+    if (from === "agent") return removeOutbox(file);
+    if (from !== "phone") return;
+    await deleteInboxFile(tab.id, file.name);
+    markInboxGone(tab.id, file.name);
+    setInboxOpen((open) => open?.name === file.name ? null : open);
+  }, [removeOutbox, tab.id]);
+  const fileMenu = useSentFileMenu({ tabId: tab.id, project, onRemove: removeChatFile });
   const answerLinks = useViewableNamed(namedFiles, viewableFile);
   /** What this tab sent is its own post in the chat; an answer naming the
    * project file it was copied from does not draw it again. */
@@ -2238,7 +2405,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       : null),
     [agentKey, liveQuestion, questionTabs.length, transcript, questionAsk, questionContext],
   );
-  const asyncAsk = useAsyncAsk({ deliver, liveTail, liveQuestion, answerQuestion });
+  const asyncAsk = useAsyncAsk({ deliver, liveTail });
   /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */
   const queueSteer = useRef({ shown: false, send: () => {}, pull: () => {} });
   useTerminalSteering({ focusView: view === "focus", liveQuestion, answerQuestion, composer: composerInput, queue: queueSteer });
@@ -2368,7 +2535,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     },
   });
   startVoiceRef.current = startVoice;
-  /** "{assistant} navigate": spoken navigation, in hands-free's open mic. */
+  /** "{assistant} navigate" and "{assistant} help": spoken navigation, in any open mic. */
   const nav = useVoiceNav({
     tab, project: projectOfTab, openTab, openProject, setOpen: setNavOpen, utterances: utteranceHooks, tabbyGate,
     handsFreeOn: handsFreeRef, guard: handsFreeGuard, voiceOpen, recognition, endDictation, startVoiceRef,
@@ -2379,6 +2546,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     sessionFocus, startVoiceRef, hasDraft: () => draftRef.current.trim() !== "",
   });
   const navLine = voiceFailure ? null : nav.line ?? landingLine;
+  /** A line's own register row ("Tabby help"), else navigation's. */
+  const navUntested = navLine?.untested ? isUntested(navLine.untested) : isUntested("mobile.voice.navigate");
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language || note.params ? { ...note.params, ...(note.language ? { language: note.language } : {}) } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
@@ -2387,7 +2556,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The Tabby gate's line: the cue after a spoken send, or the wait for a
    * prompt after the start word alone. */
   const tabbyLine = handsFree && listening && tabbyGate.line
-    ? t(tabbyGate.line === "cue" ? "mobile.voice.tabbyCue" : "mobile.voice.tabbyListening")
+    ? t(tabbyGate.line === "cue" ? "voice.gate.cue" : "voice.gate.listening")
     : "";
   const voiceLine = voiceProblem ? sayVoice(voiceProblem)
     : voicePreview ? t("mobile.voice.heard", { text: voicePreview })
@@ -2633,7 +2802,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * chip's sheet (`selectModel`) and the queued bubbles' two moves
    * (`sendQueuedNow`, `pullQueued`), under the same conditions. */
   const modelPill = tablet && tab.kind === "agent" && !bare && !tab.local_model;
-  const queuePill = tablet && tab.kind === "agent" && queueCli !== null;
+  // In landscape the overview holds the queue and the sent files instead.
+  const queuePill = tablet && tab.kind === "agent" && queueCli !== null && !overviewOffered;
+  /** The subagents at work, which the pane button counts while it is closed. */
+  const runningAgents = useMemo(() => splitByWork(sessionAgents, sessionBusy).running.length, [sessionAgents, sessionBusy]);
+  const paneCount = overviewOffered && paneAt === undefined ? runningAgents : 0;
   // Memoised: the header renders on every keystroke in the composer.
   const queuedCount = useMemo(() => sessionEntries.filter((entry) => entry.kind === "prompt" && entry.queued).length, [sessionEntries]);
   // Where the bubbles carry the pair: the session chat on screen (not the
@@ -2668,7 +2841,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (view !== choice) chooseView(choice);
   };
   const worktreeCaption = tab.kind !== "agent" && tab.worktree ? [t("terminal.reader.worktree", { name: tab.worktree.label })] : [];
-  return <main className={`terminal-screen ${tab.kind}-tab`} data-view={view} data-files-docked={filesDocked && markupAway === null ? "" : undefined} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
+  return <main className={`terminal-screen ${tab.kind}-tab`} data-view={view} data-rail={railAt} data-overview={paneAt} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
         ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} model={{
           label: assistantModels?.models.find((model) => model.id === assistantModels.current)?.label ?? modelChip,
@@ -2685,23 +2858,37 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {queuePill && <button type="button" className="header-pill header-queue" onClick={() => setQueueSheet(true)} aria-haspopup="dialog" aria-expanded={queueSheet} title={t("mobile.queue.title")} aria-label={queuedCount > 0 ? t("mobile.queue.count", { count: queuedCount }) : t("mobile.queue.title")}><ListIcon size="1em" />{queuedCount > 0 && <span className="header-count" aria-hidden="true">{queuedCount}</span>}</button>}
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
-          desktop's "Project files on the phone" switch is on. */}
-      {project && filesLabel !== null && <button
+          desktop's "Project files on the phone" switch is on. In landscape
+          it opens and closes the pane beside the chat instead: an agent's
+          overview (counting the subagents at work while it is closed), any
+          other tab's library. */}
+      {splitTier ? paneButton && <button
+        className={paneCount > 0 ? "drawer-open has-count" : "drawer-open"}
+        data-phone-hint="menu"
+        onClick={togglePane}
+        aria-pressed={paneOpen}
+        aria-label={overviewOffered
+          ? paneCount > 0 ? t("mobile.chatOverview.toggleRunning", { count: paneCount }) : t("mobile.chatOverview.toggle")
+          : t("mobile.files.toggle")}
+        title={t(overviewOffered ? "mobile.chatOverview.toggle" : "mobile.files.toggle")}
+      ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M14.5 4.5v15" /></svg>{paneCount > 0 && <span className="header-count" aria-hidden="true">{paneCount}</span>}</button>
+        : project && filesLabel !== null && <button
         className="drawer-open"
         data-phone-hint="menu"
-        onClick={splitTier ? toggleFiles : () => setFilesOpen(true)}
-        {...(splitTier ? { "aria-pressed": filesOpen } : { "aria-haspopup": "dialog" as const, "aria-expanded": filesOpen })}
-        aria-label={t(splitTier ? "mobile.files.toggle" : "mobile.project.menu")}
-        title={t(splitTier ? "mobile.files.toggle" : "mobile.project.menu")}
+        onClick={() => setFilesOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={filesOpen}
+        aria-label={t("mobile.project.menu")}
+        title={t("mobile.project.menu")}
       >{tablet ? <FolderIcon size="1em" /> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>}</button>}
-      {tabOutbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: tabOutbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{tabOutbox.length}</small></button>}
+      {tabOutbox.length > 0 && !overviewOffered && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: tabOutbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{tabOutbox.length}</small></button>}
       {/* One pill named after the view on screen; its list switches views and,
           on an agent tab's Chat, says where the chat reads from. */}
       <div className="terminal-view-switch" role={tablet ? "group" : undefined} aria-label={tablet ? t("mobile.focus.outputView") : undefined}>
         {/* A tablet shows the two views side by side; the pill after them keeps
             the list's other rows (Diffs, read aloud, hands-free, languages). */}
         {tablet && <>
-          <button type="button" className="view-seg" aria-pressed={view === "focus" && !diffsShown} aria-disabled={chatUnavailable ? "true" : undefined} onClick={() => pickView("focus")}>{t(focusLabel)}</button>
+          {!tab.no_chat && <button type="button" className="view-seg" aria-pressed={view === "focus" && !diffsShown} aria-disabled={chatUnavailable ? "true" : undefined} onClick={() => pickView("focus")}>{t(focusLabel)}</button>}
           <button type="button" className="view-seg" aria-pressed={view === "terminal" && !diffsShown} onClick={() => pickView("terminal")}>{t("mobile.focus.terminal")}</button>
         </>}
         <button
@@ -2712,11 +2899,54 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         aria-label={tablet && !diffsShown ? t("mobile.focus.outputView") : undefined}
         onClick={() => setFocusMenu((open) => !open)}
       >{!tablet || diffsShown ? t(diffsShown ? "terminal.reader.changes" : view === "terminal" ? "mobile.focus.terminal" : focusLabel) : null}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
-    {focusMenu && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
+    {/* The project's tabs: a rail beside the chat in landscape, a strip of
+        chips under the header upright. A sibling of the body, so a turn of
+        the iPad redraws it alone. */}
+    {railShown && railTabs && <ChatTabsRail
+      variant={splitTier ? "rail" : "strip"}
+      tabs={railTabs}
+      currentId={tab.id}
+      folded={railFoldPref}
+      forceFolded={railFolded}
+      onFold={toggleRailFold}
+      onOpen={openRailTab}
+    />}
+    {/* The session overview on the right of a landscape chat: a sibling of
+        the body as the rail is. Over the library (and a file) it is only the
+        way back, the library standing under its head. */}
+    {overviewOffered && paneAt !== undefined && <ChatOverview
+      mode={paneAt}
+      onBack={paneBack}
+      tabId={tab.id}
+      project={project}
+      agents={sessionAgents}
+      earlierAgents={earlierAgents}
+      agentsEarlier={agentsEarlier}
+      busy={sessionBusy}
+      onOpenAgent={openListedSubagent}
+      onEarlier={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}
+      queued={queueCli !== null ? queuedCount : 0}
+      queueOpen={queueSheet}
+      onQueue={() => setQueueSheet(true)}
+      files={chatFiles}
+      filesMore={changedMore}
+      onOpenFile={openChatFile}
+      onRemoveFile={removeChatFile}
+      sent={tabOutbox}
+      sentScope={outboxScope}
+      onOpenSent={openOutbox}
+      onSentDetails={setOutboxOpen}
+      onGallery={() => setGallery(true)}
+      links={chatLinks}
+      onOpenLink={askIndexLink}
+      onLibrary={filesLabel !== null ? openFiles : undefined}
+    />}
+    {focusMenu &&<div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
       <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
         {/* Chat / Diffs / Terminal, in the desktop's order. Chat is the stored
-            session only: dimmed, saying why, for an agent with none. */}
-        {([["focus", focusLabel], ...(diffsOffered ? [["diffs", "terminal.reader.changes"] as const] : []), ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => {
+            session only: dimmed, saying why, for an agent with none, and
+            absent for a CLI that has no chat view (`no_chat`). */}
+        {([...(tab.no_chat ? [] : [["focus", focusLabel] as const]), ...(diffsOffered ? [["diffs", "terminal.reader.changes"] as const] : []), ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => {
           const checked = choice === "diffs" ? diffsShown : view === choice && !diffsShown;
           const off = choice === "focus" && chatUnavailable;
           const googleUntested = choice === "focus" && chat && (antigravity || /gemini/iu.test(agentLabel)) && isUntested("mobile.focus.googleSession");
@@ -2792,8 +3022,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             followReadable(stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120);
             checkPinnedPrompt();
           }}>
-          {/* The session's subagents, files and links, one open list at a time. */}
-          {sessionFocus && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0 || chatLinks.length > 0) && <div ref={chatIndex} className="chat-index">
+          {/* The session's subagents, files and links, one open list at a time;
+              none while the pane beside a landscape chat shows the same. */}
+          {sessionFocus && !openStep && !(overviewOffered && paneAt !== undefined) && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0 || chatLinks.length > 0) && <div ref={chatIndex} className="chat-index">
             {(sessionAgents.length > 0 || agentsEarlier) &&
             <nav className={`subagent-index${subagentListOpen ? " open" : ""}`} aria-label={t("mobile.subagent.indexRegion")}>
               <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => toggleChatIndex("subagents")}>
@@ -2802,26 +3033,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 <svg className={subagentListOpen ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
               </button>
               {subagentListOpen && <div id="mobile-subagent-list" className="subagent-index-list">
-                {([["running", "mobile.subagent.running"], ["finished", "mobile.subagent.finished"]] as const).map(([group, heading]) => {
-                  const rows = splitByWork(sessionAgents, sessionBusy)[group];
-                  if (rows.length === 0) return null;
-                  const title = t(heading, { count: rows.length });
-                  return <section key={group} className="subagent-index-group" aria-label={title}>
-                    <h3 className="subagent-index-head">{title}</h3>
-                    {rows.map((entry, index) => {
-                      const status = group === "running" ? "working" : entry.finished ? "done" : null;
-                      return <button type="button" key={`${entry.at ?? index}:${index}`} className={status ? "has-status" : undefined} disabled={!entry.subagent} aria-label={`${entry.role ?? t("mobile.subagent.region")} · ${entry.text}`} onClick={() => openListedSubagent(entry)}>
-                        <small>{entry.role ?? t("mobile.subagent.region")}</small>
-                        <span>{entry.text}{entry.cut && "…"}</span>
-                        {status && <AgentStatusMark status={status} />}
-                      </button>;
-                    })}
-                  </section>;
-                })}
+                <SubagentIndexGroups agents={sessionAgents} busy={sessionBusy} onOpen={openListedSubagent} />
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}
-            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={openChatIndex === "files"} onToggle={() => toggleChatIndex("files")} onOpen={openChatFile} />}
+            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={openChatIndex === "files"} onToggle={() => toggleChatIndex("files")} onOpen={openChatFile} onRemove={removeChatFile} />}
             {chatLinks.length > 0 && <ChatLinksIndex links={chatLinks} open={openChatIndex === "links"} onToggle={() => toggleChatIndex("links")} onOpen={askIndexLink} />}
           </div>}
           {sessionFocus && openStep
@@ -2852,7 +3068,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} onOpenArtifact={setArtifactTarget} />
+                  <SentFileHold.Provider value={fileMenu.hold}><TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} onOpenArtifact={setArtifactTarget} /></SentFileHold.Provider>
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
@@ -2891,14 +3107,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                       until the desktop types it in: not taken yet. */}
                   {/* Both act on the CLI's whole queue, so every queued bubble
                       carries the same pair. */}
-                  {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox}
+                  {queuedShown && <SentFileHold.Provider value={fileMenu.hold}><TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox}
                     queuedActions={agentAtWork && !editing && queueReadable && <div className="transcript-queued-actions">
                       {sendNowOffered && <button type="button" disabled={!connected || sendNowWaiting} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>}
                       {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
                       <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
                       {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
                       {queueCli !== "claude" && isUntested("mobile.chat.queuedActionsOther") && <em>{t("mobile.focus.untested")}</em>}
-                    </div>} />}
+                    </div>} /></SentFileHold.Provider>}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0
             ? <div className="readable-empty"><strong>{t("mobile.focus.waitingOutput")}</strong><span>{t("mobile.focus.waitingOutputHint")}</span></div>
@@ -2929,7 +3145,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </>}
     </div>
     <div className="terminal-controls">
-      {tab.kind === "agent" && navLine && voiceStrip(navLine, isUntested("mobile.voice.navigate"), isUntested("mobile.voice.navigate"))}
+      {tab.kind === "agent" && navLine && voiceStrip(navLine, navUntested, navUntested)}
       {/* The hands-free status line carries no untested mark; its button does. */}
       {tab.kind === "agent" && !navLine && handsFreeLine && voiceStrip(handsFreeLine, isUntested("mobile.voice.handsFree"), false)}
       {tab.kind === "agent" && !navLine && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || isUntested("mobile.voice.draftEdits") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}
@@ -2958,11 +3174,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           const known = leaf === undefined ? undefined : inboxFiles.get(leaf);
           const picture = upload.preview ?? (known && known.kind.startsWith("image/") ? inboxFileUrl(tab.id, known.name) : undefined);
           return <ComposerThumb key={upload.id} name={upload.name} picture={picture} kind={known?.kind} sending={leaf === undefined}
-            onRemove={leaf === undefined ? undefined : () => dismissUpload(upload.id)} removeLabel={t("mobile.inbox.detach", { name: upload.name })} />;
+            onRemove={leaf === undefined ? undefined : () => dismissUpload(upload.id)} removeLabel={t("mobile.inbox.detach", { name: upload.name })}
+            onView={known ? () => chatInbox.onOpen(known) : undefined} viewLabel={t("mobile.inbox.holdToView", { name: upload.name })} />;
         })}
         <small className="composer-attachments-note" role="status">
           {t(!uploading ? "mobile.inbox.attached" : uploads.some((upload) => uploadInFlight(upload) && upload.source === "desktop") ? "mobile.inbox.copyingNote" : "mobile.inbox.sendingNote")}
-          {(isUntested("mobile.composer.attachHeld") || isUntested("mobile.composer.thumbnails")) && <> · <em>{t("mobile.focus.untested")}</em></>}
+          {!uploading && <> · {t("mobile.inbox.holdToViewHint")}</>}
+          {(isUntested("mobile.composer.attachHeld") || isUntested("mobile.composer.thumbnails") || isUntested("mobile.composer.holdToView")) && <> · <em>{t("mobile.focus.untested")}</em></>}
         </small>
       </div>}
       {signIn && !signInSheet && signIn.url !== hiddenSignIn && <div className="sign-in-notice" role="status">
@@ -3038,6 +3256,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
         {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
         {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
+        {limitFact(shownLimits.fable, fableReset, "mobile.facts.fable", "mobile.facts.fableLabel")}
         {(shownLimits.session || shownLimits.week) && isUntested("mobile.facts.limitBars") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
       </div>}
@@ -3058,10 +3277,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             {suggestion.used && <button className="slash-forget" onPointerDown={(event) => event.preventDefault()} onClick={() => forgetSlash(suggestion.line)} aria-label={t("mobile.slash.forget", { command: suggestion.line })} title={t("mobile.slash.forget", { command: suggestion.line })}><CloseIcon size="1em" /></button>}
           </div>)}
         </div>}
+        {/* How the local model thinks the draft goes on: a tap appends it.
+            Pointer-down is held back so the keyboard stays up. */}
+        {completionShown && <button className="composer-complete" onPointerDown={(event) => event.preventDefault()} onClick={() => setDraft(draft + completion.text)} aria-label={t("mobile.composer.completeTake", { text: completionShown })} title={completion.model ? t("terminal.reader.suggestionByModel", { model: completion.model }) : undefined}>
+          <span className="composer-complete-text">… {completionShown}</span>
+          {isUntested("agents.promptAutocomplete") && <em>{t("mobile.focus.untested")}</em>}
+        </button>}
         {/* An untouched suggestion reads greyed in the field itself, as the
             CLI dims it; the first edit makes it the reader's own text. */}
         <div className="composer-field">
-          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t("terminal.reader.suggestion") : undefined} value={fieldDraft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => {
+          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t(suggestedLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion") : undefined} value={fieldDraft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => {
             tabbyGate.clear();
             // The guess after the draft is the recognizer's, not the reader's.
             setDraft(draftFromField(event.target.value, draft, voiceHeard.interim));
@@ -3077,7 +3302,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           }} />
           {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-          {suggested && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
+          {suggestedBy && <span className="composer-suggested-by" title={suggestedLocal && localSuggestion.model ? t("terminal.reader.suggestionByModel", { model: localSuggestion.model }) : t(suggestedLocal ? "terminal.reader.localSuggestion" : "terminal.reader.suggestion")}>
+            {suggestedBy}{isUntested("agents.nextPromptSource") && <em>{t("mobile.focus.untested")}</em>}
+          </span>}
+          {suggested && !suggestedLocal && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
+          {suggestedLocal && isUntested("agents.localNextPrompt") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
           {fieldDraft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
           {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={() => {
             // A tap ends spoken navigation, whatever else it does. A stop reads the
@@ -3304,17 +3533,20 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     />}
     {/* The viewer covers the phone; the gallery stays chosen behind it, so
         closing the file lands back on the grid. */}
+    {fileMenu.sheet}
     {gallery && (!outboxOpen || markupAway !== null) && <OutboxGallery scope={outboxScope} files={tabOutbox} tabOnly onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
     {/* A markup view's Chat tucks its viewer away (`markupAway`) without
         unmounting it; the host is always there, so the switch never remounts. */}
-    {outboxOpen && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
+    {/* In a landscape agent chat these viewers stand in the pane (`paned`,
+        `pane-file`: the stylesheet places them in its column). */}
+    {outboxOpen && <div className={markupAway === null ? "markup-host pane-file" : "markup-host away pane-file"}><BackNest off={markupAway !== null}>
       <OutboxViewer key={`${tab.id}/${outboxOpen.name}`} scope={outboxScope} file={outboxOpen} pictures={outboxPictures} onStep={setOutboxOpen} onClose={() => setOutboxOpen(null)} markup={markupFor}
-        newTab={markupNewTab} />
+        newTab={markupNewTab} paned={filePaned} />
     </BackNest></div>}
     {/* What the reader sent is only looked at: no Mark up, no stepping. */}
-    {inboxOpen && (!outboxOpen || markupAway !== null) && <OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} />}
-    {askedFile && (askedFile.scope ?? askedScope) && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
-      <OutboxViewer key={`asked/${askedFile.file.ref ?? askedFile.file.name}`} scope={(askedFile.scope ?? askedScope)!} file={askedFile.file} onClose={() => setAskedFile(null)} startMarking={askedFile.marking}
+    {inboxOpen && (!outboxOpen || markupAway !== null) && <div className="pane-file"><OutboxViewer key={`${tab.id}/inbox/${inboxOpen.name}`} scope={inboxScope} file={inboxOpen} onClose={() => setInboxOpen(null)} paned={filePaned} /></div>}
+    {askedFile && (askedFile.scope ?? askedScope) && <div className={markupAway === null ? "markup-host pane-file" : "markup-host away pane-file"}><BackNest off={markupAway !== null}>
+      <OutboxViewer key={`asked/${askedFile.file.ref ?? askedFile.file.name}`} scope={(askedFile.scope ?? askedScope)!} file={askedFile.file} onClose={() => setAskedFile(null)} startMarking={askedFile.marking} paned={filePaned}
         markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
     </BackNest></div>}
     {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>

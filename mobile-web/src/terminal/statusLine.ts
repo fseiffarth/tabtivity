@@ -25,6 +25,7 @@ import {
   readAntigravityPicker,
 } from "./antigravity";
 import { codexModelSegment, codexOutputRow, codexPathTruncated, isCodexTab } from "./codexFooter";
+import { isCursorTab, readCursorFrame } from "./cursorAgent";
 import { isMuseTab, museStatus } from "./muse";
 import { isCopilotTab, readCopilotFrame } from "./copilotStatus";
 import {
@@ -121,6 +122,24 @@ function agentListStart(lines: readonly StatusLineLike[]): number {
   const tail = lines.slice(-SEARCH_WINDOW * 4);
   const found = scanAgentList(tail.map((line) => line.text));
   return found ? lines.length - tail.length + found.start : lines.length;
+}
+
+/** Codex keeps its model and directory beneath even a draft taller than the
+ * generic frame scan. Walk back from that footer through its indented rows. */
+export function codexComposerFrame(lines: readonly StatusLineLike[]): { start: number; footer: number } | null {
+  let index = lines.length - 1;
+  while (index >= 0 && !lines[index].text.trim()) index -= 1;
+  if (/^\s+(?:← for agents\b|\? for shortcuts\b|⚠.*\bf2 to view\b)/u.test(lines[index]?.text ?? "")) index -= 1;
+  const footer = index;
+  const statusLine = lines[footer]?.text ?? "";
+  const [model, directory = ""] = statusLine.trim().split(/\s+·\s+/u, 2);
+  if (!/^ {2}\S/u.test(statusLine) || !codexModelSegment(model, {}, true) || !PATH.test(directory.trim())) return null;
+  for (index -= 1; index >= 0; index -= 1) {
+    const { text } = lines[index];
+    if (/^›(?:\s|$)/u.test(text)) return { start: index, footer };
+    if (text.trim() && !/^ {2}/u.test(text)) break;
+  }
+  return null;
 }
 
 /** Status lines read below the input line. Claude Code draws at most a mode
@@ -517,6 +536,7 @@ function modelJustSet(lines: readonly StatusLineLike[], inputIndex: number): str
 export function sessionStatus(
   lines: readonly StatusLineLike[],
   agentLabel?: string,
+  composer?: ReturnType<typeof codexComposerFrame>,
 ): SessionStatus | null {
   const mini = openCodeFrame(lines, agentLabel);
   if (mini) return mini.status;
@@ -524,6 +544,9 @@ export function sessionStatus(
   if (antigravity) return antigravity.status;
   const muse = isMuseTab(agentLabel) ? museStatus(lines, SEARCH_WINDOW) : null;
   if (muse) return muse;
+  // Cursor's `→` box is no input line the generic scan knows; its footer is
+  // read by shape (`cursorAgent.ts`), and a screen without it is no frame.
+  if (isCursorTab(agentLabel)) return readCursorFrame(lines, agentLabel)?.status ?? null;
   // Copilot keeps its path and branch over the box and its model under it.
   const copilot = readCopilotFrame(lines, agentLabel);
   if (copilot) return copilot.status;
@@ -532,8 +555,9 @@ export function sessionStatus(
   if (isCopilotTab(agentLabel)) return null;
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return null;
   const bottom = agentListStart(lines);
-  let inputIndex = -1;
-  for (let index = bottom - 1; index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
+  const codex = isCodexTab(agentLabel);
+  let inputIndex = composer?.start ?? -1;
+  for (let index = bottom - 1; inputIndex < 0 && index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
     if (!isInputLine(lines, index)) continue;
     // A highlighted dialog row opens with the input line's `❯`; the rows under
     // it are its answers (the `/model` picker's `3. Haiku 5.5`), not a status.
@@ -544,8 +568,7 @@ export function sessionStatus(
   if (inputIndex < 0) return null;
   const status: SessionStatus = {};
   let read = 0;
-  const codex = isCodexTab(agentLabel);
-  for (let index = inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
+  for (let index = composer?.footer ?? inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
     const text = lines[index].text.trim();
     if (!text || isClaudeTmuxNotice(text) || (codex && codexOutputRow(text))) continue;
     read += 1;
@@ -634,6 +657,7 @@ export function inputFrameStart(
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return lines.length;
   const copilot = readCopilotFrame(lines, agentLabel);
   if (copilot) return copilot.start;
+  if (isCursorTab(agentLabel)) return readCursorFrame(lines, agentLabel)?.start ?? lines.length;
   const antigravity = antigravityFrame(lines, agentLabel);
   let start = antigravity?.start ?? -1;
   const bottom = agentListStart(lines);

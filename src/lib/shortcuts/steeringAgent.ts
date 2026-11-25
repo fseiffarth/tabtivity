@@ -18,7 +18,9 @@
  * Tabtivity chooses nothing here: each key types what the user could have typed
  * into the agent's own CLI (AGENTS.md, agent authority).
  */
-import { agentDraftPrefixes, agentFamily } from "../../../shared/agentComposer";
+import { AGENT_LINE_RESET, agentDraftPrefixes, agentFamily } from "../../../shared/agentComposer";
+import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
+import { codexComposerFrame } from "../../../mobile-web/src/terminal/statusLine";
 import {
   SessionPickerOpenError,
   pressScheduledAgentSubmit,
@@ -35,9 +37,10 @@ import { agentTabLabel } from "../../stores/agents/agentModels";
 import { noteTypedClear } from "../../stores/agents/agentClearUndo";
 import { wakeStoppedForInput } from "../../stores/agents/agentTabStop";
 import type { TabEntry } from "../../stores/tabs";
-import type { SteeringBaseLevel } from "../../stores/keyboardSteering";
+import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
 import { steeringTabsActive } from "./steeringScope";
 import { openReaderComposer } from "../agents/readerSteering";
+import { terminalFor } from "../terminal/terminalRegistry";
 
 /** What the Clear key types. */
 const NEW_CONVERSATION_COMMAND = "/clear";
@@ -138,6 +141,22 @@ export function requestSteeringPrompt(
 const START_WAIT_MS = 15_000;
 const START_POLL_MS = 200;
 
+/** Codex's Ctrl+A/Ctrl+K only clears the caret's line. A multiline draft
+ * needs one kill for each line and each newline, in both directions. */
+function codexDraftReset(ptyId: string): string | undefined {
+  const term = terminalFor(ptyId);
+  if (!term) return undefined;
+  const buffer = term.buffer.active;
+  const { lines } = readableScreen(buffer, term.rows, { plain: true });
+  const frame = codexComposerFrame(lines);
+  if (!frame) return undefined;
+  const start = Number.parseInt(lines[frame.start].key.slice(1), 10);
+  const last = Number.parseInt(lines[frame.footer].key.slice(1), 10) - 2;
+  const caret = buffer.baseY + buffer.cursorY;
+  if (last <= start || caret < start || caret > last) return undefined;
+  return AGENT_LINE_RESET + "\u000b".repeat(2 * (last - caret)) + "\u0015".repeat(2 * (caret - start));
+}
+
 /**
  * Submit `text` into the agent tab as one prompt — also while the agent works,
  * as a prompt typed into its CLI then would be (the CLI queues it), and once
@@ -147,6 +166,8 @@ const START_POLL_MS = 200;
  */
 export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<void> {
   if (!steeringAgentOffer(tab).prompt || !tab.scheduleTargetId) throw new Error("not an agent tab");
+  const { active, handedTo } = useKeyboardSteeringStore.getState();
+  const steering = active || handedTo === "prompt";
   const target = tab.scheduleTargetId;
   // A picker up in the CLI would take the words as its own keys, and the
   // agent never see them: refuse at once rather than wait for it to go.
@@ -164,7 +185,8 @@ export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<v
   // (`freshSubmit.ts`); a slash command begins no turn for a hook to confirm.
   const fresh = !!input && freshClaude(input.agent, input.ptyId) && !text.trimStart().startsWith("/");
   const since = Date.now();
-  await submitScheduledAgentMessage(target, text, { whileBusy: true });
+  const draftReset = steering && input && agentFamily(input.agent ?? tab.cmd) === "codex" ? codexDraftReset(input.ptyId) : undefined;
+  await submitScheduledAgentMessage(target, text, { whileBusy: true, draftReset });
   noteSentPrompt(target, text);
   const ptyId = scheduledAgentInput(target)?.ptyId;
   if (ptyId) noteInputFrom(ptyId, "desktop");

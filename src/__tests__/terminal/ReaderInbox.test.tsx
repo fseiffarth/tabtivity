@@ -77,7 +77,7 @@ describe("the Reader's inbox previews", () => {
     mount();
     const open = await screen.findByRole("button", { name: /shot\.png/u });
     expect(open.querySelector("img")?.getAttribute("src")).toBe("blob:shot");
-    expect(document.querySelector(".terminal-reader-command")?.textContent).toBe("/design");
+    expect(document.querySelector(".terminal-reader-command-text")?.textContent).toBe("design");
     const bubble = document.querySelector(".terminal-reader-turn.user.with-files");
     expect(bubble?.textContent).toContain("redesign ugly menu");
     expect(bubble?.textContent).not.toContain(NAMES.inboxDir);

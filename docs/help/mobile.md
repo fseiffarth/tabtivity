@@ -174,15 +174,19 @@ is refused. Works with the desktop window closed.
   asks once, at the first start with Mobile on; the switch is in the header's
   phone menu and in Settings → Mobile.
 - Creating a new tab from the phone needs Tabtivity up, or the switch above
-  on.
+  on. With no window open, the phone's ＋ still starts a shell, a plain
+  agent or a project's **Cloud sessions** (New / Open existing); a mode, a
+  worktree, a local model or a sign-in waits for the window.
 - A paired phone types into a terminal exactly like your keyboard: keep agent
   approval modes conservative while Mobile is on.
 - An agent tab opens as a **Chat**: the conversation as messages, a text box
   to write the next one, and the agent's questions as buttons to tap. The
   pill at the top right names the view on screen; tap it to switch to
   **Terminal** (the real terminal) and back. Chat shows the agent's stored
-  conversation; for an agent Tabtivity cannot read one of (Kimi, Qwen, Aider
-  and most other CLIs) Chat is dimmed and the tab opens in Terminal. A shell
+  conversation, for Claude, Codex, OpenCode, Copilot, Meta Muse Code, Cursor
+  and Antigravity tabs only (Mistral's conversation is not read yet, so its Chat
+  is dimmed). Every other CLI (Gemini, Qwen, Kimi, Aider, …) has no Chat: its
+  tab opens in Terminal and stays there. A shell
   tab has no conversation, so its pill offers **Reader** (the screen as text)
   and **Terminal**. The desktop offers the same chat on its agent tabs (help
   topic `agent-clis`).
@@ -516,7 +520,13 @@ marked.
 
 - **Load** puts a model into memory and keeps it there; Ollama decides GPU or
   CPU. The desktop's Models & agents menu shows the load while it runs.
-- **Unload** frees the memory at once, without asking.
+- **Unload** frees the memory at once, without asking, and the desktop's
+  suggestions and autocomplete leave the model unloaded until it is loaded
+  again (help topic `local-models`).
+- While a model is in memory, Home's header shows its name in a green pill
+  (**+N** when more are loaded), and the Local models row names it too; tap
+  the pill to open the list. Both follow a load or unload on the desktop
+  within 30 seconds.
 - With Ollama stopped, **Start Ollama** starts it — only in ways that need no
   password on the desktop. If it was started as Tabtivity's own server,
   quitting Tabtivity stops it again.

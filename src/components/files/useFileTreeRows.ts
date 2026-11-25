@@ -23,6 +23,21 @@ type FileTreeRunState = ReturnType<typeof useFileTreeRunState>;
 // and not.
 export const ROW_CAP_STEP = 100;
 
+/** The tree's sort keys: the listing's own plus `git`, which only the tree can
+ *  apply (the listing carries no git state). */
+export type TreeSortKey = SortKey | "git";
+
+/** Git order, ascending: the states in the order the git bar acts on them
+ *  (add, then commit, then push), then clean, then ignored. */
+const GIT_SORT_RANK: Record<string, number> = {
+  untracked: 0,
+  modified: 1,
+  staged: 2,
+  unpushed: 3,
+  ignored: 5,
+};
+const GIT_CLEAN_RANK = 4;
+
 /** The listing split into its on-screen sections, clipped to the row cap, and
  * the selection pruned to what still lists. */
 export function useFileTreeRows({
@@ -39,7 +54,7 @@ export function useFileTreeRows({
   separateGitignored: boolean;
   dirIgnoredBytes: Record<string, number>;
   dirSizes: Record<string, number>;
-  sortKey: SortKey;
+  sortKey: TreeSortKey;
   descending: boolean;
   projectId: string | null;
   scaffoldExpanded: boolean;
@@ -97,8 +112,19 @@ export function useFileTreeRows({
     // the row shows: the recursive walk, less its ignored bytes outside the
     // gitignored / hidden-by-extension groups (mirrors `dirShown` in
     // renderEntry). An unwalked or scan-excluded folder sorts last.
-    const bySize = (list: FileEntry[], subtractIgnored: boolean) =>
-      sortKey !== "size"
+    // Git order: folders first (as every key), then the rank above, ties in
+    // the name order the listing already has (`sort` is stable).
+    const byGit = (list: FileEntry[]) =>
+      [...list].sort((a, b) => {
+        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+        const d = (GIT_SORT_RANK[displayStatuses[a.name] ?? ""] ?? GIT_CLEAN_RANK)
+          - (GIT_SORT_RANK[displayStatuses[b.name] ?? ""] ?? GIT_CLEAN_RANK);
+        return descending ? -d : d;
+      });
+    const inOrder = (list: FileEntry[], subtractIgnored: boolean) =>
+      sortKey === "git"
+        ? byGit(list)
+        : sortKey !== "size"
         ? list
         : sortEntries(list, "size", descending, (e) => {
             if (!e.is_dir) return e.size;
@@ -107,10 +133,10 @@ export function useFileTreeRows({
             return subtractIgnored ? total - (dirIgnoredBytes[e.path] ?? 0) : total;
           });
     return {
-      regular: bySize(regular, true),
-      standard: bySize(standard, true),
-      gitignored: bySize(gitignored, false),
-      hiddenExt: bySize(hiddenExt, false),
+      regular: inOrder(regular, true),
+      standard: inOrder(standard, true),
+      gitignored: inOrder(gitignored, false),
+      hiddenExt: inOrder(hiddenExt, false),
     };
   }, [
     entries,

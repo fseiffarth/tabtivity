@@ -102,7 +102,7 @@ describe("steering reaches the root window's chrome", () => {
     render(<><Harness /><RootOverlayHost /></>);
     press({ key: " ", shiftKey: true });
     press({ key: "ArrowUp" });
-    const seen: string[] = [];
+    const seen = [cursor()?.getAttribute("data-root-view") ?? ""];
     for (let i = 0; i < 30; i++) {
       press({ key: "ArrowRight" });
       const el = cursor();
@@ -113,7 +113,7 @@ describe("steering reaches the root window's chrome", () => {
       seen.push(el!.getAttribute("data-root-view") ?? el!.className);
     }
     // The ten view tabs are all on the walk, in the strip's order (it wraps).
-    const order = ["now", "projects", "tonight", "mail", "calendar", "todo", "agents", "models", "machines", "root"];
+    const order = ["root", "now", "projects", "tonight", "agents", "machines", "models", "mail", "todo", "calendar"];
     const views = seen.filter((s) => order.includes(s));
     expect(views.slice(0, 10)).toEqual(order);
     // ... and the bar's buttons and the rail toggle sit on the same walk.

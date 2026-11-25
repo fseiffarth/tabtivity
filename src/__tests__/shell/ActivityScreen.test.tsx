@@ -175,7 +175,7 @@ describe("Mobile activity list — rows", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
-  it("marks a busy tab and disables a gone one; a tap opens the tab in its project", async () => {
+  it("marks a busy tab and fades a gone one, which still opens; a tap opens the tab in its project", async () => {
     const rows = [
       tab("Busy", "working", { viewer_busy: true, agent_model: "opus" }),
       tab("Gone", "done", { available: false }),
@@ -187,7 +187,13 @@ describe("Mobile activity list — rows", () => {
     await screen.findByText("Busy");
     expect(small("Busy")).toBe("Aurora · opus · working now · open elsewhere");
     expect(small("Gone")).toBe("Aurora · gone");
-    expect((screen.getByText("Gone").closest("button") as HTMLButtonElement).disabled).toBe(true);
+    // Faded, not disabled: Home routes a gone tab to its project, whose card
+    // restarts it or says why it cannot.
+    const gone = screen.getByText("Gone").closest("button") as HTMLButtonElement;
+    expect(gone.disabled).toBe(false);
+    expect(gone.classList.contains("unavailable")).toBe(true);
+    fireEvent.click(gone);
+    expect(open).toHaveBeenCalledWith("p1", rows[1]);
     fireEvent.click(screen.getByText("Free").closest("button")!);
     expect(open).toHaveBeenCalledWith("p1", rows[2]);
     expect(screen.getByText("Free").closest("button")!.querySelector(".agent-status")!.textContent).toBe("question");

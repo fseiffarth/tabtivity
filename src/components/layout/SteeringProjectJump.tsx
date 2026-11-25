@@ -12,6 +12,7 @@ import { useBoxesStore } from "../../stores/boxes";
 import { useBoxSliceStore } from "../../stores/boxSlice";
 import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
 import { useProjectsStore } from "../../stores/projects";
+import { allGroups, useTabsStore } from "../../stores/tabs";
 
 /** Up to this many results sit on the ring, each on a digit key. */
 export const RING_SLOTS = 10;
@@ -80,14 +81,25 @@ export function SteeringProjectJump() {
   }, []);
 
   if (!level) return null;
-  const close = (switched: boolean) => {
+  const close = (switched: boolean, landed?: Promise<unknown>) => {
     setLevel(null);
     useKeyboardSteeringStore.getState().enter(switched ? "tabs" : level);
+    // The subwindow is picked once the switch has swapped the tabs in, as
+    // `landOnTabs` does for the project level's own switches.
+    if (switched) void landed?.then(focusFirstGroup, () => {});
   };
   return <JumpBox onClose={close} />;
 }
 
-function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
+/** The subwindow a switch lands on: the first one, when the scope has none
+ *  focused. The rule `focusSomeGroup` in `useSteering` applies. */
+function focusFirstGroup() {
+  const tabs = useTabsStore.getState();
+  const first = allGroups(tabs.layout)[0]?.id;
+  if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
+}
+
+function JumpBox({ onClose }: { onClose: (switched: boolean, landed?: Promise<unknown>) => void }) {
   const t = useT();
   const projects = useProjectsStore((s) => s.projects);
   const boxes = useBoxesStore((s) => s.boxes);
@@ -118,10 +130,11 @@ function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
 
   const pick = (row: SearchRow) => {
     const switched = rowSwitches(row);
-    if (row.kind === "all") void useBoxSliceStore.getState().leaveBox();
-    else if (row.kind === "box") void useBoxSliceStore.getState().selectBox(row.box.id);
-    else if (switched) void useProjectsStore.getState().setActive(row.project.id);
-    onClose(switched);
+    let landed: Promise<unknown> | undefined;
+    if (row.kind === "all") landed = useBoxSliceStore.getState().leaveBox();
+    else if (row.kind === "box") landed = useBoxSliceStore.getState().selectBox(row.box.id);
+    else if (switched) landed = useProjectsStore.getState().setActive(row.project.id);
+    onClose(switched, landed);
   };
 
   const optionId = (index: number) => `${listId}-${index}`;

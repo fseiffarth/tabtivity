@@ -65,7 +65,7 @@ const ANCHORS: Record<CapAnchor, AnchorDef> = {
   add: { find: () => first(`${FOCUSED} .tab-new-btn`), align: "start" },
   files: { find: () => first(`${FOCUSED} .subwindow-files-toggle`), align: "end" },
   card: { find: () => activeTabCard(), align: "end" },
-  // On the Subagents toggle; with a subagent open, on its bar.
+  // On the Subagents toggle (the dock's done pill); with a subagent open, on its bar.
   subagents: {
     find: () => {
       const frame = activeSubagentFrame();
@@ -75,6 +75,8 @@ const ANCHORS: Record<CapAnchor, AnchorDef> = {
       for (const selector of [
         ".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)",
         ".terminal-reader-subagent-toggle",
+        // The Chat dock's pills, when none is finished yet (no done pill).
+        ".terminal-reader-agents",
       ]) {
         const control = Array.from(frame.querySelectorAll<HTMLElement>(selector)).find(drawn);
         if (control) return control;
@@ -92,8 +94,34 @@ const ANCHORS: Record<CapAnchor, AnchorDef> = {
 const CAP_H = 15;
 const OVERLAP = 4;
 
-/** Measures the given controls. Anything not drawn, or outside the window, has
- *  no entry. */
+/** The part of `el` its scrolling and clipping ancestors leave on screen, or
+ *  null when they hide all of it: the region cursor on a settings row
+ *  scrolled out of the dialog's list keeps its box up there, and its cap
+ *  would float over whatever lies above the dialog. */
+function visibleBox(el: HTMLElement): { left: number; top: number; right: number; bottom: number } | null {
+  const r = el.getBoundingClientRect();
+  let { left, top, right, bottom } = r;
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const s = getComputedStyle(p);
+    const clipX = s.overflowX !== "visible" && s.overflowX !== "";
+    const clipY = s.overflowY !== "visible" && s.overflowY !== "";
+    if (!clipX && !clipY) continue;
+    const c = p.getBoundingClientRect();
+    if (clipX) {
+      left = Math.max(left, c.left);
+      right = Math.min(right, c.right);
+    }
+    if (clipY) {
+      top = Math.max(top, c.top);
+      bottom = Math.min(bottom, c.bottom);
+    }
+    if (right <= left || bottom <= top) return null;
+  }
+  return { left, top, right, bottom };
+}
+
+/** Measures the given controls. Anything not drawn, scrolled out of its list,
+ *  or outside the window has no entry. */
 export function measureCaps(ids: readonly CapAnchor[]): CapPlacements {
   const out: CapPlacements = {};
   const vw = window.innerWidth;
@@ -102,7 +130,9 @@ export function measureCaps(ids: readonly CapAnchor[]): CapPlacements {
     const def = ANCHORS[id];
     const el = def.find();
     if (!el) continue;
-    const r = el.getBoundingClientRect();
+    const box = visibleBox(el);
+    if (!box) continue;
+    const r = { ...box, width: box.right - box.left, height: box.bottom - box.top };
     if (r.width <= 0 || r.height <= 0 || r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
     const x = def.align === "start" ? r.left - 2 : def.align === "end" ? r.right + 2 : r.left + r.width / 2;
     // Above: the row hangs 4 px into the control's top. Below: it hangs from the

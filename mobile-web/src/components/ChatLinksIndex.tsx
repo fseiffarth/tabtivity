@@ -15,14 +15,25 @@ export function ChatLinksIndex({ links, open, onToggle, onOpen }: {
       <span>{t("mobile.chatLinks.toggle", { count: links.length })}{isUntested("mobile.chat.linksIndex") && <em> · {t("mobile.focus.untested")}</em>}</span>
       <svg className={open ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
     </button>
-    {open && <ul id="mobile-chat-links" className="chat-link-index-list">
-      {links.map((link) => <li key={link.url}>
-        <button type="button" onClick={() => onOpen(link.url)}>
-          {link.label && <span>{link.label}</span>}
-          <bdi>{link.host}{link.rest}</bdi>
-          <small>{t(link.from === "you" ? "mobile.sentIndex.fromYou" : "mobile.sentIndex.fromAgent")}</small>
-        </button>
-      </li>)}
-    </ul>}
+    {open && <ChatLinkRows id="mobile-chat-links" links={links} onOpen={onOpen} />}
   </nav>;
+}
+
+/** The links as rows, newest first: the index strip's open list and the
+ * landscape iPad's session overview (`ChatOverview`). */
+export function ChatLinkRows({ id, links, onOpen }: {
+  id?: string;
+  links: readonly ChatLink[];
+  onOpen: (url: string) => void;
+}) {
+  const t = useT();
+  return <ul id={id} className="chat-link-index-list">
+    {links.map((link) => <li key={link.url}>
+      <button type="button" onClick={() => onOpen(link.url)}>
+        {link.label && <span>{link.label}</span>}
+        <bdi>{link.host}{link.rest}</bdi>
+        <small>{t(link.from === "you" ? "mobile.sentIndex.fromYou" : "mobile.sentIndex.fromAgent")}</small>
+      </button>
+    </li>)}
+  </ul>;
 }

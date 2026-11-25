@@ -9,10 +9,18 @@ import { boardColumns, fallbackColumnId, taskFromRemark } from "../../lib/todoBo
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
-import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, PencilIcon } from "../common/icons/Icon";
+import { ArrowRightIcon, CheckboxIcon, ChevronLeftIcon, ChevronRightIcon, FileTextIcon, PencilIcon, PlusIcon, TrashIcon } from "../common/icons/Icon";
+import { AddRemarkDialog } from "./AddRemarkDialog";
 
 const EMPTY_REMARKS: ProjectRemark[] = [];
 
+/**
+ * The side panel's Remarks view: the project's `REMARKS.md`, one section per
+ * file. The toolbar walks every remark in order (each step jumps to it) and
+ * opens the file itself; a file's head adds a remark to that file
+ * (`AddRemarkDialog`, the dialog the tree's context menu opens). A row is the
+ * kit's: done box, go-to, the remark over its line, then edit, card, delete.
+ */
 export function RemarksPane({ projectId, projectDir, visible }: {
   projectId: string; projectDir: string; visible: boolean;
 }) {
@@ -22,12 +30,15 @@ export function RemarksPane({ projectId, projectDir, visible }: {
   const { promptText, confirmAction, dialogs } = useDialogs();
   const entry = useProjectRemarksStore((s) => s.byProject[projectId]);
   const [cursor, setCursor] = useState(0);
+  /** The file whose head "+" is open in `AddRemarkDialog`. */
+  const [adding, setAdding] = useState<string | null>(null);
   const remarks = entry?.remarks ?? EMPTY_REMARKS;
   const groups = useMemo(() => {
     const out = new Map<string, ProjectRemark[]>();
     for (const remark of remarks) (out.get(remark.file) ?? out.set(remark.file, []).get(remark.file)!).push(remark);
     return [...out.entries()];
   }, [remarks]);
+  const done = remarks.filter((remark) => remark.done).length;
 
   useEffect(() => { if (visible) void useProjectRemarksStore.getState().refreshIfStale(projectId, projectDir); }, [visible, projectId, projectDir]);
   useEffect(() => {
@@ -63,42 +74,68 @@ export function RemarksPane({ projectId, projectDir, visible }: {
 
   return <div className="project-remarks-pane">
     {dialogs}
-    <div className="project-remarks-walk">
-      <button title={t("projectRemarks.previous")} onClick={() => walk(-1)}><ChevronLeftIcon /></button>
-      <span>{remarks.length ? `${cursor + 1}/${remarks.length}` : "0/0"}</span>
-      <button title={t("projectRemarks.next")} onClick={() => walk(1)}><ChevronRightIcon /></button>
+    <div className="sp-toolbar project-remarks-walk">
+      <button type="button" className="toolbar-btn toolbar-btn--sm" title={t("projectRemarks.previous")} aria-label={t("projectRemarks.previous")} onClick={() => walk(-1)}><ChevronLeftIcon /></button>
+      <span className="project-remarks-position" aria-live="polite">{remarks.length ? `${cursor + 1}/${remarks.length}` : "0/0"}</span>
+      <button type="button" className="toolbar-btn toolbar-btn--sm" title={t("projectRemarks.next")} aria-label={t("projectRemarks.next")} onClick={() => walk(1)}><ChevronRightIcon /></button>
+      {remarks.length > 0 && <span className="sp-toolbar-meta" data-testid="remarks-counts">{t("projectRemarks.counts", { open: remarks.length - done, done })}</span>}
       <UntestedTag id="remarksPane.1" />
+      <div className="sp-toolbar-end">
+        <button type="button" className="toolbar-btn toolbar-btn--sm" title={t("projectRemarks.openFile")} aria-label={t("projectRemarks.openFile")} onClick={() => jumpToSource(resolvePath(projectDir, REMARKS_FILE), 1)}><FileTextIcon /></button>
+      </div>
     </div>
-    {entry?.loading ? <p>{t("common.loading")}</p> : entry?.error ? <p className="error-text">{entry.error}</p> : remarks.length === 0 ? (
-      <div className="empty-state"><p>{t("projectRemarks.empty")}</p><button onClick={() => jumpToSource(resolvePath(projectDir, REMARKS_FILE), 1)}>{t("projectRemarks.openFile")}</button></div>
-    ) : groups.map(([file, rows]) => <section key={file} className="project-remarks-group">
-      <h3>{file}</h3>
-      {rows.map((remark) => {
-        const missing = remark.invalidPath || entry?.fileMissing[file];
-        return <div key={`${remark.srcStart}-${remark.text}`} className={`project-remark-row${missing ? " missing" : ""}`}>
-          <input type="checkbox" checked={remark.done} onChange={(e) => void useProjectRemarksStore.getState().setDone(projectId, projectDir, remark, e.target.checked)} />
-          <button className="project-remark-target" disabled={missing} onClick={() => jump(remark)}>{file}{remark.line != null ? `:${remark.line}` : ""}</button>
-          <span className="project-remark-text">{remark.text}</span>
-          {missing && <small>{t("projectRemarks.fileMissing")}</small>}
-          <button title={t("projectRemarks.edit")} onClick={() => void promptText({
-            title: t("projectRemarks.edit"),
-            body: <><strong>{file}</strong>{remark.line != null ? `:${remark.line}` : ""}</>,
-            label: t("projectRemarks.edit"),
-            initial: remark.text,
-            confirmLabel: t("common.save"),
-          }, (next) => useProjectRemarksStore.getState().edit(projectId, projectDir, remark, next))}><PencilIcon /></button>
-          <button title={t("projectRemarks.delete")} onClick={() => void (async () => {
-            const ok = await confirmAction({
-              title: t("projectRemarks.delete"),
-              body: t("projectRemarks.confirmDelete"),
-              confirmLabel: t("common.delete"),
-              danger: true,
-            });
-            if (ok) await useProjectRemarksStore.getState().remove(projectId, projectDir, remark);
-          })()}><CloseIcon /></button>
-          <button onClick={() => void makeCard(remark)}>{t("projectRemarks.makeCard")}</button>
-        </div>;
-      })}
-    </section>)}
+    <div className="side-panel-scroll project-remarks-list">
+      {entry?.loading ? <p className="sp-note">{t("common.loading")}</p> : entry?.error ? <p className="sp-note error-text">{entry.error}</p> : remarks.length === 0 ? (
+        <p className="sp-note">{t("projectRemarks.empty")}</p>
+      ) : groups.map(([file, rows]) => <section key={file} className="project-remarks-group" aria-label={file}>
+        <div className="sp-head project-remarks-head">
+          <span className="project-remarks-file" title={file}>{file}</span>
+          <span className="sp-head-meta">{rows.length}</span>
+          <span className="sp-head-end">
+            <button type="button" className="toolbar-btn toolbar-btn--sm" title={t("projectRemarks.addMenu")} aria-label={t("projectRemarks.addTo", { file })} onClick={() => setAdding(file)}><PlusIcon /></button>
+          </span>
+        </div>
+        {rows.map((remark) => {
+          const missing = remark.invalidPath || !!entry?.fileMissing[file];
+          const target = `${file}${remark.line != null ? `:${remark.line}` : ""}`;
+          const sub = [
+            remark.line != null ? t("projectRemarks.line", { line: remark.line }) : null,
+            missing ? t("projectRemarks.fileMissing") : null,
+          ].filter(Boolean).join(" · ");
+          return <div key={`${remark.srcStart}-${remark.text}`} className={`sp-row sp-row--two project-remark-row${missing ? " missing" : ""}${remark.done ? " done" : ""}`} data-testid="project-remark-row">
+            <span className="sp-row-state">
+              <input type="checkbox" checked={remark.done} aria-label={t("projectRemarks.doneLabel", { text: remark.text })} onChange={(e) => void useProjectRemarksStore.getState().setDone(projectId, projectDir, remark, e.target.checked)} />
+            </span>
+            <span className="sp-row-act">
+              <button type="button" className="btn-quiet project-remark-go" disabled={missing} title={t("projectRemarks.goTo", { target })} aria-label={t("projectRemarks.goTo", { target })} onClick={() => jump(remark)}><ArrowRightIcon /></button>
+            </span>
+            <span className="sp-row-text">
+              <span className="project-remark-text">{remark.text}</span>
+              {sub && <span className="sp-row-sub project-remark-sub">{sub}</span>}
+            </span>
+            <span className="sp-row-meta project-remark-actions">
+              <button type="button" className="btn-quiet" title={t("projectRemarks.edit")} aria-label={t("projectRemarks.edit")} onClick={() => void promptText({
+                title: t("projectRemarks.edit"),
+                body: <><strong>{file}</strong>{remark.line != null ? `:${remark.line}` : ""}</>,
+                label: t("projectRemarks.edit"),
+                initial: remark.text,
+                confirmLabel: t("common.save"),
+              }, (next) => useProjectRemarksStore.getState().edit(projectId, projectDir, remark, next))}><PencilIcon /></button>
+              <button type="button" className="btn-quiet" title={t("projectRemarks.makeCard")} aria-label={t("projectRemarks.makeCard")} onClick={() => void makeCard(remark)}><CheckboxIcon /></button>
+              <button type="button" className="btn-quiet is-danger" title={t("projectRemarks.delete")} aria-label={t("projectRemarks.delete")} onClick={() => void (async () => {
+                const ok = await confirmAction({
+                  title: t("projectRemarks.delete"),
+                  body: t("projectRemarks.confirmDelete"),
+                  confirmLabel: t("common.delete"),
+                  danger: true,
+                });
+                if (ok) await useProjectRemarksStore.getState().remove(projectId, projectDir, remark);
+              })()}><TrashIcon /></button>
+            </span>
+          </div>;
+        })}
+      </section>)}
+    </div>
+    {adding !== null && <AddRemarkDialog projectId={projectId} projectDir={projectDir} file={adding} onClose={() => setAdding(null)} />}
   </div>;
 }

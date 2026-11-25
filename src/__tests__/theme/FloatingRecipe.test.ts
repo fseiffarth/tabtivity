@@ -11,7 +11,7 @@ import { readAppStylesheet } from "../helpers/cssCorpus";
 const MEMBERS = [
   "project-dialog", "settings-dialog", "stats-dialog", "file-delete-dialog",
   "context-menu", "tab-new-menu", "project-switcher-add-menu", "box-chip-menu",
-  "project-search-popover", "file-run-args", "file-viewer-run-args", "git-change-tree",
+  "project-search-popover", "file-run-args", "file-viewer-run-args",
   "presentation-settings", "cal-alarm-popup", "project-pill-popup", "project-switch-toast",
   "hint-bubble",
 ];
@@ -65,16 +65,6 @@ describe("the floating recipe", () => {
     expect(css).not.toMatch(new RegExp(`(^|[\\s,}])\\.${member}\\s*\\{[^}]*border-top:`));
   });
 
-  // The Add/Commit/Push change tree is a big list over the panel: rail and wash
-  // made it a lavender slab with a thick top bar (user, 2026-11-06). It opts
-  // out after the group rules, so the later rule wins the cascade.
-  it("the change tree drops the rail and the wash after the recipe", () => {
-    const optOut = css.search(/(^|[\s,}])\.git-change-tree\s*\{\s*--surface-rail: 0px;\s*border-top: 0;/);
-    const noWash = css.search(/(^|[\s,}])\.git-change-tree::before\s*\{\s*content: none;/);
-    expect(optOut).toBeGreaterThan(css.indexOf("--surface-rail: 2px"));
-    expect(noWash).toBeGreaterThan(css.indexOf("inset: calc(-1 * var(--surface-rail)) 0 0"));
-  });
-
   // The dropdown menus keep the rail but no wash: a wash behind a column of
   // row cards read as a lavender slab (user, 2026-11-06). Rows rest flat.
   it("the dropdown menus drop the wash after the recipe and rest their rows flat", () => {
@@ -87,7 +77,7 @@ describe("the floating recipe", () => {
 
   // The accent edge runs round every side (user, 2026-11-10), dialogs and the
   // header hover menus alike; a top-only rail is what it replaced.
-  const RAIL_LESS = ["git-change-tree", "project-pill-popup", "project-switch-toast", "hint-bubble"];
+  const RAIL_LESS = ["project-pill-popup", "project-switch-toast", "hint-bubble"];
   const ring = selectorsOf("border: var(--surface-rail) solid var(--accent)");
   it.each(MEMBERS.filter((m) => !RAIL_LESS.includes(m)))("%s carries the accent ring on every side", (member) => {
     expect(ring).toMatch(/^\s*:root :is\(/);

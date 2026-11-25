@@ -10,12 +10,12 @@ import { speechLanguage, speechTag } from "../../speechLang";
 import { leadDraft } from "../../slashCommands";
 import { loadDict } from "../../../../src/lib/i18n";
 import {
-  prepareOnDeviceSpeech, speechRecognitionConstructor, advanceDictation, DICTATION_START,
-  dictationPreview, dictationProvisional, scanDictation, scanSeen, settleUtterances, stepUtterances, UTTERANCES_START, UTTERANCE_SETTLE_MS,
+  prepareOnDeviceSpeech, speechRecognitionConstructor, DICTATION_START,
+  scanDictation, settleDictation, settleUtterances, stepUtterances, UTTERANCES_START, UTTERANCE_SETTLE_MS,
   type DictationProgress, type DictationScan, type UtteranceLedger, type UtteranceOptions, type UtteranceStep,
 } from "../../voiceInput";
 import { startLexicon } from "../../startLexicon";
-import { matchDraftEdit, matchNavigate, type SpokenDraftEdit } from "../../../../src/lib/voice/voiceCommands";
+import { matchDraftEdit, matchHelp, matchNavigate, type SpokenDraftEdit } from "../../../../src/lib/voice/voiceCommands";
 import { DraftVoiceHistory, type DraftEditNote } from "../../../../src/lib/voice/draftEdit";
 import { type TabbyGate } from "./useTabbyGate";
 import { startDictation, type DictationSession } from "../../voiceSession";
@@ -124,6 +124,9 @@ export function useVoiceInput({
    * flight (the recognizer finalizes them after the stop) are routed by it, not
    * by the gate the stop has just cleared. Null while the mic is not stopping. */
   const stopped = useRef<{ gate: boolean; capture: boolean; open: boolean } | null>(null);
+  /** A spoken edit inside the step being taken forgot the dictation: the
+   * step's progress, read before the edit, must not quote it again. */
+  const forgotInStep = useRef(false);
   /** The user's stop also ends the hands-free loop until the mic is tapped
    * again. Call it before `nav.end()`: the mode the words were said in is read here. */
   const stopVoice = () => {
@@ -192,7 +195,9 @@ export function useVoiceInput({
       setVoiceStatus(shown);
       window.setTimeout(() => setVoiceStatus((current) => (current === shown ? listeningNote : current)), EDIT_NOTE_MS);
     };
-    /** Hands-free listens to utterances: the gate and the hold-back apply. */
+    /** Hands-free is on: the Tabby gate, the send guard and `pick` apply. The
+     * utterance layer itself runs on every mic, so a "Tabby navigate" or a
+     * "Tabby help" is held back and never typed, hands-free or not. */
     const layered = () => handsFree.on.current;
     const utteranceOptions = (flush: boolean): UtteranceOptions => {
       // After the user's stop the words still in flight are judged as the mic
@@ -202,14 +207,16 @@ export function useVoiceInput({
       return {
         // Asked as each utterance begins: a command taken from one utterance can
         // open navigation mode or set the gate for the next, in the same event.
-        gate: () => (after ? after.gate : tabbyGate.on.current),
+        gate: () => (after ? after.gate : layered() && tabbyGate.on.current),
         holdBack: true,
         capture: () => (after ? after.capture : utterances.capture.current),
         // The prompt has begun, or the start word was just said alone: the next
         // utterance needs no start word.
         open: (after ? after.open : tabbyGate.windowOpen()) || draftRef.current.trim() !== "",
         flush,
-        onWithheld: (text) => (after ? after.capture || matchNavigate(text, spokenIn) !== null || matchDraftEdit(text, spokenIn) !== null : dispatch(text)),
+        onWithheld: (text) => (after
+          ? after.capture || matchNavigate(text, spokenIn) !== null || matchHelp(text, spokenIn) || matchDraftEdit(text, spokenIn) !== null
+          : dispatch(text)),
       };
     };
     /** A spoken send ("go Tabby" last): it skips the hands-free window, so the
@@ -234,6 +241,7 @@ export function useVoiceInput({
       const guard = handsFree.on.current && !voiceStopping.current ? handsFree.guard() : undefined;
       voiceOpen.current = false;
       forgetDictation();
+      forgotInStep.current = true;
       const outcome = edits.apply(edit, draftRef.current, (draft, command) => leadDraft(draft, command, prefixCommands));
       if (outcome.draft !== null) {
         draftRef.current = outcome.draft;
@@ -253,7 +261,8 @@ export function useVoiceInput({
      * can be dictation, first match wins.
      *   1. navigation mode, if open: a leave word ("stop", "cancel") ends it,
      *      any other utterance is a navigation command (`useVoiceNav`);
-     *   2. "{assistant} navigate …" opens the mode (the same `take`);
+     *   2. "{assistant} navigate …" opens the mode, "{assistant} help" says
+     *      what can be said (the same `take`);
      *   3. the spoken draft edits ("Tabby scratch that" …, `matchDraftEdit`):
      *      utterances that start with the start word, so one that may be
      *      an edit is held until it settles (`startLexicon.ts`);
@@ -266,23 +275,25 @@ export function useVoiceInput({
       applyEdit(edit, text);
       return true;
     };
-    /** What a step did to the layer's state and the gate. */
-    const took = (step: UtteranceStep) => {
-      voiceProgress.current = step.progress;
+    /** What a step did to the layer's state and the gate; the "Heard:" line it
+     * leaves ("" once an edit in it forgot the dictation). */
+    const took = (step: UtteranceStep): string => {
+      const forgot = forgotInStep.current;
+      forgotInStep.current = false;
+      voiceProgress.current = forgot ? settleDictation(step.progress) : step.progress;
       ledger.current = step.ledger;
       if (step.opened) tabbyGate.windowUsed();
       if (step.bare) tabbyGate.listen();
+      return forgot ? "" : step.preview;
     };
     /** The live utterance is whole: no result for a moment, a restart, a stop. */
     const settle = (ended = false) => {
       window.clearTimeout(settleTimer.current);
-      if (!layered()) return;
       // Words the recognizer is still guessing at keep speech open, whatever
       // the quiet; at a restart they are gone.
       const live = ended ? undefined : lastScan.current;
       const step = settleUtterances(ledger.current, voiceProgress.current, lexicon, utteranceOptions(true), live);
-      took(step);
-      consume(step.insert, live?.interim ?? "", step.preview, step.held, step.provisional);
+      consume(step.insert, live?.interim ?? "", took(step), step.held, step.provisional);
     };
     settleNow.current = () => settle();
     /** What the words of one reading do: the hands-free guard, a spoken send,
@@ -296,15 +307,6 @@ export function useVoiceInput({
         handsFree.sendGuard.current?.reset();
         setVoicePreview("");
         return;
-      }
-      // Without hands-free, each event's new words are matched as one utterance
-      // for a spoken edit (hands-free does it in `dispatch`, on whole ones).
-      if (insert && !layered()) {
-        const edit = matchDraftEdit(insert, spokenIn);
-        if (edit) {
-          applyEdit(edit, insert);
-          return;
-        }
       }
       // Hands-free: settled words go through the send guard first. A stop
       // word cancels its window and never reaches the draft; on a question
@@ -387,22 +389,16 @@ export function useVoiceInput({
       },
       onResult: (event) => {
         const scan = scanDictation(event);
-        // Hands-free reads whole utterances (`voiceInput.ts`): the Tabby gate,
-        // and words held back while they may be a command. Otherwise each
-        // event's new words go straight in, as they always did.
-        if (layered()) {
-          window.clearTimeout(settleTimer.current);
-          lastScan.current = scan;
-          const step = stepUtterances(ledger.current, voiceProgress.current, scan, lexicon, utteranceOptions(false));
-          took(step);
-          consume(step.insert, scan.interim, step.preview, step.held, step.provisional);
-          settleTimer.current = window.setTimeout(() => settle(), UTTERANCE_SETTLE_MS);
-          return;
-        }
-        tabbyGate.clear();
-        const step = advanceDictation(voiceProgress.current, scan.heard, scanSeen(scan));
-        voiceProgress.current = step.progress;
-        consume(step.insert, scan.interim, dictationPreview(step.progress, scan.interim), false, dictationProvisional(step.progress, scan, lexicon));
+        // Whole utterances (`voiceInput.ts`): words held back while they may
+        // be a command ("Tabby navigate", "Tabby help", a spoken edit), and
+        // with hands-free the Tabby gate. Anything else goes in as it is
+        // finalized, as it always did.
+        if (!layered()) tabbyGate.clear();
+        window.clearTimeout(settleTimer.current);
+        lastScan.current = scan;
+        const step = stepUtterances(ledger.current, voiceProgress.current, scan, lexicon, utteranceOptions(false));
+        consume(step.insert, scan.interim, took(step), step.held, step.provisional);
+        settleTimer.current = window.setTimeout(() => settle(), UTTERANCE_SETTLE_MS);
       },
       // A new recognizer's result list starts empty: everything the last one
       // heard is in the draft already, and none of it is read back. Words it

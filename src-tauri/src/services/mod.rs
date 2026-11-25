@@ -7,8 +7,8 @@ pub use agent::{
     agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
     agent_import_offer, agent_install, agent_latest, agent_privacy, agent_prompts, agent_registry, agent_relocate, agent_resume_pinned, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, antigravity_session, assistant,
-    assistant_attach, assistant_model_probe, claude_token, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
-    model_rows, muse_session, opencode_models, opencode_session, opencode_store, transcript_watch,
+    assistant_attach, assistant_model_probe, claude_doctor, claude_otel, claude_token, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, cursor_session, google_chat,
+    model_rows, muse_session, next_prompt, opencode_models, opencode_session, opencode_store, transcript_watch,
 };
 #[cfg(unix)]
 pub use agent::codex_package;
@@ -20,12 +20,12 @@ pub mod git;
 pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_hardened, git_hosting, git_init, git_peer, git_release, git_worktrees};
 pub mod mail;
 pub use mail::{
-    mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine,
+    mail_ai, mail_attach, mail_authres, mail_complete, mail_contacts, mail_crypt, mail_crypto, mail_engine,
     mail_filters, mail_pgp, mail_reader, mail_rekey, mail_sanitize, mail_store,
     mail_thunderbird,
 };
 pub mod mcp;
-pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, print_mcp, schedule_mcp, tabs_mcp, web_lane};
+pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, print_mcp, project_lanes, schedule_mcp, tabs_mcp, web_lane};
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
@@ -116,6 +116,9 @@ pub mod net_usage;
 // The Ollama client: endpoint, listener owner gate, bounded HTTP, capability
 // and locality reads (moved down from `commands::ollama`, S5).
 pub mod ollama_client;
+// The loopback-only + no-cloud-model gate of the local-model jobs whose input
+// is private (the mail assistant, the agent next-prompt suggestion).
+pub mod ollama_local;
 // The local-model coding agents and the launch lines a local-model tab runs.
 pub mod local_drivers;
 pub mod openvpn;

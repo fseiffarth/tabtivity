@@ -104,6 +104,8 @@ export function useTapHolds(): (onTap: () => void, onHold: () => void) => TapHol
     onPointerCancel: cancel,
     onContextMenu: (event: React.MouseEvent) => {
       event.preventDefault();
+      // The hold is this button's: a chat bubble around it opens no menu too.
+      event.stopPropagation();
       // A long-press the timer already answered; a mouse's right-click has no
       // press under way and no click to swallow after it.
       if (held.current) return;
@@ -112,8 +114,9 @@ export function useTapHolds(): (onTap: () => void, onHold: () => void) => TapHol
       held.current = pressing;
       onHold();
     },
-    onClick: () => {
-      if (held.current) { held.current = false; return; }
+    // A link's click is swallowed too, so a hold on it does not also follow it.
+    onClick: (event?: React.MouseEvent) => {
+      if (held.current) { held.current = false; event?.preventDefault(); return; }
       onTap();
     },
   });
@@ -126,5 +129,5 @@ export interface TapHoldHandlers {
   onPointerUp: () => void;
   onPointerCancel: () => void;
   onContextMenu: (event: React.MouseEvent) => void;
-  onClick: () => void;
+  onClick: (event?: React.MouseEvent) => void;
 }

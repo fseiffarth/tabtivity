@@ -1,7 +1,7 @@
 import { agentFamily } from "../../shared/agentComposer";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { OPENCODE_MODEL_KEYS, OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys } from "../../mobile-web/src/terminal/openCodeMini";
+import { OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys, openCodeModelKeys } from "../../mobile-web/src/terminal/openCodeMini";
 import { antigravityEffortKeys, isAntigravityTab, type AntigravityEffort } from "../../mobile-web/src/terminal/antigravity";
 import { sameSelectStep, selectMoveKeys, type SelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
 import { bufferRows } from "../../mobile-web/src/terminal/subagentInput";
@@ -24,6 +24,7 @@ const NEXT_STEP_WAIT_MS = 700;
 /** How long a model list stays unchanged before it is kept for the next
  * opening: a frame split across reads is not the list. */
 const KEEP_SETTLE_MS = 500;
+const CODEX_MODEL_TITLE = "Select Model and Effort";
 
 export { CLAUDE_EFFORTS } from "../../shared/claudeEfforts";
 
@@ -74,7 +75,7 @@ export interface SessionPicker {
   busy: boolean;
   /** OpenCode's list is still being scrolled through and put together. */
   listing: boolean;
-  open: (command?: SessionPickerCommand) => void;
+  open: (command?: SessionPickerCommand, options?: { effortOnly?: boolean }) => void;
   choose: (index: number) => void;
   /** Close it here and, when it is up, in the session (its own Escape). */
   close: () => void;
@@ -85,7 +86,8 @@ export interface SessionPicker {
  * Claude), Codex's `/permissions` — opened in the pane and listed off its live
  * screen (`readModelPicker`), an option answered with the keys the session
  * takes (`modelPickKeys`). The Reader's facts row and steering's prompt box
- * both list it. Tabtivity picks nothing itself: each answer is the user's.
+ * both list it. Codex's effort chip advances past the current model so the
+ * first choice is the reasoning level.
  *
  * A local tab's `/model` sheet lists the rows its CLI build's picker drew last
  * time at once (`services::model_rows`), and remembers the live ones once
@@ -96,12 +98,13 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   tab: TabEntry;
   ptyId: string;
   agentLabel: string;
-  typeKeys: (keys: string[]) => Promise<void>;
+  typeKeys: (keys: string[], canWrite?: (key: string) => boolean) => Promise<void>;
 }): SessionPicker {
   const [picking, setPicking] = useState(false);
   const [command, setCommand] = useState<SessionPickerCommand>("/model");
   const [picker, setPicker] = useState<SelectPrompt | null>(null);
   const [answered, setAnswered] = useState<SelectStep | null>(null);
+  const [effortOnly, setEffortOnly] = useState(false);
   const t = useT();
   /** Antigravity keeps the model and its effort on one dialog and draws the
    * slider only under the highlighted row. A model tap walks the highlight
@@ -118,6 +121,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const [rememberedStep, setRememberedStep] = useState<SelectStep | null>(null);
   const [heldPick, setHeldPick] = useState<string | null>(null);
   const answeredOnce = useRef(false);
+  const opening = useRef(0);
   const rowsKept = useRef(false);
   // The remembered rows are this machine's CLI build's: only for a tab that
   // runs here. A VM or remote-only project's tab never does, whatever it stored.
@@ -132,7 +136,10 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
    * scrolls it and lists the slices put together (`OpenCodePickerWalk`). */
   const walk = useRef<OpenCodePickerWalk | null>(null);
   if (!walk.current) walk.current = new OpenCodePickerWalk((keys) => { void typeKeysNow.current(keys).catch(() => {}); });
-  useEffect(() => () => walk.current?.reset(), []);
+  useEffect(() => () => {
+    opening.current += 1;
+    walk.current?.reset();
+  }, []);
 
   // While the picker is up it owns the CLI's keyboard: no prompt may be typed
   // into the session (it would land in the picker and be lost).
@@ -160,6 +167,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
       }
       setPicker((previous) => (previous && next && sameSelectStep(previous, next)
         && previous.current === next.current
+        && previous.options[previous.current]?.description === next.options[next.current]?.description
         && previous.options.length === next.options.length
         && previous.hidden === next.hidden ? previous : next));
     };
@@ -172,6 +180,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   }, [picking, ptyId, agentLabel, antigravity]);
 
   const finish = useCallback(() => {
+    opening.current += 1;
     setPicking(false);
     setPicker(null);
     setAnswered(null);
@@ -200,15 +209,22 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     ? sliderPrompt(slider, t("mobile.model.effortTitle", { model: effortFor.label }))
     : null;
   const step = effortFor ? effortStep : modelStep;
+  const currentModel = effortOnly && !answeredOnce.current && modelStep?.title === CODEX_MODEL_TITLE
+    ? modelStep.options.find((option) => /\s\(current\)$/u.test(option.label))
+    : undefined;
+  const advancingModel = !!currentModel || (effortOnly && answered?.title === CODEX_MODEL_TITLE && !step);
   // The remembered rows stand in until the session draws its picker — for
   // OpenCode until its walk has listed the whole of it.
   const openCodeTab = isOpenCodeTab(agentLabel);
-  const preview = picking && !answered && !effortFor && (!picker || (openCodeTab && !!step?.hidden)) ? rememberedStep : null;
+  const preview = picking && !effortOnly && !answered && !effortFor && (!picker || (openCodeTab && !!step?.hidden)) ? rememberedStep : null;
   // A model with no slider (every Claude model Antigravity offers) is accepted
   // as soon as the walk lands: there is nothing left to ask.
+  // A model outside the account's plan takes no Enter (the dialog stays up and
+  // names why): the walk stops on it and the list shows the dialog's reason.
   useEffect(() => {
     if (!picking || !effortFor || !landed || !picker || effortStep) return;
     setEffortFor(null);
+    if (picker.options[picker.current]?.unavailable) return;
     setAnswered({ title: picker.title, options: picker.options });
     void typeKeysNow.current(["\r"]).catch(() => setAnswered(null));
   }, [picking, effortFor, landed, picker, effortStep]);
@@ -248,9 +264,12 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     return () => clearTimeout(never);
   }, [picking, step, picker, answered, effortFor, finish, closeUnread]);
 
-  const open = (next: SessionPickerCommand = "/model") => {
+  const open: SessionPicker["open"] = (next = "/model", options) => {
     if (picking || (next === "/model" ? !modelPickOffered(tab) : agentFamily(tab.cmd) !== "codex")) return;
+    const directEffort = next === "/model" && agentFamily(tab.cmd) === "codex" && !!options?.effortOnly;
+    const thisOpening = ++opening.current;
     setCommand(next);
+    setEffortOnly(directEffort);
     sawPicker.current = false;
     answeredOnce.current = false;
     rowsKept.current = false;
@@ -260,20 +279,36 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     setEffortFor(null);
     setRememberedStep(null);
     setHeldPick(null);
-    if (next === "/model" && tab.cmd && scope && runsHere) {
+    if (next === "/model" && !directEffort && tab.cmd && scope && runsHere) {
       void invoke<ModelRows | null>("remembered_model_rows", { agent: tab.cmd, scope }).then(
-        (rows) => setRememberedStep((now) => now ?? modelRowsStep(rows)),
+        (rows) => { if (opening.current === thisOpening) setRememberedStep((now) => now ?? modelRowsStep(rows)); },
         () => {},
       );
     }
+    const term = terminalFor(ptyId);
     const sent = isOpenCodeTab(agentLabel)
-      ? typeKeys(OPENCODE_MODEL_KEYS)
+      ? typeKeys(openCodeModelKeys(term ? bufferRows(term.buffer.active, term.rows) : []))
       : tab.scheduleTargetId
         ? submitScheduledAgentCommand(tab.scheduleTargetId, next)
         : Promise.reject(new Error("no agent input"));
     setPicking(true);
-    void sent.catch(finish);
+    void sent.catch(() => { if (opening.current === thisOpening) finish(); });
   };
+  useEffect(() => {
+    if (!picking || !modelStep || !currentModel || answeredOnce.current) return;
+    answeredOnce.current = true;
+    const thisOpening = opening.current;
+    setAnswered(modelStep);
+    // A redraw or a click on Close can happen between moving the highlight
+    // and pressing Enter. Only confirm the row Codex still marks current.
+    void typeKeysNow.current(modelPickKeys(modelStep, currentModel, agentLabel), (key) => {
+      if (opening.current !== thisOpening) return false;
+      const term = terminalFor(ptyId);
+      const live = term && readModelPicker(term.buffer.active, agentLabel);
+      return !!live && live.title === CODEX_MODEL_TITLE
+        && (key !== "\r" || live.options.find((option) => option.index === live.current)?.label === currentModel.label);
+    }).catch(() => { if (opening.current === thisOpening) setAnswered(null); });
+  }, [picking, modelStep, currentModel, agentLabel, ptyId]);
   /** Answer row `index` of the live step. */
   const answerLive = (index: number) => {
     if (!step) return;
@@ -303,6 +338,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     void typeKeys(modelPickKeys(step, option, agentLabel)).catch(() => setAnswered(null));
   };
   const choose = (index: number) => {
+    if (advancingModel) return;
     if (!preview) {
       answerLive(index);
       return;
@@ -314,7 +350,21 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const close = () => {
     walk.current?.hold();
     // The picker is the session's own: close it there too.
-    if (picker) void typeKeys(["\u001b"]).catch(() => {});
+    if (effortOnly && picker?.title?.startsWith("Select Reasoning Level for ")) {
+      // Escape from this step goes back to Codex's model list. Only back out
+      // of that list too if it has actually returned.
+      const thisClosing = opening.current + 1;
+      let first = true;
+      void typeKeys(["\u001b", "\u001b"], () => {
+        if (first) {
+          first = false;
+          return true;
+        }
+        const term = terminalFor(ptyId);
+        return opening.current === thisClosing && !!term
+          && readModelPicker(term.buffer.active, agentLabel)?.title === CODEX_MODEL_TITLE;
+      }).catch(() => {});
+    } else if (picker) void typeKeys(["\u001b"]).catch(() => {});
     else closeUnread();
     finish();
   };
@@ -350,11 +400,11 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     picking,
     command,
     picker,
-    step,
+    step: advancingModel ? null : step,
     // The model list stays up while the highlight walks to a tapped model.
-    shownStep: preview ?? liveShown,
+    shownStep: advancingModel ? null : preview ?? liveShown,
     remembered: !!preview,
-    busy: !!answered || !!heldPick || (!step && !preview),
+    busy: advancingModel || !!answered || !!heldPick || (!step && !preview),
     listing: openCodeTab && !!step?.hidden,
     open,
     choose,

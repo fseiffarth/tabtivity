@@ -31,6 +31,7 @@ import {
   syncRectToViewport,
   bigPointsToCssRect,
   refineToWord,
+  phraseAtPoint,
   type SyncRect,
   type TextItemBox,
 } from "../../../lib/viewers/tex/tex";
@@ -108,6 +109,7 @@ export function PdfPageCanvas({
   questionPins,
   tickBadges,
   onSize,
+  onPainted,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -189,6 +191,8 @@ export function PdfPageCanvas({
   onNoteDelete?: (noteId: string, baseline: readonly PdfNote[]) => void;
   /** Right-click → Print from here: the preview opens on this sheet to the end. */
   onPrintFrom?: () => void;
+  /** A raster of this sheet has just been put up (every paint, not only the first). */
+  onPainted?: () => void;
   /** This sheet is near the viewport and its remarks are wanted. Called instead of
    *  reading them here, so one owner holds one set of ids for one page. */
   onNeedNotes?: () => void;
@@ -337,6 +341,10 @@ export function PdfPageCanvas({
     hiddenStale.current = false;
     setCatchUp((n) => n + 1);
   }, [paneVisible]);
+
+  // Read by the render effect, which does not re-run for a new handler.
+  const onPaintedRef = useRef(onPainted);
+  onPaintedRef.current = onPainted;
 
   // What is currently ON this canvas: the fingerprint of the content it was
   // painted from, and the geometry it was painted at. A recompile hands the
@@ -525,6 +533,7 @@ export function PdfPageCanvas({
       const finalFp = fp ?? (await fingerprintPage(page, rot));
       if (cancelled) return;
       painted.current = { fp: finalFp, scale, rot, dpr, hidden: hiddenHighlights };
+      onPaintedRef.current?.();
     })();
     return () => {
       cancelled = true;
@@ -702,14 +711,23 @@ export function PdfPageCanvas({
     // The point as drawn → the page's unturned space, through the page's own
     // viewports (a turned sheet, a crop box off the origin). A failed page read
     // falls back to the plain scale mapping, right for an unturned page.
+    // No word from the text layer's hit test: read it off the page's text runs
+    // at the same point, so the editor still lands on the word, not on the line
+    // SyncTeX names (often the paragraph's first or last).
+    const withWord = async (x: number, y: number) =>
+      phrase ??
+      (await pageTextItemBoxesUnturned(doc, pageNumber).then(
+        (items) => phraseAtPoint(items, x, y),
+        () => undefined,
+      ));
     void doc.getPage(pageNumber).then(
-      (page) => {
+      async (page) => {
         const { turned, unturned } = syncViewports(page, scale, rot);
         const p = viewportToSyncPoint(turned, unturned, left, top);
         if (turned.rotation !== 0) setClickMark((m) => (m ? { ...m, turned: true } : m));
-        onSyncClick(pageNumber, p.x, p.y, phrase);
+        onSyncClick(pageNumber, p.x, p.y, await withWord(p.x, p.y));
       },
-      () => onSyncClick(pageNumber, left / scale, top / scale, phrase),
+      async () => onSyncClick(pageNumber, left / scale, top / scale, await withWord(left / scale, top / scale)),
     );
   };
 

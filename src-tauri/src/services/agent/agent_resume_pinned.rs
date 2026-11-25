@@ -56,6 +56,10 @@ pub fn resume_pinned(agent: &str, project_id: Option<&str>, uid: &str, cwd: &str
             Path::new(cwd).is_absolute()
                 && crate::services::muse_session::recorded_tab_session(&scope_home(project_id), cwd, project_id, uid).is_some()
         }
+        "cursor-agent" => {
+            Path::new(cwd).is_absolute()
+                && crate::services::cursor_session::recorded_tab_session(&scope_home(project_id), cwd, project_id, uid).is_some()
+        }
         _ => false,
     }
 }
@@ -108,7 +112,7 @@ mod tests {
 
     #[test]
     fn an_unknown_cli_or_a_bad_key_is_never_pinned() {
-        for agent in ["gemini", "cursor-agent", "grok", "qwen", "droid", "aider", "my-agent"] {
+        for agent in ["gemini", "grok", "qwen", "droid", "aider", "my-agent"] {
             assert!(!resume_pinned(agent, Some("p"), KEY, ""), "{agent}");
         }
         assert!(!resume_pinned("claude", Some("p"), "../../etc", ""));
@@ -119,5 +123,6 @@ mod tests {
     fn a_folder_cli_needs_an_absolute_working_folder() {
         assert!(!resume_pinned("agy", Some("p"), KEY, "relative"));
         assert!(!resume_pinned("muse", Some("p"), KEY, ""));
+        assert!(!resume_pinned("cursor-agent", Some("p"), KEY, ""));
     }
 }

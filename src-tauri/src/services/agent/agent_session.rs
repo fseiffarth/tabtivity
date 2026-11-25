@@ -50,6 +50,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "copilot" => crate::services::copilot_session::resolve(opts),
         "agy" => crate::services::google_chat::resolve(opts),
         "muse" => crate::services::muse_session::resolve(opts),
+        "cursor-agent" => crate::services::cursor_session::resolve(opts),
         _ => opts,
     }
 }
@@ -803,13 +804,26 @@ const SCAN_CHUNK: u64 = 1024 * 1024;
 /// flag says the window starts after the file's first byte. The scan reaches
 /// back at most [`REPLAY_SCAN_FACTOR`] times `budget`.
 pub(crate) fn read_conversation_tail(file: &mut std::fs::File, len: u64, budget: u64) -> Option<(String, bool)> {
+    read_conversation_tail_from(file, len, budget, 0)
+}
+
+/// [`read_conversation_tail`] of the part of the file from byte `from` on — a
+/// line start, such as where a Codex subagent's own records begin
+/// (`agent_transcript::codex_own_history_start`). The flag says the window
+/// starts after `from`.
+pub(crate) fn read_conversation_tail_from(
+    file: &mut std::fs::File,
+    len: u64,
+    budget: u64,
+    from: u64,
+) -> Option<(String, bool)> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
-    let start = conversation_tail_start(file, len, budget)?;
+    let start = conversation_tail_start(file, len, budget)?.max(from);
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut reader = BufReader::new(file);
     let mut line = Vec::new();
     let mut text = String::new();
-    if start > 0 {
+    if start > from {
         // Whatever came before the seek point is missing from the first line.
         reader.read_until(b'\n', &mut line).ok()?;
     }
@@ -822,7 +836,7 @@ pub(crate) fn read_conversation_tail(file: &mut std::fs::File, len: u64, budget:
             text.push_str(&String::from_utf8_lossy(&line));
         }
     }
-    Some((text, start > 0))
+    Some((text, start > from))
 }
 
 /// Where [`read_conversation_tail`]'s window starts: walking back line by line
@@ -1730,7 +1744,8 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
 /// Copilot's record is pointed at `chat` and the tab relaunched too; its spawn
 /// pins `--session-id <chat>` (`copilot_session::resolve`). Muse's likewise,
-/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`).
+/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`),
+/// Cursor's `--continue` into `--resume <chat>` (`cursor_session::resolve`).
 /// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
     if !is_uuid_shaped(uid) {
@@ -1753,7 +1768,7 @@ pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: 
             restore_cleared_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
-        "agy" | "copilot" | "muse" => {
+        "agy" | "copilot" | "muse" | "cursor-agent" => {
             write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
@@ -2559,6 +2574,7 @@ pub fn install_session_start_hook() -> std::io::Result<()> {
     crate::services::opencode_session::write_plugin()?;
     crate::services::antigravity_session::write_script()?;
     crate::services::muse_session::write_hook()?;
+    crate::services::cursor_session::write_hook()?;
     crate::services::copilot_session::write_turn_hook()?;
     crate::services::agent_hint::write_script()
 }
@@ -2602,6 +2618,8 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     crate::services::antigravity_session::register_in_home(home);
     // Muse's session hook (`services::muse_session`), on a Muse that takes it.
     crate::services::muse_session::register_in_home(home);
+    // Cursor's session hook (`services::cursor_session`).
+    crate::services::cursor_session::register_in_home(home);
     // Copilot's turn hooks (`services::copilot_session`), on a Copilot that takes them.
     crate::services::copilot_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the

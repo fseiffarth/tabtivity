@@ -122,6 +122,54 @@ describe("a waiting entry merged with the screen", () => {
     expect(card?.ask).toEqual(["Which layout should the probe draw?"]);
   });
 
+  it("merges a preview that draws boxes of its own, its label wrapped beside the panel", () => {
+    // The user's 2026-11-22 question (a `/design` session's `Dock size`): the
+    // preview frames a mock pane whose inner `│` lands on the panel's own
+    // `└──┘`. That read as Claude's fullscreen divider, the panel was cut off
+    // every row, `(Recommended)` lost the frame beside it, and both the phone
+    // card and the desktop Reader stayed read-only ("still drawing").
+    const preview = [
+      "RESTING (Diffs)",
+      "│ files │  diff card                          │",
+      "│       │  - old line                         │",
+      "├───────┴─────────────────────────────────────┤",
+      "│ [ Message the agent…                 🎙 ➤ ] │",
+      "└─────────────────────────────────────────────┘",
+      "",
+      "FOCUSED",
+      "│ files │  diff card                          │",
+      "├───────┴─────────────────────────────────────┤",
+      "│ opus · high · ⎇ develop · ctx 41%          │",
+      "│ ┌─────────────────────────────────────────┐ │",
+      "│ │ Rename that helper and…                 │ │",
+      "│ └─────────────────────────────────────────┘ │",
+    ];
+    const entry: TranscriptEntry = {
+      kind: "answer", text: "Under Diffs and Data, how tall should the dock be?", at: "2026-11-22T14:59:26.818Z", blocking: true,
+      questions: [{ header: "Dock size", question: "Under Diffs and Data, how tall should the dock be?", options: [
+        { label: "One line, grows on focus (Recommended)", preview: preview.join("\n") },
+        { label: "Full composer everywhere" }, { label: "One line everywhere, Chat too" },
+      ] }],
+    };
+    const left = ["❯ 1. One line, grows on focus", "    (Recommended)", "  2. Full composer everywhere", "  3. One line everywhere, Chat", "    too"];
+    const panel = ["┌" + "─".repeat(50) + "┐", ...preview.map((line) => `│ ${line.padEnd(48)} │`), "└" + "─".repeat(50) + "┘"];
+    const rows = Array.from({ length: panel.length }, (_, row) => ((left[row] ?? "").padEnd(34) + panel[row]).trimEnd());
+    const rule = "─".repeat(100);
+    const live = dialogOf([
+      "❯ /design keep the input field", "", rule, " ☐ Dock size", "",
+      "Under Diffs and Data, how tall should the dock be?", "",
+      ...rows, "", `${" ".repeat(34)}Notes: press n to add notes`, rule, "  Chat about this", "",
+      "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel",
+    ]);
+    expect(live?.question.options.map((option) => option.label)).toEqual([
+      "One line, grows on focus (Recommended)", "Full composer everywhere", "One line everywhere, Chat too", "Chat about this",
+    ]);
+    const card = mergeAskedQuestion(entry, live);
+    expect(card?.kind).toBe("merged");
+    expect(card?.question.readOnly).toBeUndefined();
+    expect(card?.question.options[0].preview).toBe(preview.join("\n"));
+  });
+
   it("bounds a preview it is handed, whatever the desktop sent", () => {
     const big = Array.from({ length: 80 }, (_, row) => `row ${row}`).join("\n");
     const entry: TranscriptEntry = { ...ENTRY, questions: [ASKED[0], { ...ASKED[1], options: [{ label: "Grid", preview: big }, { label: "List", preview: "x".repeat(5000) }] }] };

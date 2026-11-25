@@ -33,6 +33,10 @@ describe("cloud launches", () => {
     expect(cleanCloudTask(undefined)).toBeNull();
     expect(cleanCloudTask("a\u001b[2Jb")).toBeNull();
     expect(cleanCloudTask("x".repeat(MAX_CLOUD_TASK + 1))).toBeNull();
+    // A leading dash would reach the CLI as a flag, not as the task.
+    expect(cleanCloudTask("--dangerously-skip-permissions")).toBeNull();
+    expect(cleanCloudTask("  -v fix it")).toBeNull();
+    expect(cleanCloudTask("fix the -v flag")).toBe("fix the -v flag");
   });
 
   it("build a tab with no session id, so restore drops it instead of relaunching", () => {

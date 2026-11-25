@@ -31,10 +31,15 @@ export function useShortcutOverrides(): ShortcutMap | undefined {
   return useSettingsStore((s) => s.settings?.keyboard_shortcuts) as ShortcutMap | undefined;
 }
 
-/** Resolve a rebindable action for copy rendered outside a shortcut hook. */
-export function liveShortcutLabel(action: ShortcutAction): string {
+/** Resolve a rebindable action outside a shortcut hook. */
+export function liveShortcutChord(action: ShortcutAction): ChordDescriptor {
   const overrides = useSettingsStore.getState().settings?.keyboard_shortcuts as ShortcutMap | undefined;
-  return chordLabel(resolveChord(action, overrides));
+  return resolveChord(action, overrides);
+}
+
+/** Format a rebindable action for copy rendered outside a shortcut hook. */
+export function liveShortcutLabel(action: ShortcutAction): string {
+  return chordLabel(liveShortcutChord(action));
 }
 
 /** The panel toggle's key as the user has it — the Super/F9 default for this

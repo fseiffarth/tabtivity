@@ -774,6 +774,57 @@ intent. What is left is listed here.
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+156a. **One tab's refused refresh signs every Claude tab out, and the saved
+    long-lived token never takes over (DONE ✅ · 🧪 Untested).** Met for real
+    2026-11-23: a token saved in Manage CLIs, tabs still showing
+    `Login expired · Please run /login`. Two causes, read from the code and
+    Claude's binary, not caught in the act. (1) Every scope home
+    refreshes on its own copy of the one login and a refresh rotates the
+    refresh token; a tab refreshing within a keeper pass of another home's
+    refresh is refused, and Claude ends its copy **in place** (both tokens
+    emptied, `expiresAt: 0`, the file kept; 2.1.330). `agent_auth` adopted
+    that record like any tab write and placed it over the fresh login in
+    every home — the guard #156's `agent_creds` had ("a cleared record is
+    refused") was lost when the copies replaced it on 2026-09-26. (2) The
+    emptied file still counted as "signed in" (non-empty), so `claude_token`
+    never handed out the token, for new tabs either. Fixed in `agent_auth`:
+    an ended copy is adopted only as the end of the login the store holds
+    (what it last placed in that home), otherwise the store's login goes back
+    over it; `claude_login_live` reads the store's file, so an ended or
+    run-out login shows as signed out and the token goes to the next Claude
+    spawn. The remote line tests the host's file for a token, not for size.
+    A tab already running when the login really ends has no token in its
+    environment: the desktop Chat's expired-login answer then offers
+    **Continue on saved token** beside Sign in (a local Claude tab, a token
+    saved and the shared login over), which relaunches the tab in place on its
+    resume args — the user's choice over an automatic restart (2026-11-23).
+    The phone has no such button yet.
+    - [x] 🤖 Automated test — `agent_auth::tests`: an ended copy of an older
+      login never replaces the fresh one (either home first), the end of the
+      store's own login signs the store out and a later `/login` back in,
+      `claude_login_live` cases; `claude_token::tests`: the remote line takes
+      the token beside an ended or empty host file, not beside a login;
+      `commands::assistant` tests: a Claude on a token counts as signed in for
+      Tabby; `ReaderContinueOnToken.test.tsx`: the button relaunches on the
+      resume args once per message, and is absent while the login is good,
+      without a token, for another CLI, or in a signed-in chat.
+    - [ ] 🖐️ Manual test — needs the new backend. With a token saved and
+      several Claude tabs in different projects open past the login's
+      `expiresAt` (about eight hours): no tab shows `Login expired`. Then end
+      the login for real (revoke the session at claude.ai, send a prompt in a
+      tab): Manage CLIs shows Claude signed out and the token row "New Claude
+      tabs run on it"; a new Claude tab answers without `/login`, and a tab
+      that was already running shows **Continue on saved token** in its Chat,
+      which brings the conversation back on the token.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 ---
 
 157. **Agent fence compatibility-preserving hardening (implemented · untested live).**

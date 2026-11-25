@@ -98,6 +98,7 @@ export function SettingsMenu() {
             {t("settings.checkForUpdates")}
           </button>
           <UntestedTag id="desktop.headerMenus" />
+          <UntestedTag id="desktop.settingsLastPage" />
         </div>
       )}
     </div>

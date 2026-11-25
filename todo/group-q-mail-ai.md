@@ -155,6 +155,55 @@ the user runs it, and each new surface carries an `UntestedTag`.
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
 
+**Live QA — reply autocomplete (QA-AC)** — backend `services::mail_complete`
+(`docs/context/mail_ai.md`, plan `docs/mail_autocomplete_plan.md`); needs a
+loopback Ollama with a completion model tagged 🧠 Mail, `mail_ai_allow` on; the
+account's *autocomplete* toggle is on by default. Never live yet.
+- [ ] 🖐️ QA-ACa — reply to a plain mail, type `Thanks for` and pause: the rest of
+  the sentence appears dimmed after the caret and is about *that* mail. Tab takes
+  all of it, → takes one word. Caret inside the quoted original, or above it with
+  text after the caret on the line → no ghost.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ QA-ACb — reply to a PGP/S-MIME **encrypted** mail: the ghost still
+  appears but knows nothing of the body (ask about a fact only the body holds).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ QA-ACc — switch the account's autocomplete off: no ghost and no
+  request in `journalctl -u ollama`. With the keyring/store locked: no ghost;
+  unlock → it returns within a minute. With an Ollama cloud model or a remote
+  host set for the Mail role: no ghost, nothing leaves the machine.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ QA-ACd — phone: open a mail, type in the reply field: a tap strip
+  appears and a tap appends it. Close the desktop window: no strip, no error.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+
 **Live QA — agent attachments (#859b)** —
 needs `root_mcp_mail` on, a mail account, and Settings → Agent fence → *Root
 agent reads projects* on before the root tab is opened.

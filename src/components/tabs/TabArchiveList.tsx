@@ -1,9 +1,20 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactElement } from "react";
 import { useT } from "../../lib/i18n";
 import { AGENT_ITEMS, TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { DialogShell, useDialogs } from "../common/PromptDialogs";
 import { UntestedTag } from "../common/UntestedTag";
-import { CloseIcon, DotIcon } from "../common/icons/Icon";
+import {
+  CalendarIcon,
+  FolderIcon,
+  GlobeIcon,
+  HourglassIcon,
+  PageIcon,
+  SparkleIcon,
+  TerminalIcon,
+  TrashIcon,
+  WindowIcon,
+  type IconProps,
+} from "../common/icons/Icon";
 import {
   deleteArchivedTabs,
   restoreArchivedTab,
@@ -11,13 +22,27 @@ import {
   type ArchivedTab,
 } from "../../stores/tabArchive";
 import type { TabKind } from "../../stores/tabs";
+import { tabKindLabelKey } from "./TabHoverCard";
 
-/** What a row says under its label: the agent's CLI for an agent tab. */
+/** The agent's CLI for an agent tab: the word an agent row says it is. */
 function agentOf(entry: ArchivedTab): string | null {
   const kind = entry.tab.kind;
   if (kind !== "agent" && kind !== "local_agent") return null;
   return AGENT_ITEMS.find((item) => item.cmd === entry.tab.cmd)?.label ?? entry.tab.cmd;
 }
+
+/** One glyph per kind of tab, in that kind's tab-bar colour. */
+const KIND_ICON: Partial<Record<TabKind, (p: IconProps) => ReactElement>> = {
+  agent: SparkleIcon,
+  local_agent: SparkleIcon,
+  shell: TerminalIcon,
+  files: FolderIcon,
+  projectfiles: FolderIcon,
+  embed: PageIcon,
+  browser: GlobeIcon,
+  calendar: CalendarIcon,
+  promptchart: HourglassIcon,
+};
 
 function archivedWhen(ms: number): string {
   return new Date(ms).toLocaleString(undefined, {
@@ -30,10 +55,11 @@ function archivedWhen(ms: number): string {
 }
 
 /**
- * A scope's archived tabs (`stores/tabArchive`): a filter, then one row per
- * tab, newest first — its label opens it again (Restore), × deletes it for
- * good after asking. Shown by the side panel's Archive view and the + menu's
- * Archived tabs dialog; `onRestored` lets the dialog close after a restore.
+ * A scope's archived tabs (`stores/tabArchive`): a toolbar with the filter and
+ * the bulk delete, then one two-line row per tab, newest first — the row opens
+ * it again (Restore), the trash button deletes it for good after asking.
+ * Shown by the side panel's Archive view and the + menu's Archived tabs
+ * dialog; `onRestored` lets the dialog close after a restore.
  */
 export function TabArchiveList({ scope, onRestored }: { scope: string; onRestored?: () => void }) {
   const t = useT();
@@ -78,7 +104,7 @@ export function TabArchiveList({ scope, onRestored }: { scope: string; onRestore
 
   return (
     <div className="tab-archive-list">
-      <div className="tab-archive-head menu-form">
+      <div className="sp-toolbar tab-archive-head menu-form">
         <input
           type="search"
           value={filter}
@@ -90,7 +116,7 @@ export function TabArchiveList({ scope, onRestored }: { scope: string; onRestore
         {shown.length > 1 && (
           <button
             type="button"
-            className="orange-file-act"
+            className="btn-quiet is-danger"
             title={t("tabArchive.deleteShownTitle")}
             onClick={() => void remove(shown)}
           >
@@ -99,50 +125,47 @@ export function TabArchiveList({ scope, onRestored }: { scope: string; onRestore
         )}
       </div>
       {shown.length === 0 ? (
-        <div className="side-panel-orange-empty">
-          {t(entries.length === 0 ? "tabArchive.empty" : "tabArchive.noMatch")}
-        </div>
+        <p className="sp-note">{t(entries.length === 0 ? "tabArchive.empty" : "tabArchive.noMatch")}</p>
       ) : (
-        shown.map((entry) => {
-          const agent = agentOf(entry);
-          const kind = (entry.tab.kind ?? "shell") as TabKind;
-          return (
-            <div key={entry.id} className="orange-file-row">
-              <button
-                type="button"
-                className="orange-file-name"
-                disabled={busy !== null}
-                title={t("tabArchive.restoreTitle", { label: entry.tab.label })}
-                onClick={() => void restore(entry)}
-              >
-                <span
-                  className="orange-file-dot"
-                  style={{ color: TAB_ACCENT[kind] ?? "var(--text-secondary)" }}
-                  aria-hidden="true"
-                >
-                  <DotIcon />
-                </span>
-                <span className="tmux-session-label">{entry.tab.label}</span>
-                <span className="tmux-session-meta">
-                  {agent ? `${agent} · ` : ""}
-                  {archivedWhen(entry.archivedAt)}
-                </span>
-              </button>
-              <div className="orange-file-actions">
+        <div role="list">
+          {shown.map((entry) => {
+            const kind: TabKind = entry.tab.kind ?? "shell";
+            const Icon = KIND_ICON[kind] ?? WindowIcon;
+            const word = agentOf(entry) ?? t(tabKindLabelKey(entry.tab));
+            return (
+              <div key={entry.id} role="listitem" className="sp-row sp-row--plain sp-row--two tab-archive-row" data-testid="tab-archive-row">
                 <button
                   type="button"
-                  className="orange-file-act"
-                  title={t("tabArchive.deleteOneTitle")}
-                  aria-label={t("tabArchive.deleteOneAria", { label: entry.tab.label })}
+                  className="sp-row-main tab-archive-restore"
                   disabled={busy !== null}
-                  onClick={() => void remove([entry])}
+                  title={t("tabArchive.restoreTitle", { label: entry.tab.label })}
+                  onClick={() => void restore(entry)}
                 >
-                  <CloseIcon />
+                  <span className="tab-archive-icon" style={{ color: TAB_ACCENT[kind] ?? "var(--text-secondary)" }}>
+                    <Icon />
+                  </span>
+                  <span className="sp-row-text">
+                    <span className="sp-row-name">{entry.tab.label}</span>
+                    <span className="sp-row-sub" data-testid="tab-archive-kind">{word}</span>
+                  </span>
                 </button>
+                <span className="sp-row-meta">
+                  {archivedWhen(entry.archivedAt)}
+                  <button
+                    type="button"
+                    className="btn-quiet is-danger tab-archive-delete"
+                    title={t("tabArchive.deleteOneTitle")}
+                    aria-label={t("tabArchive.deleteOneAria", { label: entry.tab.label })}
+                    disabled={busy !== null}
+                    onClick={() => void remove([entry])}
+                  >
+                    <TrashIcon />
+                  </button>
+                </span>
               </div>
-            </div>
-          );
-        })
+            );
+          })}
+        </div>
       )}
     </div>
   );

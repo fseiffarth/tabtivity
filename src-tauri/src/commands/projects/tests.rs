@@ -1487,7 +1487,8 @@ fn a_linked_or_fifo_project_json_stops_the_move() {
 /// An import writes its project over the folder's `project.json`: a
 /// regular one past the size cap must stop it, not be taken for blank and
 /// overwritten (losing its time and description). One that does not parse
-/// is still replaced by a blank project, as it always was.
+/// as this app's (another tool's `project.json`, or a damaged one) stops it
+/// too, and is left as it was.
 #[test]
 fn an_oversized_project_json_stops_the_import() {
     let dir = tempfile::tempdir().unwrap();
@@ -1495,8 +1496,11 @@ fn an_oversized_project_json_stops_the_import() {
     assert!(project_json_to_adopt(&file).unwrap().is_none());
     fs::write(&file, r#"{"id":"p1","name":"P","directory":"d","description":"kept"}"#).unwrap();
     assert_eq!(project_json_to_adopt(&file).unwrap().unwrap().description.as_deref(), Some("kept"));
-    fs::write(&file, "{ not json").unwrap();
-    assert_eq!(project_json_to_adopt(&file).unwrap().unwrap().id, Project::default().id);
+    for foreign in ["{ not json", r#"{"dependencies":{},"frameworks":{"net9.0":{}}}"#] {
+        fs::write(&file, foreign).unwrap();
+        assert!(project_json_to_adopt(&file).is_err(), "{foreign}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), foreign);
+    }
 
     // Sparse: past the cap without writing 64 MB.
     let big = fs::File::create(&file).unwrap();
@@ -2257,6 +2261,7 @@ const SYNC_COMMANDS_ALLOWED: &[(&str, &str)] = &[
     ("projects.rs", "set_project_sandbox_spec"),
     ("projects.rs", "set_project_remote_control"),
     ("projects.rs", "set_project_schedule_mcp"),
+    ("projects.rs", "set_project_mcp_off"),
     ("projects.rs", "set_project_git_push_mcp"),
     ("projects.rs", "set_project_openvpn"),
     ("projects.rs", "set_project_auto_connect"),

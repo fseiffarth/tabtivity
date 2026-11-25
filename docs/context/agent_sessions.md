@@ -464,11 +464,12 @@ hint. See the third-party update checklist.
 
 The CLIs that load user skills from their home also get a `tabtivity-send`
 skill (`agent_hint::write_skill_in_home`, 2026-11-08): `SKILL.md` in
-`.claude/skills` (Claude, OpenCode), `.codex/skills` and `.copilot/skills`,
+`.claude/skills` (Claude, OpenCode), `.codex/skills`, `.copilot/skills` and
+`.gemini/config/skills` (Antigravity 1.5.16, run offline 2026-11-24),
 rewritten at each spawn after the global layer, never in the assistant's or
 the probe's home. It carries the whole contract (piped `-n`, `--clear`,
 limits, exit codes) and is a slash command (`/tabtivity-send <file>`). The
-shared `.agents/skills` is left out: OpenCode, Codex and Copilot all read it
+shared `.agents/skills` is left out: OpenCode, Codex, Copilot and Antigravity all read it
 beside their own and would list the skill twice. The one-line hint stays,
 since a skill loads only when the model matches its description.
 
@@ -646,11 +647,29 @@ every place a log can be has to be probed:
   it is opened — and emptied when the copied session changes. A host
   tab of any other CLI has no chat.
 
-## Continuing in another CLI
+## Continuing in a new session (same CLI or another)
 
 Code: `agent/agent_cli_handoff.rs` (backend), `CliHandoffDialog.tsx` +
 `CliHandoffMenuItem.tsx` + `lib/agents/cliHandoff.ts` (frontend); plan and
-history in `docs/done/cli_session_handoff_plan.md`.
+history in `docs/done/cli_session_handoff_plan.md` and, for the same-CLI
+target and the summary prompt, `docs/session_memory_handoff_plan.md`.
+
+- Why the same CLI: a fresh session starting from the chat text (no tool
+  output) carries a far smaller context than the resumed one. The tab menu
+  preselects the source's own CLI; a limit notice offers only the others (a
+  fresh session of the limited CLI hits the same limit).
+- The summary prompt: only while the source's prompt cache has 2+ minutes left
+  (`PromptCache` in the preview; asked cold it would re-read the whole
+  conversation at full price) and never from a limit notice (a limited session
+  cannot answer). It is a chat answer, not a file the agent writes (a write
+  outside the project would stall on the CLI's permission prompt). The prompt
+  carries `[handoff-summary <nonce>]`; the backend takes the answers after that
+  prompt, drops both from the recent conversation (budget then 16 KiB) and heads
+  the section as the previous agent's unchecked claims. No answer within 3 min,
+  or Continue without it: the chat text alone. Rejected after measuring: a
+  memory kept current every turn (+7–20% on every long session), a local-model
+  summary (minutes on the iGPU, loses exact detail), an automatic summary before
+  the cache expires (1 h lifetime: nearly always wasted).
 
 - The dialog opens from a limit notice (`TerminalLimitHandoff`) or the tab
   menu. Both start a *new* tab on the chosen CLI through `newAgentTabForDraft`,
@@ -665,7 +684,8 @@ history in `docs/done/cli_session_handoff_plan.md`.
   Reader's tab identity, never conversation text from the renderer or phone). No
   summarizer runs; the file holds the first request, the newest turns that fit a
   budget, the previous agent's cockpit notes (claims, with times) and
-  `git status`. Everything agent- or project-written is quoted in a fence.
+  `git status`, plus the source's own summary when one was asked for.
+  Everything agent- or project-written is quoted in a fence.
 - Local tabs only: remote-host tabs, remote projects, reserved scopes (the
   assistant) and CLIs whose transcript is not read are refused with the
   `unsupported` code.

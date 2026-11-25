@@ -2,7 +2,11 @@
 
 Every local project agent tab is granted the MCP lanes (`root_mcp::grant_lanes`:
 schedule, git, help, markup, print, cockpit, tabs; root in the root console). Each grant puts
-an env pair in the spawn: `TABTIVITY_<LANE>_MCP_URL` and `_TOKEN`. How the CLI
+an env pair in the spawn: `TABTIVITY_<LANE>_MCP_URL` and `_TOKEN`. A project can switch
+any of those seven off for its own tabs (`services::project_lanes`, the
+`projects.json` entry's `mcp_off`): no grant at spawn, and the listener refuses
+a running session's lane per request (help excepted: its token names no
+project, so it lasts until the tab restarts). How the CLI
 learns that the server exists is decided per CLI, in two ways.
 
 ## 1. Named at launch: the registry row

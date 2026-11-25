@@ -273,12 +273,12 @@ fn two_waiting_claude_questions_come_last_in_the_order_they_were_asked() {
 fn a_subagent_files_questions_are_never_waiting() {
     let line = probe_ask("toolu_S", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z").replace("\"isSidechain\":false", "\"isSidechain\":true");
     let lines: Vec<&str> = line.lines().collect();
-    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, true);
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, true, None);
     assert!(entries.iter().all(|e| e.questions.is_empty()), "{entries:?}");
     // The same call in the session's own file does wait.
     let own = probe_ask("toolu_S", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z");
     let lines: Vec<&str> = own.lines().collect();
-    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, false);
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, false, None);
     assert_eq!(entries.len(), 1);
     assert!(entries[0].blocking);
 }
@@ -364,6 +364,48 @@ fn the_tool_calls_with_no_result_are_listed_with_what_they_act_on() {
 }
 
 #[test]
+fn every_shell_call_is_listed_in_order_finished_or_running() {
+    let bash = |call: &str, command: &str, at: &str| tool_call(call, "Bash", serde_json::json!({"command": command, "description": format!("run {command}")}), at);
+    let text = probe_prompt("first")
+        + &bash("toolu_1", "ls", "2026-11-18T09:20:00.000Z")
+        + &tool_result("toolu_1", false)
+        + &probe_prompt("second")
+        + &bash("toolu_2", "git status", "2026-11-18T09:21:00.000Z")
+        + &tool_result("toolu_2", true)
+        + &bash("toolu_3", "cargo test", "2026-11-18T09:22:00.000Z");
+    let read = read_claude(text);
+    // Only the one without its result is running …
+    assert_eq!(read.shells.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["cargo test"]);
+    // … but the Data tab's list has them all, an earlier turn's and a failed one too.
+    assert_eq!(
+        read.shells_run.iter().map(|s| (s.command.as_str(), s.description.as_deref(), s.at.as_deref())).collect::<Vec<_>>(),
+        vec![
+            ("ls", Some("run ls"), Some("2026-11-18T09:20:00.000Z")),
+            ("git status", Some("run git status"), Some("2026-11-18T09:21:00.000Z")),
+            ("cargo test", Some("run cargo test"), Some("2026-11-18T09:22:00.000Z")),
+        ]
+    );
+    let json = serde_json::to_value(&read).unwrap();
+    assert_eq!(json["shellsRun"][1]["command"], "git status");
+    assert!(serde_json::to_value(AgentTranscript::default()).unwrap().get("shellsRun").is_none());
+}
+
+#[test]
+fn the_shell_list_keeps_the_newest_within_its_bounds() {
+    let shell = |command: String| RunningShell { command, ..Default::default() };
+    let many: Vec<RunningShell> = (0..MAX_SHELLS_RUN + 5).map(|n| shell(n.to_string())).collect();
+    let kept = newest_shells(many);
+    assert_eq!(kept.len(), MAX_SHELLS_RUN);
+    assert_eq!(kept[0].command, "5");
+    assert_eq!(kept.last().unwrap().command, (MAX_SHELLS_RUN + 4).to_string());
+    // Long command lines: only as many of the newest as fit the character bound.
+    let long: Vec<RunningShell> = (0..40).map(|n| shell(format!("{n:02}{}", "x".repeat(MAX_SHELL_CHARS - 2)))).collect();
+    let kept = newest_shells(long);
+    assert_eq!(kept.len(), MAX_SHELLS_RUN_CHARS / MAX_SHELL_CHARS);
+    assert!(kept.last().unwrap().command.starts_with("39"));
+}
+
+#[test]
 fn a_rejected_call_a_new_prompt_or_an_interrupt_ends_the_wait() {
     let edit = |call: &str| tool_call(call, "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
     // A declined call has its (error) result, the interrupt notice follows.
@@ -382,9 +424,9 @@ fn a_rejected_call_a_new_prompt_or_an_interrupt_ends_the_wait() {
 fn waiting_tools_skip_a_subagent_file_odd_names_and_are_bounded() {
     let call = tool_call("toolu_S", "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
     let lines: Vec<&str> = call.lines().collect();
-    let (_, _, sidechain) = parse_entries(&lines, TranscriptKind::Claude, true);
+    let (_, _, sidechain) = parse_entries(&lines, TranscriptKind::Claude, true, None);
     assert!(sidechain.tools.is_empty());
-    let (_, _, own) = parse_entries(&lines, TranscriptKind::Claude, false);
+    let (_, _, own) = parse_entries(&lines, TranscriptKind::Claude, false, None);
     assert_eq!(own.tools.len(), 1);
 
     let mut text = probe_prompt("go");
@@ -422,7 +464,7 @@ fn a_tail_of_unique_tool_calls_and_asks_is_walked_in_linear_time() {
         }
         let lines: Vec<&str> = text.lines().collect();
         let started = std::time::Instant::now();
-        let (entries, _, shell_calls) = parse_entries(&lines, TranscriptKind::Claude, false);
+        let (entries, _, shell_calls) = parse_entries(&lines, TranscriptKind::Claude, false, None);
         (started.elapsed(), entries, shell_calls)
     };
     let (small, ..) = run(30_000);
@@ -1549,6 +1591,32 @@ fn a_claude_background_shell_runs_while_its_output_is_held_open_and_no_notificat
 }
 
 #[test]
+fn codex_recovers_only_an_interrupted_turns_missing_prompt_from_its_own_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = dir.path().join(".codex");
+    std::fs::create_dir(&codex).unwrap();
+    std::fs::write(codex.join("history.jsonl"), [
+        r#"{"session_id":"other","ts":10,"text":"another tab"}"#,
+        r#"{"session_id":"ours","ts":10,"text":"first @image.png"}"#,
+        r#"{"session_id":"ours","ts":11,"text":"continue"}"#,
+        r#"{"session_id":"ours","ts":12,"text":"ambiguous"}"#,
+        r#"{"session_id":"ours","ts":12,"text":"also ambiguous"}"#,
+    ].join("\n")).unwrap();
+    let lines = [
+        r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}"#,
+        r#"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"one","started_at":10}}"#,
+        r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"two"}}"#,
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}"#,
+        r#"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"two","started_at":11}}"#,
+        r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"three"}}"#,
+        r#"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"three","started_at":12}}"#,
+    ];
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Codex, false, Some((dir.path(), "ours")));
+    let texts: Vec<_> = entries.iter().map(|entry| entry.text.as_str()).collect();
+    assert_eq!(texts, ["first @image.png", "interrupted", "continue", "interrupted", "interrupted"]);
+}
+
+#[test]
 fn a_codex_subagent_is_placed_when_its_thread_was_created() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state_5.sqlite");
@@ -1577,7 +1645,7 @@ fn a_codex_subagent_is_placed_when_its_thread_was_created() {
     )
     .unwrap();
     let stores = [db.clone()];
-    let read = read_transcript_in(&path, TranscriptKind::Codex, &Spawns::Codex { stores: &stores, thread: "root" }, false, None, DEFAULT_LIMIT).unwrap();
+    let read = read_transcript_in(&path, TranscriptKind::Codex, &Spawns::Codex { stores: &stores, home: dir.path(), thread: "root" }, false, None, DEFAULT_LIMIT).unwrap();
     // 1789680030000 ms is 2026-09-17T21:20:30Z: after the prompt, before the answer.
     assert_eq!(kinds(&read), vec![("prompt", "audit deps"), ("agent", "Check the lockfile"), ("answer", "Asked Kepler.")]);
     assert_eq!(read.entries[1].role.as_deref(), Some("explorer · Kepler"));
@@ -1594,6 +1662,73 @@ fn a_codex_subagent_is_placed_when_its_thread_was_created() {
     let bare = dir.path().join("bare.sqlite");
     rusqlite::Connection::open(&bare).unwrap().execute_batch("CREATE TABLE threads (id TEXT)").unwrap();
     assert!(crate::services::codex_store::spawned_threads(&bare, "root").is_empty());
+}
+
+#[test]
+fn a_codex_subagent_rollout_reads_from_its_own_history_not_its_parents() {
+    // Codex forks a spawned agent's rollout: its `session_meta`, then the
+    // parent's conversation, then from line `subagent_history_start_ordinal`
+    // on the subagent's own (shape of Codex 0.172).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-child.jsonl");
+    let message = |role: &str, kind: &str, text: &str| {
+        format!("{{\"type\":\"response_item\",\"timestamp\":\"2026-11-24T16:50:04Z\",\"payload\":{{\"type\":\"message\",\"role\":\"{role}\",\"content\":[{{\"type\":\"{kind}\",\"text\":\"{text}\"}}]}}}}\n")
+    };
+    let inherited = [
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"parent\",\"thread_source\":\"user\"}}\n".to_string(),
+        message("user", "input_text", "write it to docs"),
+        message("assistant", "output_text", "Saved the plan."),
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"apply_patch\",\"call_id\":\"c0\",\"arguments\":\"{}\"}}\n".to_string(),
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"FileChange\",\"id\":\"p\",\"status\":\"completed\",\"changes\":{\"/p/parent.md\":{\"type\":\"add\",\"content\":\"x\"}}}}}\n".to_string(),
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"t\",\"reason\":\"interrupted\"}}\n".to_string(),
+        message("developer", "input_text", "You are now a newly spawned child agent."),
+    ];
+    let ordinal = inherited.len() + 1;
+    let mut text = format!(
+        "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"child\",\"forked_from_id\":\"parent\",\"thread_source\":\"subagent\",\"subagent_history_start_ordinal\":{ordinal}}}}}\n"
+    );
+    text.extend(inherited);
+    text.push_str(&message("assistant", "output_text", "Checking the cleanup paths."));
+    std::fs::write(&path, &text).unwrap();
+
+    let read = read_transcript_in(&path, TranscriptKind::Codex, &Spawns::None, true, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(kinds(&read), vec![("answer", "Checking the cleanup paths.")]);
+    assert!(!read.truncated);
+    let changes = crate::services::agent_changes::read_changes(&path, crate::services::agent_changes::Store::Codex, None, 50).unwrap();
+    assert!(changes.changes.is_empty(), "{:?}", changes.changes);
+
+    // A rollout still being written up to its own history shows nothing yet;
+    // one without the field (a tab's own thread) is read whole.
+    let short = dir.path().join("rollout-new.jsonl");
+    std::fs::write(&short, text.lines().take(3).map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+    assert!(read_transcript_in(&short, TranscriptKind::Codex, &Spawns::None, true, None, DEFAULT_LIMIT).unwrap().entries.is_empty());
+    let own = dir.path().join("rollout-own.jsonl");
+    std::fs::write(&own, text.lines().skip(1).map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+    let whole = read_transcript_in(&own, TranscriptKind::Codex, &Spawns::None, false, None, DEFAULT_LIMIT).unwrap();
+    assert!(kinds(&whole).contains(&("prompt", "write it to docs")));
+    let all = crate::services::agent_changes::read_changes(&own, crate::services::agent_changes::Store::Codex, None, 50).unwrap();
+    assert_eq!(all.changes.len(), 1);
+}
+
+#[test]
+fn a_codex_subagent_without_a_readable_task_is_named_by_its_agent_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state_5.sqlite");
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, created_at INTEGER, title TEXT NOT NULL,
+                   first_user_message TEXT NOT NULL DEFAULT '', agent_nickname TEXT, agent_role TEXT,
+                   created_at_ms INTEGER, agent_path TEXT);
+             CREATE TABLE thread_spawn_edges (parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL);
+             INSERT INTO threads VALUES ('child', '/r/c.jsonl', 1, '', '', 'Beauvoir', NULL, 1000, '/root/ollama_cleanup');
+             INSERT INTO thread_spawn_edges VALUES ('root', 'child', 'running');",
+        )
+        .unwrap();
+    let children = crate::services::codex_store::spawned_threads(&db, "root");
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].task, "ollama cleanup");
+    assert_eq!(crate::services::codex_store::descendant_threads(&db, "root", 1)[0].task, "ollama cleanup");
 }
 
 #[test]
@@ -1830,7 +1965,7 @@ fn only_a_tab_that_runs_remotely_has_its_opencode_store_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("opencode.db");
     let tab_dir = dir.path().to_string_lossy().into_owned();
-    let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10);
+    let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10, false);
     assert_eq!(read(true).reason.as_deref(), Some("unsupported"));
     assert_eq!(read(false).reason.as_deref(), Some("no_transcript"));
 }

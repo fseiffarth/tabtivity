@@ -15,6 +15,10 @@ export function sanitizeVoiceTranscript(value: string): string {
  * or two words ("tab bi"). Pure and language-free, so it lives here. */
 const ASSISTANT_NAME = "tabb?y|tabbie|tabie|tabee|tabi|tabe|tavv?[iy]|te(?:bb?)[iy]|tab\\s+(?:by|bi|bie|bee)";
 
+/** The Tabby gate (phone and desktop): after the start word said alone, the
+ * next utterance is the prompt without it for this long. */
+export const GATE_WINDOW_MS = 10_000;
+
 /** "go Tabby", or German "los", said last sends the draft. Only after a word
  * boundary, so "ziellos" or a "Los Angeles" mid-draft stays text, and a
  * "Tabby" alone at the end (a name in the prose) does not send. */

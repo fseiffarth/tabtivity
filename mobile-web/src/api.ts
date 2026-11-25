@@ -4,6 +4,8 @@ import { appleTouchDevice } from "./platform";
 import { storageKey } from "../../src/lib/brand";
 import type { ModelRows } from "./terminal/modelRows";
 import type { CliOverviewRow } from "../../shared/cliOverview";
+import type { NextPromptAnswer, NextPromptPhase } from "./terminal/nextPrompt";
+import type { MailCompleteAnswer } from "../../src/types/mail";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
 export type ScopeKind = "project" | "box" | "root" | "assistant";
@@ -42,7 +44,7 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** A vendor cloud session (`src/lib/agents/cloudSessions.ts`): Focus shows its screen and the session's link, never a wait for a local session. */ cloud?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string; /** The facts row's ⎇ chip can move this agent to another worktree of its project (`getTabWorktrees`, `moveTabWorktree`), as the desktop Reader's can. */ worktree_movable?: boolean; /** The facts row's locality chip can move this agent of a remote project between the desktop's copy and the project's machines (`getTabLocations`, `moveTabLocation`), as the desktop tab's ⌂/☁ badge can. */ location_movable?: boolean; /** The tab runs on its remote project's host (or a worker), reached over the desktop's SSH connection: `available` only while that connection is up; files, Mark up, sign-in and (with no window) schedules cannot reach it. Absent on an older host. */ on_host?: boolean; /** The machine an `on_host` tab runs on: its display name, else its host name. Absent on an older host, which leaves the chip's generic word. */ host_label?: string; /** An `on_host` tab whose host the desktop holds no connection to: it reads "connect on the desktop". Without it, an unavailable `on_host` tab is a session that ended on the host. */ host_down?: boolean }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** A vendor cloud session (`src/lib/agents/cloudSessions.ts`): Focus shows its screen and the session's link, never a wait for a local session. */ cloud?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string; /** The facts row's ⎇ chip can move this agent to another worktree of its project (`getTabWorktrees`, `moveTabWorktree`), as the desktop Reader's can. */ worktree_movable?: boolean; /** The facts row's locality chip can move this agent of a remote project between the desktop's copy and the project's machines (`getTabLocations`, `moveTabLocation`), as the desktop tab's ⌂/☁ badge can. */ location_movable?: boolean; /** An agent tab whose CLI has no chat view (not one of the verified chat CLIs): it opens in, and stays in, Terminal, and its view list offers no Chat. Absent on an older desktop, whose `unsupported` transcript answer still hands Chat over to Terminal. */ no_chat?: boolean; /** The tab runs on its remote project's host (or a worker), reached over the desktop's SSH connection: `available` only while that connection is up; files, Mark up, sign-in and (with no window) schedules cannot reach it. Absent on an older host. */ on_host?: boolean; /** The machine an `on_host` tab runs on: its display name, else its host name. Absent on an older host, which leaves the chip's generic word. */ host_label?: string; /** An `on_host` tab whose host the desktop holds no connection to: it reads "connect on the desktop". Without it, an unavailable `on_host` tab is a session that ended on the host. */ host_down?: boolean }
 export interface TabWorktree { label: string; branch?: string }
 export interface SubagentWorktree extends TabWorktree { count: number }
 /** `default`: the desktop's default agent (`default_agent_cmd`), the one
@@ -197,6 +199,11 @@ export interface ActivityList { tabs: ActivityTab[]; desktop_available: boolean;
 export function getActivity(signal?: AbortSignal): Promise<ActivityList> {
   return api<ActivityList>("/api/v1/activity", { signal });
 }
+
+/** How often a screen that lists a project's tabs reads `getProjectDetail`
+ * again while the page is visible: the project screen's cards, and the tabs
+ * rail beside a tablet's chat (`ChatTabsRail`) at the same cadence. */
+export const PROJECT_DETAIL_POLL = 5_000;
 
 /** `GET /api/v1/projects/{id}` — the project's row, tabs, agents and file sides. */
 export function getProjectDetail(projectId: string, signal?: AbortSignal): Promise<ProjectDetail> {
@@ -443,7 +450,7 @@ export interface MobileMailAttachment { filename: string; mime: string; size: nu
  * (`shell/linkedDesktops.ts` checks every entry; absent from an older host);
  * and whether the host is a server daemon, which never has a window
  * (`server`, absent: no). */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean; host?: string; linked_desktops?: unknown; server?: boolean }> {
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean; host?: string; linked_desktops?: unknown; /** The desktop machine's OpenVPN tunnel, `"up"` or `"down"`; null or absent when it has no VPN config (or from an older host). */ vpn?: unknown; server?: boolean }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */
@@ -531,6 +538,10 @@ export const TAB_CREATE_TIMEOUT = 25_000;
 export const MAIL_MESSAGE_TIMEOUT = 40_000;
 /** Sending a reply: 2 s connect + 65 s (`MailReply` talks to SMTP and IMAP). */
 export const MAIL_REPLY_TIMEOUT = 70_000;
+/** Completing a reply as it is typed (or warming the model for it): 2 s
+ * connect + 20 s (`response_timeout` for `MailComplete` — the window fills the
+ * original's context within 6 s, then runs the model within 5 s). */
+export const MAIL_COMPLETE_TIMEOUT = 25_000;
 /** Handing an agent CLI its sign-in callback: the CLI exchanges the code with
  * its provider before it answers, and the sidecar waits 20 s for that
  * (`sign_in::CALLBACK_TIMEOUT`). */
@@ -1078,8 +1089,10 @@ export interface AskedQuestion {
  * `role` its kind, and `subagent` the handle that reads its own conversation
  * (`getTranscript`) — absent until its CLI has recorded where that lives. */
 export interface TranscriptEntry {
-  /** `interrupted`: the user cut the turn off; `text` is the CLI's own words. */
-  kind: "prompt" | "answer" | "agent" | "interrupted";
+  /** `interrupted`: the user cut the turn off; `text` is the CLI's own words.
+   * `thinking`: the model's reasoning, only in the desktop Chat's read of a
+   * local-model tab (`agent_tab_transcript`'s `thinking`); the phone never gets one. */
+  kind: "prompt" | "answer" | "agent" | "interrupted" | "thinking";
   text: string;
   /** On a slash-command `prompt`: what it left set, as the CLI confirmed it
    * (Claude's `/model` → `Fable 5.2`, `/effort` → `high`). */
@@ -1179,6 +1192,10 @@ export interface SessionTranscript {
    * masks each `subject` (a path project-relative or its leaf, a URL its host
    * only, anything else dropped). */
   waitingTools?: WaitingTool[];
+  /** Desktop Reader only (the phone's API strips it): every shell call the
+   * read covers, running or done, oldest first — the Reader's Data tab lists
+   * them. Bounded to the newest few hundred. */
+  shellsRun?: RunningShell[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
   contextCard?: string;
@@ -1241,6 +1258,60 @@ export async function getTranscript(tabId: string, version?: string, limit?: num
     { signal },
   );
   return transcript;
+}
+
+/** How long a `final` next-prompt request may take: a cold model run. */
+const NEXT_PROMPT_TIMEOUT = 30_000;
+
+/** `GET /api/v1/tabs/{id}/next-prompt` — the desktop's local model's guess at
+ * the reader's next message for the tab's ended turn (`warm` feeds it the turn
+ * so far while the agent works, answering no text). Plain text only: no turn
+ * key, ids or paths cross. Every failure is a `status`; the route itself
+ * failing is the caller's to catch. */
+export async function getNextPrompt(tabId: string, phase: NextPromptPhase, signal?: AbortSignal): Promise<NextPromptAnswer> {
+  return api<NextPromptAnswer>(
+    `/api/v1/tabs/${encodeURIComponent(tabId)}/next-prompt?phase=${phase}`,
+    { signal },
+    phase === "final" ? NEXT_PROMPT_TIMEOUT : REQUEST_TIMEOUT,
+  );
+}
+
+/** How long a completion may take: one short run, the turn already read. */
+const COMPLETE_PROMPT_TIMEOUT = 20_000;
+
+/** `POST /api/v1/tabs/{id}/next-prompt` — how `draft`, the prompt being
+ * typed, goes on, by the desktop's local model: `text` is what to append.
+ * The draft goes to the desktop's own Ollama and nowhere else. Every failure
+ * is a `status`. */
+export async function completePrompt(tabId: string, draft: string, signal?: AbortSignal): Promise<NextPromptAnswer> {
+  return api<NextPromptAnswer>(
+    `/api/v1/tabs/${encodeURIComponent(tabId)}/next-prompt`,
+    { method: "POST", body: JSON.stringify({ draft }), signal },
+    COMPLETE_PROMPT_TIMEOUT,
+  );
+}
+
+/** `POST …/mail/folders/{folder}/messages/{message}/complete` — how `draft`, the
+ * reply being typed, goes on, by the desktop's local Mail model, asked through
+ * the open desktop window (no window: `unavailable`, never an error). The
+ * opaque folder and message ids and the page `offset` are the reply route's;
+ * `text` is what to append. Every failure is a `status`. */
+export function completeMailReply(folderId: string, messageId: string, offset: number, draft: string, signal?: AbortSignal): Promise<MailCompleteAnswer> {
+  return api<MailCompleteAnswer>(
+    `/api/v1/mail/folders/${encodeURIComponent(folderId)}/messages/${encodeURIComponent(messageId)}/complete`,
+    { method: "POST", body: JSON.stringify({ draft, offset }), signal },
+    MAIL_COMPLETE_TIMEOUT,
+  );
+}
+
+/** The same route with `warm: true`: the desktop feeds the model the mail being
+ * answered ahead of the first keystroke. Answers `warmed` at once. */
+export function warmMailReply(folderId: string, messageId: string, offset: number): Promise<MailCompleteAnswer> {
+  return api<MailCompleteAnswer>(
+    `/api/v1/mail/folders/${encodeURIComponent(folderId)}/messages/${encodeURIComponent(messageId)}/complete`,
+    { method: "POST", body: JSON.stringify({ warm: true, offset }) },
+    MAIL_COMPLETE_TIMEOUT,
+  );
 }
 
 /** One file the chat changed that git still lists as changed. `path` is
@@ -1578,6 +1649,13 @@ export function inboxFileUrl(tabId: string, name: string, download = false): str
   return `/api/v1/tabs/${encodeURIComponent(tabId)}/inbox/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
 }
 
+/** `DELETE …/inbox/{name}` — drop one file the phone sent into the tab's
+ * project inbox (a hold on its card → Delete). Only a leaf the inbox would
+ * serve goes; the route carries the exact-origin check. */
+export async function deleteInboxFile(tabId: string, name: string): Promise<void> {
+  await api<{ removed: boolean }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/inbox/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
 /** `GET …/inbox?names=` — the files among `names` (inbox leaves) the tab's
  * project inbox holds, typed by their bytes on the desktop, in the order
  * asked; a leaf that is gone is simply missing from the answer. */
@@ -1645,6 +1723,8 @@ export interface ProjectFileListing {
   git_unread?: boolean
   /** The project root's catalog docs and the state each is in (the desktop tree's "Project docs" group; names only, in the catalog's order). Root of this computer's side only; missing in any folder, on the remote side, from an older desktop, or when the read timed out — the plain group then. A ghost row is `state === "missing" && creatable`. */
   docs?: DocStatus[]
+  /** The rows the desktop side panel hides by ending for this project (its "Hidden by extension" group), by name; the library folds them into Hidden. Missing from an older desktop. */
+  hidden_ext?: string[]
 }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of

@@ -55,7 +55,7 @@ export function useOutboxPoll({
 export function useOutboxViewers({
   tab, readableHost, atBottomRef, setOutbox, outboxScope, gallery, setGallery, outboxOpen,
   setOutboxOpen, inboxOpen, setInboxOpen, askedFile, markupAway, setMarkupAway, filesOpen,
-  inboxFiles, tabOutbox,
+  inboxFiles, tabOutbox, paned,
 }: {
   tab: TabRow;
   readableHost: RefObject<HTMLElement>;
@@ -75,6 +75,9 @@ export function useOutboxViewers({
   inboxFiles: ReturnType<typeof useInboxFiles>;
   /** The files this tab sent (`from_tab`) — what its gallery lists. */
   tabOutbox: readonly OutboxFile[];
+  /** The viewers stand in the pane beside a landscape chat: Escape is theirs
+   * only with the focus in one, as the docked library's keys are. */
+  paned: boolean;
 }) {
   useEffect(() => {
     const viewerUp = outboxOpen !== null && markupAway === null;
@@ -84,6 +87,7 @@ export function useOutboxViewers({
     // closes it, so a markup view's Done keeps its open note.
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      if (paned && !document.activeElement?.closest(".outbox-viewer")) return;
       if (viewerUp) goBack();
       else if (inboxOpen) setInboxOpen(null);
       else setGallery(false);
@@ -91,7 +95,7 @@ export function useOutboxViewers({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outboxOpen, gallery, inboxOpen, markupAway]);
+  }, [outboxOpen, gallery, inboxOpen, markupAway, paned]);
   // Another file opened, or the viewer closed: nothing stays tucked away —
   // past the mount, where a `markupBack` view starts out tucked away.
   const awayMounted = useRef(false);

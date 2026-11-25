@@ -26,7 +26,7 @@
 //! [`import_from_user_home`] fills the layer from the user's own `~/.claude`,
 //! `~/.codex` and `~/.gemini`, plus the hook and plugin files the other CLIs
 //! read (Cursor, Droid, Copilot, OpenCode, Pi, Mistral Vibe, Antigravity) and the shared
-//! `~/.agents/skills` (Codex, Copilot, OpenCode) — so a tool the
+//! `~/.agents/skills` (Codex, Copilot, OpenCode, Antigravity 1.5.16+) — so a tool the
 //! user wired into their agents themselves (rtk's `rtk init -g`, say) reaches
 //! every Tabtivity agent too. One click, the one direction that is safe.
 //! Tabtivity's own session hooks are filtered out of what it imports; they are
@@ -555,14 +555,17 @@ const IMPORT_DIRS: &[&str] = &[
     ".codex/prompts",
     ".codex/rules",
     ".codex/skills",
-    // The shared user-skill folder Codex, Copilot and OpenCode read beside
-    // their own (Claude only offers to import from it).
+    // The shared user-skill folder Codex, Copilot, OpenCode and Antigravity
+    // (1.5.16+) read beside their own (Claude only offers to import from it).
     ".agents/skills",
     ".gemini/commands",
     ".gemini/hooks",
     // Antigravity's plugins (`rtk init -g --agent antigravity`); its hooks
     // file beside them is Tabtivity's per home.
     ".gemini/config/plugins",
+    // Antigravity's own user-skill folder (1.5.16; it also reads the shared
+    // `.agents/skills` above). Its built-in skills live in `antigravity-cli`.
+    ".gemini/config/skills",
     ".copilot/hooks",
     ".config/opencode/plugins",
     ".pi/agent/extensions",
@@ -1521,6 +1524,7 @@ mod tests {
         write(&user.join(".codex/auth.json"), "{}");
         // What `rtk init -g` leaves for the other CLIs.
         write(&user.join(".gemini/hooks/rtk-hook-gemini.sh"), "#!/bin/bash\nexec rtk hook gemini");
+        write(&user.join(".gemini/config/skills/agy-skill/SKILL.md"), "agy skill");
         write(&user.join(".gemini/config/plugins/rtk/plugin.json"), r#"{"name": "rtk"}"#);
         write(&user.join(".gemini/config/plugins/rtk/hooks.json"), r#"{"rtk-rewrite": {"enabled": true}}"#);
         write(
@@ -1563,7 +1567,7 @@ mod tests {
             ),
         );
         let report = import_from_user_home_in(&state, &user).unwrap();
-        assert_eq!(report, ImportReport { files: 10, configs: 6 });
+        assert_eq!(report, ImportReport { files: 11, configs: 6 });
         let layer = global_dir_in(&state);
         assert!(layer.join(".claude/CLAUDE.md").is_file());
         assert!(layer.join(".claude/RTK.md").is_file());
@@ -1585,6 +1589,7 @@ mod tests {
         assert_eq!(doc["mcp_servers"]["m"]["command"].as_str(), Some("x"));
         assert!(layer.join(".codex/RTK.md").is_file());
         assert!(layer.join(".gemini/hooks/rtk-hook-gemini.sh").is_file());
+        assert!(layer.join(".gemini/config/skills/agy-skill/SKILL.md").is_file());
         assert!(layer.join(".gemini/config/plugins/rtk/plugin.json").is_file());
         assert!(layer.join(".gemini/config/plugins/rtk/hooks.json").is_file());
         let codex_hooks = read_json(&layer.join(".codex/hooks.json")).unwrap();

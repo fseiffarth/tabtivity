@@ -215,12 +215,19 @@ function CopilotFenceAuthRow() {
 /** The Accounts & keys group: every credential an agent can run on, and the
  *  config every agent home starts from. `onChange` tells the CLI cards that a
  *  login or key changed, so their sign-in line re-reads. */
-export function AgentAccounts({ onChange }: { onChange?: () => void }) {
+export function AgentAccounts({
+  onChange,
+  installed = null,
+}: {
+  onChange?: () => void;
+  /** Login ids of the installed CLIs; the logins list hides the rest. */
+  installed?: ReadonlySet<string> | null;
+}) {
   // Bumped by the API keys rows, so the logins re-read their "uses API key".
   const [apiKeysVersion, setApiKeysVersion] = useState(0);
   return (
     <div className="agents-stack">
-      <AgentLoginsRows refreshKey={apiKeysVersion} onChange={onChange} />
+      <AgentLoginsRows refreshKey={apiKeysVersion} installed={installed} onChange={onChange} />
       <ClaudeTokenRow />
       <AgentApiKeysRows
         onChange={() => {

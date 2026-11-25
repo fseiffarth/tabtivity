@@ -8,6 +8,8 @@ import {
   subagentViewed,
   viewLabel,
   viewSession,
+  viewSubagent,
+  inputBoxText,
   type SubagentDriver,
 } from "../../../mobile-web/src/terminal/subagentInput";
 
@@ -393,5 +395,60 @@ describe("viewSession", () => {
     let keys = 0;
     expect(await viewSession({ rows: () => viewed, key: async () => { keys += 1; return true; } }, FAST)).toBe(false);
     expect(keys).toBe(0);
+  });
+});
+
+describe("viewSubagent", () => {
+  const agents = [
+    { kind: "general-purpose", task: "Alpha sleeper" },
+    { kind: "general-purpose", task: "Beta sleeper" },
+  ];
+
+  it("leaves the TUI on the subagent the chat had open, the keyboard back in the box", async () => {
+    const { state, driver } = fakeClaude(agents, 2);
+    expect(await viewSubagent(driver(""), { task: "Beta sleeper", role: "general-purpose" }, FAST)).toBeNull();
+    expect(state.viewed).toBe("Beta sleeper");
+    expect(state.focus).toBe("box");
+    expect(state.sent).toEqual([]);
+    expect(state.commands).toEqual([]);
+    expect(state.escInBox).toBe(0);
+    expect(state.stopped).toEqual([]);
+  });
+
+  it("presses nothing while that subagent is already the one viewed", async () => {
+    const { state, driver } = fakeClaude(agents);
+    state.viewed = "Alpha sleeper";
+    const real = driver("");
+    let keys = 0;
+    expect(await viewSubagent({ ...real, key: async (k) => { keys += 1; return real.key(k); } }, { task: "Alpha sleeper" }, FAST)).toBeNull();
+    expect(keys).toBe(0);
+  });
+
+  it("opens one the list no longer holds from /tasks, but only from an empty box", async () => {
+    const finished = [agents[0], { kind: "general-purpose", task: "Delta waiter", listed: false }];
+    const empty = fakeClaude(finished);
+    expect(await viewSubagent(empty.driver(""), { task: "Delta waiter" }, FAST)).toBeNull();
+    expect(empty.state.commands).toEqual(["/tasks"]);
+    expect(empty.state.viewed).toBe("Delta waiter");
+
+    const typed = fakeClaude(finished);
+    const real = typed.driver("");
+    const rows = () => real.rows().map((row) => (row === "❯ " ? "❯ half a thought" : row));
+    expect(inputBoxText(rows())).toBe("half a thought");
+    expect(await viewSubagent({ ...real, rows }, { task: "Delta waiter" }, FAST)).toBe("not_listed");
+    expect(typed.state.commands).toEqual([]);
+    expect(typed.state.viewed).toBe("main");
+    expect(typed.state.focus).toBe("box");
+  });
+
+  it("presses nothing while a dialog holds the bottom of the screen", async () => {
+    const keys: string[] = [];
+    const driver = {
+      rows: () => [" Do you want to proceed?", " ❯ 1. Yes", "   2. No"],
+      key: async (k: string) => { keys.push(k); return true; },
+      command: async (k: string) => { keys.push(k); return true; },
+    };
+    expect(await viewSubagent(driver, { task: "Alpha sleeper" }, FAST)).toBe("not_opened");
+    expect(keys).toEqual([]);
   });
 });

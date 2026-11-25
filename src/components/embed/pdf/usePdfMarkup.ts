@@ -56,6 +56,8 @@ import {
   type PdfMarkupPage,
   type PdfMarkupUndoChanges,
 } from "../../../lib/viewers/pdfMarkup";
+import { synctexStatus } from "../../../lib/viewers/tex/tex";
+import { rebuildTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
 import {
   answerMarkupQuestions,
   arrivalGuard,
@@ -401,6 +403,16 @@ export function usePdfMarkup({
   const [roundTargetId, setRoundTargetId] = useState<string | null>(null);
   /** The file changed on disk and its new pages wait for Reload. */
   const [pdfStale, setPdfStale] = useState(false);
+  /** Sources of this PDF saved after its last build (the SyncTeX map's
+   *  `newer_sources`, read only while the map is this PDF's): the pages are
+   *  out of date, so Submit waits and the document is rebuilt. Null: current,
+   *  or no TeX build to tell by. With the path it was read for. */
+  const [texNewer, setTexNewer] = useState<{ path: string; files: string[] } | null>(null);
+  /** The load an automatic rebuild was started for: once per load, and again
+   *  only on Submit or the strip's Rebuild. */
+  const rebuiltFor = useRef<number | null>(null);
+  /** The latest status read: an older answer arriving late is dropped. */
+  const texCheck = useRef(0);
   /** Reloaded since the agent last finished: Reload steps back to secondary. */
   const [reloaded, setReloaded] = useState(false);
   /** The last load of new pages under the marks came by itself (Settings →
@@ -1082,18 +1094,50 @@ export function usePdfMarkup({
   const setEraser = useCallback((eraser: EraserMode) => setPen((was) => ({ ...was, tool: "eraser", eraser })), []);
   const stepSize = useCallback((delta: -1 | 1) => setPen((was) => stepPenSize(was, delta)), []);
 
+  // ── Out of date: sources newer than the PDF ──────────────────────────────
+  /** Reads the PDF's SyncTeX status and, when a source is newer than the
+   *  build, rebuilds it — `always`, or once per load. True: out of date. */
+  const checkTex = useCallback(
+    async (rebuild: "auto" | "always"): Promise<boolean> => {
+      if (picture || isPicture) return false;
+      const ask = ++texCheck.current;
+      const status = await synctexStatus(path, scope);
+      if (ask !== texCheck.current) return false;
+      const files = status && status.has_map && !status.pdf_newer_than_map ? status.newer_sources : [];
+      setTexNewer(files.length ? { path, files } : null);
+      if (!files.length) return false;
+      if (rebuild === "always" || rebuiltFor.current !== docVersion) {
+        rebuiltFor.current = docVersion;
+        void rebuildTexSource(files[0], scope).catch(() => {});
+      }
+      return true;
+    },
+    [picture, isPicture, path, scope, docVersion],
+  );
+  const outdated = texNewer && texNewer.path === path ? texNewer.files : null;
+  // Read when marking starts or the pane comes back, and after every load —
+  // a rebuild's new pages read current and let Submit go.
+  useEffect(() => {
+    if (!projectId || !active || !visible || docVersion < 0) return;
+    void checkTex("auto");
+  }, [projectId, active, visible, docVersion, checkTex]);
+
   // ── Submit ────────────────────────────────────────────────────────────────
   /** The marked pages a Submit carries: a page past the end of the PDF (it
    *  shrank on a Reload) keeps its marks, but they are not drawn or sent. */
   const marked = markedPages(history.present);
   const sendable = marked.filter((n) => n <= pageCount);
   const leftOut = marked.length - sendable.length;
-  /** Sends every marked page. */
+  /** Sends every marked page. Not while the file on disk is newer than the
+   *  pages shown (`pdfStale`): the pictures would be drawn from the old pages
+   *  and the marked copy baked from the new file — Reload first. */
   const submit = useCallback(async () => {
-    if (!projectId || !target || sending || note) return;
+    if (!projectId || !target || sending || note || pdfStale || outdated) return;
     const present = history.present;
     const pages = markedPages(present).filter((n) => n <= pageCount);
     if (!pages.length) return;
+    // A source saved since the last look: rebuild first, Submit after.
+    if (await checkTex("always")) return;
     setSending(true);
     setFailure(null);
     let prompt: string;
@@ -1184,7 +1228,7 @@ export function usePdfMarkup({
     setUndoPreview(null);
     beginRound(target, startRound(queued, Date.now(), false, undo ? { id: undo, state: "ready", logId: roundId } : undefined));
     setSending(false);
-  }, [projectId, target, sending, note, history.present, pageCount, path, doc, picture, t, beginRound]);
+  }, [projectId, target, sending, note, pdfStale, outdated, checkTex, history.present, pageCount, path, doc, picture, t, beginRound]);
 
   // An `apply` round's snapshot is settled each time the round finishes — a
   // later turn (an answered question) moves it on, and the last one wins. A
@@ -1198,6 +1242,13 @@ export function usePdfMarkup({
     if (finishedAt === null || !settleId || !projectId) return;
     void settlePdfMarkupUndo(projectId, settleId).catch(() => {});
   }, [finishedAt, settleId, projectId]);
+  // The agent finished: sources it edited without a rebuild are built now —
+  // once per finish, so the check rides a ref, not the effect's inputs.
+  const finishCheck = useRef({ checkTex, on: false });
+  finishCheck.current = { checkTex, on: !!projectId && active };
+  useEffect(() => {
+    if (finishedAt !== null && finishCheck.current.on) void finishCheck.current.checkTex("always");
+  }, [finishedAt]);
 
   /** Why an undo call failed, as the strip's line: the files changed since
    *  (nothing was changed), an undo the backend no longer holds (offered no
@@ -1446,6 +1497,10 @@ export function usePdfMarkup({
     reloaded,
     autoReloaded,
     stale: pdfStale,
+    /** Sources newer than the PDF's build (absolute paths), or null. */
+    outdated,
+    /** The strip's Rebuild: reads the status again and rebuilds. */
+    rebuild: () => void checkTex("always"),
     markStale: () => setPdfStale(true),
     clearStale: () => setPdfStale(false),
     beforeReload,

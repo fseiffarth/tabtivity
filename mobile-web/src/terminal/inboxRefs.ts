@@ -105,6 +105,15 @@ type Described = OutboxFile | null;
 /** Per tab and leaf, for every screen at once: a leaf is asked about once. */
 const described = new Map<string, Described>();
 const keyOf = (tabId: string, leaf: string) => `${tabId}\u0000${leaf}`;
+/** The mounted `useInboxFiles` hooks, told when a leaf is marked gone here. */
+const listeners = new Set<() => void>();
+
+/** A leaf the phone itself deleted (a hold on its card → Delete): every
+ * screen shows it gone at once instead of at its next ask. */
+export function markInboxGone(tabId: string, leaf: string) {
+  described.set(keyOf(tabId, leaf), null);
+  for (const listener of listeners) listener();
+}
 /** A chat's worth per request (the desktop's `inbox::MAX_DESCRIBED`). */
 const BATCH = 64;
 
@@ -132,6 +141,11 @@ export function useInboxFiles(tabId: string, leaves: readonly string[], describe
   ask.current = describe;
   const wanted = leaves.join("\n");
   const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const changed = () => setVersion((version) => version + 1);
+    listeners.add(changed);
+    return () => { listeners.delete(changed); };
+  }, []);
   useEffect(() => {
     const missing = wanted ? wanted.split("\n").filter((leaf) => !described.has(keyOf(tabId, leaf))) : [];
     if (missing.length === 0) return;

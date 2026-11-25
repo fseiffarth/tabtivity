@@ -81,7 +81,10 @@ async function renderRemote(peerState: unknown) {
 }
 
 describe("#28n git lockstep UI", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
 
   it("shows the status pill and routes checkout through git_peer_checkout when enabled", async () => {
     setup(ENABLED);
@@ -91,6 +94,7 @@ describe("#28n git lockstep UI", () => {
     // Pill reflects backend status.
     expect(await screen.findByText("synchronized")).toBeTruthy();
 
+    await user.click(await screen.findByRole("button", { name: /^Branches/, expanded: false }));
     await user.click(await screen.findByRole("button", { name: "feature" }));
     expect(mockInvoke).toHaveBeenCalledWith("git_peer_checkout", {
       projectId: "proj1",
@@ -105,6 +109,7 @@ describe("#28n git lockstep UI", () => {
     const user = userEvent.setup();
     await renderRemote(DISABLED);
 
+    await user.click(await screen.findByRole("button", { name: /^Branches/, expanded: false }));
     await user.click(await screen.findByRole("button", { name: "feature" }));
     expect(mockInvoke).toHaveBeenCalledWith("git_checkout", { projectDir: "/p", target: "feature" });
     expect(mockInvoke).not.toHaveBeenCalledWith("git_peer_checkout", expect.anything());

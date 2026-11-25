@@ -330,17 +330,19 @@ async fn edit_markers(
 /// mirror, marking each pulled file selected and recording its base. `rel_path`
 /// is project-relative (`""` = the whole project root). Returns how many files
 /// landed ([`remote_sync::PullOutcome`]); a file over the RAM cap is streamed,
-/// not left on the host. Streams `sync-progress` as it goes.
+/// not left on the host. Streams `sync-progress` as it goes. `rel_paths`, when
+/// given, pulls that explicit file list as one transfer (`pull_subtree`).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_pull(
     ctx: Ctx,
     project_id: String,
     rel_path: String,
+    rel_paths: Option<Vec<String>>,
 ) -> Result<remote_sync::PullOutcome, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let (_op, target, sftp) = manual_session(&project_id, pool).await?;
-    pull_subtree(&ctx, &project_id, &target, &sftp, &rel_path, manifest).await
+    pull_subtree(&ctx, &project_id, &target, &sftp, &rel_path, rel_paths, manifest).await
 }
 
 /// Toggle the `selected` flag for one or more project-relative paths WITHOUT
@@ -1362,9 +1364,7 @@ impl<T> Withheld<T> {
             return None;
         }
         Some(if self.tracked > 0 && self.excluded == 0 {
-            format!(
-                "'{under}' is git-tracked and travels as a commit through Git Lockstep — nothing was byte-{moved}"
-            )
+            tracked_refusal(under, moved)
         } else if self.walked > 0 {
             format!("'{under}' is excluded from sync — nothing was {moved}")
         } else {
@@ -1373,22 +1373,90 @@ impl<T> Withheld<T> {
     }
 }
 
+/// Why a named path moved nothing because lockstep owns it.
+fn tracked_refusal(rel: &str, moved: &str) -> String {
+    format!("'{rel}' is git-tracked and travels as a commit through Git Lockstep — nothing was byte-{moved}")
+}
+
+/// The mirror files an explicit push list names — each path walked (`walk`,
+/// [`remote_sync::walk_mirror_files`] outside tests) as its own push would walk
+/// it, a file named twice moved once — and, for each path that holds none, why.
+fn named_mirror_files(
+    paths: Vec<String>,
+    walk: impl Fn(&str) -> Result<Vec<String>, String>,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
+    let mut absent = Vec::new();
+    for rel in paths {
+        match walk(&rel) {
+            Ok(found) if found.is_empty() => {
+                let why = format!(
+                    "'{rel}' has nothing to push — not present in the local mirror \
+                     (or a symlink/nested-repo subtree, which byte-sync never pushes)"
+                );
+                absent.push((rel, why));
+            }
+            Ok(found) => files.extend(found.into_iter().filter(|f| seen.insert(f.clone()))),
+            Err(e) => absent.push((rel, e)),
+        }
+    }
+    (files, absent)
+}
+
+/// The host files an explicit pull list names — each path as its own pull
+/// would find it, a few stats at a time — and, for each path that holds none,
+/// why.
+async fn named_host_files(
+    sftp: &Sftp,
+    remote_root: &str,
+    paths: Vec<String>,
+) -> (Vec<remote_sync::HostFile>, Vec<(String, String)>) {
+    let mut found = stream::iter(paths)
+        .map(|rel| async move {
+            let files = host_files_for(sftp, remote_root, &rel).await.map(|(listed, _)| listed);
+            (rel, files)
+        })
+        .buffered(STAT_CONCURRENCY);
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
+    let mut absent = Vec::new();
+    while let Some((rel, outcome)) = found.next().await {
+        match outcome {
+            Ok(listed) if listed.is_empty() => {
+                absent.push((rel.clone(), format!("'{rel}' has nothing to pull — the host holds no regular file there")));
+            }
+            Ok(listed) => files.extend(listed.into_iter().filter(|f| seen.insert(f.rel.clone()))),
+            Err(e) => absent.push((rel, e)),
+        }
+    }
+    (files, absent)
+}
+
 /// The candidates of a manual transfer of `under`, as the preview and the
 /// transfer both see them: without what an exclusion below `under` covers, and
 /// with the same tracked-tree ownership split as the background engine. `Err`
 /// when lockstep is on and git could not list what it owns.
+///
+/// `under` is `None` for an explicit file list (the diverged view's "…for
+/// all"): each file is named on its own there, and a transfer that names a path
+/// ignores the markers on and above it, so no exclusion applies — exactly what
+/// one transfer per file did.
 async fn withhold<T>(
     manifest: &SyncManifestState,
     project_id: &str,
-    under: &str,
+    under: Option<&str>,
     files: Vec<T>,
     rel: impl Fn(&T) -> &str,
 ) -> Result<Withheld<T>, String> {
     let walked = files.len();
-    let files: Vec<T> = {
-        let mut guard = manifest.lock().await;
-        let m = ensure_loaded(&mut guard, project_id);
-        files.into_iter().filter(|file| !remote_sync::is_excluded(m, rel(file), under)).collect()
+    let files: Vec<T> = match under {
+        None => files,
+        Some(under) => {
+            let mut guard = manifest.lock().await;
+            let m = ensure_loaded(&mut guard, project_id);
+            files.into_iter().filter(|file| !remote_sync::is_excluded(m, rel(file), under)).collect()
+        }
     };
     let excluded = walked - files.len();
     let (enabled, tracked) = {
@@ -1506,6 +1574,7 @@ async fn preview_pull(
 ) -> Result<SyncTransferPreview, String> {
     // Source side: the same host files `pull_subtree` would transfer.
     let root = target.spec.remote_path.as_str();
+    let named = rel_paths.is_some();
     let files: Vec<remote_sync::HostFile> = match rel_paths {
         Some(paths) => {
             stream::iter(paths.into_iter().map(|rel| async move {
@@ -1518,7 +1587,8 @@ async fn preview_pull(
         }
         None => host_files_for(sftp, root, rel).await?.0,
     };
-    let Withheld { kept: files, tracked, .. } = withhold(manifest, project_id, rel, files, |f| &f.rel).await?;
+    let under = (!named).then_some(rel);
+    let Withheld { kept: files, tracked, .. } = withhold(manifest, project_id, under, files, |f| &f.rel).await?;
 
     let bytes = files.iter().map(|f| f.size).sum();
     let overwrites = files
@@ -1552,11 +1622,13 @@ async fn preview_push(
     force: bool,
     manifest: &SyncManifestState,
 ) -> Result<SyncTransferPreview, String> {
+    let named = rel_paths.is_some();
     let files = match rel_paths {
         Some(paths) => paths,
         None => remote_sync::walk_mirror_files(project_id, rel)?,
     };
-    let Withheld { kept: files, tracked, .. } = withhold(manifest, project_id, rel, files, String::as_str).await?;
+    let under = (!named).then_some(rel);
+    let Withheld { kept: files, tracked, .. } = withhold(manifest, project_id, under, files, String::as_str).await?;
     let mirror = remote_sync::mirror_dir(project_id);
     let bytes = files
         .iter()
@@ -1686,21 +1758,47 @@ impl PushFailures {
 /// have yet) is written atomically (temp + rename). A file whose host moved since
 /// the last sync is BLOCKED and returned in `conflicts` — unless `force` is set
 /// (the user chose "keep local"), which overwrites it. Never silently clobbers.
+///
+/// `rel_paths`, when given, is an explicit file list (the diverged view's
+/// "…for all") pushed as ONE transfer: one writer turn, one lockstep listing,
+/// the transfers a few at a time and the records saved in batches. One command
+/// per file paid all of that per file and made a few hundred files take
+/// minutes. A named file that cannot go (absent, git-tracked) is a per-file
+/// failure, as its own push's refusal was.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_push(
     ctx: Ctx,
     project_id: String,
     rel_path: String,
     force: bool,
+    rel_paths: Option<Vec<String>>,
 ) -> Result<SyncPushResult, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let (_op, target, sftp) = manual_session(&project_id, pool).await?;
-    let files = remote_sync::walk_mirror_files(&project_id, &rel_path)?;
+    let mut failures = PushFailures::default();
+    let named = rel_paths.is_some();
+    let files = match rel_paths {
+        None => remote_sync::walk_mirror_files(&project_id, &rel_path)?,
+        Some(paths) => {
+            let pid = project_id.clone();
+            let (files, absent) = app_core::rt::spawn_blocking(move || {
+                named_mirror_files(paths, |rel| remote_sync::walk_mirror_files(&pid, rel))
+            })
+                .await
+                .map_err(|e| e.to_string())?;
+            for (rel, why) in absent {
+                failures.note(&rel, why);
+            }
+            files
+        }
+    };
+    let named_files = named.then(|| files.clone());
     // Excluded folders are excluded in BOTH directions: a mirror-side copy of an
     // excluded tree (an earlier pull, a local build) must not be pushed up either —
     // unless the push names that folder (or one inside it), as a pull may.
-    let withheld = withhold(manifest, &project_id, &rel_path, files, String::as_str).await?;
+    let under = (!named).then_some(rel_path.as_str());
+    let withheld = withhold(manifest, &project_id, under, files, String::as_str).await?;
     if let Some(refusal) = withheld.refusal(
         &rel_path,
         "pushed",
@@ -1710,11 +1808,17 @@ pub async fn sync_push(
         return Err(refusal);
     }
     let Withheld { kept: files, excluded: skipped_excluded, tracked: skipped_tracked, .. } = withheld;
+    // A named file lockstep owns was refused by its own push; it fails here.
+    if let Some(named_files) = named_files {
+        let kept: HashSet<&str> = files.iter().map(String::as_str).collect();
+        for rel in named_files.iter().filter(|rel| !kept.contains(rel.as_str())) {
+            failures.note(rel, tracked_refusal(rel, "pushed"));
+        }
+    }
     let total = files.len();
     emit(&ctx, &project_id, "start", &rel_path, 0, total);
     let mut pushed = 0usize;
     let mut conflicts = Vec::new();
-    let mut failures = PushFailures::default();
     let mut done = 0usize;
     let records = remote_sync::RecordBatch::new(manifest, &project_id);
     // The bytes are on the host but the record is not: reported as a failure
@@ -1946,22 +2050,40 @@ fn warn_overwritten(project_id: &str, op: &str, paths: Vec<String>) {
 /// ends, falling back to the SFTP-native per-file walker (the floor) when it is
 /// missing or rsync fails. Either way the manifest bases come from the host walk
 /// (metadata only — no extra byte transfer) plus a local stat.
+///
+/// `rel_paths`, when given, is an explicit file list pulled as one transfer
+/// (see `sync_push`'s): each path is found as its own pull would find it, a
+/// path that holds nothing (or that lockstep owns) is counted in the outcome's
+/// `failed` instead of refusing the batch, and the SFTP floor moves them.
 async fn pull_subtree(
     ctx: &CoreCtx,
     project_id: &str,
     target: &RemoteTarget,
     sftp: &Sftp,
     rel: &str,
+    rel_paths: Option<Vec<String>>,
     manifest: &SyncManifestState,
 ) -> Result<remote_sync::PullOutcome, String> {
-    // Whether `rel` is a directory (walked) or a single file.
-    let (files, is_dir) = host_files_for(sftp, &target.spec.remote_path, rel).await?;
+    let named = rel_paths.is_some();
+    // Paths of a named batch that moved nothing, and why.
+    let mut unmoved: Vec<(String, String)> = Vec::new();
+    // Whether `rel` is a directory (walked) or a single file. A named batch is
+    // neither: no rsync over the list, and no single file to fail the call on.
+    let (files, is_dir) = match rel_paths {
+        None => host_files_for(sftp, &target.spec.remote_path, rel).await?,
+        Some(paths) => {
+            let (files, absent) = named_host_files(sftp, &target.spec.remote_path, paths).await;
+            unmoved = absent;
+            (files, false)
+        }
+    };
+    let named_files: Option<Vec<String>> = named.then(|| files.iter().map(|f| f.rel.clone()).collect());
     // Drop everything the user excluded from byte-sync (the giant-folder prompt,
     // `services::big_folders`). A whole-project pull is exactly the click that
     // answer exists to make safe; an explicit pull *of* the excluded folder, or of
     // one inside it (a one-off download, e.g. for an agent), still goes through,
     // which is why the markers on and above `rel` are ignored (`is_excluded`'s `under`).
-    let withheld = withhold(manifest, project_id, rel, files, |file| &file.rel).await?;
+    let withheld = withhold(manifest, project_id, (!named).then_some(rel), files, |file| &file.rel).await?;
     // The pull twin of `sync_push`'s refusal: a targeted pull whose every candidate
     // was withheld used to return `Ok(0)`, which the tree then reported as
     // "pulled" — the exact silent no-op a tracked file's orange row produced when
@@ -1972,6 +2094,13 @@ async fn pull_subtree(
         return Err(refusal);
     }
     let Withheld { kept: files, excluded: skipped_excluded, .. } = withheld;
+    if let Some(named_files) = named_files {
+        let kept: HashSet<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+        for r in named_files.into_iter().filter(|r| !kept.contains(r.as_str())) {
+            let why = tracked_refusal(&r, "pulled");
+            unmoved.push((r, why));
+        }
+    }
 
     // Room for it, before anything is written (gap 86): the listing's sizes are the
     // host's word and the preview the user confirmed is the only other bound, so a
@@ -2081,9 +2210,17 @@ async fn pull_subtree(
     };
     tokio::join!(transfers, settle);
     unrecorded(records.flush().await);
-    let outcome = remote_sync::PullOutcome { pulled };
+    // A named batch reports what did not land instead of failing whole: the
+    // paths that held nothing, then the files whose transfer failed.
+    let (failed, first_error) = if named {
+        let first = unmoved.first().map(|(_, why)| why.clone()).or(pull_error.clone());
+        (unmoved.len() + (total - pulled), first)
+    } else {
+        (0, None)
+    };
+    let outcome = remote_sync::PullOutcome { pulled, failed, first_error };
     emit(ctx, project_id, "done", rel, done, total);
-    if !is_dir && outcome.pulled == 0 {
+    if !is_dir && !named && outcome.pulled == 0 {
         return Err(match pull_error {
             Some(e) => format!("could not pull '{rel}': {e}"),
             None => format!("could not pull '{rel}'"),
@@ -2254,6 +2391,28 @@ fn emit(ctx: &CoreCtx, project_id: &str, phase: &str, rel_path: &str, done: usiz
 
 #[cfg(test)]
 mod tests {
+    /// An explicit push list walks each path as its own push would: a folder
+    /// brings its files, a file named twice moves once, and a path with nothing
+    /// to push is a per-file failure that names it instead of refusing the list.
+    #[test]
+    fn a_named_push_list_walks_each_path_and_names_the_empty_ones() {
+        let walk = |rel: &str| -> Result<Vec<String>, String> {
+            match rel {
+                "a.txt" => Ok(vec!["a.txt".into()]),
+                "dir" => Ok(vec!["dir/x".into(), "a.txt".into()]),
+                "broken" => Err("unreadable".into()),
+                _ => Ok(vec![]),
+            }
+        };
+        let paths = ["a.txt", "dir", "gone.txt", "broken"].map(String::from).to_vec();
+        let (files, absent) = super::named_mirror_files(paths, walk);
+        assert_eq!(files, ["a.txt", "dir/x"]);
+        let names: Vec<&str> = absent.iter().map(|(rel, _)| rel.as_str()).collect();
+        assert_eq!(names, ["gone.txt", "broken"]);
+        assert!(absent[0].1.contains("nothing to push"), "{}", absent[0].1);
+        assert_eq!(absent[1].1, "unreadable");
+    }
+
     use std::collections::HashSet;
 
     use super::{

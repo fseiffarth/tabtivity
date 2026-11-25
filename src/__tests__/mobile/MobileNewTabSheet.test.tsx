@@ -319,6 +319,25 @@ describe("Mobile ＋ sheet — cloud sessions", () => {
     expect(screen.getByText("New Claude cloud session")).toBeTruthy();
   });
 
+  it("offers the cloud sessions with no window, since the host starts them itself", async () => {
+    serve({ worktrees: [], cloud, sign_in: [], desktop_available: false });
+    const onPick = vi.fn();
+    render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} headless onPick={onPick} onSendFile={() => undefined} onClose={() => undefined} />);
+    await waitFor(() => expect(document.querySelector(".new-tab-cloud")).toBeTruthy());
+    // Not also folded into "Needs the window".
+    expect(document.querySelector(".new-tab-held:not(.new-tab-cloud)")).toBeNull();
+    fireEvent.click(screen.getByRole("group", { name: "Codex" }).querySelector("button")!);
+    expect(onPick).toHaveBeenCalledWith("agent", agents[1], undefined, { cloud: "open" });
+    // A task the CLI would read as a flag cannot be started.
+    fireEvent.click(screen.getByRole("group", { name: "Claude" }).querySelector("button")!);
+    const box = screen.getByRole("textbox", { name: "New Claude cloud session" });
+    const start = screen.getByRole("button", { name: "Start" }) as HTMLButtonElement;
+    fireEvent.change(box, { target: { value: "--yolo" } });
+    expect(start.disabled).toBe(true);
+    fireEvent.change(box, { target: { value: "fix the build" } });
+    expect(start.disabled).toBe(false);
+  });
+
   it("shows no cloud group when no agent has a cloud session", async () => {
     serve({ worktrees: [], cloud: [], sign_in: [] });
     render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} onPick={vi.fn()} onSendFile={() => undefined} onClose={() => undefined} />);

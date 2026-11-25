@@ -277,8 +277,10 @@ impl CreateTabRequest {
             }
         }
         if let Some(task) = &self.task {
+            // A leading `-` would reach the CLI as a flag (`--cloud -x`), not a task.
             if self.cloud.is_none()
                 || task.trim().is_empty()
+                || task.trim_start().starts_with('-')
                 || task.chars().count() > MAX_CLOUD_TASK
                 || task
                     .chars()
@@ -891,6 +893,11 @@ pub enum MailMarkAction {
 /// answer typed on a small keyboard; anything longer belongs on the desktop.
 pub const MAX_MAIL_REPLY_BYTES: usize = 16 * 1024;
 
+/// Longest draft a phone may send for a completion, in bytes. The engine
+/// completes at most [`crate::services::next_prompt::MAX_DRAFT_CHARS`]
+/// characters; the rest is a client that did not cut.
+pub const MAX_MAIL_COMPLETE_BYTES: usize = 8 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TodoAction {
@@ -1133,6 +1140,21 @@ pub enum DesktopRequest {
         message_id: String,
         offset: u32,
         body: String,
+    },
+    /// The local-model completion of the reply being typed on the phone
+    /// (`services::mail_complete`), asked of the window so the original is
+    /// resolved there from the same opaque ids as [`Self::MailReply`]. Not a
+    /// mutation: it writes nothing and never queues behind a reply. `warm`
+    /// takes no draft.
+    MailComplete {
+        request_id: String,
+        folder_id: String,
+        message_id: String,
+        offset: u32,
+        #[serde(default)]
+        draft: String,
+        #[serde(default)]
+        warm: bool,
     },
     Schedules {
         request_id: String,
@@ -1400,6 +1422,19 @@ pub enum DesktopRequest {
         #[serde(default)]
         limit: Option<usize>,
     },
+    /// The local-model "what's next" suggestion for one agent tab's newest
+    /// turn (`services::next_prompt`), asked by the window so the phone and the
+    /// window's own composer share one run per turn. Addressed like
+    /// `AgentTranscript`; `phase` is `warm`, `final` or — with `draft`, the
+    /// prompt being typed on the phone — `complete`.
+    AgentNextPrompt {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        phase: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft: Option<String>,
+    },
     /// What the desktop can hand the phone's composer as an image: the
     /// clipboard's image and the recent files of the screenshot and picture
     /// folders (`services::desktop_images`). Only opaque ids and labels come
@@ -1650,6 +1685,7 @@ impl DesktopRequest {
             | Self::MailMessage { request_id, .. }
             | Self::MailMark { request_id, .. }
             | Self::MailReply { request_id, .. }
+            | Self::MailComplete { request_id, .. }
             | Self::Schedules { request_id, .. }
             | Self::ScheduleMutate { request_id, .. }
             | Self::RenameTab { request_id, .. }
@@ -1674,6 +1710,7 @@ impl DesktopRequest {
             | Self::SwitchAssistantModel { request_id, .. }
             | Self::AgentStatus { request_id, .. }
             | Self::AgentTranscript { request_id, .. }
+            | Self::AgentNextPrompt { request_id, .. }
             | Self::DesktopImages { request_id, .. }
             | Self::AttachDesktopImage { request_id, .. }
             | Self::MarkupQuestions { request_id, .. }
@@ -1702,6 +1739,9 @@ impl DesktopRequest {
         std::time::Duration::from_secs(match self {
             Self::MailMessage { .. } | Self::MailMark { .. } => 35,
             Self::MailReply { .. } => 65,
+            // A 6 s fill of the original, a 5 s run and the gate probes
+            // (`services::mail_complete`).
+            Self::MailComplete { .. } => 20,
             Self::AgentStatus { .. } | Self::CliOverview { .. } => 25,
             // Waits for the old CLI to exit (`switchAgentWorktree`, up to
             // 3 s) before the move and the respawn.
@@ -1740,6 +1780,7 @@ impl DesktopRequest {
         std::time::Duration::from_secs(match self {
             Self::MailMessage { .. } | Self::MailMark { .. } => 30,
             Self::MailReply { .. } => 60,
+            Self::MailComplete { .. } => 16,
             Self::AgentStatus { .. } | Self::CliOverview { .. } => 20,
             Self::MoveWorktree { .. } | Self::SwitchAssistantModel { .. } => 15,
             Self::MoveLocation { .. } => 30,
@@ -1799,6 +1840,7 @@ impl DesktopRequest {
             | Self::MailOverview { .. }
             | Self::MailFolder { .. }
             | Self::MailMessage { .. }
+            | Self::MailComplete { .. }
             | Self::Schedules { .. }
             | Self::Prompts { .. }
             | Self::TabSeen { .. }
@@ -1809,6 +1851,7 @@ impl DesktopRequest {
             | Self::AssistantModels { .. }
             | Self::AgentStatus { .. }
             | Self::AgentTranscript { .. }
+            | Self::AgentNextPrompt { .. }
             | Self::DesktopImages { .. }
             | Self::AttachDesktopImage { .. }
             | Self::MarkupQuestions { .. }
@@ -2201,6 +2244,27 @@ pub enum DesktopResponse {
     },
     AgentTranscript {
         transcript: crate::services::agent_transcript::AgentTranscript,
+    },
+    /// Answers [`DesktopRequest::AgentNextPrompt`]: the suggestion's text (a
+    /// `complete`'s is what to append to the draft), its
+    /// `services::next_prompt::Status` word (`outcome`, since `status` names
+    /// this response) and the model that wrote it (the phone's chip).
+    AgentNextPrompt {
+        #[serde(default)]
+        text: Option<String>,
+        outcome: String,
+        #[serde(default)]
+        model: Option<String>,
+    },
+    /// Answers [`DesktopRequest::MailComplete`]: what to append to the reply
+    /// (`text`), the `services::mail_complete::Status` word (`outcome`, since
+    /// `status` names this response) and the model that wrote the text.
+    MailComplete {
+        #[serde(default)]
+        text: Option<String>,
+        outcome: String,
+        #[serde(default)]
+        model: Option<String>,
     },
     /// Acknowledges a [`DesktopRequest::TabSeen`], [`DesktopRequest::TabInput`]
     /// or [`DesktopRequest::TabPrompt`] — and a delivered

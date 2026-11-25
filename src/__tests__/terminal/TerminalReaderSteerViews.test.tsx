@@ -85,7 +85,7 @@ describe("TerminalView — steering's view registry", () => {
     readerProps.current = {};
   });
 
-  it("offers Chat and Terminal until Diffs and Files have something to show", async () => {
+  it("offers Chat and Terminal while Diffs and Data are empty", async () => {
     const view = await mount();
     const target = readerViewFor(ID)!;
     expect(target).not.toBeNull();

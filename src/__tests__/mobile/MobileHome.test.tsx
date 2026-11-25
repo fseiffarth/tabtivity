@@ -168,6 +168,55 @@ describe("Mobile home — project list states", () => {
     expect(screen.getByText("Alpha")).toBeTruthy();
     expect(screen.queryByText(/No project/)).toBeNull();
   });
+
+  it("says in the header whether the desktop's VPN tunnel is up, and nothing where it has none", async () => {
+    answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
+    const home = (vpn?: "up" | "down" | null) => <Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} vpn={vpn} />;
+    const view = render(home());
+    await screen.findByText("Alpha");
+    expect(screen.queryByRole("img", { name: /^VPN on the desktop/ })).toBeNull();
+    view.rerender(home("up"));
+    expect(screen.getByRole("img", { name: "VPN on the desktop is connected" }).className).toBe("home-vpn up");
+    view.rerender(home("down"));
+    expect(screen.getByRole("img", { name: "VPN on the desktop is not connected" }).className).toBe("home-vpn");
+    // A link that is down says nothing about the tunnel.
+    fetchMock.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")));
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText(/Showing the last list this session loaded/);
+    expect(screen.queryByRole("img", { name: /^VPN on the desktop/ })).toBeNull();
+  });
+});
+
+describe("Mobile home — local model pill", () => {
+  const model = (name: string, state: string) => ({ name, size: 1, parameter_size: null, quantization: null, state, for_tabs: false, remote: false });
+  function serveModels(models: unknown[]) {
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/local-models")) return new Response(JSON.stringify({ server: "running", can_start: false, start_failed: false, models }), { status: 200 });
+      if (url.startsWith("/api/v1/alerts")) return new Response(JSON.stringify({ alerts: { enabled: false, items: [] } }), { status: 200 });
+      if (url.startsWith("/api/v1/activity")) return new Response(JSON.stringify({ tabs: [], desktop_available: true }), { status: 200 });
+      return new Response(JSON.stringify({ projects: [{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }] }), { status: 200 });
+    });
+  }
+
+  it("names the model in memory in the header, and opens the Local models sheet on a tap", async () => {
+    serveModels([model("qwen3.8:27b", "loaded"), model("llama3:latest", "loaded"), model("gemma3:4b", "idle")]);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    const pill = await screen.findByRole("button", { name: "Local model in memory on the desktop: llama3, qwen3.8:27b" });
+    expect(pill.className).toBe("home-model");
+    expect(pill.textContent).toContain("llama3");
+    expect(pill.textContent).toContain("+1");
+    fireEvent.click(pill);
+    expect(await screen.findByRole("dialog", { name: "Local models" })).toBeTruthy();
+  });
+
+  it("shows no pill while no model is in memory", async () => {
+    serveModels([model("gemma3:4b", "idle")]);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Ollama models on the desktop/ }).textContent).toContain("0 loaded · 1 installed"));
+    expect(screen.queryByRole("button", { name: /^Local model in memory/ })).toBeNull();
+  });
 });
 
 describe("Mobile home — box layout", () => {

@@ -110,6 +110,27 @@ export function compileTexWorkspace(path: string): boolean {
   return true;
 }
 
+// Builds asked for before an editor that runs them was mounted in this window
+// (Mark up found its PDF older than the sources and opened or focused the
+// workspace), by path, with the time each lapses: an editor mounted later than
+// that does not build by itself.
+const queuedCompiles = new Map<string, number>();
+export const QUEUED_COMPILE_MS = 30_000;
+
+/** Queue a build for the editor of `path` that mounts next in this window
+ *  ({@link takeQueuedTexCompile}); the editor runs it once its file loaded. */
+export function queueTexCompile(path: string, now = Date.now()): void {
+  queuedCompiles.set(path, now + QUEUED_COMPILE_MS);
+}
+
+/** Take the queued build for `path`: true when one was queued and is still due. */
+export function takeQueuedTexCompile(path: string, now = Date.now()): boolean {
+  const until = queuedCompiles.get(path);
+  if (until === undefined) return false;
+  queuedCompiles.delete(path);
+  return now <= until;
+}
+
 /** Broadcast a recompile request to the other window(s) — the workspace tab
  *  exists but renders in a popout this heap cannot reach. Best effort, like
  *  {@link requestTexCenter}. */

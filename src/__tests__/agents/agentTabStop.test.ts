@@ -45,18 +45,18 @@ const cand = (ptyId: string, lastUsedAt: number, over: Partial<StopCandidate> = 
 
 describe("the CLI allow-list", () => {
   it("takes the id-resuming CLIs and the pinned-only ones", () => {
-    for (const cmd of ["claude", "codex", "agy", "vibe", "opencode", "copilot", "muse"]) expect(isStoppableCli(cmd)).toBe(true);
+    for (const cmd of ["claude", "codex", "agy", "vibe", "opencode", "copilot", "muse", "cursor-agent"]) expect(isStoppableCli(cmd)).toBe(true);
   });
 
   it("never takes a folder's-latest CLI, a CLI with no resume, or a custom agent", () => {
-    for (const cmd of ["gemini", "cursor-agent", "grok", "qwen", "droid", "aider", "kiro-cli", "my-custom-agent"]) {
+    for (const cmd of ["gemini", "grok", "qwen", "droid", "aider", "kiro-cli", "my-custom-agent"]) {
       expect(isStoppableCli(cmd)).toBe(false);
     }
   });
 
   it("names only binaries the registry has", () => {
     const bins = new Set(AGENT_CLI_ROWS.map((r) => r.bin));
-    for (const cmd of ["claude", "codex", "agy", "vibe", "opencode", "copilot", "muse"]) expect(bins.has(cmd)).toBe(true);
+    for (const cmd of ["claude", "codex", "agy", "vibe", "opencode", "copilot", "muse", "cursor-agent"]) expect(bins.has(cmd)).toBe(true);
   });
 });
 

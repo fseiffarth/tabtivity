@@ -20,6 +20,7 @@
 pub mod capture;
 pub mod cpu;
 pub mod gpu;
+pub mod lang;
 pub mod models;
 pub mod phantom;
 pub mod piper;
@@ -46,6 +47,9 @@ pub const EV_LEVEL: &str = "voice:level";
 pub const EV_VAD: &str = "voice:vad";
 pub const EV_PARTIAL: &str = "voice:partial";
 pub const EV_FINAL: &str = "voice:final";
+/// A candidate session's language locked (`{ session, lang }`), just before
+/// the final that locked it.
+pub const EV_LANG: &str = "voice:lang";
 pub const EV_STATE: &str = "voice:state";
 pub const EV_OWNER: &str = "voice:owner";
 pub const EV_ERROR: &str = "voice:error";
@@ -226,6 +230,12 @@ pub struct ListenRequest {
     pub tab_key: String,
     pub model: String,
     pub lang: String,
+    /// The languages to pick among when `lang` is `auto` (at most
+    /// [`MAX_LANGS`]); empty means none. After `validate`: primary subtags,
+    /// deduplicated.
+    pub langs: Vec<String>,
+    /// Which candidate runs before any pick; ignored without candidates.
+    pub fallback: Option<String>,
     pub mode: ListenMode,
     pub pause_ms: u32,
     pub headset: bool,
@@ -233,6 +243,9 @@ pub struct ListenRequest {
     /// The `voice_gpu` setting.
     pub gpu: bool,
 }
+
+/// Candidate languages in one request, counted before deduplication.
+pub const MAX_LANGS: usize = 5;
 
 /// The hands-free pause's range (plan step 2).
 pub const PAUSE_MS: std::ops::RangeInclusive<u32> = 800..=4000;
@@ -252,7 +265,35 @@ fn valid_lang(lang: &str) -> bool {
         && parts.all(|p| (2..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
+/// A concrete language (not `auto`) reduced to its primary subtag.
+fn candidate(lang: &str) -> Result<String, VoiceError> {
+    if lang == "auto" || !valid_lang(lang) {
+        return Err(VoiceError::BadArgument);
+    }
+    Ok(lang.split('-').next().unwrap_or(lang).to_string())
+}
+
 impl ListenRequest {
+    /// The candidates: at most [`MAX_LANGS`], each a concrete language, only
+    /// with `lang` `auto`; reduced to primary subtags and deduplicated. A bad
+    /// fallback is an error, a fallback without candidates is dropped. Whether
+    /// whisper knows a candidate is the model load's question.
+    fn check_langs(&mut self) -> Result<(), VoiceError> {
+        if self.langs.len() > MAX_LANGS || (!self.langs.is_empty() && self.lang != "auto") {
+            return Err(VoiceError::BadArgument);
+        }
+        let mut langs: Vec<String> = Vec::new();
+        for lang in &self.langs {
+            let lang = candidate(lang)?;
+            if !langs.contains(&lang) {
+                langs.push(lang);
+            }
+        }
+        self.fallback = self.fallback.as_deref().map(candidate).transpose()?.filter(|_| !langs.is_empty());
+        self.langs = langs;
+        Ok(())
+    }
+
     /// Every argument in its range; the prompt stripped of control characters
     /// (whisper-rs panics on a NUL) and bounded.
     pub fn validate(mut self) -> Result<Self, VoiceError> {
@@ -265,6 +306,7 @@ impl ListenRequest {
         if !valid_lang(&self.lang) {
             return Err(VoiceError::BadArgument);
         }
+        self.check_langs()?;
         match self.mode {
             ListenMode::Dictate => self.pause_ms = vad::VadConfig::DICTATE_END_SILENCE_MS,
             ListenMode::HandsFree if !PAUSE_MS.contains(&self.pause_ms) => return Err(VoiceError::BadArgument),
@@ -481,6 +523,8 @@ mod tests {
             tab_key: "tab-1".into(),
             model: models::DEFAULT_MODEL.into(),
             lang: "de".into(),
+            langs: Vec::new(),
+            fallback: None,
             mode: ListenMode::HandsFree,
             pause_ms: 1500,
             headset: false,
@@ -540,5 +584,33 @@ mod tests {
         assert!(!prompt.contains('\0') && !prompt.contains('\n'));
         assert!(prompt.chars().count() <= MAX_PROMPT_CHARS);
         assert!(ListenRequest { prompt: Some(" \u{1}\n".into()), ..request() }.validate().unwrap().prompt.is_none());
+    }
+
+    #[test]
+    fn candidates_are_checked_reduced_and_deduplicated() {
+        let auto = |langs: &[&str], fallback: Option<&str>| ListenRequest {
+            lang: "auto".into(),
+            langs: langs.iter().map(|l| l.to_string()).collect(),
+            fallback: fallback.map(str::to_string),
+            ..request()
+        };
+        let req = auto(&["de-DE", "en", "de", "pt-BR"], Some("en-GB")).validate().unwrap();
+        assert_eq!(req.langs, ["de", "en", "pt"]);
+        assert_eq!(req.fallback.as_deref(), Some("en"));
+        // Without candidates a fallback means nothing.
+        assert_eq!(auto(&[], Some("en")).validate().unwrap().fallback, None);
+        // Five are the most, counted before deduplication.
+        assert!(auto(&["de", "en", "fr", "es", "it"], None).validate().is_ok());
+        assert_eq!(auto(&["de", "en", "fr", "es", "it", "pt"], None).validate().unwrap_err(), VoiceError::BadArgument);
+        assert_eq!(auto(&["de", "de", "de", "de", "de", "de"], None).validate().unwrap_err(), VoiceError::BadArgument);
+        for bad in ["auto", "", "DE", "de_DE", "../x"] {
+            assert_eq!(auto(&["de", bad], None).validate().unwrap_err(), VoiceError::BadArgument, "{bad:?}");
+            assert_eq!(auto(&["de"], Some(bad)).validate().unwrap_err(), VoiceError::BadArgument, "fallback {bad:?}");
+        }
+        // Candidates need `auto`: a forced language is not a pick.
+        let forced = ListenRequest { langs: vec!["de".into()], ..request() };
+        assert_eq!(forced.validate().unwrap_err(), VoiceError::BadArgument);
+        // The fallback need not be one of them: the first candidate then runs.
+        assert_eq!(auto(&["de", "en"], Some("fr")).validate().unwrap().fallback.as_deref(), Some("fr"));
     }
 }

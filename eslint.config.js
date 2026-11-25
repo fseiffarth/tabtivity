@@ -179,7 +179,6 @@ export default tseslint.config(
     // pen bar's ⋯) or inside content a test reads (a branch fact, a Reader row).
     files: [
       'src/components/embed/pdf/PdfMarkupBar.tsx',
-      'src/components/files/GitHistory.tsx',
       'src/components/layout/RootReviewStrip.tsx',
       'src/components/terminal/TerminalReaderFacts.tsx',
       'src/components/terminal/TerminalReaderView.tsx',

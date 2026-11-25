@@ -179,6 +179,11 @@ export interface SyncMirrorSkips {
 export interface SyncPullOutcome {
   /** Files that landed in the mirror. */
   pulled: number;
+  /** An explicit-list pull's paths that did not land (absent on the host,
+   *  git-tracked, or a failed transfer); 0 for a path pull, which throws. */
+  failed?: number;
+  /** The first of those failures' reasons. */
+  firstError?: string | null;
 }
 
 /** One file only the host holds (`sync_scan_host_new`). */
@@ -215,6 +220,8 @@ function toPullOutcome(raw: unknown): SyncPullOutcome {
   const r = (raw && typeof raw === "object" ? raw : {}) as Partial<SyncPullOutcome>;
   return {
     pulled: typeof r.pulled === "number" ? r.pulled : typeof raw === "number" ? raw : 0,
+    ...(typeof r.failed === "number" ? { failed: r.failed } : {}),
+    ...(typeof r.firstError === "string" ? { firstError: r.firstError } : {}),
   };
 }
 
@@ -664,36 +671,38 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   scanHostNew: (projectId, confirmed) => invoke<HostNewScan>("sync_scan_host_new", { projectId, confirmed }),
 
   resolveAll: (projectId, relPaths, side, force = true) =>
-    // Iterate per path (each side has its own single-file command) but refresh
-    // the cached status only once at the end (`transferring`) — refreshing per
-    // file would re-stat the whole selection N times. A single failed file is
-    // logged and skipped so one bad path doesn't abort the rest of the batch.
-    // The failures are returned too: logging them only made a batch the backend
-    // refused file by file look exactly like one that went through.
+    // ONE command for the whole list (`relPaths`): the backend takes the
+    // project's writer turn and lists lockstep's files once, moves the files a
+    // few at a time and saves their records in batches. One command per file
+    // paid all of that per file — a few hundred files took minutes, with the
+    // progress bar restarting at 1/1 for each. A file that fails is counted and
+    // skipped, never the whole batch; the status refreshes once at the end
+    // (`transferring`).
     transferring(projectId, async () => {
-      let failed = 0;
-      let firstError: string | null = null;
-      const fail = (rel: string, e: unknown) => {
-        console.error(`resolveAll: ${side} failed for ${rel}`, e);
-        failed += 1;
-        firstError ??= e instanceof Error ? e.message : String(e);
-      };
-      for (const rel of relPaths) {
-        try {
-          if (side === "host") {
-            await invoke<unknown>("sync_pull", { projectId, relPath: rel });
-          } else {
-            const result = await invoke<SyncPushResult>("sync_push", { projectId, relPath: rel, force });
-            const why = pushFailure(result);
-            if (why) fail(rel, why);
-            // Unforced, a host copy that moved blocks the file: nothing went.
-            else if (result?.conflicts?.length) fail(rel, "changed on the host");
-          }
-        } catch (e) {
-          fail(rel, e);
+      if (relPaths.length === 0) return { failed: 0, firstError: null };
+      try {
+        if (side === "host") {
+          const outcome = toPullOutcome(
+            await invoke<unknown>("sync_pull", { projectId, relPath: "", relPaths }),
+          );
+          return { failed: outcome.failed ?? 0, firstError: outcome.firstError ?? null };
         }
+        const result = await invoke<SyncPushResult>("sync_push", { projectId, relPath: "", force, relPaths });
+        if (result?.skipped_unsafe) noteSkippedUnsafe(projectId, result.skipped_unsafe);
+        let failed = result?.failed_total ?? 0;
+        let firstError = pushFailure(result);
+        // Unforced, a host copy that moved blocks the file: nothing went.
+        const blocked = result?.conflicts?.length ?? 0;
+        if (blocked > 0) {
+          failed += blocked;
+          firstError ??= "changed on the host";
+        }
+        if (failed > 0) console.error(`resolveAll: ${side} failed for ${failed} file(s)`, firstError);
+        return { failed, firstError };
+      } catch (e) {
+        console.error(`resolveAll: ${side} failed`, e);
+        return { failed: relPaths.length, firstError: e instanceof Error ? e.message : String(e) };
       }
-      return { failed, firstError };
     }),
 
   markSelected: async (projectId, relPaths, selected, isDir) => {

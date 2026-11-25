@@ -75,6 +75,9 @@ export interface ReadableLineLike {
 
 export interface ReadableBufferLike {
   readonly length: number;
+  readonly baseY?: number;
+  readonly cursorX?: number;
+  readonly cursorY?: number;
   getLine(row: number): ReadableLineLike | undefined;
 }
 
@@ -354,9 +357,16 @@ function dividerAt(text: string, column: number): number {
 const RULE_STROKE = /^[─━═▔]$/u;
 
 /** Whether `below` is a rule drawn across the divider at `column` — the top
- * edge of something the screen draws under the pane at full width. */
+ * edge of something the screen draws under the pane at full width, so it
+ * starts where the screen's own rules do (`MIN_SIDE_COLUMN`). A box's bottom
+ * edge only spans the box: Claude Code's question previews are framed in a
+ * panel beside the answers, and a preview that draws boxes of its own put its
+ * inner `│` on the panel's `└──┘` — read as the pane's divider, it cut the
+ * panel off every row, the wrapped label beside it no longer read as one, and
+ * the question stayed a read-only card. */
 function ruleAcross(below: string | undefined, column: number): boolean {
-  return below !== undefined && BORDER_ONLY.test(below) && below.length > column + 1 && RULE_STROKE.test(below[column]);
+  return below !== undefined && BORDER_ONLY.test(below) && below.length > column + 1 && RULE_STROKE.test(below[column])
+    && below.search(/\S/u) < MIN_SIDE_COLUMN;
 }
 
 /**

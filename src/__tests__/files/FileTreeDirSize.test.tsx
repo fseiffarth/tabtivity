@@ -36,6 +36,7 @@ vi.mock("../../stores/settings", () => {
 
 import { useProjectsStore } from "../../stores/projects";
 import { SidePanel } from "../../components/layout/SidePanel";
+import { clearFileViewSnapshots } from "../../lib/projects/fileViewSnapshots";
 
 const mockUseProjectsStore = vi.mocked(useProjectsStore);
 
@@ -61,6 +62,10 @@ function dirEntry(name: string) {
 describe("file tree folder sizes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The tree seeds its first render from the last listing of the same
+    // project; without this a test mounts with the previous test's rows, and a
+    // slow runner asserts on them before `list_dir` replaces them.
+    clearFileViewSnapshots();
     const state = {
       projects: [ACTIVE_PROJECT],
       activeId: "proj-1",
@@ -185,7 +190,9 @@ describe("file tree folder sizes", () => {
       render(<SidePanel open={true} />);
     });
 
-    expect(await screen.findByText("gitignored (1)")).toBeTruthy();
+    const head = (await screen.findByText("Gitignored")).closest("button") as HTMLElement;
+    expect(head.classList.contains("sp-head")).toBe(true);
+    expect(head.querySelector(".sp-count")?.textContent).toBe("1");
     expect(screen.queryByText("cache")).toBeNull();
   });
 

@@ -35,6 +35,9 @@ export interface CloudLaunch {
   session?: (id: string) => string[];
 }
 
+/** Twinned in the sidecar for a create with no window
+ * (`mobile_control::headless::CLOUD_LAUNCHES`, held to this table by a source
+ * scan there): an entry changed here is changed there. */
 const CLOUD_LAUNCHES: Readonly<Record<string, readonly CloudLaunch[]>> = {
   claude: [
     { action: "new", needsTask: true, args: (task) => ["--cloud", task] },
@@ -61,12 +64,13 @@ export const MAX_CLOUD_TASK = 4000;
 
 /**
  * The task text as it may go on a command line, or null when it cannot:
- * empty, over-long, or carrying terminal control characters (newlines and
- * tabs are prose and stay).
+ * empty, over-long, led by a `-` the CLI would read as a flag, or carrying
+ * terminal control characters (newlines and tabs are prose and stay). The
+ * sidecar's `CreateTabRequest::launch_shape_ok` is the same rule.
  */
 export function cleanCloudTask(task: string | undefined): string | null {
   const text = (task ?? "").trim();
-  if (!text || [...text].length > MAX_CLOUD_TASK) return null;
+  if (!text || text.startsWith("-") || [...text].length > MAX_CLOUD_TASK) return null;
   if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) return null;
   return text;
 }

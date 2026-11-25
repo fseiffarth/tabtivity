@@ -851,7 +851,6 @@
 .project-search-popover,
 .file-run-args,
 .file-viewer-run-args,
-.git-change-tree,
 .presentation-settings,
 .cal-alarm-popup,
 .project-pill-popup,
@@ -898,7 +897,6 @@
 .project-search-popover::before,
 .file-run-args::before,
 .file-viewer-run-args::before,
-.git-change-tree::before,
 .presentation-settings::before,
 .cal-alarm-popup::before,
 .project-pill-popup::before,
@@ -937,20 +935,7 @@
   border: var(--surface-rail) solid var(--accent);
 }
 
-/* The Add/Commit/Push change tree is a list read over the side panel, not a
-   menu: on its 480×320 frame the rail read as a thick bar and the accent wash
-   as a solid lavender slab (user, 2026-11-06). Plain floating fill, no rail,
-   no wash; the shadow alone lifts it. Declared after the groups it opts out of. */
-.git-change-tree {
-  --surface-rail: 0px;
-  border-top: 0;
-}
-.git-change-tree::before {
-  content: none;
-}
-
-/* The dropdown menus (+ tab, + project, context, box pill) are lists, like the
-   change tree above: a 32% accent wash behind a column of white row cards read
+/* The dropdown menus (+ tab, + project, context, box pill) are lists: a 32% accent wash behind a column of white row cards read
    as a lavender slab full of boxes (user, 2026-11-06). The fill stays plain, the
    rows sit flat on it (their own rules) and light up on hover; the accent ring
    keeps the edge. Declared after the groups it opts out of. Dialogs keep the
@@ -1002,7 +987,6 @@
 .project-search-popover,
 .file-run-args,
 .file-viewer-run-args,
-.git-change-tree,
 .presentation-settings,
 .cal-alarm-popup {
   animation: surface-enter var(--motion-enter) var(--ease-out);

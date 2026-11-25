@@ -486,6 +486,12 @@ fn prepare_home_with(
     // runs no shell.
     if !matches!(seed, Seed::Assistant | Seed::Probe) {
         crate::services::agent_hint::write_skill_in_home(home);
+        // The naming the agent hook asks for on every new conversation must
+        // not stop at a permission dialog in a mode that asks for MCP tools
+        // (plan mode). Best effort: an unwritable rule costs a prompt only.
+        if let Err(e) = allow_tab_naming(home) {
+            eprintln!("agent_home: allow tab naming in {}: {e}", home.display());
+        }
     }
     // Copilot signs in through a keyring the fence hides: its home gets the
     // plain-text token setting Tabtivity's keeper collects from (`copilot_auth`).
@@ -768,6 +774,28 @@ pub(crate) fn login_read_deny_rules() -> Vec<String> {
 /// Add [`login_read_deny_rules`] to `permissions.deny` of the home's Claude
 /// `settings.json`, keeping every other key and rule. Idempotent.
 fn deny_login_reads(home: &Path) -> io::Result<()> {
+    add_claude_permission_rules(home, "deny", &login_read_deny_rules())
+}
+
+/// Claude's `permissions.allow` rules for the cockpit lane's two tools the
+/// agent hook (`cockpit_mcp::NAME_HINT`) asks for unprompted: reading and
+/// renaming the agent's own tab. Self-only, so a prompt for them guards
+/// nothing; the other cockpit tools stay the user's to allow.
+pub(crate) fn tab_naming_allow_rules() -> Vec<String> {
+    use crate::services::cockpit_mcp::{SERVER_NAME, TOOL_INFO, TOOL_RENAME};
+    [TOOL_INFO, TOOL_RENAME].iter().map(|tool| format!("mcp__{SERVER_NAME}__{tool}")).collect()
+}
+
+/// Add [`tab_naming_allow_rules`] to `permissions.allow` of the home's Claude
+/// `settings.json`. Idempotent.
+fn allow_tab_naming(home: &Path) -> io::Result<()> {
+    add_claude_permission_rules(home, "allow", &tab_naming_allow_rules())
+}
+
+/// Add `rules` to the `list` (`allow`/`deny`) of `permissions` in the home's
+/// Claude `settings.json`, keeping every other key and rule. Idempotent; an
+/// unparsable file is moved aside and started over.
+fn add_claude_permission_rules(home: &Path, list: &str, rules: &[String]) -> io::Result<()> {
     use serde_json::{json, Value};
     let file = HomeFile::open(home, ".claude/settings.json")
         .ok_or_else(|| io::Error::other(format!(".claude/settings.json in {} is not a plain path", home.display())))?;
@@ -786,13 +814,13 @@ fn deny_login_reads(home: &Path) -> io::Result<()> {
         obj.insert("permissions".into(), json!({}));
     }
     let Some(permissions) = obj.get_mut("permissions").and_then(Value::as_object_mut) else { return Ok(()) };
-    if !permissions.get("deny").is_some_and(Value::is_array) {
-        permissions.insert("deny".into(), json!([]));
+    if !permissions.get(list).is_some_and(Value::is_array) {
+        permissions.insert(list.into(), json!([]));
     }
-    let Some(deny) = permissions.get_mut("deny").and_then(Value::as_array_mut) else { return Ok(()) };
-    for rule in login_read_deny_rules() {
-        if !deny.iter().any(|d| d.as_str() == Some(rule.as_str())) {
-            deny.push(Value::String(rule));
+    let Some(entries) = permissions.get_mut(list).and_then(Value::as_array_mut) else { return Ok(()) };
+    for rule in rules {
+        if !entries.iter().any(|d| d.as_str() == Some(rule.as_str())) {
+            entries.push(Value::String(rule.clone()));
         }
     }
     let body = serde_json::to_vec_pretty(&root).map_err(io::Error::other)?;
@@ -1144,6 +1172,36 @@ mod tests {
         prepare_home_in(state, &scope, "p1", &[], Seed::Scope).unwrap();
         let text = std::fs::read_to_string(scope.join(".claude/settings.json")).unwrap();
         assert!(!text.contains("Read(~/"), "{text}");
+    }
+
+    /// The naming the agent hook asks for runs without a permission dialog
+    /// (plan mode asked every time): a scope's home allows reading and
+    /// renaming its own tab, keeps the user's rules, adds nothing on a second
+    /// spawn and allows no other cockpit tool; the assistant's home, which
+    /// has no cockpit lane, gets no such rule.
+    #[test]
+    fn a_scope_home_allows_naming_its_own_tab_without_a_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let home = scope_home_in(state, "p1");
+        write_file(&home.join(".claude/settings.json"), r#"{"model":"x","permissions":{"allow":["Bash(ls)"]}}"#);
+        let allow_of = |home: &Path| -> Vec<String> {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude/settings.json")).unwrap()).unwrap();
+            v["permissions"]["allow"].as_array().map(|a| a.iter().map(|d| d.as_str().unwrap().to_string()).collect()).unwrap_or_default()
+        };
+        prepare_home_in(state, &home, "p1", &[], Seed::Scope).unwrap();
+        let first = allow_of(&home);
+        let server = crate::services::cockpit_mcp::SERVER_NAME;
+        for rule in ["Bash(ls)".to_string(), format!("mcp__{server}__tab_get_info"), format!("mcp__{server}__tab_rename")] {
+            assert!(first.contains(&rule), "{rule} in {first:?}");
+        }
+        assert_eq!(first.len(), 3, "no other cockpit tool: {first:?}");
+        prepare_home_in(state, &home, "p1", &[], Seed::Scope).unwrap();
+        assert_eq!(allow_of(&home), first, "idempotent");
+        let chat = crate::services::assistant::chat_dir(state, CHAT).unwrap();
+        prepare_assistant_home_in(state, false, &chat).unwrap();
+        let assistant = allow_of(&scope_home_in(state, "assistant"));
+        assert!(!assistant.iter().any(|r| r.contains("cockpit")), "{assistant:?}");
     }
 
     /// The Tabtivity-wide layer never reaches the assistant's home, not even

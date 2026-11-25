@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LineLike } from "../../lib/terminal/terminalSelection";
-import { findServerUrls, forwardedUrl, isLoopbackServerHost, localPageUrl, parseServerTarget } from "../../lib/terminal/serverUrls";
+import { findServerUrls, forwardedUrl, isLoopbackServerHost, localPageUrl, parseServerTarget, withoutOwnServers } from "../../lib/terminal/serverUrls";
 
 const COLS = 100;
 
@@ -152,5 +152,20 @@ describe("isLoopbackServerHost", () => {
       expect(isLoopbackServerHost(no), no).toBe(false);
     }
     expect(parseServerTarget("http://localhost-gpu:8888/", true)?.host).toBe("localhost-gpu");
+  });
+});
+
+describe("withoutOwnServers", () => {
+  it("drops the phone server's port on the loopback, keeps every other server", () => {
+    const kept = withoutOwnServers(scan([
+      "● Bash(curl -s http://127.0.0.1:8742/assets/index.js)",
+      "  Local:   http://localhost:5173/",
+      "  http://node042:9000/ on a cluster node",
+    ]), [8742]);
+    expect(kept.map((s) => `${s.host}:${s.port}`)).toEqual(["localhost:5173", "node042:9000"]);
+    // `0.0.0.0` is read as the loopback, so it is this machine's port too.
+    expect(withoutOwnServers(scan(["http://0.0.0.0:8742/"]), [8742])).toEqual([]);
+    // A node of the same port is another machine.
+    expect(withoutOwnServers(scan(["http://node042:8742/"]), [8742])).toHaveLength(1);
   });
 });

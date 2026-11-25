@@ -103,6 +103,7 @@ function gitHostingValue(): string {
 
 describe("clone import fills the Git hosting field", () => {
   beforeEach(() => {
+    localStorage.clear(); // ProjectDialog reopens on its last answers (projectDialogMemory)
     vi.useFakeTimers();
     invoke.mockReset();
     useSettingsStore.setState({ settings: { git_token: "", git_profile_url: "" } } as never);
@@ -212,6 +213,7 @@ async function renderWithFolder(overrides: Record<string, unknown> = {}) {
 
 describe("folder import with an existing origin fills the Git hosting field", () => {
   beforeEach(() => {
+    localStorage.clear(); // ProjectDialog reopens on its last answers (projectDialogMemory)
     vi.useFakeTimers();
     invoke.mockReset();
     useSettingsStore.setState({ settings: { git_token: "", git_profile_url: "" } } as never);
@@ -259,6 +261,7 @@ describe("folder import with an existing origin fills the Git hosting field", ()
 
 describe("VM tier prerequisites", () => {
   beforeEach(() => {
+    localStorage.clear(); // ProjectDialog reopens on its last answers (projectDialogMemory)
     invoke.mockReset();
     useSettingsStore.setState({ settings: { git_token: "", git_profile_url: "" } } as never);
     useProjectsStore.setState({ projects: [], activeId: null, loaded: true });

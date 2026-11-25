@@ -98,8 +98,10 @@ describe("file tree · Agent memory sub-group", () => {
     setupInvoke([entry("MEMORY.md"), entry("user_role.md"), entry("notes.md", "codex")]);
     await renderPanel();
     await openDocs();
-    const head = await screen.findByText(/Agent memory \(3\)/);
+    // The sub-head names the group and counts it in a `.sp-count` badge.
+    const head = await screen.findByText("Agent memory");
     const toggle = head.closest("button") as HTMLElement;
+    expect(toggle.querySelector(".sp-count")?.textContent).toBe("3");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(document.querySelector(".doc-memory")).toBeNull();
 

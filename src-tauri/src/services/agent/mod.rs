@@ -52,6 +52,9 @@ pub mod agent_session;
 pub mod agent_shim;
 pub mod agent_sqlite;
 pub mod agent_tasks;
+// The local-model "what's next" suggestion: the session's last turn, sent to
+// a loopback Ollama for the one line the user would likely type next.
+pub mod next_prompt;
 // The stored conversation behind an agent tab (Claude's session log, Codex's
 // rollout) as the prompt/answer entries the phone's Focus view lays out.
 pub mod agent_transcript;
@@ -63,9 +66,15 @@ pub mod agent_turn;
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
 pub mod agent_versions;
+// Claude's trace spans as a second, separate source of token counts (experimental
+// `claude_otel_tokens`; docs/claude_otel_tokens_plan.md): a loopback OTLP receiver and its ledger.
+pub mod claude_otel;
 // Claude's long-lived token (`claude setup-token`): kept in the keyring,
 // the fallback login of every Claude tab with no shared login, local and remote.
 pub mod claude_token;
+// `claude doctor`'s API connectivity section (2.1.331+): the Check API
+// connection action in Manage CLIs runs it in the probe home and parses it.
+pub mod claude_doctor;
 // One overview of the CLIs in use: plan, account, usage windows
 // (docs/done/cli_overview_plan.md).
 pub mod cli_overview;
@@ -88,6 +97,9 @@ pub mod copilot_session;
 // Meta Muse Code's session store: the Reader's chat, the Resume menu and a
 // restored tab's `resume --last`.
 pub mod muse_session;
+// Cursor CLI's chat store: the Reader's chat and Diffs, the Resume menu and a
+// restored tab's `--resume <id>`.
+pub mod cursor_session;
 pub mod opencode_models;
 pub mod opencode_session;
 pub mod opencode_store;

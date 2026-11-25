@@ -3,6 +3,7 @@ import captured152 from "../fixtures/antigravity152.json";
 import captured159 from "../fixtures/antigravity159.json";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import {
+  antigravityDialogStart,
   antigravityEffortKeys,
   antigravityFooter,
   isAntigravityHintRow,
@@ -142,6 +143,11 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort`, () => {
     expect(picker!.options[6].label).toBe("GPT-OSS 120B (Medium)");
     expect(picker!.current).toBe(4);
     expect(picker!.hidden).toBeUndefined();
+  });
+
+  it("keeps the auto-compaction override out of the current model's name", () => {
+    const picker = readAntigravityPicker(lines(...PICKER.map((row) => row.replace("(current)", "(current · 838860)"))));
+    expect(picker?.options[2]).toMatchObject({ label: "Gemini 3.6 Flash", description: "(current)" });
   });
 
   it("reads nothing where the heading is a line of output", () => {
@@ -494,5 +500,58 @@ describe(`${BRAND.display} Mobile — Antigravity 1.5.9, queued prompts`, () => 
     for (const name of ["Gemini 4 Carbon", "GPT-OSS 120B (Medium)", "Claude Opus 4.6 (Thinking)"]) {
       expect(antigravityFooter(`? for shortcuts                       ${name} · high`)?.model).toBe(name);
     }
+  });
+});
+
+// Transcribed from a user's screenshot of 1.5.16 (not a pty capture): Enter
+// on a model the account's plan lacks leaves the dialog up, greys the row and
+// prints why under the list, with no effort slider.
+const UNAVAILABLE_1516 = [
+  "  Antigravity CLI 1.5.16",
+  "  Gemini 3.8 Flash (High)",
+  "",
+  ">",
+  "Switch Model",
+  "",
+  "  Search:",
+  "",
+  "  Gemini 3.8 Flash             (current)",
+  "  Claude Sonnet 4.6 (Thinking)",
+  "  Claude Opus 4.6 (Thinking)",
+  "  GPT-OSS 120B (Medium)",
+  "> Gemini 4 Carbon",
+  "  Gemini 4 Argon",
+  "  Gemini 4 Hydrogen",
+  "  Gemini 4 Neon",
+  "",
+  "  Unavailable · Gemini 4 Carbon is currently available to Ultra and paid Pro plan subscribers.",
+  "",
+  "Keyboard: ↑/↓ Navigate  esc Go Back",
+  "                                              auto · Gemini 3.8 Flash · high",
+];
+
+describe(`${BRAND.display} Mobile — Antigravity 1.5.16, a model outside the plan`, () => {
+  it("marks the highlighted row unavailable with the dialog's own reason", () => {
+    const picker = readAntigravityPicker(lines(...UNAVAILABLE_1516));
+    expect(picker?.options).toHaveLength(8);
+    const row = picker?.options[picker.current];
+    expect(row?.label).toBe("Gemini 4 Carbon");
+    expect(row?.unavailable).toBe(true);
+    expect(row?.description).toMatch(/^Unavailable · Gemini 4 Carbon is currently available/u);
+    expect(picker?.options.filter((option) => option.unavailable)).toHaveLength(1);
+    expect(readAntigravityEffort(lines(...UNAVAILABLE_1516))).toBeNull();
+  });
+
+  it("leaves a note naming another model off the highlighted row", () => {
+    const moved = UNAVAILABLE_1516.map((text) => (text === "> Gemini 4 Carbon" ? "  Gemini 4 Carbon" : text === "  Gemini 4 Argon" ? "> Gemini 4 Argon" : text));
+    const picker = readAntigravityPicker(lines(...moved));
+    expect(picker?.options[picker.current]?.label).toBe("Gemini 4 Argon");
+    expect(picker?.options.some((option) => option.unavailable)).toBe(false);
+  });
+
+  it("finds the dialog's heading, rows or no rows", () => {
+    expect(antigravityDialogStart(lines(...UNAVAILABLE_1516))).toBe(4);
+    expect(antigravityDialogStart(lines(">", "Switch Model", "", "  Search:"))).toBe(1);
+    expect(antigravityDialogStart(lines(...IDLE))).toBe(-1);
   });
 });

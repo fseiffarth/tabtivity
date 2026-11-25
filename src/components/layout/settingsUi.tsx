@@ -298,6 +298,13 @@ export function SettingsNavigation({ value, groups, results, onChange, query, on
   const t = useT();
   /** The result whose link was last copied, and how that went. */
   const [copyState, setCopyState] = useState<{ value: string; state: "copied" | "failed" } | null>(null);
+  /** The search result last opened: marked current, so steering's ←/→ step
+   *  on from it through the results (`stepSettingsPage`). */
+  const [picked, setPicked] = useState<string | null>(null);
+  const pick = (next: string) => {
+    setPicked(next);
+    onChange(next);
+  };
   const flat = results ?? groups.flatMap((group) => group.entries);
   const options = results
     ? results.map((r) => ({ value: r.value, label: `${r.label} · ${r.trail}` }))
@@ -316,7 +323,7 @@ export function SettingsNavigation({ value, groups, results, onChange, query, on
       onKeyDown={(e) => {
         if (e.key === "Enter" && flat[0]) {
           e.preventDefault();
-          onChange(flat[0].value);
+          pick(flat[0].value);
         } else if (e.key === "Escape" && query) {
           e.preventDefault();
           onQuery("");
@@ -333,7 +340,8 @@ export function SettingsNavigation({ value, groups, results, onChange, query, on
             const copied = copyState?.value === result.value ? copyState.state : null;
             const copyLabel = t(copied === "copied" ? "appLink.copied" : copied === "failed" ? "appLink.copyFailed" : "appLink.copy");
             return <div key={result.value} className="settings-navigation-result"><button type="button" className="settings-btn"
-              onClick={() => onChange(result.value)}>
+              aria-current={result.value === picked ? "location" : undefined}
+              onClick={() => pick(result.value)}>
               {result.label}
               <span className="settings-navigation-hit">{result.trail}</span>
             </button>{result.url && <button type="button" className="settings-btn icon settings-navigation-copy"

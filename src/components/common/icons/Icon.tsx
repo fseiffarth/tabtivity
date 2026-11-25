@@ -355,6 +355,16 @@ export function TimerIcon(p: IconProps) {
   );
 }
 
+/** ⧗ — the prompt chart: prompts laid out over time. */
+export function HourglassIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M7 3.5h10M7 20.5h10" />
+      <path d="M8.5 3.5V6L12 12l3.5-6V3.5M8.5 20.5V18L12 12l3.5 6v2.5" />
+    </Frame>
+  );
+}
+
 export function BugIcon(p: IconProps) {
   return (
     <Frame {...p}>
@@ -735,6 +745,21 @@ export function PlayMark() {
   return (
     <svg viewBox="0 0 10 10" width="1em" height="1em" aria-hidden="true" focusable="false" style={{ display: "inline-block", verticalAlign: "-0.05em" }}>
       <path d="M2 1v8l7-4z" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** An agent turn's working mark: "•••", three dots a light walks through
+ *  (`.working-dot` in projects-tabs.css). Paused (window in the background,
+ *  Energy Saver, the CPU paint path, reduced motion) the dots stand at full
+ *  strength, so holding still keeps the shape and only the light stops. Drawn
+ *  for the same reason as {@link PlayMark}: no font fallback can recolour it. */
+export function WorkingDots() {
+  return (
+    <svg viewBox="0 0 10 10" width="1em" height="1em" aria-hidden="true" focusable="false" style={{ display: "inline-block", verticalAlign: "-0.05em" }}>
+      <circle className="working-dot" cx="1.4" cy="5" r="1.4" fill="currentColor" />
+      <circle className="working-dot" cx="5" cy="5" r="1.4" fill="currentColor" />
+      <circle className="working-dot" cx="8.6" cy="5" r="1.4" fill="currentColor" />
     </svg>
   );
 }

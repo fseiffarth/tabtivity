@@ -65,6 +65,52 @@ pub(crate) fn configured_context_length() -> Option<u32> {
     crate::storage::load_settings().and_then(|s| s.ollama_context_length)
 }
 
+// ── Models the user unloaded ──────────────────────────────────────────────
+// An Unload (`stop_ollama_model`, desktop or phone) holds the model: the
+// unattended callers — prompt suggestions and autocomplete
+// (`agent::next_prompt`), mail autocomplete (`mail::mail_complete`) and the
+// editor's automatic completions — skip it instead of loading it straight
+// back. A Load (`commands::ollama::run_load`) releases it; so does a restart,
+// the hold being this process's memory only. What the user starts by hand (an
+// agent tab, a mail summary, a manual completion) is not held back.
+
+/// The held models, by [`held_key`].
+fn held_models() -> &'static std::sync::Mutex<std::collections::BTreeSet<String>> {
+    static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> = std::sync::OnceLock::new();
+    HELD.get_or_init(Default::default)
+}
+
+/// The error an unattended caller answers for a held model.
+pub(crate) const MODEL_HELD: &str = "model_unloaded";
+
+/// One spelling per model: trimmed, a bare name as its `:latest`.
+fn held_key(model: &str) -> String {
+    let model = model.trim();
+    if model.rsplit('/').next().unwrap_or(model).contains(':') {
+        model.to_owned()
+    } else {
+        format!("{model}:latest")
+    }
+}
+
+/// The user unloaded `model`: unattended callers leave it unloaded.
+pub fn hold_unloaded(model: &str) {
+    use app_core::sync::LockExt;
+    held_models().lock_ok().insert(held_key(model));
+}
+
+/// The user loaded `model`: unattended callers may use it again.
+pub fn release_hold(model: &str) {
+    use app_core::sync::LockExt;
+    held_models().lock_ok().remove(&held_key(model));
+}
+
+/// Whether the user unloaded `model` and has not loaded it since.
+pub fn is_held(model: &str) -> bool {
+    use app_core::sync::LockExt;
+    held_models().lock_ok().contains(&held_key(model))
+}
+
 /// The pure core of [`ollama_addr`]: what the user wrote → what we dial.
 ///
 /// Liberal about spelling (Ollama's own `OLLAMA_HOST` accepts most of these, and
@@ -305,6 +351,56 @@ pub(crate) fn ollama_http_at(
     json_body: Option<&str>,
     read_timeout: Duration,
 ) -> Result<String, String> {
+    ollama_http_inner(addr, method, path, json_body, read_timeout, None)
+}
+
+/// The answer of a request [`Abort::abort`] ended before it was answered.
+pub(crate) const ABORTED: &str = "aborted";
+
+/// A handle another thread uses to end an [`ollama_http_abortable`] request
+/// in flight: it shuts the request's socket down, which Ollama takes as the
+/// client going away and stops the request. Abort before the request connects
+/// and it never sends.
+#[derive(Default)]
+pub(crate) struct Abort {
+    aborted: std::sync::atomic::AtomicBool,
+    stream: std::sync::Mutex<Option<TcpStream>>,
+}
+
+impl Abort {
+    pub(crate) fn abort(&self) {
+        use app_core::sync::LockExt;
+        self.aborted.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(stream) = self.stream.lock_ok().as_ref() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    pub(crate) fn is_aborted(&self) -> bool {
+        self.aborted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// [`ollama_http_at`] that `abort` can end early, answering [`ABORTED`].
+pub(crate) fn ollama_http_abortable(
+    addr: &str,
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+    abort: &Abort,
+) -> Result<String, String> {
+    ollama_http_inner(addr, method, path, json_body, read_timeout, Some(abort))
+}
+
+fn ollama_http_inner(
+    addr: &str,
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+    abort: Option<&Abort>,
+) -> Result<String, String> {
     #[cfg(test)]
     if let Some(answer) = test_http::answer(addr, method, path) {
         return answer;
@@ -314,6 +410,27 @@ pub(crate) fn ollama_http_at(
     stream
         .set_read_timeout(Some(read_timeout))
         .map_err(|e| format!("set timeout: {e}"))?;
+    if let Some(abort) = abort {
+        use app_core::sync::LockExt;
+        let clone = stream.try_clone().map_err(|e| format!("clone: {e}"))?;
+        *abort.stream.lock_ok() = Some(clone);
+        // An abort between the check above and the store would find no socket.
+        if abort.is_aborted() {
+            return Err(ABORTED.to_string());
+        }
+    }
+    let answered = ollama_http_send(&mut stream, addr, method, path, json_body);
+    if let Some(abort) = abort {
+        use app_core::sync::LockExt;
+        abort.stream.lock_ok().take();
+        if abort.is_aborted() {
+            return Err(ABORTED.to_string());
+        }
+    }
+    answered
+}
+
+fn ollama_http_send(stream: &mut TcpStream, addr: &str, method: &str, path: &str, json_body: Option<&str>) -> Result<String, String> {
 
     let req = match json_body {
         Some(body) => format!(

@@ -51,6 +51,47 @@ class GateJobTests(unittest.TestCase):
         self.assertEqual(result.returncode, 7)
         self.assertIn("useful-diagnostic", result.stdout)
 
+    def test_every_failed_gates_tail_survives_a_long_log(self):
+        body = (
+            'for i in $(seq 200); do echo "progress $i"; done\n'
+            'echo "--- clippy failed; last lines of /x/clippy.log:"\n'
+            'for i in $(seq 60); do echo "clippy-line $i"; done\n'
+            'echo "--- vitest failed; last lines of /x/vitest.log:"\n'
+            'for i in $(seq 60); do echo "vitest-line $i"; done\n'
+            'printf "== gates ==\\nFAILED: clippy\\n"\nexit 1\n'
+        )
+        result = self.finish(self.start(body))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("clippy-line 1\n", result.stdout)
+        self.assertIn("vitest-line 60", result.stdout)
+        self.assertNotIn("progress 200", result.stdout)
+
+    def wait(self, job, *args):
+        return subprocess.run([*self.runner, "wait", str(job), *args], capture_output=True, text=True, timeout=30)
+
+    def test_wait_blocks_until_the_result(self):
+        job = self.start('sleep 0.5\nprintf "== gates ==\\nPASS waited\\n"\n')
+        result = self.wait(job, "--timeout", "10")
+        self.assertEqual(result.returncode, 0, result)
+        self.assertIn("PASS waited", result.stdout)
+
+    def test_wait_past_its_timeout_says_still_running(self):
+        job = self.start('echo "gates: another session\'s run holds the gate lock; waiting for it"\nsleep 5\n')
+        result = self.wait(job, "--timeout", "1")
+        self.assertEqual(result.returncode, 3, result)
+        self.assertIn("waiting for it", result.stdout)
+
+    def test_wait_on_a_dead_worker_is_not_a_pass(self):
+        job = pathlib.Path(self.fixture.name) / "dead"
+        job.mkdir()
+        child = subprocess.Popen(["true"])
+        child.wait()
+        (job / "pid").write_text(f"{child.pid}\n")
+        t0 = time.monotonic()
+        result = self.wait(job, "--timeout", "20")
+        self.assertEqual(result.returncode, 2)
+        self.assertLess(time.monotonic() - t0, 5)
+
     def test_missing_job_is_not_a_pass(self):
         result = self.status(pathlib.Path(self.fixture.name) / "missing")
         self.assertEqual(result.returncode, 2)

@@ -79,6 +79,19 @@ describe("Mobile home — Needs you", () => {
     expect(await screen.findByText("Alpha · done-1")).toBeTruthy();
   });
 
+  it("opens an inactive tab's project rather than leaving its row dead", async () => {
+    serve([tab("gone-1", "done", { done_at: 2_000, available: false })]);
+    const projects: string[] = [];
+    const tabs: string[] = [];
+    render(<Home tabby={() => {}} open={(id) => projects.push(id)} openTab={(_project, row) => tabs.push(row.id)} todo={noop} mail={noop} />);
+    const row = (await screen.findByText("Alpha · gone-1")).closest("button") as HTMLButtonElement;
+    expect(row.disabled).toBe(false);
+    expect(row.classList.contains("unavailable")).toBe(true);
+    fireEvent.click(row);
+    expect(projects).toEqual(["p1"]);
+    expect(tabs).toEqual([]);
+  });
+
   it("sends \"continue\" to an interrupted tab from beside its row, without opening it", async () => {
     serve([tab("cut", "interrupted", { working_at: 1_000 }), tab("asking", "question", { working_at: 2_000 })]);
     const held: { url: string; body: unknown }[] = [];

@@ -1410,7 +1410,8 @@ the desktop groundwork the hosted plan's P1 builds on.*
     the owner could do like Undo clear); the ⎇ worktree and locality moves
     (the window carries the conversation between folders/hosts); the
     Diverged list and its resolve actions (the window's sync store and SSH
-    session); a mode, cloud, local-model, API-key or sign-in launch (the
-    window builds those specs; on a server sign-in tabs and admin API keys
+    session); a mode, local-model, API-key or sign-in launch (the window
+    builds those specs; a project's cloud session starts with no window
+    since `develop`'s `headless::cloud_options`, 2026-11; on a server sign-in tabs and admin API keys
     matter most); the CLI overview's Claude `/usage` note still says "needs
     the desktop app".

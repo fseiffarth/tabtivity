@@ -87,6 +87,9 @@ describe("notes on the Reader's Diffs tab", () => {
     expect(composer()?.value).toContain("Review notes on your changes:\n\nsrc/a.rs:1\n```diff\n- x\n+ y\n```\n→ Why not y?");
     expect(useDiffNotesStore.getState().byTab[ID]).toBeUndefined();
     expect(host.querySelector(".terminal-changes-notes")).toBeNull();
+    // Into the field docked under Diffs, which stays, the field open.
+    expect(host.querySelector(".terminal-changes")).not.toBeNull();
+    expect(host.querySelector(".terminal-reader")?.classList.contains("dock-open")).toBe(true);
   });
 
   it("starts a note from the key on a folded card, extends it with Shift in the unified layout, and edits it", async () => {

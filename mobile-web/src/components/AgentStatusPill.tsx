@@ -15,7 +15,7 @@ export const AGENT_STATUS_GLYPH: Record<AgentStatus, ReactNode> = {
 };
 
 /** The state's word, in the phone's language. */
-const AGENT_STATUS_WORD: Record<AgentStatus, TranslationKey> = {
+export const AGENT_STATUS_WORD: Record<AgentStatus, TranslationKey> = {
   working: "mobile.agentStatus.working",
   question: "mobile.agentStatus.question",
   interrupted: "mobile.agentStatus.interrupted",

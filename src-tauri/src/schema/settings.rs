@@ -566,6 +566,12 @@ pub struct Settings {
     /// has never heard of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_roles: Option<HashMap<String, String>>,
+    /// Whether the Suggestions model also completes a prompt while it is being
+    /// typed (`services::agent::next_prompt`, `complete`): the dim text after
+    /// the caret in the Chat composer and steering's prompt box, a strip on the
+    /// phone. Unset is on; `false` leaves the turn-end suggestion alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_autocomplete: Option<bool>,
     /// Missing/unknown provider retains Ollama. Prose always retains its role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_completion_provider: Option<String>,
@@ -812,6 +818,11 @@ pub struct Settings {
     /// webview regardless. Read via `gpu_compositing()`, strict default-off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_compositing: Option<bool>,
+    /// When a renderer crash on the GPU path turned `gpu_compositing` off
+    /// (`services::webkit_gpu::fall_back_to_cpu_at`, ISO time). The main window
+    /// asks once whether to turn it back on; either answer clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_compositing_fallback: Option<String>,
     /// EXPERIMENTAL, default OFF. The markdown relationship graph: a "Graph"
     /// mode on the markdown viewer that crawls the viewed document's local-file
     /// links and renders them as a clickable navigation map. Purely a frontend
@@ -837,6 +848,13 @@ pub struct Settings {
     /// the Settings card sets in the same click.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_checkpoints: Option<bool>,
+    /// EXPERIMENTAL, default OFF. Claude's trace spans as a second, separate
+    /// source of the recap's token counts (`services::claude_otel`,
+    /// `docs/claude_otel_tokens_plan.md`): local Claude tabs started after it
+    /// is on export their `claude_code.llm_request` spans to a loopback
+    /// receiver. Read via [`Settings::claude_otel_tokens`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_otel_tokens: Option<bool>,
     /// EXPERIMENTAL, default ON (`ON_BY_DEFAULT` in `src/lib/experimental.ts`:
     /// unset is on, an explicit `false` turns it off). The chat assistant
     /// (`docs/done/assistant_plan.md`,
@@ -1038,6 +1056,14 @@ pub struct Settings {
     /// against the keychain whenever it *is* readable, so it cannot drift for long.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vpn_saved_configs: Option<Vec<String>>,
+    /// The `.ovpn` configs with **Keep connected** on (the VPN menu's switch):
+    /// their tunnels are started with the options that stop OpenVPN from ending
+    /// itself on an idle, ping or session timer
+    /// (`services::openvpn::keep_connected_args`). Read by the backend at each
+    /// connect; off (absent) by default, since it overrides what the VPN's
+    /// operator asked the client to do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpn_keep_connected: Option<Vec<String>>,
     /// Energy-saver mode: "off" | "battery" (default) | "always". When active
     /// (mode "always", or "battery" while discharging) Tabtivity pauses the blob
     /// auto-spin, collapses idle animations, and widens always-on UI timers.
@@ -1456,6 +1482,12 @@ impl Settings {
     /// them only with its own switch on too (`services::checkpoints::capturing_in`).
     pub fn turn_checkpoints(&self) -> bool {
         self.experimental(self.turn_checkpoints)
+    }
+
+    /// Whether Claude's trace spans are a token source: the receiver starts and
+    /// new local Claude tabs export to it (`services::claude_otel`).
+    pub fn claude_otel_tokens(&self) -> bool {
+        self.experimental(self.claude_otel_tokens)
     }
 
     /// Whether the experimental Python Run/Debug buttons and breakpoint gutter are

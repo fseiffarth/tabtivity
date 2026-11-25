@@ -31,7 +31,7 @@ import type { SteeringAgentCommand } from "../shortcuts/steeringAgent";
 
 export type ReaderViewId = "chat" | "changes" | "files" | "terminal";
 
-/** The cycle's order. */
+/** The cycle's order, including both views of the Chat/Terminal switch. */
 export const READER_VIEW_ORDER: readonly ReaderViewId[] = ["chat", "changes", "files", "terminal"];
 
 /** What a pane with a view strip lets steering do to it. */
@@ -62,14 +62,14 @@ export interface ReaderInsideTarget {
 /**
  * The next view in the cycle: `dir` 1 forward, -1 back, wrapping, skipping any
  * view not in `offered`. The current view stays selectable (it may have gone
- * grey while open), so with nothing else offered the cycle stays put.
+ * grey while open), so with nothing else offered the cycle stays put. The
  */
 export function cycleReaderView(current: ReaderViewId, offered: readonly ReaderViewId[], dir: 1 | -1): ReaderViewId {
   const n = READER_VIEW_ORDER.length;
   const from = READER_VIEW_ORDER.indexOf(current);
-  for (let step = 1; step <= n; step++) {
+  for (let step = 1; step < n; step++) {
     const candidate = READER_VIEW_ORDER[(((from + dir * step) % n) + n) % n];
-    if (candidate === current || offered.includes(candidate)) return candidate;
+    if (offered.includes(candidate)) return candidate;
   }
   return current;
 }
@@ -117,7 +117,7 @@ export function openQuestionField(id: string, index: number): boolean {
   return true;
 }
 
-/** Shows pane `id`'s Chat composer for steering's Prompt key (it stands aside
+/** Shows pane `id`'s Reader composer (under Chat, Diffs or Data) for steering's Prompt key (it stands aside
  *  under steering otherwise), its text led with `lead`; the composer brings
  *  steering back on `level` once the prompt is sent or Esc pressed. False when
  *  it cannot take the prompt now. */
@@ -125,16 +125,23 @@ export type ReaderComposerOpen = (level: SteeringBaseLevel, lead?: SteeringAgent
 
 const composers = new Map<string, ReaderComposerOpen>();
 
-/** Register pane `id`'s Chat composer, while it is shown and can take text. */
+/** Register pane `id`'s Reader composer while it is shown (Chat, or docked
+ *  under Diffs or Data) and can take text. */
 export function registerReaderComposer(id: string, open: ReaderComposerOpen): () => void {
   return register(composers, id, open);
 }
 
-/** Shows pane `id`'s Chat composer for steering; false when the pane has none
+/** Shows pane `id`'s Reader composer for steering; false when the pane has none
  *  on show (Terminal view, another CLI) — the prompt box then. A starting CLI
  *  or a question up still answers: the composer takes the text, sent by hand once it can go. */
 export function openReaderComposer(id: string, level: SteeringBaseLevel, lead?: SteeringAgentCommand): boolean {
   return composers.get(id)?.(level, lead) ?? false;
+}
+
+/** Whether pane `id` has its Reader composer on show — what steering's new
+ *  agent tab waits for before it falls back to the prompt box. */
+export function readerComposerShown(id: string): boolean {
+  return composers.has(id);
 }
 
 /** What steering does to the Chat's queued prompts (Send now, Cancel and edit). */

@@ -10,13 +10,19 @@
  * would say the same, but reading it means a status call that can spawn the
  * CLI; the screen is already streaming to the phone. */
 
+import { cursorStopHint, cursorWork } from "./cursorAgent";
+
 /** The key that stops `family`'s running turn (`agentFamily`): Esc for every
- * CLI but Copilot. Copilot 1.0.112 ignores a lone Esc mid-turn and stops on
- * Ctrl+C (its footer's `ctrl+c interrupt`) or Esc Esc; on an idle box Esc Esc
- * opens its rewind picker, while Ctrl+C only clears the draft (probed offline
- * 2026-11-17), so a Stop that lands as the turn ends is harmless with Ctrl+C. */
+ * CLI but Copilot and Cursor. Copilot 1.0.112 ignores a lone Esc mid-turn and
+ * stops on Ctrl+C (its footer's `ctrl+c interrupt`) or Esc Esc; on an idle box
+ * Esc Esc opens its rewind picker, while Ctrl+C only clears the draft (probed
+ * offline 2026-11-17), so a Stop that lands as the turn ends is harmless with
+ * Ctrl+C. Cursor 2026.11.22 stops on Ctrl+C (its box says `ctrl+c to stop`),
+ * ignores Esc, and on an idle box answers one Ctrl+C with `Press Ctrl+C again
+ * to exit` — a Stop that lands late is harmless there too, a second one is
+ * not. */
 export function stopKey(family: string): string {
-  return family === "copilot" ? "\u0003" : "\u001b";
+  return family === "copilot" || family === "cursor" ? "\u0003" : "\u001b";
 }
 
 /** Rows read from the bottom. The hint sits above the input box, with at most
@@ -80,21 +86,39 @@ const EFFORT = /\bwith\s+([a-z][a-z-]*)\s+effort\b/iu;
  * select-prompt reader (`selectPrompt`) needs to know it is not the dialog's
  * heading. */
 export function busyRow(text: string): boolean {
+  return genericBusyRow(text) || cursorStopHint(text);
+}
+
+/** The rows `agentWork` counts by themselves, anywhere near the bottom. Not
+ * Cursor's stop hint: an answer that quotes `→ … ctrl+c to stop` would keep
+ * every pane busy; Cursor's own busy turn is read with its box (`cursorWork`). */
+function genericBusyRow(text: string): boolean {
   return BUSY_HINT.test(text) || CLAUDE_SPINNER.test(text);
 }
 
-/** The busy row's facts, or `null` when no row says the agent is working. */
+/** The busy row's facts, or `null` when no row says the agent is working.
+ * The lowest busy row says it works; the facts come from the lowest one that
+ * prints any. Claude Code 2.1.326+ in auto mode ends its footer, below the
+ * box, with `· esc to interrupt ·`; that row has no numbers, and the spinner
+ * above it has them. */
 export function agentWork(lines: readonly { text: string }[]): WorkFacts | null {
+  // Cursor's hint goes while a draft is typed; its busy row, with the count,
+  // is read with the box (`cursorWork`).
+  const cursor = cursorWork(lines);
+  if (cursor) return cursor;
+  let first: WorkFacts | null = null;
   for (let index = lines.length - 1; index >= 0 && index >= lines.length - BUSY_WINDOW; index -= 1) {
     const text = lines[index].text;
-    if (!busyRow(text)) continue;
+    if (!genericBusyRow(text)) continue;
     const inside = BUSY_FACTS.exec(text)?.[1] ?? "";
     const elapsed = ELAPSED.exec(inside)?.[1];
     const tokens = TOKENS.exec(inside)?.[1].replace(/\s+/u, "");
     const effort = EFFORT.exec(text)?.[1].toLowerCase();
-    return effort ? { elapsed, tokens, effort } : { elapsed, tokens };
+    const facts = effort ? { elapsed, tokens, effort } : { elapsed, tokens };
+    if (elapsed || tokens || effort) return facts;
+    first ??= facts;
   }
-  return null;
+  return first;
 }
 
 export function agentWorking(lines: readonly { text: string }[]): boolean {

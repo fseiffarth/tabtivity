@@ -135,9 +135,10 @@ jobs:
 
       # The helper scripts' own unit tests (stdlib only), once per run; no
       # gate or CI step ran them before.
-      - name: Test the gate-job and fresh-VM scripts
+      - name: Test the gate, gate-job and fresh-VM scripts
         run: |
           python3 -m unittest discover -s scripts -p test_gate_job.py
+          python3 -m unittest discover -s scripts -p test_gates.py
           python3 -m unittest discover -s scripts -p test_fresh_vm.py
 
   # SAST. Findings land in the repo's Security → Code scanning tab, not in the

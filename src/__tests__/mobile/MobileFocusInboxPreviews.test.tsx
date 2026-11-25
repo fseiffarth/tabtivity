@@ -133,7 +133,7 @@ describe(`${BRAND.display} Mobile shows what the phone sent in its prompt's bubb
     await settle();
 
     const chat = screen.getByTestId("session-transcript");
-    expect(chat.querySelector(".readable-command-text")?.textContent).toBe("/design");
+    expect(chat.querySelector(".readable-command-text")?.textContent).toBe("design");
     const bubble = chat.querySelector(".readable-turn.user.command-args")!;
     expect(bubble.classList.contains("with-files")).toBe(true);
     expect(bubble.querySelector(".transcript-md")?.textContent?.trim()).toBe("redesign ugly menu");
