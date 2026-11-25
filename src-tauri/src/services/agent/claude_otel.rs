@@ -541,6 +541,9 @@ impl Server {
                 let mut handle = handle;
                 if tokio::time::timeout(Duration::from_secs(2), &mut handle).await.is_err() {
                     handle.abort();
+                    // `abort` only asks: the listener closes when the task's
+                    // future is dropped, which this await waits for.
+                    let _ = handle.await;
                 }
             });
         }

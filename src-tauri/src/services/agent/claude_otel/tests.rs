@@ -406,9 +406,14 @@ struct Reply {
 
 /// One HTTP/1.1 request on a fresh connection to the receiver.
 async fn post(port: u16, method: &str, path: &str, headers: &[(&str, String)], body: &[u8]) -> Reply {
+    send(port, method, path, headers, body.len(), body).await
+}
+
+/// [`post`] declaring a `Content-Length` of `length` and sending `body`.
+async fn send(port: u16, method: &str, path: &str, headers: &[(&str, String)], length: usize, body: &[u8]) -> Reply {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-    let mut head = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\nContent-Length: {}\r\n", body.len());
+    let mut head = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\nContent-Length: {length}\r\n");
     if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("host")) {
         head.push_str(&format!("Host: 127.0.0.1:{port}\r\n"));
     }
@@ -478,8 +483,10 @@ fn the_receiver_counts_for_the_token_s_scope_and_refuses_everything_else() {
         assert_eq!(post(port, "POST", "/v1/metrics", &json_headers(&token), b"{}").await.status, 404);
         assert_eq!(post(port, "GET", TRACES_PATH, &json_headers(&token), b"").await.status, 405);
         assert_eq!(post(port, "POST", TRACES_PATH, &json_headers(&token), b"[1,2").await.status, 400);
-        let big = vec![b' '; MAX_BODY + 1];
-        assert_eq!(post(port, "POST", TRACES_PATH, &json_headers(&token), &big).await.status, 413);
+        // Refused on the declared length, before any body is read. No body is
+        // sent: one left unread in the socket makes Windows answer the close
+        // with a reset that discards the reply already received.
+        assert_eq!(send(port, "POST", TRACES_PATH, &json_headers(&token), MAX_BODY + 1, b"").await.status, 413);
         // A gzip bomb is bounded.
         let mut bomb = json_headers(&token);
         bomb.push(("Content-Encoding", "gzip".into()));
@@ -495,7 +502,12 @@ fn the_receiver_counts_for_the_token_s_scope_and_refuses_everything_else() {
 
     // Stopping closes the port and writes the ledger.
     server.stop();
-    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err(), "the port is closed after stop");
+    // A child another test thread forked holds a copy of the listener until
+    // it execs, so the port may answer for a moment longer.
+    assert!(
+        crate::test_util::wait_until(crate::test_util::PATIENCE, || std::net::TcpStream::connect(("127.0.0.1", port)).is_err()),
+        "the port is closed after stop"
+    );
     let saved = Ledger::load(&dir.path().join(LEDGER_FILE));
     // (tab-2's repeat of the turn tab-1 delivered was a redelivery: nothing more.)
     assert_eq!(total(saved.stats(), "p2", &want_in), 300);
