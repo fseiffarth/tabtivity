@@ -2187,7 +2187,7 @@ fn retry_ff_clearing_identical(
     // as found.
     let mut staged: Vec<String> = Vec::new();
     if !tracked.is_empty() {
-        let verdict = read_dirt_verdict(dst_peer, dst_peer, src_sha, &tracked);
+        let verdict = read_dirt_verdict(dst_peer, dst_peer, src_sha, &tracked, false);
         if !verdict.differing.is_empty() {
             return FfRetry::Differing(verdict.differing);
         }
@@ -2287,7 +2287,20 @@ fn git_over_paths(peer: &Peer, head: &[&str], paths: &[String], literal: bool) -
 /// tree is read on `target_peer` (the dest once the objects arrived, the source before
 /// they have); everything about the working tree and the index on `wt_peer`. A read that
 /// fails makes every path *differing*. A handful of batched calls, never one per path.
-fn read_dirt_verdict(target_peer: &Peer, wt_peer: &Peer, target_sha: &str, paths: &[String]) -> DirtVerdict {
+///
+/// `rewrites_worktree` is for a caller whose next move *writes* the identical paths
+/// (`reset --hard`): `hash-object` follows a symlink and cannot see the exec bit, so each
+/// identical path's working-tree mode must also equal the incoming entry's, or the reset
+/// would replace a symlink / drop an exec bit the user set. A fast-forward never writes
+/// the working tree (it stages, and [`stage_identical`] checks the mode), so it passes
+/// `false`.
+fn read_dirt_verdict(
+    target_peer: &Peer,
+    wt_peer: &Peer,
+    target_sha: &str,
+    paths: &[String],
+    rewrites_worktree: bool,
+) -> DirtVerdict {
     let (Some(target), Some(head), Some(index), Some(deleted)) = (
         git_over_paths(target_peer, &["ls-tree", "-r", "-z", target_sha], paths, false),
         git_over_paths(wt_peer, &["ls-tree", "-r", "-z", "HEAD"], paths, false),
@@ -2307,14 +2320,63 @@ fn read_dirt_verdict(target_peer: &Peer, wt_peer: &Peer, target_sha: &str, paths
     // `hash-object` of a missing file fails its whole chunk, so only present files go in.
     let present: Vec<String> = paths.iter().filter(|p| !deleted.contains(*p)).cloned().collect();
     let worktree = hash_objects(wt_peer, &present);
-    classify_tracked_dirt(
+    let (target, index) = (parse_ls_tree_blobs(&target), parse_ls_files_stage(&index));
+    let mut verdict = classify_tracked_dirt(
         paths,
-        &parse_ls_tree_blobs(&target),
+        &target,
         &parse_ls_tree_blobs(&head),
-        &parse_ls_files_stage(&index),
+        &index,
         &deleted,
         &worktree,
-    )
+    );
+    if rewrites_worktree && !verdict.identical.is_empty() {
+        let kept = verdict.identical.clone();
+        let bad = worktree_mode_mismatches(wt_peer, &kept, &target, &index);
+        if !bad.is_empty() {
+            verdict.identical.retain(|p| !bad.contains(p));
+            verdict.to_stage.retain(|p| !bad.contains(p));
+            verdict.differing.extend(bad);
+        }
+    }
+    verdict
+}
+
+/// The identical `paths` whose working-tree entry is not of the incoming entry's mode
+/// (exec bit, symlink vs file) — or whose mode cannot be read (the safe direction).
+/// The worktree mode is what `git diff-files` reports as the new mode, else the index
+/// entry's (a path `diff-files` does not list matches its index entry). A path the
+/// incoming commit does not carry has no file to rewrite and is never listed.
+fn worktree_mode_mismatches(
+    peer: &Peer,
+    paths: &[String],
+    target: &HashMap<String, GitBlob>,
+    index: &HashMap<String, Option<GitBlob>>,
+) -> Vec<String> {
+    let Some(raw) = git_over_paths(peer, &["diff-files", "--raw", "-z", "--no-renames"], paths, true) else {
+        return paths.iter().filter(|p| target.contains_key(*p)).cloned().collect();
+    };
+    // `:<old mode> SP <new mode> SP <old sha> SP <new sha> SP <status>` NUL `<path>` NUL
+    let mut changed: HashMap<String, String> = HashMap::new();
+    let mut fields = raw.split(|&b| b == 0).filter(|r| !r.is_empty());
+    while let (Some(meta), Some(path)) = (fields.next(), fields.next()) {
+        let meta = String::from_utf8_lossy(meta);
+        let cols: Vec<&str> = meta.trim_start_matches(':').split(' ').collect();
+        if cols.len() >= 2 {
+            changed.insert(String::from_utf8_lossy(path).to_string(), cols[1].to_string());
+        }
+    }
+    paths
+        .iter()
+        .filter(|p| {
+            let Some(want) = target.get(*p) else { return false };
+            let have = changed
+                .get(*p)
+                .cloned()
+                .or_else(|| index.get(*p).and_then(Option::as_ref).map(|b| b.mode.clone()));
+            have.as_deref() != Some(want.mode.as_str())
+        })
+        .cloned()
+        .collect()
 }
 
 /// Put the index entries of `paths` back to HEAD's (a path-limited reset, which never
@@ -3806,7 +3868,7 @@ async fn force_apply(
                     // tree git cannot list (`None`) stays a refusal, as before.
                     let listed = dirty_tracked_paths(&dest_peer);
                     let differing = (!listed.is_empty()).then(|| {
-                        read_dirt_verdict(&source_peer, &dest_peer, &target.sha, &listed).differing
+                        read_dirt_verdict(&source_peer, &dest_peer, &target.sha, &listed, true).differing
                     });
                     if differing.as_ref().is_none_or(|d| !d.is_empty()) {
                         let dirty = differing.unwrap_or_default();

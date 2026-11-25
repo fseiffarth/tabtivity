@@ -2865,9 +2865,64 @@ fn the_force_reset_predicate_reads_the_target_from_the_source_peer() {
         &Peer::Local(dst.clone()),
         &sha,
         &lines(&["a.txt", "b.txt", "gone.txt"]),
+        true,
     );
     assert_eq!(v.identical, lines(&["a.txt", "gone.txt"]));
     assert_eq!(v.differing, lines(&["b.txt"]));
     // A read-only verdict: the dest's index is untouched.
     assert_eq!(crate::test_util::git(&dst, &["diff", "--cached", "--name-only"]), "");
+}
+
+/// Two repos, the dest checked out at `main` without `feat`'s objects (as `force_apply`
+/// sees them); `a.txt` is not yet touched.
+#[cfg(unix)]
+fn force_reset_pair(tmp: &Path) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let src = tmp.join("src");
+    let dst = tmp.join("dst");
+    std::fs::create_dir_all(&src).unwrap();
+    let sha = tracked_repo_behind(&src);
+    crate::test_util::git(
+        tmp,
+        &["clone", "-q", "--no-local", "--branch", "main", "--single-branch", &src.to_string_lossy(), &dst.to_string_lossy()],
+    );
+    (src, dst, sha)
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_identical_bytes_with_another_mode() {
+    // `reset --hard` rewrites the file at the target's mode: a user's exec bit on bytes
+    // that match the target would be dropped, so the path must count as differing.
+    use std::os::unix::fs::PermissionsExt;
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_identical_bytes_with_another_mode");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair(tmp.path());
+    std::fs::write(dst.join("a.txt"), "a2\n").unwrap();
+    std::fs::set_permissions(dst.join("a.txt"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(dst.join("b.txt"), "b2\n").unwrap();
+    let v = read_dirt_verdict(&Peer::Local(src), &Peer::Local(dst), &sha, &lines(&["a.txt", "b.txt"]), true);
+    assert_eq!(v.differing, lines(&["a.txt"]));
+    assert_eq!(v.identical, lines(&["b.txt"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_a_symlink_to_the_incoming_bytes() {
+    // `hash-object` follows a symlink, so a link to a file holding the target's bytes
+    // reads as identical; `reset --hard` would replace the link with a regular file.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_a_symlink_to_the_incoming_bytes");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair(tmp.path());
+    std::fs::write(dst.join("elsewhere.txt"), "a2\n").unwrap();
+    std::fs::remove_file(dst.join("a.txt")).unwrap();
+    std::os::unix::fs::symlink("elsewhere.txt", dst.join("a.txt")).unwrap();
+    let v = read_dirt_verdict(&Peer::Local(src), &Peer::Local(dst), &sha, &lines(&["a.txt"]), true);
+    assert_eq!(v.differing, lines(&["a.txt"]));
+    assert!(v.identical.is_empty());
 }

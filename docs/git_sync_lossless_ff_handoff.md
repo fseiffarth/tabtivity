@@ -42,7 +42,7 @@ Spec: `docs/git_sync_lossless_ff_plan.md`. Gates skipped at user's request.
 - `result.absorbed` (new `TransferResult` field) is logged with `eprintln!` like the other
   lockstep notes; see Flagged.
 
-## Observed git stderr (git 2.x, LC_ALL=C; hardened runner pins C)
+## Observed git stderr (git 2.x, LC_ALL=C set by the test; see the review section: the peer runner does not pin C)
 
 ```
 error: Your local changes to the following files would be overwritten by merge:
@@ -81,3 +81,37 @@ Clippy, `--no-default-features` build and the other gates were not run.
   read, which reads as differing (safe).
 - Windows/macOS were not exercised; the mode test is unix-only, fixtures use `Path::join`.
 - Clippy with `-D warnings` was not run: a lint is possible.
+
+## Review (second agent)
+
+Fixed (1 confirmed bug, 2 regression tests; `git_peer` suite 105 passed, `the_force_reset_predicate_refuses_*`):
+
+- Force-reset path accepted a dirty file whose `hash-object` equals the target's blob even when
+  `reset --hard` would rewrite it differently: `hash-object` follows a symlink (a link to a
+  file holding the target's bytes read as identical) and cannot see the exec bit. The fast-forward
+  path was safe (`stage_identical` checks mode/type on the index), the reset path had no such
+  check. `read_dirt_verdict` takes `rewrites_worktree`; for the reset caller every identical path
+  must also have the working-tree mode (`diff-files --raw -z`, else the index entry's) equal to
+  the target entry's, unreadable = differing.
+
+Flagged for user (review):
+
+- Locale: the local `Peer::run` does not pin `LC_ALL=C` (only the checkpoint runner does; the
+  remote host never is), contrary to the first handoff. Under a non-English git both stderr
+  parsers return nothing, so `retry_ff_clearing_identical` returns `Refused` and the feature is
+  silently inert (fail closed, as the untracked retry already was). Pinning C on lockstep peers
+  (or deriving the blocking set from `diff --name-only HEAD <target>` instead of stderr) is a
+  design change, left to you.
+- Force reset and filters: equality is by filtered `hash-object`, but `reset --hard` writes
+  `smudge(blob)`. A worktree file that cleans to the target blob yet differs from what the blob
+  checks out to (CRLF file under `eol=lf`/`text=auto`, `ident`, a lossy clean filter, LFS
+  without the filter installed reads as different, so safe) would be rewritten by the reset.
+  The fast-forward path never rewrites it. Decision 2 prescribes the hash, so not changed.
+- Merge-stderr paths are `trim`med, so a tracked path with leading or trailing spaces is parsed
+  as a different path; that fails closed (the retry fails and the index is put back), but such a
+  project stays Desynchronized.
+- `unstage` is `reset -q -- path`: it restores mode and blob exactly, but would not restore
+  index flags (assume-unchanged, skip-worktree, intent-to-add) on a path the failed retry had
+  re-added. Not reproduced; sparse/assume-unchanged checkouts are unusual on a synced host.
+- Case-insensitive filesystems (macOS/Windows) were not exercised: `hash-object` of a path that
+  the index spells in another case may read a different file. Not reproduced.
