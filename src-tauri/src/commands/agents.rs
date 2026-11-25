@@ -1665,7 +1665,9 @@ pub async fn agent_tab_changes(
 /// the identity `agent_tab_transcript` takes, plus `tab_id` (the saved tab's
 /// stable id, for its notes); `target` is the binary of the CLI to continue
 /// with, checked against the registry. `preview_only` writes nothing and
-/// answers the counts alone. An `Err` is a short code: `unknown_target`,
+/// answers the counts alone. `summary_nonce` names the summary prompt the
+/// dialog sent the tab: its answer goes into the file as the previous agent's
+/// own summary. An `Err` is a short code: `unknown_target`,
 /// `unsupported` (a remote host's tab, an unreadable CLI), `no_session`,
 /// `no_transcript`, `read_failed`, or the text of a failed write.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1681,6 +1683,7 @@ pub async fn agent_cli_handoff_prepare(
     tab_id: Option<String>,
     target: String,
     preview_only: bool,
+    summary_nonce: Option<String>,
 ) -> Result<crate::services::agent_cli_handoff::Prepared, String> {
     app_core::rt::try_blocking("agent", move || {
         agent_cli_handoff_prepare_blocking(crate::services::agent_cli_handoff::Request {
@@ -1694,6 +1697,7 @@ pub async fn agent_cli_handoff_prepare(
             tab_id,
             target,
             preview_only,
+            summary_nonce,
         })
     })
     .await

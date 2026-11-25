@@ -423,6 +423,24 @@ Antigravity and Meta Muse Code tabs reopen their own conversation once they
 have taken a prompt; before that they start fresh. Gemini, Qwen, Grok, Cursor
 and Droid continue the project's most recent conversation. Others start fresh.
 
+## Continue in a new session
+
+A long conversation gets expensive: every prompt sends the whole context
+again, tool output included. Right-click an agent tab → **Continue in a new
+session…** opens a new tab that picks the work up in a fresh session. It starts
+with the same CLI ("(new session)"); you can pick another installed CLI instead.
+The new tab reads a file with the first request, the newest prompts and
+answers, the agent's notes and `git status`, without tool output, so it starts
+with a much smaller context. The original tab stays open. When a CLI shows a
+usage-limit notice, the same dialog opens with only the other CLIs.
+
+While the original session's prompt cache is still warm (Claude and Codex; it
+lasts up to an hour after the last answer), the dialog offers **Ask for a
+summary first**. The original session is sent one prompt asking it to
+summarize its own work. That costs about two of its turns, and the summary goes
+into the file beside the chat. Once the cache has expired, the summary is not
+offered, because it would re-read the whole conversation at full price.
+
 ## Permission modes
 
 Plan mode, auto-accept, sandbox or approval policies are set inside each

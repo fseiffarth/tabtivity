@@ -1692,8 +1692,10 @@ label.settings-toggle-card-row {
 
 /* The radio sits beside a two-line block (label + its help line), so the row is
    a grid rather than a flex baseline — a flex row centres the input against the
-   whole block and puts it next to the help text on a wrapped option. */
-.project-dialog label.container-scope-option {
+   whole block and puts it next to the help text on a wrapped option. The
+   hand-off dialog's summary checkbox (`CliHandoffDialog`) is the same row. */
+.project-dialog label.container-scope-option,
+.project-dialog label.cli-handoff-summary {
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: start;
@@ -1701,19 +1703,22 @@ label.settings-toggle-card-row {
   cursor: var(--cur-pointer, pointer);
 }
 
-.project-dialog label.container-scope-option input[type="radio"] {
+.project-dialog label.container-scope-option input[type="radio"],
+.project-dialog label.cli-handoff-summary input[type="checkbox"] {
   width: auto;
   margin: 2px 0 0;
   cursor: var(--cur-pointer, pointer);
 }
 
-.project-dialog label.container-scope-option > span {
+.project-dialog label.container-scope-option > span,
+.project-dialog label.cli-handoff-summary > span {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.project-dialog label.container-scope-option .settings-help {
+.project-dialog label.container-scope-option .settings-help,
+.project-dialog label.cli-handoff-summary .settings-help {
   margin: 0;
 }
 

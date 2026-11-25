@@ -28,14 +28,14 @@ afterEach(cleanup);
 
 it("is offered on an idle local agent tab and opens the dialog", () => {
   show();
-  fireEvent.click(screen.getByRole("button", { name: /Continue with another CLI/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Continue in a new session/ }));
   expect(mocks.open).toHaveBeenCalledTimes(1);
 });
 
 it("is disabled, with the reason, while the tab's turn is running, and frees up when it ends", () => {
   useActivityStore.setState({ busyByTab: { "project:a": true }, busyKindByTab: { "project:a": "agent" } });
   show();
-  const button = screen.getByRole("button", { name: /Continue with another CLI/ }) as HTMLButtonElement;
+  const button = screen.getByRole("button", { name: /Continue in a new session/ }) as HTMLButtonElement;
   expect(button.disabled).toBe(true);
   expect(button.title).toContain("Wait for the turn to end");
   act(() => { useActivityStore.setState({ busyByTab: {}, busyKindByTab: {} }); });
@@ -45,7 +45,7 @@ it("is disabled, with the reason, while the tab's turn is running, and frees up 
 it("stays enabled while only a shell command the agent started is running", () => {
   useActivityStore.setState({ busyByTab: { "project:a": true }, busyKindByTab: { "project:a": "shell" } });
   show();
-  expect((screen.getByRole("button", { name: /Continue with another CLI/ }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: /Continue in a new session/ }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 it.each([
