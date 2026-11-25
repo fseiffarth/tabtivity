@@ -1424,6 +1424,8 @@ pub async fn agent_tab_transcript(
             read.unchanged,
             &agent,
             project_id.as_deref(),
+            tab_dir.as_deref(),
+            since,
             &session_id,
             subagent.as_deref(),
             local,
@@ -1445,6 +1447,8 @@ fn arm_transcript_watch(
     unchanged: bool,
     agent: &str,
     project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    since: Option<i64>,
     session_id: &str,
     subagent: Option<&str>,
     local_model: bool,
@@ -1456,7 +1460,7 @@ fn arm_transcript_watch(
     if unchanged && transcript_watch::keep(id) {
         return true;
     }
-    let targets = agent_transcript::watch_targets(agent, project_id, session_id, subagent, local_model);
+    let targets = agent_transcript::tab_watch_targets(agent, project_id, tab_dir, since, session_id, subagent, local_model);
     transcript_watch::arm(id, targets)
 }
 
@@ -1648,6 +1652,8 @@ pub async fn agent_tab_changes(
             read.unchanged,
             &agent,
             project_id.as_deref(),
+            tab_dir.as_deref(),
+            since,
             &session_id,
             subagent.as_deref(),
             false,

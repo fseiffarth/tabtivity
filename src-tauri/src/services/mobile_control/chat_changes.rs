@@ -124,7 +124,7 @@ pub fn for_tab(
         agent_changes::local_opencode_changes(Some(project_id), Some(&tab.cwd), tab.since, tab.session_id.as_deref(), subagent, version, limit)
     } else {
         let session = tab.session_id.as_deref().filter(|id| !id.is_empty());
-        let Some(session) = session.or((tab.cmd == "opencode").then_some("")) else {
+        let Some(session) = session.or(matches!(tab.cmd.as_str(), "opencode" | "cursor-agent").then_some("")) else {
             let reason = if matches!(tab.cmd.as_str(), "claude" | "codex" | "copilot") { "no_session" } else { "unsupported" };
             return ChatChanges::unavailable(reason);
         };

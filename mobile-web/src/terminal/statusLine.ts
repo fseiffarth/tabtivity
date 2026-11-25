@@ -25,6 +25,7 @@ import {
   readAntigravityPicker,
 } from "./antigravity";
 import { codexModelSegment, codexOutputRow, codexPathTruncated, isCodexTab } from "./codexFooter";
+import { isCursorTab, readCursorFrame } from "./cursorAgent";
 import { isMuseTab, museStatus } from "./muse";
 import { isCopilotTab, readCopilotFrame } from "./copilotStatus";
 import {
@@ -543,6 +544,9 @@ export function sessionStatus(
   if (antigravity) return antigravity.status;
   const muse = isMuseTab(agentLabel) ? museStatus(lines, SEARCH_WINDOW) : null;
   if (muse) return muse;
+  // Cursor's `→` box is no input line the generic scan knows; its footer is
+  // read by shape (`cursorAgent.ts`), and a screen without it is no frame.
+  if (isCursorTab(agentLabel)) return readCursorFrame(lines, agentLabel)?.status ?? null;
   // Copilot keeps its path and branch over the box and its model under it.
   const copilot = readCopilotFrame(lines, agentLabel);
   if (copilot) return copilot.status;
@@ -653,6 +657,7 @@ export function inputFrameStart(
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return lines.length;
   const copilot = readCopilotFrame(lines, agentLabel);
   if (copilot) return copilot.start;
+  if (isCursorTab(agentLabel)) return readCursorFrame(lines, agentLabel)?.start ?? lines.length;
   const antigravity = antigravityFrame(lines, agentLabel);
   let start = antigravity?.start ?? -1;
   const bottom = agentListStart(lines);

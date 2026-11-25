@@ -97,6 +97,9 @@ pub mod copilot_session;
 // Meta Muse Code's session store: the Reader's chat, the Resume menu and a
 // restored tab's `resume --last`.
 pub mod muse_session;
+// Cursor CLI's chat store: the Reader's chat and Diffs, the Resume menu and a
+// restored tab's `--resume <id>`.
+pub mod cursor_session;
 pub mod opencode_models;
 pub mod opencode_session;
 pub mod opencode_store;

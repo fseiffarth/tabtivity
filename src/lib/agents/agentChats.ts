@@ -40,13 +40,13 @@ export interface ChatList {
   next?: number;
 }
 
-const CHAT_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot", "muse"]);
+const CHAT_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot", "muse", "cursor-agent"]);
 
 /** The agents whose Resume menu is new and not yet checked live. */
-export const UNTESTED_CHAT_AGENTS = new Set(["opencode", "agy", "copilot", "muse"]);
+export const UNTESTED_CHAT_AGENTS = new Set(["opencode", "agy", "copilot", "muse", "cursor-agent"]);
 
 /** Whether `tab` offers the Resume menu: a Claude, Codex, OpenCode, Copilot,
- * Antigravity or Muse tab with its launch id, running on this machine. */
+ * Antigravity, Muse or Cursor tab with its launch id, running on this machine. */
 export function chatsOffered(scope: string, tab: TabEntry | undefined): tab is TabEntry {
   return !!tab && tab.kind === "agent" && CHAT_AGENTS.has(tab.cmd) && !!tab.sessionId && runsLocally(scope, tab);
 }

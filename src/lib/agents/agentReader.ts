@@ -17,9 +17,21 @@ import { workingElapsed } from "../../../mobile-web/src/terminal/subagents";
 
 export type { SessionTranscript };
 
-/** The agents whose transcript the backend reads; any other family answers
- * `unsupported` there. The phone bridge's list (`MobileBridgeHost`). */
-const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot", "muse"]);
+/** The CLIs whose conversation is offered as a chat: the ones verified
+ * against their CLI (user, 2026-11-25), `agent_transcript::CHAT_AGENTS`'s
+ * copy. Every other agent — Gemini among them — gets Terminal only. Mistral
+ * (`vibe`) is on the list but has no transcript reader yet. */
+const CHAT_AGENTS = new Set(["claude", "codex", "opencode", "copilot", "muse", "vibe", "agy", "cursor-agent"]);
+
+/** Whether `agent`'s conversation may be shown as a chat (`CHAT_AGENTS`). */
+export function chatAgent(agent: string): boolean {
+  return CHAT_AGENTS.has(agent);
+}
+
+/** The chat CLIs whose transcript the backend reads (Mistral's is not read);
+ * any other family answers `unsupported` there. The phone bridge reads the
+ * same set (`MobileBridgeHost`). */
+export const READER_AGENTS: ReadonlySet<string> = new Set(["claude", "codex", "opencode", "agy", "copilot", "muse", "cursor-agent"]);
 
 /** The agents whose session is found by the tab's folder (and launch moment)
  * rather than by a launch id Tabtivity mints: they read with no `sessionId`. */

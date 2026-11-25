@@ -50,6 +50,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "copilot" => crate::services::copilot_session::resolve(opts),
         "agy" => crate::services::google_chat::resolve(opts),
         "muse" => crate::services::muse_session::resolve(opts),
+        "cursor-agent" => crate::services::cursor_session::resolve(opts),
         _ => opts,
     }
 }
@@ -1743,7 +1744,8 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
 /// Copilot's record is pointed at `chat` and the tab relaunched too; its spawn
 /// pins `--session-id <chat>` (`copilot_session::resolve`). Muse's likewise,
-/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`).
+/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`),
+/// Cursor's `--continue` into `--resume <chat>` (`cursor_session::resolve`).
 /// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
     if !is_uuid_shaped(uid) {
@@ -1766,7 +1768,7 @@ pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: 
             restore_cleared_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
-        "agy" | "copilot" | "muse" => {
+        "agy" | "copilot" | "muse" | "cursor-agent" => {
             write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
@@ -2572,6 +2574,7 @@ pub fn install_session_start_hook() -> std::io::Result<()> {
     crate::services::opencode_session::write_plugin()?;
     crate::services::antigravity_session::write_script()?;
     crate::services::muse_session::write_hook()?;
+    crate::services::cursor_session::write_hook()?;
     crate::services::copilot_session::write_turn_hook()?;
     crate::services::agent_hint::write_script()
 }
@@ -2615,6 +2618,8 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     crate::services::antigravity_session::register_in_home(home);
     // Muse's session hook (`services::muse_session`), on a Muse that takes it.
     crate::services::muse_session::register_in_home(home);
+    // Cursor's session hook (`services::cursor_session`).
+    crate::services::cursor_session::register_in_home(home);
     // Copilot's turn hooks (`services::copilot_session`), on a Copilot that takes them.
     crate::services::copilot_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the

@@ -296,12 +296,14 @@ pub fn prompts(state_dir: &Path, project_id: &str) -> Result<Vec<ProjectAgentPro
 
 // ── Transcript ──────────────────────────────────────────────────────────────
 
-/// The agents whose transcript Tabtivity reads at all (`TRANSCRIPT_AGENTS`).
-const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "copilot", "opencode", "gemini", "agy", "muse"];
+/// The agents whose conversation the phone's Chat reads (`TRANSCRIPT_AGENTS`):
+/// the chat CLIs that have a transcript reader.
+const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "copilot", "opencode", "agy", "muse", "cursor-agent"];
 
 /// `agentTranscriptFor` off the tab record: the same two "not yet" answers
 /// (`no_session` for a transcript family whose hook has not recorded a
-/// session yet, `unsupported` for the rest), then the CLI's own transcript.
+/// session yet, `unsupported` for the rest — every CLI off the chat list
+/// [`agent_transcript::CHAT_AGENTS`] included), then the CLI's own transcript.
 /// An OpenCode tab reads its folder's newest session — begun since the
 /// launch a headless create stamped (`ResolvedTab::since`), so a new tab is
 /// a new chat rather than the folder's last conversation — and needs no
@@ -319,6 +321,9 @@ pub fn transcript(
     if tab.place.on_host() {
         return AgentTranscript::unavailable("unsupported");
     }
+    if !agent_transcript::chat_offered(&tab.cmd) {
+        return AgentTranscript::unavailable("unsupported");
+    }
     if tab.local_model && tab.cmd == "opencode" {
         return agent_transcript::local_opencode_transcript(
             Some(project_id),
@@ -332,7 +337,7 @@ pub fn transcript(
         );
     }
     let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
-    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy" | "muse").then_some("")) else {
+    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "agy" | "muse" | "cursor-agent").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };
@@ -2235,6 +2240,7 @@ mod tests {
                 assistant_launch: None,
                 worktree_movable: false,
                 location_movable: false,
+                no_chat: false,
                 on_host: false,
                 host_label: None,
                 host_down: false,
@@ -2951,7 +2957,9 @@ mod tests {
         // OpenCode is read by folder, so a tab without a session id (a
         // local-model one) still reaches the reader instead of waiting on one.
         assert_ne!(transcript("p1", &tab("opencode", None), None, None, None).reason.as_deref(), Some("no_session"));
-        for cmd in ["gemini", "agy"] {
+        // Gemini's store is read for other uses, but it is off the chat list.
+        assert_eq!(transcript("p1", &tab("gemini", None), None, None, None).reason.as_deref(), Some("unsupported"));
+        for cmd in ["agy", "cursor-agent"] {
             let read = transcript("p1", &tab(cmd, None), None, None, None);
             assert_ne!(read.reason.as_deref(), Some("no_session"));
             assert_ne!(read.reason.as_deref(), Some("unsupported"));

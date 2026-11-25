@@ -109,12 +109,13 @@ export function useSessionTranscript({
     transcriptHeld.current = false;
     return current && sameTranscript(current, next) ? current : next;
   });
-  /** An agent with no stored session to read: its Chat entry is dimmed and
+  /** An agent with no stored session to read, or whose CLI has no chat view
+   * at all (`no_chat`): its Chat entry is dimmed (absent for `no_chat`) and
    * its Focus hands over to Terminal. A just-sent prompt is still a useful
    * Reader conversation when Codex has not produced a readable rollout yet —
    * its local bubble stays on screen rather than vanishing mid-turn. */
-  const chatUnavailable = tab.kind === "agent" && transcript?.available === false && transcript.reason === "unsupported"
-    && (!CODEX_AGENT.test(tab.agent_label ?? tab.label) || pending.length === 0);
+  const chatUnavailable = tab.kind === "agent" && (tab.no_chat === true || (transcript?.available === false && transcript.reason === "unsupported"
+    && (!CODEX_AGENT.test(tab.agent_label ?? tab.label) || pending.length === 0)));
   useEffect(() => {
     if (!composerTyping && view === "focus" && chatUnavailable) setView("terminal");
   // eslint-disable-next-line react-hooks/exhaustive-deps

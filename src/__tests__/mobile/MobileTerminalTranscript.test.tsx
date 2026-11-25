@@ -160,7 +160,22 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(screen.queryByRole("menuitemradio", { name: /Screen/ })).toBeNull();
   });
 
-  it.each(["Google Gemini", "Google Antigravity"])("shows %s's stored conversation instead of its startup logo", async (agent) => {
+  it("keeps a CLI without a chat view on Terminal, with no Chat to pick", async () => {
+    // A CLI off the verified chat list (`no_chat`): even a chosen Focus and a
+    // readable store leave it on Terminal, and the list offers only Terminal.
+    localStorage.setItem(storageKey("mobile.view.google-gemini"), "focus");
+    vi.stubGlobal("fetch", sidecarFetch(() => STORED));
+    render(<Terminal tab={{ ...TAB, label: "Google Gemini", agent_label: "Google Gemini", no_chat: true }} back={() => {}} />);
+    await settle();
+    expect(screen.getByTitle("Output view").textContent).toBe("Terminal");
+    expect(screen.queryByTestId("session-transcript")).toBeNull();
+    fireEvent.click(screen.getByTitle("Output view"));
+    expect(screen.queryByRole("menuitemradio", { name: /Chat/ })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: /Diffs/ })).toBeNull();
+    screen.getByRole("menuitemradio", { name: /Terminal/ });
+  });
+
+  it.each(["Google Antigravity"])("shows %s's stored conversation instead of its startup logo", async (agent) => {
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     terminalState.lines = ["  ▄▀▀▄  " + agent, "  Gemini 3.1 Pro", "> add a clear button", "✦ screen answer", ">", "? for shortcuts"];
     render(<Terminal tab={{ ...TAB, label: agent, agent_label: agent }} back={() => {}} />);

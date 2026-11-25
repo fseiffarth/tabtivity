@@ -20,6 +20,7 @@
  */
 
 import { busyRow } from "./agentBusy";
+import { isCursorTab, readCursorDialog } from "./cursorAgent";
 import { readOpenCodeQuestion } from "./openCodeQuestion";
 
 export interface SelectOption {
@@ -558,6 +559,10 @@ export function readSelectPrompt(
   if (/opencode/iu.test(agentLabel ?? "")) {
     const question = readOpenCodeQuestion(lines);
     if (question) return question;
+  }
+  if (isCursorTab(agentLabel)) {
+    const dialog = readCursorDialog(lines, { title: readTitle, context: readContext });
+    if (dialog) return dialog;
   }
   const option = radioMarkerAgent(agentLabel) ? RADIO_OPTION : OPTION;
   const hanglessWrap = HANGLESS_WRAP_AGENT.test(agentLabel ?? "");

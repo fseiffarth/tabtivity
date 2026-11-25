@@ -80,6 +80,9 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
     ("muse", &["--version"]),
     // "vibe 3.1.2" (Windows, uv tool shim, 2026-11-15)
     ("vibe", &["--version"]),
+    // "2026.11.22-e9042b2" (the hidden `--disable-auto-update` first, as a tab
+    // launches it: without it a probe may start the launcher's background update)
+    ("cursor-agent", &["--disable-auto-update", "--version"]),
 ];
 
 /// Environment a version probe sets for one agent, keyed like [`VERSION_ARGV`].
@@ -160,6 +163,11 @@ const VERIFIED: &[Verified] = &[
         agent: "muse",
         version: "1.4.25",
         surface: "§1.5 — launcher's no-update switch, --model/--reasoning-effort, login file, the ⟩ menu lamp",
+    },
+    Verified {
+        agent: "cursor-agent",
+        version: "2026.11.22-e9042b2",
+        surface: "§1.5 — --disable-auto-update, --continue/--resume <id>, chat store (store.db), beforeSubmitPrompt hook, Write/StrReplace diffs",
     },
     Verified {
         agent: "vibe",
@@ -854,6 +862,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
         assert_eq!(drift("claude", None).0, DriftState::Unknown);
+        // Cursor's first check: its dated builds, `<year>.<month>.<day>-<hash>`.
+        assert_eq!(drift("cursor-agent", Some("2026.11.22-e9042b2")).0, DriftState::Match);
+        let (state, stale) = drift("cursor-agent", Some("2026.09.28-64d2043"));
+        assert_eq!(state, DriftState::Moved);
+        assert!(stale.iter().all(|note| note.direction == Direction::Older));
+        assert_eq!(parse_version("2026.11.22-e9042b2\n").as_deref(), Some("2026.11.22-e9042b2"));
+        assert_eq!(version_argv("cursor-agent").unwrap(), ["--disable-auto-update", "--version"]);
     }
 
     /// `agentVersionNotice.ts` repeats these releases so a hot-reloaded window
@@ -867,6 +882,7 @@ mod tests {
         let rows: Vec<_> = table.lines().filter_map(|line| line.trim().split_once(": ")).collect();
         assert!(rows.len() >= 3, "the table was not read: {rows:?}");
         for (agent, version) in rows {
+            let agent = agent.trim_matches('"');
             let version = version.trim_end_matches(',').trim_matches('"');
             assert!(
                 VERIFIED.iter().any(|note| note.agent == agent && note.version == version),

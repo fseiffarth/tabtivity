@@ -263,6 +263,28 @@ gives its usage.
   which answers offline. Don't use its `meta` provider from a probe: with
   `--base-url` at the stub, one turn was still answered by something that
   wasn't the stub.
+- **Cursor** (`cursor/`): no stub backend, so these use the real login and
+  small billed turns (budget them). `drive.py <label> <bin> <name> <folder>
+  [--step …] [-- args]` drives the TUI against the real `$HOME` in a scratch
+  project folder (git-init it, give it a project-level `.cursor/hooks.json`
+  running `hookdump.py`); the chats land in `~/.cursor/chats/<md5 of the
+  folder>/`, which no real tab reads. Never copy `~/.config/cursor/auth.json`.
+  `hooks.py <label> <bin>` writes the app's `beforeSubmitPrompt` hook (ignored
+  test `writes_the_cursor_hook_for_a_probe`) into such a folder and plays two tabs
+  with made-up keys (two prompts): each must record the chat of its own prompt,
+  a launch with no prompt, `--resume` and `--continue` record nothing, and
+  `--resume <id>` shows the tab's own prompt. The app's own store reader runs
+  over a real store with `CURSOR_PROBE_HOME=<home> CURSOR_PROBE_DIR=<folder>
+  cargo test -p tabtivity --lib reads_a_real_cursor_store -- --ignored
+  --nocapture`. `-p` ends every turn with a retry loop in 2026.11.22 (exit 1),
+  so use the TUI for turns. Get a build without installing it: the agent
+  install's `.local/share/cursor-agent/versions/<build>/cursor-agent`.
+  `tui_round.py <label> <bin> [--paid]` captures every TUI screen the Chat
+  reads (sign-in, trust page, idle box and drafts, the `/` menu, the Shift+Tab
+  modes, `/model`, the resume list and, with `--paid`, the approvals, busy
+  row, follow-ups box, Ctrl+C and the Chat's two-line send) in a scratch home
+  on the real login (only `XDG_CONFIG_HOME` points at it, nothing is copied,
+  `~/.cursor` is never read); `tui_screens.py` runs one scripted launch.
 
 ## Traps
 

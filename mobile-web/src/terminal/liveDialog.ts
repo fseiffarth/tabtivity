@@ -1,5 +1,6 @@
 import { agentFamily } from "../../../shared/agentComposer";
 import { agentWork } from "./agentBusy";
+import { isCursorTab } from "./cursorAgent";
 import { isOpenCodeTab, readOpenCodeNotice } from "./openCodeMini";
 import type { ReadableLine } from "./readableScreen";
 import { pressHintShown, readCodexHooksPage, readReviewStep, readSelectPrompt, readStrayDialog, type SelectPrompt } from "./selectPrompt";
@@ -16,12 +17,15 @@ import { inputFrameStart } from "./statusLine";
  * highlighted dialog row otherwise, and the chat showed a question card where
  * the agent asked nothing.
  *
- * Only Claude Code's: the other CLIs keep (or draw) a `›`/`>` box where a
- * dialog sits, and have not been captured the same way. The desktop Reader
+ * Cursor's too: its approvals, trust page and pickers draw no footer (28
+ * frames, 2026.11.22), and its frame is found only with one, so answer text
+ * quoting `Run (once) (y)` rows above the box is not a dialog whose `y` the
+ * Chat would type into the prompt. The other CLIs keep (or draw) a `›`/`>` box
+ * where a dialog sits, and have not been captured the same way. The desktop Reader
  * (`readReaderLive`) and the phone (`readLiveQuestion`) both ask this.
  */
 export function boxHidesDialog(agentLabel: string | undefined, frameFound: boolean): boolean {
-  return frameFound && agentFamily(agentLabel ?? "") === "claude";
+  return frameFound && (agentFamily(agentLabel ?? "") === "claude" || isCursorTab(agentLabel));
 }
 
 /**

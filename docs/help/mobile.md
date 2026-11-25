@@ -183,8 +183,10 @@ is refused. Works with the desktop window closed.
   to write the next one, and the agent's questions as buttons to tap. The
   pill at the top right names the view on screen; tap it to switch to
   **Terminal** (the real terminal) and back. Chat shows the agent's stored
-  conversation; for an agent Tabtivity cannot read one of (Kimi, Qwen, Aider
-  and most other CLIs) Chat is dimmed and the tab opens in Terminal. A shell
+  conversation, for Claude, Codex, OpenCode, Copilot, Meta Muse Code, Cursor
+  and Antigravity tabs only (Mistral's conversation is not read yet, so its Chat
+  is dimmed). Every other CLI (Gemini, Qwen, Kimi, Aider, …) has no Chat: its
+  tab opens in Terminal and stays there. A shell
   tab has no conversation, so its pill offers **Reader** (the screen as text)
   and **Terminal**. The desktop offers the same chat on its agent tabs (help
   topic `agent-clis`).

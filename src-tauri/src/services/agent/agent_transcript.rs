@@ -66,6 +66,20 @@ const MAX_TAIL_BYTES: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_LIMIT: usize = 120;
 /// The most entries one answer carries, whatever the caller asks for.
 pub const MAX_LIMIT: usize = 1000;
+
+/// The CLIs whose conversation is offered as a chat (the desktop Reader, the
+/// phone's Chat view): the ones verified against their CLI (user,
+/// 2026-11-25; Cursor, `cursor-agent`, with 2026.11.22). Every other agent —
+/// Gemini among them, though its store is read for other uses — gets Terminal
+/// only. Mistral (`vibe`) is on the list but has no transcript reader yet, so
+/// its chat still answers `unsupported`.
+/// The desktop's copy: `CHAT_AGENTS` in `src/lib/agents/agentReader.ts`.
+pub const CHAT_AGENTS: &[&str] = &["claude", "codex", "opencode", "copilot", "muse", "vibe", "agy", "cursor-agent"];
+
+/// Whether `cmd`'s conversation may be shown as a chat ([`CHAT_AGENTS`]).
+pub fn chat_offered(cmd: &str) -> bool {
+    CHAT_AGENTS.contains(&cmd)
+}
 /// Longest text of one prompt. The full prompt is the user's own words, so
 /// the bound is generous; a pasted log is cut and marked.
 const MAX_PROMPT_CHARS: usize = 6_000;
@@ -528,6 +542,18 @@ pub fn agent_session_transcript(
         let own = crate::services::muse_session::recorded(project_id, launch_id);
         return crate::services::muse_session::transcript(&home, directory, since, own.as_ref(), version, limit);
     }
+    if cmd == "cursor-agent" {
+        if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
+        let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
+            return AgentTranscript::unavailable("no_session");
+        };
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return AgentTranscript::unavailable("unsupported");
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        let own = crate::services::cursor_session::recorded(project_id, launch_id);
+        return crate::services::cursor_session::transcript(&home, directory, since, own.as_ref(), version, limit);
+    }
     if cmd == "copilot" {
         return copilot_transcript(project_id, launch_id, subagent, version, limit);
     }
@@ -569,18 +595,21 @@ pub fn stored_chat_transcript(
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
-    if matches!(cmd, "opencode" | "agy" | "muse") {
+    if matches!(cmd, "opencode" | "agy" | "muse" | "cursor-agent") {
         if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
             return AgentTranscript::unavailable("no_transcript");
         }
         let dir = tab_dir.unwrap_or_default();
-        if matches!(cmd, "agy" | "muse") {
+        if matches!(cmd, "agy" | "muse" | "cursor-agent") {
             if subagent.is_some() {
                 return AgentTranscript::unavailable("no_subagent");
             }
             let home = crate::services::agent_home::scope_home(project_id);
             if cmd == "muse" {
                 return crate::services::muse_session::chat(&home, dir, chat, version, limit);
+            }
+            if cmd == "cursor-agent" {
+                return crate::services::cursor_session::chat(&home, dir, chat, version, limit);
             }
             return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
         }
@@ -618,6 +647,14 @@ pub fn stored_chat_watch_targets(
         } else {
             Vec::new()
         };
+    }
+    if cmd == "cursor-agent" {
+        let (Some(dir), None) = (tab_dir.filter(|dir| Path::new(dir).is_absolute()), subagent) else { return Vec::new() };
+        if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
+            return Vec::new();
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        return crate::services::cursor_session::chat_watch_targets(&home, dir, chat);
     }
     stored_chat_file(cmd, project_id, tab_dir, launch_id, chat, subagent)
         .map(|file| conversation_targets(cmd, &file, subagent.is_some()))
@@ -884,6 +921,30 @@ pub fn watch_targets(
         Some(file) => conversation_targets(cmd, &file, subagent.is_some()),
         None => Vec::new(),
     }
+}
+
+/// [`watch_targets`] for the tab launched as `cmd` working in `tab_dir`: the
+/// CLIs that keep their chats by folder (Cursor) need the folder and the launch
+/// moment, as [`agent_session_transcript`] does, to say which chat the tab reads.
+pub fn tab_watch_targets(
+    cmd: &str,
+    project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    since: Option<i64>,
+    launch_id: &str,
+    subagent: Option<&str>,
+    local_model: bool,
+) -> Vec<crate::services::transcript_watch::Target> {
+    if cmd != "cursor-agent" {
+        return watch_targets(cmd, project_id, launch_id, subagent, local_model);
+    }
+    let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else { return Vec::new() };
+    if subagent.is_some() || project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+        return Vec::new();
+    }
+    let home = crate::services::agent_home::scope_home(project_id);
+    let own = crate::services::cursor_session::recorded(project_id, launch_id);
+    crate::services::cursor_session::watch_targets(&home, directory, since, own.as_ref())
 }
 
 /// [`watch_targets`] for a Claude or Codex conversation stored in `file`.

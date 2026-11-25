@@ -335,7 +335,7 @@ read as an option. The vendor's cloud needs a plan that includes it.
 
 ## Talk to an agent as a chat
 
-Claude, Codex, OpenCode, Antigravity, Copilot and Meta Muse Code tabs can be
+Claude, Codex, OpenCode, Antigravity, Copilot, Meta Muse Code and Cursor tabs can be
 used as a chat instead of the terminal — the same chat view the phone's Focus uses. Click **Chat** at the
 right end of the prompt row above the terminal:
 your prompts show on the right, the agent's answers on the left as
@@ -346,14 +346,17 @@ while the agent works waits in its queue as a typed one would. When the
 agent asks something — a permission prompt ("Do you want to make this
 edit?") or a question with choices — the choices show as buttons under the
 chat; click one to answer. While the agent works, a **working** row shows
-how long it has been busy, and its **Stop** button interrupts it. Press Esc in
+how long it has been busy, and its **Stop** button interrupts it (in a Cursor
+tab that is Ctrl+C, the one key Cursor stops a turn on). Press Esc in
 that box, or click **Terminal**, to go back. The terminal keeps running
 underneath, so nothing is lost by switching. The chat is optional: tabs
 open on their terminal until you pick Chat. The choice is kept per agent
 and remembered: picking Chat (or Terminal) in a Claude tab switches every
 open Claude tab, and new Claude tabs open the same way, while each other
 agent's tabs keep their own choice. Agents without a chat view keep their
-terminal.
+terminal: the chat is offered only for the CLIs above, whose screens and
+stores have been checked; Gemini and the other CLIs stay terminal-only, on
+the phone too.
 
 **Cache cold.** The provider keeps a conversation's prompt cache only for a
 while after each answer: Claude for 1 hour on a subscription (5 minutes on an
@@ -422,8 +425,8 @@ While AI is off:
 
 Claude, Codex, Mistral, OpenCode and Copilot tabs reopen their exact
 conversation (an OpenCode tab that never got a prompt starts fresh).
-Antigravity and Meta Muse Code tabs reopen their own conversation once they
-have taken a prompt; before that they start fresh. Gemini, Qwen, Grok, Cursor
+Antigravity, Meta Muse Code and Cursor tabs reopen their own conversation once
+they have taken a prompt; before that they start fresh. Gemini, Qwen, Grok
 and Droid continue the project's most recent conversation. Others start fresh.
 
 ## Continue in a new session

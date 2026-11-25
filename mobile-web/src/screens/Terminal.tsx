@@ -510,6 +510,7 @@ function viewAgentOf(tab: TabRow): string {
  * whole turns — and Terminal on a shell. Focus hands over to Terminal once the
  * agent turns out to have no stored session to read (`unsupported`). */
 function initialView(tab: TabRow): TerminalViewChoice {
+  if (tab.no_chat) return "terminal";
   return readTerminalView(viewAgentOf(tab)) ?? (tab.kind === "agent" ? "focus" : "terminal");
 }
 
@@ -2179,7 +2180,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const focusLabel = chat ? "mobile.focus.chat" : "mobile.focus.reader";
   /** The Diffs view: an agent tab of a scope with a folder, on this machine
    * (`GET /tabs/{id}/changes` refuses Tabby's chats and host tabs). */
-  const diffsOffered = chat && !bare && !tab.on_host;
+  const diffsOffered = chat && !bare && !tab.on_host && !tab.no_chat;
   const diffsShown = diffsOpen && diffsOffered;
   /** The live screen after the last prompt echo — what the session is
    * drawing right now. Shown under the stored session while it holds a
@@ -2881,7 +2882,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {/* A tablet shows the two views side by side; the pill after them keeps
             the list's other rows (Diffs, read aloud, hands-free, languages). */}
         {tablet && <>
-          <button type="button" className="view-seg" aria-pressed={view === "focus" && !diffsShown} aria-disabled={chatUnavailable ? "true" : undefined} onClick={() => pickView("focus")}>{t(focusLabel)}</button>
+          {!tab.no_chat && <button type="button" className="view-seg" aria-pressed={view === "focus" && !diffsShown} aria-disabled={chatUnavailable ? "true" : undefined} onClick={() => pickView("focus")}>{t(focusLabel)}</button>}
           <button type="button" className="view-seg" aria-pressed={view === "terminal" && !diffsShown} onClick={() => pickView("terminal")}>{t("mobile.focus.terminal")}</button>
         </>}
         <button
@@ -2937,8 +2938,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     {focusMenu &&<div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
       <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
         {/* Chat / Diffs / Terminal, in the desktop's order. Chat is the stored
-            session only: dimmed, saying why, for an agent with none. */}
-        {([["focus", focusLabel], ...(diffsOffered ? [["diffs", "terminal.reader.changes"] as const] : []), ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => {
+            session only: dimmed, saying why, for an agent with none, and
+            absent for a CLI that has no chat view (`no_chat`). */}
+        {([...(tab.no_chat ? [] : [["focus", focusLabel] as const]), ...(diffsOffered ? [["diffs", "terminal.reader.changes"] as const] : []), ["terminal", "mobile.focus.terminal"]] as const).map(([choice, label]) => {
           const checked = choice === "diffs" ? diffsShown : view === choice && !diffsShown;
           const off = choice === "focus" && chatUnavailable;
           const googleUntested = choice === "focus" && chat && (antigravity || /gemini/iu.test(agentLabel)) && isUntested("mobile.focus.googleSession");

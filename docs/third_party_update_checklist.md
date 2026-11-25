@@ -1477,7 +1477,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh`; Windows: Astral's `install.ps1` then `uv tool install --upgrade --python cpython-3.14+gil mistral-vibe` (no vendor `install.ps1`; re-check against `install.sh`'s uv/Python pins) |
 | OpenCode | `--continue` | `run` | `curl … opencode.ai/v2/install` (also writes `opencode2`, shimmed by `agent_bin::VENDOR_ALIASES`) / `npm i -g @opencode/cli` |
 | Copilot | `--session-id <tab uuid>` (`copilot_session::resolve`; `--continue` only on a remote tab) | `-p` | `npm i -g @github/copilot` |
-| Cursor agent | `--continue` | `-p` | `curl … cursor.com/install` |
+| Cursor agent | `--continue`, aimed at `--resume <chat id>` by `cursor_session::resolve` | `-p` | `curl … cursor.com/install` |
 | Grok | — (0.0.34 keeps no sessions; `--session` is an unknown option) | `-p` | `npm i -g @vibe-kit/grok-cli` |
 | Antigravity (`agy`) | `--conversation <id>` from its hook's record (`google_chat::resolve`; `--continue` without one) | — | `curl … antigravity.google/cli/install.sh` |
 | Kimi | — | `-p` | `curl … code.kimi.com/install.sh` |
@@ -1575,8 +1575,8 @@ signed-in API, so its newest build is read out of the download URL in
 `~/.local/share/cursor-agent/versions/<build>/` folder its launcher links into.
 Running the installer again always fetches the newest build and relinks, so
 Update is the installer. Its only auto-update switch is the hidden top-level
-`--disable-auto-update` flag (read in 2026.09.28 and 2026.11.11; no environment
-variable), so every fenced Cursor session gets it first in its argv
+`--disable-auto-update` flag (read in 2026.09.28, 2026.11.11 and 2026.11.22; no
+environment variable), so every fenced Cursor session gets it first in its argv
 (`agent_install::AUTOUPDATE_OFF_ARGS`, `apply_fence_args`) — only on a build at
 least that old, read from its `versions/` folder, and never before a
 subcommand. Without it a fenced Cursor downloaded every new build into the
@@ -1773,6 +1773,143 @@ names its pid (no saved 1.4.24 run to diff). The echo frames read the same, the
 store (prompt, answer, the chats); the `turns.py` home reads empty on 1.4.24
 as well (its newest session has no turn). No public changelog for 1.4.25. Not
 verified: a real model, sign-in, the Update click.
+
+**Cursor** (`cursor-agent`; `cursor_session.rs` and `cursor_session/hook.rs`,
+`agent_hint.rs`'s `sessionStart` entry, `agent_install.rs`'s
+`--disable-auto-update`, `agent_relocate.rs`'s `.cursor/chats` `FolderStore`,
+the resume flag in `agentCliTable.ts`). **2026.11.22-e9042b2** is the first
+verified build (2026-11-25, Linux; the agent install's copy, the real login, a
+scratch project folder under `tmp/verify-cli/cursor/`, 12 short billed turns on
+Auto, outside Tabtivity, never live). Flags against 2026.09.28-64d2043: only
+`update --channel <cursor|prod|lab>` is new. Every assumption, where it lives
+and how to re-check it:
+
+- **Version.** `--disable-auto-update --version` prints `2026.11.22-e9042b2` (one
+  line). Where: `agent_versions.rs` (`VERSION_ARGV` runs it with the hidden flag
+  first, `VERIFIED`, the `drift("cursor-agent", …)` test). Verify: `cargo run
+  --example agent_versions --manifest-path src-tauri/Cargo.toml`.
+- **Updater switch.** The hidden top-level `--disable-auto-update` is still
+  accepted (the flag is not in `--help`). Where: `agent_install.rs`
+  `AUTOUPDATE_OFF_ARGS`. Verify: `scripts/verify-cli/flags.sh cursor-agent
+  <label> <bin>` and a launch with the flag first.
+- **Where a chat lives.** `~/.cursor/chats/<md5 hex of the working folder>/<uuid>/`
+  holds `meta.json` (`cwd`, `createdAtMs`, `updatedAtMs`, `hasConversation`,
+  later `title`) from the launch on, and `store.db` (+ `-wal`, `-shm`) from the
+  first prompt. A subagent's chat is a folder of the same store with a
+  `store.db` and **no** `meta.json` (its store `meta` names `subagentInfo`).
+  Every fresh launch makes an empty chat folder at once; a resume makes none;
+  `/clear` makes the next one. Where: `cursor_session.rs` (`folder_chats_all`,
+  `chat_in`), `agent_relocate.rs`, `agent_history.rs` (`md5_hex`). Verify:
+  `CURSOR_PROBE_HOME=<home> CURSOR_PROBE_DIR=<folder> cargo test -p tabtivity
+  --lib reads_a_real_cursor_store -- --ignored --nocapture` on a store the new
+  build wrote.
+- **The store.** `store.db` is `blobs(id, data)` (id = sha256 hex of data) and
+  `meta(key, value)` with one row, key `0`, value the hex of a JSON object whose
+  `latestRootBlobId` names a protobuf root: repeated field 1 = the message
+  blobs in conversation order, repeated field 8 = one blob per turn (its first
+  sub-message names the user step: field 1 the prompt as typed, field 25 its
+  time in ms). Message blobs are AI-SDK JSON: a prompt is a `user` message
+  whose text holds `<user_query>…</user_query>` (a string `content` is
+  `<user_info>` or the retry's synthetic prompt), an answer the `text` parts of
+  an `assistant` message (its `reasoning` text is stored empty), a tool result
+  a `tool` message whose `providerOptions.cursor.highLevelToolCallResult.output`
+  carries the result. `meta` changes with every message written, so the read's
+  fingerprint is its root id. Where: `cursor_session.rs` (`root`, `turns`,
+  `turn_prompt`, `user_query`). A new build that changes any of these shows as
+  an empty Chat on the same store: `reads_a_real_cursor_store` above.
+- **The retry.** This build ends every turn with `RetriableError: WritableIterable
+  is closed` and retries it (also in the TUI, and in `-p`, which exits 1): the
+  store gets `Your previous response was interrupted. Continue from where you
+  left off.` as a user message with string content, and the answer again.
+  Stepped over / collapsed in `turns` (test
+  `reads_prompts_and_answers_and_steps_over_the_retry`). If a build stops doing
+  it, nothing changes.
+- **Diffs.** A `Write` / `StrReplace` result's `success` has `path`, `linesAdded`,
+  `linesRemoved`, `diffString` (`--- a//<abs>`, `+++ b//<abs>`, hunks; a new file
+  `--- /dev/null` with `@@ -1,0 +1 @@`) and `afterFullFileContent`
+  (`beforeFullFileContent` when the file existed); a delete is a
+  `CallDynamicTool` (`toolName` `Delete`, reached through `GetDynamicTools`)
+  whose `success` has `deletedFile`, `prevContent`. A failed call has no
+  `success`. Where: `cursor_session.rs` `chat_changes_of`,
+  `agent_changes.rs`. Verify: the same real-store test lists the changes.
+- **No question tool.** Asked for `AskQuestion` the model answered "There's no
+  AskQuestion tool in this session": no question entry is read. Re-check with
+  a prompt asking for it.
+- **Hooks.** A project-level `.cursor/hooks.json` is honoured as the home's is
+  (`{"version": 1, "hooks": {"<event>": [{"command": …}]}}`). Events seen in the
+  TUI: `sessionStart`, `beforeSubmitPrompt`, `afterAgentThought`, `preToolUse`,
+  `beforeShellExecution`, `afterShellExecution`, `postToolUse`, `beforeReadFile`,
+  `stop`, `afterAgentResponse` (`sessionEnd` in `-p`). The payload is one line
+  of JSON whose first key is `conversation_id` (= the chat folder's name =
+  `session_id`), then `generation_id`, `model`, … `hook_event_name`,
+  `transcript_path`; `beforeSubmitPrompt` adds `prompt`. `sessionStart` fires
+  **only for a fresh launch** — not on `--continue`, `--resume <id>` or `/clear`;
+  `beforeSubmitPrompt` carries the chat each prompt goes into (the new one after
+  a `/clear`). A hook inherits the CLI's whole environment (the tab's keys
+  included); the commands the agent's shell tool runs also have
+  `CURSOR_CONVERSATION_ID`, `CURSOR_AGENT`, `CURSOR_REQUEST_ID`, `AI_AGENT`, so a
+  nested `cursor-agent` is told apart by it. An empty stdout is accepted. Where:
+  `cursor_session/hook.rs`, `agent_hint.rs` (`add_cursor_hook`). Verify:
+  `scripts/verify-cli/cursor/hooks.py <label> <bin>` (two billed prompts): each
+  tab records the chat of its own prompt, a launch with no prompt, `--resume`
+  and `--continue` record nothing, `--resume <id>` shows the tab's own prompt.
+- **Resume.** `--resume <id>` opens that chat (history drawn) and the next
+  prompt goes into the same chat (the same `conversation_id`, same folder, the
+  conversation appended); `--resume <unknown uuid>` does not fail, it opens a
+  fresh chat created under that id; `--continue` resumes the chat the folder
+  used last, and in a folder with no chat prints `No previous chats found.` and
+  **exits 1** (so `resolve` drops the flag there). A second `--resume` on an
+  open chat is not refused (idle; a second writer's prompt was not tried).
+  Where: `cursor_session.rs` `resolve_in` / `resumed_onto`,
+  `agent_resume_pinned.rs`. Verify: `drive.py <label> <bin> <name> <folder> --
+  --continue` / `--resume <id>` and read the screen.
+- **Not supported.** Subagents (`no_subagent`: their chats are in the store
+  with `subagentInfo.parentAgentId`, the parent's `CallDynamicTool` `Task`
+  names them by `toolCallId`; not read), remote-host Chat, Windows (no hook
+  script: the restore stays `--continue`), the phone's uncommitted count
+  (`changed_paths`).
+- **Not verified.** A second writer prompting into one chat, a `/compact`ed
+  chat's root, a hostile or encrypted store (`blobEncryptionKey` is in `meta`
+  and never read; a blob that is not JSON is stepped over), the Resume menu
+  click, a restore after a restart in a real tab, Windows and macOS.
+
+### TUI screens
+
+Cursor (`cursor-agent`), verified 2026.11.22-e9042b2.
+**Verify**: `python3 scripts/verify-cli/cursor/tui_round.py <label> <bin> [--paid]`, then
+`VERIFY_CLI=cursor VERIFY_AGENT=cursor-agent VERIFY_NEW=<label> node_modules/.bin/vitest run --config scripts/verify-cli/parsers/vitest.config.mts`
+and `npx vitest run src/__tests__/mobile/CursorAgentLive.test.ts`.
+
+- The input row is `→` (draft rows 4 columns in); the footer rows are 2 in:
+  `[N task]`, `[Plan|Debug|Ask (shift+tab to cycle)]`,
+  `<model [window level]> [· N.N%] [· N files edited]  [Run Everything|Auto-review]`,
+  `<folder> · <branch>`. The % is context FULL. **Where**: `cursorAgent.ts`
+  `readCursorFrame`, wired in `statusLine.ts` (`sessionStatus`, `inputFrameStart`).
+- A turn running = the box ends in `ctrl+c to stop` (gone while a draft is
+  typed; then the `⠘⠤ <Verb>  N tokens` busy row with only its tip above the
+  box); the busy row is left as a ghost after the turn. **Where**: `cursorWork`,
+  `agentBusy.ts` `agentWork`.
+- Stop = Ctrl+C; Esc does nothing mid-turn; Ctrl+C on an idle box prints
+  `Press Ctrl+C again to exit`. **Where**: `agentBusy.ts` `stopKey("cursor")`.
+- Dialogs: no numbers, each row ends in its key `(y)` `(tab)` `(shift+tab)`
+  `(esc or n [or p])`, or opens with `[a]`/`[q]` (trust page, `▶` marks the
+  highlight). **Where**: `cursorAgent.ts` `readCursorDialog` via
+  `selectPrompt.ts` `readSelectPrompt`; lamp: `prompt.ts`
+  `CURSOR_APPROVAL`/`CURSOR_TRUST`. Also: Esc/n on a shell approval opens
+  `Tell the agent what to do instead`; a write inside the workspace asks nothing.
+- Shift+Tab (legacy backtab `ESC [ Z`) cycles agent, Plan, Debug, Ask, agent;
+  the agent mode draws no row. **Where**: `agentModes.ts` CURSOR family.
+- The pane has bracketed paste on (`?2004h`): the Chat's writes (Ctrl+A
+  Ctrl+K, one paste, Enter) submit a multi-line prompt whole; Ctrl+J adds a
+  line. **Where**: `shared/agentComposer.ts` `agentInputWrites`. Known gap: the
+  reset clears only the cursor's line.
+- `/` menu command names the catalog uses. **Where**: `slashCommands.ts`
+  `CATALOG.cursor` (the test holds them to the real menu).
+- `/model` is `Available models` / `Filter:` / rows / `N-M of K` (unchanged
+  since 2026.09.26). **Where**: `readCursorPicker`, phone only.
+- Not read: the `follow-ups` queue box (`↑` edit, Esc cancel),
+  `Run Everything`/`Auto-review` as a mode.
+
 Copilot's row started at 1.0.89 (2026-09-30, from the npm package, not live): `-p`,
 `--continue`, `session-state` under `COPILOT_HOME`/home, and `authTokens` /
 `storeTokenPlaintext` in the runtime it unpacks into `~/.cache/copilot/pkg/`.
@@ -2863,8 +3000,8 @@ move a conversation, and editable scheduled loops. Bare `--resume` opens
 the browser. Tabtivity's per-tab restore supplies the explicit ID.
 [Vibe release notes](https://github.com/mistralai/mistral-vibe/releases/tag/v3.1.5)
 
-Cursor 2026.09.28 keeps `-p/--print`,
-`--continue` and its chats under `~/.cursor`. Aider 0.86.2 (latest) needs
+Cursor's checks are in its own section above (2026.11.22: `--continue`,
+`--resume <id>`, the chat store, the hook). Aider 0.86.2 (latest) needs
 only its binary name and `aider.chat/install.sh`, still served. Droid, OpenClaw and OpenCode are also `LOCAL_DRIVERS` (Ollama-backed
 tabs via `ollama launch <agent>`).
 

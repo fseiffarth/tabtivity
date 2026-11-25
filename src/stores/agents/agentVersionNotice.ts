@@ -76,6 +76,7 @@ const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
   antigravity: "1.5.17",
   copilot: "1.0.115",
   muse: "1.4.25",
+  "cursor-agent": "2026.11.22-e9042b2",
   vibe: "3.1.5",
 };
 

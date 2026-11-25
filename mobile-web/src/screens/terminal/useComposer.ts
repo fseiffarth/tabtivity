@@ -655,7 +655,7 @@ export function useComposerSend({
   const codexQueueShown = () => queueCli === "codex" && queuedHintShown(screenRows.current(), "codex");
   /** What sends that box on (`finishSendNow`). */
   const releaseCodexQueue = () => finishSendNow({ rows: () => screenRows.current(), key: async (key) => type(key) }, "codex", SUBAGENT_WALK);
-  /** The working row's Stop: the stop key (Ctrl+C for Copilot, else Esc), and what Claude does on its own for a
+  /** The working row's Stop: the stop key (Ctrl+C for Copilot and Cursor, else Esc), and what Claude does on its own for a
    * queue, Codex's goes on too. */
   const stopTurn = () => {
     const release = codexQueueShown();
