@@ -2242,6 +2242,15 @@ binary's strings only, never run): `event` gets `{type, properties}` with
 `replied`, `question.asked` / `replied` / `rejected`; the shell tool's
 environment is `process.env` plus the `shell.env` hook.
 
+**OpenCode 1.x dropped (2026-11-25).** Every launch, the session plugin, the
+store reader, token stats, API-key routing and the phone's mini parser assume
+OpenCode 2; nothing probes the version first. A 1.x binary still installed is
+not refused: the daily update check offers 2.x (`agent_latest`, `@opencode/cli`)
+and Update runs the V2 installer. A store OpenCode 2 migrated keeps its 1.x
+`session`/`message`/`part` tables as a copy of rows it also holds in its own
+(checked on the user's store: all 8 migrated sessions have their messages in
+`session_message`); they are never read.
+
 **OpenCode 2 (2026-10-22).** The standalone binary installed in the fenced
 project home (not a verified host-wide installation) answers
 `opencode v2.1.2`; `--help`, `mini --help`, `auth export --help` and

@@ -36,7 +36,6 @@ import {
   openCodeComposer,
   openCodeFullFooter,
   openCodeMiniRow,
-  openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
 import { claudeEffortHint, effortHintAbove, isClaudeTmuxNotice, withoutEffortHint } from "./claudeStatus";
@@ -330,21 +329,9 @@ function geminiIndicatorAbove(
 }
 
 /**
- * OpenCode's live area (`opencode --mini`), for a tab whose label names it:
- * where the frame starts and what its status row says — or, when the last row
- * is not mini's, the full TUI's composer (`openCodeFullFrame`).
- *
- * The anchor is the status row — the agent's name in capitals — which OpenCode
- * keeps as the last non-blank row of every frame it draws. Above it sits the
- * input box: blank rows, or the box's own placeholder, or a draft typed on the
- * desktop. Only the first two are taken into the frame; a draft is left in the
- * reading view, the harmless direction, because the rows it occupies are
- * otherwise indistinguishable from the answer above them.
- *
- * The model is not on that row (except for the moment after a switch, when
- * OpenCode prints it as a notice), so it comes from the last turn footer
- * above the frame — `▣ Build · Muse Spark 1.3 Free · 6.2s`, the only place a
- * mini session prints the model's display name at all.
+ * OpenCode's live area, for a tab whose label names it: `mini`'s
+ * (`openCodeMiniFrame`) or, when the last row is not mini's status row, the
+ * full TUI's composer (`openCodeFullFrame`).
  */
 function openCodeFrame(
   lines: readonly StatusLineLike[],
@@ -354,47 +341,24 @@ function openCodeFrame(
   let index = lines.length - 1;
   while (index >= 0 && !lines[index].text.trim()) index -= 1;
   if (index < 0 || index < lines.length - SEARCH_WINDOW) return null;
-  const row = openCodeStatusRow(lines[index].text);
-  if (!row) {
-    const v2 = openCodeMiniV2Frame(lines, index);
-    if (v2) return v2;
-    const full = openCodeFullFrame(lines, index);
-    if (full || !isOpenCodeHomeFooter(lines[index].text)) return full;
-    // The start screen's own footer sits under the box's.
-    let footer = index - 1;
-    while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
-    return footer < 0 ? null : openCodeFullFrame(lines, footer);
-  }
-  let start = index;
-  while (start > 0) {
-    const above = lines[start - 1].text;
-    if (!above.trim() || isOpenCodePlaceholder(above)) start -= 1;
-    else break;
-  }
-  const status: SessionStatus = { mode: row.mode };
-  const folder = openCodeBannerPath(lines);
-  if (folder) status.path = folder;
-  if (row.context) status.context = row.context;
-  if (row.model) status.model = row.model;
-  if (!status.model) {
-    for (let above = start - 1; above >= 0; above -= 1) {
-      const footer = openCodeTurnFooter(lines[above].text);
-      if (!footer) continue;
-      if (footer.model) status.model = footer.model;
-      break;
-    }
-  }
-  return { start, status };
+  const mini = openCodeMiniFrame(lines, index);
+  if (mini) return mini;
+  const full = openCodeFullFrame(lines, index);
+  if (full || !isOpenCodeHomeFooter(lines[index].text)) return full;
+  // The start screen's own footer sits under the box's.
+  let footer = index - 1;
+  while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+  return footer < 0 ? null : openCodeFullFrame(lines, footer);
 }
 
 /**
- * OpenCode 2's `mini` live area, whose status row is `index`
- * (`openCodeMiniRow`): the `┃` box above it — its placeholder, a draft, or,
- * empty, nothing `readableScreen` keeps — and the blank rows around it. The
- * model, where the row had no room for it, comes from the last turn footer
- * (`Build · gemma4:e4b · 16.9s`), as `--mini`'s does.
+ * `mini`'s live area, whose status row is `index` (`openCodeMiniRow`): the
+ * `┃` box above it — its placeholder, a draft, or, empty, nothing
+ * `readableScreen` keeps — and the blank rows around it. A draft is left in
+ * the reading view, the harmless direction. The model, where the row had no
+ * room for it, comes from the last turn footer (`Build · gemma4:e4b · 16.9s`).
  */
-function openCodeMiniV2Frame(
+function openCodeMiniFrame(
   lines: readonly StatusLineLike[],
   index: number,
 ): { start: number; status: SessionStatus } | null {

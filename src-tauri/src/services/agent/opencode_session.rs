@@ -10,8 +10,8 @@
 //! - **The plugin.** One directory of Tabtivity's in `<state_dir>/hooks/`
 //!   (read-only in the fence, at its own path), listed by file URL in every
 //!   agent home's `.config/opencode/opencode.json` `plugin` list — the
-//!   directory for OpenCode 2 (2.1.3 skips a configured plugin file), its
-//!   `index.js` for 1.x. Each time the tab's
+//!   directory, as OpenCode 2 loads it (2.1.3 skips a configured plugin file;
+//!   1.x is not supported). Each time the tab's
 //!   OpenCode takes a prompt it writes that session's id to
 //!   `live_sessions/<uid>`, beside the other CLIs' records — a `/new` or a
 //!   session picked from `/sessions` moves it at the next prompt. Only the
@@ -48,7 +48,7 @@ use crate::terminal::PtyOptions;
 /// The plugin's directory in `<state_dir>/hooks/`, and its entry file.
 /// OpenCode 2 loads a configured local plugin only as a directory (2.1.3 skips
 /// a file with "configured plugin path must be a directory") and resolves its
-/// `index`; 1.x imports the file itself.
+/// `index`.
 const PLUGIN_DIR: &str = concat!(crate::app_slug!(), "_opencode_session");
 const PLUGIN_ENTRY: &str = "index.js";
 /// The single file earlier builds wrote and listed: taken back out of homes.
@@ -74,29 +74,19 @@ fn file_url(path: PathBuf) -> Option<String> {
     url::Url::from_file_path(path).ok().map(String::from)
 }
 
-/// The `plugin` entry OpenCode loads the plugin by: the directory for V2, the
-/// entry file for V1.
-fn plugin_url(v2: bool) -> Option<String> {
-    let dir = plugin_dir();
-    file_url(if v2 { dir } else { dir.join(PLUGIN_ENTRY) })
+/// The `plugin` entry OpenCode loads the plugin by: its directory.
+fn plugin_url() -> Option<String> {
+    file_url(plugin_dir())
 }
 
-/// Every entry of Tabtivity's that is not `url`: the other release's, and the
-/// single file earlier builds listed.
-fn stale_urls(url: &str) -> Vec<String> {
+/// The entries of Tabtivity's that earlier builds listed and homes may still
+/// carry: the entry file listed for OpenCode 1.x, and the single file before it.
+fn stale_urls() -> Vec<String> {
     let hooks = storage::state_dir().join("hooks");
-    [plugin_url(true), plugin_url(false), file_url(hooks.join(LEGACY_PLUGIN_FILE))]
+    [file_url(plugin_dir().join(PLUGIN_ENTRY)), file_url(hooks.join(LEGACY_PLUGIN_FILE))]
         .into_iter()
         .flatten()
-        .filter(|u| u != url)
         .collect()
-}
-
-/// Whether the OpenCode Tabtivity last probed is 2.x (`agent_versions`; a
-/// spawn probes it before resolving, `launch_prep::prepare`).
-fn installed_v2() -> bool {
-    let store = crate::services::agent_versions::load();
-    crate::services::agent_versions::opencode_is_v2(store.get("opencode"))
 }
 
 fn plugin_body(live_dir: &str) -> String {
@@ -113,14 +103,13 @@ fn plugin_body(live_dir: &str) -> String {
          const TAB = /^[0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}}$/;\n\
          const SESSION = /^ses_[A-Za-z0-9]{{1,64}}$/;\n\
          const CLAIM = {claim};\n\
-         // The bus events that move the turn (V1 `event` hook, V2 subscription):\n\
-         // a question waits on the user, an answer resumes, the end of a run is done.\n\
+         // The bus events that move the turn: a question waits on the user, an\n\
+         // answer resumes, the end of a run is done.\n\
          const TURN = {{\n\
-         \x20 \"permission.asked\": \"decision\", \"question.asked\": \"decision\", \"form.created\": \"decision\",\n\
-         \x20 \"permission.replied\": \"working\", \"question.replied\": \"working\", \"question.rejected\": \"working\",\n\
-         \x20 \"form.replied\": \"working\", \"form.cancelled\": \"working\",\n\
-         \x20 \"session.idle\": \"done\", \"session.error\": \"done\", \"session.execution.succeeded\": \"done\",\n\
-         \x20 \"session.execution.failed\": \"done\", \"session.execution.interrupted\": \"done\",\n\
+         \x20 \"permission.asked\": \"decision\", \"form.created\": \"decision\",\n\
+         \x20 \"permission.replied\": \"working\", \"form.replied\": \"working\", \"form.cancelled\": \"working\",\n\
+         \x20 \"session.execution.succeeded\": \"done\", \"session.execution.failed\": \"done\",\n\
+         \x20 \"session.execution.interrupted\": \"done\",\n\
          }};\n\
          \n\
          const TabSession = async () => {{\n\
@@ -148,13 +137,13 @@ fn plugin_body(live_dir: &str) -> String {
          \x20   if (recorded && id === recorded) put(\".turn\", `${{word}} ${{Math.floor(Date.now() / 1000)}}`);\n\
          \x20 }};\n\
          \x20 return {{\n\
-         \x20   // V1 passes `{{type, properties}}`, V2 `{{type, data}}`.\n\
+         \x20   // An event as the subscription yields it: `{{type, data}}`.\n\
          \x20   event: async ({{ event }}) => {{\n\
          \x20     const type = String(event?.type);\n\
-         \x20     const props = event?.properties ?? event?.data ?? {{}};\n\
+         \x20     const props = event?.data ?? {{}};\n\
          \x20     const info = props.info;\n\
          \x20     if (type.startsWith(\"session.\") && info?.parentID && typeof info.id === \"string\") children.add(info.id);\n\
-         \x20     const word = type === \"session.status\" ? (props.status?.type === \"idle\" ? \"done\" : undefined) : TURN[type];\n\
+         \x20     const word = TURN[type];\n\
          \x20     if (word) turn(props.sessionID ?? props.form?.sessionID, word);\n\
          \x20   }},\n\
          \x20   \"chat.message\": async (input) => {{\n\
@@ -163,23 +152,17 @@ fn plugin_body(live_dir: &str) -> String {
          \x20     if (id !== recorded && put(\"\", id)) recorded = id;\n\
          \x20     turn(id, \"working\");\n\
          \x20   }},\n\
-         \x20   // Every command the shell tool runs carries the claim, also where the\n\
-         \x20   // shell's environment is not this process's.\n\
-         \x20   \"shell.env\": async (_input, output) => {{\n\
-         \x20     if (output?.env) output.env[CLAIM] = \"1\";\n\
-         \x20   }},\n\
          \x20 }};\n\
          }};\n\
          \n\
-         // V1 (1.18.29+) calls server; V2 calls setup. No runtime dependency:\n\
-         // Plugin.define is the identity function in @opencode/plugin.\n\
+         // OpenCode 2 calls setup. No runtime dependency: Plugin.define is the\n\
+         // identity function in @opencode/plugin.\n\
          export default {{\n\
          \x20 id: {plugin_id},\n\
-         \x20 server: TabSession,\n\
          \x20 async setup(ctx) {{\n\
          \x20   const hooks = await TabSession();\n\
          \x20   if (!hooks[\"chat.message\"]) return;\n\
-         \x20   // V2 gives the shell tool a per-session copy of the environment, so the\n\
+         \x20   // The shell tool gets a per-session copy of the environment, so the\n\
          \x20   // claim set above never reached it and a nested `opencode run` took the\n\
          \x20   // record over (2.3.0): each shell gets it here.\n\
          \x20   try {{\n\
@@ -232,8 +215,8 @@ pub fn write_plugin() -> std::io::Result<()> {
 /// listed afterwards — a config that isn't plain JSON is left alone, and then
 /// the tab records nothing.
 pub fn register_in_home(home: &Path) -> bool {
-    let Some(url) = plugin_url(installed_v2()) else { return false };
-    let stale = stale_urls(&url);
+    let Some(url) = plugin_url() else { return false };
+    let stale = stale_urls();
     let Some(file) = HomeFile::open(home, crate::services::agent_hint::OPENCODE_CONFIG) else {
         return false;
     };
@@ -248,8 +231,7 @@ pub fn register_in_home(home: &Path) -> bool {
 /// OpenCode 2's managed background service listens on one fixed loopback
 /// port shared by every home, and a typed `opencode` does not get
 /// `--standalone`. `disabled: true` in the home's service config makes every
-/// launch from it use a private server (`standalone || disabled`). A 1.x
-/// home ignores the file.
+/// launch from it use a private server (`standalone || disabled`).
 const SERVICE_CONFIG: &str = ".config/opencode/service.json";
 
 pub fn disable_service_in_home(home: &Path) {
@@ -295,10 +277,10 @@ fn add_plugin(root: &mut Value, url: &str, stale: &[String]) -> bool {
     true
 }
 
-/// V2's private server keeps the tab's environment, MCP grants and plugin
-/// claim in its own process tree. Its model flag belongs to `mini`/`run`,
-/// whereas V1 also accepted it on the full TUI. Preserve those saved launches
-/// through the minimal interface, which accepts both the model and session.
+/// OpenCode 2's private server keeps the tab's environment, MCP grants and
+/// plugin claim in its own process tree. Its model flag belongs to
+/// `mini`/`run`, not the full TUI: saved launch lines carrying one go through
+/// the minimal interface, which accepts both the model and session.
 pub fn v2_launch_args(args: &mut Vec<String>) {
     let first = args.first().map(String::as_str);
     if first.is_some_and(|a| matches!(a, "debug" | "upgrade" | "update" | "uninstall" | "service" | "plugin" | "mcp" | "serve" | "pair" | "reload" | "models" | "stats" | "session" | "api")) {
@@ -682,27 +664,23 @@ mod tests {
     }
 
     #[test]
-    fn a_release_switch_replaces_the_other_entry_of_ours() {
-        // OpenCode 2.1.3 skips the file entry an earlier build listed; the
-        // directory takes its place, and back for 1.x.
+    fn an_entry_an_earlier_build_listed_is_replaced_by_the_directory() {
+        // OpenCode 2.1.3 skips the file entries earlier builds listed.
         let stale = ["file:///h/x.js".to_string(), "file:///h/x/index.js".to_string()];
-        let mut root = json!({ "plugin": ["mine", "file:///h/x.js"] });
-        assert!(add_plugin(&mut root, "file:///h/x", &stale));
-        assert_eq!(root["plugin"], json!(["mine", "file:///h/x"]));
-        assert!(!add_plugin(&mut root, "file:///h/x", &stale));
-        let back = ["file:///h/x".to_string()];
-        assert!(add_plugin(&mut root, "file:///h/x/index.js", &back));
-        assert_eq!(root["plugin"], json!(["mine", "file:///h/x/index.js"]));
+        for old in &stale {
+            let mut root = json!({ "plugin": ["mine", old] });
+            assert!(add_plugin(&mut root, "file:///h/x", &stale));
+            assert_eq!(root["plugin"], json!(["mine", "file:///h/x"]));
+            assert!(!add_plugin(&mut root, "file:///h/x", &stale));
+        }
     }
 
     #[test]
-    fn v2_lists_the_plugin_directory_and_v1_its_entry_file() {
-        let v2 = plugin_url(true).unwrap();
-        let v1 = plugin_url(false).unwrap();
-        assert!(v2.ends_with(PLUGIN_DIR), "{v2}");
-        assert_eq!(v1, format!("{v2}/{PLUGIN_ENTRY}"));
-        let stale = stale_urls(&v2);
-        assert!(stale.contains(&v1) && !stale.contains(&v2));
+    fn the_plugin_is_listed_by_its_directory() {
+        let url = plugin_url().unwrap();
+        assert!(url.ends_with(PLUGIN_DIR), "{url}");
+        let stale = stale_urls();
+        assert!(stale.contains(&format!("{url}/{PLUGIN_ENTRY}")) && !stale.contains(&url));
         assert!(stale.iter().any(|u| u.ends_with(LEGACY_PLUGIN_FILE)));
     }
 
@@ -777,14 +755,8 @@ mod tests {
             process.env[agentKey] = 'codex';
             await plugin.setup({session: {hook: async () => { nested = true; }}});
             assert.equal(nested, false);
-            delete process.env[claimKey];
-            process.env[agentKey] = 'opencode';
-            const legacy = await plugin.server();
-            await legacy.event({event: {type: 'session.created', properties: {info: {id: 'ses_child', parentID: 'ses_parent'}}}});
-            await legacy['chat.message']({sessionID: 'ses_child'});
-            assert.equal(readFileSync(record, 'utf8'), 'ses_new');
-            await legacy['chat.message']({sessionID: 'ses_legacy'});
-            assert.equal(readFileSync(record, 'utf8'), 'ses_legacy');
+            // OpenCode 1.x's entry point is gone.
+            assert.equal(plugin.server, undefined);
         "#).unwrap();
         run_node_check(dir.path(), &live);
     }
@@ -808,8 +780,8 @@ mod tests {
     /// a permission or question asked is a decision, its answer working, the
     /// end of a run done. Only the session the tab is in counts — a
     /// subagent's child and any other session say nothing — and a nested
-    /// OpenCode (the claim in its environment, which V2 puts in every shell
-    /// itself) records nothing at all.
+    /// OpenCode (the claim in its environment, which the plugin puts in every
+    /// shell itself) records nothing at all.
     #[test]
     fn the_plugin_writes_the_turn_of_the_tabs_own_session_only() {
         let dir = tempfile::tempdir().unwrap();
@@ -876,32 +848,6 @@ mod tests {
             await plugin.setup({ session: { hook: async () => { hooked = true; } }, shell: { hook: async () => { hooked = true; } }, event: { subscribe: async () => { hooked = true; } } });
             assert.equal(hooked, false);
 
-            // V1: the `event` hook with `{type, properties}`, `session.status`
-            // and the idle and error events, `question.*`, `shell.env`.
-            delete process.env[claimKey];
-            reset();
-            const v1 = await plugin.server();
-            await v1.event({ event: { type: 'session.created', properties: { info: { id: 'ses_kid', parentID: 'ses_v1' } } } });
-            await v1['chat.message']({ sessionID: 'ses_kid' });
-            assert.equal(word(), null);
-            await v1['chat.message']({ sessionID: 'ses_v1' });
-            assert.equal(word(), 'working');
-            for (const [type, props, want] of [
-                ['question.asked', { sessionID: 'ses_v1' }, 'decision'], ['question.replied', { sessionID: 'ses_v1' }, 'working'],
-                ['permission.asked', { sessionID: 'ses_v1' }, 'decision'], ['permission.replied', { sessionID: 'ses_v1' }, 'working'],
-                ['session.status', { sessionID: 'ses_v1', status: { type: 'busy' } }, 'working'],
-                ['session.status', { sessionID: 'ses_v1', status: { type: 'idle' } }, 'done'],
-                ['permission.asked', { sessionID: 'ses_kid' }, 'done'],
-                ['question.asked', { sessionID: 'ses_v1' }, 'decision'], ['question.rejected', { sessionID: 'ses_v1' }, 'working'],
-                ['session.error', { sessionID: 'ses_v1' }, 'done'],
-                ['permission.asked', { sessionID: 'ses_v1' }, 'decision'], ['session.idle', { sessionID: 'ses_v1' }, 'done'],
-            ]) {
-                await v1.event({ event: { type, properties: props } });
-                assert.equal(word(), want, `${type} ${JSON.stringify(props)}`);
-            }
-            const out = { env: {} };
-            await v1['shell.env']({ cwd: '/' }, out);
-            assert.equal(out.env[claimKey], '1');
             process.exit(0);
         "#).unwrap();
         run_node_check(dir.path(), &live);

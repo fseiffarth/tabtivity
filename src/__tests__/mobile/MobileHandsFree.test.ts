@@ -124,14 +124,14 @@ describe("the phone's hands-free loop", () => {
     const line = (text: string, background?: string): ReadableLine => ({ key: text, text, spans: [{ text, background }] });
     const tabs: ReadableLine = {
       key: "tabs",
-      text: " Which model picker fails   Failure symptoms   Confirm ",
-      spans: ["Which model picker fails", "Failure symptoms", "Confirm"].flatMap((text, index) => [
+      text: " Which model picker fails   Failure symptoms   Submit ",
+      spans: ["Which model picker fails", "Failure symptoms", "Submit"].flatMap((text, index) => [
         { text: ` ${text} `, background: index === 0 ? "#cc8800" : "#222222" },
         { text: " ", background: "#222222" },
       ]),
     };
     const screen: ReadableLine[] = [
-      line("Asked 2 questions"), line("▣ Build · Muse Spark 1.3 Free"), line(""), tabs, line(""),
+      line("Asked 2 questions"), line("Build · Muse Spark 1.3 Free · 6.2s"), line(""), tabs, line(""),
       line("Which OpenCode model picker do you mean?", "#222222"), line(""),
       line("1. Desktop Reader Chat view", "#333333"), line("   Chat/Terminal switch facts-row model chip", "#222222"),
       line("2. Steering prompt chip", "#222222"), line("   Keyboard-steering prompt box", "#222222"),

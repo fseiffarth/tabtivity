@@ -841,7 +841,6 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
         "127.0.0.1:11434",
         &[loaded("nemotron:30b", Some(32_768))],
         Some("qwen3:8b"),
-        false,
     ))
     .unwrap();
     let p = &cfg["provider"]["ollama"];
@@ -852,27 +851,21 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
 
     // Nothing loaded: an empty whitelist, so stale config models drop out.
     let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &[], None, true)).unwrap();
+        serde_json::from_str(&opencode_ollama_config("h:1", &[], None)).unwrap();
     assert_eq!(cfg["provider"]["ollama"]["whitelist"], serde_json::json!([]));
 }
 
 #[test]
-fn opencode_2_measures_context_against_the_window_ollama_runs() {
+fn opencode_measures_context_against_the_window_ollama_runs() {
     let loaded = [loaded("qwen3-coder:30b", Some(32_768)), loaded("old:1b", None)];
     let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, Some("qwen3:8b"), true)).unwrap();
+        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, Some("qwen3:8b"))).unwrap();
     let models = &cfg["provider"]["ollama"]["models"];
     // The loaded window, not the trained 262 144 OpenCode 2 discovers.
     assert_eq!(models["qwen3-coder:30b"]["limit"], serde_json::json!({ "context": 32_768 }));
     // No reported window, or not loaded yet: OpenCode keeps its own figure.
     assert!(models["old:1b"].get("limit").is_none());
     assert!(models["qwen3:8b"].get("limit").is_none());
-
-    // OpenCode 1 requires `output` beside `context`: a lone one would be
-    // an invalid config, so 1.x gets no limit at all.
-    let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, None, false)).unwrap();
-    assert!(cfg["provider"]["ollama"]["models"]["qwen3-coder:30b"].get("limit").is_none());
 }
 
 #[test]
@@ -1067,7 +1060,7 @@ fn the_pinned_local_line_is_the_drivers_own_and_takes_only_plain_names() {
     }
     assert!(model_name_ok("hf.co/org/model-GGUF:Q4_K_M") && model_name_ok("llama3:latest"));
     // The provider block always names the requested model, Ollama up or not.
-    let config: serde_json::Value = serde_json::from_str(&opencode_assistant_provider(m, true)).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&opencode_assistant_provider(m)).unwrap();
     assert!(config["provider"]["ollama"]["models"][m].is_object());
 }
 

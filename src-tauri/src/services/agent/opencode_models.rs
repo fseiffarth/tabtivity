@@ -14,8 +14,8 @@
 //!
 //! A spawn hides nothing until both are known, and nothing for a provider
 //! whose listing came back empty. OpenCode 2 takes the result as
-//! `providers.<id>.models.<model>.disabled` (it drops 1.x's `whitelist` and
-//! `blacklist` as legacy settings); 1.x as `provider.<id>.blacklist`.
+//! `providers.<id>.models.<model>.disabled` (it drops a `whitelist` or
+//! `blacklist` as legacy settings).
 //! AppHandle-free.
 
 use std::collections::{BTreeSet, HashMap};

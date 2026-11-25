@@ -95,11 +95,9 @@ describe(`${BRAND.display} OpenCode status line: mini`, () => {
     expect(sessionStatus(lines(banner, "", "Build · stub · Ollama"), "OpenCode")).toMatchObject({ path: "~/work" });
   });
 
-  it("reads 1.x's block-logo banner, and the newest banner wins", () => {
-    expect(openCodeBannerPath(lines("█▀▀█  OpenCode", "█  █  ~/work"))).toBe("~/work");
+  it("reads the newest banner, and none of 1.x's block logo", () => {
     expect(openCodeBannerPath(lines(banner, "…", "▪ oc mini v2.3.0 · ~/other"))).toBe("~/other");
-    const v1 = lines("█▀▀█  OpenCode", "█  █  ~/work", "", " BUILD   110 (0%) · ctrl+p cmd");
-    expect(sessionStatus(v1, "OpenCode")).toEqual({ path: "~/work", mode: "build", context: "100%" });
+    expect(openCodeBannerPath(lines("█▀▀█  OpenCode", "█  █  ~/work"))).toBeUndefined();
   });
 
   it("takes no folder from prose, or when the banner has scrolled away", () => {

@@ -1,9 +1,10 @@
 import type { ReadableSpan } from "./readableScreen";
 import type { QuestionTab, SelectOption, SelectPrompt } from "./selectPrompt";
 
-/** OpenCode 1.18.34's QuestionPrompt (source checked, plus the phone screenshot
- * of 2026-10-16). The footer identifies a live question; numbers alone never
- * do. OpenCode uses colours rather than an arrow for the selected answer.
+/** OpenCode 2's questions (first read off 1.18.34's QuestionPrompt and a phone
+ * screenshot of 2026-10-16; 1.x itself is not supported). The footer
+ * identifies a live question; numbers alone never do. OpenCode uses colours
+ * rather than an arrow for the selected answer.
  * Number shortcuts select rows 1–9 directly, independently of that highlight.
  * 2.1.3 (captured 2026-10-24) asks through a form titled `Questions`, drawn in
  * a barred box whose empty rows `readableScreen` drops: `afterRule`, set on the
@@ -49,8 +50,8 @@ function previous(lines: readonly QuestionLine[], from: number): number {
 
 function navigation(line: QuestionLine, baseline: string | undefined): SelectPrompt["navigation"] {
   const labels = line.text.trim().split(/\s{2,}/u);
-  // The last step is Confirm in 1.18.34, Submit in 2.1.3.
-  if (labels.length < 2 || !/^(?:Confirm|Submit)$/u.test(labels[labels.length - 1])) return undefined;
+  // The last step is Submit.
+  if (labels.length < 2 || labels[labels.length - 1] !== "Submit") return undefined;
   let offset = 0;
   const columns = labels.map((label) => {
     const column = line.text.indexOf(label, offset);
@@ -224,7 +225,7 @@ export function readOpenCodeQuestion(screen: readonly QuestionLine[]): SelectPro
       };
     }
     // The last step draws one summary per question under the tab row, with
-    // Enter to send: headed Review in 1.18.34, bare in 2.1.3.
+    // Enter to send.
     for (let tabRow = footer - 1; tabRow >= first; tabRow -= 1) {
       let row = tabRow + 1;
       while (row < footer && !lines[row].text.trim()) row += 1;

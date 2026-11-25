@@ -628,10 +628,9 @@ fn copilot_sections(detailed: &str) -> Vec<&str> {
         .collect()
 }
 
-/// V2's public tool content carries FileDiff records directly. Reuse the
-/// renderer's bounded diff format without reconstructing V1 tool envelopes.
-/// A session migrated from V1 keeps V1's `state` shape under its `name`, and
-/// is read as V1's are.
+/// OpenCode 2's public tool content carries FileDiff records directly. Reuse
+/// the renderer's bounded diff format. A session OpenCode 2 migrated from 1.x
+/// keeps 1.x's `state` shape under its `name`, and is read by that shape.
 pub(crate) fn opencode_v2_tool_changes(created: i64, tool: &Value) -> Vec<FileChange> {
     if tool.pointer("/state/status").and_then(Value::as_str) != Some("completed") {
         return Vec::new();
@@ -663,16 +662,6 @@ pub(crate) fn opencode_v2_tool_changes(created: i64, tool: &Value) -> Vec<FileCh
         return vec![whole_file(path, if created { "add" } else { "write" }, content, at)];
     }
     tool_state_changes(tool["name"].as_str(), &tool["state"], ended)
-}
-
-/// The changes one OpenCode tool part records, created at `created` (epoch
-/// ms) unless the part says when it ended.
-pub(crate) fn opencode_part_changes(created: i64, part: &Value) -> Vec<FileChange> {
-    let Some(state) = part.get("state") else {
-        return Vec::new();
-    };
-    let ended = state.pointer("/time/end").and_then(Value::as_i64).unwrap_or(created);
-    tool_state_changes(part.get("tool").and_then(Value::as_str), state, ended)
 }
 
 /// The changes a completed `tool` call's `state` records, ended at `ended`.
@@ -899,9 +888,12 @@ mod tests {
     }
 
     #[test]
-    fn opencode_tool_parts_give_their_recorded_diffs() {
+    fn a_migrated_sessions_tool_state_gives_its_recorded_diffs() {
+        // What OpenCode 2 keeps of a session it migrated from 1.x: 1.x's tool
+        // `state` under the tool's `name`.
+        let opencode_part_changes = |created: i64, part: &Value| opencode_v2_tool_changes(created, part);
         let edit = serde_json::json!({
-            "type": "tool", "tool": "edit",
+            "type": "tool", "name": "edit", "time": {"completed": 1_790_000_000_000i64},
             "state": {"status": "completed", "input": {"filePath": "/p/a.ts"},
                 "metadata": {"diff": "Index: /p/a.ts\n===\n--- /p/a.ts\n+++ /p/a.ts\n@@ -1,1 +1,1 @@\n-a\n+b\n"},
                 "time": {"start": 1, "end": 1_790_000_000_000i64}}
@@ -913,14 +905,14 @@ mod tests {
         assert!(changes[0].at.is_some());
 
         let write = |exists: bool| serde_json::json!({
-            "type": "tool", "tool": "write",
+            "type": "tool", "name": "write",
             "state": {"status": "completed", "input": {"filePath": "/p/w.ts", "content": "x\ny\n"}, "metadata": {"exists": exists}}
         });
         assert_eq!(opencode_part_changes(0, &write(false))[0].kind, "add");
         assert_eq!(opencode_part_changes(0, &write(true))[0].kind, "write");
 
         let patch = serde_json::json!({
-            "type": "tool", "tool": "apply_patch",
+            "type": "tool", "name": "apply_patch",
             "state": {"status": "completed", "metadata": {"files": [
                 {"filePath": "/p/u.ts", "type": "update", "diff": "--- a\n+++ b\n@@ -2,1 +2,1 @@\n-q\n+r\n"},
                 {"filePath": "/p/gone.ts", "type": "delete", "before": "z\n"},
@@ -932,7 +924,7 @@ mod tests {
         assert_eq!(kinds, vec![("/p/u.ts", "edit"), ("/p/gone.ts", "delete"), ("/p/m.ts", "edit")]);
         assert_eq!(changes[2].moved_to.as_deref(), Some("/p/n.ts"));
 
-        let running = serde_json::json!({"type": "tool", "tool": "edit", "state": {"status": "running", "input": {"filePath": "/p/a.ts"}}});
+        let running = serde_json::json!({"type": "tool", "name": "edit", "state": {"status": "running", "input": {"filePath": "/p/a.ts"}}});
         assert!(opencode_part_changes(0, &running).is_empty());
     }
 

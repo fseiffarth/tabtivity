@@ -492,9 +492,7 @@ pub fn inject_launch(opts: &mut crate::terminal::PtyOptions, admin: Option<&'sta
                 None => {
                     let keyed: Vec<Provider> =
                         routes_of("opencode").iter().filter(|r| injected.contains(&r.base_var)).map(|r| r.provider).collect();
-                    let store = crate::services::agent_versions::load();
                     Picker {
-                        v2: crate::services::agent_versions::opencode_is_v2(store.get("opencode")),
                         hidden: crate::services::opencode_models::hidden_for(&keyed),
                         extra: crate::services::opencode_models::extra_for(&keyed),
                     }
@@ -578,8 +576,8 @@ fn opencode_inline_with(
         let extra = picker.extra.get(provider).map(Vec::as_slice).unwrap_or_default();
         // OpenCode 2's own block for the provider outranks the legacy one,
         // so one the user's config has must carry the route too.
-        if !hidden.is_empty() || !extra.is_empty() || (picker.v2 && config["providers"][name].is_object()) {
-            hide_in_picker(&mut config, name, &settings, hidden, extra, picker.v2);
+        if !hidden.is_empty() || !extra.is_empty() || config["providers"][name].is_object() {
+            hide_in_picker(&mut config, name, &settings, hidden, extra);
         }
     }
     let added = left_out.len() < keyed.len();
@@ -609,8 +607,6 @@ fn only_keyed_providers(config: &mut serde_json::Value, keyed: &[(Provider, &str
 /// (`opencode_models`): by provider, the catalog models its key cannot call.
 #[derive(Debug, Default)]
 pub(crate) struct Picker {
-    /// The OpenCode Tabtivity last probed is 2.x (`agent_versions`).
-    pub v2: bool,
     pub hidden: HashMap<Provider, Vec<String>>,
     /// By provider, the models its key can call that the catalog lacks
     /// (`opencode_models::extra`): offered under their exact id.
@@ -619,9 +615,8 @@ pub(crate) struct Picker {
 
 /// Hide `hidden` of provider `name` from OpenCode's model list and offer
 /// `extra` — models the key calls that the catalog lacks — under their exact
-/// id. 1.x: the legacy block's `blacklist` (unless it filters already) and
-/// `models`. 2.x drops that as a legacy setting and takes
-/// `providers.<name>.models.<id>.disabled` — in its own `providers` block,
+/// id: `providers.<name>.models.<id>.disabled` — in OpenCode 2's own
+/// `providers` block,
 /// which outranks the legacy one for that provider, so it carries the same
 /// `settings` (checked with 2.1.2) — also with nothing to hide, for a block
 /// the user's config has. A model entry the config already has keeps its own
@@ -632,30 +627,19 @@ fn hide_in_picker(
     settings: &serde_json::Value,
     hidden: &[String],
     extra: &[String],
-    v2: bool,
 ) {
-    let Some(root) = config.as_object_mut() else {
+    let Some(block) = config
+        .as_object_mut()
+        .map(|root| root.entry("providers").or_insert_with(|| serde_json::json!({})))
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|providers| providers.entry(name).or_insert_with(|| serde_json::json!({})).as_object_mut())
+    else {
         return;
     };
-    let block = if v2 {
-        root.entry("providers")
-            .or_insert_with(|| serde_json::json!({}))
-            .as_object_mut()
-            .and_then(|providers| providers.entry(name).or_insert_with(|| serde_json::json!({})).as_object_mut())
-    } else {
-        root.get_mut("provider").and_then(|p| p.get_mut(name)).and_then(serde_json::Value::as_object_mut)
-    };
-    let Some(block) = block else {
-        return;
-    };
-    if v2 {
-        if let Some(own) = block.entry("settings").or_insert_with(|| serde_json::json!({})).as_object_mut() {
-            own.extend(settings.as_object().cloned().unwrap_or_default());
-        }
-    } else if !hidden.is_empty() && !block.contains_key("whitelist") && !block.contains_key("blacklist") {
-        block.insert("blacklist".into(), hidden.into());
+    if let Some(own) = block.entry("settings").or_insert_with(|| serde_json::json!({})).as_object_mut() {
+        own.extend(settings.as_object().cloned().unwrap_or_default());
     }
-    if (!v2 || hidden.is_empty()) && extra.is_empty() {
+    if hidden.is_empty() && extra.is_empty() {
         return;
     }
     let Some(models) = block.entry("models").or_insert_with(|| serde_json::json!({})).as_object_mut() else {
@@ -663,9 +647,6 @@ fn hide_in_picker(
     };
     for id in extra {
         models.entry(id.as_str()).or_insert_with(|| serde_json::json!({ "name": id }));
-    }
-    if !v2 {
-        return;
     }
     for id in hidden {
         if let Some(entry) = models.entry(id.as_str()).or_insert_with(|| serde_json::json!({})).as_object_mut() {
@@ -1354,10 +1335,9 @@ mod tests {
         }
     }
 
-    /// What a key cannot call leaves OpenCode's picker: 2.x through its own
-    /// `providers` block, carrying the proxy settings too; 1.x as a legacy
-    /// `blacklist`. A provider without a list, or one the user routed, is
-    /// left as it was.
+    /// What a key cannot call leaves OpenCode's picker through its own
+    /// `providers` block, carrying the proxy settings too. A provider without a
+    /// list, or one the user routed, is left as it was.
     #[test]
     fn opencode_hides_the_catalog_models_a_key_cannot_call() {
         let hidden = HashMap::from([(Provider::Anthropic, vec!["claude-sonnet-5".to_string(), "claude-sonnet-5-fast".to_string()])]);
@@ -1367,7 +1347,7 @@ mod tests {
             route_opencode(&mut env, &set, ambient, picker);
             serde_json::from_str::<serde_json::Value>(&env[OPENCODE_INLINE_ENV]).unwrap()
         };
-        let v2 = routed(&Picker { v2: true, hidden: hidden.clone(), ..Default::default() }, None);
+        let v2 = routed(&Picker { hidden: hidden.clone(), ..Default::default() }, None);
         let native = &v2["providers"]["anthropic"];
         assert_eq!(native["models"]["claude-sonnet-5"]["disabled"], true);
         assert_eq!(native["models"]["claude-sonnet-5-fast"]["disabled"], true);
@@ -1377,28 +1357,23 @@ mod tests {
         assert!(v2["provider"]["anthropic"].get("blacklist").is_none());
         assert_eq!(v2["providers"].as_object().unwrap().len(), 1, "no list, no native block: {v2}");
 
-        let v1 = routed(&Picker { v2: false, hidden: hidden.clone(), ..Default::default() }, None);
-        assert_eq!(v1["provider"]["anthropic"]["blacklist"], serde_json::json!(["claude-sonnet-5", "claude-sonnet-5-fast"]));
-        assert!(v1.get("providers").is_none());
-        // The user's own filter and model entries stay theirs.
-        let mine = r#"{"provider":{"anthropic":{"whitelist":["claude-opus-5-5"]}}}"#;
-        assert_eq!(routed(&Picker { v2: false, hidden: hidden.clone(), ..Default::default() }, Some(mine))["provider"]["anthropic"]["whitelist"], serde_json::json!(["claude-opus-5-5"]));
+        // The user's own model entries stay theirs.
         let mine = r#"{"providers":{"anthropic":{"models":{"claude-sonnet-5":{"disabled":false}}}}}"#;
-        let kept = routed(&Picker { v2: true, hidden: hidden.clone(), ..Default::default() }, Some(mine));
+        let kept = routed(&Picker { hidden: hidden.clone(), ..Default::default() }, Some(mine));
         assert_eq!(kept["providers"]["anthropic"]["models"]["claude-sonnet-5"]["disabled"], false);
         assert_eq!(kept["providers"]["anthropic"]["models"]["claude-sonnet-5-fast"]["disabled"], true);
         // A provider OpenCode 2's own block points somewhere is not routed at all.
         let mine = r#"{"providers":{"anthropic":{"settings":{"baseURL":"https://gateway.example/v1"}}}}"#;
         let mut env = HashMap::new();
         let set = inject_env_with("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied);
-        route_opencode(&mut env, &set, Some(mine), &Picker { v2: true, hidden, ..Default::default() });
+        route_opencode(&mut env, &set, Some(mine), &Picker { hidden, ..Default::default() });
         let config: serde_json::Value = serde_json::from_str(&env[OPENCODE_INLINE_ENV]).unwrap();
         assert_eq!(config["providers"]["anthropic"], serde_json::json!({"settings":{"baseURL":"https://gateway.example/v1"}}));
         assert!(config["provider"].get("anthropic").is_none_or(|b| b["options"].get("baseURL").is_none()));
         assert!(!env.contains_key(ANTHROPIC_CARRIER) && env.contains_key(GEMINI_CARRIER));
         // The user's 2.x block without a route gets the proxy's, list or not.
         let mine = r#"{"providers":{"google":{"name":"Mine"}}}"#;
-        let config = routed(&Picker { v2: true, hidden: HashMap::new(), ..Default::default() }, Some(mine));
+        let config = routed(&Picker { hidden: HashMap::new(), ..Default::default() }, Some(mine));
         assert_eq!(config["providers"]["google"]["settings"]["apiKey"], "{env:GEMINI_API_KEY}");
         assert_eq!(config["providers"]["google"]["name"], "Mine");
         assert!(config["providers"]["google"].get("models").is_none());
@@ -1410,11 +1385,11 @@ mod tests {
         let extra = HashMap::from([(Provider::Anthropic, vec!["claude-sonnet-5-5".to_string()])]);
         let mut config = serde_json::json!({"provider":{"anthropic":{"options":{}}}});
         let settings = serde_json::json!({"baseURL": "http://127.0.0.1:9/anthropic/v1"});
-        hide_in_picker(&mut config, "anthropic", &settings, &[], &extra[&Provider::Anthropic], false);
-        assert_eq!(config["provider"]["anthropic"]["models"]["claude-sonnet-5-5"]["name"], "claude-sonnet-5-5");
-        assert!(config.get("providers").is_none());
+        hide_in_picker(&mut config, "anthropic", &settings, &[], &extra[&Provider::Anthropic]);
+        assert_eq!(config["providers"]["anthropic"]["models"]["claude-sonnet-5-5"]["name"], "claude-sonnet-5-5");
+        assert_eq!(config["providers"]["anthropic"]["settings"], settings);
         let mut config = serde_json::json!({"providers":{"anthropic":{"models":{"claude-sonnet-5-5":{"name":"Mine"}}}}});
-        hide_in_picker(&mut config, "anthropic", &settings, &["old".into()], &["claude-sonnet-5-5".into(), "claude-x".into()], true);
+        hide_in_picker(&mut config, "anthropic", &settings, &["old".into()], &["claude-sonnet-5-5".into(), "claude-x".into()]);
         let models = &config["providers"]["anthropic"]["models"];
         assert_eq!(models["claude-sonnet-5-5"]["name"], "Mine");
         assert_eq!(models["claude-x"]["name"], "claude-x");

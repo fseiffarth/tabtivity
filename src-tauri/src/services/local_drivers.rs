@@ -559,20 +559,18 @@ pub(crate) fn loaded_models(ps_body: &str) -> Option<Vec<LoadedModel>> {
 /// picker. An empty list is kept deliberately: nothing loaded means no Ollama
 /// models to offer. Pure + tested.
 ///
-/// With `context_limits` (OpenCode 2), a loaded model also carries
-/// `limit.context`: the window Ollama runs it with. OpenCode 2 discovers Ollama's
+/// A loaded model also carries `limit.context`: the window Ollama runs it
+/// with. OpenCode 2 discovers Ollama's
 /// models itself and takes each one's *trained* window from `/api/show`
 /// (262 144 for `qwen3-coder`), so its context % and its compaction measured
 /// against a window the server never gave — Ollama runs it at 32 768, or what
 /// the context setting says, and silently cuts the rest. A config `limit` wins
-/// over that discovery (checked on 2.3.2). OpenCode 1's schema requires
-/// `output` beside `context`, so 1.x gets none. A model not loaded yet has no
+/// over that discovery (checked on 2.3.2). A model not loaded yet has no
 /// window to report and is left to OpenCode's own figure.
 pub(crate) fn opencode_ollama_config(
     addr: &str,
     loaded: &[LoadedModel],
     requested: Option<&str>,
-    context_limits: bool,
 ) -> String {
     let mut names: Vec<&str> = loaded.iter().map(|m| m.name.as_str()).collect();
     if let Some(r) = requested.filter(|r| !r.is_empty() && !names.contains(r)) {
@@ -583,7 +581,6 @@ pub(crate) fn opencode_ollama_config(
             .iter()
             .find(|m| m.name == name)
             .and_then(|m| m.context)
-            .filter(|_| context_limits)
     };
     let models: serde_json::Map<String, serde_json::Value> = names
         .iter()
@@ -611,22 +608,21 @@ pub(crate) fn opencode_ollama_config(
 
 /// `OPENCODE_CONFIG_CONTENT` for an OpenCode spawn asking for `requested`, or
 /// `None` when Ollama cannot be asked — an unreachable server leaves the user's
-/// own config alone rather than emptying its model list on a guess. `v2`: the
-/// OpenCode being spawned is 2.x (see [`opencode_ollama_config`]).
-pub(crate) fn opencode_loaded_models_config(requested: Option<&str>, v2: bool) -> Option<String> {
+/// own config alone rather than emptying its model list on a guess.
+pub(crate) fn opencode_loaded_models_config(requested: Option<&str>) -> Option<String> {
     let loaded = loaded_models(&ollama_status_read("/api/ps").ok()?)?;
     let addr = ollama_addr().ok()?;
-    Some(opencode_ollama_config(&addr, &loaded, requested, v2))
+    Some(opencode_ollama_config(&addr, &loaded, requested))
 }
 
 /// The inline OpenCode config an assistant chat merges its own settings into:
 /// [`opencode_loaded_models_config`], or — when Ollama cannot be asked — the
 /// same `ollama` provider block with no loaded models and `requested` alone,
 /// since the assistant home holds no config of the user's to fall back on.
-pub(crate) fn opencode_assistant_provider(requested: &str, v2: bool) -> String {
-    opencode_loaded_models_config(Some(requested), v2).unwrap_or_else(|| {
+pub(crate) fn opencode_assistant_provider(requested: &str) -> String {
+    opencode_loaded_models_config(Some(requested)).unwrap_or_else(|| {
         let addr = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
-        opencode_ollama_config(&addr, &[], Some(requested), v2)
+        opencode_ollama_config(&addr, &[], Some(requested))
     })
 }
 

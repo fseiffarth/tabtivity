@@ -243,10 +243,10 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         bin: "opencode",
         mcp: McpWiring::OpenCodeInline,
         resume: Resume::Args(&["--continue"]),
-        // OpenCode 2: `opencode.ai/install` and npm `opencode-ai` only ever
-        // serve OpenCode 1. The V2 script replaces a V1 binary in place
-        // (same `~/.opencode/bin`); on Windows the V1 package goes first, as
-        // both packages link an `opencode` launcher.
+        // OpenCode 2, the only release supported: `opencode.ai/install` and
+        // npm `opencode-ai` only ever serve 1.x. The V2 script replaces a 1.x
+        // binary in place (same `~/.opencode/bin`); on Windows the 1.x
+        // package goes first, as both packages link an `opencode` launcher.
         install_cmd: "curl -fsSL https://opencode.ai/v2/install | bash",
         install_cmd_windows: Some("npm uninstall -g opencode-ai && npm install -g @opencode/cli"),
         extra_paths: &[".opencode/bin/opencode", ".local/bin/opencode"],
@@ -854,20 +854,6 @@ pub(crate) fn codex_takes_no_daemon() -> bool {
     host_agent_version_says("codex", &PROBING, crate::services::agent_versions::codex_takes_no_daemon)
 }
 
-/// V2 changes startup flags, so the first launch must wait for the bounded
-/// version probe rather than letting an unknown release join a shared server.
-pub(crate) async fn opencode_is_v2() -> bool {
-    use crate::services::agent_versions as versions;
-    let Some(spec) = find_spec("opencode") else { return false };
-    let Some(path) = resolve_spec_path(spec) else { return false };
-    let store = versions::load();
-    let seen = store.get(spec.id);
-    if seen.is_some_and(|s| versions::fresh_for_path(s, versions::PROBE_TTL, &path)) {
-        return versions::opencode_is_v2(seen);
-    }
-    let result = probe_agent_version(spec, &path).await;
-    versions::opencode_is_v2(Some(&versions::remember(spec.id, result, &path)))
-}
 
 /// Answer `check` from the version store's entry for `agent`, refreshing a
 /// missing or day-old entry in the background (one probe per agent at a time).

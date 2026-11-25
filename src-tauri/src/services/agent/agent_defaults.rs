@@ -56,12 +56,8 @@ fn launch_model(cmd: &str, model: &str, effort: Option<&str>) -> String {
 }
 
 pub fn capabilities(cmd: &str) -> Capabilities {
-    let opencode_v2 = cmd == "opencode"
-        && crate::services::agent_versions::opencode_is_v2(
-            crate::services::agent_versions::load().get("opencode"),
-        );
     let efforts: &'static [&'static str] = match cmd {
-        "opencode" if opencode_v2 => &["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        "opencode" => &["none", "minimal", "low", "medium", "high", "xhigh", "max"],
         "claude" | "agy" | "kiro-cli" | "grok" => &["low", "medium", "high", "xhigh", "max"],
         "codex" | "muse" => &[
             "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
