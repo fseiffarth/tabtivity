@@ -1507,13 +1507,6 @@
   padding: 0 var(--space-3);
 }
 
-/* Host / Mirror — only rendered for a remote project, where there really are two
-   repos (#23 I2). Compact: it is a qualifier on the section, not a main control. */
-.git-worktree-site .dropdown-trigger {
-  font-size: var(--text-sm);
-  padding: 1px 5px;
-}
-
 .git-branch-worktree {
   color: var(--text-muted);
   font-size: var(--text-sm);

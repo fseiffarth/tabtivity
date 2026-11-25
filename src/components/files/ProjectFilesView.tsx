@@ -2275,6 +2275,7 @@ export function ProjectFilesView({
             projectId={onNestedRepo ? undefined : project?.remote ? projectId ?? undefined : undefined}
             remote={!onNestedRepo && !!project?.remote}
             hostPinned={hostPinned}
+            site={source === "local" ? "mirror" : "host"}
             authProjectId={onNestedRepo ? undefined : projectId ?? undefined}
             onChanged={() => effectiveGitRoot && refreshGit(effectiveGitRoot)}
             onWorktreeChanged={onGitWorktreeChanged}

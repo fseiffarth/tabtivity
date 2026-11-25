@@ -346,30 +346,35 @@ describe("#23 git worktrees", () => {
     expect(within(pill).queryByRole("button", { name: /Remove worktree/ })).toBeNull();
   });
 
-  it("a remote project can manage the mirror's worktrees too", async () => {
+  it("a remote project's view follows the Local/Remote switch", async () => {
     // I2: `projectDir` for a remote project is the LOCAL MIRROR, but the commands
     // resolved remoteness from it and ran on the host — so a path picked from a
     // local file tree was created on the login node, and the mirror's own repo
-    // could never have its worktrees managed at all. There is no side switch for
-    // a local project, where there is only one side to be on.
-    const user = userEvent.setup();
+    // could never have its worktrees managed at all. The side is the parent's
+    // file-source switch: the view used to open on the host whatever that said.
+    let view!: ReturnType<typeof render>;
     await act(async () => {
-      render(<GitHistory projectDir="/p" projectId="pid" remote />);
+      view = render(<GitHistory projectDir="/p" projectId="pid" remote site="host" />);
     });
     await openWorktrees();
+    expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", { projectDir: "/p", site: "host" });
+    expect(screen.getByText("Remote")).toBeTruthy();
     mockInvoke.mockClear();
-    await user.click(screen.getByTitle("Side"));
-    await user.click(screen.getByRole("option", { name: "Mirror" }));
-    expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", {
-      projectDir: "/p",
-      site: "mirror",
+    await act(async () => {
+      view.rerender(<GitHistory projectDir="/p" projectId="pid" remote site="mirror" />);
     });
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", { projectDir: "/p", site: "mirror" }));
+    expect(mockInvoke).toHaveBeenCalledWith("git_log", { projectDir: "/p", worktree: { path: "", site: "mirror" }, limit: 20, skip: 0 });
+    expect(screen.getByText("Local")).toBeTruthy();
   });
 
-  it("a local project is offered no side switch", async () => {
-    await renderHistory();
-    await screen.findByText("Worktrees");
-    expect(screen.queryByTitle("Side")).toBeNull();
+  it("a local project has one side whatever the switch says", async () => {
+    await act(async () => {
+      render(<GitHistory projectDir="/p" site="mirror" />);
+    });
+    await openWorktrees();
+    expect(mockInvoke).toHaveBeenCalledWith("git_worktree_list", { projectDir: "/p", site: "host" });
+    expect(screen.queryByText("Local")).toBeNull();
   });
 
   it("a failing worktree probe does not blank the commit list", async () => {
@@ -430,10 +435,8 @@ describe("selected worktree context", () => {
 
   it("a mirror selection uses explicit mirror context throughout", async () => {
     const user = userEvent.setup();
-    await act(async () => { render(<GitHistory projectDir="/p" remote projectId="pid" />); });
+    await act(async () => { render(<GitHistory projectDir="/p" remote projectId="pid" site="mirror" />); });
     await openWorktrees();
-    await user.click(screen.getByTitle("Side"));
-    await user.click(screen.getByRole("option", { name: "Mirror" }));
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_branches", { projectDir: "/p", worktree: { path: "", site: "mirror" } }));
     await user.click(screen.getByRole("button", { name: "Select worktree feature" }));
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_merge_state", { projectDir: "/p", worktree: { path: `/p/${NAMES.worktreesDir}/feature`, site: "mirror" } }));

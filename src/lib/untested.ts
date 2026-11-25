@@ -298,6 +298,7 @@ export const UNTESTED = {
   "gitSelectiveCommit": { area: "files", what: "Stage, inspect the index diff and unstage individual files from the Git bar" },
   "gitChangeGroup.fold": { area: "files", what: "Git view change groups start collapsed and remember which groups are open for each checkout" },
   "gitHistory.worktreeSelection": { area: "files", what: "Git · Select a worktree; branches, history and actions follow its checkout" },
+  "gitHistory.followsSource": { area: "files", what: "Git view of a remote project follows the Local/Remote switch (Local = mirror repo, Remote = host repo)" },
   "gitHistory.loadMoreCommits": { area: "files", what: "GitHistory · Load older commits" },
   "gitHistory.search": { area: "files", what: "GitHistory · Commit search box", tested: "2026-09-28" },
   "gitHistory.localAuthoritative": { area: "files", what: "Git sync · Local wins switch (commits go to the host only; host commits backed up and reset)" },
