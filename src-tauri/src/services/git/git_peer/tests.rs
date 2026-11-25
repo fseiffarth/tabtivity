@@ -2590,11 +2590,11 @@ fn classify_tracked_dirt_needs_every_fact_proven() {
 
 #[test]
 fn the_ls_parsers_read_git_records() {
-    let tree = b"100644 blob aaaa\ta.txt\0100755 blob bbbb\td/b.sh\0160000 commit cccc\tsub\0";
+    let tree = b"100644 blob aaaa\ta.txt\x00100755 blob bbbb\td/b.sh\x00160000 commit cccc\tsub\0";
     let t = parse_ls_tree_blobs(tree);
     assert_eq!(t["d/b.sh"], blob("100755", "bbbb"));
     assert_eq!(t["sub"], blob("160000", "cccc"));
-    let idx = b"100644 aaaa 0\ta.txt\0100644 bbbb 1\tc.txt\0100644 cccc 2\tc.txt\0";
+    let idx = b"100644 aaaa 0\ta.txt\x00100644 bbbb 1\tc.txt\x00100644 cccc 2\tc.txt\0";
     let i = parse_ls_files_stage(idx);
     assert_eq!(i["a.txt"], Some(blob("100644", "aaaa")));
     assert_eq!(i["c.txt"], None, "a conflicted path is not one blob");
