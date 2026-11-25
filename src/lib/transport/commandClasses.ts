@@ -551,6 +551,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["openvpn_connect", "admin"],
   ["openvpn_disconnect", "admin"],
   ["openvpn_disconnect_all_on_quit", "admin"],
+  ["openvpn_exit_reason", "admin"],
   ["openvpn_list_configs", "admin"],
   ["openvpn_remove_config", "admin"],
   ["openvpn_status", "admin"],

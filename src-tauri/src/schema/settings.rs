@@ -1056,6 +1056,14 @@ pub struct Settings {
     /// against the keychain whenever it *is* readable, so it cannot drift for long.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vpn_saved_configs: Option<Vec<String>>,
+    /// The `.ovpn` configs with **Keep connected** on (the VPN menu's switch):
+    /// their tunnels are started with the options that stop OpenVPN from ending
+    /// itself on an idle, ping or session timer
+    /// (`services::openvpn::keep_connected_args`). Read by the backend at each
+    /// connect; off (absent) by default, since it overrides what the VPN's
+    /// operator asked the client to do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpn_keep_connected: Option<Vec<String>>,
     /// Energy-saver mode: "off" | "battery" (default) | "always". When active
     /// (mode "always", or "battery" while discharging) Tabtivity pauses the blob
     /// auto-spin, collapses idle animations, and widens always-on UI timers.

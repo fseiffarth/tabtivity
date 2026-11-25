@@ -897,6 +897,11 @@ export interface Settings {
    *  toggle and the connect path would otherwise read "nothing saved" over a
    *  perfectly good saved credential (see `lib/keyring.ts`). */
   vpn_saved_configs?: string[];
+  /** The `.ovpn` configs with **Keep connected** on (the VPN menu's switch). The
+   *  backend reads it at each connect and starts the tunnel with the options that
+   *  stop OpenVPN from ending itself on an idle, ping or session timer. Off by
+   *  default: it overrides what the VPN's operator asked the client to do. */
+  vpn_keep_connected?: string[];
   /** When true, the header's OpenVPN indicator is shown. Default ON (unset →
    *  shown); the first-run `RemoteFeaturesPrompt` or Settings switch it off. */
   vpn_enabled?: boolean;

@@ -2376,6 +2376,7 @@ pub fn run() {
             commands::openvpn::openvpn_disconnect_all_on_quit,
             commands::openvpn::openvpn_status,
             commands::openvpn::openvpn_active,
+            commands::openvpn::openvpn_exit_reason,
             commands::openvpn::openvpn_store_config,
             commands::openvpn::openvpn_list_configs,
             commands::openvpn::openvpn_remove_config,

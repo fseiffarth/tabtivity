@@ -7,7 +7,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { isVpnTerminalHandoff, useVpnPromptStore } from "../../stores/remote/vpn/vpnPrompt";
-import { anyVpnLive, disconnectVpnTunnel, useVpnStatusStore } from "../../stores/remote/vpn/vpnStatus";
+import { anyVpnLive, disconnectVpnTunnel, useVpnStatusStore, type VpnEnd } from "../../stores/remote/vpn/vpnStatus";
 import { canConnectVpnSilently, connectVpnSilently } from "../../lib/remote/vpn/vpnConnect";
 import {
   fileOf,
@@ -15,12 +15,15 @@ import {
   openVpnLoginInTerminal,
   setVpnAutoConnect,
   setVpnCredentialSaved,
+  setVpnKeepConnected,
   syncVpnCredentialSaved,
   vpnUsernameFor,
 } from "../../lib/remote/vpn/vpnAutoConnect";
 import { keyringState, unlockKeyring, type KeyringState } from "../../lib/keyring";
 import type { StoredVpnConfig } from "../../types";
 import { useT } from "../../lib/i18n";
+import { formatTime } from "../../lib/calendar/calendarTime";
+import { useUse24h } from "../../lib/timeFormat";
 import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import { ErrorNote } from "../common/ErrorNote";
@@ -95,6 +98,12 @@ export function VpnIndicator() {
   // the reason `isVpnCredentialSaved` documents: a locked keychain would report every
   // one of them as unsaved. `NO_SAVED` keeps the selector identity-stable.
   const savedConfigs = useSettingsStore((s) => s.settings?.vpn_saved_configs ?? NO_SAVED);
+  // The configs with Keep connected on: their tunnels are started with the options
+  // that stop OpenVPN from ending itself on an idle, ping or session timer.
+  const keptConfigs = useSettingsStore((s) => s.settings?.vpn_keep_connected ?? NO_SAVED);
+  // Tunnels that died on their own and have not come back, with why.
+  const ended = useVpnStatusStore((s) => s.ended);
+  const use24h = useUse24h();
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
   // On by default (Settings' "Remote features"); switched off, this machine-wide
   // tunnel control leaves the header.
@@ -228,6 +237,47 @@ export function VpnIndicator() {
     }
     await probeCredentials(configs);
   }, [configs, probeCredentials, t]);
+
+  /**
+   * Why a tunnel that died on its own is gone, in words. The three timer reasons
+   * are the ones Keep connected prevents, so with it off they say so: a lamp that
+   * only went dark after a long idle gave no hint that a switch stops it.
+   */
+  const endReason = useCallback(
+    (config: string, end: VpnEnd) => {
+      const reason =
+        end.kind === "unknown"
+          ? (end.line ?? t("vpnIndicator.endReason.unknown"))
+          : t(`vpnIndicator.endReason.${end.kind}`);
+      const timer = end.kind === "inactive" || end.kind === "ping_exit" || end.kind === "session_timeout";
+      return timer && !keptConfigs.includes(config) ? `${reason} ${t("vpnIndicator.endedKeepHint")}` : reason;
+    },
+    [keptConfigs, t],
+  );
+
+  // A tunnel that ends unasked is said once, when the reconcile notices it, and
+  // marks the glyph until the menu has been opened: after a long idle the toast
+  // is long gone, and a merely dim glyph reads as "never connected".
+  const announced = useRef<Record<string, number>>({});
+  const [seen, setSeen] = useState<Record<string, number>>({});
+  useEffect(() => {
+    for (const [config, end] of Object.entries(ended)) {
+      if (announced.current[config] === end.at) continue;
+      announced.current[config] = end.at;
+      useProjectsStore.setState({
+        connToast: t("vpnIndicator.endedToast", { config: fileOf(config), reason: endReason(config, end) }),
+      });
+    }
+  }, [ended, endReason, t]);
+  useEffect(() => {
+    if (!open) return;
+    setSeen((prev) => {
+      const next = Object.fromEntries(Object.entries(ended).map(([config, end]) => [config, end.at]));
+      const same = Object.keys(next).length === Object.keys(prev).length && Object.keys(next).every((c) => prev[c] === next[c]);
+      return same ? prev : next;
+    });
+  }, [open, ended]);
+  const unseenEnd = Object.entries(ended).some(([config, end]) => seen[config] !== end.at);
 
   const reveal = () => {
     window.clearTimeout(closeTimer.current);
@@ -490,6 +540,7 @@ export function VpnIndicator() {
       // that says they exist has to go too — a leftover would keep claiming a saved
       // credential for a config that no longer exists, and offer to unlock for it.
       void setVpnCredentialSaved(config, false);
+      void setVpnKeepConnected(config, false);
       try {
         await invoke("openvpn_remove_config", { config });
       } catch (e) {
@@ -518,12 +569,17 @@ export function VpnIndicator() {
     !enabled
       ? null
       : {
-          tone: lamp === "connecting" ? "attention" : lamp === "connected" ? "ok" : "off",
-          label: `OpenVPN: ${lamp}`,
+          tone: lamp === "connecting" || (lamp === "off" && unseenEnd) ? "attention" : lamp === "connected" ? "ok" : "off",
+          label: lamp === "off" && unseenEnd ? t("vpnIndicator.titleEnded") : `OpenVPN: ${lamp}`,
         },
   );
 
   const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? id;
+  /** A moment as the app's clock reads it (12/24 h, the app language's day period). */
+  const clock = (at: number) => {
+    const d = new Date(at);
+    return formatTime(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`, use24h);
+  };
   // Configs that are up are listed as tunnels above; don't offer them again below.
   const idle = configs.filter((c) => !(c.path in byConfig));
 
@@ -541,6 +597,7 @@ export function VpnIndicator() {
   const autoConnectRow = (config: string) => {
     const on = armed === config;
     const saved = savedConfigs.includes(config);
+    const kept = keptConfigs.includes(config);
     // A locked store makes `silent` read false for every config, so without the
     // recorded intent an armed tunnel would look ineligible and offer to disarm
     // itself after every restart. The credential is there; it is just unreadable.
@@ -597,6 +654,19 @@ export function VpnIndicator() {
             {t("vpnIndicator.startsWithApp")}{headless ? "" : t("vpnIndicator.waitsInRootTerminal")}.
           </div>
         )}
+        <label className="vpn-indicator-auto">
+          <Toggle
+            size="sm"
+            checked={kept}
+            onChange={(e) => void setVpnKeepConnected(config, e.target.checked)}
+            aria-label={t("vpnIndicator.keepConnectedAria", { file: fileOf(config) })}
+            title={t("vpnIndicator.keepConnectedTitle")}
+          />
+          <span>
+            {t("vpnIndicator.keepConnectedLabel")} <UntestedTag id="vpnIndicator.keepConnected" />
+          </span>
+        </label>
+        {kept && <div className="vpn-indicator-hint">{t("vpnIndicator.keepConnectedHint")}</div>}
       </>
     );
   };
@@ -613,7 +683,7 @@ export function VpnIndicator() {
         aria-expanded={open}
         title={
           lamp === "off"
-            ? t("vpnIndicator.titleOff")
+            ? t(unseenEnd ? "vpnIndicator.titleEnded" : "vpnIndicator.titleOff")
             : lamp === "connecting"
               ? t("vpnIndicator.titleConnecting")
               : t("vpnIndicator.titleConnected")
@@ -626,7 +696,7 @@ export function VpnIndicator() {
       >
         {/* The glyph itself carries the state, like Mobile's phone icon — no
             separate lamp beside it. */}
-        <VpnGlyph className={`header-status-glyph vpn-indicator-glyph ${lamp}`} />
+        <VpnGlyph className={`header-status-glyph vpn-indicator-glyph ${lamp === "off" && unseenEnd ? "ended" : lamp}`} />
       </button>
       {open && (
         <div className="tab-new-menu vpn-indicator-menu" role="menu">
@@ -732,6 +802,12 @@ export function VpnIndicator() {
                         {c.name}
                       </span>
                     </div>
+                    {ended[c.path] && (
+                      <div className="vpn-indicator-hint vpn-indicator-ended" role="status">
+                        {t("vpnIndicator.endedAt", { time: clock(ended[c.path].at) })} {endReason(c.path, ended[c.path])}{" "}
+                        <UntestedTag id="vpnIndicator.endReason" />
+                      </div>
+                    )}
                     {removeArm === c.path ? (
                       // Armed remove: the second click is destructive (the saved
                       // credentials go with the config and can't be re-browsed

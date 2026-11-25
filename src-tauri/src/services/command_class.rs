@@ -783,6 +783,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("openvpn_connect", Admin),
     ("openvpn_disconnect", Admin),
     ("openvpn_disconnect_all_on_quit", Admin),
+    ("openvpn_exit_reason", Admin),
     ("openvpn_list_configs", Admin),
     ("openvpn_remove_config", Admin),
     ("openvpn_status", Admin),

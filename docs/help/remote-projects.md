@@ -124,6 +124,16 @@ The tunnel is machine-wide, not per project: the header's OpenVPN button
 brings it up or down and can arm "Connect on launch" once saved credentials
 make the connect silent. Needs `openvpn` and polkit installed.
 
+If a tunnel is gone after the computer sat idle for a long time, the VPN has an
+idle timer. Turn on **Keep connected** for that config in the header's OpenVPN
+menu and connect again: OpenVPN then ignores the VPN's idle and session timers.
+It is off by default because it overrides what the VPN's operator asked for. A
+tunnel that ended on its own says when and why on its row in that menu.
+
+The phone's start page shows a **VPN** pill beside the connection lamp while the
+desktop has a VPN config: green while the tunnel is up, dim and struck through
+while it is down.
+
 ## Compute machines (workers)
 
 A remote project can reach more than one host.

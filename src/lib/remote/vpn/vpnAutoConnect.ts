@@ -67,16 +67,27 @@ export function isVpnCredentialSaved(config: string): boolean {
   return (useSettingsStore.getState().settings?.vpn_saved_configs ?? []).includes(config);
 }
 
+/** `list` with `config` in or out of it; null when that changes nothing. */
+function withConfig(list: string[], config: string, present: boolean): string[] | null {
+  if (list.includes(config) === present) return null;
+  return present ? [...list, config] : list.filter((c) => c !== config);
+}
+
 /** Record (or drop) the "remember this config's credentials" intent. */
 export async function setVpnCredentialSaved(config: string, saved: boolean): Promise<void> {
-  const current = useSettingsStore.getState().settings?.vpn_saved_configs ?? [];
-  const next = saved
-    ? current.includes(config)
-      ? current
-      : [...current, config]
-    : current.filter((c) => c !== config);
-  if (next.length === current.length && next.every((c, i) => c === current[i])) return;
-  await useSettingsStore.getState().updateSettings({ vpn_saved_configs: next });
+  const next = withConfig(useSettingsStore.getState().settings?.vpn_saved_configs ?? [], config, saved);
+  if (next) await useSettingsStore.getState().updateSettings({ vpn_saved_configs: next });
+}
+
+/**
+ * "Keep connected", per config (`settings.vpn_keep_connected`): the backend starts
+ * that tunnel with the options that stop OpenVPN from ending itself on an idle,
+ * ping or session timer (`services::openvpn::keep_connected_args`). It reads the
+ * list at connect, so a change applies from the tunnel's next connect.
+ */
+export async function setVpnKeepConnected(config: string, keep: boolean): Promise<void> {
+  const next = withConfig(useSettingsStore.getState().settings?.vpn_keep_connected ?? [], config, keep);
+  if (next) await useSettingsStore.getState().updateSettings({ vpn_keep_connected: next });
 }
 
 /**

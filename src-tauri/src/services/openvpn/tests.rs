@@ -1264,3 +1264,107 @@ fn a_recycled_pid_is_not_a_tunnel() {
     child.wait().unwrap();
     assert!(!pid_runs_openvpn(dead));
 }
+
+/// Keep connected: the three exit timers are switched off for a pushed option
+/// and for the file's own, and the file's `ping-exit` keeps its patience as a
+/// restart. `--session-timeout` is never passed: OpenVPN before 2.6 rejects it.
+#[test]
+fn keep_connected_turns_every_exit_timer_into_staying_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain.ovpn");
+    std::fs::write(&plain, "client\ninactive 3600\n# ping-exit 30\n").unwrap();
+    let args = keep_connected_args(&plain.to_string_lossy());
+    assert_eq!(
+        args,
+        [
+            "--inactive", "0",
+            "--pull-filter", "ignore", "inactive",
+            "--pull-filter", "ignore", "ping-exit",
+            "--pull-filter", "ignore", "session-timeout",
+        ]
+    );
+    assert!(!args.iter().any(|a| a == "--session-timeout"));
+
+    let exiting = dir.path().join("exiting.ovpn");
+    std::fs::write(&exiting, "client\nping 10\nping-exit 30\n  ping-exit   90 ; the last one wins\n").unwrap();
+    let args = keep_connected_args(&exiting.to_string_lossy());
+    assert_eq!(args[args.len() - 2..], ["--ping-restart", "90"]);
+
+    // An unreadable config still gets the options that need no reading.
+    assert_eq!(keep_connected_args(&dir.path().join("gone.ovpn").to_string_lossy()).len(), 11);
+}
+
+#[test]
+fn a_tunnels_last_lines_name_why_it_ended() {
+    let kind = |lines: &[&str]| classify_tunnel_end(lines).kind;
+    assert_eq!(
+        kind(&["2026-01-01 03:12:00 Inactivity timeout (--inactive), exiting", "2026-01-01 03:12:00 SIGTERM[soft,inactive] received, process exiting"]),
+        TunnelEndKind::Inactive
+    );
+    assert_eq!(kind(&["[server] Inactivity timeout (--ping-exit), exiting"]), TunnelEndKind::PingExit);
+    assert_eq!(kind(&["Session timeout, exiting", "SIGTERM[soft,session-timeout] received, process exiting"]), TunnelEndKind::SessionTimeout);
+    assert_eq!(kind(&["AUTH: Received control message: AUTH_FAILED", "SIGTERM[soft,auth-failure] received, process exiting"]), TunnelEndKind::Auth);
+    assert_eq!(kind(&["SIGTERM[soft,server-pushed-halt] received, process exiting"]), TunnelEndKind::ServerHalt);
+    // A restart is not an end, and a plain kill names no reason.
+    assert_eq!(kind(&["[server] Inactivity timeout (--ping-restart), restarting", "SIGTERM[hard,] received, process exiting"]), TunnelEndKind::Unknown);
+
+    let end = classify_tunnel_end(&["first", "  last words  ", "", "   "]);
+    assert_eq!(end.line.as_deref(), Some("last words"));
+    assert_eq!(classify_tunnel_end::<&str>(&[]), TunnelEnd { kind: TunnelEndKind::Unknown, line: None });
+    let long = "x".repeat(1000);
+    assert_eq!(classify_tunnel_end(&[long]).line.map(|l| l.len()), Some(240));
+}
+
+/// The kept tail is the *end* of the output, bounded; a daemonized tunnel's is
+/// read off its logfile, and a fresh connect starts it over.
+#[test]
+fn the_tail_keeps_only_the_last_lines_of_one_tunnel() {
+    let cfg = "/store/test-tail-bounded.ovpn";
+    let tail = fresh_tail(cfg);
+    for n in 0..TAIL_LINES + 5 {
+        push_tail(&tail, &format!("line {n}"));
+    }
+    assert_eq!(tail.lock_ok().len(), TAIL_LINES);
+    assert_eq!(tail.lock_ok().front().map(String::as_str), Some("line 5"));
+    // Nothing is up under this path, so the reason is readable.
+    assert_eq!(tunnel_end(cfg).and_then(|end| end.line), Some(format!("line {}", TAIL_LINES + 4)));
+
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("tunnel.log");
+    let mut text: String = (0..100).map(|n| format!("noise {n}\n")).collect();
+    text.push_str("Inactivity timeout (--inactive), exiting\n");
+    std::fs::write(&log, text).unwrap();
+    remember_tail_from_logfile(cfg, &log);
+    assert_eq!(tunnel_end(cfg).map(|end| end.kind), Some(TunnelEndKind::Inactive));
+
+    forget_tail(cfg);
+    assert_eq!(tunnel_end(cfg), None);
+    assert_eq!(tunnel_end("/store/test-tail-never-ran.ovpn"), None);
+}
+
+/// The readers keep draining after the ready marker: what OpenVPN says when it
+/// later exits is in the tail, where it used to go into a closed pipe.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_lines_after_the_ready_marker_are_kept() {
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("echo 'Initialization Sequence Completed'; sleep 0.3; echo 'SIGTERM[soft,inactive] received, process exiting' >&2")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let tail = Tail::default();
+    wait_for_ready(&mut child, &|_| {}, &tail).expect("the marker was printed");
+    child.wait().unwrap();
+    let start = Instant::now();
+    loop {
+        let lines: Vec<String> = tail.lock_ok().iter().cloned().collect();
+        if classify_tunnel_end(&lines).kind == TunnelEndKind::Inactive {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "the tail never got the exit line: {lines:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

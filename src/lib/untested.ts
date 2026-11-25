@@ -383,6 +383,8 @@ export const UNTESTED = {
   "machinesIndicator.8": { area: "header", what: "MachinesIndicator · — off while tagged HPC" },
   "machinesIndicator.9": { area: "header", what: "MachinesIndicator · HPC cluster (login node)" },
   "vpnIndicator.saveLoginCredentialsLabel": { area: "header", what: "VpnIndicator · Save login credentials", tested: "2026-09-20" },
+  "vpnIndicator.keepConnected": { area: "header", what: "VPN menu · Keep connected switch per .ovpn (off by default): a tunnel connected with it on no longer ends after a long idle (OpenVPN's inactive timer, from the config or pushed by the server), nor on a pushed ping-exit or session-timeout; the switch applies from the tunnel's next connect; removing the config clears it" },
+  "vpnIndicator.endReason": { area: "header", what: "VPN menu · a tunnel that dies on its own (not Disconnect) shows \"Ended on its own at HH:MM: <reason>\" on its row until it connects again, a toast says the same once, and the header's VPN glyph is amber until the menu is opened; the reason names the idle timer, ping-exit, the session limit, a refused login or the server ending it, else OpenVPN's last line; a tunnel typed into a terminal tab has no line" },
   "vpnIndicator.unlockKeyring": { area: "header", what: "VpnIndicator · Unlock keyring", tested: "2026-09-20" },
 
   // --- layout — Settings, root console, menus, theming --------------
