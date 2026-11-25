@@ -366,7 +366,7 @@ export function agentShortcutSlots(opts: {
 }
 
 /** A plain "+" row's item: on the CLI's own login whatever the Manage CLIs
- *  switch says — the API section is where a stored key is picked. */
+ *  switch says — the "(API)" rows are where a stored key is picked. */
 export function onOwnLogin(item: StaticMenuItem): StaticMenuItem {
   return { ...item, apiKey: false };
 }

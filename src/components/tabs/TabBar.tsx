@@ -35,7 +35,7 @@ import { isHostPinned } from "../../lib/projectTabHost";
 import { cloudRowsOffered, isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { AddTabMenuList, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
-import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
+import { apiKeyMenuEntries, useKeyableAgents, withApiKeyRows } from "./apiKeyGroup";
 import { TabColorPicker } from "./TabColorPicker";
 import { TabMarkBadge } from "./TabMarkBadge";
 import { TabMarkMenuItems } from "./TabMarkMenuItems";
@@ -699,7 +699,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // The local-model group's GPU gate; probes only while the menu is open
   // (and never on a host-pinned scope, whose menu has no such group).
   const localModelGpu = useLocalModelPlacement(localModel, menuOpen && !hostPinned);
-  // The API section's CLIs (a stored key can run them); asked while open.
+  // The "(API)" rows' CLIs (a stored key can run them); asked while open.
   const keyableAgents = useKeyableAgents(menuOpen && !hostPinned);
 
   const updateScrollState = useCallback(() => {
@@ -1699,6 +1699,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const isDropTarget = reorderGroup === groupId && reorderIndex != null;
   const dropPlaceholder = <TabDropPlaceholder label={dragLabel} />;
 
+  // "<agent> (API)" rows, each under its agent's row in the "+" menu. A
+  // host-pinned scope (VM, remote-only) has no local tree, so none start there.
+  const apiRows = hostPinned
+    ? []
+    : apiKeyMenuEntries({
+        keyable: keyableAgents,
+        installedBuiltins: enabledAgents,
+        remoteScope: isRemoteScope,
+        pick: handleAdd,
+        t,
+      });
+
   return (
     <div
       className={`tab-bar${isDropTarget ? " drop-target" : ""}`}
@@ -1932,7 +1944,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               ...(!cloudRowsOffered(localModelsOnly) ? [] : [{
                 label: t("newTabMenu.groupAgents"),
                 moreLabel: t("newTabMenu.moreAgents"),
-                entries: agentMenuEntries({
+                entries: withApiKeyRows(agentMenuEntries({
                   installedBuiltins: enabledAgents,
                   installedCmds: installedCustom,
                   customAgents,
@@ -1947,9 +1959,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     openAgentsAndClis();
                   },
                   t,
-                }),
+                }), apiRows),
                 compactEntries: compactAgentMenuEntries(
-                  agentMenuEntries({
+                  withApiKeyRows(agentMenuEntries({
                     installedBuiltins: enabledAgents,
                     installedCmds: installedCustom,
                     customAgents,
@@ -1964,23 +1976,12 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                       openAgentsAndClis();
                     },
                     t,
-                  }),
+                  }), apiRows),
                   compactAgentBins,
                 ),
               }]),
               // A host-pinned scope (VM, remote-only) has no local tree: its
-              // API-key and local-model rows, which start on this machine,
-              // are not offered. Nor are the API-key rows of a local-models-only
-              // project: they start a cloud agent.
-              ...(hostPinned || !cloudRowsOffered(localModelsOnly)
-                ? []
-                : apiKeyMenuGroups({
-                    keyable: keyableAgents,
-                    installedBuiltins: enabledAgents,
-                    remoteScope: isRemoteScope,
-                    pick: handleAdd,
-                    t,
-                  })),
+              // local-model rows, which start on this machine, are not offered.
               // Only offer agents whose binary is actually installed: Mistral/vibe
               // (checked against `vibeForLocalModel`) and the drivers the backend
               // already marks `available` — and only once the model is on the GPU.

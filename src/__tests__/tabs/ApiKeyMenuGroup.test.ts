@@ -1,21 +1,22 @@
 /**
- * The "+" menu's API section (`components/tabs/apiKeyGroup`): "<agent> (API)"
- * rows open a tab on the stored key, the Agents group's plain rows stay on the
- * CLI's own login, and the pick rides the tab record into the spawn.
+ * The "+" menu's API rows (`components/tabs/apiKeyGroup`): "<agent> (API)"
+ * rows sit under their agent's row in the Agents group and open a tab on the
+ * stored key, the plain rows stay on the CLI's own login, and the pick rides
+ * the tab record into the spawn.
  */
 import { describe, expect, it } from "vitest";
-import { apiKeyMenuGroups } from "../../components/tabs/apiKeyGroup";
+import { apiKeyMenuEntries, withApiKeyRows } from "../../components/tabs/apiKeyGroup";
 import { AGENT_ITEMS, buildStaticTabSpec, type StaticMenuItem } from "../../lib/tabs/newTabItems";
-import { agentMenuEntries } from "../../components/tabs/agentMenuEntries";
+import { agentMenuEntries, compactAgentMenuEntries } from "../../components/tabs/agentMenuEntries";
 import { tabTerminalSpawn, terminalSpawnKey } from "../../lib/terminal/terminalSpawn";
 import { toSavedTabEntry } from "../../stores/tabs";
 
 const t = (key: string, vars?: Record<string, string>) =>
   vars ? `${key}(${Object.values(vars).join(",")})` : key;
 
-const groups = (opts: Partial<Parameters<typeof apiKeyMenuGroups>[0]> = {}) => {
+const rows = (opts: Partial<Parameters<typeof apiKeyMenuEntries>[0]> = {}) => {
   const picked: StaticMenuItem[] = [];
-  const result = apiKeyMenuGroups({
+  const result = apiKeyMenuEntries({
     keyable: [{ bin: "claude", budgetReached: false }],
     installedBuiltins: new Set(["claude", "codex"]),
     remoteScope: false,
@@ -26,32 +27,61 @@ const groups = (opts: Partial<Parameters<typeof apiKeyMenuGroups>[0]> = {}) => {
   return { result, picked };
 };
 
-describe("the + menu's API section", () => {
-  it("lists only installed agents a saved key can run, and none at all without one", () => {
-    expect(groups({ keyable: [] }).result).toEqual([]);
+describe("the + menu's API rows", () => {
+  it("list only installed agents a saved key can run, and none at all without one", () => {
+    expect(rows({ keyable: [] }).result).toEqual([]);
     // Gemini has a key but is not installed; Codex is installed but has none.
-    const { result } = groups({ keyable: [{ bin: "claude", budgetReached: false }, { bin: "gemini", budgetReached: false }] });
-    expect(result).toHaveLength(1);
-    expect(result[0].label).toBe("newTabMenu.groupApiKey");
-    expect(result[0].entries.map((e) => e.key)).toEqual(["api:claude"]);
-    expect(result[0].entries[0].label).toBe("newTabMenu.apiKeyEntry(Claude)");
+    const { result } = rows({ keyable: [{ bin: "claude", budgetReached: false }, { bin: "gemini", budgetReached: false }] });
+    expect(result.map((e) => e.key)).toEqual(["api:claude"]);
+    expect(result[0].label).toBe("newTabMenu.apiKeyEntry(Claude)");
   });
 
-  it("opens a tab on the key, labelled as one", () => {
-    const { result, picked } = groups();
-    result[0].entries[0].onPick();
+  it("sit right under their agent's row in the Agents group, also in the compact view", () => {
+    const agents = agentMenuEntries({
+      installedBuiltins: new Set(["claude", "codex"]),
+      installedCmds: null,
+      customAgents: [],
+      agentOrder: ["claude", "codex"],
+      pick: () => {},
+      onAddCustom: () => {},
+      t,
+    });
+    const keys = withApiKeyRows(agents, rows().result).map((e) => e.key);
+    expect(keys.slice(0, 3)).toEqual(["claude", "api:claude", "codex"]);
+    expect(withApiKeyRows(agents, [])).toBe(agents);
+    const compact = compactAgentMenuEntries(withApiKeyRows(agents, rows().result), new Set(["claude"]));
+    expect(compact.map((e) => e.key)).toEqual(["claude", "api:claude", "__add_custom_agent__"]);
+    expect(compactAgentMenuEntries(withApiKeyRows(agents, rows().result), new Set(["codex"])).map((e) => e.key))
+      .not.toContain("api:claude");
+  });
+
+  it("keep a row whose agent row is missing, after the last built-in", () => {
+    const agents = agentMenuEntries({
+      installedBuiltins: new Set(["codex"]),
+      installedCmds: null,
+      customAgents: [],
+      pick: () => {},
+      onAddCustom: () => {},
+      t,
+    });
+    expect(withApiKeyRows(agents, rows().result).map((e) => e.key)).toEqual(["codex", "api:claude", "__add_custom_agent__"]);
+  });
+
+  it("open a tab on the key, labelled as one", () => {
+    const { result, picked } = rows();
+    result[0].onPick();
     expect(picked).toHaveLength(1);
     expect(picked[0]).toMatchObject({ cmd: "claude", apiKey: true, label: "newTabMenu.apiKeyEntry(Claude)" });
     const spec = buildStaticTabSpec(picked[0], "/p", "p", t);
     expect(spec).toMatchObject({ cmd: "claude", apiKey: true, label: "newTabMenu.apiKeyEntry(Claude)" });
   });
 
-  it("greys a row whose budget is spent and cautions in a remote project", () => {
-    const blocked = groups({ keyable: [{ bin: "claude", budgetReached: true }] }).result[0].entries[0];
+  it("grey a row whose budget is spent and caution in a remote project", () => {
+    const blocked = rows({ keyable: [{ bin: "claude", budgetReached: true }] }).result[0];
     expect(blocked.disabled).toBe(true);
     expect(blocked.label).toContain("newTabMenu.apiKeyEntryBudgetReached");
-    expect(groups().result[0].entries[0].caution).toBeUndefined();
-    expect(groups({ remoteScope: true }).result[0].entries[0].caution).toBe("newTabMenu.apiKeyRemoteCaution");
+    expect(rows().result[0].caution).toBeUndefined();
+    expect(rows({ remoteScope: true }).result[0].caution).toBe("newTabMenu.apiKeyRemoteCaution");
   });
 });
 

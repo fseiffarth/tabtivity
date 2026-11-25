@@ -1244,7 +1244,7 @@ async function agentLoginRows(): Promise<Map<string, AgentLoginRow>> {
   return new Map((Array.isArray(logins) ? logins : []).map((row) => [row.id, row]));
 }
 
-/** The desktop "+"'s API section for the phone (`apiKeyMenuGroups`): every
+/** The desktop "+"'s "(API)" rows for the phone (`apiKeyMenuEntries`): every
  * built-in a stored provider key can run, switched on in Manage CLIs or not. */
 async function apiKeyOptions(byId: Map<string, AgentLoginRow>): Promise<MobileApiKeyLaunch[]> {
   return (await agentChoices())

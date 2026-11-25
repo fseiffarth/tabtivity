@@ -536,7 +536,7 @@ took the port. Injection happens inside both fence wraps and in
 proxy runs in that process — so the `agent_bin` shim (a CLI typed into a
 shell tab, its own process) gets nothing and stays on its login. Only CLIs
 listed in `agent_api_key_clis` get a token — unless the tab picked for itself
-(`PtyOptions::api_key`, `agent_api_keys::with_pick`: the ＋ menu's API section
+(`PtyOptions::api_key`, `agent_api_keys::with_pick`: the ＋ menu's "(API)" rows
 `true`, its plain rows `false`; persisted on the tab, dropped by the
 untrusted-layout sanitizer so an adopted folder or imported bundle cannot
 spend the key); never a remote, container or
