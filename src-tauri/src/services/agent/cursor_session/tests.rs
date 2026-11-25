@@ -173,7 +173,10 @@ struct Work {
 }
 
 fn work() -> Work {
-    let home = tempfile::tempdir().unwrap();
+    // Under the canonical temp dir: SQLite's `NOFOLLOW` refuses a link
+    // anywhere in the store's path, and macOS's temp dir is reached through
+    // `/var` → `/private/var`. An agent home under the state dir has none.
+    let home = tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
     let dir = home.path().join("work");
     std::fs::create_dir_all(&dir).unwrap();
     let dir = dir.to_string_lossy().into_owned();
