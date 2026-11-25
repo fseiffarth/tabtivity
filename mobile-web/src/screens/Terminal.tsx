@@ -114,7 +114,7 @@ import { useTapOutside } from "../tapOutside";
 import { fileKey, useViewableNamed } from "../terminal/chatFiles";
 import { linkPathsInHtml } from "../../../src/lib/terminal/pathCandidates";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
-import { commandArgsInline, commandLabel, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
+import { COMMAND_SEPARATOR, commandArgsInline, commandRuns, pinnedPromptText, readableCommandLabel, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { waitingQuestion } from "../terminal/askedQuestion";
 import { useAskedCard } from "./terminal/useAskedCard";
 import { isPermissionDialog, permissionSubject, permissionSubjectLabel } from "../terminal/permissionSubject";
@@ -254,6 +254,7 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
   columns?: number;
 }) {
   const { tap, menu } = useMessageMenu();
+  const t = useT();
   if (!chat) return <>{lines.map((line) => <ReadableRow key={line.key} line={line} />)}</>;
   return <>{chatTurns(lines, agent, columns).map((turn) => {
     const shown = turn.role === "user" ? (turn.prompt ?? turn.lines) : (turn.answer ?? turn.lines);
@@ -262,7 +263,7 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
     // screen rows are not one, and a tap on them opens nothing.
     const press = turn.role === "user" || turn.answer ? tap(`screen:${turn.key}`, () => readableText(shown)) : undefined;
     const command = turn.role === "user" ? slashCommand(readableText(shown)) : null;
-    if (command) return <Fragment key={turn.key}><CommandDivider command={command} label={promptLabel} press={press} /></Fragment>;
+    if (command) return <Fragment key={turn.key}><CommandDivider command={command} text={readableCommandLabel(command, { model: t("terminal.reader.model"), effort: t("terminal.reader.effortUnknown") })} label={promptLabel} press={press} /></Fragment>;
     return turn.role === "user"
       ? <div key={turn.key} className="readable-turn user" role="group" aria-label={promptLabel} data-prompt={readableText(shown)} {...press}>{rows}</div>
       : <div key={turn.key} className={turn.answer ? "readable-turn agent answer" : "readable-turn agent"} {...press}>{rows}</div>;
@@ -273,9 +274,12 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
  * a turn of the CLI's own dial, so its name reads as a rule across the chat.
  * A one-word setting rides on the rule (`/model opus`); the text of a `/goal`
  * or `/plan` is the reader's own words, so it follows as an ordinary prompt
- * bubble. Both keep the prompt's message menu. */
-function CommandDivider({ command, label, press, inbox, links }: {
+ * bubble. Both keep the prompt's message menu. Settings sent one after
+ * another share one rule (`commandRuns`), as in the desktop Reader. */
+function CommandDivider({ command, text, label, press, inbox, links }: {
   command: SlashCommand;
+  /** The words on the rule: this command's, after any it folded in. */
+  text: string;
   label: string;
   press?: TapHandlers;
   /** The stored chat's inbox: a `/design @inbox-picture` prompt's picture
@@ -287,7 +291,7 @@ function CommandDivider({ command, label, press, inbox, links }: {
   const withFiles = !!inbox && !!links && inboxLeaves(command.args).length > 0;
   return <>
     <div className="readable-command" role="separator" aria-label={label} data-prompt={command.args ? `${command.name} ${command.args}` : command.name} {...press}>
-      <span className="readable-command-text">{commandLabel(command)}</span>
+      <span className="readable-command-text">{text}</span>
     </div>
     {!inline && <div className={withFiles ? "readable-turn user command-args with-files" : "readable-turn user command-args"} role="group" aria-label={label} {...press}>
       {withFiles && links ? <PromptBody text={command.args} links={links} inbox={inbox} /> : <p className="transcript-text">{command.args}</p>}
@@ -440,6 +444,9 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   const t = useT();
   // A messenger's day chip over the first message of each day (`dayOpeners`).
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
+  // Slash commands sent one after another share one rule.
+  const commandText = useCallback((command: SlashCommand) => readableCommandLabel(command, { model: t("terminal.reader.model"), effort: t("terminal.reader.effortUnknown") }), [t]);
+  const runs = useMemo(() => commandRuns(turns, openers, commandText), [turns, openers, commandText]);
   const now = new Date();
   const dayLabels = { today: t("mobile.transcript.today"), yesterday: t("mobile.transcript.yesterday") };
   const timesUntested = isUntested("mobile.transcript.times");
@@ -463,7 +470,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
       ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t(turn.asking ? "mobile.transcript.asyncWaiting" : "mobile.transcript.notAnswered")} untested={(turn.asking ? isUntested("mobile.transcript.asyncAsk") : isUntested("mobile.focus.askedCard")) ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)}
           answer={turn.asking && asyncAsk ? { sending: asyncAsk.sending?.key === turn.key ? asyncAsk.sending : null, label: t("mobile.transcript.answering"), pick: (question, row) => (turn.questions?.[question] && asyncAsk.pick(turn.key, turn.questions[question], question, row)) } : undefined} />
       : turn.command
-      ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} inbox={inbox} links={links} />
+      ? !runs.folded.has(index) && <CommandDivider command={turn.command} text={[runs.lead.get(index), commandText(turn.command)].filter(Boolean).join(COMMAND_SEPARATOR)} label={promptLabel} press={tap(turn.key, () => turn.text)} inbox={inbox} links={links} />
       : turn.kind === "prompt"
       ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={index === 0 && taskLabel ? taskLabel : promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...tap(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
           <PromptBody text={turn.text} links={links} inbox={inbox} />

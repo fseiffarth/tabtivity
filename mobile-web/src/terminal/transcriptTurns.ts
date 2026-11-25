@@ -88,6 +88,17 @@ export function commandLabel(command: SlashCommand): string {
   return command.setting ? `${typed} → ${command.setting}` : typed;
 }
 
+/** The words on a command's rule in both chats (desktop Reader and phone):
+ * a setting by its name and value (`Model: Fable 5.2`, `Effort: high`),
+ * anything else by its bare name (`clear`). `names` are the translated
+ * "Model" and "Effort". */
+export function readableCommandLabel(command: SlashCommand, names: { model: string; effort: string }): string {
+  const name = command.name === "/model" || command.name === "/models" ? names.model
+    : command.name === "/effort" ? names.effort : command.name.slice(1);
+  const value = command.setting || (commandArgsInline(command.args) ? command.args : "");
+  return value ? `${name}: ${value}` : name;
+}
+
 /** Whether a command's arguments ride on the divider beside its name: a
  * one-word setting does (`/model opus`, `/effort high`); anything with words
  * — the text of a `/goal` or `/plan` — is the reader's own message and reads

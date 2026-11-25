@@ -111,7 +111,7 @@ import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
-import { COMMAND_SEPARATOR, commandArgsInline, commandRuns, commandSettingKey, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { COMMAND_SEPARATOR, commandArgsInline, commandRuns, commandSettingKey, pinnedPromptText, readableCommandLabel, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordedRun, recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
@@ -562,10 +562,7 @@ const PromptText = memo(function PromptText({ text, unlinked = false }: { text: 
 /** The chat's setting row uses readable labels; command text stays intact
  * in the transcript and in data-prompt for restoring it to the composer. */
 function readerCommandLabel(command: NonNullable<TranscriptTurn["command"]>, t: ReturnType<typeof useT>): string {
-  const name = command.name === "/model" || command.name === "/models" ? t("terminal.reader.model")
-    : command.name === "/effort" ? t("terminal.reader.effortUnknown") : command.name.slice(1);
-  const value = command.setting || (commandArgsInline(command.args) ? command.args : "");
-  return value ? `${name}: ${value}` : name;
+  return readableCommandLabel(command, { model: t("terminal.reader.model"), effort: t("terminal.reader.effortUnknown") });
 }
 
 /** What a subagent's card or list row opens: its handle and what it says. */
