@@ -138,6 +138,9 @@ const SYNC_HEADER_LIMIT: u32 = 200;
 /// local page over what is indexed — and the next sync's tail plus the next
 /// search's backfill keep growing it.
 const SERVER_SEARCH_MATCH_CAP: usize = 1000;
+/// Release the store lock between search batches so long queries leave room
+/// for interactive reads.
+const SEARCH_BACKFILL_BATCH: usize = 32;
 
 /// Keep the newest bounded set of server matches and tell the caller when
 /// older matches were omitted. The UI must never describe that page as a
@@ -2433,7 +2436,7 @@ async fn sync_inner(
             autoclassify && classify_budget > 0 && folder2.kind == MailFolderKind::Inbox;
         #[allow(clippy::type_complexity)]
         let (added, filed, candidates): (u32, u32, Vec<ClassifyCandidate>) =
-            app_core::rt::try_blocking("mail", move || {
+            app_core::rt::try_blocking("mail", move || store3.write_headers(|writer| {
                 let mut added = 0u32;
                 let mut filed = 0u32;
                 let mut candidates: Vec<ClassifyCandidate> = Vec::new();
@@ -2444,13 +2447,11 @@ async fn sync_inner(
                 // whole initial backlog is too. `None` is the folder's first sync, so
                 // nothing here is an arrival and nothing is filed: the existing pile
                 // is what the explicit "apply to existing" is for.
-                let prev_max_uid = store3.folder_max_uid(&folder2.id)?;
+                let prev_max_uid = writer.folder_max_uid(&folder2.id)?;
                 let is_arrival = |uid: u32| matches!(prev_max_uid, Some(m) if uid > m);
                 for h in headers {
                     let (mut row, in_reply_to) = header_row(&folder2, h);
-                    store3.retain_header_id(&mut row)?;
-                    let inserted = store3.upsert_header(&row)?;
-                    store3.set_reply_key(&row.id, in_reply_to.as_deref())?;
+                    let inserted = writer.ingest(&mut row, in_reply_to.as_deref())?;
                     if inserted {
                         added += 1;
                     }
@@ -2469,12 +2470,7 @@ async fn sync_inner(
                             // Provenance `filter`, so the model classifier below can
                             // never be mistaken for a keyword rule (#205). The reason
                             // is the rule's own name, which is what the UI shows.
-                            if store3.set_priority_ex(
-                                &row.id,
-                                Some(mark),
-                                crate::schema::mail::MailPrioritySource::Filter,
-                                &hit.rule_name,
-                            )? {
+                            if writer.set_filter_priority(&row.id, mark, &hit.rule_name)? {
                                 filed += 1;
                             }
                         } else if collect_for_model {
@@ -2490,10 +2486,9 @@ async fn sync_inner(
                         }
                     }
                 }
-                store3.set_server_counts(&folder2.id, server_total, server_unread)?;
-                store3.refresh_counts(&folder2.id)?;
+                writer.set_sync_counts(&folder2.id, server_total, server_unread)?;
                 Ok::<_, String>((added, filed, candidates))
-            })
+            }))
             .await?;
 
         // #205 classify hook: run the local model over the still-unmarked new
@@ -2724,21 +2719,23 @@ pub async fn mail_search(
                 let folder_id = folder_id.clone();
                 let backfilled = app_core::rt::blocking("mail", move || {
                     let store = store_of(&rt)?;
-                    let mut inserted = 0u32;
-                    let mut inserted_unseen = 0u32;
-                    for h in headers {
-                        let unseen = !h.seen;
-                        let (mut row, in_reply_to) = header_row(&folder, h);
-                        store.retain_header_id(&mut row)?;
-                        if store.upsert_header(&row)? {
-                            inserted += 1;
-                            if unseen {
-                                inserted_unseen += 1;
+                    // Release the connection between bounded batches so even a
+                    // broad search can share the store with inbox reads.
+                    let mut headers = headers.into_iter();
+                    while headers.len() > 0 {
+                        store.write_headers(|writer| {
+                            let mut inserted = 0u32;
+                            let mut inserted_unseen = 0u32;
+                            for h in headers.by_ref().take(SEARCH_BACKFILL_BATCH) {
+                                let (mut row, in_reply_to) = header_row(&folder, h);
+                                if writer.ingest(&mut row, in_reply_to.as_deref())? {
+                                    inserted += 1;
+                                    inserted_unseen += u32::from(!row.seen);
+                                }
                             }
-                        }
-                        store.set_reply_key(&row.id, in_reply_to.as_deref())?;
+                            writer.note_indexed(&folder_id, inserted, inserted_unseen)
+                        })?;
                     }
-                    store.note_indexed(&folder_id, inserted, inserted_unseen)?;
                     Ok::<_, String>(())
                 })
                 .await?;
