@@ -21,16 +21,22 @@ const { invoke, terminals, size, bus } = vi.hoisted(() => ({
   terminals: [] as { opened: boolean; disposed: boolean; writes: string[] }[],
   /** What the (mocked) fit addon measures the pane as. */
   size: { cols: 80, rows: 24 },
-  bus: { output: new Map<string, (data: string) => void>() },
+  bus: {
+    output: new Map<string, (data: string, range?: { startOffset: number; endOffset: number }) => void>(),
+    replay: new Map<string, (data: string, range?: { startOffset: number; endOffset: number }) => void>(),
+  },
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("../../lib/terminal/terminalBus", () => ({
-  onTerminalOutput: (id: string, h: (data: string) => void) => {
+  onTerminalOutput: (id: string, h: (data: string, range?: { startOffset: number; endOffset: number }) => void) => {
     bus.output.set(id, h);
     return () => bus.output.delete(id);
   },
-  onTerminalReplay: () => () => {},
+  onTerminalReplay: (id: string, h: (data: string, range?: { startOffset: number; endOffset: number }) => void) => {
+    bus.replay.set(id, h);
+    return () => bus.replay.delete(id);
+  },
   onTerminalReady: () => () => {},
   onTerminalExit: () => () => {},
 }));
@@ -122,6 +128,7 @@ describe("TerminalView — the xterm is built on first show", () => {
     invoke.mockClear();
     terminals.length = 0;
     bus.output.clear();
+    bus.replay.clear();
     size.cols = 80;
     size.rows = 24;
     giveLayout(true);
@@ -192,5 +199,41 @@ describe("TerminalView — the xterm is built on first show", () => {
     await act(async () => { unmount(); });
     expect(calls("pty_resize")).toHaveLength(1);
     expect(calls("pty_resize")[0][1]).toMatchObject({ cols: 132, rows: 40 });
+  });
+
+  // The backend's hidden-spell buffer is capped at a byte count: a replay that
+  // starts past the last offset the pane took is a fragment of a TUI's
+  // incremental redraws, which over the pane's old screen leaves two frames
+  // interleaved. The pane makes the program repaint: one column narrower,
+  // then its true width back once the program has read the change.
+  it("asks the program for a repaint after a replay that lost its front, and only then", async () => {
+    let rerender: (ui: React.ReactElement) => void = () => {};
+    await act(async () => {
+      rerender = render(<TerminalView id="p:lost" cmd="claude" cwd="/p" visible focused={false} />).rerender;
+    });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    bus.output.get("p:lost")?.("frame", { startOffset: 0, endOffset: 5 });
+    await act(async () => {
+      rerender(<TerminalView id="p:lost" cmd="claude" cwd="/p" visible={false} focused={false} />);
+    });
+    await act(async () => {
+      rerender(<TerminalView id="p:lost" cmd="claude" cwd="/p" visible focused={false} />);
+    });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    invoke.mockClear();
+
+    // Contiguous: nothing was lost, no repaint.
+    await act(async () => { bus.replay.get("p:lost")?.("more", { startOffset: 5, endOffset: 9 }); });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    expect(calls("pty_resize")).toHaveLength(0);
+
+    // A gap: the cap cut bytes 9..2000 off.
+    await act(async () => { bus.replay.get("p:lost")?.("tail", { startOffset: 2000, endOffset: 2004 }); });
+    expect(terminals[0].writes.join("")).toContain("tail");
+    expect(calls("pty_resize")).toHaveLength(1);
+    expect(calls("pty_resize")[0][1]).toMatchObject({ id: "p:lost", cols: 79, rows: 24 });
+    await act(async () => { vi.advanceTimersByTime(300); });
+    expect(calls("pty_resize")).toHaveLength(2);
+    expect(calls("pty_resize")[1][1]).toMatchObject({ id: "p:lost", cols: 80, rows: 24 });
   });
 });
