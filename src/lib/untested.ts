@@ -321,6 +321,7 @@ export const UNTESTED = {
   "projectFilesView.1": { area: "files", what: "ProjectFilesView · Files" },
   "projectFilesView.2": { area: "files", what: "ProjectFilesView · Remote machines…" },
   "projectFilesView.3": { area: "files", what: "ProjectFilesView · {count} diverged" },
+  "projectFilesView.nameMenu": { area: "files", what: "ProjectFilesView · right-click the project name for the project pill's menu" },
   "projectFilesView.takeNewerAll": { area: "files", what: "ProjectFilesView · diverged view, take the newer copy for all (each file by its newer side; one confirmation for both directions)" },
   "projectFilesView.takeNewerAuto": { area: "files", what: "ProjectFilesView · diverged view, \"Take the newer copy automatically\" switch: auto-sync resolves both-sides-changed files by newer mtime, backs up the loser under conflict-backups/ and logs it in the local-loss report" },
   "projectFilesView.excludeBothChanged": { area: "files", what: "ProjectFilesView · diverged view, \"Exclude changed on both\" tick (default on): take remote / keep local / take newer for all skip files both sides changed" },

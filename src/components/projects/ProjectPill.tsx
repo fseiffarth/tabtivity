@@ -31,6 +31,7 @@ import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
 import { providerName, gitTypeLabel } from "./projectTypeTags";
 import { PublishWindow } from "./PublishWindow";
 import { GitHostingWindow } from "./GitHostingWindow";
+import { usePillMenuRequestStore } from "../../stores/pillMenuRequest";
 import { ProjectHoverCard, projectDescription, useProjectHoverCard } from "./ProjectHoverCard";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { ActivityCalendar } from "./ActivityCalendar";
@@ -1236,6 +1237,26 @@ export function ProjectPill({
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // Anchor to the pill's bottom-left corner so the menu opens downward, below
+    // the bar, with its left edge flush to the pill's left border.
+    const rect = pillRef.current?.getBoundingClientRect();
+    openContextMenu({
+      x: rect ? rect.left : e.clientX,
+      y: rect ? rect.bottom : e.clientY,
+    });
+  };
+
+  // The same menu, asked for from outside the pill (the side panel's project
+  // name): opened where that right-click was (`stores/pillMenuRequest`).
+  const menuRequest = usePillMenuRequestStore((s) => s.request);
+  useEffect(() => {
+    if (menuRequest?.projectId !== project.id) return;
+    const request = usePillMenuRequestStore.getState().take(project.id);
+    if (request) openContextMenu({ x: request.x, y: request.y });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires per request; openContextMenu is a fresh closure each render
+  }, [menuRequest, project.id]);
+
+  const openContextMenu = (pos: ContextMenuPos) => {
     hover.close();
     // The saved-password lookup that used to sit here is now `useSavedCredential`
     // above, gated on this very menu being open — same "only when asked" cost, but
@@ -1268,13 +1289,7 @@ export function ProjectPill({
         setHasPythonFiles(false);
       }
     }
-    // Anchor to the pill's bottom-left corner so the menu opens downward, below
-    // the bar, with its left edge flush to the pill's left border.
-    const rect = pillRef.current?.getBoundingClientRect();
-    setContextMenu({
-      x: rect ? rect.left : e.clientX,
-      y: rect ? rect.bottom : e.clientY,
-    });
+    setContextMenu(pos);
   };
 
   /**
