@@ -2903,7 +2903,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    *  screen and the tab's own hooks both idle, no prompt waiting — so the
    *  chat's end says so, as the tab strip's ✓ does (`turnFinishedRule`). */
   const tabBusy = useActivityStore((s) => !!s.busyByTab[ptyId]);
-  const finishedRule = sessionTurn && !tabBusy && pending.length === 0 && !unsavedReply
+  const sessionAgentsWorking = !browsed && entries.some((entry) => entry.kind === "agent" && subagentAtWork(entry, !!live.working));
+  const finishedRule = sessionTurn && !tabBusy && !sessionAgentsWorking && pending.length === 0 && !unsavedReply
     ? turnFinishedRule(turns)
     : null;
   /** The conversation the bar and the Main pill go back up to. */
