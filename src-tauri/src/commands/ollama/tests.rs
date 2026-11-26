@@ -79,10 +79,10 @@ fn the_keep_alive_drop_in_writes_a_choice_and_removes_the_default() {
 /// The service's value is read off `systemctl show -p Environment`.
 #[test]
 fn the_service_keep_alive_is_read_from_its_environment() {
-    assert_eq!(keep_alive_in_unit_env("PATH=/usr/bin OLLAMA_KEEP_ALIVE=30m OLLAMA_IGPU_ENABLE=1\n"), Some("30m".into()));
-    assert_eq!(keep_alive_in_unit_env("OLLAMA_IGPU_ENABLE=1"), None);
-    assert_eq!(keep_alive_in_unit_env("OLLAMA_KEEP_ALIVE_X=1"), None);
-    assert_eq!(keep_alive_in_unit_env(""), None);
+    assert_eq!(var_in_unit_env("PATH=/usr/bin OLLAMA_KEEP_ALIVE=30m OLLAMA_IGPU_ENABLE=1\n", KEEP_ALIVE_VAR), Some("30m".into()));
+    assert_eq!(var_in_unit_env("OLLAMA_IGPU_ENABLE=1", KEEP_ALIVE_VAR), None);
+    assert_eq!(var_in_unit_env("OLLAMA_KEEP_ALIVE_X=1", KEEP_ALIVE_VAR), None);
+    assert_eq!(var_in_unit_env("", KEEP_ALIVE_VAR), None);
 }
 
 /// An interrupted-pull list that does not parse keeps its entries: a new
@@ -2330,6 +2330,40 @@ async fn the_install_strategy_is_the_script_everywhere_but_windows() {
         assert!(s.command.contains("https://ollama.com/install.sh"), "{}", s.command);
     }
     assert_eq!(s.auto, cfg!(any(windows, target_os = "linux", target_os = "macos")));
+}
+
+/// Only the listed cache types reach an environment or the root shell.
+#[test]
+fn only_a_listed_kv_cache_type_is_configured() {
+    assert_eq!(configured_kv_cache_type(Some("q8_0")), Some("q8_0"));
+    assert_eq!(configured_kv_cache_type(Some(" q4_0 ")), Some("q4_0"));
+    assert_eq!(configured_kv_cache_type(Some("f16")), None);
+    assert_eq!(configured_kv_cache_type(Some("q8_0; reboot")), None);
+    assert_eq!(configured_kv_cache_type(None), None);
+}
+
+/// The cache type's drop-in carries flash attention with it, is its own file,
+/// and is taken back out for the default.
+#[test]
+fn the_kv_cache_drop_in_sets_flash_attention_and_removes_the_default() {
+    assert_eq!(kv_cache_service_command(Some("q8_0"), false), "");
+    let on = kv_cache_service_command(Some("q8_0"), true);
+    assert!(on.contains("Environment=\"OLLAMA_KV_CACHE_TYPE=q8_0\"\\nEnvironment=\"OLLAMA_FLASH_ATTENTION=1\"\\n"), "{on}");
+    assert!(on.contains(&format!("| sudo tee /etc/systemd/system/ollama.service.d/{KV_CACHE_DROPIN} && ")), "{on}");
+    assert!(on.ends_with("sudo systemctl daemon-reload && sudo systemctl restart ollama"));
+    let off = kv_cache_service_command(None, true);
+    assert!(off.starts_with(&format!("sudo rm -f /etc/systemd/system/ollama.service.d/{KV_CACHE_DROPIN} && ")), "{off}");
+    assert_eq!(kv_cache_service_command(Some("q8_0; reboot"), true), off);
+    assert!(KV_CACHE_DROPIN.ends_with("-kv-cache.conf"));
+    assert_ne!(KV_CACHE_DROPIN, KEEP_ALIVE_DROPIN);
+}
+
+/// Any variable is read off `systemctl show -p Environment`, whole names only.
+#[test]
+fn a_service_variable_is_read_by_its_whole_name() {
+    let env = "OLLAMA_IGPU_ENABLE=1 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_FLASH_ATTENTION=1\n";
+    assert_eq!(var_in_unit_env(env, KV_CACHE_TYPE_VAR), Some("q8_0".into()));
+    assert_eq!(var_in_unit_env("OLLAMA_KV_CACHE_TYPE_X=q4_0", KV_CACHE_TYPE_VAR), None);
 }
 
 /// A local-model Claude Code gets the long timeouts; a value already set wins,

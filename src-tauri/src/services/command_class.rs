@@ -757,6 +757,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("ollama_check_updates", Core),
     ("ollama_context_plan", Core),
     ("ollama_keep_alive_plan", Core),
+    ("ollama_kv_cache_plan", Core),
     ("ollama_gpu_status", Core),
     ("ollama_install_strategy", Core),
     ("ollama_is_installed", Core),

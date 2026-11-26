@@ -59,6 +59,12 @@ pub fn configured_keep_alive() -> Option<String> {
     crate::storage::load_settings().and_then(|s| s.ollama_keep_alive)
 }
 
+/// The user's chosen KV cache type (`Settings::ollama_kv_cache_type`), read on
+/// every use like [`configured_keep_alive`].
+pub fn configured_kv_cache_type() -> Option<String> {
+    crate::storage::load_settings().and_then(|s| s.ollama_kv_cache_type)
+}
+
 /// The user's chosen context window (`Settings::ollama_context_length`), read
 /// on every use like [`configured_models_dir`].
 pub(crate) fn configured_context_length() -> Option<u32> {

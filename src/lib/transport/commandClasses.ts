@@ -526,6 +526,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["ollama_check_updates", "core"],
   ["ollama_context_plan", "core"],
   ["ollama_keep_alive_plan", "core"],
+  ["ollama_kv_cache_plan", "core"],
   ["ollama_gpu_status", "core"],
   ["ollama_install_strategy", "core"],
   ["ollama_is_installed", "core"],

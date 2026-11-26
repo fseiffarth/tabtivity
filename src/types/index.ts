@@ -638,6 +638,10 @@ export interface Settings {
    *  Ollama's 5 minutes. A server Tabtivity starts gets it; a systemd service
    *  through the drop-in `ollama_keep_alive_plan` offers. */
   ollama_keep_alive?: string | null;
+  /** How Ollama stores context and cached prompts, as `OLLAMA_KV_CACHE_TYPE`
+   *  (with flash attention): `"q8_0"` or `"q4_0"`; `null` = Ollama's f16.
+   *  Applied like `ollama_keep_alive` (`ollama_kv_cache_plan`). */
+  ollama_kv_cache_type?: string | null;
   /** Per-task local-model assignments (🧠 menu role chips). Maps a task key —
    *  `"autocomplete"`, `"autocomplete_prose"`, `"tabs"` or `"mail"` —
    *  to the model name that should serve it (`autocomplete_prose` covers plain

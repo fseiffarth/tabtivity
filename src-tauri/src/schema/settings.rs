@@ -551,6 +551,14 @@ pub struct Settings {
     /// its OpenAI-compatible API, which cannot ask for a keep-alive per request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_keep_alive: Option<String>,
+    /// How Ollama stores a loaded model's context and the prompts it caches
+    /// between conversations, as `OLLAMA_KV_CACHE_TYPE` (`q8_0`, `q4_0`; set
+    /// with `OLLAMA_FLASH_ATTENTION=1`, which a quantized type needs). `None`
+    /// keeps Ollama's f16. Reaches a server **Tabtivity starts itself** at start
+    /// and a systemd service through its own drop-in
+    /// (`commands::ollama::ollama_kv_cache_plan`), like `ollama_keep_alive`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_kv_cache_type: Option<String>,
     /// Preserved for Python rollback; not used by the Tauri app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ollama_model: Option<String>,

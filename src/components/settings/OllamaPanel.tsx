@@ -21,7 +21,7 @@ import { runOllamaUpdateCheck, upgradeOllamaInTab } from "../../lib/agents/ollam
 import { askRestartOllama, restartOllamaServer } from "../../lib/agents/ollamaRestart";
 import { useDialogs } from "../common/PromptDialogs";
 import { OllamaContextCard } from "./OllamaContextCard";
-import { OllamaKeepAliveCard } from "./OllamaKeepAliveCard";
+import { OllamaKeepAliveCard, OllamaKvCacheCard } from "./OllamaServiceEnvCard";
 import { runInstallInTab, type InstallShellKind } from "../../lib/installCommand";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
@@ -1270,6 +1270,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
 
       {serverRunning === true && <OllamaContextCard restarting={restarting} onRestart={() => void restartOllama()} />}
       {serverRunning === true && <OllamaKeepAliveCard restarting={restarting} onRestart={() => void restartOllama()} />}
+      {serverRunning === true && <OllamaKvCacheCard restarting={restarting} onRestart={() => void restartOllama()} />}
 
       {error && <ErrorNote className="project-dialog-error" error={error} />}
       {error === t("ollama.hfRealmHost") && <CopyOllamaKey />}
