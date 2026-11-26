@@ -8,7 +8,9 @@ import {
   openCodeComposer,
   openCodeDialogCloseKeys,
   openCodeModelKeys,
+  openCodeVariantKeys,
   OPENCODE_MODEL_KEYS,
+  OPENCODE_VARIANT_KEYS,
   mergeOpenCodePage,
   openCodeMiniRow,
   openCodePickKeys,
@@ -739,6 +741,38 @@ describe(`${BRAND.display} Mobile OpenCode dialogs over the composer`, () => {
     ])).toEqual(["\u001b", ...OPENCODE_MODEL_KEYS]);
     expect(openCodeModelKeys([" Build · DeepSeek V4.1 Flash Free OpenCode", " ~/proj:develop   ctrl+p commands"])).toEqual(OPENCODE_MODEL_KEYS);
   });
+
+  it("opens the effort list by its palette entry's full name, not Variant cycle", () => {
+    // 2.4.2's palette: `variant` lists `Variant cycle` (ctrl+t) first.
+    expect(OPENCODE_VARIANT_KEYS).toEqual(["\u0010", "Switch model variant", "\r"]);
+    expect(openCodeVariantKeys(["            Select model                         esc"])).toEqual(["\u001b", ...OPENCODE_VARIANT_KEYS]);
+    expect(openCodeVariantKeys([" ~/proj:develop   ctrl+p commands"])).toEqual(OPENCODE_VARIANT_KEYS);
+  });
+
+  it("reads 2.4.2's effort list with the highlight on the session's own effort", () => {
+    // Captured 2026-11-26 at 120×40 from "Switch model variant".
+    const rows = [
+      "                                  Select variant                                   esc",
+      "",
+      "                                  Default",
+      "                                  low",
+      "                                  medium",
+      "                              ┃ ▪ high",
+      "                                  xhigh",
+      "                                  max",
+      "",
+      "                       ┃",
+      "                       ┃  Ask anything… \"Fix broken tests\"",
+      "                       ┃",
+      "                       ┃  Build · Claude Opus 5.5 Anthropic · high",
+    ];
+    const page = readOpenCodeModelPage({ length: rows.length, getLine: (at) => ({ translateToString: () => rows[at] }) });
+    expect(page?.variantCursor).toBe(3);
+    const prompt = readOpenCodePicker(readableScreen({ length: rows.length, getLine: (at) => ({ translateToString: () => rows[at] }) }).lines);
+    expect(prompt?.options.map((option) => option.label)).toEqual(["Default", "low", "medium", "high", "xhigh", "max"]);
+    expect(prompt?.options[4].keys).toEqual(["\u001b[B", "\r"]);
+    expect(prompt?.options[3].keys).toEqual(["\r"]);
+  });
 });
 
 /**
@@ -858,6 +892,25 @@ describe(`${BRAND.display} Mobile OpenCode model picker walk`, () => {
     expect(walk.prompt()).toBeNull();
     vi.advanceTimersByTime(10_000);
     expect(typed.length).toBe(sent);
+  });
+
+  it("stops a step's keys still being typed once a row is tapped", () => {
+    // A ↓ landing after the tap's search query moved the highlight to the
+    // next match, and Enter picked `Claude Opus 5.5 Fast` for `Claude Opus 5.5`.
+    vi.useFakeTimers();
+    const live: (() => boolean)[] = [];
+    const walk = new OpenCodePickerWalk((_keys, stillLive) => live.push(stillLive));
+    walk.read(openCodeDialog(groups, 9, "Zen model 2").page());
+    expect(live).toHaveLength(1);
+    expect(live[0]()).toBe(true);
+    walk.hold();
+    expect(live[0]()).toBe(false);
+    // …and once the query has filtered the list into no picker the walk knows.
+    const next = new OpenCodePickerWalk((_keys, stillLive) => live.push(stillLive));
+    next.read(openCodeDialog(groups, 9, "Zen model 2").page());
+    expect(live[1]()).toBe(true);
+    next.read(null);
+    expect(live[1]()).toBe(false);
   });
 
   it("starts over for the dialog's next step", () => {

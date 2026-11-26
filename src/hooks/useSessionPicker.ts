@@ -1,7 +1,7 @@
 import { agentFamily } from "../../shared/agentComposer";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys, openCodeModelKeys } from "../../mobile-web/src/terminal/openCodeMini";
+import { OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys, openCodeModelKeys, openCodeVariantKeys } from "../../mobile-web/src/terminal/openCodeMini";
 import { antigravityEffortKeys, isAntigravityTab, type AntigravityEffort } from "../../mobile-web/src/terminal/antigravity";
 import { sameSelectStep, selectMoveKeys, type SelectPrompt, type SelectStep } from "../../mobile-web/src/terminal/selectPrompt";
 import { bufferRows } from "../../mobile-web/src/terminal/subagentInput";
@@ -129,13 +129,14 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const hostPinned = useProjectsStore((s) => isHostPinned(s.projects.find((p) => p.id === scope)));
   const runsHere = effectiveTabLocation(tab, { hostPinned }) === "local";
   // Rows are kept and listed per scope (gap 95): a tab's screen fills only its own scope's sheets.
-  const rememberRows = command === "/model" && !!tab.cmd && !!scope && runsHere;
+  // OpenCode's effort list is no model list.
+  const rememberRows = command === "/model" && !(effortOnly && isOpenCodeTab(agentLabel)) && !!tab.cmd && !!scope && runsHere;
   const typeKeysNow = useRef(typeKeys);
   useEffect(() => { typeKeysNow.current = typeKeys; });
   /** OpenCode's list is a scroll box that shows a slice of itself: the walk
    * scrolls it and lists the slices put together (`OpenCodePickerWalk`). */
   const walk = useRef<OpenCodePickerWalk | null>(null);
-  if (!walk.current) walk.current = new OpenCodePickerWalk((keys) => { void typeKeysNow.current(keys).catch(() => {}); });
+  if (!walk.current) walk.current = new OpenCodePickerWalk((keys, live) => { void typeKeysNow.current(keys, live).catch(() => {}); });
   useEffect(() => () => {
     opening.current += 1;
     walk.current?.reset();
@@ -266,7 +267,9 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
 
   const open: SessionPicker["open"] = (next = "/model", options) => {
     if (picking || (next === "/model" ? !modelPickOffered(tab) : agentFamily(tab.cmd) !== "codex")) return;
-    const directEffort = next === "/model" && agentFamily(tab.cmd) === "codex" && !!options?.effortOnly;
+    const openCode = isOpenCodeTab(agentLabel);
+    // Codex's effort is its model list's next step; OpenCode's a list of its own.
+    const directEffort = next === "/model" && (agentFamily(tab.cmd) === "codex" || openCode) && !!options?.effortOnly;
     const thisOpening = ++opening.current;
     setCommand(next);
     setEffortOnly(directEffort);
@@ -286,8 +289,9 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
       );
     }
     const term = terminalFor(ptyId);
-    const sent = isOpenCodeTab(agentLabel)
-      ? typeKeys(openCodeModelKeys(term ? bufferRows(term.buffer.active, term.rows) : []))
+    const viewport = term ? bufferRows(term.buffer.active, term.rows) : [];
+    const sent = openCode
+      ? typeKeys(directEffort ? openCodeVariantKeys(viewport) : openCodeModelKeys(viewport))
       : tab.scheduleTargetId
         ? submitScheduledAgentCommand(tab.scheduleTargetId, next)
         : Promise.reject(new Error("no agent input"));

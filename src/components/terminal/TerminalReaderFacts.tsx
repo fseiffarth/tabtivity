@@ -267,7 +267,8 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   };
   const openEffort = () => {
     if (!claude) {
-      openPicker("/model", { effortOnly: codex });
+      // OpenCode's effort is a list of its own, not the model list's next step.
+      openPicker("/model", { effortOnly: codex || isOpenCodeTab(agentLabel) });
       return;
     }
     onStatusClose();

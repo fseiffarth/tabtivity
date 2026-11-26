@@ -811,6 +811,11 @@ const CLEAR_SEARCH = "\u007f".repeat(MAX_QUERY);
 /** The keys that open the model picker: the palette, the word that finds
  * "Switch model" in it, and Enter. */
 export const OPENCODE_MODEL_KEYS = [PALETTE, "model", "\r"];
+/** The keys that open the current model's effort list (`Select variant`) by
+ * its palette entry's full name: `variant` alone finds `Variant cycle` (ctrl+t)
+ * first, which steps the effort on instead (2.4.2). Picking a model asks for
+ * no effort in 2.4, so this is the only way to the list. */
+export const OPENCODE_VARIANT_KEYS = [PALETTE, "Switch model variant", "\r"];
 
 /** The keys that answer the picker with `label`: clear the search, type the
  * label, submit. A label the pane truncated (`Ling 3.0 Flash Fin…`) is typed
@@ -945,11 +950,18 @@ export class OpenCodePickerWalk {
   private steps = 0;
   private held = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Moves on every hold and reset: a step's keys still being typed then
+   * stop (`send`'s `live`). */
+  private epoch = 0;
 
-  /** `send` types keys into the session; `changed` says the list grew or the
-   * walk ended without a new frame (a caller that reads only on frames). */
+  /** `send` types keys into the session — a caller that paces them checks
+   * `live` before each one: a ↓ typed after a tap's search query moved the
+   * highlight off the match it typed, and Enter took the row below (`Claude
+   * Opus 5.5` answered as `Claude Opus 5.5 Fast`). `changed` says the list
+   * grew or the walk ended without a new frame (a caller that reads only on
+   * frames). */
   constructor(
-    private readonly send: (keys: string[]) => void,
+    private readonly send: (keys: string[], live: () => boolean) => void,
     private readonly changed: () => void = () => {},
   ) {}
 
@@ -991,10 +1003,12 @@ export class OpenCodePickerWalk {
   /** No more keys: a row was tapped, or the picker is being closed. */
   hold(): void {
     this.held = true;
+    this.epoch += 1;
     this.clearTimer();
   }
 
   reset(): void {
+    this.epoch += 1;
     this.clearTimer();
     this.page = null;
     this.rows = null;
@@ -1012,7 +1026,8 @@ export class OpenCodePickerWalk {
       return;
     }
     this.steps += 1;
-    this.send(walkKeys(this.page));
+    const epoch = this.epoch;
+    this.send(walkKeys(this.page), () => this.epoch === epoch);
     this.timer = setTimeout(() => {
       this.timer = null;
       this.still += 1;
@@ -1066,6 +1081,11 @@ export function openCodeDialogCloseKeys(rows: readonly (string | { text: string 
  * palette's keys vanish into it (`OPENCODE_MODEL_KEYS`). */
 export function openCodeModelKeys(rows: readonly (string | { text: string })[]): string[] {
   return [...openCodeDialogCloseKeys(rows), ...OPENCODE_MODEL_KEYS];
+}
+
+/** …and the keys that open the effort list over them (`OPENCODE_VARIANT_KEYS`). */
+export function openCodeVariantKeys(rows: readonly (string | { text: string })[]): string[] {
+  return [...openCodeDialogCloseKeys(rows), ...OPENCODE_VARIANT_KEYS];
 }
 
 /** A notice's footer: the one key that closes it, at the dialog's right edge
