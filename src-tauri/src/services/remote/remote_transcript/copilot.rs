@@ -9,7 +9,7 @@
 //! (`agent_transcript::read_transcript`, `TranscriptKind::Copilot`). The other
 //! files of the folder (`workspace.yaml`, `session.db`, checkpoints) are not
 //! needed and not copied. The log is append-only through prompts, `/compact`
-//! and `/new` (1.0.114 and 1.0.115, `scripts/verify-cli/copilot/remote_store.py`), so
+//! and `/new` (1.0.114 to 1.0.116, `scripts/verify-cli/copilot/remote_store.py`), so
 //! [`super::grow`] adds only the bytes appended since the last read.
 //!
 //! Bounds are the parent's: only a connected pool is used and a read while the

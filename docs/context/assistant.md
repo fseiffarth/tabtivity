@@ -134,7 +134,8 @@ Ollama 0.40.3 (A0). All four are offered and listed (cloud Claude was
 unlisted on 2026-10-26 and listed again on 2026-10-27, the user's call).
 OpenCode (local) was re-checked on 2.2.5 (2026-10-31): the lane's tools are
 offered and every built-in is off, but `skill` stays listed and refuses each
-call, with no config that hides it. 2.2.5 runs a call to a missing `bash` as
+call, with no config that hides it; 2.4.2 hides it like the others
+(2026-11-26). 2.2.5 runs a call to a missing `bash` as
 `shell`; the pin turns `shell` off, so that is refused as well, forced through
 a stub model (`docs/third_party_update_checklist.md`).
 

@@ -445,8 +445,9 @@ pub(crate) fn claude_local_tail_ok(tail: &[String], lane_url: &str, help_url: Op
 /// hidden tool is not offered, not merely asked about. `permission` is left
 /// alone on purpose: `{"*": "deny"}` hides MCP tools too (plan, A0).
 /// OpenCode 2 reads the map as rules, `bash` as `shell` and `task` as
-/// `subagent`; 2.2.5 still lists `skill`, its browser plugin's own rule coming
-/// last, and refuses every call. 2.2.5 runs a call to a missing `bash` as
+/// `subagent`; 2.2.5 to 2.4.1 still list `skill`, its browser plugin's own
+/// rule coming last, and refuse every call; 2.4.2 hides it (checklist §1.5,
+/// `opencode/tabby.py`). 2.2.5 runs a call to a missing `bash` as
 /// `shell`, which is off here too, so it is refused as `shell` (checklist §1.5).
 const OPENCODE_TOOLS_OFF: [&str; 15] = [
     "bash", "edit", "write", "read", "grep", "glob", "list", "patch", "webfetch", "websearch", "task", "todowrite",

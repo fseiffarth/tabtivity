@@ -72,9 +72,9 @@ export interface NewerAgentVersion {
 const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
   claude: "2.1.332",
   codex: "0.172.0",
-  opencode: "2.4.1",
-  antigravity: "1.5.17",
-  copilot: "1.0.115",
+  opencode: "2.4.2",
+  antigravity: "1.5.18",
+  copilot: "1.0.116",
   muse: "1.4.25",
   "cursor-agent": "2026.11.22-e9042b2",
   vibe: "3.1.5",
