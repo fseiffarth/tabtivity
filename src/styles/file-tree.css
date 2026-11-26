@@ -621,9 +621,17 @@
   display: none;
 }
 
+/* The wide layout's tracks, shared by the header and every row. A column the
+   user sized by hand (useFileTreeColumns) sets its --fc-* on the list root;
+   an unset one keeps its default. Share of folder always takes the rest. */
+.file-tree {
+  --file-cols-template: 16px 22px var(--fc-name, minmax(200px, 1.4fr))
+    var(--fc-git, 110px) var(--fc-mod, 150px) var(--fc-size, 76px) minmax(120px, 1fr);
+}
+
 @container file-list (min-width: 720px) {
   .file-entry.file-grid {
-    grid-template-columns: 16px 22px minmax(200px, 1.4fr) 110px 150px 76px minmax(120px, 1fr);
+    grid-template-columns: var(--file-cols-template);
     grid-template-areas: "state act main git mod size share";
     column-gap: var(--space-3);
     padding: 0 var(--space-3);
@@ -654,7 +662,7 @@
 
   .file-cols {
     display: grid;
-    grid-template-columns: 16px 22px minmax(200px, 1.4fr) 110px 150px 76px minmax(120px, 1fr);
+    grid-template-columns: var(--file-cols-template);
     column-gap: var(--space-3);
     align-items: center;
     min-height: 30px;
@@ -673,6 +681,41 @@
 
 .file-cols-size {
   justify-self: end;
+}
+
+/* A column head is the anchor of its resize grip. */
+.file-cols-cell {
+  position: relative;
+  min-width: 0;
+}
+
+/* The grip straddles the gap to the next column: a wide hit target, a thin
+   line only on hover or while dragging (no animation). */
+.file-cols-grip {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  right: calc(-0.5 * var(--space-3) - 4px);
+  width: 8px;
+  cursor: var(--cur-col-resize, col-resize);
+  touch-action: none;
+  z-index: 1;
+}
+
+.file-cols-grip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-subtle);
+}
+
+.file-cols-grip:hover::after,
+.file-cols-grip.dragging::after {
+  background: var(--accent);
 }
 
 .file-cols-share {

@@ -8812,6 +8812,7 @@ export const enSource = {
   "fileTree.colModified": "Modified",
   "fileTree.colSize": "Size",
   "fileTree.colShare": "Share of folder",
+  "fileTree.colResizeTitle": "Drag to resize the {key} column · double-click to reset",
   "fileTree.errLocalOnly": "This folder isn't on the remote host — it may be local-only (never synced). Switch to Local to view it.",
   "fileTree.errRemoteList": "Couldn't list this folder on the remote host. Check the connection and try again.",
   "fileTree.gitStatusFailed": "Couldn't read git status, so change letters and the ignored section may be out of date: {error}",

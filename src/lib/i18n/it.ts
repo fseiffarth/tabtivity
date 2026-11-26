@@ -8442,6 +8442,7 @@ export const dict: Dict = {
   "fileTree.colModified": "Modificato",
   "fileTree.colSize": "Dimensione",
   "fileTree.colShare": "Quota della cartella",
+  "fileTree.colResizeTitle": "Trascina per ridimensionare la colonna {key} · doppio clic per ripristinare",
   "fileTree.errLocalOnly": "Questa cartella non è sull'host remoto — potrebbe essere solo locale (mai sincronizzata). Passa a Locale per visualizzarla.",
   "fileTree.errRemoteList": "Impossibile elencare questa cartella sull'host remoto. Controlla la connessione e riprova.",
   "fileTree.gitStatusFailed": "Impossibile leggere lo stato di git; le lettere delle modifiche e la sezione dei file ignorati potrebbero non essere aggiornate: {error}",

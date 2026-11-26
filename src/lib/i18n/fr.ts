@@ -8444,6 +8444,7 @@ export const dict: Dict = {
   "fileTree.colModified": "Modifié",
   "fileTree.colSize": "Taille",
   "fileTree.colShare": "Part du dossier",
+  "fileTree.colResizeTitle": "Faire glisser pour redimensionner la colonne {key} · double-clic pour réinitialiser",
   "fileTree.errLocalOnly": "Ce dossier n'est pas sur l'hôte distant — il est peut-être local uniquement (jamais synchronisé). Passez à Local pour le voir.",
   "fileTree.errRemoteList": "Impossible de lister ce dossier sur l'hôte distant. Vérifiez la connexion et réessayez.",
   "fileTree.gitStatusFailed": "Impossible de lire l'état git ; les lettres de modification et la section des fichiers ignorés peuvent être obsolètes : {error}",

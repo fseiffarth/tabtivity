@@ -8448,6 +8448,7 @@ export const dict: Dict = {
   "fileTree.colModified": "Geändert",
   "fileTree.colSize": "Größe",
   "fileTree.colShare": "Anteil am Ordner",
+  "fileTree.colResizeTitle": "Ziehen, um die Spalte {key} anzupassen · Doppelklick setzt sie zurück",
   "fileTree.errLocalOnly": "Dieser Ordner existiert nicht auf dem Remote-Host — er ist möglicherweise nur lokal (nie synchronisiert). Zu Lokal wechseln, um ihn anzuzeigen.",
   "fileTree.errRemoteList": "Dieser Ordner konnte auf dem Remote-Host nicht aufgelistet werden. Verbindung prüfen und erneut versuchen.",
   "fileTree.gitStatusFailed": "Git-Status konnte nicht gelesen werden, Änderungsbuchstaben und der Abschnitt der ignorierten Dateien sind evtl. veraltet: {error}",
