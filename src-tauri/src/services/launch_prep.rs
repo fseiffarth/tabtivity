@@ -1320,6 +1320,13 @@ pub async fn prepare(
         }
     }
 
+    // A local-model Claude Code waits out a long prompt re-read instead of
+    // dropping it after Claude Code's 5 idle minutes (`LOCAL_CLAUDE_TIMEOUT_ENV`).
+    // A value the user set, in the app's environment or the tab's, wins.
+    if crate::services::local_drivers::is_local_claude_line(&opts.cmd, &opts.args) {
+        crate::services::local_drivers::add_local_claude_timeouts(&mut opts.env, |name| std::env::var_os(name).is_some());
+    }
+
     // A chat's launch: its home first (Codex's catalog is written into it),
     // then the argv and env the profile pins, with the lane `grant_lanes` just
     // granted. The home is kept for the fence arm below.

@@ -2331,3 +2331,25 @@ async fn the_install_strategy_is_the_script_everywhere_but_windows() {
     }
     assert_eq!(s.auto, cfg!(any(windows, target_os = "linux", target_os = "macos")));
 }
+
+/// A local-model Claude Code gets the long timeouts; a value already set wins,
+/// and only `ollama launch claude` is one.
+#[test]
+fn a_local_claude_gets_long_timeouts_unless_set() {
+    use crate::services::local_drivers::{add_local_claude_timeouts, is_local_claude_line};
+    let line = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(is_local_claude_line("ollama", &line(&["launch", "claude", "--model", "qwen3:8b"])));
+    assert!(is_local_claude_line("/usr/local/bin/ollama", &line(&["launch", "claude"])));
+    assert!(!is_local_claude_line("ollama", &line(&["launch", "codex", "--model", "qwen3:8b"])));
+    assert!(!is_local_claude_line("claude", &line(&["--model", "qwen3:8b"])));
+
+    let mut env = std::collections::HashMap::new();
+    add_local_claude_timeouts(&mut env, |_| false);
+    assert_eq!(env["CLAUDE_STREAM_IDLE_TIMEOUT_MS"], "1800000");
+    assert_eq!(env["API_TIMEOUT_MS"], "1800000");
+
+    let mut env = std::collections::HashMap::from([("API_TIMEOUT_MS".to_string(), "60000".to_string())]);
+    add_local_claude_timeouts(&mut env, |name| name == "CLAUDE_STREAM_IDLE_TIMEOUT_MS");
+    assert_eq!(env["API_TIMEOUT_MS"], "60000", "the tab's own value wins");
+    assert!(!env.contains_key("CLAUDE_STREAM_IDLE_TIMEOUT_MS"), "the app's environment wins");
+}

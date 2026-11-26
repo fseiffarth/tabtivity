@@ -437,6 +437,36 @@ pub(crate) fn claude_managed_settings(model: &str, addr: &str) -> String {
     .unwrap_or_default()
 }
 
+/// The timeouts a local-model Claude Code gets, 30 minutes each (the most Claude Code
+/// accepts for the idle one). Claude Code drops a response after 5 minutes with no
+/// streamed byte, and Ollama streams nothing while it re-reads a prompt: measured
+/// 2026-11-25, two forks of one qwen3-coder:30b tab on the 890M kept evicting each
+/// other's prompt cache, each re-read 12k–23k tokens at 55–110 t/s, and every request
+/// died at 5 min 20 s–5 min 50 s and started over. The retry re-reads the same prompt,
+/// so the default turns a slow answer into none.
+pub(crate) const LOCAL_CLAUDE_TIMEOUT_ENV: &[(&str, &str)] =
+    &[("CLAUDE_STREAM_IDLE_TIMEOUT_MS", "1800000"), ("API_TIMEOUT_MS", "1800000")];
+
+/// Whether `cmd args` starts a local-model Claude Code: `ollama launch claude`, its
+/// only launch form ([`LOCAL_DRIVERS`]). Pure.
+pub(crate) fn is_local_claude_line(cmd: &str, args: &[String]) -> bool {
+    let bin = std::path::Path::new(cmd).file_stem().and_then(|s| s.to_str()).unwrap_or(cmd);
+    bin == "ollama" && args.first().is_some_and(|a| a == "launch") && args.get(1).is_some_and(|a| a == "claude")
+}
+
+/// Adds [`LOCAL_CLAUDE_TIMEOUT_ENV`] to a local Claude Code's spawn `env`, leaving a
+/// value already there or in `inherited` (the environment the app runs in) alone.
+pub(crate) fn add_local_claude_timeouts(
+    env: &mut std::collections::HashMap<String, String>,
+    inherited: impl Fn(&str) -> bool,
+) {
+    for (name, value) in LOCAL_CLAUDE_TIMEOUT_ENV {
+        if !inherited(name) {
+            env.entry((*name).to_string()).or_insert_with(|| (*value).to_string());
+        }
+    }
+}
+
 /// The CLI a local driver runs (`claude` for `"claude"`), for naming the agent
 /// of a persisted local-model tab whose own `cmd` may be `ollama`.
 pub(crate) fn local_driver_bin(driver: &str) -> Option<&'static str> {

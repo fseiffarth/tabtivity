@@ -918,10 +918,12 @@ pub fn launch_line(launch: &AssistantLaunch, ctx: &LaunchCtx<'_>) -> Result<Assi
             if !claude_local_tail_ok(&args[head..], &lane.url, help) {
                 return Err(Refusal::Config);
             }
-            let env = HashMap::from([
+            let mut env = HashMap::from([
                 (crate::app_env!("LOCAL_MODEL").to_string(), model.to_string()),
                 (crate::services::agent_session::TAB_AGENT_ENV.to_string(), "claude".to_string()),
             ]);
+            // The same long-prompt allowance a local-model tab gets (`launch_prep`).
+            crate::services::local_drivers::add_local_claude_timeouts(&mut env, |name| std::env::var_os(name).is_some());
             Ok(AssistantSpawn { cmd: spec.cmd, args, env })
         }
     }
