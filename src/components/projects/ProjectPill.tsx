@@ -379,7 +379,8 @@ function RenameWindow({
                   <div className="project-dialog-path">
                     {project.status !== "inactive"
                       ? t("pill.folderRenameClosesProject")
-                      : t("pill.folderRenameAgentNote")}
+                      : t("pill.folderRenameAgentNote")}{" "}
+                    <UntestedTag id="pill.folderRenameCarriesAgents" />
                   </div>
                 ) : (
                   <div className={plan.status === "same" ? "project-dialog-path" : "project-dialog-error"}>

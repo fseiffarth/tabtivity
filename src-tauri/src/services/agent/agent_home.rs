@@ -537,6 +537,37 @@ fn trust_claude_added_dirs_in(state_dir: &Path, home: &Path, dirs: &[PathBuf]) -
     trust_claude_json(&file, &spellings)
 }
 
+/// A renamed project folder's per-folder CLI settings in `home`, re-pointed
+/// from each old path to its new one (`agent_history::repoint_project`):
+/// Claude's `.claude.json` `projects.<dir>` entries (the folder's trust
+/// answer, its local MCP servers) and Codex's `[projects."<dir>"]` trust.
+/// Under the home's preparation lock: the login keeper writes `.claude.json`
+/// too. The number of files changed.
+pub fn repoint_folder_settings(home: &Path, rewrites: &[(String, String)]) -> io::Result<usize> {
+    repoint_folder_settings_in(&storage::state_dir(), home, rewrites)
+}
+
+fn repoint_folder_settings_in(state_dir: &Path, home: &Path, rewrites: &[(String, String)]) -> io::Result<usize> {
+    use crate::services::agent_history;
+    let _one_at_a_time = home_lock(state_dir, home)?;
+    let mut changed = 0;
+    for rel in [".claude.json", ".codex/config.toml"] {
+        let Some(file) = HomeFile::open_existing(home, rel).filter(HomeFile::is_file) else { continue };
+        let Some(bytes) = file.read_capped(16 * 1024 * 1024) else { continue };
+        let rewritten = if rel.ends_with(".json") {
+            let out = agent_history::rewrite_file(rel, bytes.clone(), rewrites);
+            (out != bytes).then_some(out)
+        } else {
+            std::str::from_utf8(&bytes).ok().and_then(|text| agent_history::rewrite_config_text(text, rewrites)).map(String::into_bytes)
+        };
+        if let Some(out) = rewritten {
+            file.write(&out)?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
 /// One-time seeding of a new home:
 ///
 /// - the scope's existing Tabtivity-kept Codex store (`codex-state/<key>`) and
@@ -1378,6 +1409,46 @@ mod tests {
         let empty = tmp.path().join("empty-home");
         trust_claude_added_dirs_in(&state, &empty, &[]).unwrap();
         assert!(!empty.join(".claude.json").exists());
+    }
+
+    #[test]
+    fn a_renamed_folder_keeps_its_claude_entry_and_codex_trust() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        let old = tmp.path().join("trips");
+        let new = tmp.path().join("refunds");
+        let sibling = tmp.path().join("trips-2025");
+        let key = |p: &Path| p.to_string_lossy().into_owned();
+        write_file(
+            &home.join(".claude.json"),
+            &serde_json::to_string_pretty(&serde_json::json!({
+                "oauthAccount": {"emailAddress": "a@b"},
+                "projects": {
+                    key(&old): {"hasTrustDialogAccepted": true, "mcpServers": {"db": {"command": "x"}}},
+                    key(&sibling): {"hasTrustDialogAccepted": false},
+                },
+            }))
+            .unwrap(),
+        );
+        let toml_key = |p: &Path| serde_json::to_string(&key(p)).unwrap();
+        write_file(
+            &home.join(".codex").join("config.toml"),
+            &format!("model = \"m\"\n\n[projects.{}]\ntrust_level = \"trusted\"\n", toml_key(&old)),
+        );
+        let changed = repoint_folder_settings_in(&state, &home, &[(key(&old), key(&new))]).unwrap();
+        assert_eq!(changed, 2);
+        let claude: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(claude["projects"][key(&new)]["hasTrustDialogAccepted"], true);
+        assert_eq!(claude["projects"][key(&new)]["mcpServers"]["db"]["command"], "x");
+        assert!(claude["projects"].get(key(&old)).is_none());
+        assert_eq!(claude["projects"][key(&sibling)]["hasTrustDialogAccepted"], false, "a sibling folder is not this one");
+        assert_eq!(claude["oauthAccount"]["emailAddress"], "a@b");
+        let codex = std::fs::read_to_string(home.join(".codex").join("config.toml")).unwrap();
+        assert!(codex.contains(&format!("[projects.{}]\ntrust_level = \"trusted\"", toml_key(&new))), "{codex}");
+        assert!(codex.starts_with("model = \"m\"\n"));
+        // Nothing left to re-point: nothing written.
+        assert_eq!(repoint_folder_settings_in(&state, &home, &[(key(&old), key(&new))]).unwrap(), 0);
     }
 
     #[test]

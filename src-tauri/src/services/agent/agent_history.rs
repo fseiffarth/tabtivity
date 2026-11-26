@@ -44,6 +44,9 @@ use serde_json::Value;
 
 use crate::services::home_io::{HomeDir, HomeFile};
 
+mod in_place;
+pub use in_place::{repoint_home, repoint_project, Repointed};
+
 /// One place a CLI keeps conversations: a home-relative folder or file. A `*`
 /// in a segment matches any run of characters within that one name.
 pub struct Root {
@@ -112,6 +115,8 @@ pub const ROOTS: &[Root] = &[
     root(".vibe/logs/session"),
     root(".vibe/vibehistory"),
     root(".augment/sessions"),
+    // Meta Muse Code: one dated folder per session (`services::muse_session`).
+    root(".local/share/muse/sessions"),
 ];
 
 /// A CLI database whose tables are known: only `keep` survive a transfer,
@@ -381,6 +386,12 @@ fn open_untrusted(path: &Path) -> Result<Connection, String> {
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|e| e.to_string())?;
+    harden(conn)
+}
+
+/// The guards of [`open_untrusted`] on an open connection, and its integrity
+/// check: also what [`in_place`] changes a home's databases through.
+fn harden(conn: Connection) -> Result<Connection, String> {
     for (config, on) in [
         (DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false),
         (DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true),
@@ -722,6 +733,8 @@ fn rewrite_text(value: &str, old: &str, new: &str) -> Option<String> {
     let before_ok = |head: &str| {
         head.is_empty()
             || head.ends_with("file://")
+            // A Windows drive path in a URI: `file:///C:/…`.
+            || head.ends_with("file:///")
             || head
                 .chars()
                 .last()
@@ -749,6 +762,22 @@ fn rewrite_text(value: &str, old: &str, new: &str) -> Option<String> {
     }
     out.push_str(rest);
     changed.then_some(out)
+}
+
+/// A config file's text (Codex's `config.toml`) re-pointed: each old path
+/// as written and as a quoted string escapes it.
+pub fn rewrite_config_text(text: &str, rewrites: &[(String, String)]) -> Option<String> {
+    let escaped = |path: &str| serde_json::to_string(path).unwrap_or_default().trim_matches('"').to_string();
+    let mut out: Option<String> = None;
+    for (old, new) in rewrites {
+        for (o, n) in [(old.clone(), new.clone()), (escaped(old), escaped(new))] {
+            let current = out.as_deref().unwrap_or(text);
+            if let Some(changed) = rewrite_text(current, &o, &n) {
+                out = Some(changed);
+            }
+        }
+    }
+    out
 }
 
 /// Every string in a JSON value — object keys too (Gemini's `projects.json`

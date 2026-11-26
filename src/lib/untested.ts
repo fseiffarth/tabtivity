@@ -1214,6 +1214,7 @@ export const UNTESTED = {
   "hpcWizard.title": { area: "projects", what: "HpcPipelineWizard · HPC pipeline" },
   "migrate.title": { area: "projects", what: "ProjectMigrationDialog · Migrate project" },
   "pill.alsoRenameFolder": { area: "projects", what: "ProjectPill · Also rename the project folder" },
+  "pill.folderRenameCarriesAgents": { area: "projects", what: "Rename project · Also rename the project folder: afterwards each agent tab of the project (Claude, Codex, Copilot, OpenCode, Antigravity, Muse, Cursor) reopens on its conversation, and its Resume menu lists the chats started before the rename; Claude keeps the folder's trust (no trust prompt), Codex resumes without a different-folder prompt and its earlier threads still open whole" },
   "pill.containerScopeLegend": { area: "projects", what: "ProjectPill · What runs in the container" },
   "pill.forgetProjectEllipsis": { area: "projects", what: "ProjectPill · Remove from Tabtivity…" },
   "pill.publishFrom": { area: "projects", what: "ProjectPill · Publish from" },
