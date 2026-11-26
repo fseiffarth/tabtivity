@@ -723,9 +723,10 @@ const CODEX_SEED_CAP: u64 = 8 * 1024 * 1024;
 
 /// Decision 16: a home Codex never ran in has no `models_cache.json`, and Codex
 /// is not started without the catalog built from it, so the first Codex chat
-/// could never start. When the home has none, copy the newest usable one from
-/// any other agent home next to it (`<state>/agent-homes/*`) into
-/// `<home>/.codex`. Every read is a no-follow regular-file read relative to
+/// could never start. When the home has none, or a sibling's is newer (Codex
+/// in a chat never refreshes the home's own, so it would go stale), copy the
+/// newest usable one from any other agent home next to it
+/// (`<state>/agent-homes/*`) into `<home>/.codex`. Every read is a no-follow regular-file read relative to
 /// directory handles (`home_io`), capped at [`CODEX_SEED_CAP`]; a link, a
 /// FIFO, an oversized or unusable file in a sibling is skipped, and the write
 /// goes through `home_io` too. Finding nothing changes nothing: the caller's
@@ -733,30 +734,44 @@ const CODEX_SEED_CAP: u64 = 8 * 1024 * 1024;
 /// named like the agent-homes folder seeds, so a stray path never scans its
 /// parent.
 fn seed_codex_models_cache(home: &Path) {
-    use std::io::Read;
-    let rel = format!(".codex/{CODEX_MODELS_CACHE}");
-    if crate::services::home_io::HomeFile::open_existing(home, &rel).is_some_and(|file| file.metadata().is_some()) {
-        return;
-    }
-    let Some(homes) = home.parent().filter(|p| p.file_name().is_some_and(|n| n == crate::services::agent_home::HOMES_DIR)) else {
-        return;
-    };
-    let newest = crate::services::agent_home::existing_homes_under(homes)
-        .into_iter()
-        .filter(|other| other != home)
-        .filter_map(|other| {
-            let file = crate::services::home_io::HomeFile::open_existing(&other, &rel)?.open_read()?;
-            let modified = file.metadata().ok()?.modified().ok()?;
-            let mut bytes = Vec::new();
-            file.take(CODEX_SEED_CAP + 1).read_to_end(&mut bytes).ok()?;
-            (bytes.len() as u64 <= CODEX_SEED_CAP && build_codex_catalog(&bytes).is_some()).then_some((modified, bytes))
-        })
-        .max_by_key(|(modified, _)| *modified);
-    if let Some((_, bytes)) = newest {
+    if let Some((bytes, false)) = newest_codex_cache(home) {
+        let rel = format!(".codex/{CODEX_MODELS_CACHE}");
         if let Some(target) = crate::services::home_io::HomeFile::open(home, &rel) {
             let _ = target.write(&bytes);
         }
     }
+}
+
+/// The newest usable `models_cache.json` among `home`'s own and its sibling
+/// agent homes' (the cache the "Default model" list of every other Codex tab
+/// is read from, `agent_defaults::discovered_models`), and whether it is the
+/// home's own (a tie goes to the home's). A chat's Codex runs on the catalog
+/// and never refreshes its own cache, so the home's copy would otherwise stay
+/// at whatever the first chat found. Local-model homes are skipped, as in that
+/// list. Read-only, with the reads of [`seed_codex_models_cache`].
+fn newest_codex_cache(home: &Path) -> Option<(Vec<u8>, bool)> {
+    use std::io::Read;
+    let rel = format!(".codex/{CODEX_MODELS_CACHE}");
+    let mut homes = vec![home.to_path_buf()];
+    if let Some(root) = home.parent().filter(|p| p.file_name().is_some_and(|n| n == crate::services::agent_home::HOMES_DIR)) {
+        homes.extend(
+            crate::services::agent_home::existing_homes_under(root)
+                .into_iter()
+                .filter(|other| other != home && !crate::services::agent_home::is_local_model_home(other)),
+        );
+    }
+    homes
+        .into_iter()
+        .enumerate()
+        .filter_map(|(at, other)| {
+            let file = crate::services::home_io::HomeFile::open_existing(&other, &rel)?.open_read()?;
+            let modified = file.metadata().ok()?.modified().ok()?;
+            let mut bytes = Vec::new();
+            file.take(CODEX_SEED_CAP + 1).read_to_end(&mut bytes).ok()?;
+            (bytes.len() as u64 <= CODEX_SEED_CAP && build_codex_catalog(&bytes).is_some()).then_some((modified, at == 0, bytes))
+        })
+        .max_by_key(|(modified, own, _)| (*modified, *own))
+        .map(|(_, own, bytes)| (bytes, own))
 }
 
 /// Build the catalog from the home's `models_cache.json` (seeded first when
@@ -788,13 +803,14 @@ fn read_codex_models_cache(home: &Path) -> Option<Vec<u8>> {
 }
 
 /// The models a Codex chat can be switched to: the listed slugs of the
-/// catalog the home's `models_cache.json` builds (the spawn's allowlist and
-/// check, so every one is a model the spawn accepts), the one Codex starts
-/// with first. Read only — nothing is seeded or written — so a home Codex
-/// never ran in offers none until its first chat. Empty on any failure.
+/// catalog the newest `models_cache.json` builds ([`newest_codex_cache`]: the
+/// list every other Codex tab offers, and what the spawn copies in before it
+/// builds its catalog, so every one is a model the spawn accepts), the one
+/// Codex starts with first. Read only — nothing is seeded or written. Empty
+/// on any failure.
 pub fn codex_offered_models(home: &Path) -> Vec<String> {
-    let Some(offered) = read_codex_models_cache(home)
-        .and_then(|cache| build_codex_catalog(&cache))
+    let Some(offered) = newest_codex_cache(home)
+        .and_then(|(cache, _)| build_codex_catalog(&cache))
         .and_then(|catalog| checked_codex_catalog(&catalog))
     else {
         return Vec::new();
@@ -1670,10 +1686,26 @@ mod tests {
         // The copy is the home's own now; the sibling's file is untouched.
         assert!(home.join(".codex").join(CODEX_MODELS_CACHE).is_file());
         assert!(std::fs::read_to_string(new.join(".codex").join(CODEX_MODELS_CACHE)).unwrap().contains("new"));
-        // A later start never re-seeds: the home's own cache wins over a newer sibling.
-        agent_home_with_cache(state.path(), "p4", Some("newer"));
+        // An older sibling never replaces the home's own cache, a newer one does,
+        // and the model dropdown offers what the next start will run on.
+        set(&new, day * 2);
         launch_line(&launch(AssistantCli::Codex, None), &ctx(&home, Some(&grant))).unwrap();
         assert_eq!(catalog_slugs(&home), ["new"]);
+        let newer = agent_home_with_cache(state.path(), "p4", Some("newer"));
+        let ahead = |home: &Path| {
+            let file = std::fs::File::options().write(true).open(home.join(".codex").join(CODEX_MODELS_CACHE)).unwrap();
+            file.set_modified(std::time::SystemTime::now() + day).unwrap();
+        };
+        ahead(&newer);
+        assert_eq!(codex_offered_models(&home), ["newer"]);
+        launch_line(&launch(AssistantCli::Codex, None), &ctx(&home, Some(&grant))).unwrap();
+        assert_eq!(catalog_slugs(&home), ["newer"]);
+        // A local-model home's list is not one of the Codex tabs' lists.
+        let local = crate::services::agent_home::local_model_home_in(state.path(), "p5");
+        std::fs::create_dir_all(local.join(".codex")).unwrap();
+        std::fs::write(local.join(".codex").join(CODEX_MODELS_CACHE), codex_cache(&["local"])).unwrap();
+        ahead(&local);
+        assert_eq!(codex_offered_models(&home), ["newer"]);
     }
 
     #[test]
