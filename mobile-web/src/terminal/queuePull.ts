@@ -22,6 +22,9 @@
  * taken up by the turn.
  */
 
+import { openCodeBoxReset } from "./composer";
+import { isOpenCodePlaceholder, openCodeComposer } from "./openCodeMini";
+
 /** The CLIs whose queue can be read off the screen. Copilot and OpenCode's
  * full TUI mark nothing, and `ctrl+x q` quits the full TUI: only the mini
  * footer's count may ever lead to that key. Mirrors `queue_hint` in
@@ -86,6 +89,9 @@ const OPENCODE_PANEL = /^\s*Pending prompts (\d+)\b/u;
 const OPENCODE_SEARCH = /^\s*Search\s*$/u;
 const OPENCODE_RULE = /^\s*▀{3,}/u;
 const OPENCODE_KIND = /\s{2,}\S+\s*$/u;
+/** OpenCode 2's busy row after a first Esc: `esc again to interrupt`, or
+ * `esc again: stop` where the pane is narrow. */
+const OPENCODE_STOP_AGAIN = /\besc again(?: to interrupt|: stop)\b/u;
 const CTRL_X = "\u0018";
 const CTRL_D = "\u0004";
 const ESCAPE = "\u001b";
@@ -296,6 +302,19 @@ export async function sendQueuedNow(driver: QueuePullDriver, family: QueueFamily
   return true;
 }
 
+/** What a plain stop leaves to do once the stop key went in. OpenCode 2
+ * stops a turn only on a second Esc: the first just asks `esc again`, and the
+ * turn ran on (probed 2.4.2, full TUI and mini, 2026-11-26,
+ * `scripts/verify-cli/opencode/chat_send.py`). The second goes in only while
+ * the busy row still asks for it, so a turn that ended meanwhile gets none. */
+export async function finishStop(driver: QueuePullDriver, family: QueueFamily | null): Promise<void> {
+  if (family !== "opencode") return;
+  await sleep(ESC_GAP_MS);
+  if (driver.rows().filter((row) => row.trim()).slice(-4).some((row) => OPENCODE_STOP_AGAIN.test(row))) {
+    await driver.key(ESCAPE);
+  }
+}
+
 /**
  * Takes the queued messages back out of Claude's queue into the caller's
  * hands and empties the box ↑ put them in. `sent` is what was sent to the
@@ -367,28 +386,88 @@ export function claudeBoxWords(rows: readonly string[]): string {
   return words((inputBoxLines(rows) ?? []).join(" "));
 }
 
+/** OpenCode 2's full TUI: the box's bottom edge, right under its agent row. */
+const OPENCODE_EDGE = /^\s*╹▀{3,}/u;
+/** A row inside that box: its `┃`, then the text two columns over. */
+const OPENCODE_BAR = /^\s*┃(?: {1,2}|$)/u;
+
+/**
+ * The lines in OpenCode 2's input box — the `┃` rows over its agent row
+ * (`Build · stub Ollama (local)`), which sits right on the box's `╹▀` edge —
+ * blank rows at either end cut and the empty box's placeholder read as
+ * nothing; null when no such box is near the bottom of the screen. `mini`
+ * draws none, and hands nothing back either. A wrapped line is several rows.
+ */
+export function openCodeBoxLines(rows: readonly string[]): string[] | null {
+  for (let index = rows.length - 1; index >= Math.max(1, rows.length - 12); index -= 1) {
+    if (!OPENCODE_EDGE.test(rows[index])) continue;
+    const agent = rows[index - 1];
+    if (!OPENCODE_BAR.test(agent) || !openCodeComposer({ text: agent })) return null;
+    const lines: string[] = [];
+    for (let at = index - 2; at >= 0 && OPENCODE_BAR.test(rows[at]); at -= 1) {
+      lines.unshift(rows[at].replace(OPENCODE_BAR, "").trimEnd());
+    }
+    while (lines.length > 0 && !lines[0].trim()) lines.shift();
+    while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
+    return lines.length === 1 && isOpenCodePlaceholder(lines[0]) ? [] : lines;
+  }
+  return null;
+}
+
+/** The CLIs a stop can hand a prompt back to. */
+export type TakeBackFamily = "claude" | "opencode";
+
+/** Whether a stop on `family` can hand the prompt back ({@link takeBackStopped}). */
+export function takesBackStopped(family: string | null): family is TakeBackFamily {
+  return family === "claude" || family === "opencode";
+}
+
+/** The box's words as a stop is pressed, for {@link takeBackStopped}. */
+export function stopBoxWords(rows: readonly string[], family: TakeBackFamily): string {
+  return family === "opencode" ? words((openCodeBoxLines(rows) ?? []).join(" ")) : claudeBoxWords(rows);
+}
+
+/** Empties OpenCode's box, which holds `box`: {@link openCodeBoxReset} over
+ * as many lines as it draws (a wrapped line draws more rows than it has
+ * lines; a Backspace on an empty box does nothing), and a box taller than the
+ * screen shows takes another round. True once its words are gone. */
+async function emptyOpenCodeBox(driver: QueuePullDriver, box: readonly string[], timing: QueuePullTiming): Promise<boolean> {
+  const last = words(box.join(" ")).slice(-24);
+  const emptied = (now: string[] | null) => !!now && !words(now.join(" ")).includes(last);
+  for (let round = 0; round < 3; round += 1) {
+    const rows = openCodeBoxLines(driver.rows())?.length ?? box.length;
+    if (!(await driver.key(openCodeBoxReset(rows)))) return false;
+    if (emptied(await pollUntil(() => openCodeBoxLines(driver.rows()), emptied, timing))) return true;
+  }
+  return false;
+}
+
 /**
  * Claude 2.1.318: an Esc that lands before the turn has answered stops it
  * and puts its prompt back in the input box, unsent — with a queue behind
  * it, the queue goes and the first prompt comes back
- * (`scripts/verify-cli/claude/esc_early.py`). The next prompt a chat sends
- * empties that box first, so the words would be lost. Watches the box after
- * such an Esc (`before`: its words as the Esc went, `claudeBoxWords`); when
- * it fills with one of `sent` (oldest first; its words, or their end when the
- * box is taller than the screen), empties it and says which came back. Null
- * when nothing of `sent` did: anything else in the box is the user's own,
- * and stays.
+ * (`scripts/verify-cli/claude/esc_early.py`). OpenCode 2.4.2's full TUI does
+ * the same on the stop's second Esc, and drops the prompt from the session
+ * (`scripts/verify-cli/opencode/takeback.py`; `mini` keeps it, as 2.4.1 did).
+ * The next prompt a chat sends empties that box first, so the words would be
+ * lost. Watches the box after such an Esc (`before`: its words as the Esc
+ * went, `stopBoxWords`); when it fills with one of `sent` (oldest first; its
+ * words, or their end when the box is taller than the screen), empties it
+ * and says which came back. Null when nothing of `sent` did: anything else in
+ * the box is the user's own, and stays.
  */
 export async function takeBackStopped(
   driver: QueuePullDriver,
   sent: readonly string[],
   before: string,
   timing: QueuePullTiming = STOP_TIMING,
+  family: TakeBackFamily = "claude",
 ): Promise<{ index: number; cleared: boolean } | null> {
   if (sent.length === 0) return null;
   const known = sent.map(bare);
+  const boxOf = family === "opencode" ? openCodeBoxLines : inputBoxLines;
   const found = (box: string[] | null): number => {
-    if (!box || QUEUED_HINT.test(box[0]) || words(box.join(" ")) === before) return -1;
+    if (!box || box.length === 0 || QUEUED_HINT.test(box[0]) || words(box.join(" ")) === before) return -1;
     const shown = bare(box.join(""));
     if (!shown) return -1;
     for (let index = known.length - 1; index >= 0; index -= 1) {
@@ -396,8 +475,9 @@ export async function takeBackStopped(
     }
     return -1;
   };
-  const box = await pollUntil(() => inputBoxLines(driver.rows()), (now) => found(now) >= 0, timing);
+  const box = await pollUntil(() => boxOf(driver.rows()), (now) => found(now) >= 0, timing);
   const index = found(box);
   if (index < 0 || !box) return null;
-  return { index, cleared: await emptyClaudeBox(driver, box, timing) };
+  const cleared = family === "opencode" ? await emptyOpenCodeBox(driver, box, timing) : await emptyClaudeBox(driver, box, timing);
+  return { index, cleared };
 }

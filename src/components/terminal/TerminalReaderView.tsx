@@ -87,7 +87,7 @@ import { parseAppLink } from "../../lib/navigation/appLinks";
 import { ReaderArtifactDialog } from "./ReaderArtifactDialog";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, viewSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
-import { claudeBoxWords, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
+import { finishStop, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, stopBoxWords, takeBackStopped, takenPrompts, takesBackStopped, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, leadDraft, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu, slashMenuKey } from "./ReaderSlashMenu";
@@ -1982,21 +1982,24 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [takenBack, setTakenBack] = useState<string | null>(null);
   /** The stop key (`stopWith`), the working row's Stop. With a queue on screen it is Send now where
    * a lone Esc would not send it: Codex would drop it into a box the chat
-   * does not show, OpenCode asks for a second press. */
+   * does not show, OpenCode asks for a second press — as it does to stop a
+   * turn at all (`finishStop`). */
   const pressEscape = useCallback(() => {
     const driver = paneDriver();
     if (tabFamily && tabFamily !== "claude" && queuedHintShown(driver.rows(), tabFamily)) {
       void sendQueuedNow(driver, tabFamily);
       return;
     }
-    // Claude hands a prompt back, unsent, when the stop lands before the
-    // turn answered: it comes back into the composer, not left in a box the
-    // next send empties.
-    const sent = tabFamily === "claude" && workingRef.current ? stoppableRef.current() : [];
-    const before = sent.length > 0 ? claudeBoxWords(driver.rows()) : "";
+    // Claude, and OpenCode 2.4.2's full TUI, hand a prompt back, unsent, when
+    // the stop lands before the turn answered: it comes back into the
+    // composer, not left in a box the next send empties.
+    const family = takesBackStopped(tabFamily) ? tabFamily : null;
+    const sent = family && workingRef.current ? stoppableRef.current() : [];
+    const before = family && sent.length > 0 ? stopBoxWords(driver.rows(), family) : "";
     void typeIntoPane([stopWith]).then(async () => {
-      if (sent.length === 0) return;
-      const back = await takeBackStopped(driver, sent.map((item) => item.text), before);
+      await finishStop(driver, tabFamily);
+      if (!family || sent.length === 0) return;
+      const back = await takeBackStopped(driver, sent.map((item) => item.text), before, undefined, family);
       if (!back) return;
       const item = sent[back.index];
       if (item.id !== undefined && sendTargetRef.current) forgetSentPrompts(sendTargetRef.current, [item.id]);

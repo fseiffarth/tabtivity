@@ -55,7 +55,7 @@ import type { LoginTarget } from "../../lib/remote/loginTarget";
 import { scrollbackRowsFor } from "../../lib/terminal/scrollback";
 import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
-import { confirmFreshSubmit, isClaude } from "../../lib/agents/freshSubmit";
+import { confirmFreshSubmit, dropsFreshEnter } from "../../lib/agents/freshSubmit";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
@@ -1720,9 +1720,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             initialInputPending.current = false;
             const enteredAt = Date.now();
             writePtyInput(id, new Uint8Array([0x0d])).catch(console.error);
-            // A Claude still starting can drop this Enter (`freshSubmit.ts`).
+            // A Claude or OpenCode still starting can drop this Enter (`freshSubmit.ts`).
             // A slash command (`/rename`) begins no turn for a hook to confirm.
-            if (kind === "agent" && isClaude(cmd) && !initialInput.trimStart().startsWith("/")) {
+            if (kind === "agent" && dropsFreshEnter(cmd) && !initialInput.trimStart().startsWith("/")) {
               void confirmFreshSubmit(
                 id,
                 enteredAt,

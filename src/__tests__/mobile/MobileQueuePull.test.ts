@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { claudeBoxWords, codexBoxLines, inputBoxLines, openCodePanelRows, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts } from "../../../mobile-web/src/terminal/queuePull";
+import { claudeBoxWords, codexBoxLines, finishStop, inputBoxLines, openCodeBoxLines, openCodePanelRows, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, stopBoxWords, takeBackStopped, takenPrompts, takesBackStopped } from "../../../mobile-web/src/terminal/queuePull";
+import { openCodeBoxReset } from "../../../mobile-web/src/terminal/composer";
 
 const FAST = { waitMs: 30, pollMs: 2 };
 const RULE = "────────────────────────────────────────";
@@ -293,6 +294,28 @@ describe("queuePull on OpenCode", () => {
     expect(await sendQueuedNow(driver, "opencode")).toBe(true);
     expect(state.keys).toEqual(["\u001b", "\u001b"]);
   });
+
+  it("stops a turn with the second Esc only while the busy row asks for it", async () => {
+    // 2.4.2: one Esc leaves the turn running under `esc again to interrupt`.
+    const stopping = (row: string) => {
+      const keys: string[] = [];
+      return { keys, driver: { rows: () => ["› fix it", "", row, ""], key: async (key: string) => { keys.push(key); return true; } } };
+    };
+    for (const row of [
+      "   ⬝⬝⬝⬝⬝⬝⬝■ esc again to interrupt          ↓ 1 shell · 110 (0%)  ctrl+p commands",
+      "🯦 esc again: stop · Build · stub",
+    ]) {
+      const { keys, driver } = stopping(row);
+      await finishStop(driver, "opencode");
+      expect(keys).toEqual(["\u001b"]);
+    }
+    const ended = stopping("Build · stub · 110 (0%) · Ollama (local) · ctrl+p menu");
+    await finishStop(ended.driver, "opencode");
+    expect(ended.keys).toEqual([]);
+    const claude = stopping("esc again to interrupt");
+    await finishStop(claude.driver, "claude");
+    expect(claude.keys).toEqual([]);
+  });
 });
 
 describe("queueFamily", () => {
@@ -350,5 +373,99 @@ describe("queueFamily", () => {
       expect(await takeBackStopped(driver, ["sent from the chat"], before, FAST)).toBeNull();
       expect(state.keys).toEqual([]);
     });
+  });
+});
+
+/** OpenCode 2.4.2's full TUI at 120×40, rows 30–39 of the probe's frames
+ * (`scripts/verify-cli/opencode/takeback.py`, `takeback-full/`): the last
+ * answer, then the input box over its agent row and `╹▀` edge. */
+const OPENCODE_EDGE = `  ╹${"▀".repeat(60)}`;
+const OPENCODE_IDLE = "  ~/work:develop                                       110 (0%)  ctrl+p commands";
+function openCodeFullRows(box: string[], footer = OPENCODE_IDLE): string[] {
+  return [
+    "  ┃",
+    "  ┃  Say NEXTSINGLEMARK.",
+    "  ┃",
+    "",
+    "     stub answer done",
+    "",
+    ...(box.length ? ["  ┃", ...box.map((line) => `  ┃  ${line}`)] : ["  ┃", "  ┃"]),
+    "  ┃",
+    "  ┃  Build · stub Ollama (local)",
+    OPENCODE_EDGE,
+    footer,
+  ];
+}
+
+/** OpenCode's box with the cursor at its end, as after a stop handed a prompt
+ * back: Ctrl-E there stays, Ctrl-U empties the line, Backspace on an empty
+ * line joins it onto the one above (else takes a character), Ctrl-A Ctrl-K
+ * empties the line. A stop's Esc hands `back` over a moment later. */
+function fakeOpenCodeFull(back: string) {
+  const state = { lines: [] as string[], keys: [] as string[] };
+  const rows = () => openCodeFullRows(state.lines);
+  const key = async (pressed: string) => {
+    state.keys.push(pressed);
+    if (pressed === "\u001b") {
+      setTimeout(() => { state.lines = back.split("\n"); }, 5);
+      return true;
+    }
+    for (const char of pressed) {
+      const last = state.lines.length - 1;
+      if (last < 0) continue;
+      if (char === "\u0015" || char === "\u000b") state.lines[last] = "";
+      else if (char === "\u007f") {
+        if (state.lines[last]) state.lines[last] = state.lines[last].slice(0, -1);
+        else if (last > 0) state.lines.pop();
+      }
+    }
+    if (state.lines.length === 1 && !state.lines[0]) state.lines = [];
+    return true;
+  };
+  return { state, driver: { rows, key } };
+}
+
+describe("a stop OpenCode answers by handing the prompt back (2.4.2)", () => {
+  it("reads the full TUI's box, not the prompts above it", () => {
+    expect(openCodeBoxLines(openCodeFullRows(["STUB:SLOW 12 Say MULTIMARK.", "Second line TWOMARK."])))
+      .toEqual(["STUB:SLOW 12 Say MULTIMARK.", "Second line TWOMARK."]);
+    expect(openCodeBoxLines(openCodeFullRows([], "   ⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt            110 (0%)  ctrl+p commands"))).toEqual([]);
+    // The start screen: the box centred, its placeholder no draft.
+    expect(openCodeBoxLines([
+      "                       ┃",
+      "                       ┃  Ask anything… \"Fix a TODO in the codebase\"",
+      "                       ┃",
+      "                       ┃  Build · stub Ollama (local)",
+      `                       ╹${"▀".repeat(40)}`,
+      "                       ~/work:develop                            shift+tab agents  ctrl+p commands",
+    ])).toEqual([]);
+    // mini draws no such box; neither does Claude.
+    expect(openCodeBoxLines(["┃", "Build · stub · Ollama (local) · ctrl+p menu"])).toBeNull();
+    expect(openCodeBoxLines(["❯ fix it", RULE])).toBeNull();
+  });
+
+  it("takes a two-line prompt the chat sent back out of the box, every line of it", async () => {
+    const { state, driver } = fakeOpenCodeFull("STUB:SLOW 12 Say MULTIMARK.\nSecond line TWOMARK.");
+    const before = stopBoxWords(driver.rows(), "opencode");
+    expect(before).toBe("");
+    await driver.key("\u001b");
+    const back = await takeBackStopped(driver, ["older one", "STUB:SLOW 12 Say MULTIMARK.\nSecond line TWOMARK."], before, FAST, "opencode");
+    expect(back).toEqual({ index: 1, cleared: true });
+    expect(state.lines).toEqual([]);
+    expect(state.keys).toContain(openCodeBoxReset(2));
+    // Never OpenCode's Ctrl+C: on an empty box it quits.
+    expect(state.keys.join("")).not.toContain("\u0003");
+  });
+
+  it("leaves the user's own words in the box", async () => {
+    const { state, driver } = fakeOpenCodeFull("typed in the terminal");
+    await driver.key("\u001b");
+    expect(await takeBackStopped(driver, ["sent from the chat"], "", FAST, "opencode")).toBeNull();
+    expect(state.lines).toEqual(["typed in the terminal"]);
+    expect(state.keys).toEqual(["\u001b"]);
+  });
+
+  it("is asked only of the CLIs that hand a prompt back", () => {
+    expect(["claude", "opencode", "codex", null].map(takesBackStopped)).toEqual([true, true, false, false]);
   });
 });

@@ -18,7 +18,7 @@ import {
   submitScheduledAgentMessage,
   type ScheduledAgentInput,
 } from "../../lib/agents/scheduledAgentInput";
-import { confirmFreshSubmit, freshClaude } from "../../lib/agents/freshSubmit";
+import { confirmFreshSubmit, freshStart } from "../../lib/agents/freshSubmit";
 import { forgetPhoneHold, onPhoneHoldDue, phoneHoldDue } from "../../lib/agents/phoneHolds";
 import { agentDeliveryReady, agentDeliveryTurn, lastPtyOutputAt, noteScheduleProposal, useActivityStore } from "../../stores/activity";
 import { recordScheduledDelivery, sendCollectedPrompt, useAgentPromptsStore } from "../../stores/agents/agentPrompts";
@@ -336,7 +336,7 @@ async function queueDuePhoneHold(
     if (scheduledAgentInput(binding.scheduleTargetId) !== input || !queueableWhileBusy(input)) {
       throw new Error("agent readiness changed");
     }
-    const fresh = freshClaude(input.agent, input.ptyId);
+    const fresh = freshStart(input.agent, input.ptyId);
     const since = Date.now();
     await submitScheduledAgentMessage(binding.scheduleTargetId, schedule.message, {
       preface: schedule.preface,
@@ -517,7 +517,7 @@ export function AgentScheduleHost() {
                   || !agentDeliveryReady(input.ptyId, COMPLETION_STABLE_MS)
                   || useActivityStore.getState().busyByTab[input.ptyId]
                   || useActivityStore.getState().attentionByTab[input.ptyId] === "decision") throw new Error("agent readiness changed");
-              const fresh = freshClaude(input.agent, input.ptyId);
+              const fresh = freshStart(input.agent, input.ptyId);
               const since = Date.now();
               const ptyId = await submitScheduledAgentMessage(
                 binding.scheduleTargetId,

@@ -146,11 +146,11 @@ export async function submitScheduledAgentMessage(
   const takesInput = options.whileBusy ? (input?.started ?? input?.ready) : input?.ready;
   if (!input || !takesInput?.()) throw new Error("agent terminal is not ready");
   const bracketed = bracketsAgentMessage(input.agent, input.bracketedPaste());
-  const typed = agentInputWrites(message, bracketed);
+  const typed = agentInputWrites(message, bracketed, input.agent);
   if (typed.length === 0) throw new Error("scheduled prompt is empty");
   const messageWrites = options.whileBusy ? agentQueueWrites(typed, input.agent, message) : typed;
   const prefaceWrites = (options.preface ?? [])
-    .map((command) => agentInputWrites(command, bracketed))
+    .map((command) => agentInputWrites(command, bracketed, input.agent))
     .filter((writes) => writes.length > 0);
 
   const submissions = [...prefaceWrites, messageWrites];
@@ -177,7 +177,7 @@ export async function submitScheduledAgentMessage(
 export async function submitScheduledAgentCommand(scheduleTargetId: string, command: string): Promise<string> {
   const input = inputs.get(scheduleTargetId);
   if (!input || !input.ready()) throw new Error("agent terminal is not ready");
-  const typed = agentInputWrites(command, bracketsAgentMessage(input.agent, input.bracketedPaste()));
+  const typed = agentInputWrites(command, bracketsAgentMessage(input.agent, input.bracketedPaste()), input.agent);
   if (typed.length === 0) throw new Error("command is empty");
   const writes = [...(input.dialogCloseKeys?.() ?? []), ...typed];
   input.noteInput?.();

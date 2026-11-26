@@ -20,10 +20,10 @@ import { type ReadableLine } from "../../terminal/readableScreen";
 import { stopKey } from "../../terminal/agentBusy";
 import { type TerminalControl } from "../../terminal/protocol";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../terminal/openCodeMini";
-import { agentFamily, agentInputWrites, bracketsAgentMessage } from "../../terminal/composer";
+import { agentFamily, agentInputWrites, bracketsAgentMessage, newConversationCommand } from "../../terminal/composer";
 import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../../terminal/commitPrompts";
 import { sendToSubagent, subagentViewed, viewSession, type SubagentSendFailure } from "../../terminal/subagentInput";
-import { finishSendNow, pullQueuedPrompts, queueFamily, queuedHintShown, takenPrompts } from "../../terminal/queuePull";
+import { finishSendNow, finishStop, pullQueuedPrompts, queueFamily, queuedHintShown, takenPrompts } from "../../terminal/queuePull";
 import { inWorkflow, type SubagentStep } from "../../terminal/subagents";
 import {
   MAX_PENDING, arrivedPending, pendingPrompt, reworded, type PendingPrompt,
@@ -79,12 +79,11 @@ const AGENT_INTERRUPT_GAP = 400;
 /** How long Send is held before it interrupts the agent instead of queueing. */
 const SEND_HOLD_MS = 450;
 
-/** What the new-conversation button types. Every supported scrollback agent
- * reads `/clear` as "start a new chat" — Codex too, since it grew the command.
- * Codex's own `/new` is no longer a one-keystroke act: from 0.156 it opens a
- * "Where should the new conversation run?" picker, which the button's single
- * Enter leaves waiting on the desktop (2026-09-23). */
-const NEW_CONVERSATION_COMMAND = "/clear";
+/* What the new-conversation button types (`newConversationCommand`): `/clear`
+ * reads as "start a new chat" in Codex too, since it grew the command. Codex's
+ * own `/new` is no longer a one-keystroke act: from 0.156 it opens a "Where
+ * should the new conversation run?" picker, which the button's single Enter
+ * leaves waiting on the desktop (2026-09-23). */
 
 /** The Commit chip's sheet rows, by the prompt each sends. */
 const COMMIT_LABELS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit.own", state: "mobile.commit.state", split: "mobile.commit.split" };
@@ -301,7 +300,7 @@ export function useComposerSend({
    * composer's Send and the composer chips' slash commands. */
   const sendAgentText = (text: string, prompt?: number) => {
     const bracketed = bracketsAgentMessage(tab.agent_label ?? tab.label, bracketedPaste.current());
-    const typed = agentInputWrites(text, bracketed);
+    const typed = agentInputWrites(text, bracketed, tab.agent_label ?? tab.label);
     // A dialog OpenCode has up over its composer would take the message
     // instead of the agent: closed first (`openCodeDialogCloseKeys`).
     const writes = typed.length > 0 && isOpenCodeTab(tab.agent_label ?? tab.label)
@@ -567,7 +566,7 @@ export function useComposerSend({
       setPending((current) => current.map((entry) => entry.id === id ? { ...entry, failed: true, retrying: false } : entry));
     });
     if (release) void releaseCodexQueue().finally(send);
-    else send();
+    else void finishStop(screenDriver, queueCli).finally(send);
     return true;
   };
   /** Send held down: interrupt and send. `fired` swallows the click the
@@ -653,13 +652,17 @@ export function useComposerSend({
   /** Codex's queue is on screen: an Esc would drop it into the CLI's input
    * box, which a chat does not show, unsent. */
   const codexQueueShown = () => queueCli === "codex" && queuedHintShown(screenRows.current(), "codex");
+  /** The pane's screen and keys, as the queue moves drive them. */
+  const screenDriver = { rows: () => screenRows.current(), key: async (key: string) => type(key) };
   /** What sends that box on (`finishSendNow`). */
-  const releaseCodexQueue = () => finishSendNow({ rows: () => screenRows.current(), key: async (key) => type(key) }, "codex", SUBAGENT_WALK);
+  const releaseCodexQueue = () => finishSendNow(screenDriver, "codex", SUBAGENT_WALK);
   /** The working row's Stop: the stop key (Ctrl+C for Copilot and Cursor, else Esc), and what Claude does on its own for a
    * queue, Codex's goes on too. */
   const stopTurn = () => {
     const release = codexQueueShown();
-    if (type(stopKey(agentKey)) && release) void releaseCodexQueue();
+    if (!type(stopKey(agentKey))) return;
+    if (release) void releaseCodexQueue();
+    else void finishStop(screenDriver, queueCli);
   };
   /** The queued bubbles' Send now (the desktop chat's): Claude's own
    * Ctrl+X Ctrl+S sends what waits in its queue into the turn at once; the
@@ -921,7 +924,7 @@ export function useComposerSend({
       return;
     }
     setClearRefused(false);
-    if (sendAgentText(NEW_CONVERSATION_COMMAND)) startedOver();
+    if (sendAgentText(newConversationCommand(agentKey))) startedOver();
   };
   // The bubbles' Edit and Resend go to the memoised transcript: a new closure
   // per render redrew every turn on each keystroke and screen tick, so the two

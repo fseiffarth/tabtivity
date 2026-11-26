@@ -7,5 +7,7 @@ export {
   agentFamily,
   agentInputWrites,
   bracketsAgentMessage,
+  newConversationCommand,
+  openCodeBoxReset,
   sanitizeAgentMessage,
 } from "../../../shared/agentComposer";

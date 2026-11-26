@@ -5,6 +5,7 @@ vi.mock("../../lib/terminal/terminalInput", () => ({
 }));
 
 import { writePtyInput } from "../../lib/terminal/terminalInput";
+import { openCodeBoxReset } from "../../../shared/agentComposer";
 import {
   SessionPickerOpenError,
   _clearScheduledAgentInputsForTest,
@@ -84,9 +85,10 @@ describe("scheduled agent input", () => {
 
     await submitScheduledAgentMessage("target", "yes", { preface: ["/compact"], settle: () => Promise.resolve() });
 
+    // OpenCode's whole box is emptied, the preface's too (`openCodeBoxReset`).
     expect(writeMock.mock.calls.map(([, bytes]) => decode(bytes))).toEqual([
-      "\u001b", "\u0001\u000b", "\u001b[200~/compact\u001b[201~", "\r",
-      "\u0001\u000b", "\u001b[200~yes\u001b[201~", "\r",
+      "\u001b", openCodeBoxReset(), "\u001b[200~/compact\u001b[201~", "\r",
+      openCodeBoxReset(), "\u001b[200~yes\u001b[201~", "\r",
     ]);
   });
 

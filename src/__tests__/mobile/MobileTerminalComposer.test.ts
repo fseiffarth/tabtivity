@@ -6,7 +6,7 @@ import {
   agentInputWrites,
   bracketsAgentMessage,
 } from "../../../mobile-web/src/terminal/composer";
-import { agentQueueWrites } from "../../../shared/agentComposer";
+import { agentQueueWrites, newConversationCommand, openCodeBoxReset } from "../../../shared/agentComposer";
 import { BRAND } from "../../lib/brand";
 
 describe(`${BRAND.display} Mobile agent composer writes`, () => {
@@ -56,6 +56,40 @@ describe(`${BRAND.display} Mobile agent composer writes`, () => {
       `${PASTE_START}first line\nsecond line${PASTE_END}`,
       "\r",
     ]);
+  });
+
+  it("closes OpenCode's @ picker with a space before the Enter", () => {
+    // The picker takes the Enter, so the words stayed in the box (2.4.2).
+    const words = "what is this @inbox/shot.png";
+    expect(agentInputWrites(words, true, "OpenCode")).toEqual([openCodeBoxReset(), `${PASTE_START}${words}${PASTE_END}`, " ", "\r"]);
+    expect(agentInputWrites("see @a.png", false, "opencode")).toEqual([openCodeBoxReset(), "see @a.png", " ", "\r"]);
+    expect(agentInputWrites("@a.png then more", true, "opencode").slice(-1)).toEqual(["\r"]);
+    expect(agentInputWrites("mail me@example.org", true, "opencode").slice(-2)).toEqual([`${PASTE_START}mail me@example.org${PASTE_END}`, "\r"]);
+    expect(agentInputWrites(words, true, "claude").slice(-1)).toEqual(["\r"]);
+    expect(agentInputWrites(words, true)).toEqual([AGENT_LINE_RESET, `${PASTE_START}${words}${PASTE_END}`, "\r"]);
+  });
+
+  it("empties every line of OpenCode's box, not just the cursor's", () => {
+    // 2.4.2 hands a prompt stopped before its first token back into the box,
+    // and a draft typed over several lines is several lines: the line reset
+    // left all but the last in front of the next prompt (takeback.py).
+    const reset = openCodeBoxReset();
+    expect(reset.endsWith(AGENT_LINE_RESET)).toBe(true);
+    expect(reset.slice(0, -AGENT_LINE_RESET.length)).toBe("\u0005\u0015\u007f".repeat(32));
+    expect(openCodeBoxReset(2)).toBe("\u0005\u0015\u007f\u0005\u0015\u007f" + AGENT_LINE_RESET);
+    // Never OpenCode's Ctrl+C, which quits on an empty box.
+    expect(reset).not.toContain("\u0003");
+    expect(agentInputWrites("two\nlines", false, "OpenCode (API)")[0]).toBe(reset);
+    expect(agentInputWrites("two\nlines", true, "opencode --standalone")[0]).toBe(reset);
+    for (const agent of ["claude", "codex", "copilot", undefined]) {
+      expect(agentInputWrites("two\nlines", true, agent)[0]).toBe(AGENT_LINE_RESET);
+    }
+  });
+
+  it("clears an OpenCode conversation with /new, whose mini has no /clear", () => {
+    expect(newConversationCommand("opencode")).toBe("/new");
+    expect(newConversationCommand("OpenCode (API)")).toBe("/new");
+    for (const agent of ["claude", "codex", "copilot", "cursor-agent"]) expect(newConversationCommand(agent)).toBe("/clear");
   });
 
   it("types a one-character message as a key press even where the pane pastes", () => {
