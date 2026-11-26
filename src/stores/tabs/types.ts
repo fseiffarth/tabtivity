@@ -186,6 +186,10 @@ export interface ViewerState {
   // over a selection, because writing the clipboard is not this viewer's to keep
   // doing if the reader was only pointing at a sentence.
   pdfCopyOnSelect?: boolean;
+  // Whether the PDF viewer tints a form's fillable fields (#pdf-forms). Absent means
+  // ON: a field nobody can see is a field nobody fills. Per tab, for
+  // `pdfAutosaveNotes`'s reason.
+  pdfHighlightFields?: boolean;
   // The table viewer's column separator (#40), as the literal character. Absent
   // means "auto" — sniffed from the content on every open. It is persisted only
   // when the reader *overrides* the guess, because that is the case the sniffer

@@ -54,6 +54,7 @@ import {
   openSource,
   sourceBytes,
   buildPdf,
+  saveFlattensForm,
   REDACT_DEFAULT_DPI,
   type PdfSources,
 } from "./pdfDoc";
@@ -127,6 +128,8 @@ import { usePdfPresent } from "./usePdfPresent";
 import { usePdfMetadata } from "./usePdfMetadata";
 import { usePdfReverseSearch } from "./usePdfReverseSearch";
 import { usePdfNotes } from "./usePdfNotes";
+import { usePdfForm } from "./usePdfForm";
+import { scrollIntoPdfBox } from "./scrollBox";
 import { usePdfPrint } from "./usePdfPrint";
 import { usePageTransfer } from "./usePageTransfer";
 
@@ -340,8 +343,24 @@ function PdfCanvas({
   /** Unsaved edits: the arrangement no longer describes the file on disk, or the
    *  metadata is pending deletion — which is an edit with no page to sit on, and
    *  the only reason Save is reachable at all on an otherwise untouched file. */
+  // ── Filling the form (#pdf-forms) ────────────────────────────────────────
+  // Declared before the dirty flag it feeds. Its two callbacks reach code further
+  // down (the autosave, the page scroller) through refs set there.
+  const formEditRef = useRef<() => void>(() => {});
+  const formJumpRef = useRef<(filePage: number) => void>(() => {});
+  const onFormEdit = useCallback(() => formEditRef.current(), []);
+  const jumpToFormPage = useCallback((filePage: number) => formJumpRef.current(filePage), []);
+  const form = usePdfForm({ doc, viewPos, onEdit: onFormEdit, jumpToFilePage: jumpToFormPage });
+  const formPendingRef = useRef(false);
+  formPendingRef.current = form.formDirty;
+  /** A rearranged save of a form PDF is waiting to be confirmed: it flattens the
+   *  fields (`flattenFormFields`), the reader is told first. */
+  const [confirmFlatten, setConfirmFlatten] = useState(false);
+
   const dirty =
-    doc != null && pages.length > 0 && (stripMeta || !isPristine(pages, doc.numPages));
+    doc != null &&
+    pages.length > 0 &&
+    (stripMeta || form.formDirty || !isPristine(pages, doc.numPages));
   // The mtime poll runs on an interval that closes over its own scope; it needs
   // the LIVE dirty flag to decide whether an on-disk change may auto-reload.
   const dirtyRef = useRef(false);
@@ -454,7 +473,24 @@ function PdfCanvas({
     deletePdfNote,
     notesTotal,
     notedSheets,
-  } = usePdfNotes({ doc, pages, pagesRef, sourcesRef, applyEdit, viewPos, stripMeta, staleOnDisk });
+    scheduleNoteAutosave,
+  } = usePdfNotes({
+    doc,
+    pages,
+    pagesRef,
+    sourcesRef,
+    applyEdit,
+    viewPos,
+    stripMeta,
+    staleOnDisk,
+    formPendingRef,
+  });
+  // A filled-in field holds the source bytes (as an arrangement edit does) and arms
+  // the autosave remarks use.
+  formEditRef.current = () => {
+    materializeSourceBytes();
+    scheduleNoteAutosave();
+  };
   // How this reopen starts — the seeded zoom and whether it is the fit baseline.
   // Decided once, by `restoredPdfZoom`, which is where the rule is documented.
   const restored = useState(() => restoredPdfZoom(viewPos.initial))[0];
@@ -481,6 +517,17 @@ function PdfCanvas({
     askPopoutRepaint();
   }, []);
   const contentRef = useRef<HTMLDivElement>(null);
+  // Tab to a field on a sheet that is off screen: bring the sheet near, so its
+  // fields are read and the field's own editor scrolls itself the rest of the way.
+  formJumpRef.current = (filePage: number) => {
+    const idx = pagesRef.current.findIndex((r) => r.src === SELF && r.page === filePage);
+    const wrap = idx < 0 ? undefined : (contentRef.current?.children[idx] as HTMLElement | undefined);
+    const box = scrollRef.current;
+    if (!wrap || !box) return;
+    const w = wrap.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    if (w.bottom < b.top || w.top > b.bottom) scrollIntoPdfBox(wrap, "start");
+  };
   // True once the first document load has run, so only that load restores the
   // session-persisted scroll/zoom (#viewerpos); later reloads behave as before.
   const didInitialLoad = useRef(false);
@@ -916,7 +963,7 @@ function PdfCanvas({
    * a sheet whose remarks changed *while* the bytes were in flight keeps its
    * ownership, since its `notes` array is no longer the one that was written.
    */
-  const handleSave = useCallback(async (redactConfirmed = false, silent = false) => {
+  const handleSave = useCallback(async (redactConfirmed = false, silent = false, flattenConfirmed = false) => {
     if (!dirty || writing.current) return;
     // Blackouts are burned in by rasterising the sheets that carry them, which
     // destroys their text for good. Ask first — the same Save also writes ordinary
@@ -926,6 +973,15 @@ function PdfCanvas({
       return;
     }
     setConfirmRedact(false);
+    // A rebuild (pages moved, turned, merged, blacked out, or the metadata deleted)
+    // cannot keep a form fillable, so it burns the fields in (#pdf-forms). Asked
+    // for the same reason as the blackout: it is not what "Save" says.
+    if (!silent && !flattenConfirmed && (await saveFlattensForm(pagesRef.current, sources, stripMeta))) {
+      setConfirmFlatten(true);
+      return;
+    }
+    setConfirmFlatten(false);
+    if (writing.current) return;
     writing.current = true;
     // The Save button's spinner is feedback for a click; an autosave had no click, so
     // flashing it once per comment is chrome twitching at the reader. The panel says
@@ -936,12 +992,17 @@ function PdfCanvas({
     // The exact list the bytes are built from, so the reconciliation below can tell
     // what was written from what has been edited since.
     const written = pages;
+    // The form values as they stand now, and the revision they are — a field typed
+    // into while the bytes are in flight stays pending.
+    const writtenFormRev = form.revRef.current;
     try {
       const bytes = await buildPdf(written, sources, {
         emptyMsg: t("pdfViewer.pdfBuildEmpty"),
         sourceClosedMsg: t("pdfViewer.pdfSourceClosed"),
         redactDpi,
         stripMetadata: stripMeta,
+        formValues: form.valuesRef.current,
+        worker: workerSlot.current?.get(),
       });
       // Verify the file's identity HERE, not from the poll's cached flag.
       //
@@ -976,10 +1037,18 @@ function PdfCanvas({
       const m = await fileMtime(path, scope).catch(() => null);
       if (m != null) lastMtime.current = m;
       setStaleOnDisk(false);
+      form.markSaved(writtenFormRev);
       if (!silent) {
         setDiskVersion((v) => v + 1);
         return;
       }
+      // What was just written is the file now, and the next save must start from it:
+      // a silent save keeps the document on screen (it does not reload), so without
+      // this the next one would rebuild from the bytes it was opened from and drop
+      // every remark and value the earlier autosaves wrote. Only the identity
+      // arrangement is ever autosaved, so these bytes are the same pages.
+      const self = sources.get(SELF);
+      if (self) self.bytes = bytes;
       // What was just written IS the file's own set now — same remarks, same ids.
       setFileNotes((prev) => {
         const next = new Map(prev);
@@ -1011,13 +1080,17 @@ function PdfCanvas({
       setSaving(false);
       setAutosaving(false);
     }
-  }, [dirty, pages, sources, path, scope, redactDpi, stripMeta, noteKey, t, setAutosaving, setFileNotes, writing]);
+  }, [dirty, pages, sources, path, scope, redactDpi, stripMeta, noteKey, t, setAutosaving, setFileNotes, writing, form]);
 
   // What a scheduled remark autosave calls. Through a ref because the timer is armed
   // by an edit made long before this render's `handleSave` exists, and because the
   // save closes over the arrangement it must write — the one from the render that
   // last saw it, not the one from the render that armed the timer.
   noteSaveRef.current = () => void handleSave(false, true);
+  // Ctrl+S typed inside a field's editor, after the editor committed its value.
+  const formSaveRef = useRef<() => void>(() => {});
+  formSaveRef.current = () => void handleSave();
+  const requestFormSave = useCallback(() => formSaveRef.current(), []);
 
   const {
     pdfPickerRoots,
@@ -1134,13 +1207,14 @@ function PdfCanvas({
         e.preventDefault();
         void handlePrint();
       } else if (mod && key === "z" && !e.shiftKey) {
-        // Marking up, the keys undo strokes; the arrangement holds still then.
-        if (marking && isTextEntry(e.target)) return;
+        // Marking up, the keys undo strokes; the arrangement holds still then. In a
+        // text box (a form field, the find bar, a remark) they are the box's own.
+        if (isTextEntry(e.target)) return;
         e.preventDefault();
         if (marking) markupRef.current.undo();
         else undo();
       } else if (mod && (key === "y" || (key === "z" && e.shiftKey))) {
-        if (marking && isTextEntry(e.target)) return;
+        if (isTextEntry(e.target)) return;
         e.preventDefault();
         if (marking) markupRef.current.redo();
         else redo();
@@ -2056,6 +2130,23 @@ function PdfCanvas({
           <CommentIcon />
         </button>
         <UntestedTag id="pdfViewer.4" />
+        {/* The form's fields (#pdf-forms): only on a PDF that has some. Filling is
+            not a mode — a field is filled by clicking it — so this only says whether
+            the fields wear a tint. */}
+        {form.hasForm && (
+          <>
+            <button
+              className={`file-viewer-zoom-btn file-viewer-zoom-text${form.highlight ? " active" : ""}`}
+              onClick={() => form.setHighlight(!form.highlight)}
+              disabled={marking}
+              title={t("pdfForm.highlightTitle")}
+              aria-pressed={form.highlight}
+            >
+              {t("pdfForm.highlightToggle")}
+            </button>
+            <UntestedTag id="pdfViewer.forms" />
+          </>
+        )}
         {/* Delete the metadata (#pdf-meta). Beside the blackout tool because the two
             are the same job on the file's two halves — what is on the page, and what
             the file says about itself off it. */}
@@ -2360,6 +2451,18 @@ function PdfCanvas({
           <button onClick={() => setConfirmRedact(false)}>{t("common.cancel")}</button>
         </div>
       )}
+      {confirmFlatten && (
+        // A rearranging save of a form: it keeps every value, as page content, and
+        // the fields stop being fillable. Said before, not discovered after.
+        <div className="file-viewer-banner is-warn" role="alert">
+          <span>{t("pdfForm.flattenConfirmMessage")}</span>
+          <UntestedTag id="pdfViewer.formFlatten" />
+          <button onClick={() => void handleSave(true, false, true)}>
+            {t("pdfForm.flattenConfirmButton")}
+          </button>
+          <button onClick={() => setConfirmFlatten(false)}>{t("common.cancel")}</button>
+        </div>
+      )}
       {staleOnDisk && (
         // The file changed underneath our unsaved edits. Reloading would throw them
         // away and saving would overwrite the newer file, so neither happens on its
@@ -2591,6 +2694,19 @@ function PdfCanvas({
                     questionPins={
                       marking && markup.panel && ref.src === SELF && questionPins.has(i + 1)
                         ? { pins: questionPins.get(i + 1)!, focus: markup.questions.focus, onPick: pickQuestionPin }
+                        : null
+                    }
+                    form={
+                      ref.src === SELF && form.hasForm
+                        ? {
+                            valueOf: form.valueOf,
+                            highlight: form.highlight,
+                            focus: form.focus,
+                            rev: form.pageRevs.get(ref.page) ?? 0,
+                            onCommit: form.commit,
+                            onStep: form.step,
+                            onSaveRequest: requestFormSave,
+                          }
                         : null
                     }
                     tickBadges={

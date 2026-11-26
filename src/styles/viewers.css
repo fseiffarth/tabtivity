@@ -6042,6 +6042,96 @@ select.file-viewer-run-args-input {
   background: transparent;
   box-shadow: none;
 }
+/* A form's fillable fields (#pdf-forms). The canvas paints each field and its value
+   (from pdf.js's annotation storage); this layer is only where a click lands, so at
+   rest it draws nothing but the optional tint — blue, fixed rather than the theme's
+   accent for the link layer's reason: it sits on the document's paper. Above the
+   text layer (1), a highlight (2) and the links (3): a field is what the click is
+   for. */
+.file-viewer-pdf-form-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.file-viewer-pdf-field-slot {
+  position: absolute;
+  pointer-events: auto;
+}
+.file-viewer-pdf-field {
+  --pdf-field-color: #2563eb;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 1px;
+  background: transparent;
+  cursor: var(--cur-text, text);
+  transition: background-color 90ms ease-out, box-shadow 90ms ease-out;
+}
+.file-viewer-pdf-field.is-checkbox,
+.file-viewer-pdf-field.is-radio,
+.file-viewer-pdf-field.is-choice {
+  cursor: var(--cur-pointer, pointer);
+}
+.file-viewer-pdf-form-layer.is-tinted .file-viewer-pdf-field {
+  background: color-mix(in srgb, var(--pdf-field-color) 11%, transparent);
+}
+.file-viewer-pdf-form-layer.is-tinted .file-viewer-pdf-field.is-required {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #dc2626 55%, transparent);
+}
+.file-viewer-pdf-field:hover,
+.file-viewer-pdf-field:focus-visible {
+  background: color-mix(in srgb, var(--pdf-field-color) 20%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pdf-field-color) 65%, transparent);
+  outline: none;
+}
+/* The editor sits exactly over the field and is opaque, so the value the canvas
+   still shows underneath is not read twice. Black on white whatever the theme:
+   it stands in for the paper. */
+.file-viewer-pdf-field-editor,
+.file-viewer-pdf-field-settling {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 1px;
+  background: #fff;
+  color: #000;
+  font-family: Helvetica, Arial, sans-serif;
+  line-height: 1.15;
+  box-shadow: inset 0 0 0 1px #2563eb;
+  outline: none;
+  z-index: 1;
+}
+.file-viewer-pdf-field-editor.is-multiline {
+  padding: 2px;
+  resize: none;
+  overflow: auto;
+}
+.file-viewer-pdf-field-editor.is-choice {
+  padding: 0;
+}
+.file-viewer-pdf-field-settling {
+  inset: 0;
+  display: flex;
+  align-items: center;
+  white-space: pre;
+  overflow: hidden;
+  box-shadow: none;
+  pointer-events: none;
+}
+.file-viewer-pdf-field-settling.is-multiline {
+  align-items: flex-start;
+  white-space: pre-wrap;
+}
+[data-sync-armed] .file-viewer-pdf-page.is-syncable ~ .file-viewer-pdf-form-layer .file-viewer-pdf-field {
+  cursor: var(--cur-crosshair, crosshair);
+}
 /* While reverse search is armed (Ctrl/⌘ held) a click on a link box performs the
    SyncTeX jump instead of following the link, so the boxes must not go on
    promising a link cursor. The boxes are later siblings of the page's canvas. */

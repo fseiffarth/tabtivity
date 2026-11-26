@@ -43,6 +43,7 @@ export function usePdfNotes({
   viewPos,
   stripMeta,
   staleOnDisk,
+  formPendingRef,
 }: {
   doc: PDFDocumentProxy | null;
   pages: PageList;
@@ -55,6 +56,9 @@ export function usePdfNotes({
   stripMeta: boolean;
   /** The file changed on disk under unsaved edits: holds the autosave back. */
   staleOnDisk: boolean;
+  /** Filled-in form values are pending (#pdf-forms). They ride the same autosave —
+   *  same switch, same gate — so a field edit with no remark pending still writes. */
+  formPendingRef: React.MutableRefObject<boolean>;
 }) {
   // ── Remarks (#pdf-notes) ─────────────────────────────────────────────────
   // Writing, changing and deleting a remark are ordinary arrangement edits, for the
@@ -265,7 +269,7 @@ export function usePdfNotes({
       if (!autosaveRef.current) return;
       const d = docRef.current;
       const list = pagesRef.current;
-      if (!d || notedSheetCount(list) === 0) return;
+      if (!d || (notedSheetCount(list) === 0 && !formPendingRef.current)) return;
       if (stripMetaRef.current || staleRef.current) return;
       if (!isPristineExceptNotes(list, d.numPages)) return;
       // A save already running has its own bytes in flight; wait it out rather than
@@ -276,7 +280,7 @@ export function usePdfNotes({
       }
       noteSaveRef.current?.();
     }, NOTE_AUTOSAVE_MS);
-  }, [pagesRef]);
+  }, [pagesRef, formPendingRef]);
 
   // The three edits themselves. Ordinary arrangement edits (see above), each followed
   // by the autosave nudge — which is where writing-on-its-own is armed for *every*
@@ -340,6 +344,7 @@ export function usePdfNotes({
     autosaving,
     setAutosaving,
     noteSaveRef,
+    scheduleNoteAutosave,
     addPdfNote,
     updatePdfNote,
     deletePdfNote,
