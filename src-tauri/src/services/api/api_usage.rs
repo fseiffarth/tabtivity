@@ -31,6 +31,15 @@
 //! provider is refused until one is set ([`Verdict::NoLimit`]). Once billed ≥
 //! limit ([`Verdict::Reached`]) the proxy refuses new billed requests.
 //!
+//! **Custom endpoints** (`custom-1`..`custom-8`, `agent_api_keys::Provider::
+//! Custom`) are providers like the others here: a row in the ledger under
+//! their id, a limit in `agent_api_token_limits`, a reservation cell of their
+//! own. They have no price table, so their charges carry no dollars and are
+//! never listed as "priced at the highest rate" ([`Ledger::add`]); the token
+//! limit is their only guard. A removed slot keeps its ledger entry until the
+//! month turns, and `agent_api_keys` does not hand its number out again
+//! before then.
+//!
 //! **Requests in flight count** (gap 9): before forwarding, the proxy
 //! reserves each billed request's worst case in billed tokens (`api_meter::
 //! Meter::worst_case_billed`) with [`Book::reserve`], refused when billed + every reservation
@@ -219,11 +228,16 @@ impl Ledger {
         m.requests = m.requests.saturating_add(1);
         m.billed = m.billed.saturating_add(billed);
         m.usd += charge.usd.max(0.0);
-        m.unknown |= !charge.known;
+        // A custom endpoint has no price table, so none of its models is
+        // "priced at the highest rate": the panel says "no price" instead.
+        m.unknown |= !charge.known && provider.priced();
     }
 
     /// The models of `provider` priced at the fallback rate this month.
     pub fn unknown_models(&self, provider: Provider) -> Vec<String> {
+        if !provider.priced() {
+            return Vec::new();
+        }
         self.providers
             .get(provider.id())
             .map(|u| u.models.iter().filter(|(_, m)| m.unknown).map(|(n, _)| n.clone()).collect())
@@ -283,16 +297,12 @@ struct BookState {
     dirty: bool,
     flush_scheduled: bool,
     /// Billed tokens held by requests in flight, per provider
-    /// ([`Provider::ALL`] order).
-    reserved: [u64; Provider::ALL.len()],
+    /// ([`Provider::index`] order).
+    reserved: [u64; Provider::SLOTS],
 }
 
 fn slot(provider: Provider) -> usize {
-    match provider {
-        Provider::Anthropic => 0,
-        Provider::Gemini => 1,
-        Provider::OpenAi => 2,
-    }
+    provider.index()
 }
 
 /// One billed request's hold on the monthly limit while it is in flight
@@ -340,7 +350,7 @@ impl Book {
                 loaded: false,
                 dirty: false,
                 flush_scheduled: false,
-                reserved: [0; Provider::ALL.len()],
+                reserved: [0; Provider::SLOTS],
             }),
             writing: Mutex::new(()),
             closing: std::sync::atomic::AtomicBool::new(false),
@@ -788,6 +798,46 @@ mod tests {
         let usd = legacy_usd_limits_in(&s);
         assert_eq!(usd.len(), 1);
         assert_eq!(usd["anthropic"], 20.0);
+    }
+
+    /// A custom slot has a ledger entry, limit and reservations of its own,
+    /// and no price: its model is never "priced at the highest rate".
+    #[test]
+    fn a_custom_slot_is_its_own_row_and_never_priced_at_the_fallback_rate() {
+        let (one, two) = (Provider::Custom(1), Provider::Custom(2));
+        let mut l = Ledger::default();
+        l.roll(at(2026, 10, 4));
+        let unpriced = Charge { model: "m-1".into(), known: false, input: 100, output: 50, usd: 0.0, ..Charge::default() };
+        l.add(one, &unpriced);
+        l.add(Provider::Anthropic, &charge("claude-new", 1.0, false));
+        assert_eq!(l.billed(one), 150);
+        assert_eq!((l.billed(two), l.spent_usd(one)), (0, 0.0));
+        assert!(l.unknown_models(one).is_empty(), "no price is not an unknown price");
+        assert_eq!(l.unknown_models(Provider::Anthropic), ["claude-new"]);
+        assert_eq!(l.providers["custom-1"].models["m-1"].requests, 1);
+        // The limits of custom slots are read like the others'; a slot that
+        // does not exist is no provider.
+        let s: crate::schema::Settings =
+            serde_json::from_str(r#"{"agent_api_token_limits":{"custom-1":4000,"custom-2":0,"custom-9":5,"custom-01":5}}"#).unwrap();
+        let limits = limits_in(&s);
+        assert_eq!(limits.keys().collect::<Vec<_>>(), ["custom-1"]);
+        // Reservations are held per slot.
+        let book = Arc::new(Book::new(None));
+        let now = at(2026, 10, 4);
+        let a = book.reserve(one, 3_000, Some(4_000), now).unwrap();
+        assert_eq!(book.reserved(one), 3_000);
+        assert_eq!((book.reserved(two), book.reserved(Provider::OpenAi)), (0, 0));
+        assert!(book.reserve(one, 2_000, Some(4_000), now).is_err());
+        assert!(book.reserve(two, 2_000, Some(4_000), now).is_ok());
+        drop(a);
+        assert_eq!(book.reserved(one), 0);
+    }
+
+    #[test]
+    fn every_provider_has_its_own_reservation_cell() {
+        let mut cells: Vec<usize> = Provider::ALL.into_iter().chain((1..=crate::services::agent_api_keys::MAX_CUSTOM).filter_map(Provider::custom)).map(Provider::index).collect();
+        cells.sort_unstable();
+        assert_eq!(cells, (0..Provider::SLOTS).collect::<Vec<_>>());
     }
 
     #[test]

@@ -156,6 +156,24 @@ pub struct AppMobileHostSettings {
     pub extra: HashMap<String, Value>,
 }
 
+/// One custom OpenAI-compatible endpoint a user keeps an API key for
+/// (`Settings::agent_api_custom_endpoints`, `services::agent_api_keys`). Slot
+/// `n` (`1..=8`) is the provider `custom-<n>`; its key is in the keychain, its
+/// monthly limit in `agent_api_token_limits["custom-<n>"]`. Never a secret.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct CustomEndpoint {
+    pub slot: u8,
+    /// What the user calls it (OpenCode's `/model` shows it).
+    pub label: String,
+    /// `https://host[:port][/path]`, or `http://` to the loopback only
+    /// (`agent_api_keys::validate_base_url`), no trailing `/`.
+    pub base_url: String,
+    /// The model ids the endpoint's `GET /models` listed when the key was
+    /// checked or last refreshed.
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
 /// The chat assistant's options (`Settings::assistant_settings`, plan A3). An
 /// absent block is the defaults; unknown keys survive a patch.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -685,6 +703,11 @@ pub struct Settings {
     /// is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_api_token_limits: Option<std::collections::BTreeMap<String, u64>>,
+    /// The custom OpenAI-compatible endpoints a user holds a key for
+    /// (`services::agent_api_keys`, provider ids `custom-1`..`custom-8`).
+    /// Absent until the first one is added; no secret in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_api_custom_endpoints: Option<Vec<CustomEndpoint>>,
     /// Local model names switched off for the root console by the 🧠 menu's
     /// "Root" chips. Opt-out: unset means every local model is offered there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2321,6 +2344,32 @@ mod default_rule_tests {
         let tokens = back.agent_api_token_limits.unwrap();
         assert_eq!(tokens["anthropic"], 5_000_000);
         assert_eq!(tokens["gemini"], 250_000);
+    }
+
+    /// The custom endpoints are absent until one exists, and round-trip.
+    #[test]
+    fn agent_api_custom_endpoints_round_trip_and_stay_absent_when_unset() {
+        let s: Settings = serde_json::from_str(r#"{"agent_api_token_limits":{"anthropic":5}}"#).unwrap();
+        assert!(s.agent_api_custom_endpoints.is_none());
+        assert!(!serde_json::to_string(&s).unwrap().contains("agent_api_custom_endpoints"));
+        let raw = r#"{"agent_api_custom_endpoints":[{"slot":2,"label":"Lab","base_url":"https://llm.example.org/v1","models":["m-1","m-2"]},{"slot":3,"label":"No list","base_url":"http://127.0.0.1:8080"}]}"#;
+        let s: Settings = serde_json::from_str(raw).unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        let list = back.agent_api_custom_endpoints.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            list[0],
+            CustomEndpoint {
+                slot: 2,
+                label: "Lab".into(),
+                base_url: "https://llm.example.org/v1".into(),
+                models: vec!["m-1".into(), "m-2".into()]
+            }
+        );
+        assert!(list[1].models.is_empty(), "a missing list reads as empty");
+        // An empty list is written as it is, not dropped.
+        let s = Settings { agent_api_custom_endpoints: Some(Vec::new()), ..Settings::default() };
+        assert!(serde_json::to_string(&s).unwrap().contains("\"agent_api_custom_endpoints\":[]"));
     }
 
     /// `ide_launchers` is optional on the way in and absent on the way out

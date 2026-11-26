@@ -91,6 +91,9 @@ pub fn opencode_id(provider: Provider) -> &'static str {
         Provider::Anthropic => "anthropic",
         Provider::Gemini => "google",
         Provider::OpenAi => "openai",
+        // A2: a custom slot has no models.dev catalog entry; its models are
+        // the endpoint's own listing (`CustomEndpoint::models`).
+        Provider::Custom(_) => provider.opencode_custom_id().unwrap_or("tt-custom-0"),
     }
 }
 
@@ -140,7 +143,7 @@ fn parse_catalog(body: &[u8]) -> Option<HashMap<String, Vec<CatalogModel>>> {
 pub fn listed_ids(provider: Provider, body: &str) -> Option<Vec<String>> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     let (list, field) = match provider {
-        Provider::Anthropic | Provider::OpenAi => (v.get("data")?.as_array()?, "id"),
+        Provider::Anthropic | Provider::OpenAi | Provider::Custom(_) => (v.get("data")?.as_array()?, "id"),
         Provider::Gemini => (v.get("models")?.as_array()?, "name"),
     };
     Some(
@@ -198,6 +201,8 @@ pub fn extra(provider: Provider, catalog: &[CatalogModel], listed: &[String]) ->
     let chat = |id: &str| match provider {
         Provider::Anthropic => id.starts_with("claude-"),
         Provider::Gemini => id.starts_with("gemini-") && !id.contains("embedding") && !id.contains("image") && !id.contains("tts"),
+        // A2: a custom endpoint's models are all its own; nothing to add to.
+        Provider::Custom(_) => false,
         Provider::OpenAi => {
             let o_series = id.strip_prefix('o').is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()));
             (id.starts_with("gpt-") || id.starts_with("chatgpt-") || o_series)

@@ -15,12 +15,22 @@
 //!   the provider's own prefix (`http://127.0.0.1:<port>/anthropic`).
 //!
 //! The listener takes the token off the request, checks it, and forwards the
-//! request to the provider's one fixed HTTPS API host ([`upstream_host`]) with
-//! the real key in the provider's own header (an administrator's key that
-//! goes through the server's key broker: to the broker's loopback URL, with
-//! this user's broker token instead — the broker swaps it for the key) — only on a path that provider's
-//! CLIs need ([`path_allowed`]), with a bounded body, never following a
-//! redirect, and with the response (Server-Sent Events included) passed back
+//! request to the provider's API host with the real key in the provider's own
+//! header. A built-in provider has one fixed HTTPS host ([`upstream_host`]); a
+//! **custom endpoint** (`custom-<n>`, an OpenAI-compatible Chat Completions
+//! server) has the host the user typed into Manage CLIs, read from the
+//! settings — which live in the masked state dir, so no agent and no project
+//! can set one — and validated again at every use
+//! (`agent_api_keys::validate_base_url`: `https://`, or `http://` only to the
+//! loopback; no user info, query or fragment). Its key goes in
+//! `Authorization: Bearer`, only `POST /chat/completions` and `GET /models`
+//! pass, no query parameter is forwarded, and a request the meter cannot read
+//! is refused ([`Refusal::NoUsage`]). An administrator's key that goes
+//! through the server's key broker goes to the broker's loopback URL instead,
+//! with this user's broker token — the broker swaps it for the key. Every
+//! request passes only on a path that provider's CLIs need ([`path_allowed`]),
+//! with a bounded body, never following a redirect, and with the response
+//! (Server-Sent Events included) passed back
 //! chunk by chunk as it arrives. A token that leaks — a project's CLI config
 //! that redirects the base URL, a prompt-injected `env` dump — is worthless off
 //! this machine and dies with its tab.
@@ -108,12 +118,15 @@ const WRITE_STALL: Duration = READ_IDLE;
 /// A keychain read that found nothing is retried after this, not per request.
 const MISSING_KEY_RETRY: Duration = Duration::from_secs(15);
 
-/// The provider's one API host. HTTPS only; nothing else is ever dialled.
-pub fn upstream_host(provider: Provider) -> &'static str {
+/// A built-in provider's one API host. HTTPS only; nothing else is ever
+/// dialled. A custom endpoint has none fixed: its base URL is the user's own
+/// ([`Upstream::base`]).
+pub fn upstream_host(provider: Provider) -> Option<&'static str> {
     match provider {
-        Provider::Anthropic => "api.anthropic.com",
-        Provider::Gemini => "generativelanguage.googleapis.com",
-        Provider::OpenAi => "api.openai.com",
+        Provider::Anthropic => Some("api.anthropic.com"),
+        Provider::Gemini => Some("generativelanguage.googleapis.com"),
+        Provider::OpenAi => Some("api.openai.com"),
+        Provider::Custom(_) => None,
     }
 }
 
@@ -188,6 +201,13 @@ fn issue_grant(grant: Grant) -> Option<String> {
 /// tmux will ever create is not kept past its PTY.
 pub fn issue(provider: Provider, admin: Option<&'static str>, scope: &str, tab: &str, tmux: Option<&str>) -> Option<(String, String)> {
     let base = base_url(provider)?;
+    if provider.is_custom() {
+        // Only the user's own key, and only for an endpoint that exists and
+        // still validates: no token for a slot nothing names.
+        if admin.is_some() || provider.slot().and_then(crate::services::agent_api_keys::custom_base).is_none() {
+            return None;
+        }
+    }
     if admin.is_none() {
         key_for(provider)?;
     }
@@ -448,8 +468,9 @@ pub fn is_proxy_base(url: &str, provider: Provider) -> bool {
         .is_some_and(|(port, path)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && path == provider.id())
 }
 
-/// Where requests go. Production has exactly one answer per provider; the
-/// test variant does not exist outside `cfg(test)`.
+/// Where requests go. Production has exactly one answer per provider — a
+/// custom slot's, the base URL the user saved, read from the settings and
+/// validated again here; the test variant does not exist outside `cfg(test)`.
 #[derive(Clone)]
 enum Upstream {
     Provider,
@@ -458,11 +479,17 @@ enum Upstream {
 }
 
 impl Upstream {
-    fn base(&self, provider: Provider) -> String {
+    /// The base URL (no trailing `/`) requests for `provider` go to; `None`
+    /// for a custom slot that was removed or whose saved URL no longer
+    /// validates.
+    fn base(&self, provider: Provider) -> Option<String> {
         match self {
-            Upstream::Provider => format!("https://{}", upstream_host(provider)),
+            Upstream::Provider => match provider.slot() {
+                Some(slot) => crate::services::agent_api_keys::custom_base(slot),
+                None => upstream_host(provider).map(|host| format!("https://{host}")),
+            },
             #[cfg(test)]
-            Upstream::Test(base) => base.clone(),
+            Upstream::Test(base) => Some(base.clone()),
         }
     }
 }
@@ -663,7 +690,88 @@ pub struct Workspace {
 /// `anthropic-workspace-id` header) is saved with `workspace` once that one
 /// answers, or with the only workspace it lists; otherwise the user picks.
 pub async fn check_key(provider: Provider, key: &str, workspace: Option<&str>) -> Result<KeyCheck, String> {
-    check_key_at(&Upstream::Provider.base(provider), provider, key, workspace, true).await
+    if provider.is_custom() {
+        // A custom slot's replacement key is checked against its own saved
+        // endpoint (the listing is not kept: `refresh_custom` does that).
+        let Some(base) = Upstream::Provider.base(provider) else {
+            return Err("this custom endpoint does not exist".into());
+        };
+        custom_models_at(&base, key).await?;
+        return Ok(KeyCheck::Save { workspace: None });
+    }
+    let Some(base) = Upstream::Provider.base(provider) else {
+        return Err("unknown API key provider".into());
+    };
+    check_key_at(&base, provider, key, workspace, true).await
+}
+
+/// How long [`custom_check`] waits for a custom endpoint: an institute's
+/// gateway may be slower than a provider's.
+const CUSTOM_CHECK_WAIT: Duration = Duration::from_secs(20);
+/// The largest model listing read from a custom endpoint.
+const MAX_CUSTOM_LISTING: usize = 2 * 1024 * 1024;
+
+/// Check `key` against the custom endpoint at `base_url` — the address as
+/// the form holds it, validated here — with `GET <base>/models` (free: the
+/// key in `Authorization: Bearer`, no redirect followed, plain HTTP only to
+/// the loopback) and return its model ids ([`clean_model_ids`]: at most 200,
+/// plain characters). `Err` with a message the form shows when the endpoint
+/// refuses the key (401/403), cannot be reached, answers an error, or
+/// answers something that is no listing. An endpoint with no listing at all
+/// (404, 405, 501) is accepted with an empty one: the key could not be
+/// checked, and the UI warns.
+///
+/// [`clean_model_ids`]: crate::services::agent_api_keys::clean_model_ids
+pub async fn custom_check(base_url: &str, key: &str) -> Result<Vec<String>, String> {
+    let base = crate::services::agent_api_keys::validate_base_url(base_url)?;
+    custom_models_at(&base, key).await
+}
+
+async fn custom_models_at(base: &str, key: &str) -> Result<Vec<String>, String> {
+    if !crate::services::agent_api_keys::key_shape_ok(key) {
+        return Err("not a usable API key (empty, too long, or contains spaces)".into());
+    }
+    let client = client(!base.starts_with("http://"))?;
+    let Ok(mut value) = HeaderValue::from_str(&format!("Bearer {key}")) else {
+        return Err("not a usable API key".into());
+    };
+    value.set_sensitive(true);
+    let request = client.get(format!("{base}/models")).header(header::AUTHORIZATION, value).header(header::ACCEPT_ENCODING, "identity");
+    let answer = async {
+        let mut response = request.send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                "the endpoint could not be reached: check the address and your connection".to_string()
+            } else {
+                "the endpoint could not be asked for its models".to_string()
+            }
+        })?;
+        let status = response.status();
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| "the endpoint's answer broke off".to_string())? {
+            if body.len() + chunk.len() > MAX_CUSTOM_LISTING {
+                return Err("the endpoint's model listing is too large".to_string());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok((status, body))
+    };
+    let (status, body) = tokio::time::timeout(CUSTOM_CHECK_WAIT, answer)
+        .await
+        .map_err(|_| "the endpoint did not answer in time".to_string())??;
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        return Err("the endpoint rejected this API key (wrong, revoked, or not allowed to list models)".into());
+    }
+    if matches!(status, StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED) {
+        return Ok(Vec::new());
+    }
+    if !status.is_success() {
+        return Err(format!("the endpoint answered HTTP {} when asked for its models", status.as_u16()));
+    }
+    let listed = std::str::from_utf8(&body)
+        .ok()
+        .and_then(|text| crate::services::opencode_models::listed_ids(Provider::Custom(1), text))
+        .ok_or_else(|| "the address answered, but not with a model listing: check that it ends where /models would be (for example …/v1)".to_string())?;
+    Ok(crate::services::agent_api_keys::clean_model_ids(listed))
 }
 
 async fn check_key_at(
@@ -686,6 +794,7 @@ async fn check_key_at(
     };
     let path = match provider {
         Provider::Anthropic | Provider::OpenAi => "/v1/models",
+        Provider::Custom(_) => "/models",
         Provider::Gemini => "/v1beta/models",
     };
     let Some((status, body)) = ask_with_key(&client, base, path, provider, key, workspace).await? else {
@@ -699,6 +808,7 @@ async fn check_key_at(
             Provider::Anthropic => "Anthropic",
             Provider::Gemini => "Google",
             Provider::OpenAi => "OpenAI",
+            Provider::Custom(_) => "The custom endpoint",
         };
         return Err(format!("{who} rejected this API key (wrong, revoked, or not an API key) — it was not saved"));
     }
@@ -734,8 +844,13 @@ async fn check_key_at(
 /// [`KEY_CHECK_WAIT`], a refusal or a body that is no listing
 /// (`opencode_models::listed_ids`).
 pub async fn key_models(provider: Provider) -> Option<Vec<String>> {
+    // A custom slot's models are the endpoint's own, kept in the settings
+    // (`agent_api_keys::refresh_custom`), not OpenCode's picker cache.
+    if provider.is_custom() {
+        return None;
+    }
     let stored = app_core::rt::spawn_blocking(move || stored_for(provider)).await.ok().flatten()?;
-    key_models_at(&Upstream::Provider.base(provider), provider, &stored, true).await
+    key_models_at(&Upstream::Provider.base(provider)?, provider, &stored, true).await
 }
 
 async fn key_models_at(base: &str, provider: Provider, stored: &StoredKey, https_only: bool) -> Option<Vec<String>> {
@@ -744,6 +859,7 @@ async fn key_models_at(base: &str, provider: Provider, stored: &StoredKey, https
     let path = match provider {
         Provider::Anthropic => "/v1/models?limit=1000",
         Provider::OpenAi => "/v1/models",
+        Provider::Custom(_) => "/models",
         Provider::Gemini => "/v1beta/models?pageSize=1000",
     };
     let (status, body) =
@@ -765,7 +881,7 @@ async fn ask_with_key(
     key: &str,
     workspace: Option<&str>,
 ) -> Result<Option<(StatusCode, String)>, String> {
-    let value = if provider == Provider::OpenAi { format!("Bearer {key}") } else { key.to_string() };
+    let value = if provider.bearer() { format!("Bearer {key}") } else { key.to_string() };
     let Ok(mut value) = HeaderValue::from_str(&value) else {
         return Err("not a usable API key".into());
     };
@@ -1082,6 +1198,13 @@ enum Refusal {
     Background,
     /// A metered OpenAI request for a priced `service_tier` (gap 48).
     ServiceTier,
+    /// A metered custom-endpoint request whose usage the proxy could not
+    /// read off the answer: a body that is not one JSON object, or a stream
+    /// that does not ask for `stream_options.include_usage`.
+    NoUsage,
+    /// A custom slot whose endpoint was removed, or whose saved address no
+    /// longer validates.
+    NoEndpoint,
     /// The token is good, but no key is saved (removed, or the keyring is
     /// locked).
     NoKey,
@@ -1116,10 +1239,15 @@ impl Refusal {
         match self {
             Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => StatusCode::UNAUTHORIZED,
             Refusal::Forbidden => StatusCode::FORBIDDEN,
-            Refusal::NotFound => StatusCode::NOT_FOUND,
+            Refusal::NotFound | Refusal::NoEndpoint => StatusCode::NOT_FOUND,
             Refusal::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Refusal::BodyTimeout => StatusCode::REQUEST_TIMEOUT,
-            Refusal::BadBody | Refusal::NoWorkspace | Refusal::Unmeterable | Refusal::Background | Refusal::ServiceTier => StatusCode::BAD_REQUEST,
+            Refusal::BadBody
+            | Refusal::NoWorkspace
+            | Refusal::Unmeterable
+            | Refusal::Background
+            | Refusal::ServiceTier
+            | Refusal::NoUsage => StatusCode::BAD_REQUEST,
             Refusal::Upstream => StatusCode::BAD_GATEWAY,
             Refusal::Busy | Refusal::AdminUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => StatusCode::TOO_MANY_REQUESTS,
@@ -1129,6 +1257,10 @@ impl Refusal {
     fn message(self, provider: Option<Provider>) -> &'static str {
         match self {
             Refusal::BudgetReached => match provider {
+                Some(Provider::Custom(_)) => concat!(
+                    crate::app_name!(),
+                    " monthly API budget for this custom endpoint reached — raise it in Manage CLIs → API keys, or wait for next month"
+                ),
                 Some(Provider::OpenAi) => concat!(crate::app_name!(), " monthly API budget for OpenAI reached — raise it in Manage CLIs → API keys, or wait for next month"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
@@ -1140,6 +1272,12 @@ impl Refusal {
                 ),
             },
             Refusal::WouldPass => match provider {
+                Some(Provider::Custom(_)) => concat!(
+                    crate::app_name!(),
+                    " monthly API budget for this custom endpoint: this request could cost more than is left of it",
+                    " (requests still in flight count until they end) — wait for them, raise it in Manage CLIs → API keys,",
+                    " or wait for next month"
+                ),
                 Some(Provider::OpenAi) => concat!(crate::app_name!(), " monthly API budget for OpenAI: this request could cost more than is left of it (requests still in flight count until they end) — wait for them, raise it in Manage CLIs → API keys, or wait for next month"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
@@ -1155,6 +1293,10 @@ impl Refusal {
                 ),
             },
             Refusal::NoBudget => match provider {
+                Some(Provider::Custom(_)) => concat!(
+                    crate::app_name!(),
+                    " has no monthly API budget set for this custom endpoint — set one in Manage CLIs → API keys"
+                ),
                 Some(Provider::OpenAi) => concat!(crate::app_name!(), " has no monthly API budget set for OpenAI — set one in Manage CLIs → API keys"),
                 Some(Provider::Gemini) => concat!(
                     crate::app_name!(),
@@ -1190,6 +1332,16 @@ impl Refusal {
                 " budget does not track; use \"auto\", \"default\" or \"flex\", or leave service_tier out (in Codex,",
                 " turn Fast mode off)"
             ),
+            Refusal::NoUsage => concat!(
+                crate::app_name!(),
+                " API proxy: the monthly API budget can only count a request whose body is one JSON object, and for a",
+                " streamed one only with \"stream_options\": {\"include_usage\": true} — add it (OpenCode sends it",
+                " when the provider is set to report usage)"
+            ),
+            Refusal::NoEndpoint => concat!(
+                crate::app_name!(),
+                " API proxy: this custom endpoint was removed or its address is no longer valid — open Manage CLIs → API keys"
+            ),
             Refusal::NoKey => concat!(
                 crate::app_name!(),
                 " has no API key saved for this provider (or its key store is locked): add one in Manage CLIs → API keys"
@@ -1197,6 +1349,10 @@ impl Refusal {
             // Never naming the header: Claude turns an error that mentions
             // it into "Not logged in · Please run /login".
             Refusal::KeyRejected => match provider {
+                Some(Provider::Custom(_)) => concat!(
+                    "the custom endpoint rejected the API key saved in ", crate::app_name!(),
+                    " (wrong or revoked) — replace it in Manage CLIs → API keys"
+                ),
                 Some(Provider::OpenAi) => concat!("OpenAI rejected the API key saved in ", crate::app_name!(), " (wrong, revoked, or not an API key) — replace it in Manage CLIs → API keys"),
                 Some(Provider::Gemini) => concat!("Google rejected the Gemini API key saved in ", crate::app_name!(), " (wrong, revoked, or not an API key) — replace it in Manage CLIs → API keys"),
                 _ => concat!(
@@ -1230,7 +1386,7 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
     let status = refusal.status();
     let message = refusal.message(provider);
     let body = match provider {
-        Some(Provider::OpenAi) => serde_json::json!({
+        Some(Provider::OpenAi | Provider::Custom(_)) => serde_json::json!({
             "error": { "message": message, "type": if status == StatusCode::TOO_MANY_REQUESTS { "insufficient_quota" } else { "invalid_request_error" },
                 "code": if status == StatusCode::TOO_MANY_REQUESTS { "insufficient_quota" } else { "api_proxy_error" }, "param": null }
         }),
@@ -1238,8 +1394,8 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
             "error": { "code": status.as_u16(), "message": message, "status": match refusal {
                 Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => "UNAUTHENTICATED",
                 Refusal::Forbidden => "PERMISSION_DENIED",
-                Refusal::NotFound => "NOT_FOUND",
-                Refusal::TooLarge | Refusal::BadBody | Refusal::NoWorkspace | Refusal::Unmeterable | Refusal::Background | Refusal::ServiceTier => {
+                Refusal::NotFound | Refusal::NoEndpoint => "NOT_FOUND",
+                Refusal::TooLarge | Refusal::BadBody | Refusal::NoWorkspace | Refusal::Unmeterable | Refusal::Background | Refusal::ServiceTier | Refusal::NoUsage => {
                     "INVALID_ARGUMENT"
                 }
                 Refusal::BodyTimeout => "DEADLINE_EXCEEDED",
@@ -1253,14 +1409,14 @@ fn refuse(provider: Option<Provider>, refusal: Refusal) -> Response {
             "error": { "type": match refusal {
                 Refusal::Unauthorized | Refusal::NoKey | Refusal::KeyRejected | Refusal::AdminWithdrawn => "authentication_error",
                 Refusal::Forbidden => "permission_error",
-                Refusal::NotFound => "not_found_error",
+                Refusal::NotFound | Refusal::NoEndpoint => "not_found_error",
                 Refusal::TooLarge => "request_too_large",
                 Refusal::BodyTimeout
                 | Refusal::BadBody
                 | Refusal::NoWorkspace
                 | Refusal::Unmeterable
                 | Refusal::Background
-                | Refusal::ServiceTier => "invalid_request_error",
+                | Refusal::ServiceTier | Refusal::NoUsage => "invalid_request_error",
                 Refusal::Upstream | Refusal::Busy | Refusal::AdminUnavailable => "api_error",
                 Refusal::BudgetReached | Refusal::WouldPass | Refusal::NoBudget => "rate_limit_error",
             }, "message": message }
@@ -1306,6 +1462,14 @@ fn path_allowed(provider: Provider, method: &Method, path: &str) -> bool {
     let post = *method == Method::POST;
     let get = *method == Method::GET;
     match provider {
+        // Chat Completions and the model listing of the user's own endpoint:
+        // nothing else (no embeddings, files, batches or fine-tunes) can be
+        // reached through a tab's token.
+        Provider::Custom(_) => match segs.as_slice() {
+            ["chat", "completions"] => post,
+            ["models"] => get,
+            _ => false,
+        },
         // Responses inference and compaction; no files, batches or stored
         // responses can be read through a tab's token.
         Provider::OpenAi => match segs.as_slice() {
@@ -1380,7 +1544,7 @@ fn query_allowed(provider: Provider, name: &str) -> bool {
     match provider {
         Provider::Anthropic => matches!(name, "beta" | "limit" | "after_id" | "before_id"),
         Provider::Gemini => matches!(name, "alt" | "pageSize" | "pageToken"),
-        Provider::OpenAi => false,
+        Provider::OpenAi | Provider::Custom(_) => false,
     }
 }
 
@@ -1470,7 +1634,7 @@ fn auth_header(provider: Provider) -> &'static str {
     match provider {
         Provider::Anthropic => "x-api-key",
         Provider::Gemini => "x-goog-api-key",
-        Provider::OpenAi => "authorization",
+        Provider::OpenAi | Provider::Custom(_) => "authorization",
     }
 }
 
@@ -1506,6 +1670,12 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
     if !path_allowed(provider, &parts.method, rest) {
         return refuse(Some(provider), Refusal::NotFound);
     }
+    // Where it goes: a built-in's fixed host, or a custom slot's saved base
+    // URL, read now and validated again — gone or invalid refuses before the
+    // key is fetched or any body is read.
+    let Some(upstream_base) = state.upstream.base(provider) else {
+        return refuse(Some(provider), Refusal::NoEndpoint);
+    };
     // The key and where it goes: the user's own to the provider; an
     // administrator's to the provider, or (brokered) this user's broker
     // token to the server's key broker.
@@ -1519,7 +1689,7 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
             Err(refusal) => return refuse(Some(provider), refusal),
         },
     };
-    let credential = zeroize::Zeroizing::new(if provider == Provider::OpenAi { format!("Bearer {}", key.as_str()) } else { key.to_string() });
+    let credential = zeroize::Zeroizing::new(if provider.bearer() { format!("Bearer {}", key.as_str()) } else { key.to_string() });
     let Ok(mut key_value) = HeaderValue::from_str(&credential) else {
         return refuse(Some(provider), Refusal::NoKey);
     };
@@ -1559,6 +1729,11 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
                 None => {}
             }
         }
+        // A custom endpoint's usage is read off its answer: a body the meter
+        // cannot read, or a stream that will not report usage, is refused.
+        if provider.is_custom() && super::api_meter::custom_refusal(&body).is_some() {
+            return refuse(Some(provider), Refusal::NoUsage);
+        }
         meter.request(&body);
         let worst = meter.worst_case_billed(&super::api_usage::month_of(chrono::Utc::now()));
         match state.budget.reserve(provider, worst) {
@@ -1566,7 +1741,7 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
             Err(refusal) => return refuse(Some(provider), refusal),
         }
     }
-    let base = broker.clone().unwrap_or_else(|| state.upstream.base(provider));
+    let base = broker.clone().unwrap_or(upstream_base);
     let url = format!("{base}{rest}{}", forwarded_query(provider, query));
     let mut headers = copy_headers(&parts.headers, DROP_REQUEST);
     headers.insert(auth_header(provider), key_value);
@@ -1587,7 +1762,9 @@ async fn handle(State(state): State<ProxyState>, request: Request) -> Response {
         started: Instant::now(),
         reservation,
     }));
-    let client = if broker.is_some() { &state.loopback } else { &state.client };
+    // Plain HTTP only where the base URL was validated to be loopback: the
+    // broker, or a custom endpoint on this computer.
+    let client = if broker.is_some() || (provider.is_custom() && url.starts_with("http://")) { &state.loopback } else { &state.client };
     let upstream = client.request(parts.method, url).headers(headers).body(body).send().await;
     // The body has been sent (or never will be): its bytes leave the budget.
     drop(held);

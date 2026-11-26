@@ -18,6 +18,15 @@
 //! goes in under the CLI's own name. The base URL is not a secret and rides as
 //! a plain variable.
 //!
+//! **Custom endpoints** (`docs/opencode_api_keys_plan.md`, Phase 1): up to
+//! [`MAX_CUSTOM`] OpenAI-compatible Chat Completions servers the user types in
+//! (`Settings::agent_api_custom_endpoints`: name, base URL, the model ids the
+//! endpoint listed), each a [`Provider::Custom`] slot `custom-<n>` with its key
+//! under `agent-key:custom-<n>`, a limit in `agent_api_token_limits` and a
+//! ledger row of its own. The base URL is checked when saved and again at
+//! every use ([`validate_base_url`]); [`add_custom`], [`refresh_custom`] and
+//! [`remove_custom`] are the one way in and out. A hosted server has none.
+//!
 //! Rules:
 //!
 //! - **Only proxyable CLIs.** A CLI is in [`CLI_ROUTES`] only if the spawn
@@ -52,28 +61,122 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
+/// How many custom endpoint slots there are (`custom-1`..`custom-8`).
+pub const MAX_CUSTOM: u8 = 8;
+
+/// The static ids of the custom slots, so [`Provider::id`] stays
+/// `&'static str`.
+const CUSTOM_IDS: [&str; MAX_CUSTOM as usize] =
+    ["custom-1", "custom-2", "custom-3", "custom-4", "custom-5", "custom-6", "custom-7", "custom-8"];
+
+/// OpenCode's provider ids of the custom slots (`tt-custom-<n>`, decision 8 of
+/// `docs/opencode_api_keys_plan.md`).
+const CUSTOM_OPENCODE_IDS: [&str; MAX_CUSTOM as usize] = [
+    "tt-custom-1",
+    "tt-custom-2",
+    "tt-custom-3",
+    "tt-custom-4",
+    "tt-custom-5",
+    "tt-custom-6",
+    "tt-custom-7",
+    "tt-custom-8",
+];
+
 /// A provider whose key Tabtivity can hold. One key serves every CLI of its
-/// provider.
+/// provider; a custom slot is one OpenAI-compatible endpoint the user typed
+/// in (`Settings::agent_api_custom_endpoints`) with a key of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Provider {
     Anthropic,
     Gemini,
     OpenAi,
+    /// Slot `1..=`[`MAX_CUSTOM`]; build one with [`Provider::custom`].
+    Custom(u8),
 }
 
 impl Provider {
+    /// The built-in providers. A custom slot is in [`Provider::configured`]
+    /// only.
     pub const ALL: [Provider; 3] = [Provider::Anthropic, Provider::Gemini, Provider::OpenAi];
+    /// Every provider a per-provider table needs a cell for: the built-ins,
+    /// then each custom slot ([`Provider::index`]).
+    pub const SLOTS: usize = Self::ALL.len() + MAX_CUSTOM as usize;
+
+    /// The custom slot `slot`, if it is one of `1..=`[`MAX_CUSTOM`].
+    pub fn custom(slot: u8) -> Option<Self> {
+        (1..=MAX_CUSTOM).contains(&slot).then_some(Provider::Custom(slot))
+    }
+
+    pub fn is_custom(self) -> bool {
+        matches!(self, Provider::Custom(_))
+    }
+
+    /// The slot number of a custom provider.
+    pub fn slot(self) -> Option<u8> {
+        match self {
+            Provider::Custom(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// Whether `api_prices` can price this provider's answers. A custom
+    /// endpoint has no price table: its answers carry no dollar figure and
+    /// the token limit is the only guard.
+    pub fn priced(self) -> bool {
+        !self.is_custom()
+    }
+
+    /// Whether the provider's key goes in `Authorization: Bearer`.
+    pub fn bearer(self) -> bool {
+        matches!(self, Provider::OpenAi | Provider::Custom(_))
+    }
+
+    /// The cell of this provider in a table of [`Provider::SLOTS`].
+    pub fn index(self) -> usize {
+        match self {
+            Provider::Anthropic => 0,
+            Provider::Gemini => 1,
+            Provider::OpenAi => 2,
+            Provider::Custom(n) => Self::ALL.len() + usize::from(n).saturating_sub(1).min(usize::from(MAX_CUSTOM) - 1),
+        }
+    }
 
     pub fn id(self) -> &'static str {
         match self {
             Provider::Anthropic => "anthropic",
             Provider::Gemini => "gemini",
             Provider::OpenAi => "openai",
+            Provider::Custom(n) => CUSTOM_IDS.get(usize::from(n).wrapping_sub(1)).copied().unwrap_or("custom-0"),
         }
     }
 
+    /// OpenCode's provider id of a custom slot (`tt-custom-<n>`); `None` for
+    /// a built-in (OpenCode's own `anthropic`/`google`/`openai`).
+    pub fn opencode_custom_id(self) -> Option<&'static str> {
+        match self {
+            Provider::Custom(n) => CUSTOM_OPENCODE_IDS.get(usize::from(n).wrapping_sub(1)).copied(),
+            _ => None,
+        }
+    }
+
+    /// Parses [`Provider::id`]: the three built-ins and `custom-1`..`custom-8`
+    /// spelled exactly so.
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.id() == id)
+        Self::ALL
+            .into_iter()
+            .find(|p| p.id() == id)
+            .or_else(|| CUSTOM_IDS.iter().position(|c| *c == id).and_then(|i| Self::custom(i as u8 + 1)))
+    }
+
+    /// The built-ins plus every custom slot in settings: what the status
+    /// panel and the limits list. Reads `settings.json`.
+    pub fn configured() -> Vec<Provider> {
+        Self::configured_with(&custom_endpoints())
+    }
+
+    /// [`Provider::configured`] over the given endpoints. Pure.
+    pub fn configured_with(endpoints: &[crate::schema::settings::CustomEndpoint]) -> Vec<Provider> {
+        Self::ALL.into_iter().chain(endpoints.iter().filter_map(|e| Self::custom(e.slot))).collect()
     }
 
     /// The keychain account under `remote_credentials`' service.
@@ -95,6 +198,9 @@ impl Provider {
             Provider::Anthropic => &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
             Provider::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
             Provider::OpenAi => &["OPENAI_API_KEY", "CODEX_API_KEY"],
+            // A custom endpoint has no credential name of the user's to
+            // shadow: its token variable is its own (A2).
+            Provider::Custom(_) => &[],
         }
     }
 }
@@ -272,16 +378,32 @@ pub fn set_key(provider: Provider, key: Option<&str>, workspace: Option<&str>) -
     if workspace.is_some_and(|w| !workspace_shape_ok(w)) {
         return Err("not a workspace id (it starts with wrkspc_)".into());
     }
+    let custom = provider.is_custom();
+    if custom {
+        // A key only goes beside an endpoint the user added (`add_custom`),
+        // never under a slot nothing names.
+        if workspace.is_some() {
+            return Err("a custom endpoint's key names no workspace".into());
+        }
+        if key.is_some() && provider.slot().and_then(custom_endpoint).is_none() {
+            return Err("this custom endpoint does not exist: add it first".into());
+        }
+    }
     let saved = crate::services::remote_credentials::set(&provider.account(), key).and_then(|()| {
+        if custom {
+            return Ok(());
+        }
         crate::services::remote_credentials::set(&provider.workspace_account(), workspace.filter(|_| key.is_some()))
     });
     // Saved or not, the proxy reads the keychain again at its next use: a
     // removed key stops running keyed tabs at their next request.
     crate::services::api_proxy::forget_key(provider);
-    // What OpenCode's picker hides was the old key's: list the new one's.
-    crate::services::opencode_models::forget(provider);
-    if saved.is_ok() && key.is_some() {
-        crate::services::opencode_models::refresh(vec![provider]);
+    if !custom {
+        // What OpenCode's picker hides was the old key's: list the new one's.
+        crate::services::opencode_models::forget(provider);
+        if saved.is_ok() && key.is_some() {
+            crate::services::opencode_models::refresh(vec![provider]);
+        }
     }
     saved
 }
@@ -307,6 +429,358 @@ pub fn get_workspace(provider: Provider) -> Option<String> {
 
 fn settings() -> crate::schema::Settings {
     crate::storage::read_json(&crate::storage::settings_path()).unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// Custom endpoints (`docs/opencode_api_keys_plan.md`, Phase 1)
+
+use crate::schema::settings::CustomEndpoint;
+
+/// Longest base URL accepted.
+const MAX_BASE_URL_BYTES: usize = 512;
+/// Longest endpoint label accepted, in characters.
+const MAX_LABEL_CHARS: usize = 48;
+/// Model ids kept from an endpoint's listing, and the longest one (bytes).
+pub const MAX_LISTED_MODELS: usize = 200;
+pub const MAX_MODEL_ID_BYTES: usize = 128;
+
+/// A custom endpoint's base URL as it is saved and again at every use:
+/// `https://host[:port][/path]`, or `http://` only to `127.0.0.1`,
+/// `localhost` or `[::1]`. No user info, query or fragment; every path
+/// segment plain (`[A-Za-z0-9._~-]`, no empty, `.` or `..` one). Returns the
+/// URL rebuilt from its parts with a trailing `/` trimmed
+/// (`https://llm.example.org/v1`). Pure.
+pub fn validate_base_url(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.len() > MAX_BASE_URL_BYTES || raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("not a usable address (it must be a single https:// URL)".into());
+    }
+    // As typed, before the URL parser tidies it: no backslash (read as a
+    // slash), no percent-escape, no `.` or `..` segment (resolved away).
+    if raw.contains(['\\', '%']) {
+        return Err("the address must not contain \\ or % escapes".into());
+    }
+    // `https:host`, `https:///host` and the like are read by the parser as
+    // something else than they say: only `scheme://host…` is an address.
+    let Some((_, after_scheme)) = raw.split_once("://").filter(|(_, rest)| !rest.starts_with('/')) else {
+        return Err("not a usable address (it must look like https://host/v1)".into());
+    };
+    let typed_path = after_scheme.find('/').map_or("", |i| &after_scheme[i..]);
+    if typed_path.split('/').any(|segment| segment == "." || segment == "..") {
+        return Err("the address path must not contain . or .. segments".into());
+    }
+    let url =url::Url::parse(raw).map_err(|_| "not a usable address (it must look like https://host/v1)".to_string())?;
+    let secure = match url.scheme() {
+        "https" => true,
+        "http" => false,
+        _ => return Err("the address must start with https:// (http:// only for this computer: 127.0.0.1, localhost or [::1])".into()),
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("the address must not contain a user name or password: the API key is entered apart".into());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("the address must not contain a query (?…) or a fragment (#…)".into());
+    }
+    let Some(host) = url.host() else {
+        return Err("the address names no host".into());
+    };
+    let loopback = match &host {
+        url::Host::Domain(d) => *d == "localhost",
+        url::Host::Ipv4(ip) => *ip == std::net::Ipv4Addr::LOCALHOST,
+        url::Host::Ipv6(ip) => *ip == std::net::Ipv6Addr::LOCALHOST,
+    };
+    if !secure && !loopback {
+        return Err("http:// is only allowed for this computer (127.0.0.1, localhost or [::1]): use https://".into());
+    }
+    let path = url.path();
+    let path = path.strip_suffix('/').unwrap_or(path);
+    if !path.is_empty() {
+        let plain = |s: &str| {
+            !s.is_empty() && s != "." && s != ".." && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'~'))
+        };
+        if !path[1..].split('/').all(plain) {
+            return Err("the address path may hold only letters, digits and . _ - ~ between slashes".into());
+        }
+    }
+    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+    Ok(format!("{}://{}{port}{path}", url.scheme(), url.host_str().unwrap_or_default()))
+}
+
+/// The host (and port) of a validated base URL, for showing.
+pub fn base_url_host(base_url: &str) -> String {
+    url::Url::parse(base_url)
+        .ok()
+        .map(|u| match (u.host_str(), u.port()) {
+            (Some(h), Some(p)) => format!("{h}:{p}"),
+            (Some(h), None) => h.to_string(),
+            _ => String::new(),
+        })
+        .unwrap_or_default()
+}
+
+/// An endpoint label: trimmed, 1 to [`MAX_LABEL_CHARS`] characters, no
+/// control characters.
+fn clean_label(raw: &str) -> Result<String, String> {
+    let label = raw.trim();
+    if label.is_empty() || label.chars().count() > MAX_LABEL_CHARS || label.chars().any(char::is_control) {
+        return Err(format!("the name must be 1 to {MAX_LABEL_CHARS} characters, no control characters"));
+    }
+    Ok(label.to_string())
+}
+
+/// Model ids fit to keep from an endpoint's listing: at most
+/// [`MAX_LISTED_MODELS`], each 1 to [`MAX_MODEL_ID_BYTES`] bytes of plain
+/// characters (`[A-Za-z0-9._:/@+-]`), no duplicates, in the listing's order.
+/// A listing is the endpoint's word, never trusted: an id with anything else
+/// in it is dropped. Pure.
+pub fn clean_model_ids(listed: impl IntoIterator<Item = String>) -> Vec<String> {
+    let plain = |id: &str| {
+        !id.is_empty()
+            && id.len() <= MAX_MODEL_ID_BYTES
+            && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'/' | b'@' | b'+' | b'-'))
+    };
+    let mut seen = std::collections::HashSet::new();
+    listed.into_iter().filter(|id| plain(id) && seen.insert(id.clone())).take(MAX_LISTED_MODELS).collect()
+}
+
+/// The custom endpoints of `settings`: slots in range, the first of any slot
+/// listed twice, by slot. Pure.
+pub fn custom_endpoints_in(settings: &crate::schema::Settings) -> Vec<CustomEndpoint> {
+    let mut out: Vec<CustomEndpoint> = Vec::new();
+    for endpoint in settings.agent_api_custom_endpoints.iter().flatten() {
+        if Provider::custom(endpoint.slot).is_some() && !out.iter().any(|e| e.slot == endpoint.slot) {
+            out.push(endpoint.clone());
+        }
+    }
+    out.sort_by_key(|e| e.slot);
+    out
+}
+
+type SettingsStamp = Option<(std::time::SystemTime, u64)>;
+type CachedEndpoints = (SettingsStamp, std::time::Instant, Vec<CustomEndpoint>);
+
+static ENDPOINTS: std::sync::Mutex<Option<CachedEndpoints>> = std::sync::Mutex::new(None);
+
+/// A cached read of the endpoints is trusted this long even when the
+/// settings file's stamp did not change (as `api_usage::limit_for`).
+const ENDPOINTS_FRESH: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The custom endpoints in `settings.json`, re-read when the file's
+/// modification time or size changed, [`ENDPOINTS_FRESH`] after the last
+/// read, or after [`forget_endpoints`] — the proxy asks per request, so this
+/// costs one `stat` while nothing changed. None on a hosted server, which
+/// has no custom endpoints in this phase.
+pub fn custom_endpoints() -> Vec<CustomEndpoint> {
+    use app_core::sync::LockExt;
+    if crate::services::server::is_server() {
+        return Vec::new();
+    }
+    let path = crate::storage::settings_path();
+    let stamp: SettingsStamp = std::fs::metadata(&path).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+    let mut cache = ENDPOINTS.lock_ok();
+    let fresh = matches!(&*cache, Some((s, read, _)) if stamp.is_some() && *s == stamp && read.elapsed() < ENDPOINTS_FRESH);
+    if !fresh {
+        *cache = Some((stamp, std::time::Instant::now(), custom_endpoints_in(&settings())));
+    }
+    cache.as_ref().map(|(_, _, list)| list.clone()).unwrap_or_default()
+}
+
+/// The settings changed under us (an add, a removal, a refresh): read again.
+fn forget_endpoints() {
+    use app_core::sync::LockExt;
+    *ENDPOINTS.lock_ok() = None;
+}
+
+/// Custom slot `slot`, if one is configured.
+pub fn custom_endpoint(slot: u8) -> Option<CustomEndpoint> {
+    custom_endpoints().into_iter().find(|e| e.slot == slot)
+}
+
+/// Where requests for custom slot `slot` go: its base URL, validated again
+/// (decision 3: at save and at every use). `None` when the slot is gone or
+/// its saved URL no longer validates — a settings file edited by hand.
+pub fn custom_base(slot: u8) -> Option<String> {
+    custom_endpoint(slot).and_then(|e| validate_base_url(&e.base_url).ok())
+}
+
+/// A custom endpoint to add, validated (nothing checked with the network,
+/// nothing saved).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomDraft {
+    pub label: String,
+    /// [`validate_base_url`]'s answer.
+    pub base_url: String,
+    /// The monthly limit in billed tokens, valid.
+    pub limit_tokens: u64,
+}
+
+/// Validate what the "Add endpoint" form holds, but for the key.
+pub fn custom_draft(label: &str, base_url: &str, limit_tokens: u64) -> Result<CustomDraft, String> {
+    if !crate::services::api_usage::valid_limit(limit_tokens) {
+        return Err("set a monthly token limit for this endpoint before saving its key".into());
+    }
+    Ok(CustomDraft { label: clean_label(label)?, base_url: validate_base_url(base_url)?, limit_tokens })
+}
+
+/// The custom slots whose ledger entry holds use this month: a removed slot
+/// among them is not handed out again until the month turns, so its use never
+/// lands on another endpoint's row. Pure.
+pub fn ledger_slots(ledger: &crate::services::api_usage::Ledger) -> std::collections::BTreeSet<u8> {
+    (1..=MAX_CUSTOM)
+        .filter(|n| {
+            ledger
+                .providers
+                .get(CUSTOM_IDS[usize::from(*n) - 1])
+                .is_some_and(|u| u.billed > 0 || !u.models.is_empty())
+        })
+        .collect()
+}
+
+/// The lowest slot neither configured nor held by the ledger. Pure.
+fn free_slot(endpoints: &[CustomEndpoint], held: &std::collections::BTreeSet<u8>) -> Option<u8> {
+    (1..=MAX_CUSTOM).find(|n| !held.contains(n) && !endpoints.iter().any(|e| e.slot == *n))
+}
+
+/// Add `draft` under the lowest free slot — chosen, with its limit, inside
+/// one settings write under the settings file's lock, so two adds never take
+/// one slot. `held` is [`ledger_slots`].
+fn add_custom_at(
+    path: &std::path::Path,
+    draft: &CustomDraft,
+    models: Vec<String>,
+    held: &std::collections::BTreeSet<u8>,
+) -> Result<CustomEndpoint, String> {
+    crate::storage::patch_json(path, crate::schema::Settings::default(), |settings| {
+        let existing = custom_endpoints_in(settings);
+        let Some(slot) = free_slot(&existing, held) else {
+            return Err(format!("at most {MAX_CUSTOM} custom endpoints: remove one first"));
+        };
+        let endpoint = CustomEndpoint {
+            slot,
+            label: draft.label.clone(),
+            base_url: draft.base_url.clone(),
+            models: clean_model_ids(models),
+        };
+        settings.agent_api_custom_endpoints.get_or_insert_with(Vec::new).push(endpoint.clone());
+        settings
+            .agent_api_token_limits
+            .get_or_insert_with(Default::default)
+            .insert(Provider::Custom(slot).id().to_string(), draft.limit_tokens);
+        settings.rev += 1;
+        Ok(endpoint)
+    })
+}
+
+/// Take slot `slot` and its limit out of the settings. Whether it was there.
+fn remove_custom_at(path: &std::path::Path, slot: u8) -> Result<bool, String> {
+    crate::storage::patch_json(path, crate::schema::Settings::default(), |settings| {
+        let before = settings.agent_api_custom_endpoints.as_ref().map_or(0, Vec::len);
+        if let Some(list) = settings.agent_api_custom_endpoints.as_mut() {
+            list.retain(|e| e.slot != slot);
+            if list.is_empty() {
+                settings.agent_api_custom_endpoints = None;
+            }
+        }
+        let had_limit = Provider::custom(slot)
+            .and_then(|p| settings.agent_api_token_limits.as_mut().and_then(|l| l.remove(p.id())))
+            .is_some();
+        let removed = settings.agent_api_custom_endpoints.as_ref().map_or(0, Vec::len) < before;
+        if removed || had_limit {
+            settings.rev += 1;
+        }
+        Ok(removed)
+    })
+}
+
+/// Replace slot `slot`'s model list.
+fn set_custom_models_at(path: &std::path::Path, slot: u8, models: Vec<String>) -> Result<CustomEndpoint, String> {
+    crate::storage::patch_json(path, crate::schema::Settings::default(), |settings| {
+        let endpoint = settings
+            .agent_api_custom_endpoints
+            .iter_mut()
+            .flatten()
+            .find(|e| e.slot == slot)
+            .ok_or_else(|| "this custom endpoint does not exist".to_string())?;
+        endpoint.models = clean_model_ids(models);
+        let saved = endpoint.clone();
+        settings.rev += 1;
+        Ok(saved)
+    })
+}
+
+fn refuse_on_server() -> Result<(), String> {
+    if crate::services::server::is_server() {
+        return Err("custom endpoints are not available on a hosted server".into());
+    }
+    Ok(())
+}
+
+/// Add a custom endpoint: validate the form, check `key` against the
+/// endpoint's `GET <base>/models` (a refused key saves nothing,
+/// `api_proxy::custom_check`), then save the endpoint, its limit and the key
+/// under the lowest free slot. Returns the saved endpoint — its `models` may
+/// be empty (an endpoint with no listing; the UI warns). The key goes to the
+/// keychain only; if that fails the endpoint is taken out of the settings
+/// again.
+pub async fn add_custom(label: String, base_url: String, key: String, limit_tokens: u64) -> Result<CustomEndpoint, String> {
+    refuse_on_server()?;
+    let draft = custom_draft(&label, &base_url, limit_tokens)?;
+    let key = key.trim().to_string();
+    if !key_shape_ok(&key) {
+        return Err("not a usable API key (empty, too long, or contains spaces)".into());
+    }
+    let models = crate::services::api_proxy::custom_check(&draft.base_url, &key).await?;
+    app_core::rt::try_blocking("agent", move || add_custom_blocking(&draft, &key, models)).await
+}
+
+fn add_custom_blocking(draft: &CustomDraft, key: &str, models: Vec<String>) -> Result<CustomEndpoint, String> {
+    let held = ledger_slots(&crate::services::api_usage::book().snapshot(chrono::Utc::now()));
+    let path = crate::storage::settings_path();
+    let endpoint = add_custom_at(&path, draft, models, &held);
+    forget_endpoints();
+    let endpoint = endpoint?;
+    let provider = Provider::Custom(endpoint.slot);
+    if let Err(e) = set_key(provider, Some(key), None) {
+        // No half-added endpoint: without its key it could never run.
+        let _ = remove_custom_at(&path, endpoint.slot);
+        forget_endpoints();
+        return Err(e);
+    }
+    Ok(endpoint)
+}
+
+/// Remove custom slot `slot`: its key from the keychain first (a locked
+/// keyring refuses, with its own message, and nothing changes), then the
+/// endpoint and its limit from the settings. Its ledger entry stays for the
+/// rest of the month.
+pub fn remove_custom(slot: u8) -> Result<(), String> {
+    refuse_on_server()?;
+    let provider = Provider::custom(slot).ok_or_else(|| "unknown custom endpoint".to_string())?;
+    set_key(provider, None, None)?;
+    let result = remove_custom_at(&crate::storage::settings_path(), slot).map(|_| ());
+    forget_endpoints();
+    result
+}
+
+/// Fetch slot `slot`'s model listing again with its stored key and keep it.
+/// A refused key or an unreachable endpoint changes nothing.
+pub async fn refresh_custom(slot: u8) -> Result<CustomEndpoint, String> {
+    refuse_on_server()?;
+    let (endpoint, key) = app_core::rt::try_blocking("agent", move || {
+        let provider = Provider::custom(slot).ok_or_else(|| "unknown custom endpoint".to_string())?;
+        let endpoint = custom_endpoint(slot).ok_or_else(|| "this custom endpoint does not exist".to_string())?;
+        let key = get_key(provider).ok_or_else(|| "no API key is saved for this endpoint (or the key store is locked)".to_string())?;
+        Ok((endpoint, key))
+    })
+    .await?;
+    let base = validate_base_url(&endpoint.base_url)?;
+    let models = crate::services::api_proxy::custom_check(&base, &key).await?;
+    app_core::rt::try_blocking("agent", move || {
+        let saved = set_custom_models_at(&crate::storage::settings_path(), slot, models);
+        forget_endpoints();
+        saved
+    })
+    .await
 }
 
 /// The CLIs the user switched on, from `settings.json` — readable in the
@@ -516,6 +990,10 @@ fn opencode_provider(provider: Provider) -> (&'static str, &'static str) {
         Provider::Anthropic => ("anthropic", "/v1"),
         Provider::Gemini => ("google", "/v1beta"),
         Provider::OpenAi => ("openai", "/v1"),
+        // A2: a custom slot is not routed through `CLI_ROUTES` yet; its block
+        // (`tt-custom-<n>`, the proxy base as `baseURL`, no path suffix) is
+        // built by the OpenCode spawn wiring.
+        Provider::Custom(_) => (provider.opencode_custom_id().unwrap_or("tt-custom-0"), ""),
     }
 }
 
@@ -774,6 +1252,25 @@ pub struct ProviderStatus {
     pub models: Vec<ModelStatus>,
     /// The workspace a saved Anthropic key that is not scoped to one names.
     pub workspace: Option<String>,
+    /// Whether `api_prices` prices this provider's answers; `false` for a
+    /// custom endpoint, whose row shows "no price" (its `spent_usd` is 0 and
+    /// the token limit is the only guard).
+    pub priced: bool,
+    /// A custom slot's own details; absent for a built-in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<EndpointStatus>,
+}
+
+/// A custom endpoint as the panel shows it. Never the key.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointStatus {
+    pub slot: u8,
+    pub label: String,
+    pub base_url: String,
+    /// The base URL's host (and port), for the row.
+    pub host: String,
+    pub model_count: usize,
 }
 
 /// One model's month from `api_usage::ModelUsage`, in the panel's casing.
@@ -870,8 +1367,9 @@ fn status_with(
     limits: &std::collections::BTreeMap<String, u64>,
     legacy_usd: &std::collections::BTreeMap<String, f64>,
     ledger: &crate::services::api_usage::Ledger,
+    endpoints: &[CustomEndpoint],
 ) -> ApiKeyStatus {
-    let providers: Vec<ProviderStatus> = Provider::ALL
+    let providers: Vec<ProviderStatus> = Provider::configured_with(endpoints)
         .into_iter()
         .map(|p| {
             let limit_tokens = limits.get(p.id()).copied();
@@ -887,6 +1385,14 @@ fn status_with(
                 unknown_models: ledger.unknown_models(p),
                 models: model_statuses(ledger, p),
                 workspace: None,
+                priced: p.priced(),
+                endpoint: p.slot().and_then(|slot| endpoints.iter().find(|e| e.slot == slot)).map(|e| EndpointStatus {
+                    slot: e.slot,
+                    label: e.label.clone(),
+                    base_url: e.base_url.clone(),
+                    host: base_url_host(&e.base_url),
+                    model_count: e.models.len(),
+                }),
             }
         })
         .collect();
@@ -959,7 +1465,12 @@ pub fn status() -> ApiKeyStatus {
         &crate::services::api_usage::limits_in(&settings),
         &crate::services::api_usage::legacy_usd_limits_in(&settings),
         &crate::services::api_usage::book().snapshot(chrono::Utc::now()),
+        &custom_endpoints_in(&settings),
     );
+    // On a hosted server no custom slot is ever listed (`custom_endpoints`).
+    if crate::services::server::is_server() {
+        status.providers.retain(|p| p.endpoint.is_none());
+    }
     for p in &mut status.providers {
         if p.saved {
             p.workspace = Provider::from_id(p.id).and_then(get_workspace);
@@ -1232,6 +1743,267 @@ mod tests {
     }
 
     #[test]
+    fn custom_slots_parse_and_format_their_static_ids() {
+        for n in 1..=MAX_CUSTOM {
+            let p = Provider::custom(n).unwrap();
+            assert_eq!(p, Provider::Custom(n));
+            assert_eq!(p.id(), format!("custom-{n}"));
+            assert_eq!(Provider::from_id(p.id()), Some(p));
+            assert_eq!(p.account(), format!("agent-key:custom-{n}"));
+            assert_eq!(p.opencode_custom_id(), Some(format!("tt-custom-{n}").as_str()));
+            assert_eq!((p.slot(), p.is_custom(), p.priced(), p.bearer()), (Some(n), true, false, true));
+            assert!(p.credential_names().is_empty());
+        }
+        for bad in ["custom-0", "custom-9", "custom-01", "custom-", "custom", "Custom-1", "custom-1 ", "custom--1", "custom-+1", "custom-10", "tt-custom-1"] {
+            assert_eq!(Provider::from_id(bad), None, "{bad:?}");
+        }
+        assert_eq!(Provider::custom(0), None);
+        assert_eq!(Provider::custom(MAX_CUSTOM + 1), None);
+        // The three built-ins are what `ALL` lists; a built-in is priced and
+        // has no slot.
+        assert_eq!(Provider::ALL.len(), 3);
+        assert!(Provider::ALL.iter().all(|p| p.priced() && p.slot().is_none() && p.opencode_custom_id().is_none()));
+        assert!(Provider::OpenAi.bearer() && !Provider::Anthropic.bearer() && !Provider::Gemini.bearer());
+        // A value built by hand out of range cannot index outside the table.
+        assert!(Provider::Custom(0).index() < Provider::SLOTS && Provider::Custom(200).index() < Provider::SLOTS);
+    }
+
+    fn endpoint(slot: u8, label: &str) -> CustomEndpoint {
+        CustomEndpoint { slot, label: label.into(), base_url: format!("https://llm{slot}.example.org/v1"), models: vec!["m-1".into()] }
+    }
+
+    #[test]
+    fn configured_providers_are_the_built_ins_and_the_slots_in_settings() {
+        assert_eq!(Provider::configured_with(&[]), Provider::ALL.to_vec());
+        let all = Provider::configured_with(&[endpoint(3, "A"), endpoint(1, "B")]);
+        assert_eq!(&all[..3], &Provider::ALL);
+        assert_eq!(&all[3..], [Provider::Custom(3), Provider::Custom(1)]);
+        // The settings' own list: slots in range, the first of a repeated
+        // slot, by slot.
+        let settings = crate::schema::Settings {
+            agent_api_custom_endpoints: Some(vec![endpoint(5, "five"), endpoint(0, "zero"), endpoint(2, "two"), endpoint(5, "again"), endpoint(9, "nine")]),
+            ..Default::default()
+        };
+        let list = custom_endpoints_in(&settings);
+        assert_eq!(list.iter().map(|e| (e.slot, e.label.as_str())).collect::<Vec<_>>(), [(2, "two"), (5, "five")]);
+        assert!(custom_endpoints_in(&crate::schema::Settings::default()).is_empty());
+    }
+
+    #[test]
+    fn a_base_url_is_https_or_loopback_http_with_no_userinfo_query_or_fragment() {
+        let ok = |raw: &str| validate_base_url(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
+        assert_eq!(ok("https://llm.example.org/v1"), "https://llm.example.org/v1");
+        assert_eq!(ok("  https://llm.example.org/v1/  "), "https://llm.example.org/v1", "trimmed, trailing slash dropped");
+        assert_eq!(ok("https://llm.example.org"), "https://llm.example.org");
+        assert_eq!(ok("https://llm.example.org/"), "https://llm.example.org");
+        assert_eq!(ok("HTTPS://LLM.Example.ORG:8443/api/v1.2/x_y-z~"), "https://llm.example.org:8443/api/v1.2/x_y-z~");
+        assert_eq!(ok("https://llm.example.org:443/v1"), "https://llm.example.org/v1", "the default port is implied");
+        assert_eq!(ok("http://127.0.0.1:8080/v1"), "http://127.0.0.1:8080/v1");
+        assert_eq!(ok("http://localhost:11434/v1"), "http://localhost:11434/v1");
+        assert_eq!(ok("http://[::1]:8000"), "http://[::1]:8000");
+        assert_eq!(ok("https://[::1]:8000/v1"), "https://[::1]:8000/v1");
+        assert_eq!(ok("https://203.0.113.5/v1"), "https://203.0.113.5/v1", "https is not restricted to names");
+        for bad in [
+            "",
+            "   ",
+            "llm.example.org/v1",
+            "ftp://llm.example.org/v1",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "wss://llm.example.org/v1",
+            // http to anything but this computer
+            "http://llm.example.org/v1",
+            "http://example.com",
+            "http://127.0.0.2/v1",
+            "http://203.0.113.6/v1",
+            "http://localhost.example.org/v1",
+            "http://localhost./v1",
+            "http://[::2]/v1",
+            "http://0.0.0.0/v1",
+            // user info
+            "https://user@llm.example.org/v1",
+            "https://user:pass@llm.example.org/v1",
+            "https://:pass@llm.example.org/v1",
+            "http://127.0.0.1@evil.example.org/v1",
+            "https://llm.example.org@evil.example.org/v1",
+            // query and fragment, even empty ones
+            "https://llm.example.org/v1?key=1",
+            "https://llm.example.org/v1?",
+            "https://llm.example.org/v1#frag",
+            "https://llm.example.org/v1#",
+            // path trickery
+            "https://llm.example.org//v1",
+            "https://llm.example.org/v1//",
+            "https://llm.example.org/v1/%2e%2e/x",
+            "https://llm.example.org/v1/a%20b",
+            "https://llm.example.org/v1/a;b",
+            "https://llm.example.org/v1/a:b",
+            "https://llm.example.org/v1\\x",
+            // whitespace and control characters inside
+            "https://llm.example.org/ v1",
+            "https://llm.example.org/v1\nx",
+            "https://llm.exa\tmple.org/v1",
+            // no host
+            "https://",
+            "https:///v1",
+        ] {
+            assert!(validate_base_url(bad).is_err(), "{bad:?} must be refused");
+        }
+        assert!(validate_base_url(&format!("https://llm.example.org/{}", "a".repeat(600))).is_err());
+        // Validating twice changes nothing.
+        let once = ok("https://llm.example.org:8443/v1/");
+        assert_eq!(ok(&once), once);
+        assert_eq!(base_url_host(&once), "llm.example.org:8443");
+        assert_eq!(base_url_host("https://llm.example.org/v1"), "llm.example.org");
+    }
+
+    #[test]
+    fn a_models_listing_is_bounded_and_plain() {
+        let ids = |v: &[&str]| clean_model_ids(v.iter().map(|s| s.to_string()));
+        assert_eq!(ids(&["gpt-4o", "meta-llama/Llama-3.1-8B-Instruct", "qwen2.5:7b", "org/m@rev+1", "a_b.c"]).len(), 5);
+        assert_eq!(ids(&["a", "a", "b", "a"]), ["a", "b"], "no duplicates, listing order");
+        assert_eq!(ids(&["", "has space", "new\nline", "quote\"", "uni\u{e9}", "semi;colon", "ok", "back\\slash", "<tag>"]), ["ok"]);
+        assert!(ids(&[&"x".repeat(MAX_MODEL_ID_BYTES + 1)]).is_empty());
+        assert_eq!(ids(&[&"x".repeat(MAX_MODEL_ID_BYTES)]).len(), 1);
+        let many: Vec<String> = (0..MAX_LISTED_MODELS + 50).map(|i| format!("model-{i}")).collect();
+        let kept = clean_model_ids(many);
+        assert_eq!(kept.len(), MAX_LISTED_MODELS);
+        assert_eq!(kept[0], "model-0");
+    }
+
+    #[test]
+    fn the_add_form_is_validated_before_anything_is_asked_or_saved() {
+        let ok = custom_draft("  Institute  ", "https://llm.example.org/v1/", 5_000_000).unwrap();
+        assert_eq!(ok, CustomDraft { label: "Institute".into(), base_url: "https://llm.example.org/v1".into(), limit_tokens: 5_000_000 });
+        assert!(custom_draft("", "https://llm.example.org/v1", 1).is_err());
+        assert!(custom_draft("   ", "https://llm.example.org/v1", 1).is_err());
+        assert!(custom_draft(&"x".repeat(MAX_LABEL_CHARS + 1), "https://llm.example.org/v1", 1).is_err());
+        assert!(custom_draft("bad\nlabel", "https://llm.example.org/v1", 1).is_err());
+        assert!(custom_draft("Lab", "http://llm.example.org/v1", 1).is_err());
+        assert!(custom_draft("Lab", "https://llm.example.org/v1", 0).is_err(), "a limit is required, as for the others");
+        assert!(custom_draft("Lab", "https://llm.example.org/v1", crate::services::api_usage::MAX_LIMIT + 1).is_err());
+    }
+
+    fn temp_settings() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        (dir, path)
+    }
+
+    fn read(path: &std::path::Path) -> crate::schema::Settings {
+        crate::storage::read_json(path).unwrap()
+    }
+
+    #[test]
+    fn adding_an_endpoint_takes_the_lowest_free_slot_with_its_limit_and_keeps_the_rest_of_the_file() {
+        let (_dir, path) = temp_settings();
+        let existing = r#"{"agent_api_key_clis":["opencode"],"agent_api_token_limits":{"anthropic":7},"some_future_setting":{"a":1}}"#;
+        std::fs::write(&path, existing).unwrap();
+        let draft = custom_draft("One", "https://one.example.org/v1", 1_000).unwrap();
+        let held = std::collections::BTreeSet::new();
+        let one = add_custom_at(&path, &draft, vec!["m-1".into(), "bad id".into()], &held).unwrap();
+        assert_eq!((one.slot, one.label.as_str(), one.base_url.as_str()), (1, "One", "https://one.example.org/v1"));
+        assert_eq!(one.models, ["m-1"], "the listing is cleaned");
+        let two = add_custom_at(&path, &custom_draft("Two", "http://127.0.0.1:8080", 2_000).unwrap(), vec![], &held).unwrap();
+        assert_eq!(two.slot, 2);
+        let s = read(&path);
+        assert_eq!(custom_endpoints_in(&s), vec![one.clone(), two.clone()]);
+        let limits = s.agent_api_token_limits.unwrap();
+        assert_eq!((limits["anthropic"], limits["custom-1"], limits["custom-2"]), (7, 1_000, 2_000));
+        assert_eq!(s.agent_api_key_clis.unwrap(), ["opencode"]);
+        assert_eq!(s.extra["some_future_setting"]["a"], 1);
+        // A removed slot's number is free again, the lowest first.
+        assert!(remove_custom_at(&path, 1).unwrap());
+        let again = add_custom_at(&path, &draft, vec![], &held).unwrap();
+        assert_eq!(again.slot, 1);
+        // But not while the ledger holds its use this month.
+        assert!(remove_custom_at(&path, 1).unwrap());
+        let held = std::collections::BTreeSet::from([1]);
+        let third = add_custom_at(&path, &draft, vec![], &held).unwrap();
+        assert_eq!(third.slot, 3, "slot 1 is held by its ledger entry, slot 2 is in use");
+    }
+
+    #[test]
+    fn at_most_eight_endpoints_and_a_removal_takes_the_limit_with_it() {
+        let (_dir, path) = temp_settings();
+        let draft = custom_draft("E", "https://e.example.org", 10).unwrap();
+        let held = std::collections::BTreeSet::new();
+        for n in 1..=MAX_CUSTOM {
+            assert_eq!(add_custom_at(&path, &draft, vec![], &held).unwrap().slot, n);
+        }
+        let err = add_custom_at(&path, &draft, vec![], &held).unwrap_err();
+        assert!(err.contains("at most 8"), "{err}");
+        assert_eq!(read(&path).agent_api_custom_endpoints.unwrap().len(), 8, "a refused add changes nothing");
+        assert!(remove_custom_at(&path, 4).unwrap());
+        assert!(!remove_custom_at(&path, 4).unwrap(), "already gone");
+        let s = read(&path);
+        assert!(!s.agent_api_token_limits.as_ref().unwrap().contains_key("custom-4"));
+        assert!(s.agent_api_token_limits.unwrap().contains_key("custom-5"));
+        for n in [1, 2, 3, 5, 6, 7, 8] {
+            assert!(remove_custom_at(&path, n).unwrap());
+        }
+        let s = read(&path);
+        assert!(s.agent_api_custom_endpoints.is_none(), "an empty list is not kept");
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("agent_api_custom_endpoints"));
+    }
+
+    #[test]
+    fn a_refresh_replaces_only_the_models_of_an_existing_slot() {
+        let (_dir, path) = temp_settings();
+        let draft = custom_draft("E", "https://e.example.org/v1", 10).unwrap();
+        let held = std::collections::BTreeSet::new();
+        add_custom_at(&path, &draft, vec!["old".into()], &held).unwrap();
+        let saved = set_custom_models_at(&path, 1, vec!["new-1".into(), "bad id".into(), "new-2".into()]).unwrap();
+        assert_eq!(saved.models, ["new-1", "new-2"]);
+        assert_eq!((saved.label.as_str(), saved.base_url.as_str()), ("E", "https://e.example.org/v1"));
+        assert!(set_custom_models_at(&path, 2, vec![]).is_err());
+        assert_eq!(read(&path).agent_api_custom_endpoints.unwrap()[0].models, ["new-1", "new-2"]);
+    }
+
+    #[test]
+    fn the_ledger_holds_the_slots_that_have_use_this_month() {
+        use crate::services::api_prices::Charge;
+        let mut ledger = crate::services::api_usage::Ledger { month: "2026-10".into(), ..Default::default() };
+        assert!(ledger_slots(&ledger).is_empty());
+        let charge = Charge { model: "m".into(), output: 5, ..Charge::default() };
+        ledger.add(Provider::Custom(2), &charge);
+        ledger.add(Provider::Anthropic, &charge);
+        assert_eq!(ledger_slots(&ledger), std::collections::BTreeSet::from([2]));
+        assert_eq!(free_slot(&[endpoint(1, "x")], &ledger_slots(&ledger)), Some(3));
+        assert_eq!(free_slot(&[], &Default::default()), Some(1));
+    }
+
+    #[test]
+    fn status_lists_the_configured_custom_slots_without_a_price() {
+        let ledger = crate::services::api_usage::Ledger { month: "2026-10".into(), ..Default::default() };
+        let mut one = endpoint(1, "Institute");
+        one.base_url = "https://llm.example.org:8443/v1".into();
+        let limits = std::collections::BTreeMap::from([("custom-1".to_string(), 9_000)]);
+        let s = status_with(true, "keychain", |p| p == Provider::Custom(1), &[], &limits, &Default::default(), &ledger, &[one]);
+        assert_eq!(s.providers.iter().map(|p| p.id).collect::<Vec<_>>(), ["anthropic", "gemini", "openai", "custom-1"]);
+        let row = &s.providers[3];
+        assert!(row.saved && !row.priced);
+        assert_eq!((row.limit_tokens, row.budget, row.spent_usd), (Some(9_000), "open", 0.0));
+        let endpoint = row.endpoint.as_ref().unwrap();
+        assert_eq!((endpoint.slot, endpoint.label.as_str(), endpoint.host.as_str(), endpoint.model_count), (1, "Institute", "llm.example.org:8443", 1));
+        assert!(s.providers[..3].iter().all(|p| p.priced && p.endpoint.is_none()));
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["providers"][3]["priced"], false);
+        assert_eq!(json["providers"][3]["endpoint"]["modelCount"], 1);
+        assert_eq!(json["providers"][3]["endpoint"]["baseUrl"], "https://llm.example.org:8443/v1");
+        assert!(json["providers"][0].get("endpoint").is_none(), "absent for a built-in");
+        // The CLIs keep the built-ins only until the spawn wiring counts a
+        // slot as a key of OpenCode's (A2).
+        let opencode = s.clis.iter().find(|c| c.id == "opencode").unwrap();
+        assert_eq!(opencode.providers, vec!["anthropic", "gemini", "openai"]);
+    }
+
+    #[test]
+    fn a_key_never_goes_under_a_workspace_for_a_custom_slot() {
+        assert!(set_key(Provider::Custom(2), Some("sk-test-fake"), Some("wrkspc_01AAAAAAAAAAAAAAAAAAAAAAAA")).is_err());
+    }
+
+    #[test]
     fn codex_gets_only_a_token_and_launch_only_provider_settings() {
         for carry in [false, true] {
             let mut env = HashMap::new();
@@ -1419,7 +2191,7 @@ mod tests {
     #[test]
     fn status_is_ready_only_for_a_switched_on_cli_with_a_key() {
         let ledger = crate::services::api_usage::Ledger { month: "2026-10".into(), ..Default::default() };
-        let s = status_with(true, "keychain", |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &Default::default(), &ledger);
+        let s = status_with(true, "keychain", |p| p == Provider::Anthropic, &on(&["claude", "gemini"]), &Default::default(), &Default::default(), &ledger, &[]);
         let cli = |id: &str| s.clis.iter().find(|c| c.id == id).unwrap().clone();
         assert!(cli("claude").ready);
         assert!(!cli("gemini").ready, "on, but no Gemini key");
@@ -1427,7 +2199,7 @@ mod tests {
         assert!(s.providers.iter().any(|p| p.id == "anthropic" && p.saved));
         assert!(!s.clis.iter().any(|c| c.id == "vibe"));
         // A CLI of several providers is ready on any one key.
-        let s = status_with(true, "keychain", |p| p == Provider::OpenAi, &on(&["opencode"]), &Default::default(), &Default::default(), &ledger);
+        let s = status_with(true, "keychain", |p| p == Provider::OpenAi, &on(&["opencode"]), &Default::default(), &Default::default(), &ledger, &[]);
         let opencode = s.clis.iter().find(|c| c.id == "opencode").unwrap();
         assert!(opencode.ready);
         assert_eq!(opencode.providers, vec!["anthropic", "gemini", "openai"]);
@@ -1457,7 +2229,7 @@ mod tests {
         let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 20_000)]);
         // An older build's dollar limits: shown only where no token limit is.
         let legacy = std::collections::BTreeMap::from([("anthropic".to_string(), 20.0), ("gemini".to_string(), 7.5)]);
-        let s = status_with(true, "vault", |_| true, &on(&["claude", "gemini"]), &limits, &legacy, &ledger);
+        let s = status_with(true, "vault", |_| true, &on(&["claude", "gemini"]), &limits, &legacy, &ledger, &[]);
         let anthropic = &s.providers[0];
         assert_eq!((anthropic.id, anthropic.limit_tokens, anthropic.budget), ("anthropic", Some(20_000), "reached"));
         assert_eq!(anthropic.billed, 20_000);
