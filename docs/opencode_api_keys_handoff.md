@@ -201,3 +201,92 @@ fixture address rename, `agent_api_keys` tests re-run: 38 passed)
 - A hand edit of `settings.json` that adds, changes or removes an endpoint
   takes effect within 10 s (or at once when the file stamp changes); a slot
   whose saved URL stops validating is refused (404) at the proxy.
+
+## R1 — security review of A1 (`683e61dea..6a17ef48f`)
+
+Fixed on top of `6a17ef48f`, each with a test that fails without it.
+
+### Confirmed and fixed
+
+- **`n > 1` slipped past the worst-case reservation** (`fa964b4d5`). A Chat
+  Completions body asking for `n` answers holds `max_tokens` once, but the
+  endpoint generates and bills every choice, so one request could overshoot
+  the limit by a factor of `n`. `Meter::request` now reads `n` (a mistyped or
+  repeated `n` is refused as unreadable, `null`/`0` mean 1) and the worst
+  case and the elapsed-time estimate scale with it (saturating). Test:
+  `a_custom_request_asking_for_several_answers_holds_the_cost_of_each`.
+- **A settings patch could retarget a saved key** (`f0f57b670`).
+  `patch_settings` (class Core, so also a paired browser client) and
+  `save_settings` write any `Settings` field, `agent_api_custom_endpoints`
+  included: changing a slot's `base_url` sent that slot's real key to the new
+  host at the next request, a read primitive that `agent_api_key_set` (write
+  only) never gave. Like `git_token`, the list is now the add/remove/refresh
+  commands' alone: `patch_settings_at` drops it from a patch and
+  `save_settings_at` keeps the file's. Test:
+  `a_patch_or_a_save_cannot_retarget_a_custom_endpoint`. The limit
+  (`agent_api_token_limits["custom-<n>"]`) stays patchable (a user setting,
+  no key movement).
+
+### Checked and rejected (no bug)
+
+- **Base URL validation**: userinfo (`user@`, `user:pw@`), backslash, `%`
+  escapes, `.`/`..` segments, empty segments, `https:host`, `https:///host`,
+  query/fragment (also empty `?`/`#`), tabs/newlines, `localhost.example.org`,
+  trailing-dot `localhost.`, IPv4-mapped IPv6, `0.0.0.0`, `127.0.0.2`,
+  IDNA/fullwidth lookalikes (normalised to `localhost` and so really
+  loopback), default ports and case are all refused or normalised correctly;
+  the URL is rebuilt from the parsed parts, and the plain-HTTP client is
+  picked from that rebuilt string.
+- **Redirects**: both clients use `Policy::none()`; a 3xx on `/models` at save
+  is an error, on a request it is passed back unfollowed. The key is only ever
+  put on the request to the validated base.
+- **Token reach**: `grant.provider == provider` keeps a token to its slot (and
+  from built-ins); `issue` refuses a slot with no valid endpoint or an admin
+  grant; removal makes `Upstream::base` return `None` (404) before the key is
+  fetched, at once (`forget_endpoints` on every in-process write). No key,
+  token or body is logged or put on an argv in this range.
+- **Smuggling**: custom paths pass the plain-segment filter, exactly two
+  routes; no query is forwarded; agent credential headers are dropped
+  (`authorization`, `x-api-key`, ...) and the key header is `insert`ed.
+- **Meter**: duplicate/mistyped `stream`, `stream_options`, `max_tokens`
+  and `model` refuse as unreadable (serde rejects duplicates and floats);
+  non-2xx answers charge nothing; a stream with no final usage is charged the
+  estimate; `usage: null` chunks, the `choices: []` final chunk and `[DONE]`
+  are read correctly (tests exist); only root-level `usage`/`model` count.
+- `final_usage` is assigned, not OR-ed, in `merge`: a `usage: null` chunk
+  *after* the final one would reset it and add the estimate on top. Only
+  over-charges, no server sends it; left alone.
+- A compressed answer (an upstream ignoring `accept-encoding: identity`) is
+  read as unparsable and charged the estimate: same as the built-ins.
+
+### Flagged for user (not acted on)
+
+- **System proxy variables and plain-HTTP loopback endpoints.** The
+  `loopback` client (and `custom_models_at` for `http://`) is a default
+  `reqwest` client, which honours `HTTP_PROXY`/`ALL_PROXY` from the app's
+  environment. With one set and no `NO_PROXY` for `127.0.0.1`/`localhost`, a
+  `http://localhost:...` custom endpoint's Bearer key would travel in clear to
+  that proxy. The built-ins are HTTPS (CONNECT) and unaffected. A
+  `.no_proxy()` on the loopback client would close it (the key broker's
+  loopback URL too); not done because it cannot be tested without changing the
+  process environment, and it changes the broker path.
+- **Slot reuse and running tabs.** A removed slot with no use in the ledger
+  is free at once; a tab started before still holds a valid `custom-<n>`
+  token, and after the user adds another endpoint under that number the old
+  tab's requests go to the new endpoint with the new key. Decision 2 only
+  protects slots with ledger use. Both endpoints are the user's own.
+- **An omitted `max_tokens` is assumed 32 768** (decision 5). An endpoint
+  whose own default is larger (some servers default to the model's whole
+  window) can bill more than reserved; the answer's reported usage is still
+  charged in full, so only the pre-check is loose.
+- `https://` to link-local/private addresses is accepted (already flagged by
+  A1).
+
+### Gates (after both fixes)
+
+- `cargo test -q -p tabtivity --lib`: 6638 passed, 0 failed, 23 ignored.
+- `cargo test -q -p tabtivity --no-default-features --lib --test server_secrets`:
+  6429 + 1 passed, 0 failed, 20 ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`, `-p tabtivity
+  --no-default-features --lib`, `-p app-serverd --all-targets`: clean (exit 0).
+- `scripts/privacy-check.sh`: passes. Frontend untouched.
