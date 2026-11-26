@@ -166,7 +166,7 @@ describe("New Project: Local models only", () => {
     expect(screen.queryByText("Codex")).toBeNull();
   });
 
-  it("reopens on the last answers; a used name is not offered again", async () => {
+  it("reopens on the last answers; a created project clears them all", async () => {
     stubBackend();
     await openNew();
     await typeName("draft");
@@ -182,9 +182,6 @@ describe("New Project: Local models only", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
     });
-    expect(readProjectDialogMemory("new")).toEqual(
-      expect.objectContaining({ localModelsOnly: true }),
-    );
-    expect(readProjectDialogMemory("new").name).toBeUndefined();
+    expect(readProjectDialogMemory("new")).toEqual({});
   });
 });

@@ -44,7 +44,7 @@ import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
 import type { AgentPrivacyChange } from "../../lib/projects/localModelsOnly";
-import { readProjectDialogMemory, writeProjectDialogMemory } from "./projectDialogMemory";
+import { clearProjectDialogMemory, readProjectDialogMemory, writeProjectDialogMemory } from "./projectDialogMemory";
 import { NAMES } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
 import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
@@ -514,6 +514,11 @@ export function ProjectDialog({
   // Every answer is kept as it changes, so however the dialog closes the next
   // one opens on them (`projectDialogMemory`).
   useEffect(() => {
+    // A New dialog that made its project starts the next one from the defaults.
+    if (draftUsed && kind === "new") {
+      clearProjectDialogMemory(kind);
+      return;
+    }
     writeProjectDialogMemory(kind, {
       projectsRoot: projectsRootPicked ? projectsRoot : undefined,
       gitType: kind === "new" ? gitType : undefined,

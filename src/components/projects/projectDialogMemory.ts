@@ -4,9 +4,10 @@ import { storageKey } from "../../lib/brand";
  * The New / Import project dialog's last answers, so closing it (Cancel, ✕,
  * Escape, or a finished create) does not throw them away. One record per dialog
  * kind, in this browser's localStorage: a convenience, never project state.
- * The choices (location, git hosting, where it runs, Local models only, …) are
- * kept across creates; the typed name and description only until a project is
- * made from them, so a closed draft comes back but a used one does not.
+ * A closed draft comes back, but once a New project is made from it the whole
+ * record is cleared, so the next New dialog opens on the defaults. Import keeps
+ * its choices (location, where it runs, …) across imports and drops only the
+ * typed name and description.
  */
 export interface ProjectDialogMemory {
   projectsRoot?: string;
@@ -58,5 +59,14 @@ export function writeProjectDialogMemory(kind: "new" | "import", memory: Project
     localStorage.setItem(keyOf(kind), JSON.stringify(memory));
   } catch {
     // Private window or full storage: the dialog simply starts fresh next time.
+  }
+}
+
+/** Forget every remembered answer of a dialog kind (a New project was just made). */
+export function clearProjectDialogMemory(kind: "new" | "import"): void {
+  try {
+    localStorage.removeItem(keyOf(kind));
+  } catch {
+    // Storage unavailable: nothing was remembered.
   }
 }
