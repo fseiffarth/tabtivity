@@ -14,7 +14,10 @@
 //!   1.x is not supported). Each time the tab's
 //!   OpenCode takes a prompt it writes that session's id to
 //!   `live_sessions/<uid>`, beside the other CLIs' records — a `/new` or a
-//!   session picked from `/sessions` moves it at the next prompt. Only the
+//!   session picked from `/sessions` moves it at the next prompt. A prompt
+//!   that reached the server before the plugin was loaded (it re-boots its
+//!   instance on a prompt after a while idle) is caught by the session's run
+//!   events instead, while the tab has none recorded. Only the
 //!   tab's own OpenCode records: `TAB_AGENT` names OpenCode (set at the spawn,
 //!   so one nested under another CLI's tab stays out), a claim it sets in its
 //!   environment keeps one nested under the tab out, and a subagent's child
@@ -26,8 +29,9 @@
 //!   is restored fresh — not into a sibling's. A tab from before the plugin
 //!   (no note) keeps its `--continue` until its first prompt records one.
 //! - **The Reader** (`agent_transcript`, `agent_changes`) reads the recorded
-//!   session while the store still has it; otherwise the folder's newest, as
-//!   before, created since the last fresh launch.
+//!   session while the store still has it; otherwise the folder's newest
+//!   created since the last fresh launch that no other tab's record claims
+//!   (a sibling's chat is never shown as a fresh tab's).
 //!
 //! A local-model tab records and resumes the same way, against its local-model
 //! home's store. Remote tabs (their store is on the far host) and assistant
@@ -152,8 +156,19 @@ fn plugin_body(live_dir: &str) -> String {
          \x20     if (id !== recorded && put(\"\", id)) recorded = id;\n\
          \x20     turn(id, \"working\");\n\
          \x20   }},\n\
+         \x20   // A session running in this tab's own server while it has none\n\
+         \x20   // recorded: the prompt that booted the instance reached it before\n\
+         \x20   // this plugin was loaded, so the prompt hook never saw it.\n\
+         \x20   unrecorded: () => !recorded,\n\
+         \x20   adopt: (id) => {{\n\
+         \x20     if (recorded || typeof id !== \"string\" || children.has(id) || !SESSION.test(id)) return;\n\
+         \x20     if (put(\"\", id)) recorded = id;\n\
+         \x20   }},\n\
          \x20 }};\n\
          }};\n\
+         \n\
+         // The events that say a session is running here — not one only viewed.\n\
+         const runs = (type) => type.startsWith(\"session.step.\") || type.startsWith(\"session.execution.\") || type in TURN;\n\
          \n\
          // OpenCode 2 calls setup. No runtime dependency: Plugin.define is the\n\
          // identity function in @opencode/plugin.\n\
@@ -181,7 +196,16 @@ fn plugin_body(live_dir: &str) -> String {
          \x20   try {{\n\
          \x20     const events = await ctx.event.subscribe();\n\
          \x20     (async () => {{\n\
-         \x20       for await (const event of events) await hooks.event({{ event }});\n\
+         \x20       for await (const event of events) {{\n\
+         \x20         const id = event?.data?.sessionID ?? event?.data?.form?.sessionID;\n\
+         \x20         if (hooks.unrecorded() && typeof id === \"string\" && runs(String(event?.type))) {{\n\
+         \x20           try {{\n\
+         \x20             const session = await ctx.session.get({{ sessionID: id }});\n\
+         \x20             if (!session.parentID) hooks.adopt(id);\n\
+         \x20           }} catch {{}}\n\
+         \x20         }}\n\
+         \x20         await hooks.event({{ event }});\n\
+         \x20       }}\n\
          \x20     }})().catch(() => {{}});\n\
          \x20   }} catch {{}}\n\
          \x20 }},\n\
@@ -463,23 +487,71 @@ fn now_ms() -> i64 {
     crate::clock::now_ms() as i64
 }
 
-/// What the Reader reads for the OpenCode tab `launch_id`: the session its
-/// plugin recorded (the store checks it is still there), and the moment since
-/// which the folder's sessions are the tab's own — the caller's `since`, or
-/// the tab's last fresh launch when it has been relaunched since.
-pub fn reader_session(project_id: Option<&str>, launch_id: Option<&str>, since: Option<i64>) -> (Option<String>, Option<i64>) {
-    let Some(uid) = launch_id.filter(|uid| is_uuid_shaped(uid)) else {
-        return (None, since);
-    };
-    reader_session_in(&live_sessions_dir(), recorded_session(project_id, uid), uid, since)
+/// What the Reader reads for an OpenCode tab: see [`reader_session`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ReaderSession {
+    /// The session the tab's plugin recorded (the store checks it is still there).
+    pub own: Option<String>,
+    /// The moment since which the folder's sessions are the tab's own — the
+    /// caller's `since`, or the tab's last fresh launch when it has been
+    /// relaunched since.
+    pub since: Option<i64>,
+    /// Without `own`: the sessions other tabs' plugins recorded as theirs,
+    /// which the folder's newest is never taken from — or a tab that has not
+    /// prompted yet would show a sibling's chat as its own.
+    pub claimed: Vec<String>,
 }
 
-fn reader_session_in(notes: &Path, own: Option<String>, uid: &str, since: Option<i64>) -> (Option<String>, Option<i64>) {
+/// What the Reader reads for the OpenCode tab `launch_id`.
+pub fn reader_session(project_id: Option<&str>, launch_id: Option<&str>, since: Option<i64>) -> ReaderSession {
+    let Some(uid) = launch_id.filter(|uid| is_uuid_shaped(uid)) else {
+        return ReaderSession { since, ..Default::default() };
+    };
+    let mut read = reader_session_in(&live_sessions_dir(), recorded_session(project_id, uid), uid, since);
+    if read.own.is_none() {
+        let slice = project_live_sessions_dir(project_id.unwrap_or(storage::ROOT_SCOPE));
+        read.claimed = claimed_in(&[live_sessions_dir(), slice], uid, read.since);
+    }
+    read
+}
+
+fn reader_session_in(notes: &Path, own: Option<String>, uid: &str, since: Option<i64>) -> ReaderSession {
     let since = match read_launch_in(notes, uid) {
         Some(Launch::Fresh(at)) => Some(since.map_or(at, |s| s.max(at))),
         _ => since,
     };
-    (own, since)
+    ReaderSession { own, since, claimed: Vec::new() }
+}
+
+/// Slack under `since` for a record's modification time: it is stamped by the
+/// file system, the session's creation by OpenCode.
+const CLAIM_SLACK_MS: i64 = 5_000;
+
+/// The OpenCode sessions recorded in `dirs` by tabs other than `uid`. With
+/// `since`, only records written since then are read: a session the Reader
+/// could take was created since, and its record after it.
+fn claimed_in(dirs: &[PathBuf], uid: &str, since: Option<i64>) -> Vec<String> {
+    let floor = since
+        .and_then(|ms| u64::try_from(ms.saturating_sub(CLAIM_SLACK_MS)).ok())
+        .map(|ms| std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms));
+    let mut claimed: Vec<String> = dirs
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_name().to_str().is_some_and(|name| name != uid && is_uuid_shaped(name)))
+        .filter(|entry| {
+            entry.metadata().is_ok_and(|meta| {
+                meta.is_file() && floor.is_none_or(|floor| meta.modified().is_ok_and(|at| at >= floor))
+            })
+        })
+        .filter_map(|entry| crate::services::home_io::read_record(&entry.path()))
+        .map(|id| id.trim().to_string())
+        .filter(|id| is_session_id(id))
+        .collect();
+    claimed.sort();
+    claimed.dedup();
+    claimed
 }
 
 #[cfg(test)]
@@ -646,12 +718,48 @@ mod tests {
     #[test]
     fn the_reader_reads_only_sessions_since_a_fresh_relaunch() {
         let notes = tmp("reader");
-        assert_eq!(reader_session_in(&notes, None, UID, None), (None, None));
+        let read = |own: Option<&str>, since| {
+            let read = reader_session_in(&notes, own.map(str::to_string), UID, since);
+            (read.own, read.since)
+        };
+        assert_eq!(read(None, None), (None, None));
         write_launch_in(&notes, UID, Launch::Fresh(500)).unwrap();
-        assert_eq!(reader_session_in(&notes, None, UID, None), (None, Some(500)));
-        assert_eq!(reader_session_in(&notes, None, UID, Some(900)), (None, Some(900)));
+        assert_eq!(read(None, None), (None, Some(500)));
+        assert_eq!(read(None, Some(900)), (None, Some(900)));
         write_launch_in(&notes, UID, Launch::Continued).unwrap();
-        assert_eq!(reader_session_in(&notes, Some("ses_a".into()), UID, None), (Some("ses_a".into()), None));
+        assert_eq!(read(Some("ses_a"), None), (Some("ses_a".into()), None));
+    }
+
+    /// Three OpenCode tabs in one folder, two not prompted yet: those two must
+    /// not take the third's session as the folder's newest. Their own records,
+    /// Claude's records beside them, launch notes and records older than the
+    /// launch are not claims.
+    #[test]
+    fn other_tabs_records_are_claims() {
+        let root = tmp("claims-root");
+        let slice = tmp("claims-slice");
+        const OTHER: &str = "6a0d7654-9781-48d2-9d10-55353bba0963";
+        const FENCED: &str = "a6e9a1c0-a56f-40e2-9768-ff30b1c80740";
+        const CLAUDE: &str = "9e0f0ff9-c7b4-4945-b958-f2791377994a";
+        const OLD: &str = "c078300f-a1f1-40ae-9604-fa1379fd9d6d";
+        std::fs::write(root.join(UID), "ses_mine").unwrap();
+        std::fs::write(root.join(OTHER), "ses_other\n").unwrap();
+        std::fs::write(slice.join(FENCED), "ses_fenced").unwrap();
+        std::fs::write(slice.join(format!("{FENCED}.turn")), "done 1").unwrap();
+        std::fs::write(root.join(format!("{OTHER}{LAUNCH_SUFFIX}")), "fresh 1").unwrap();
+        std::fs::write(root.join(CLAUDE), "0b9f6a52-3c1d-4e8a-9f00-1a2b3c4d5e6f").unwrap();
+        std::fs::create_dir_all(root.join("p1")).unwrap();
+        let old = root.join(OLD);
+        std::fs::write(&old, "ses_old").unwrap();
+        let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(an_hour_ago).unwrap();
+        let dirs = [root.clone(), slice.clone()];
+        assert_eq!(claimed_in(&dirs, UID, None), ["ses_fenced", "ses_old", "ses_other"]);
+        let launched = crate::clock::now_ms() as i64 - 60_000;
+        assert_eq!(claimed_in(&dirs, UID, Some(launched)), ["ses_fenced", "ses_other"]);
+        assert_eq!(claimed_in(&dirs, OTHER, Some(launched)), ["ses_fenced", "ses_mine"]);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&slice);
     }
 
     #[test]
@@ -814,9 +922,20 @@ mod tests {
                 shell: { hook: async (name, cb) => { assert.equal(name, 'create.before'); shell = cb; } },
                 event: { subscribe: async () => stream },
             });
-            // Nothing before the tab's first prompt: no session is the tab's yet.
-            await emit('permission.asked', { sessionID: 'ses_main' });
+            const record = join(dir, uid);
+            // A session only looked at, or a subagent's child running, is not the tab's.
+            await emit('session.updated', { sessionID: 'ses_main' });
+            await emit('session.step.started', { sessionID: 'ses_child' });
+            assert.equal(existsSync(record), false);
             assert.equal(word(), null);
+            // The prompt that booted the instance came before the plugin: the
+            // session's run makes it the tab's all the same.
+            await emit('permission.asked', { sessionID: 'ses_main' });
+            assert.equal(readFileSync(record, 'utf8'), 'ses_main');
+            assert.equal(word(), 'decision');
+            // Once recorded, another session's run takes nothing over.
+            await emit('session.step.started', { sessionID: 'ses_other' });
+            assert.equal(readFileSync(record, 'utf8'), 'ses_main');
             await prompt({ sessionID: 'ses_main' });
             assert.equal(word(), 'working');
             assert.match(readFileSync(turnFile, 'utf8'), /^working \d+$/);

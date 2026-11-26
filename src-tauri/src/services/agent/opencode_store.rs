@@ -145,7 +145,7 @@ pub fn session_transcript(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
-    session_transcript_with(db, directory, since, own, subagent, version, limit, false)
+    session_transcript_with(db, directory, since, own, &[], subagent, version, limit, false)
 }
 
 /// [`session_transcript`], with each finished `reasoning` part as a
@@ -159,13 +159,14 @@ pub fn session_transcript_with(
     directory: &str,
     since: Option<i64>,
     own: Option<&str>,
+    claimed: &[String],
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
     thinking: bool,
 ) -> Option<AgentTranscript> {
     let conn = open_store(db)?;
-    let session = match tab_session(&conn, directory, since, own, subagent)? {
+    let session = match tab_session(&conn, directory, since, own, claimed, subagent)? {
         TabSession::Id(id) => id,
         TabSession::NoSubagent => return Some(AgentTranscript::unavailable("no_subagent")),
         TabSession::None => {
@@ -234,12 +235,13 @@ enum TabSession {
     Id(String),
 }
 
-/// The tab's session — or, with `subagent`, its descendant of that handle.
+/// The tab's session — or, with `subagent`, its descendant of that handle:
+/// `own`, else the folder's newest that no other tab has `claimed`.
 /// `None` when the store cannot be queried.
-fn tab_session(conn: &Connection, directory: &str, since: Option<i64>, own: Option<&str>, subagent: Option<&str>) -> Option<TabSession> {
+fn tab_session(conn: &Connection, directory: &str, since: Option<i64>, own: Option<&str>, claimed: &[String], subagent: Option<&str>) -> Option<TabSession> {
     let session = match own.and_then(|id| top_level(conn, id)) {
         Some(id) => Some(id),
-        None => newest_in(conn, directory, since)?,
+        None => newest_in(conn, directory, since, claimed)?,
     };
     let Some(session) = session else {
         return Some(if subagent.is_some() { TabSession::NoSubagent } else { TabSession::None });
@@ -273,19 +275,29 @@ fn top_level(conn: &Connection, id: &str) -> Option<String> {
 }
 
 /// The newest top-level, unarchived session of `directory` created at or
-/// after `since`; `None` when the store cannot be queried.
-fn newest_in(conn: &Connection, directory: &str, since: Option<i64>) -> Option<Option<String>> {
+/// after `since` that is not one of the `claimed`; `None` when the store
+/// cannot be queried.
+fn newest_in(conn: &Connection, directory: &str, since: Option<i64>, claimed: &[String]) -> Option<Option<String>> {
     let [given, real, given_slashed, real_slashed] = folder_dirs(directory);
-    conn.query_row(
-        "SELECT id FROM session
-          WHERE directory IN (?1, ?2, ?3, ?4) AND parent_id IS NULL AND time_archived IS NULL
-            AND time_created >= ?5
-          ORDER BY time_updated DESC LIMIT 1",
-        rusqlite::params![given, real, given_slashed, real_slashed, since.unwrap_or(i64::MIN)],
-        |row| row.get(0),
-    )
-    .optional()
-    .ok()
+    // Enough rows that one past every claimed session is among them.
+    let rows = i64::try_from(claimed.len()).unwrap_or(i64::MAX).saturating_add(1);
+    let mut query = conn
+        .prepare(
+            "SELECT id FROM session
+              WHERE directory IN (?1, ?2, ?3, ?4) AND parent_id IS NULL AND time_archived IS NULL
+                AND time_created >= ?5
+              ORDER BY time_updated DESC LIMIT ?6",
+        )
+        .ok()?;
+    let ids = query
+        .query_map(
+            rusqlite::params![given, real, given_slashed, real_slashed, since.unwrap_or(i64::MIN), rows],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()?
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    Some(ids.into_iter().find(|id| !claimed.contains(id)))
 }
 
 /// The ways a session's `directory` may name the folder: as given and
@@ -419,12 +431,13 @@ pub fn session_changes(
     directory: &str,
     since: Option<i64>,
     own: Option<&str>,
+    claimed: &[String],
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentChanges> {
     let conn = open_store(db)?;
-    let session = match tab_session(&conn, directory, since, own, subagent)? {
+    let session = match tab_session(&conn, directory, since, own, claimed, subagent)? {
         TabSession::Id(id) => id,
         TabSession::NoSubagent => return Some(AgentChanges::unavailable("no_subagent")),
         TabSession::None => return Some(AgentChanges::read(format!("new:{directory}"), Vec::new(), false, limit)),
@@ -703,7 +716,7 @@ mod tests {
         assert_eq!(turns, [("prompt", "question"), ("answer", "answer")]);
         assert!(transcript.entries.iter().any(|e| e.kind == "agent" && e.subagent.is_some()));
         assert!(session_transcript(&db, "v2", None, Some("ses_v2"), None, transcript.version.as_deref(), 100).unwrap().unchanged);
-        let changes = session_changes(&db, "v2", None, Some("ses_v2"), None, None, 100).unwrap();
+        let changes = session_changes(&db, "v2", None, Some("ses_v2"), &[], None, None, 100).unwrap();
         let mut changed: Vec<_> = changes.changes.iter().map(|c| (c.path.as_str(), c.kind.as_str())).collect();
         changed.sort();
         assert_eq!(changed, [("again.txt", "write"), ("created.txt", "add"), ("file.rs", "edit"), ("lib.rs", "edit"), ("new.rs", "add")]);
@@ -757,12 +770,12 @@ mod tests {
             json!({"content": [{"type": "reasoning", "text": "pondering"}, {"type": "text", "text": "answer"}], "time": {"completed": 40}}));
         let plain = session_transcript(&db, "v2", None, Some("ses_v2"), None, None, 100).unwrap();
         assert_eq!(kinds(&plain), [("prompt", "question"), ("answer", "answer")]);
-        let thinking = session_transcript_with(&db, "v2", None, Some("ses_v2"), None, None, 100, true).unwrap();
+        let thinking = session_transcript_with(&db, "v2", None, Some("ses_v2"), &[], None, None, 100, true).unwrap();
         assert_eq!(kinds(&thinking), [("prompt", "question"), ("thinking", "pondering"), ("answer", "answer")]);
         // One read's version never passes for the other's.
         assert_ne!(plain.version, thinking.version);
-        assert!(!session_transcript_with(&db, "v2", None, Some("ses_v2"), None, plain.version.as_deref(), 100, true).unwrap().unchanged);
-        assert!(session_transcript_with(&db, "v2", None, Some("ses_v2"), None, thinking.version.as_deref(), 100, true).unwrap().unchanged);
+        assert!(!session_transcript_with(&db, "v2", None, Some("ses_v2"), &[], None, plain.version.as_deref(), 100, true).unwrap().unchanged);
+        assert!(session_transcript_with(&db, "v2", None, Some("ses_v2"), &[], None, thinking.version.as_deref(), 100, true).unwrap().unchanged);
     }
 
     #[test]
@@ -825,6 +838,28 @@ mod tests {
         prompt(&conn, "m1", "ses_mine", 600, "new question");
         let mine = session_transcript(&db, "/p", Some(500), None, None, fresh.version.as_deref(), 120).unwrap();
         assert_eq!(kinds(&mine), vec![("prompt", "new question")]);
+    }
+
+    /// Three tabs launched together, one prompted: the other two read no
+    /// session rather than its — and once one of them prompts without a
+    /// record yet, its own.
+    #[test]
+    fn a_fresh_tab_never_reads_a_session_another_tab_claimed() {
+        let (db, conn) = store();
+        session(&conn, "ses_sibling", None, "/p", 600, None);
+        prompt(&conn, "m1", "ses_sibling", 600, "their prompt");
+        let claimed = ["ses_sibling".to_string()];
+        let read = |claimed: &[String]| session_transcript_with(&db, "/p", Some(500), None, claimed, None, None, 120, false).unwrap();
+        assert_eq!(kinds(&read(&[])), vec![("prompt", "their prompt")]);
+        let none = read(&claimed);
+        assert!(none.available && none.entries.is_empty());
+        session(&conn, "ses_mine", None, "/p", 700, None);
+        prompt(&conn, "m2", "ses_mine", 700, "my prompt");
+        prompt(&conn, "m3", "ses_sibling", 800, "their newer prompt");
+        conn.execute("UPDATE session_v2 SET time_updated = 800 WHERE id = 'ses_sibling'", []).unwrap();
+        assert_eq!(kinds(&read(&claimed)), vec![("prompt", "my prompt")]);
+        let changes = session_changes(&db, "/p", Some(500), None, &claimed, None, None, 100).unwrap();
+        assert!(changes.available);
     }
 
     #[test]
@@ -1012,7 +1047,7 @@ mod tests {
             let child = session_transcript(&db, &dir, None, Some(&own), Some(handle), None, 500).expect("subagent readable");
             println!("subagent {} entries {:?}", child.entries.len(), child.entries.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>());
         }
-        let changes = session_changes(&db, &dir, None, Some(&own), None, None, 500).expect("changes readable");
+        let changes = session_changes(&db, &dir, None, Some(&own), &[], None, None, 500).expect("changes readable");
         println!(
             "{} transcript entries; {} subagent(s); running_agents {}; {} completed file changes",
             transcript.entries.len(),

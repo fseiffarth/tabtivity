@@ -157,8 +157,8 @@ pub fn agent_session_changes(
     }
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
-        let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
+        let reader = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
+        return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, &reader, subagent, version, limit);
     }
     if cmd == "cursor-agent" {
         if subagent.is_some() {
@@ -211,7 +211,8 @@ pub fn stored_chat_changes(
             return AgentChanges::unavailable("no_transcript");
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
+        let reader = crate::services::opencode_session::ReaderSession { own: Some(chat.to_string()), ..Default::default() };
+        return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, &reader, subagent, version, limit);
     }
     if cmd == "cursor-agent" {
         if subagent.is_some() {
@@ -256,17 +257,18 @@ pub fn local_opencode_changes(
         return AgentChanges::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
-    let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
+    let reader = crate::services::opencode_session::reader_session(project_id, launch_id, since);
     // A local-model tab runs here even in a remote project (`local_only`).
-    opencode_changes(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit)
+    opencode_changes(&db, false, tab_dir, &reader, subagent, version, limit)
 }
 
 /// Every file a tab's conversation changed, by the path its CLI named — the
 /// phone's "not committed yet" count (`mobile_control::chat_uncommitted`)
 /// checks these against `git status`. Unlike the Changes panel this reads
 /// the whole transcript, not the Reader's tail, and a Claude session's
-/// subagents' files with it; no diff is kept. `None` for a CLI whose edits
-/// are not read here; an empty list for a session before its first edit.
+/// subagents' files with it (Copilot's, Cursor's and OpenCode's: the newest
+/// diffs the Changes panel reads); no diff is kept. `None` for a CLI whose
+/// edits are not read here; an empty list for a session before its first edit.
 /// What the agent changed through a shell command is not in any of these
 /// records, so the list is a floor, never the whole tree's changes.
 pub fn changed_paths(
@@ -277,7 +279,7 @@ pub fn changed_paths(
     launch_id: Option<&str>,
     local_model: bool,
 ) -> Option<Vec<String>> {
-    if cmd == "opencode" {
+    if cmd == "opencode" || (!local_model && matches!(cmd, "copilot" | "cursor-agent")) {
         let read = if local_model {
             local_opencode_changes(project_id, tab_dir, since, launch_id, None, None, MAX_LIMIT)
         } else {
@@ -430,8 +432,7 @@ fn opencode_changes(
     db: &Path,
     remote: bool,
     tab_dir: Option<&str>,
-    since: Option<i64>,
-    own: Option<&str>,
+    reader: &crate::services::opencode_session::ReaderSession,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
@@ -445,7 +446,7 @@ fn opencode_changes(
     if !db.is_file() {
         return AgentChanges::empty();
     }
-    crate::services::opencode_store::session_changes(db, dir, since, own, subagent, version, limit)
+    crate::services::opencode_store::session_changes(db, dir, reader.since, reader.own.as_deref(), &reader.claimed, subagent, version, limit)
         .unwrap_or_else(|| AgentChanges::unavailable("read_failed"))
 }
 
