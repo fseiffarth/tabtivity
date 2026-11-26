@@ -941,6 +941,11 @@ pub async fn prepare(
     // a running agent must stay reachable, if only to stop it. Its input is
     // gated like any agent's (`ai`).
     let ai = is_ai_spawn(&opts);
+    // What the Windows session host takes: every agent, its CLI's sign-in
+    // included (the switch above lets a sign-in through; the host must take
+    // it too, or the phone that asked for it never finds its session).
+    #[cfg(windows)]
+    let agent_launch = is_agent_launch(&opts);
     let mut host_attach_only = false;
     if ai && crate::services::ai_switch::is_off() {
         let (project, host, session, local_only) =
@@ -1852,7 +1857,7 @@ pub async fn prepare(
             let persist = || {
                 storage::read_json::<crate::schema::Settings>(&settings).unwrap_or_default().persist_local_sessions()
             };
-            let facts = host_route_facts(&opts, ai, crate::services::session_mux::winhost::flag_on(&settings), persist);
+            let facts = host_route_facts(&opts, agent_launch, crate::services::session_mux::winhost::flag_on(&settings), persist);
             let via = host_launch_via(&facts, opts.tmux_session.as_deref(), crate::services::session_mux::winhost::probe_live_session)?;
             match via {
                 HostVia::Wrap => crate::services::session_mux::mux().wrap(&mut opts),
@@ -1980,6 +1985,13 @@ pub fn is_ai_spawn(opts: &PtyOptions) -> bool {
         || (crate::services::agent_fence::is_agent(opts) && !is_sign_in_argv(&opts.args))
 }
 
+/// An agent launch, a sign-in included: what the Windows session host takes
+/// ([`host_route_facts`]), where [`is_ai_spawn`] is what the AI switch stops.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_agent_launch(opts: &PtyOptions) -> bool {
+    opts.assistant.is_some() || crate::services::agent_fence::is_agent(opts)
+}
+
 fn is_sign_in_argv(args: &[String]) -> bool {
     match args {
         [first, ..] if first == "login" => true,
@@ -1989,12 +2001,12 @@ fn is_sign_in_argv(args: &[String]) -> bool {
 }
 
 /// What `session_host::route::routes_through_host` decides a resolved
-/// launch on: `ai` is [`is_ai_spawn`] of the caller's options, `persist`
-/// reads `persist_local_sessions` (only while the flag is on).
+/// launch on: `agent` is [`is_agent_launch`] of the caller's options,
+/// `persist` reads `persist_local_sessions` (only while the flag is on).
 #[cfg_attr(not(windows), allow(dead_code))]
 fn host_route_facts(
     opts: &PtyOptions,
-    ai: bool,
+    agent: bool,
     flag_on: bool,
     persist: impl FnOnce() -> bool,
 ) -> crate::services::session_host::route::RouteFacts {
@@ -2003,7 +2015,7 @@ fn host_route_facts(
         persist_local: flag_on && persist(),
         has_session: opts.tmux_session.is_some(),
         local: opts.cmd != "ssh" && !crate::services::sandbox::is_engine_cmd(&opts.cmd),
-        ai,
+        agent,
         root_scope: opts.project_id.as_deref().is_none_or(|p| p == storage::ROOT_SCOPE),
         host_session: opts.host_session,
     }
@@ -2259,7 +2271,7 @@ mod tests {
             base.as_object_mut().unwrap().extend(json.as_object().unwrap().clone());
             serde_json::from_value(base).unwrap()
         };
-        let goes = |opts: &PtyOptions, ai: bool| routes_through_host(&host_route_facts(opts, ai, true, || true));
+        let goes = |opts: &PtyOptions, agent: bool| routes_through_host(&host_route_facts(opts, agent, true, || true));
         assert!(goes(&launch(serde_json::json!({})), true));
         assert!(!goes(&launch(serde_json::json!({})), false), "a shell stays in-process");
         assert!(!goes(&launch(serde_json::json!({ "project_id": null })), true), "root");
@@ -2281,7 +2293,7 @@ mod tests {
     fn a_tab_whose_session_outlived_the_setting_reattaches_or_fails_closed() {
         use crate::services::session_host::route::RouteFacts;
         let on = RouteFacts {
-            flag_on: true, persist_local: true, has_session: true, local: true, ai: true, root_scope: false, host_session: false,
+            flag_on: true, persist_local: true, has_session: true, local: true, agent: true, root_scope: false, host_session: false,
         };
         let off = RouteFacts { flag_on: false, ..on };
         let never = |_: &str| -> Result<bool, String> { panic!("no probe") };
@@ -2290,7 +2302,7 @@ mod tests {
         assert_eq!(host_launch_via(&off, Some("s"), |_| Ok(false)), Ok(HostVia::InProcess));
         let mute = host_launch_via(&off, Some("s"), |_| Err("no answer".into())).unwrap_err();
         assert!(mute.starts_with(crate::services::session_host::route::ERR_SILENT), "{mute}");
-        assert_eq!(host_launch_via(&RouteFacts { ai: false, ..off }, Some("s"), never), Ok(HostVia::InProcess), "a shell");
+        assert_eq!(host_launch_via(&RouteFacts { agent: false, ..off }, Some("s"), never), Ok(HostVia::InProcess), "a shell");
         assert_eq!(host_launch_via(&off, None, never), Ok(HostVia::InProcess));
     }
 
@@ -2313,6 +2325,12 @@ mod tests {
         let mut shell = opts("bash", &[]);
         shell.agent = false;
         assert!(!is_ai_spawn(&shell));
+        // The switch lets a sign-in through, and the Windows session host
+        // takes it like any agent: a phone attaches only to a host session.
+        let sign_in = PtyOptions { project_id: Some("p".into()), tmux_session: Some("s".into()), ..opts("claude", &["auth", "login", "--claudeai"]) };
+        assert!(is_agent_launch(&sign_in));
+        assert!(crate::services::session_host::route::routes_through_host(&host_route_facts(&sign_in, is_agent_launch(&sign_in), true, || true)));
+        assert!(!is_agent_launch(&shell));
     }
 
     #[test]
