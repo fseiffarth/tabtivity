@@ -622,6 +622,9 @@ struct RequestFacts {
     by_reference: bool,
     /// OpenAI: the hosted-tool calls the body's tools may make.
     tools: ToolCalls,
+    /// Custom endpoint: the answers (`n`) a Chat Completions request asks
+    /// for; each one costs its own output. 0 reads as 1.
+    choices: u64,
 }
 
 /// OpenAI hosted-tool call counts.
@@ -840,6 +843,8 @@ struct CustomRequest {
     model: Option<String>,
     max_tokens: Option<u64>,
     max_completion_tokens: Option<u64>,
+    /// How many answers the request asks for (each is generated and billed).
+    n: Option<u64>,
     stream: Option<bool>,
     stream_options: Option<CustomStreamOptions>,
 }
@@ -1097,6 +1102,7 @@ impl Meter {
                 self.request.model = r.model.filter(|m| !m.is_empty() && m.len() <= MAX_STRING);
                 // Both names are in use; the larger bounds the worst case.
                 self.request.max_output = r.max_tokens.into_iter().chain(r.max_completion_tokens).max();
+                self.request.choices = r.n.unwrap_or(1).max(1);
             }
         }
         if self.provider == Provider::Gemini && matches!(self.billing, Billing::Usage { .. }) {
@@ -1326,7 +1332,13 @@ impl Meter {
             };
         let (max_input, max_output, per_sec) = match self.provider {
             Provider::Custom(_) => {
-                (CUSTOM_MAX_INPUT, self.request.max_output.unwrap_or(CUSTOM_MAX_OUTPUT), CUSTOM_TOKENS_PER_SEC)
+                // `n` answers are generated side by side, each up to the cap.
+                let choices = self.request.choices.max(1);
+                (
+                    CUSTOM_MAX_INPUT,
+                    self.request.max_output.unwrap_or(CUSTOM_MAX_OUTPUT).saturating_mul(choices),
+                    CUSTOM_TOKENS_PER_SEC.saturating_mul(choices),
+                )
             }
             Provider::OpenAi => (1_050_000, self.request.max_output.unwrap_or(128_000), 1_000),
             Provider::Anthropic => {
@@ -1865,6 +1877,35 @@ mod tests {
         assert_eq!(worst(uncapped), input(uncapped) + CUSTOM_MAX_OUTPUT);
         // An unreadable body (refused before this in the proxy) still gets the default.
         assert_eq!(worst(b"not json"), input(b"not json") + CUSTOM_MAX_OUTPUT);
+    }
+
+    #[test]
+    fn a_custom_request_asking_for_several_answers_holds_the_cost_of_each() {
+        let worst = |body: &[u8]| {
+            let mut m = Meter::new(custom(), Billing::Usage { model: None });
+            m.request(body);
+            m.worst_case_billed(MONTH)
+        };
+        let input = |body: &[u8]| (body.len() as u64).div_ceil(3);
+        let three = br#"{"model":"m","max_tokens":100,"n":3}"#;
+        assert_eq!(worst(three), input(three) + 300, "every choice may use the whole cap");
+        let uncapped = br#"{"model":"m","n":4}"#;
+        assert_eq!(worst(uncapped), input(uncapped) + 4 * CUSTOM_MAX_OUTPUT);
+        let zero = br#"{"model":"m","max_tokens":100,"n":0,"x":null}"#;
+        assert_eq!(worst(zero), input(zero) + 100, "n 0 or null is one answer");
+        let huge = br#"{"model":"m","max_tokens":100,"n":18446744073709551615}"#;
+        assert!(worst(huge) > 1 << 60, "a count past any limit saturates, never wraps");
+        // The elapsed-time estimate of a cut-off stream scales with them too.
+        let body = br#"{"model":"m","max_tokens":5000,"n":2,"stream":true}"#;
+        let mut m = Meter::new(custom(), Billing::Usage { model: None });
+        m.request(body);
+        m.answer(200, Some("text/event-stream"));
+        assert_eq!(m.charge(MONTH, cut(2)).unwrap().output, 4_000);
+        // A count that is not a whole number is not a request the meter reads.
+        assert_eq!(custom_refusal(br#"{"n":"2"}"#), Some(CustomRefusal::Unparsable));
+        assert_eq!(custom_refusal(br#"{"n":2.5}"#), Some(CustomRefusal::Unparsable));
+        assert_eq!(custom_refusal(br#"{"n":2,"n":1}"#), Some(CustomRefusal::Unparsable));
+        assert_eq!(custom_refusal(br#"{"n":null}"#), None);
     }
 
     #[test]
