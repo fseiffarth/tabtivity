@@ -5,7 +5,8 @@ Each agent adds its own section below; read the ones above yours first.
 
 ## A1 — backend core (decisions 1–7)
 
-Commits: (filled in at the end of the section)
+Commits on `opencode-custom-endpoint` (on top of `683e61dea`): `daf0df0df` (all of
+A1's code and tests), then the commit that adds this sha to the doc.
 
 ### What exists now (exact names)
 
