@@ -18,6 +18,7 @@ import { RunHostPicker } from "../tabs/TabLocalityBadges";
 import { ProjectFilesSettingsDialog, useProjectFileFilters } from "./ProjectFilesSettings";
 import { useImportDrop } from "./importDrop";
 import { logoutRemote, useProjectsStore } from "../../stores/projects";
+import { usePillMenuRequestStore } from "../../stores/pillMenuRequest";
 import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import {
@@ -57,6 +58,7 @@ import { basename, dirname } from "../../lib/paths";
 import { readDownloadsShown, writeDownloadsShown, type DownloadsHost } from "../../lib/projects/downloadsShown";
 import { projectTypeTags, providerName } from "../projects/projectTypeTags";
 import { ScaffoldTagPopover } from "./ScaffoldTagPopover";
+import { AgentPrivacyDialog } from "../projects/AgentPrivacyDialog";
 import { PublishWindow } from "../projects/PublishWindow";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
 import { IdeHeaderButton } from "../projects/IdeMenuItems";
@@ -584,6 +586,8 @@ export function ProjectFilesView({
   const [scaffoldMissing, setScaffoldMissing] = useState(false);
   // The "no scaffold" tag's popover (missing defaults + Repair), anchored under the tag.
   const [scaffoldTagMenu, setScaffoldTagMenu] = useState<{ x: number; y: number } | null>(null);
+  // The "local only" tag opens the project's Agent privacy switch.
+  const [showAgentPrivacy, setShowAgentPrivacy] = useState(false);
   const [scaffoldProbe, setScaffoldProbe] = useState(0);
   // Nested-repo detection: when the browsed folder lives in a git repo distinct
   // from the project's own repo, `nestedRoot` holds that repo's root and the git
@@ -889,6 +893,8 @@ export function ProjectFilesView({
     }
     return m;
   }, [scopeTabs, scope]);
+  // The tab in front, so its session's row reads as the current one.
+  const currentTabKey = useTabsStore((s) => (s.scope === scope ? s.activeKey : null));
 
   // Open a host session in a tab: reveal the owning tab if one exists; bring an
   // agent session back as its agent tab (`lib/remote/hostSessionTab`), so it keeps
@@ -1316,6 +1322,7 @@ export function ProjectFilesView({
               setScaffoldTagMenu({ x: r.left, y: r.bottom + 4 });
             }
           : undefined,
+        onLocalOnlyClick: projectId ? () => setShowAgentPrivacy(true) : undefined,
       })
     : [];
 
@@ -1885,6 +1892,17 @@ export function ProjectFilesView({
               : undefined
           }
           onMouseLeave={!activeBox && project ? () => nameHover.close() : undefined}
+          // Right-click: the project pill's own menu, at the pointer.
+          onContextMenu={
+            !activeBox && project
+              ? (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  nameHover.close();
+                  usePillMenuRequestStore.getState().open({ projectId: project.id, x: e.clientX, y: e.clientY });
+                }
+              : undefined
+          }
           // The root scope has no project to hover a card for, so what it is
           // rather than what it holds goes in the plain tooltip: the path, and
           // the one sentence saying this folder is the scratch area.
@@ -1903,6 +1921,7 @@ export function ProjectFilesView({
           )}
         </span>
         {isRootScope && <UntestedTag id="projectFilesView.1" />}
+        {!activeBox && project && <UntestedTag id="projectFilesView.nameMenu" />}
         {!activeBox && project && (
           <ProjectHoverCard project={project} state={nameHover} showTags={false} />
         )}
@@ -2031,6 +2050,9 @@ export function ProjectFilesView({
           />
         )}
         {mobileAccessError && <ErrorNote className="side-panel-mobile-access-error" role="alert" error={mobileAccessError} />}
+        {showAgentPrivacy && project && (
+          <AgentPrivacyDialog project={project} onClose={() => setShowAgentPrivacy(false)} />
+        )}
         {scaffoldTagMenu && projectId && (
           <ScaffoldTagPopover
             projectId={projectId}
@@ -2266,6 +2288,7 @@ export function ProjectFilesView({
             projectId={onNestedRepo ? undefined : project?.remote ? projectId ?? undefined : undefined}
             remote={!onNestedRepo && !!project?.remote}
             hostPinned={hostPinned}
+            site={source === "local" ? "mirror" : "host"}
             authProjectId={onNestedRepo ? undefined : projectId ?? undefined}
             onChanged={() => effectiveGitRoot && refreshGit(effectiveGitRoot)}
             onWorktreeChanged={onGitWorktreeChanged}
@@ -3062,11 +3085,14 @@ export function ProjectFilesView({
                       <span className="sp-count">{rows.length}</span>
                     </div>
                     {rows.map(({ session: s }) => {
-                      const owned = sessionOwners.has(`${hostId} ${s.name}`);
+                      const ownerKey = sessionOwners.get(`${hostId} ${s.name}`);
+                      const owned = ownerKey !== undefined;
+                      const current = owned && ownerKey === currentTabKey;
                       return (
                         <div
                           key={`${hostId} ${s.name}`}
-                          className="sp-row sp-row--two orange-file-row"
+                          className={`sp-row sp-row--two orange-file-row${current ? " selected" : ""}`}
+                          aria-current={current ? "true" : undefined}
                           onMouseEnter={(e) => handleSessionRowMouseEnter(e, hostId, s.name)}
                           onMouseLeave={handleSessionRowMouseLeave}
                         >
@@ -3093,7 +3119,14 @@ export function ProjectFilesView({
                                       : t("projectFilesView.workingTitle")
                                     : t("projectFilesView.tooltipIdle")}
                                 </span>
-                                {owned && <span className="tmux-session-meta">{t("projectFilesView.openMeta")}</span>}
+                                {owned && (
+                                  <span className="tmux-session-meta">
+                                    {t(current ? "projectFilesView.currentMeta" : "projectFilesView.openMeta")}
+                                  </span>
+                                )}
+                                {current && (
+                                  <UntestedTag id="projectFilesView.currentSession" />
+                                )}
                               </span>
                             </span>
                           </button>

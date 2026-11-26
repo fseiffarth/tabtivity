@@ -1785,6 +1785,68 @@ fn resolve_finds_a_log_under_any_of_several_roots() {
     assert_eq!(out.env.get(TAB_AGENT_ENV).map(String::as_str), Some("claude"));
 }
 
+/// A local-model tab's Claude Code (`ollama launch claude --model <m> --
+/// --session-id <id>`) resolves as a Claude tab does, on the flags behind the
+/// launcher's `--` only: it resumes its own transcript, keeps its key when it
+/// has none yet, and the mode it re-applies lands behind the `--` too.
+#[test]
+fn a_local_model_claude_line_resolves_behind_the_launchers_separator() {
+    let uuid = "7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e7e";
+    let local = |args: &[&str]| {
+        let mut opts = opts_with_args(args);
+        opts.cmd = "ollama".into();
+        opts.local_model = true;
+        opts
+    };
+    let line = ["launch", "claude", "--model", "qwen3:8b", "--", "--session-id", uuid];
+    let has = projects_with_sessions(&[uuid]);
+    let out = resolve_claude_session_in(local(&line), &[has.as_path()], |_| None, |_| Some("plan".into()));
+    assert_eq!(out.args, ["launch", "claude", "--model", "qwen3:8b", "--", "--resume", uuid, "--permission-mode", "plan"]);
+    assert_eq!(out.env.get(TAB_AGENT_ENV).map(String::as_str), Some("claude"));
+    assert_eq!(out.env.get(crate::app_env!("TAB_UID")).map(String::as_str), Some(uuid));
+    assert!(crate::services::local_drivers::identify_local_launch(&out.cmd, &out.args).is_some_and(|(d, _)| d == "claude"));
+
+    let none = projects_with_sessions(&[]);
+    let fresh = resolve_claude_session_in(local(&line), &[none.as_path()], |_| None, |_| None);
+    assert_eq!(fresh.args, line);
+
+    // The privacy gate's reading of the line: the session tail only, and only
+    // behind Claude Code's line — never one a persisted `localLaunch` may hold.
+    let identify = |args: &[&str]| {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        crate::services::local_drivers::identify_local_launch("ollama", &args).map(|(d, _)| d)
+    };
+    assert_eq!(identify(&line), Some("claude"));
+    assert_eq!(identify(&["launch", "claude", "--model", "qwen3:8b"]), Some("claude"));
+    assert_eq!(identify(&["launch", "claude", "--model", "qwen3:8b", "--", "--session-id", "x"]), None);
+    assert_eq!(identify(&["launch", "claude", "--model", "qwen3:8b", "--", "--settings", "/tmp/s.json"]), None);
+    assert_eq!(identify(&["launch", "claude", "--model", "qwen3:8b", "--", "--resume", uuid, "--permission-mode", "yolo"]), None);
+    assert_eq!(identify(&["launch", "pi", "--model", "qwen3:8b", "--", "--session-id", uuid]), None);
+    let persisted: Vec<String> = line.iter().map(|a| a.to_string()).collect();
+    assert!(!crate::services::local_drivers::local_launch_line_ok("claude", "qwen3:8b", "ollama", &persisted));
+
+    // Another launcher line, and the assistant's own pinned tail, are left alone.
+    let codex = ["launch", "codex", "--model", "m", "--", "--session-id", uuid];
+    assert_eq!(resolve_claude_session_in(local(&codex), &[has.as_path()], |_| None, |_| None).args, codex);
+    assert_eq!(resolve_agent_session(local(&codex)).args, codex);
+    let mut assistant = local(&line);
+    assistant.assistant = Some(crate::services::assistant::AssistantLaunch {
+        cli: crate::services::assistant::AssistantCli::Claude,
+        model: None,
+    });
+    assert!(!local_claude_launch(&assistant));
+    assert!(local_claude_launch(&local(&line)));
+}
+
+/// The transcript roots add the local-model home to a scope's own, once.
+#[test]
+fn claude_transcript_roots_add_the_local_model_home() {
+    let roots = claude_transcript_roots(Some("p1"));
+    assert_eq!(roots.len(), 2);
+    assert!(roots[1].starts_with(crate::services::agent_home::local_model_home(Some("p1"))));
+    assert_eq!(claude_transcript_roots(Some("assistant")).len(), 2);
+}
+
 #[test]
 fn resolvers_stamp_the_tab_agent_over_whatever_the_layout_carried() {
     let projects = projects_with_sessions(&[]);

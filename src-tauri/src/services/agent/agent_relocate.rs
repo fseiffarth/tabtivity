@@ -137,8 +137,11 @@ fn move_in(
         }
         "codex" | "vibe" | "opencode" => Ok(Moved::Carried),
         _ if carries(cmd) => {
+            // Cursor records the chat each tab is in: that one moves, never
+            // another tab's newest (`services::cursor_session`).
+            let own = (cmd == "cursor-agent").then(|| live(uid).filter(|id| is_uuid_shaped(id))).flatten();
             for store in FOLDER_STORES.iter().filter(|s| s.cmd == cmd) {
-                if move_newest(home, store, from, to).map_err(|e| format!("moving the session: {e}"))? {
+                if move_newest(home, store, from, to, own.as_deref()).map_err(|e| format!("moving the session: {e}"))? {
                     return Ok(Moved::Carried);
                 }
             }
@@ -179,8 +182,10 @@ fn move_claude(home: &Path, ids: &[String], to: &str) -> std::io::Result<()> {
 }
 
 /// A "continue the latest" CLI: the newest conversation filed under `from`
-/// into `to`'s folder. `false` when `from` has none in this store.
-fn move_newest(home: &Path, store: &FolderStore, from: &str, to: &str) -> std::io::Result<bool> {
+/// into `to`'s folder, or `own` (the one the tab's record names) when the CLI
+/// has one: then nothing else moves, and nothing at all when `own` is not
+/// filed under `from`. `false` when `from` has none in this store.
+fn move_newest(home: &Path, store: &FolderStore, from: &str, to: &str, own: Option<&str>) -> std::io::Result<bool> {
     let rel = |path: &str| match store.sub {
         Some(sub) => format!("{}/{}/{sub}", store.base, (store.encode)(path)),
         None => format!("{}/{}", store.base, (store.encode)(path)),
@@ -188,11 +193,21 @@ fn move_newest(home: &Path, store: &FolderStore, from: &str, to: &str) -> std::i
     let Some(source) = HomeDir::open_existing(home, &rel(from)) else {
         return Ok(false);
     };
-    let Some(name) = newest_entry(&source, store.entry) else {
+    let Some(name) = (match own {
+        Some(own) => source.open_subdir(own).map(|_| own.to_string()),
+        None => newest_entry(&source, store.entry),
+    }) else {
         return Ok(false);
     };
     let target = HomeDir::open(home, &rel(to)).ok_or_else(|| std::io::Error::other("the new folder's session folder"))?;
     source.file(&name).ok_or_else(|| std::io::Error::other("the session"))?.move_into(&target)?;
+    if store.cmd == "cursor-agent" {
+        // The chat names the folder it began in; a store listing by that name
+        // would not find it under the new one.
+        if let Err(e) = retarget_cursor_chat(&target, &name, to) {
+            eprintln!("agent_relocate: cursor chat {name}: {e}");
+        }
+    }
     if store.cmd == "droid" {
         if let Some(stem) = name.strip_suffix(".jsonl") {
             if let Some(settings) = source.file(&format!("{stem}{DROID_SETTINGS}")).filter(HomeFile::is_file) {
@@ -201,6 +216,19 @@ fn move_newest(home: &Path, store: &FolderStore, from: &str, to: &str) -> std::i
         }
     }
     Ok(true)
+}
+
+/// Cursor's `meta.json` of the chat `name` in `target`, its `cwd` made `to`.
+/// Left as it is when it is not a plain JSON object with a `cwd`.
+fn retarget_cursor_chat(target: &HomeDir, name: &str, to: &str) -> std::io::Result<()> {
+    let Some(meta) = target.open_subdir(name).and_then(|chat| chat.file("meta.json")) else { return Ok(()) };
+    let Some(bytes) = meta.read_capped(64 * 1024) else { return Ok(()) };
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return Ok(()) };
+    let Some(object) = value.as_object_mut().filter(|object| object.get("cwd").is_some_and(serde_json::Value::is_string)) else {
+        return Ok(());
+    };
+    object.insert("cwd".to_string(), serde_json::Value::String(to.to_string()));
+    meta.write(&serde_json::to_vec(&value).map_err(std::io::Error::other)?)
 }
 
 /// The most recently written conversation in `dir`. Listed and dated by path
@@ -441,6 +469,39 @@ mod tests {
         assert_eq!(std::fs::read_to_string(new.join("b.jsonl")).unwrap(), "newest");
         assert!(new.join("b.settings.json").is_file());
         assert!(old.join("a.jsonl").is_file());
+    }
+
+    #[test]
+    fn a_cursor_tab_takes_its_own_chat_not_the_folders_newest_and_the_chat_names_the_new_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let root = abs(&["home", "me", "proj"]);
+        let to = worktree(&root, "feature");
+        let (from_s, to_s) = (root.to_string_lossy().to_string(), to.to_string_lossy().to_string());
+        let old = home.join(".cursor").join("chats").join(md5_hex(&from_s));
+        // The tab's chat is the older; another tab's chat is the folder's newest.
+        for id in [UID, LIVE] {
+            std::fs::create_dir_all(old.join(id)).unwrap();
+            std::fs::write(old.join(id).join("meta.json"), serde_json::json!({"cwd": from_s, "hasConversation": true}).to_string()).unwrap();
+            std::fs::write(old.join(id).join("store.db"), id).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        let own = Some(UID.to_string());
+        assert_eq!(move_in(home, "cursor-agent", LIVE, &from_s, &to_s, |_| own.clone()).unwrap(), Moved::Carried);
+        let new = home.join(".cursor").join("chats").join(md5_hex(&to_s));
+        assert_eq!(std::fs::read_to_string(new.join(UID).join("store.db")).unwrap(), UID);
+        let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(new.join(UID).join("meta.json")).unwrap()).unwrap();
+        assert_eq!(meta["cwd"], to_s.as_str());
+        assert_eq!(meta["hasConversation"], true);
+        assert!(old.join(LIVE).is_dir() && !new.join(LIVE).exists(), "another tab's chat stays");
+        // A record naming a chat not filed under the old folder moves nothing.
+        let stray = Some("0d9f2a31-0000-4000-8000-000000000009".to_string());
+        assert_eq!(move_in(home, "cursor-agent", LIVE, &from_s, &to_s, |_| stray.clone()).unwrap(), Moved::Carried);
+        assert!(old.join(LIVE).is_dir() && !new.join(LIVE).exists());
+        // No record: the folder's newest, as for the other "continue" CLIs.
+        assert_eq!(move_in(home, "cursor-agent", LIVE, &from_s, &to_s, |_| None).unwrap(), Moved::Carried);
+        assert!(new.join(LIVE).is_dir());
     }
 
     #[test]

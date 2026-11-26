@@ -43,6 +43,8 @@ import {
   type NewTabSlotsDetail,
 } from "../../lib/shortcuts/newTabChord";
 import { nextStatusTab, statusTabs } from "../../lib/shortcuts/statusJump";
+import { STEERING_PROMPT_EVENT, type SteeringPromptDetail } from "../../lib/shortcuts/steeringAgent";
+import { registerReaderComposer } from "../../lib/agents/readerSteering";
 import {
   activateRegionCursor,
   clearRegionCursor,
@@ -297,6 +299,68 @@ describe("steering levels", () => {
       expect(steering()).toMatchObject({ active: true, level: "region", region: "addTab" });
     } finally {
       window.removeEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+    }
+  });
+
+  it("an agent number opens the new agent tab with its prompt: the Chat composer, else the box", async () => {
+    twoPanes();
+    render(<Harness />);
+    // The pane answers an agent number with an agent tab, made active.
+    const onRequest = (e: Event) => {
+      const { request } = (e as CustomEvent<NewTabShortcutDetail>).detail;
+      if (request.kind !== "agent") return;
+      e.preventDefault();
+      useTabsStore.getState().addTab({ label: "claude", cmd: "claude", cwd: "/p", kind: "agent" });
+    };
+    const prompts: SteeringPromptDetail[] = [];
+    const onPrompt = (e: Event) => {
+      const detail = (e as CustomEvent<SteeringPromptDetail>).detail;
+      prompts.push(detail);
+      detail.handled = true;
+    };
+    window.addEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+    window.addEventListener(STEERING_PROMPT_EVENT, onPrompt);
+    const unregister: (() => void)[] = [];
+    try {
+      press({ key: " ", shiftKey: true });
+      // The pane's Chat composer shows as soon as the tab is up: it takes the prompt.
+      const composer = vi.fn(() => true);
+      let shown = false;
+      unregister.push(
+        useTabsStore.subscribe((s) => {
+          const tab = s.tabs.find((t) => t.kind === "agent");
+          if (!tab || shown) return;
+          shown = true;
+          unregister.push(registerReaderComposer(`p:${tab.key}`, composer));
+        }),
+      );
+      press({ key: "1" });
+      await waitFor(() => expect(composer).toHaveBeenCalledWith("tabs", undefined));
+      expect(steering()).toMatchObject({ active: false, handedTo: "prompt" });
+      expect(prompts).toHaveLength(0);
+      for (const off of unregister.splice(0)) off();
+
+      // No composer (Terminal view): the prompt box, a second later.
+      act(() => useKeyboardSteeringStore.getState().resume());
+      press({ key: "2" });
+      const fresh = useTabsStore.getState().tabs.filter((t) => t.kind === "agent").pop()!;
+      expect(steering().active).toBe(true);
+      await waitFor(() => expect(prompts.map((p) => p.tab.key)).toEqual([fresh.key]), { timeout: 2500 });
+      expect(steering()).toMatchObject({ active: false, handedTo: "prompt" });
+
+      // A key pressed before the prompt opened keeps steering.
+      act(() => useKeyboardSteeringStore.getState().resume());
+      press({ key: "3" });
+      press({ key: "ArrowLeft" });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 1300));
+      });
+      expect(prompts).toHaveLength(1);
+      expect(steering().active).toBe(true);
+    } finally {
+      for (const off of unregister) off();
+      window.removeEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+      window.removeEventListener(STEERING_PROMPT_EVENT, onPrompt);
     }
   });
 

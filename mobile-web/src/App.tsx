@@ -263,6 +263,9 @@ export function App() {
   const [framedPage] = useState(isFramed);
   /** This desktop's name (`status.host`), for a frame's `ready`. */
   const [hostName, setHostName] = useState<string | null>(() => linkedSnapshot().homeName ?? null);
+  /** The desktop machine's OpenVPN tunnel (`status.vpn`), for Home's pill;
+   * null until a status says, and where the desktop has no VPN config. */
+  const [vpn, setVpn] = useState<"up" | "down" | null>(null);
   const shellUnlocked = pastLock && (auth === "loading" || auth === "unavailable" || auth === "paired");
   /** A linked desktop is on screen instead of this one (`DesktopStage`). */
   const framedShown = shell.selected !== null && shellUnlocked;
@@ -487,8 +490,9 @@ export function App() {
   }, [auth, tab, projectView, terminal]);
 
   useVisiblePoll(
-    () => getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, host, linked_desktops }) => {
+    () => getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, host, linked_desktops, vpn }) => {
       noteDesktopTheme(color_scheme);
+      setVpn(vpn === "up" || vpn === "down" ? vpn : null);
       // The switcher's list, kept for a home that is down (`linkedDesktops.ts`).
       noteHomeStatus({ host, linked_desktops });
       if (typeof host === "string" && host) setHostName(host);
@@ -840,6 +844,7 @@ export function App() {
     tabby={setTabby}
     todo={openTodo}
     mail={() => setTab("mail")}
+    vpn={vpn}
   />;
   const project = projectView.kind === "project"
     ? <Project key={`project:${projectView.id}`} id={projectView.id} back={leaveProject} splitList={splitTier ? { hidden: splitListHidden, toggle: toggleSplitList } : undefined} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />

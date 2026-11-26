@@ -73,7 +73,7 @@ import {
 import { chordMatches, modifierLabel, resolveChord } from "../../../lib/shortcuts/shortcuts";
 import { useChordHint, useShortcutOverrides } from "../../../lib/shortcuts/shortcutHint";
 import { renderTexPreview, cachedTexPreview } from "../../../lib/viewers/tex/texPreview";
-import { registerTexCompile, unregisterTexCompile } from "../../../stores/viewers/texCenter";
+import { registerTexCompile, takeQueuedTexCompile, unregisterTexCompile } from "../../../stores/viewers/texCenter";
 import { useT } from "../../../lib/i18n";
 import { ArrowUpRightIcon, CloseIcon, GearIcon, WarningIcon } from "../../common/icons/Icon";
 import { ErrorNote } from "../../common/ErrorNote";
@@ -872,6 +872,12 @@ export function TexView({
     registerTexCompile(path, run);
     return () => unregisterTexCompile(path, run);
   }, [path]);
+  // A build queued before this editor mounted (`rebuildTexSource`: a PDF in
+  // Mark up older than its sources) runs once the file has loaded, so the save
+  // that starts every build writes the text read from disk.
+  useEffect(() => {
+    if (loaded && takeQueuedTexCompile(path)) void compileRef.current();
+  }, [loaded, path]);
 
   // Ctrl+Shift+B (rebindable) builds the document. Bound on this pane's root
   // rather than in `useKeyboard` for the same reason as the workspace's

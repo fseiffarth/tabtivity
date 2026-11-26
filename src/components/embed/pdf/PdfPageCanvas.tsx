@@ -31,6 +31,7 @@ import {
   syncRectToViewport,
   bigPointsToCssRect,
   refineToWord,
+  phraseAtPoint,
   type SyncRect,
   type TextItemBox,
 } from "../../../lib/viewers/tex/tex";
@@ -710,14 +711,23 @@ export function PdfPageCanvas({
     // The point as drawn → the page's unturned space, through the page's own
     // viewports (a turned sheet, a crop box off the origin). A failed page read
     // falls back to the plain scale mapping, right for an unturned page.
+    // No word from the text layer's hit test: read it off the page's text runs
+    // at the same point, so the editor still lands on the word, not on the line
+    // SyncTeX names (often the paragraph's first or last).
+    const withWord = async (x: number, y: number) =>
+      phrase ??
+      (await pageTextItemBoxesUnturned(doc, pageNumber).then(
+        (items) => phraseAtPoint(items, x, y),
+        () => undefined,
+      ));
     void doc.getPage(pageNumber).then(
-      (page) => {
+      async (page) => {
         const { turned, unturned } = syncViewports(page, scale, rot);
         const p = viewportToSyncPoint(turned, unturned, left, top);
         if (turned.rotation !== 0) setClickMark((m) => (m ? { ...m, turned: true } : m));
-        onSyncClick(pageNumber, p.x, p.y, phrase);
+        onSyncClick(pageNumber, p.x, p.y, await withWord(p.x, p.y));
       },
-      () => onSyncClick(pageNumber, left / scale, top / scale, phrase),
+      async () => onSyncClick(pageNumber, left / scale, top / scale, await withWord(left / scale, top / scale)),
     );
   };
 

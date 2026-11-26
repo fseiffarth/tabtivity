@@ -1350,9 +1350,18 @@ pub fn git_ssh_args(spec: &RemoteSpec, git_args: &[String]) -> Result<Vec<String
 
 /// [`git_ssh_args`] with the remote command from [`bounded_remote_git_command`].
 pub fn git_ssh_args_within(spec: &RemoteSpec, git_args: &[String], host_secs: Option<u64>) -> Result<Vec<String>, String> {
+    git_ssh_args_for(spec, git_args, host_secs, false)
+}
+
+fn git_ssh_args_for(
+    spec: &RemoteSpec,
+    git_args: &[String],
+    host_secs: Option<u64>,
+    c_locale: bool,
+) -> Result<Vec<String>, String> {
     validate_arg("remote path", &spec.remote_path)?;
     let mut args = ssh_base_args(&spec.user, &spec.host, spec.port)?;
-    args.push(bounded_remote_git_command(&spec.remote_path, git_args, host_secs));
+    args.push(git_command_string(&spec.remote_path, git_args, host_secs, c_locale));
     Ok(args)
 }
 
@@ -1379,6 +1388,22 @@ pub fn run_git_remote(
     spec: &RemoteSpec,
     git_args: &[String],
 ) -> Result<std::process::Output, String> {
+    run_git_remote_in(spec, git_args, false)
+}
+
+/// [`run_git_remote`] with git's messages pinned to English ([`C_LOCALE_ENV`]).
+pub fn run_git_remote_c_locale(
+    spec: &RemoteSpec,
+    git_args: &[String],
+) -> Result<std::process::Output, String> {
+    run_git_remote_in(spec, git_args, true)
+}
+
+fn run_git_remote_in(
+    spec: &RemoteSpec,
+    git_args: &[String],
+    c_locale: bool,
+) -> Result<std::process::Output, String> {
     // A spec ssh would refuse fails here, before anything is probed.
     git_ssh_args(spec, git_args)?;
     let host = crate::services::git_hardened::host_git(spec);
@@ -1390,7 +1415,7 @@ pub fn run_git_remote(
     if let Some(refusal) = crate::services::git_hardened::host_hooks_off_refusal(host.version, git_args) {
         return Err(refusal);
     }
-    let args = git_ssh_args_within(spec, git_args, host.timeout.then(|| host_timeout_secs(git_args)))?;
+    let args = git_ssh_args_for(spec, git_args, host.timeout.then(|| host_timeout_secs(git_args)), c_locale)?;
     let mut cmd = crate::paths::command_no_window("ssh");
     cmd.args(&args);
     let out = crate::services::git_bounded::wrapped_output(cmd, git_args, host.timeout)
@@ -1418,10 +1443,25 @@ const HOST_TIMEOUT_MARGIN_SECS: u64 = 30;
 /// login shell runs it (`timeout` sends TERM to git's process group, then KILL
 /// 10 s on). `None` is exactly [`remote_git_command`]. Pure.
 pub fn bounded_remote_git_command(remote_path: &str, git_args: &[String], host_secs: Option<u64>) -> String {
-    let Some(secs) = host_secs else {
-        return remote_git_command(remote_path, git_args);
+    git_command_string(remote_path, git_args, host_secs, false)
+}
+
+/// The words that put the host's git messages in English: `env LC_ALL=C LANGUAGE=`
+/// (plain words, so fish and csh login shells run it as POSIX ones do — no `VAR=x cmd`).
+const C_LOCALE_ENV: &str = "env LC_ALL=C LANGUAGE=";
+
+/// [`bounded_remote_git_command`] with git run under [`C_LOCALE_ENV`], for a caller that
+/// parses git's own messages (lockstep's `merge --ff-only` stderr). Pure.
+pub fn bounded_remote_git_command_c_locale(remote_path: &str, git_args: &[String], host_secs: Option<u64>) -> String {
+    git_command_string(remote_path, git_args, host_secs, true)
+}
+
+fn git_command_string(remote_path: &str, git_args: &[String], host_secs: Option<u64>, c_locale: bool) -> String {
+    let env = if c_locale { format!("{C_LOCALE_ENV} ") } else { String::new() };
+    let mut s = match host_secs {
+        Some(secs) => format!("cd {} && {env}timeout -k 10 {secs} git", shell_quote(remote_path)),
+        None => format!("cd {} && {env}git", shell_quote(remote_path)),
     };
-    let mut s = format!("cd {} && timeout -k 10 {secs} git", shell_quote(remote_path));
     for a in git_args {
         s.push(' ');
         s.push_str(&shell_quote(a));

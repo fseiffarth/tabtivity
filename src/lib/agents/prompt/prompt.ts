@@ -86,6 +86,15 @@ const TRUST_OPTION = /(\D|^)\d{1,2}[.)][ \t]*Trust/;
 const MUSE_POINTER_ROW = /⟩[ \t]*(\d{1,2})[ \t]{2,}[^\s\d]/gu;
 const MUSE_MENU_ROW = /(?:^|[\r\n])[ \t]*(\d{1,2})[ \t]{2,}[^\s\d]/g;
 
+// Cursor (2026.11.22) names the key of every row of its approvals in
+// parentheses — "→ Run (once) (y)", "Proceed (y)" — over a last row ending in
+// "(esc or n)" — and of its workspace-trust page in brackets, "[a] Trust this
+// workspace" over "[q] Quit". No numbers and no yes/no words alone: the pair
+// of the keys is what makes the menu. Space-tolerant, as a PTY tail may have
+// lost its cursor moves.
+const CURSOR_APPROVAL = /(?:Run\s*\(once\)\s*\(y\)|Proceed\s*\(y\))[\s\S]{0,300}?\(esc\s*or\s*n/u;
+const CURSOR_TRUST = /\[a\]\s*Trust\s*this\s*workspace[\s\S]{0,100}?\[q\]\s*Quit/u;
+
 // OpenCode questions have no pointer or yes/no pair. Their footer identifies
 // the choice/toggle page and the final review. Cursor moves can omit spaces.
 const OPENCODE_QUESTION_KEYS = /(?:↑\s*↓\s*select|⇆\s*tab)\s*enter\s*(?:submit|confirm|toggle)\s*esc\s*dismiss|enter\s*choose\s*(?:tab\s*next\s*)?esc\s*dismiss|◆\s*Questions\s*Review[\s\S]{0,1000}?enter\s*submit\s*esc\s*dismiss/u;
@@ -204,6 +213,7 @@ export function looksLikeDecisionPromptStripped(plain: string): boolean {
   if (hasPointerChoice(plain)) return true;
   if (hasPointerWordMenu(plain)) return true;
   if (hasMuseMenu(plain)) return true;
+  if (CURSOR_APPROVAL.test(plain) || CURSOR_TRUST.test(plain)) return true;
   if (CODEX_HOOK_TRUST_HEADING.test(plain) && TRUST_OPTION.test(plain)) return true;
   return hasYesNoMenu(plain);
 }

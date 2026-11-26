@@ -204,8 +204,8 @@ pub enum Status {
     Ok,
     /// A warm-up was fed.
     Warmed,
-    /// Nothing to do: no ended turn, a warm-up for a local-model tab, or a
-    /// draft a completion is not written for.
+    /// Nothing to do: no ended turn, a warm-up for a local-model tab, a
+    /// draft a completion is not written for, or a model the user unloaded.
     Skipped,
     /// A warm-up while this session's slot is taken, or too soon after the last.
     Busy,
@@ -588,7 +588,7 @@ fn skip_osc(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
 
 /// One line with every control, bidi-override and zero-width character
 /// turned into a space and the spaces collapsed.
-fn inert(line: &str) -> String {
+pub(crate) fn inert(line: &str) -> String {
     let hidden = |c: char| {
         c.is_control()
             || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}' | '\u{2028}' | '\u{2029}')
@@ -964,6 +964,10 @@ fn run(settings: &Settings, ask: &Ask<'_>, turn: Option<Turn<'_>>, backend: &Oll
         }
     }
 
+    // A model the user unloaded stays unloaded (`ollama_client::is_held`).
+    if ollama::is_held(&model) {
+        return Some(NextPrompt::keyed(Status::Skipped, &key));
+    }
     // The gate, before a byte of the turn is sent: loopback, allowed, local.
     let addr = match ollama_local::preflight(settings, &model) {
         Ok(addr) => addr,

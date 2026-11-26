@@ -231,6 +231,19 @@ fn bwrap_masks_the_keyring_listing() {
     assert!(proc_mount < out.iter().position(|a| a == "/proc/keys").unwrap());
 }
 
+/// NixOS's programs all live behind `/run/current-system`: the private `/run`
+/// must not hide them, so the profile is bound back after it, read-only.
+#[test]
+fn bwrap_keeps_the_nixos_system_profile_under_its_private_run() {
+    let out = bwrap_args("/home/u", None, "/p", "sh", &[], &[], &[], &[]);
+    let run = out.windows(2).position(|w| w == ["--tmpfs", "/run"]).unwrap();
+    let profile = out
+        .windows(3)
+        .position(|w| w == ["--ro-bind-try", "/run/current-system", "/run/current-system"])
+        .unwrap();
+    assert!(run < profile);
+}
+
 fn proc_(argv0: &str, argv1: Option<&str>, host_ns: bool) -> ProcView {
     ProcView {
         argv0: argv0.to_string(),
@@ -854,12 +867,14 @@ fn roots_cover_plain_multi_box_and_box_scope() {
     for expected in [
         "/work/p1",
         "/boxes/a",
-        "/remote/p2",
         "/mirrors/p2",
         "/boxes/b",
     ] {
         assert!(p1_roots.contains(&PathBuf::from(expected)), "{p1_roots:?}");
     }
+    // A remote member's `directory` (its state folder, or a legacy entry's
+    // home) is never a sibling root: only its local copy is.
+    assert!(!p1_roots.contains(&PathBuf::from("/remote/p2")), "{p1_roots:?}");
     let box_roots = compute_fence_roots(&boxes, &projects, "box:a", false).unwrap();
     assert!(box_roots.contains(&PathBuf::from("/boxes/a")));
     assert!(compute_fence_roots(&boxes, &projects, "ghost", false).is_none());
@@ -902,7 +917,9 @@ fn a_remote_only_project_contributes_no_local_root() {
     };
     let p1_roots = compute_fence_roots(&boxes, &projects, "p1", true).unwrap();
     assert!(!leaked(&p1_roots), "{p1_roots:?}");
-    assert!(p1_roots.contains(&PathBuf::from("/state/remote-projects/pl")), "a plain Remote member is unchanged");
+    // A plain Remote member's state folder is no root either; its local copy
+    // reaches a spawn through `box_store::box_allowed_roots`.
+    assert!(!p1_roots.iter().any(|r| r.starts_with("/state/remote-projects/pl")), "{p1_roots:?}");
     let box_roots = crate::services::box_store::compute_box_allowed_roots(&boxes, &projects, "a").unwrap();
     assert!(!leaked(&box_roots), "{box_roots:?}");
     let attach = attach_roots(&boxes, &projects, "p1", state).unwrap();

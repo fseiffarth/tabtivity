@@ -119,6 +119,26 @@ describe("TexView", () => {
     expect(editor.selectionStart).toBe(draft.indexOf("Last row"));
   });
 
+  it("marks the clicked word's line, not the paragraph end SyncTeX named", async () => {
+    setupInvoke(false);
+    await renderTexView();
+    const editor = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(editor.value).toBe(TEX_SOURCE));
+    const draft = "Intro.\n\nAlpha beta gamma\ndelta clicked epsilon\nzeta eta theta.\n\nNext.";
+    fireEvent.change(editor, { target: { value: draft } });
+    const { useEditorJumpStore } = await import("../../stores/viewers/editorJump");
+    // SyncTeX names the paragraph's last line (5); the word sits on line 4.
+    act(() => useEditorJumpStore.getState().requestJump("/p/paper.tex", 5, 0, {
+      words: ["gamma", "delta", "clicked", "epsilon"], index: 2,
+    }));
+    expect(editor.selectionStart).toBe(draft.indexOf("clicked"));
+    // The select event a caret move fires, and the Ctrl key coming up.
+    fireEvent.select(editor);
+    fireEvent.keyUp(editor, { key: "Control" });
+    const marked = document.querySelector(".file-viewer-gutter-line.caret");
+    expect(marked?.textContent).toBe("4");
+  });
+
   it("accepts the highlighted TeX completion with Enter", async () => {
     setupInvoke(false);
     await renderTexView();

@@ -13,17 +13,20 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MAIL_COMPLETE_TIMEOUT,
   MAIL_MESSAGE_TIMEOUT,
   MAIL_REPLY_TIMEOUT,
   SIGN_IN_CALLBACK_TIMEOUT,
   TAB_CREATE_TIMEOUT,
   LOCAL_MODELS_TIMEOUT,
+  completeMailReply,
   finishSignIn,
   HOST_SEARCH_TIMEOUT,
   getLocalModels,
   localModelAction,
   openSignInTab,
   reopenTab,
+  warmMailReply,
 } from "../../../mobile-web/src/api";
 import { BRAND } from "../../lib/brand";
 
@@ -106,6 +109,30 @@ describe(`${BRAND.display} Mobile request deadlines`, () => {
     expect(responseTimeout("MailMark")).toBe(responseTimeout("MailMessage"));
     expect(MAIL_MESSAGE_TIMEOUT / 1000).toBeGreaterThan(connectTimeout() + responseTimeout("MailMessage"));
     expect(MAIL_REPLY_TIMEOUT / 1000).toBeGreaterThan(connectTimeout() + responseTimeout("MailReply"));
+  });
+
+  it("waits longer for a mail completion than the sidecar does", () => {
+    // `MailComplete` has its own 20 s arm (the window's 6 s fill + 5 s run plus
+    // the gate probes; the default 10 s is below that).
+    const seconds = responseTimeout("MailComplete");
+    expect(seconds).toBe(20);
+    expect(MAIL_COMPLETE_TIMEOUT / 1000).toBeGreaterThan(connectTimeout() + seconds);
+  });
+
+  it.each([
+    ["completing a reply", () => completeMailReply("f1", "m1", 25, "Thanks for the"), { draft: "Thanks for the", offset: 25 }],
+    ["warming the model for a reply", () => warmMailReply("f1", "m1", 25), { warm: true, offset: 25 }],
+  ])("gives %s the completion deadline and posts only the draft or the warm flag and the offset", async (_name, call, body) => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ text: null, status: "warmed" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const armed = vi.spyOn(AbortSignal, "timeout");
+    await call();
+    expect(armed.mock.calls).toEqual([[MAIL_COMPLETE_TIMEOUT]]);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain("/api/v1/mail/folders/f1/messages/m1/complete");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual(body);
+    armed.mockRestore();
   });
 
   it("waits longer for the local-models routes than the sidecar waits for the window", () => {

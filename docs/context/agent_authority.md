@@ -275,6 +275,11 @@ The import also takes the hook and plugin files the other CLIs read
 user wired into their agents on their side — `rtk init -g --agent …` — reaches
 every agent. Tabtivity never installs or registers such a tool itself: it comes
 from the user's own setup, through this import (2026-09-26).
+Local-model homes (`<scope>.local`) get the layer without rtk: its files,
+its `@RTK.md` import lines and every hook entry naming it are left out
+there, and taken back out of a local home an older build filled; the user
+chose it (2026-11-25) — its rewritten output and instructions cost a small
+model more than they save.
 At every spawn, before Tabtivity's hooks are registered, its plain files are
 copied over the home's (a scope file replaced the first time is kept in
 `.tabtivity-global-backup/`) and its fragments of the files the CLIs write
@@ -536,7 +541,7 @@ took the port. Injection happens inside both fence wraps and in
 proxy runs in that process — so the `agent_bin` shim (a CLI typed into a
 shell tab, its own process) gets nothing and stays on its login. Only CLIs
 listed in `agent_api_key_clis` get a token — unless the tab picked for itself
-(`PtyOptions::api_key`, `agent_api_keys::with_pick`: the ＋ menu's API section
+(`PtyOptions::api_key`, `agent_api_keys::with_pick`: the ＋ menu's "(API)" rows
 `true`, its plain rows `false`; persisted on the tab, dropped by the
 untrusted-layout sanitizer so an adopted folder or imported bundle cannot
 spend the key); never a remote, container or

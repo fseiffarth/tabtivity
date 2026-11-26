@@ -2,7 +2,11 @@
 
 Every local project agent tab is granted the MCP lanes (`root_mcp::grant_lanes`:
 schedule, git, help, markup, print, cockpit, tabs; root in the root console). Each grant puts
-an env pair in the spawn: `TABTIVITY_<LANE>_MCP_URL` and `_TOKEN`. How the CLI
+an env pair in the spawn: `TABTIVITY_<LANE>_MCP_URL` and `_TOKEN`. A project can switch
+any of those seven off for its own tabs (`services::project_lanes`, the
+`projects.json` entry's `mcp_off`): no grant at spawn, and the listener refuses
+a running session's lane per request (help excepted: its token names no
+project, so it lasts until the tab restarts). How the CLI
 learns that the server exists is decided per CLI, in two ways.
 
 ## 1. Named at launch: the registry row
@@ -19,7 +23,10 @@ takes a server. `root_mcp::wire_named_cli` is the one function every lane calls.
 | `None` | everyone else | env pair only → `tabtivity-mcp` | — |
 
 Tool-tagged local Vibe models keep their own path (`VIBE_MCP_SERVERS`, the
-`is_local_model` branch of each `apply_*_to_spawn_with`).
+`is_local_model` branch of each `apply_*_to_spawn_with`). Any other local-model
+tab whose launcher has no form (`ollama launch claude|opencode …`) gets no lane
+at all (`root_mcp::unwired_local_model`): the env pair alone made the Claude
+hook ask the model to name its tab with tools it was never given.
 
 Rules each form keeps:
 

@@ -29,6 +29,16 @@ the *why*.
   default, backs up the losing copy first and logs it here. It is a **log file**, not an
   event: the services are `AppHandle`-free and a background pass can delete with no window
   listening, so a loss recorded while the app was closed still surfaces on next launch.
+- **A fast-forward absorbs tracked edits that already are the incoming commit** (#28r,
+  `retry_ff_clearing_identical`). File sync often carries a tracked file's bytes before its
+  commit arrives, and `merge --ff-only` refuses over them ("Your local changes … would be
+  overwritten"). When *every* path git names there is provably the incoming blob (batched
+  `hash-object` vs `ls-tree`; a delete the target also carries counts; the staged blob must
+  be HEAD's or the target's; mode checked on the index after staging), the pass `git add`s
+  them, retries once with any identical untracked collisions, and unstages them if the retry
+  fails. Working-tree bytes are never written, so nothing goes to `local_loss`. One path that
+  differs or can't be proven blocks the whole branch and the status names only that path. The
+  force-reset refusal over uncommitted tracked edits uses the same predicate.
 - **Every manual transfer asks first** (`stores/remote/syncConfirm` → `SyncConfirmDialog`,
   priced by the read-only `sync_transfer_preview`). The clause above — "non-destructive
   by construction" — describes the *background* engine, which skips a both-sides-changed

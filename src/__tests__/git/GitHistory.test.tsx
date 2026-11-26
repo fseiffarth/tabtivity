@@ -185,7 +185,7 @@ describe("lazy commit history", () => {
     expect(screen.getAllByText("commit 20").length).toBe(1);
   });
 
-  it("keeps the first 20 when the button fits and loads older commits when it scrolls into view", async () => {
+  it("fills the panel on open and continues paging when the button scrolls into view", async () => {
     let intersect!: (entries: { intersectionRatio: number }[]) => void;
     vi.stubGlobal("IntersectionObserver", class {
       constructor(callback: typeof intersect) { intersect = callback; }
@@ -193,15 +193,16 @@ describe("lazy commit history", () => {
       disconnect() {}
     });
     mockInvoke.mockImplementation((cmd: string, args: { skip: number }) =>
-      Promise.resolve(cmd === "git_log" ? page(args.skip, args.skip ? 10 : 20) : null));
+      Promise.resolve(cmd === "git_log" ? page(args.skip, Math.min(20, 50 - args.skip)) : null));
 
     try {
       await renderHistory();
       await act(async () => intersect([{ intersectionRatio: 1 }]));
-      expect(screen.queryByText("commit 20")).toBeNull();
+      expect(screen.getByText("commit 39")).toBeTruthy();
       await act(async () => intersect([{ intersectionRatio: 0.75 }]));
+      expect(screen.queryByText("commit 40")).toBeNull();
       await act(async () => intersect([{ intersectionRatio: 1 }]));
-      expect(screen.getByText("commit 29")).toBeTruthy();
+      expect(screen.getByText("commit 49")).toBeTruthy();
     } finally {
       vi.unstubAllGlobals();
     }

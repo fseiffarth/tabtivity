@@ -2496,3 +2496,519 @@ fn the_batched_host_scripts_turn_the_diff_drivers_off() {
     run_sh(&dir, "git diff >/dev/null");
     assert!(marker.exists(), "the planted diff.external is live");
 }
+
+// ── #28r: tracked edits byte-identical to the incoming commit ───────────────
+
+fn lines(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|p| p.to_string()).collect()
+}
+
+#[test]
+fn parse_tracked_overwrite_paths_reads_both_blocks_in_one_stderr() {
+    // As `git merge --ff-only` prints it with tracked and untracked collisions together.
+    let stderr = "error: Your local changes to the following files would be overwritten by merge:\n\
+                  \ta.txt\n\t\"d/\\303\\251.txt\"\n\
+                  Please commit your changes or stash them before you merge.\n\
+                  error: The following untracked working tree files would be overwritten by merge:\n\
+                  \td/n2.txt\n\tn.txt\n\
+                  Please move or remove them before you merge.\n\
+                  Aborting\n\
+                  Updating 179a047..02c9c54\n";
+    assert_eq!(parse_tracked_overwrite_paths(stderr), lines(&["a.txt", "d/é.txt"]));
+    assert_eq!(parse_untracked_overwrite_paths(stderr), lines(&["d/n2.txt", "n.txt"]));
+    // Either block alone, and neither.
+    let only_tracked = "error: Your local changes to the following files would be overwritten by merge:\n\tb.txt\nPlease commit your changes or stash them before you merge.\nAborting\n";
+    assert_eq!(parse_tracked_overwrite_paths(only_tracked), lines(&["b.txt"]));
+    assert!(parse_untracked_overwrite_paths(only_tracked).is_empty());
+    assert!(parse_tracked_overwrite_paths("fatal: Not possible to fast-forward, aborting.\n").is_empty());
+}
+
+fn blob(mode: &str, sha: &str) -> GitBlob {
+    GitBlob {
+        mode: mode.into(),
+        sha: sha.into(),
+    }
+}
+
+#[test]
+fn classify_tracked_dirt_needs_every_fact_proven() {
+    let mut target: HashMap<String, GitBlob> = [
+        ("same", "T1"),
+        ("staged_target", "T2"),
+        ("other", "T3"),
+        ("third", "T4"),
+        ("nohash", "T5"),
+        ("gone_kept", "T8"),
+    ]
+    .iter()
+    .map(|(p, s)| (p.to_string(), blob("100644", s)))
+    .collect();
+    target.insert("link".to_string(), blob("160000", "T6"));
+    let mut head: HashMap<String, GitBlob> = [
+        ("same", "H1"),
+        ("staged_target", "H2"),
+        ("other", "H3"),
+        ("third", "H4"),
+        ("nohash", "H5"),
+        ("gone", "H7"),
+        ("gone_kept", "H8"),
+    ]
+    .iter()
+    .map(|(p, s)| (p.to_string(), blob("100644", s)))
+    .collect();
+    head.insert("link".to_string(), blob("160000", "H6"));
+    let mut index: HashMap<String, Option<GitBlob>> =
+        head.iter().map(|(p, b)| (p.clone(), Some(b.clone()))).collect();
+    index.insert("staged_target".to_string(), Some(blob("100644", "T2")));
+    index.insert("third".to_string(), Some(blob("100644", "ZZ")));
+    let deleted: HashSet<String> = ["gone".to_string(), "gone_kept".to_string()].into();
+    let worktree: HashMap<String, String> = [
+        ("same", "T1"),
+        ("staged_target", "T2"),
+        ("other", "DIFFERENT"),
+        ("third", "T4"),
+        ("link", "T6"),
+    ]
+    .iter()
+    .map(|(p, h)| (p.to_string(), h.to_string()))
+    .collect();
+    let paths = lines(&["same", "staged_target", "other", "third", "nohash", "link", "gone", "gone_kept"]);
+    let v = classify_tracked_dirt(&paths, &target, &head, &index, &deleted, &worktree);
+    // identical: matching bytes under HEAD's index entry; already staged to the target;
+    // deleted and absent from the target.
+    assert_eq!(v.identical, lines(&["same", "staged_target", "gone"]));
+    // Only the first needs staging.
+    assert_eq!(v.to_stage, lines(&["same"]));
+    // differing: other bytes; a third staged blob; no hash; a gitlink; deleted but kept.
+    assert_eq!(v.differing, lines(&["other", "third", "nohash", "link", "gone_kept"]));
+
+    // A conflicted index entry proves nothing.
+    let conflicted: HashMap<String, Option<GitBlob>> = [("same".to_string(), None)].into();
+    let v = classify_tracked_dirt(&lines(&["same"]), &target, &head, &conflicted, &deleted, &worktree);
+    assert_eq!(v.differing, lines(&["same"]));
+}
+
+#[test]
+fn the_ls_parsers_read_git_records() {
+    let tree = b"100644 blob aaaa\ta.txt\x00100755 blob bbbb\td/b.sh\x00160000 commit cccc\tsub\0";
+    let t = parse_ls_tree_blobs(tree);
+    assert_eq!(t["d/b.sh"], blob("100755", "bbbb"));
+    assert_eq!(t["sub"], blob("160000", "cccc"));
+    let idx = b"100644 aaaa 0\ta.txt\x00100644 bbbb 1\tc.txt\x00100644 cccc 2\tc.txt\0";
+    let i = parse_ls_files_stage(idx);
+    assert_eq!(i["a.txt"], Some(blob("100644", "aaaa")));
+    assert_eq!(i["c.txt"], None, "a conflicted path is not one blob");
+}
+
+/// `main` at a base commit; returns the sha one commit ahead on `feat`, which edits
+/// `a.txt` and `b.txt`, deletes `gone.txt`, and adds `new.txt` and `sub/n2.txt`. `main`
+/// is checked out, behind.
+fn tracked_repo_behind(dir: &Path) -> String {
+    use crate::test_util::git;
+    git(dir, &["init", "-q", "-b", "main"]);
+    // The code under test runs git with the system config, where Git for
+    // Windows turns `core.autocrlf` on: the repo's own config pins it off.
+    git(dir, &["config", "core.autocrlf", "false"]);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    for (f, c) in [("a.txt", "a\n"), ("b.txt", "b\n"), ("gone.txt", "g\n"), ("keep.txt", "k\n")] {
+        std::fs::write(dir.join(f), c).unwrap();
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-qm", "base"]);
+    git(dir, &["checkout", "-q", "-b", "feat"]);
+    std::fs::write(dir.join("a.txt"), "a2\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "b2\n").unwrap();
+    std::fs::remove_file(dir.join("gone.txt")).unwrap();
+    std::fs::write(dir.join("new.txt"), "new\n").unwrap();
+    std::fs::write(dir.join("sub").join("n2.txt"), "n2\n").unwrap();
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-qm", "feat"]);
+    let sha = git(dir, &["rev-parse", "HEAD"]);
+    git(dir, &["checkout", "-q", "main"]);
+    sha
+}
+
+fn porcelain(dir: &Path) -> String {
+    crate::test_util::git(dir, &["status", "--porcelain"])
+}
+
+fn head_of(dir: &Path) -> String {
+    crate::test_util::git(dir, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn ff_absorbs_tracked_edits_identical_to_the_incoming_commit() {
+    // (a) + (e): the dest holds the incoming bytes as uncommitted edits (file sync
+    // outran the commits), including a delete the target also carries.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping ff_absorbs_tracked_edits_identical_to_the_incoming_commit");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    let sha = tracked_repo_behind(dir);
+    let peer = Peer::Local(dir.to_path_buf());
+    std::fs::write(dir.join("a.txt"), "a2\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "b2\n").unwrap();
+    std::fs::remove_file(dir.join("gone.txt")).unwrap();
+
+    let (ok, stderr) = try_ff(&peer, &sha);
+    assert!(!ok, "git refuses over identical tracked edits");
+    assert_eq!(parse_tracked_overwrite_paths(&stderr), lines(&["a.txt", "b.txt"]));
+
+    let retry = retry_ff_clearing_identical(&peer, &sha, &stderr, &HashSet::new());
+    assert!(matches!(&retry, FfRetry::Cleared(c) if c.is_empty()), "absorbed, nothing cleared");
+    assert_eq!(head_of(dir), sha);
+    assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), b"a2\n");
+    assert_eq!(std::fs::read(dir.join("b.txt")).unwrap(), b"b2\n");
+    assert!(!dir.join("gone.txt").exists());
+    assert_eq!(porcelain(dir), "", "a clean tree at the incoming commit");
+}
+
+#[test]
+fn ff_refuses_when_one_tracked_edit_differs_and_names_only_that_one() {
+    // (b): one identical, one real work. Nothing moves; index and bytes stay as found.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping ff_refuses_when_one_tracked_edit_differs_and_names_only_that_one");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    let sha = tracked_repo_behind(dir);
+    let before = head_of(dir);
+    let peer = Peer::Local(dir.to_path_buf());
+    std::fs::write(dir.join("a.txt"), "a2\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "MY OWN WORK\n").unwrap();
+    let status = porcelain(dir);
+
+    let (ok, stderr) = try_ff(&peer, &sha);
+    assert!(!ok);
+    let FfRetry::Differing(differing) = retry_ff_clearing_identical(&peer, &sha, &stderr, &HashSet::new()) else {
+        panic!("a differing tracked edit must refuse the whole pass");
+    };
+    assert_eq!(differing, lines(&["b.txt"]));
+    let detail = blocked_detail_tracked("main", &differing);
+    assert!(detail.contains("b.txt") && !detail.contains("a.txt"), "{detail}");
+
+    assert_eq!(head_of(dir), before);
+    assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), b"a2\n");
+    assert_eq!(std::fs::read(dir.join("b.txt")).unwrap(), b"MY OWN WORK\n");
+    assert_eq!(porcelain(dir), status, "the index is exactly as found");
+    assert_eq!(crate::test_util::git(dir, &["diff", "--cached", "--name-only"]), "");
+}
+
+#[test]
+fn ff_absorbs_identical_tracked_and_untracked_edits_in_one_pass() {
+    // (c): both blocks in one stderr, one retry.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping ff_absorbs_identical_tracked_and_untracked_edits_in_one_pass");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    let sha = tracked_repo_behind(dir);
+    let peer = Peer::Local(dir.to_path_buf());
+    std::fs::write(dir.join("a.txt"), "a2\n").unwrap();
+    std::fs::write(dir.join("new.txt"), "new\n").unwrap();
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub").join("n2.txt"), "n2\n").unwrap();
+
+    let (ok, stderr) = try_ff(&peer, &sha);
+    assert!(!ok);
+    assert!(!parse_tracked_overwrite_paths(&stderr).is_empty(), "{stderr}");
+    assert!(!parse_untracked_overwrite_paths(&stderr).is_empty(), "{stderr}");
+
+    let retry = retry_ff_clearing_identical(&peer, &sha, &stderr, &HashSet::new());
+    let FfRetry::Cleared(cleared) = &retry else {
+        panic!("both kinds identical: one pass lands");
+    };
+    let mut cleared = cleared.clone();
+    cleared.sort();
+    assert_eq!(cleared, lines(&["new.txt", "sub/n2.txt"]));
+    assert_eq!(head_of(dir), sha);
+    assert_eq!(porcelain(dir), "");
+}
+
+#[test]
+fn ff_stages_nothing_when_an_untracked_file_differs() {
+    // The untracked proof runs before anything is staged: a refusal leaves the index alone.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping ff_stages_nothing_when_an_untracked_file_differs");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    let sha = tracked_repo_behind(dir);
+    let peer = Peer::Local(dir.to_path_buf());
+    std::fs::write(dir.join("a.txt"), "a2\n").unwrap();
+    std::fs::write(dir.join("new.txt"), "SOMETHING ELSE\n").unwrap();
+    let status = porcelain(dir);
+    let (ok, stderr) = try_ff(&peer, &sha);
+    assert!(!ok);
+    assert!(matches!(
+        retry_ff_clearing_identical(&peer, &sha, &stderr, &HashSet::new()),
+        FfRetry::Refused
+    ));
+    assert_eq!(porcelain(dir), status);
+    assert_eq!(std::fs::read(dir.join("new.txt")).unwrap(), b"SOMETHING ELSE\n");
+}
+
+#[test]
+fn ff_refuses_a_staged_blob_that_is_neither_heads_nor_the_targets() {
+    // (d): the worktree matches the incoming commit, but the index holds a third version
+    // the fast-forward would drop.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping ff_refuses_a_staged_blob_that_is_neither_heads_nor_the_targets");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    let sha = tracked_repo_behind(dir);
+    let peer = Peer::Local(dir.to_path_buf());
+    std::fs::write(dir.join("a.txt"), "STAGED THIRD VERSION\n").unwrap();
+    crate::test_util::git(dir, &["add", "a.txt"]);
+    std::fs::write(dir.join("a.txt"), "a2\n").unwrap();
+    let status = porcelain(dir);
+
+    let (ok, stderr) = try_ff(&peer, &sha);
+    assert!(!ok);
+    assert!(matches!(
+        retry_ff_clearing_identical(&peer, &sha, &stderr, &HashSet::new()),
+        FfRetry::Differing(ref d) if d == &lines(&["a.txt"])
+    ));
+    assert_eq!(porcelain(dir), status);
+    assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), b"a2\n");
+}
+
+#[test]
+fn ff_accepts_an_edit_already_staged_to_the_incoming_blob() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping ff_accepts_an_edit_already_staged_to_the_incoming_blob");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    let sha = tracked_repo_behind(dir);
+    let peer = Peer::Local(dir.to_path_buf());
+    std::fs::write(dir.join("a.txt"), "a2\n").unwrap();
+    crate::test_util::git(dir, &["add", "a.txt"]);
+    std::fs::write(dir.join("b.txt"), "b2\n").unwrap();
+    // Git itself takes the staged one; only the unstaged one blocks.
+    let (ok, stderr) = try_ff(&peer, &sha);
+    assert!(!ok);
+    assert_eq!(parse_tracked_overwrite_paths(&stderr), lines(&["b.txt"]));
+    assert!(matches!(
+        retry_ff_clearing_identical(&peer, &sha, &stderr, &HashSet::new()),
+        FfRetry::Cleared(_)
+    ));
+    assert_eq!(head_of(dir), sha);
+    assert_eq!(porcelain(dir), "");
+}
+
+#[cfg(unix)]
+#[test]
+fn ff_refuses_identical_bytes_with_a_different_file_mode() {
+    // `hash-object` cannot see the exec bit: the staged entry is checked after `add`.
+    use std::os::unix::fs::PermissionsExt;
+    if !git_available() {
+        eprintln!("git not on PATH — skipping ff_refuses_identical_bytes_with_a_different_file_mode");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    tracked_repo_behind(dir);
+    // Cut the incoming commit with `a.txt` executable.
+    crate::test_util::git(dir, &["checkout", "-q", "feat"]);
+    std::fs::set_permissions(dir.join("a.txt"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_util::git(dir, &["commit", "-qam", "exec"]);
+    let sha = head_of(dir);
+    crate::test_util::git(dir, &["checkout", "-q", "main"]);
+    let peer = Peer::Local(dir.to_path_buf());
+    // Right bytes, plain mode.
+    std::fs::write(dir.join("a.txt"), "a2\n").unwrap();
+    let status = porcelain(dir);
+    let (ok, stderr) = try_ff(&peer, &sha);
+    assert!(!ok);
+    assert!(matches!(
+        retry_ff_clearing_identical(&peer, &sha, &stderr, &HashSet::new()),
+        FfRetry::Differing(ref d) if d == &lines(&["a.txt"])
+    ));
+    assert_eq!(porcelain(dir), status, "the index was put back");
+    assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), b"a2\n");
+}
+
+#[test]
+fn the_force_reset_predicate_reads_the_target_from_the_source_peer() {
+    // The dest has not received the target's objects yet (`force_apply` runs before the
+    // transfer): the incoming tree is read on the source, the edits on the dest.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_reads_the_target_from_the_source_peer");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&src).unwrap();
+    let sha = tracked_repo_behind(&src);
+    // `--single-branch` of `main`: the clone never receives `feat`'s commit.
+    crate::test_util::git(
+        tmp.path(),
+        &["clone", "-q", "--config", "core.autocrlf=false", "--no-local", "--branch", "main", "--single-branch", &src.to_string_lossy(), &dst.to_string_lossy()],
+    );
+    assert!(
+        Peer::Local(dst.clone()).answer(&["cat-file", "-t", &sha]).is_none(),
+        "the dest must not hold the target commit"
+    );
+    std::fs::write(dst.join("a.txt"), "a2\n").unwrap();
+    std::fs::write(dst.join("b.txt"), "different\n").unwrap();
+    std::fs::remove_file(dst.join("gone.txt")).unwrap();
+
+    let v = read_dirt_verdict(
+        &Peer::Local(src),
+        &Peer::Local(dst.clone()),
+        &sha,
+        &lines(&["a.txt", "b.txt", "gone.txt"]),
+        true,
+    );
+    assert_eq!(v.identical, lines(&["a.txt", "gone.txt"]));
+    assert_eq!(v.differing, lines(&["b.txt"]));
+    // A read-only verdict: the dest's index is untouched.
+    assert_eq!(crate::test_util::git(&dst, &["diff", "--cached", "--name-only"]), "");
+}
+
+/// Two repos, the dest checked out at `main` without `feat`'s objects (as `force_apply`
+/// sees them); `a.txt` is not yet touched.
+#[cfg(unix)]
+fn force_reset_pair(tmp: &Path) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let src = tmp.join("src");
+    let dst = tmp.join("dst");
+    std::fs::create_dir_all(&src).unwrap();
+    let sha = tracked_repo_behind(&src);
+    crate::test_util::git(
+        tmp,
+        &["clone", "-q", "--config", "core.autocrlf=false", "--no-local", "--branch", "main", "--single-branch", &src.to_string_lossy(), &dst.to_string_lossy()],
+    );
+    (src, dst, sha)
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_identical_bytes_with_another_mode() {
+    // `reset --hard` rewrites the file at the target's mode: a user's exec bit on bytes
+    // that match the target would be dropped, so the path must count as differing.
+    use std::os::unix::fs::PermissionsExt;
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_identical_bytes_with_another_mode");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair(tmp.path());
+    std::fs::write(dst.join("a.txt"), "a2\n").unwrap();
+    std::fs::set_permissions(dst.join("a.txt"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(dst.join("b.txt"), "b2\n").unwrap();
+    let v = read_dirt_verdict(&Peer::Local(src), &Peer::Local(dst), &sha, &lines(&["a.txt", "b.txt"]), true);
+    assert_eq!(v.differing, lines(&["a.txt"]));
+    assert_eq!(v.identical, lines(&["b.txt"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_a_symlink_to_the_incoming_bytes() {
+    // `hash-object` follows a symlink, so a link to a file holding the target's bytes
+    // reads as identical; `reset --hard` would replace the link with a regular file.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_a_symlink_to_the_incoming_bytes");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair(tmp.path());
+    std::fs::write(dst.join("elsewhere.txt"), "a2\n").unwrap();
+    std::fs::remove_file(dst.join("a.txt")).unwrap();
+    std::os::unix::fs::symlink("elsewhere.txt", dst.join("a.txt")).unwrap();
+    let v = read_dirt_verdict(&Peer::Local(src), &Peer::Local(dst), &sha, &lines(&["a.txt"]), true);
+    assert_eq!(v.differing, lines(&["a.txt"]));
+    assert!(v.identical.is_empty());
+}
+
+/// The dest of [`force_reset_pair`] with a `.gitattributes` that is not part of any
+/// commit (`reset --hard` leaves it), for the smudge tests below.
+#[cfg(unix)]
+fn force_reset_pair_with_attrs(tmp: &Path, attrs: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let (src, dst, sha) = force_reset_pair(tmp);
+    std::fs::write(dst.join(".gitattributes"), attrs).unwrap();
+    (src, dst, sha)
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_bytes_a_clean_filter_would_normalise() {
+    // `* text eol=lf`: a CRLF working file cleans to the target's LF blob, so the
+    // filtered hash matches — but `reset --hard` writes the LF blob and the CRLF bytes
+    // on disk are gone. Only the raw bytes may decide a path the reset rewrites.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_bytes_a_clean_filter_would_normalise");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair_with_attrs(tmp.path(), "* text eol=lf\n");
+    std::fs::write(dst.join("a.txt"), "a2\r\n").unwrap();
+    std::fs::write(dst.join("b.txt"), "b2\n").unwrap();
+    let paths = lines(&["a.txt", "b.txt"]);
+    // The fast-forward never rewrites the file: the filtered hash still serves it.
+    let ff = read_dirt_verdict(&Peer::Local(src.clone()), &Peer::Local(dst.clone()), &sha, &paths, false);
+    assert!(ff.identical.contains(&"a.txt".to_string()), "{ff:?}");
+    let v = read_dirt_verdict(&Peer::Local(src), &Peer::Local(dst), &sha, &paths, true);
+    assert!(v.differing.contains(&"a.txt".to_string()), "{v:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_bytes_a_smudge_would_rewrite() {
+    // `* text eol=crlf`: the LF working file *is* the target's blob byte for byte, but the
+    // checkout would write CRLF. A path under any conversion attribute is refused.
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_bytes_a_smudge_would_rewrite");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair_with_attrs(tmp.path(), "a.txt text eol=crlf\n");
+    std::fs::write(dst.join("a.txt"), "a2\n").unwrap();
+    std::fs::write(dst.join("b.txt"), "b2\n").unwrap();
+    let v = read_dirt_verdict(
+        &Peer::Local(src),
+        &Peer::Local(dst),
+        &sha,
+        &lines(&["a.txt", "b.txt"]),
+        true,
+    );
+    assert_eq!(v.differing, lines(&["a.txt"]), "{v:?}");
+    assert_eq!(v.identical, lines(&["b.txt"]), "{v:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_force_reset_predicate_refuses_everything_under_autocrlf_true() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_force_reset_predicate_refuses_everything_under_autocrlf_true");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (src, dst, sha) = force_reset_pair(tmp.path());
+    crate::test_util::git(&dst, &["config", "core.autocrlf", "true"]);
+    std::fs::write(dst.join("b.txt"), "b2\n").unwrap();
+    let v = read_dirt_verdict(&Peer::Local(src), &Peer::Local(dst), &sha, &lines(&["b.txt"]), true);
+    assert_eq!(v.differing, lines(&["b.txt"]), "{v:?}");
+}
+
+#[test]
+fn the_local_peer_runs_git_in_the_c_locale() {
+    // The stderr parsers match git's English wording; a user's own `LANGUAGE`/`LC_ALL`
+    // must not reach the child (`Command::get_envs`: `None` = removed).
+    let cmd = local_git_command(Path::new("."), &["merge", "--ff-only", "x"]);
+    let envs: HashMap<String, Option<String>> = cmd
+        .get_envs()
+        .map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
+        .collect();
+    assert_eq!(envs.get("LC_ALL"), Some(&Some("C".to_string())));
+    assert_eq!(envs.get("LANGUAGE"), Some(&None));
+}

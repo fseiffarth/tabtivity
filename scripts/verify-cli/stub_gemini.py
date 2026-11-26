@@ -9,7 +9,11 @@
 # ends in an error); `STUB:SLOW <secs>` waits that long before answering (a
 # turn to interrupt). Every `STUBMARK-<WORD>` anywhere in a request is logged
 # as `marks`, to see what a hook injected into the model's context.
-import json,re,sys,time
+# `STUB:HOLD <secs>` beside a `STUB:CALL` waits that long before answering the
+# tool's result (to capture a screen mid-turn, such as agy's step checklist).
+# With `STUB_DECLS=<file>` set, the first request's tool declarations
+# (names, descriptions, parameter schemas) are written there as JSON.
+import json,os,re,sys,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 port=int(sys.argv[1]); log=open(sys.argv[2],'a',buffering=1)
 def tools(req):
@@ -27,6 +31,17 @@ def call(req):
         try: return {'name':m.group(1),'args':json.loads(m.group(2))}
         except ValueError: return None
     return None
+def hold(req):
+    """Seconds a `STUB:HOLD` in the turn asks for, when the last content answers a tool."""
+    contents=[c for c in req.get('contents') or [] if isinstance(c,dict)]
+    if not contents or not any('functionResponse' in p or 'function_response' in p for p in contents[-1].get('parts') or [] if isinstance(p,dict)):
+        return 0
+    for c in reversed(contents):
+        if c.get('role')=='model': continue
+        m=re.search(r'STUB:HOLD (\d+)',' '.join(p.get('text','') for p in c.get('parts') or [] if isinstance(p,dict)))
+        if m: return int(m.group(1))
+    return 0
+DECLS=os.environ.get('STUB_DECLS')
 def last_text(req):
     contents=req.get('contents') or []
     if not contents: return ''
@@ -44,6 +59,11 @@ class H(BaseHTTPRequestHandler):
         text=last_text(req) if isinstance(req,dict) else ''
         marks=sorted(set(re.findall(r'STUBMARK-[A-Z0-9-]+',body.decode('utf-8','replace'))))
         log.write(json.dumps({'POST':self.path,'n':len(body),'tools':tools(req) if isinstance(req,dict) else [],'call':fc,'marks':marks})+'\n')
+        global DECLS
+        if DECLS and isinstance(req,dict) and req.get('tools'):
+            with open(DECLS,'w') as f: json.dump(req['tools'],f,indent=1)
+            DECLS=None
+        if isinstance(req,dict) and not fc and hold(req): time.sleep(hold(req))
         if 'STUB:FAIL' in text and not fc:
             b=b'{"error":{"code":500,"message":"stub failure","status":"INTERNAL"}}'
             self.send_response(500); self.send_header('content-type','application/json'); self.send_header('content-length',str(len(b))); self.end_headers(); self.wfile.write(b)

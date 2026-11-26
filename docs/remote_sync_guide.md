@@ -301,7 +301,7 @@ that names the dirty files of a refusal, still run plain.) Steps:
 |---|---|
 | in sync | nothing |
 | missing on dest | `update-ref` (create) |
-| dest can fast-forward, branch checked out there | `git merge --ff-only` (refuses on a dirty tree or an untracked collision) |
+| dest can fast-forward, branch checked out there | `git merge --ff-only` (refuses on a dirty tree or an untracked collision, unless the edits are byte-identical to the incoming commit) |
 | dest can fast-forward, branch not checked out | `update-ref` with old-value guard |
 | dest is ahead | nothing (the other leg carries it) |
 | diverged | reported; the peer's tip is parked at `refs/tabtivity/peer/<branch>` so you can merge by hand |
@@ -325,6 +325,10 @@ provably harmless: byte-identical to the incoming blob (`hash-object` vs
 `rev-parse <sha>:<path>`), or a stale byte-synced copy whose content git already
 holds as an object. One file that is neither, and nothing is touched — the
 status names it. Your options: commit it, move it, or delete it, then *Retry*.
+
+The same goes for **tracked** files with uncommitted edits git also refuses over:
+when every one is byte-identical to the incoming commit (and nothing else is staged
+there), the pass stages them and fast-forwards; if one differs, the status names it.
 
 ### 3.4 Checkouts
 

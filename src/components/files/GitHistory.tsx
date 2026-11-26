@@ -137,6 +137,12 @@ interface Props {
   /** The remote project has no local copy (`isHostPinned`): its one repo is the
    *  host's, so there is no lockstep to pair and no mirror worktree site. */
   hostPinned?: boolean;
+  /** Which repo of a remote project the whole view reads: the parent's
+   *  Local/Remote file-source switch (`mirror` = Local). The view used to open
+   *  on the host whatever that switch said, labelled only "Host", so a host
+   *  checkout full of changes read as the local folder's. Ignored for a local
+   *  or host-pinned project, which have one repo. */
+  site?: "host" | "mirror";
   /** The project whose git credentials a fetch uses — any project kind, unlike
    *  `projectId`; absent on a nested repo (its own remote, no provider token). */
   authProjectId?: string;
@@ -411,7 +417,7 @@ export function GitHistory(props: Props) {
   return <GitHistoryView key={props.projectDir} {...props} />;
 }
 
-function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, authProjectId, onChanged, pullRequest, upstream, changes, onWorktreeChanged, actionsBusy = false, selectionBusy = actionsBusy, connected = true }: Props) {
+function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, site = "host", authProjectId, onChanged, pullRequest, upstream, changes, onWorktreeChanged, actionsBusy = false, selectionBusy = actionsBusy, connected = true }: Props) {
   const t = useT();
   // Every destructive git question below is asked in the panel's own dialog —
   // the native `confirm()` these used arrives themeless, titled with the page
@@ -442,7 +448,18 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [selectionSupported, setSelectionSupported] = useState<boolean | null>(null);
-  const [worktreeSelection, setWorktreeSelection] = useState<GitWorktreeSelection | null>(null);
+  /**
+   * Which side's repo this is (#23 I2). For a remote project `projectDir` is the
+   * **local mirror** while the repo of record is on the host, so resolving this
+   * from the directory alone created host worktrees at mirror-shaped paths and
+   * left the mirror's own repo unmanageable. It follows the `site` prop (the
+   * Local/Remote switch). A backend that cannot select a worktree would read the
+   * host under a "Local" label, so it stays on the host there.
+   */
+  const wtSite: "host" | "mirror" = remote && !hostPinned && site === "mirror" && selectionSupported !== false ? "mirror" : "host";
+  const [worktreeSelection, setWorktreeSelection] = useState<GitWorktreeSelection | null>(
+    () => wtSite === "mirror" ? { path: "", site: "mirror" } : null,
+  );
   const gitArgs = useMemo(() => gitWorktreeArgs(worktreeSelection), [worktreeSelection]);
   const contextVersion = useRef(0);
   // Git lockstep (#28n): only meaningful for SSH remote projects.
@@ -465,15 +482,16 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
     saved.set(JSON.stringify([receipt.checkout, receipt.upstream_ref, receipt.remote]), receipt);
     fetchReceipts.current.set(fetchKey, saved);
   }, [fetchKey]);
-  /**
-   * Which side's worktrees these are (#23 I2). For a remote project `projectDir`
-   * is the **local mirror** while the repo of record is on the host, so resolving
-   * this from the directory alone created host worktrees at mirror-shaped paths
-   * and left the mirror's own repo unmanageable. Defaults to the host, which is
-   * what the rest of this panel reflects. Meaningless (and hidden) for a local
-   * project, where there is only one side.
-   */
-  const [wtSite, setWtSite] = useState<"host" | "mirror">("host");
+  // A side change starts over on that side's current checkout. Reset during
+  // render, not in an effect, so no read goes out with the new side and the old
+  // side's selection mixed.
+  const [shownSite, setShownSite] = useState(wtSite);
+  if (shownSite !== wtSite) {
+    setShownSite(wtSite);
+    setWtForm(null);
+    setWorktrees([]);
+    setWorktreeSelection(wtSite === "mirror" ? { path: "", site: "mirror" } : null);
+  }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<GitCommit | null>(null);
@@ -673,19 +691,14 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
 
   const searchActive = query.trim() !== "" && results !== null;
 
-  // Load another page when scrolling brings the button into view. If it already
-  // fits when the page opens, leave the button available for an explicit click.
-  // The viewport observer also accounts for clipping by the panel's scroller.
+  // Keep paging while the button fits, including when the panel first opens or
+  // grows. Observing again after each page fills the panel before scrolling starts.
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || !hasMore || !autoPage || typeof IntersectionObserver === "undefined") return;
-    let wasOutside = false;
     const io = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          if (entry.intersectionRatio < 1) wasOutside = true;
-          else if (wasOutside) loadMore();
-        }
+        if (entries.some((entry) => entry.intersectionRatio === 1)) loadMore();
       },
       { threshold: 1 },
     );
@@ -1185,9 +1198,10 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
         <span className="sp-toolbar-meta git-history-meta">
           {upstream && <span className="git-history-upstream">{upstream}</span>}
           <span className="git-history-worktree">{basename(selectedWorktree?.path ?? projectDir)}</span>
-          {remote && <span className="git-history-worktree">{t(wtSite === "host" ? "gitHistory.worktreeSiteHost" : "gitHistory.worktreeSiteMirror")}</span>}
+          {remote && <span className="git-history-worktree">{t(wtSite === "host" ? "fileSourceSwitch.remote" : "fileSourceSwitch.local")}</span>}
         </span>
         <UntestedTag id="gitHistory.worktreeSelection" />
+        {remote && !hostPinned && <UntestedTag id="gitHistory.followsSource" />}
         <span className="sp-toolbar-end">
           <button
             className={`toolbar-btn toolbar-btn--sm git-history-mode${graphMode ? " active" : ""}`}
@@ -1470,28 +1484,6 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
         preferenceKey={`gitHistory.worktreesOpen.${projectDir}`} untested={<UntestedTag id="gitHistory.foldSections" />}>
         <div className="git-worktree-actions">
           <UntestedTag id="gitHistory.1" />
-          {remote && !hostPinned && (
-            // #23 I2: two repos, two answers. `git_publish`'s "Publish from"
-            // selector is the precedent — where the bytes are is not where the
-            // operation runs, and for a remote project `projectDir` is the mirror.
-            <Dropdown
-              className="git-worktree-site"
-              value={wtSite}
-              title={t("gitHistory.worktreeSiteLabel")}
-              onChange={(v) => {
-                setWtForm(null);
-                const site = v === "mirror" ? "mirror" : "host";
-                setWorktrees([]);
-                setWtSite(site);
-                setWorktreeSelection(site === "mirror" ? { path: "", site } : null);
-              }}
-              disabled={!selectionSupported || loading || fetching || selectionBusy || !connected}
-              options={[
-                { value: "host", label: t("gitHistory.worktreeSiteHost") },
-                { value: "mirror", label: t("gitHistory.worktreeSiteMirror") },
-              ]}
-            />
-          )}
           {worktrees.some((w) => w.is_prunable) && (
             <button
               className="toolbar-btn"
@@ -1750,7 +1742,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
               key={c.hash}
               className={`sp-row git-commit-row${c.is_head ? " head" : ""}`}
               onClick={() => setSelected(c)}
-              title={c.subject}
+              title={[c.subject, ...refs].join("\n")}
             >
               {graphMode && !searchActive ? (
                 <span className="git-commit-graph">
@@ -1779,7 +1771,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                       className="git-commit-ref"
                       style={color ? { color } : undefined}
                     >
-                      {r}
+                      <span className="sp-row-name">{r}</span>
                     </span>
                   );
                 })}

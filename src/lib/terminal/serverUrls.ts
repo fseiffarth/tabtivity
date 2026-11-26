@@ -147,6 +147,20 @@ export function findServerUrls(
   });
 }
 
+/** The port the phone server listens on when Mobile settings name none — the
+ *  backend's `mobile_control::config::default_port`. */
+export const DEFAULT_PHONE_PORT = 8742;
+
+/**
+ * `servers` without the app's own: a loopback URL on `ownPorts` (the phone
+ * server) is Tabtivity itself, not a program the tab started — an agent quoting
+ * a `curl http://127.0.0.1:8742/…` must not get an Open card for it. Only for a
+ * tab on this machine: a remote tab's loopback is the other host's.
+ */
+export function withoutOwnServers(servers: ServerUrl[], ownPorts: readonly number[]): ServerUrl[] {
+  return servers.filter((server) => !(isLoopbackServerHost(server.host) && ownPorts.includes(server.port)));
+}
+
 /** The page address of a forwarded server: always the loopback's numeric
  *  address, not `localhost` (Jupyter's and Vite's host checks accept it, and it
  *  sidesteps `::1` against `127.0.0.1`). */

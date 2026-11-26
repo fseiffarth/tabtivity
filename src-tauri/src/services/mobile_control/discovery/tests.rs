@@ -979,6 +979,23 @@ fn local_model_tabs_are_listed_as_agent_tabs() {
         assert_eq!(row["local_model"], serde_json::json!(true));
         assert!(row.get("worktree_movable").is_none(), "{row}");
     }
+    // Mistral is a chat CLI; a local Claude Code (read as `ollama`) is not.
+    let no_chat: Vec<bool> = tabs.iter().map(|t| t.public.no_chat).collect();
+    assert_eq!(no_chat, vec![false, true]);
+}
+
+/// Chat is offered only for the verified chat CLIs: any other agent — Gemini,
+/// whose store is read for other uses, among them — is flagged for the
+/// phone to keep in Terminal.
+#[test]
+fn only_the_verified_chat_clis_offer_a_chat() {
+    use crate::services::agent_transcript::chat_offered;
+    for cmd in ["claude", "codex", "opencode", "copilot", "muse", "vibe", "agy", "cursor-agent"] {
+        assert!(chat_offered(cmd), "{cmd}");
+    }
+    for cmd in ["gemini", "qwen", "ollama", ""] {
+        assert!(!chat_offered(cmd), "{cmd}");
+    }
 }
 
 /// The phone's ⎇ chip moves exactly the tabs the desktop Reader's does: a

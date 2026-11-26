@@ -26,7 +26,10 @@ import {
 import {
   compileTexWorkspace,
   hasTexCompiler,
+  QUEUED_COMPILE_MS,
+  queueTexCompile,
   registerTexCompile,
+  takeQueuedTexCompile,
   unregisterTexCompile,
 } from "../../stores/viewers/texCenter";
 import {
@@ -681,6 +684,18 @@ describe("editedAboveLine (does an unsaved edit move forward search's line?)", (
     expect(editedAboveLine(saved, "a\nb\nc changed\nd\n", 3)).toBe(false);
     expect(editedAboveLine(saved, "a\nb\nc\nd\nmore\n", 3)).toBe(false);
     expect(editedAboveLine(saved, saved, 1)).toBe(false);
+  });
+});
+
+describe("queued compiles (Mark up rebuilding a PDF whose editor is not mounted yet)", () => {
+  it("hands a queued build to the editor once, and not after it lapsed", () => {
+    queueTexCompile("/p/main.tex", 1_000);
+    expect(takeQueuedTexCompile("/p/other.tex", 1_000)).toBe(false);
+    expect(takeQueuedTexCompile("/p/main.tex", 1_000 + QUEUED_COMPILE_MS)).toBe(true);
+    expect(takeQueuedTexCompile("/p/main.tex", 1_000)).toBe(false);
+    queueTexCompile("/p/main.tex", 1_000);
+    expect(takeQueuedTexCompile("/p/main.tex", 1_001 + QUEUED_COMPILE_MS)).toBe(false);
+    expect(takeQueuedTexCompile("/p/main.tex", 1_000)).toBe(false);
   });
 });
 

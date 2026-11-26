@@ -35,7 +35,7 @@ import { isHostPinned } from "../../lib/projectTabHost";
 import { cloudRowsOffered, isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { AddTabMenuList, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
-import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
+import { apiKeyMenuEntries, useKeyableAgents, withApiKeyRows } from "./apiKeyGroup";
 import { TabColorPicker } from "./TabColorPicker";
 import { TabMarkBadge } from "./TabMarkBadge";
 import { TabMarkMenuItems } from "./TabMarkMenuItems";
@@ -699,7 +699,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // The local-model group's GPU gate; probes only while the menu is open
   // (and never on a host-pinned scope, whose menu has no such group).
   const localModelGpu = useLocalModelPlacement(localModel, menuOpen && !hostPinned);
-  // The API section's CLIs (a stored key can run them); asked while open.
+  // The "(API)" rows' CLIs (a stored key can run them); asked while open.
   const keyableAgents = useKeyableAgents(menuOpen && !hostPinned);
 
   const updateScrollState = useCallback(() => {
@@ -738,7 +738,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   }, []);
 
   // Reveal a tab cut off at either edge of the strip.
-  const revealTab = useCallback((tabEl: HTMLElement) => {
+  const revealTab = useCallback((tabEl: HTMLElement, smooth = true) => {
     const el = stripRef.current;
     if (!el || !el.contains(tabEl)) return;
     if (tabEl === el.lastElementChild) {
@@ -754,7 +754,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       r.left < strip.left ? r.left - strip.left
       : r.right > strip.right ? Math.min(r.right - strip.right, r.left - strip.left)
       : 0;
-    if (Math.abs(delta) >= 1) el.scrollBy({ left: delta, behavior: "smooth" });
+    if (Math.abs(delta) < 1) return;
+    if (smooth) el.scrollBy({ left: delta, behavior: "smooth" });
+    else el.scrollLeft += delta;
   }, []);
 
   // Continuous scroll while a chevron is hovered: rAF loop nudges the strip each
@@ -839,6 +841,42 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     const tabEl = strip.querySelector<HTMLElement>(".tab.active");
     if (tabEl) revealTab(tabEl);
   }, [activeKey, tabs.length, revealTab]);
+
+  // A project switch keeps this bar (the layout tree isn't keyed by scope) and
+  // so its strip, still scrolled where the last project left it and still
+  // end-pinned by `observeStripResize` if that one sat at its end — the pin
+  // then dragged the new project's strip to its end, past its active tab.
+  // Re-read the pin for the new tabs and jump (not glide: a smooth scroll gets
+  // cut short by that pin) to the active tab; once more when its width
+  // transition settles, since the active tab grows into place. Done once the
+  // new scope's active tab is drawn: the scope can reach this bar a render
+  // before its group's tabs do.
+  const revealedScopeRef = useRef(scope);
+  useLayoutEffect(() => {
+    if (revealedScopeRef.current === scope) return;
+    const strip = stripRef.current;
+    const tabEl = strip?.querySelector<HTMLElement>(".tab.active");
+    if (!strip || !tabEl) return;
+    revealedScopeRef.current = scope;
+    strip.scrollLeft = 0;
+    revealTab(tabEl, false);
+    // The pin and the chevrons both re-read the position on "scroll".
+    strip.dispatchEvent(new Event("scroll"));
+    // Once only: a later max-width change (the tab going inactive) must not
+    // pull the strip back to it; no transition at all → the timer drops it.
+    const stop = () => {
+      tabEl.removeEventListener("transitionend", settle);
+      window.clearTimeout(timer);
+    };
+    const settle = (e: TransitionEvent) => {
+      if (e.target !== tabEl || e.propertyName !== "max-width") return;
+      stop();
+      if (tabEl.classList.contains("active")) revealTab(tabEl, false);
+    };
+    const timer = window.setTimeout(stop, 1000);
+    tabEl.addEventListener("transitionend", settle);
+    return stop;
+  }, [scope, activeKey, tabs.length, revealTab]);
 
   // A remote project's "+" agent rows each get a ▾ to start on a machine.
   const addMenuMachines = useRemoteAgentMachines(scope,
@@ -1661,6 +1699,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const isDropTarget = reorderGroup === groupId && reorderIndex != null;
   const dropPlaceholder = <TabDropPlaceholder label={dragLabel} />;
 
+  // "<agent> (API)" rows, each under its agent's row in the "+" menu. A
+  // host-pinned scope (VM, remote-only) has no local tree, so none start there.
+  const apiRows = hostPinned
+    ? []
+    : apiKeyMenuEntries({
+        keyable: keyableAgents,
+        installedBuiltins: enabledAgents,
+        remoteScope: isRemoteScope,
+        pick: handleAdd,
+        t,
+      });
+
   return (
     <div
       className={`tab-bar${isDropTarget ? " drop-target" : ""}`}
@@ -1894,7 +1944,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               ...(!cloudRowsOffered(localModelsOnly) ? [] : [{
                 label: t("newTabMenu.groupAgents"),
                 moreLabel: t("newTabMenu.moreAgents"),
-                entries: agentMenuEntries({
+                entries: withApiKeyRows(agentMenuEntries({
                   installedBuiltins: enabledAgents,
                   installedCmds: installedCustom,
                   customAgents,
@@ -1909,9 +1959,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     openAgentsAndClis();
                   },
                   t,
-                }),
+                }), apiRows),
                 compactEntries: compactAgentMenuEntries(
-                  agentMenuEntries({
+                  withApiKeyRows(agentMenuEntries({
                     installedBuiltins: enabledAgents,
                     installedCmds: installedCustom,
                     customAgents,
@@ -1926,23 +1976,12 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                       openAgentsAndClis();
                     },
                     t,
-                  }),
+                  }), apiRows),
                   compactAgentBins,
                 ),
               }]),
               // A host-pinned scope (VM, remote-only) has no local tree: its
-              // API-key and local-model rows, which start on this machine,
-              // are not offered. Nor are the API-key rows of a local-models-only
-              // project: they start a cloud agent.
-              ...(hostPinned || !cloudRowsOffered(localModelsOnly)
-                ? []
-                : apiKeyMenuGroups({
-                    keyable: keyableAgents,
-                    installedBuiltins: enabledAgents,
-                    remoteScope: isRemoteScope,
-                    pick: handleAdd,
-                    t,
-                  })),
+              // local-model rows, which start on this machine, are not offered.
               // Only offer agents whose binary is actually installed: Mistral/vibe
               // (checked against `vibeForLocalModel`) and the drivers the backend
               // already marks `available` — and only once the model is on the GPU.

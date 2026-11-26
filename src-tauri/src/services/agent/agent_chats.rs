@@ -111,7 +111,7 @@ pub fn list_chats(
 ) -> ChatList {
     let limit = limit.clamp(1, MAX_PAGE);
     let dir = tab_dir.map(normal_dir);
-    if matches!(cmd, "opencode" | "agy" | "muse") {
+    if matches!(cmd, "opencode" | "agy" | "muse" | "cursor-agent") {
         return folder_store_chats(cmd, project_id, dir.as_deref(), launch_id, offset, limit);
     }
     let Some(kind) = kind_of(cmd) else {
@@ -205,6 +205,11 @@ fn folder_store_chats(
             crate::services::muse_session::folder_chats(&home, dir, offset, limit, MAX_SCANNED),
             crate::services::muse_session::recorded_tab_session(&home, dir, project_id, launch_id),
         )
+    } else if cmd == "cursor-agent" {
+        (
+            crate::services::cursor_session::folder_chats(&home, dir, offset, limit, MAX_SCANNED),
+            crate::services::cursor_session::recorded_tab_session(&home, dir, project_id, launch_id),
+        )
     } else {
         (
             crate::services::google_chat::antigravity_chats(&home, dir, offset, limit, MAX_SCANNED),
@@ -254,6 +259,12 @@ pub fn is_folder_chat(cmd: &str, project_id: Option<&str>, tab_dir: Option<&str>
             local()
                 && dir.as_deref().filter(|dir| Path::new(dir).is_absolute()).is_some_and(|dir| {
                     crate::services::muse_session::folder_chat(&crate::services::agent_home::scope_home(project_id), dir, chat)
+                })
+        }
+        "cursor-agent" => {
+            local()
+                && dir.as_deref().filter(|dir| Path::new(dir).is_absolute()).is_some_and(|dir| {
+                    crate::services::cursor_session::folder_chat(&crate::services::agent_home::scope_home(project_id), dir, chat)
                 })
         }
         _ => chat_file(cmd, project_id, tab_dir, launch_id, chat).is_some(),

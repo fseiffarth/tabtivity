@@ -2472,10 +2472,22 @@ select.file-viewer-run-args-input {
   will-change: transform;
   animation: file-viewer-pdf-sync-fade 3.2s ease-in forwards;
 }
-.file-viewer-jump-flash > * {
+.file-viewer-jump-flash > .file-viewer-jump-pills {
   position: absolute;
   right: 12px;
   top: 0;
+  display: flex;
+  gap: 4px;
+}
+/* The matched PDF word itself, boxed on its row (a reverse search that found
+   the clicked word in the draft). Fades with the band it sits in. */
+.file-viewer-jump-flash > .file-viewer-jump-word {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  outline: 1px solid var(--accent);
 }
 
 /* TeX missing-end diagnostic: the line number stays red even when it is also

@@ -25,6 +25,7 @@ import {
   readAntigravityPicker,
 } from "./antigravity";
 import { codexModelSegment, codexOutputRow, codexPathTruncated, isCodexTab } from "./codexFooter";
+import { isCursorTab, readCursorFrame } from "./cursorAgent";
 import { isMuseTab, museStatus } from "./muse";
 import { isCopilotTab, readCopilotFrame } from "./copilotStatus";
 import {
@@ -35,7 +36,6 @@ import {
   openCodeComposer,
   openCodeFullFooter,
   openCodeMiniRow,
-  openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
 import { claudeEffortHint, effortHintAbove, isClaudeTmuxNotice, withoutEffortHint } from "./claudeStatus";
@@ -121,6 +121,24 @@ function agentListStart(lines: readonly StatusLineLike[]): number {
   const tail = lines.slice(-SEARCH_WINDOW * 4);
   const found = scanAgentList(tail.map((line) => line.text));
   return found ? lines.length - tail.length + found.start : lines.length;
+}
+
+/** Codex keeps its model and directory beneath even a draft taller than the
+ * generic frame scan. Walk back from that footer through its indented rows. */
+export function codexComposerFrame(lines: readonly StatusLineLike[]): { start: number; footer: number } | null {
+  let index = lines.length - 1;
+  while (index >= 0 && !lines[index].text.trim()) index -= 1;
+  if (/^\s+(?:← for agents\b|\? for shortcuts\b|⚠.*\bf2 to view\b)/u.test(lines[index]?.text ?? "")) index -= 1;
+  const footer = index;
+  const statusLine = lines[footer]?.text ?? "";
+  const [model, directory = ""] = statusLine.trim().split(/\s+·\s+/u, 2);
+  if (!/^ {2}\S/u.test(statusLine) || !codexModelSegment(model, {}, true) || !PATH.test(directory.trim())) return null;
+  for (index -= 1; index >= 0; index -= 1) {
+    const { text } = lines[index];
+    if (/^›(?:\s|$)/u.test(text)) return { start: index, footer };
+    if (text.trim() && !/^ {2}/u.test(text)) break;
+  }
+  return null;
 }
 
 /** Status lines read below the input line. Claude Code draws at most a mode
@@ -311,21 +329,9 @@ function geminiIndicatorAbove(
 }
 
 /**
- * OpenCode's live area (`opencode --mini`), for a tab whose label names it:
- * where the frame starts and what its status row says — or, when the last row
- * is not mini's, the full TUI's composer (`openCodeFullFrame`).
- *
- * The anchor is the status row — the agent's name in capitals — which OpenCode
- * keeps as the last non-blank row of every frame it draws. Above it sits the
- * input box: blank rows, or the box's own placeholder, or a draft typed on the
- * desktop. Only the first two are taken into the frame; a draft is left in the
- * reading view, the harmless direction, because the rows it occupies are
- * otherwise indistinguishable from the answer above them.
- *
- * The model is not on that row (except for the moment after a switch, when
- * OpenCode prints it as a notice), so it comes from the last turn footer
- * above the frame — `▣ Build · Muse Spark 1.3 Free · 6.2s`, the only place a
- * mini session prints the model's display name at all.
+ * OpenCode's live area, for a tab whose label names it: `mini`'s
+ * (`openCodeMiniFrame`) or, when the last row is not mini's status row, the
+ * full TUI's composer (`openCodeFullFrame`).
  */
 function openCodeFrame(
   lines: readonly StatusLineLike[],
@@ -335,47 +341,24 @@ function openCodeFrame(
   let index = lines.length - 1;
   while (index >= 0 && !lines[index].text.trim()) index -= 1;
   if (index < 0 || index < lines.length - SEARCH_WINDOW) return null;
-  const row = openCodeStatusRow(lines[index].text);
-  if (!row) {
-    const v2 = openCodeMiniV2Frame(lines, index);
-    if (v2) return v2;
-    const full = openCodeFullFrame(lines, index);
-    if (full || !isOpenCodeHomeFooter(lines[index].text)) return full;
-    // The start screen's own footer sits under the box's.
-    let footer = index - 1;
-    while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
-    return footer < 0 ? null : openCodeFullFrame(lines, footer);
-  }
-  let start = index;
-  while (start > 0) {
-    const above = lines[start - 1].text;
-    if (!above.trim() || isOpenCodePlaceholder(above)) start -= 1;
-    else break;
-  }
-  const status: SessionStatus = { mode: row.mode };
-  const folder = openCodeBannerPath(lines);
-  if (folder) status.path = folder;
-  if (row.context) status.context = row.context;
-  if (row.model) status.model = row.model;
-  if (!status.model) {
-    for (let above = start - 1; above >= 0; above -= 1) {
-      const footer = openCodeTurnFooter(lines[above].text);
-      if (!footer) continue;
-      if (footer.model) status.model = footer.model;
-      break;
-    }
-  }
-  return { start, status };
+  const mini = openCodeMiniFrame(lines, index);
+  if (mini) return mini;
+  const full = openCodeFullFrame(lines, index);
+  if (full || !isOpenCodeHomeFooter(lines[index].text)) return full;
+  // The start screen's own footer sits under the box's.
+  let footer = index - 1;
+  while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+  return footer < 0 ? null : openCodeFullFrame(lines, footer);
 }
 
 /**
- * OpenCode 2's `mini` live area, whose status row is `index`
- * (`openCodeMiniRow`): the `┃` box above it — its placeholder, a draft, or,
- * empty, nothing `readableScreen` keeps — and the blank rows around it. The
- * model, where the row had no room for it, comes from the last turn footer
- * (`Build · gemma4:e4b · 16.9s`), as `--mini`'s does.
+ * `mini`'s live area, whose status row is `index` (`openCodeMiniRow`): the
+ * `┃` box above it — its placeholder, a draft, or, empty, nothing
+ * `readableScreen` keeps — and the blank rows around it. A draft is left in
+ * the reading view, the harmless direction. The model, where the row had no
+ * room for it, comes from the last turn footer (`Build · gemma4:e4b · 16.9s`).
  */
-function openCodeMiniV2Frame(
+function openCodeMiniFrame(
   lines: readonly StatusLineLike[],
   index: number,
 ): { start: number; status: SessionStatus } | null {
@@ -517,6 +500,7 @@ function modelJustSet(lines: readonly StatusLineLike[], inputIndex: number): str
 export function sessionStatus(
   lines: readonly StatusLineLike[],
   agentLabel?: string,
+  composer?: ReturnType<typeof codexComposerFrame>,
 ): SessionStatus | null {
   const mini = openCodeFrame(lines, agentLabel);
   if (mini) return mini.status;
@@ -524,6 +508,9 @@ export function sessionStatus(
   if (antigravity) return antigravity.status;
   const muse = isMuseTab(agentLabel) ? museStatus(lines, SEARCH_WINDOW) : null;
   if (muse) return muse;
+  // Cursor's `→` box is no input line the generic scan knows; its footer is
+  // read by shape (`cursorAgent.ts`), and a screen without it is no frame.
+  if (isCursorTab(agentLabel)) return readCursorFrame(lines, agentLabel)?.status ?? null;
   // Copilot keeps its path and branch over the box and its model under it.
   const copilot = readCopilotFrame(lines, agentLabel);
   if (copilot) return copilot.status;
@@ -532,8 +519,9 @@ export function sessionStatus(
   if (isCopilotTab(agentLabel)) return null;
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return null;
   const bottom = agentListStart(lines);
-  let inputIndex = -1;
-  for (let index = bottom - 1; index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
+  const codex = isCodexTab(agentLabel);
+  let inputIndex = composer?.start ?? -1;
+  for (let index = bottom - 1; inputIndex < 0 && index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
     if (!isInputLine(lines, index)) continue;
     // A highlighted dialog row opens with the input line's `❯`; the rows under
     // it are its answers (the `/model` picker's `3. Haiku 5.5`), not a status.
@@ -544,8 +532,7 @@ export function sessionStatus(
   if (inputIndex < 0) return null;
   const status: SessionStatus = {};
   let read = 0;
-  const codex = isCodexTab(agentLabel);
-  for (let index = inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
+  for (let index = composer?.footer ?? inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
     const text = lines[index].text.trim();
     if (!text || isClaudeTmuxNotice(text) || (codex && codexOutputRow(text))) continue;
     read += 1;
@@ -634,6 +621,7 @@ export function inputFrameStart(
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return lines.length;
   const copilot = readCopilotFrame(lines, agentLabel);
   if (copilot) return copilot.start;
+  if (isCursorTab(agentLabel)) return readCursorFrame(lines, agentLabel)?.start ?? lines.length;
   const antigravity = antigravityFrame(lines, agentLabel);
   let start = antigravity?.start ?? -1;
   const bottom = agentListStart(lines);

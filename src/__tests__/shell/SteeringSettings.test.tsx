@@ -1,14 +1,15 @@
 /**
  * Steering through the settings dialog: `/` opens it and stays in steering on
- * its region — ←/→ step the left-hand list's pages, ↑/↓ walk the page's
- * controls, Enter presses (a dropdown option hands the cursor back to its
- * dropdown), `/` hands the caret to the dialog's search, Escape closes an open
- * dropdown and then the dialog. The dialog here is a stand-in with the real
+ * its region with the caret in the dialog's search; Esc there walks the page:
+ * ←/→ step the left-hand list's pages, ↑/↓ walk the page's controls, Enter
+ * presses (a dropdown option hands the cursor back to its dropdown), `/` hands
+ * the caret back to the search, Escape closes an open dropdown and then the
+ * dialog. The dialog here is a stand-in with the real
  * one's markup (`settings-dialog`, `settings-navigation-links`,
  * `settings-panel-content`) and its modal frame (`useModalFocus`).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useEffect, useState } from "react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
@@ -36,6 +37,8 @@ function Dialog({ onClose }: { onClose: () => void }) {
   // Enter in the search opens its one result, the zoom setting, and flashes
   // its box as `revealSetting` does.
   const [flash, setFlash] = useState(false);
+  // The search's query clears on Escape, as settings' own search does.
+  const [query, setQuery] = useState("");
   return (
     <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" className="settings-dialog">
       <nav className="settings-navigation">
@@ -46,7 +49,14 @@ function Dialog({ onClose }: { onClose: () => void }) {
           type="text"
           className="settings-navigation-search"
           autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
+            if (e.key === "Escape" && query) {
+              e.preventDefault();
+              setQuery("");
+              return;
+            }
             if (e.key !== "Enter") return;
             e.preventDefault();
             setPage("layout");
@@ -156,6 +166,18 @@ async function settle() {
 const steering = () => useKeyboardSteeringStore.getState();
 const dialog = () => document.querySelector(".settings-dialog");
 
+/** Steering on, `/` opens settings — its search takes the keys — and Esc
+ *  leaves the search for the page. */
+async function openSettingsAndWalk() {
+  press({ key: " ", shiftKey: true });
+  press({ key: "/" });
+  await settle();
+  expect(steering()).toMatchObject({ active: false, handedTo: "search" });
+  press({ key: "Escape" });
+  await settle();
+  expect(steering()).toMatchObject({ active: true, level: "region", region: "settings" });
+}
+
 beforeEach(() => {
   useTabsStore.setState({
     scope: "p",
@@ -200,6 +222,8 @@ describe("steering through settings", () => {
     expect(dialog()).not.toBeNull();
     expect(steering()).toMatchObject({ active: true, level: "region", region: "settings", regionReturn: "tabs" });
     await settle();
+    press({ key: "Escape" });
+    await settle();
     // The page's first control — never the dialog's ×.
     expect(regionCursor()?.id).toBe("g1");
     press({ key: "d" });
@@ -233,9 +257,7 @@ describe("steering through settings", () => {
 
   it("Escape closes an open dropdown first, then settings, back on the level it came from", async () => {
     render(<Harness />);
-    press({ key: " ", shiftKey: true });
-    press({ key: "/" });
-    await settle();
+    await openSettingsAndWalk();
     press({ key: "ArrowRight" });
     await settle();
     press({ key: "Enter" });
@@ -254,11 +276,10 @@ describe("steering through settings", () => {
     expect(steering()).toMatchObject({ active: true, level: "tabs", region: null });
   });
 
-  it("/ hands the caret to the settings search; the chord over settings comes back to it", async () => {
+  it("/ hands the caret back to the settings search; the chord over settings comes back to it", async () => {
     render(<Harness />);
-    press({ key: " ", shiftKey: true });
-    press({ key: "/" });
-    await settle();
+    await openSettingsAndWalk();
+    expect(document.activeElement?.id).not.toBe("search");
     press({ key: "/" });
     expect(steering().active).toBe(false);
     expect(document.activeElement?.id).toBe("search");
@@ -286,13 +307,23 @@ describe("steering through settings", () => {
     expect(document.activeElement?.id).toBe("search");
   });
 
-  it("settings opened from steering leaves no caret in its search", async () => {
+  it("settings opened from steering puts the caret in its search, which takes the keys; Esc walks the page", async () => {
     render(<Harness />);
     press({ key: " ", shiftKey: true });
     press({ key: "/" });
     await settle();
-    expect(steering()).toMatchObject({ active: true, region: "settings" });
+    expect(steering()).toMatchObject({ active: false, handedTo: "search", region: "settings" });
+    expect(document.activeElement?.id).toBe("search");
+    // A letter is the box's, not a steering key.
+    press({ key: "d" });
+    expect(steering().active).toBe(false);
+    expect(dialog()).not.toBeNull();
+
+    press({ key: "Escape" });
+    await settle();
+    expect(steering()).toMatchObject({ active: true, level: "region", region: "settings", handedTo: null });
     expect(document.activeElement?.id).not.toBe("search");
+    expect(regionCursor()?.id).toBe("g1");
   });
 
   it("Enter in the search opens its result and steering comes back on the revealed setting", async () => {
@@ -300,7 +331,6 @@ describe("steering through settings", () => {
     press({ key: " ", shiftKey: true });
     press({ key: "/" });
     await settle();
-    press({ key: "/" });
     expect(steering()).toMatchObject({ active: false, handedTo: "search" });
     const search = document.getElementById("search")!;
     act(() => void search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
@@ -310,11 +340,34 @@ describe("steering through settings", () => {
     expect(document.activeElement?.id).not.toBe("search");
   });
 
-  it("a press into the search while steering hands it the keys", async () => {
-    render(<Harness />);
+  it("Enter in the search, then the keyboard hook goes: nothing comes back after it", async () => {
+    function Split({ keys }: { keys: boolean }) {
+      return (
+        <>
+          {keys && <Keyboard />}
+          <SettingsOwner />
+        </>
+      );
+    }
+    const { rerender } = render(<Split keys />);
     press({ key: " ", shiftKey: true });
     press({ key: "/" });
     await settle();
+    expect(steering()).toMatchObject({ active: false, handedTo: "search" });
+    const search = document.getElementById("search")!;
+    act(() => {
+      search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      rerender(<Split keys={false} />);
+    });
+    await settle();
+    // The landing pass went with the hook: steering stays where it was left.
+    expect(dialog()).not.toBeNull();
+    expect(steering()).toMatchObject({ active: false, handedTo: "search" });
+  });
+
+  it("a press into the search while steering hands it the keys", async () => {
+    render(<Harness />);
+    await openSettingsAndWalk();
     const search = document.getElementById("search")!;
     act(() => {
       search.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
@@ -323,6 +376,34 @@ describe("steering through settings", () => {
     await settle();
     expect(steering()).toMatchObject({ active: false, handedTo: "field" });
     expect(document.activeElement?.id).toBe("search");
+  });
+
+  it("Esc in a handed settings search with a query clears it first; a second Esc comes back to steering", async () => {
+    render(<Harness />);
+    await openSettingsAndWalk();
+    const search = document.getElementById("search") as HTMLInputElement;
+    act(() => {
+      search.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      search.focus();
+    });
+    await settle();
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
+    const level = steering().level;
+    fireEvent.change(search, { target: { value: "zoom" } });
+
+    // The Esc reaches the field: its query goes, the dialog stays, steering
+    // stays off and the field keeps the keys.
+    act(() => void search.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await settle();
+    expect(search.value).toBe("");
+    expect(dialog()).not.toBeNull();
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
+
+    // An empty query: the Esc comes back to steering, as before.
+    act(() => void search.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await settle();
+    expect(steering()).toMatchObject({ active: true, level, handedTo: null });
+    expect(dialog()).not.toBeNull();
   });
 
   it("a plain key over settings is the dialog's; steering left elsewhere joins settings opened by the pointer", async () => {

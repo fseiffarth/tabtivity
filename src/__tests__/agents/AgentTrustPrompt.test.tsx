@@ -161,6 +161,7 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
       projectId: null,
       sandbox: false,
       localOnly: false,
+      remoteHost: null,
     });
     // Neither the rename text nor — the fatal half — the Enter that would have
     // confirmed `No, exit`.
@@ -222,7 +223,38 @@ describe("auto-typed initial input vs. Claude's trust dialog", () => {
       projectId: "p9",
       sandbox: false,
       localOnly: false,
+      remoteHost: null,
     });
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("names a remote tab's host, so the backend asks that host's Claude", async () => {
+    // A remote project's Claude runs on its host and reads the host's
+    // `.claude.json`. Answered from this machine's file (the same path trusted
+    // here), the rename's Enter confirmed the host's `No, exit` by itself.
+    invoke.mockImplementation((cmd: unknown) =>
+      Promise.resolve(cmd === "claude_folder_trusted" ? false : undefined),
+    );
+    const id = "r1:t1";
+    await act(async () => {
+      render(
+        <TerminalView
+          id={id}
+          cmd="claude"
+          cwd={`/home/u/${BRAND.slug}/projects/remote`}
+          kind="agent"
+          projectId="r1"
+          remoteHostId="primary"
+          initialInput="/rename Remote"
+          visible
+          focused
+        />,
+      );
+    });
+    await launch(id);
+
+    const probe = invoke.mock.calls.find((c) => c[0] === "claude_folder_trusted");
+    expect(probe?.[1]).toMatchObject({ projectId: "r1", remoteHost: "primary" });
     expect(writes()).toHaveLength(0);
   });
 

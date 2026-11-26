@@ -1,5 +1,6 @@
 import { formatRemoteTarget, type ProjectEntry } from "../../types";
 import type { TranslationKey } from "../../lib/i18n";
+import { isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 
 /** The `useT()` translator, passed in rather than read from the store: these are
  *  pure functions called during render, and taking `t` as an argument is what
@@ -45,7 +46,7 @@ export function projectTypeTags(
   project: ProjectEntry,
   scaffoldMissing: boolean,
   t: Translate,
-  opts?: { onScaffoldClick?: ProjectTypeTag["onClick"] },
+  opts?: { onScaffoldClick?: ProjectTypeTag["onClick"]; onLocalOnlyClick?: ProjectTypeTag["onClick"] },
 ): ProjectTypeTag[] {
   const tags: ProjectTypeTag[] = [];
   const gitType = typeof project.git_type === "string" ? project.git_type : "local";
@@ -114,6 +115,18 @@ export function projectTypeTags(
         title: t("projectType.titleRemoteOnly", { target: formatRemoteTarget(project.remote) }),
       });
     }
+  }
+  // Local models only (`services::agent_privacy`): its own axis, who may read
+  // the project; with Cut network the label says so too.
+  if (isLocalModelsOnly(project)) {
+    const cut = isCutNetwork(project);
+    tags.push({
+      key: "localOnly",
+      label: t(cut ? "projectType.tagLocalOnlyCut" : "projectType.tagLocalOnly"),
+      color: "#db61a2",
+      title: cut ? `${t("agentPrivacy.badgeTitle")}\n${t("agentPrivacy.cutTitle")}` : t("agentPrivacy.badgeTitle"),
+      ...(opts?.onLocalOnlyClick ? { onClick: opts.onLocalOnlyClick } : {}),
+    });
   }
   if (scaffoldMissing) {
     tags.push({

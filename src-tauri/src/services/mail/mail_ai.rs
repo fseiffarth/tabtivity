@@ -44,7 +44,7 @@ pub const REMOTE_REFUSED: &str =
      127.0.0.1 to use it.";
 
 /// The reason an embedding-only model cannot answer a chat prompt.
-fn embedding_only_reason(model: &str) -> String {
+pub(crate) fn embedding_only_reason(model: &str) -> String {
     format!(
         "the model '{model}' is embedding-only, so it cannot write text — load a local \
          completion model for the mail assistant."
@@ -53,7 +53,7 @@ fn embedding_only_reason(model: &str) -> String {
 
 /// The reason an Ollama cloud model is refused (gap 25): a loopback Ollama
 /// forwards it to ollama.com, so the endpoint check alone would let mail out.
-fn cloud_model_reason(model: &str) -> String {
+pub(crate) fn cloud_model_reason(model: &str) -> String {
     format!(
         "the model '{model}' is an Ollama cloud model: it runs on ollama.com, not on this \
          machine, so the mail assistant refuses it — pick a local model for the brain menu's \
@@ -64,13 +64,13 @@ fn cloud_model_reason(model: &str) -> String {
 /// The reason a listener that is not Ollama's is refused (gap 50a): whoever
 /// binds the port while Ollama is down would be handed the mail and answer for
 /// the model. `why` is the owner gate's own reason.
-fn listener_refused_reason(why: &str) -> String {
+pub(crate) fn listener_refused_reason(why: &str) -> String {
     format!("the local mail assistant refused the Ollama endpoint: {why} Nothing about your mail was sent.")
 }
 
 /// The reason a model the local Ollama does not list (or whose list could not
 /// be read) is refused: nothing proves it runs here, so it fails closed.
-fn unlisted_model_reason(model: &str) -> String {
+pub(crate) fn unlisted_model_reason(model: &str) -> String {
     format!(
         "the model '{model}' is not one the local Ollama lists as installed, so the mail \
          assistant does not use it — pull it, or pick an installed model for the brain menu's \
@@ -79,7 +79,7 @@ fn unlisted_model_reason(model: &str) -> String {
 }
 
 /// The reason a hosted server refuses a model its administrator did not allow.
-fn model_not_allowed_reason(model: &str) -> String {
+pub(crate) fn model_not_allowed_reason(model: &str) -> String {
     format!(
         "the model '{model}' is not one the server's administrator allows — pick an \
          allowed model for the brain menu's Mail role."

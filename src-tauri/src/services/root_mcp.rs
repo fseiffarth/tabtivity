@@ -1109,6 +1109,17 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
     })
 }
 
+/// A local-model tab (`PtyOptions::local_model`) started through a launcher no
+/// lane can name a server to: `ollama launch claude|opencode …`, since `ollama`
+/// has no registry row. Vibe is not one: its tool-tagged models take the
+/// servers through `VIBE_MCP_SERVERS` ([`is_local_model`]). Such a tab gets no
+/// lane at all. The env pairs alone would arm the Claude hook's tab-naming and
+/// tab-message reminders (`agent_session`) for tools the model was never given.
+fn unwired_local_model(opts: &PtyOptions) -> bool {
+    opts.local_model && !is_local_model(opts)
+        && matches!(super::agent_registry::mcp_wiring(basename(&opts.cmd)), McpWiring::None)
+}
+
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
 /// Every lane's token ([`LANE_TOKEN_ENVS`]) is taken, so no lane is left out;
 /// the guard holds their hashes ([`Session::id`]), never the tokens.
@@ -1241,6 +1252,9 @@ fn help_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
 /// - those project agents with a schedule target: the **markup** lane while
 ///   `markup_mcp` is on (the window, or a server daemon).
 ///
+/// Each of those lanes is also skipped where the spawn's project switched it
+/// off (`services::project_lanes`, the trusted entry's `mcp_off`).
+///
 /// `runtime` is this process's listener ([`runtime`]): `None` hands out
 /// nothing, and one that does not serve the root lane (the Mobile host) hands
 /// out neither a root nor a reader token; a markup token only where
@@ -1254,6 +1268,7 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         return false;
     }
     let root_agent = is_root_agent(opts, agent_spawn);
+    if unwired_local_model(opts) { return root_agent; }
     let Some(runtime) = runtime else { return root_agent };
     let trusted = Trusted::read(state, opts.project_id.as_deref());
     if root_agent && runtime.serves_root {
@@ -1272,39 +1287,46 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     }
     let project_lanes = agent_spawn && !root_agent && reader_project.is_none() && !opts.sandbox
         && opts.project_id.is_some() && !trusted.off_host(opts) && trusted.settings.is_some();
+    // The project's own per-lane switches (`services::project_lanes`), read
+    // from its trusted `projects.json` entry: a lane switched off there is
+    // handed to none of the project's spawns, whatever its global switch says.
+    let lane_on = |lane: &str| super::project_lanes::allows(trusted.entry.as_ref(), lane);
     if project_lanes {
         let project = opts.project_id.clone().unwrap_or_default();
         let tool_models = trusted.tool_models();
-        if super::schedule_mcp::level_at(&trusted.state, &project).is_ok() {
+        if lane_on("schedule") && super::schedule_mcp::level_at(&trusted.state, &project).is_ok() {
             grant_schedule(opts, runtime, store, &tool_models);
         }
         // Agent-requested pushes (`services::git_push_mcp`), beside the
         // schedule lane. The project's level is *not* checked here — an `off`
         // project still gets the tools, so the agent can be told where to turn
         // them on. The bound directory is the trusted entry's, canonicalised;
-        // a project without one gets no token.
+        // a project without one gets no token, and neither does one that is
+        // not inside a git repo at spawn: every call there would fail, and a
+        // repo made later is refused as `repo_changed` until the tab restarts.
         let dir = trusted.entry.as_ref().and_then(super::remote::entry_directory).and_then(|d| std::fs::canonicalize(d).ok());
-        if let Some(dir) = dir.filter(|_| super::git_push_mcp::enabled_in(&trusted.state.join("settings.json"))) {
+        let dir = dir.filter(|d| super::git_push_mcp::git_entry_identity(d).is_some());
+        if let Some(dir) = dir.filter(|_| lane_on("git") && super::git_push_mcp::enabled_in(&trusted.state.join("settings.json"))) {
             grant_git_push(opts, runtime, store, dir, &tool_models);
         }
     }
     // The help lane merges into the Vibe env the lanes above set outright.
-    if agent_spawn && help_reaches(opts, &trusted) && trusted.settings.as_ref().is_some_and(|s| s.help_mcp()) {
+    if agent_spawn && help_reaches(opts, &trusted) && lane_on("help") && trusted.settings.as_ref().is_some_and(|s| s.help_mcp()) {
         grant_help(opts, runtime, store, &trusted.tool_models());
     }
     // Last, after help: the markup questions server (`services::markup_mcp`)
     // merges into the same Vibe env. Its asks live in this process, so only a
     // process whose views answer them grants it (`Runtime::serves_markup`).
-    if project_lanes && runtime.serves_markup && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
+    if project_lanes && runtime.serves_markup && lane_on("markup") && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
         grant_markup(opts, runtime, store, &trusted.tool_models());
     }
     // The print requests server (`services::print_mcp`), merged into the same
     // Vibe env after markup. Approval needs the window's preview, so only the
     // window grants it (`Runtime::serves_print`).
-    if project_lanes && runtime.serves_print() && trusted.settings.as_ref().is_some_and(|s| s.print_mcp()) {
+    if project_lanes && runtime.serves_print() && lane_on("print") && trusted.settings.as_ref().is_some_and(|s| s.print_mcp()) {
         grant_print(opts, runtime, store, &trusted.tool_models());
     }
-    if agent_spawn && reader_project.is_none() && help_reaches(opts, &trusted)
+    if agent_spawn && reader_project.is_none() && help_reaches(opts, &trusted) && lane_on("cockpit")
         && trusted.settings.as_ref().is_some_and(|s| s.cockpit_mcp()) {
         grant_cockpit(opts, runtime, store, &trusted.state, &trusted.tool_models());
     }
@@ -1315,11 +1337,43 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     // The class comes from the gate's stamp and `local_model`, both final by
     // now: `launch_prep::prepare` runs the gate before this, and nothing
     // between here and the home it prepares changes either.
-    if project_lanes && runtime.serves_tabs() && trusted.settings.as_ref().is_some_and(|s| s.tabs_mcp())
+    if project_lanes && runtime.serves_tabs() && lane_on("tabs") && trusted.settings.as_ref().is_some_and(|s| s.tabs_mcp())
         && tabs_reaches(opts, &trusted) {
         grant_tabs(opts, runtime, store, &trusted.state, &trusted.tool_models());
     }
+    if !root_agent {
+        keep_vibe_tools(opts, &trusted.share);
+    }
     root_agent
+}
+
+/// A local Vibe tab outside the root console whose home keeps Vibe's own tools
+/// on (a model with the `tools` capability, `local_drivers::vibe_local_config`)
+/// keeps them beside the MCP servers the lanes above named: their
+/// `VIBE_ENABLED_TOOLS` outranks the home's config and would otherwise narrow the
+/// tab to those servers' tools. The root console keeps that narrowing (a short
+/// tool list and no shell). `VIBE_HOME` comes from the renderer, so only one of
+/// the `vibe_local` homes under `share` is read; anything else changes nothing.
+fn keep_vibe_tools(opts: &mut PtyOptions, share: &Path) {
+    if !is_local_model(opts) || !opts.env.contains_key("VIBE_ENABLED_TOOLS") {
+        return;
+    }
+    let Some(home) = opts.env.get("VIBE_HOME").map(std::path::PathBuf::from) else { return };
+    let Ok(leaf) = home.strip_prefix(share.join("vibe_local")) else { return };
+    if leaf.components().count() != 1 || leaf.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else { return };
+    if !super::local_drivers::vibe_config_keeps_tools(&text) {
+        return;
+    }
+    let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+        .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+    let every = json!("*");
+    if !enabled.contains(&every) {
+        enabled.push(every);
+    }
+    opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
 }
 
 /// Whether a project-lane spawn may hold the tab messages lane beyond

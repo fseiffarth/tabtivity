@@ -16,7 +16,7 @@ import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
 import { UntestedTag } from "../common/UntestedTag";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useT } from "../../lib/i18n";
-import { ChevronLeftIcon, CloudIcon, DotIcon, HomeIcon, PlayMark } from "../common/icons/Icon";
+import { ChevronLeftIcon, CloudIcon, DotIcon, HomeIcon, PlayMark, WorkingDots } from "../common/icons/Icon";
 import { useAgentModelsStore, agentTabLabel, tabModeMarks } from "../../stores/agents/agentModels";
 import { screenModeMarks } from "../../lib/agents/agentModel";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
@@ -388,13 +388,13 @@ export function RunHostPicker({
   );
 }
 
-/** The status glyph leading a tab's label, in its ring's colour: ▶ working,
+/** The status glyph leading a tab's label, in its ring's colour: ••• working,
  *  ? waiting on a decision, ✓ finished unseen. The ring alone left the three
  *  states to be told apart by colour and stroke; the glyph names them. Takes the
  *  strip's already-resolved state class (`busyStateClass`) so every strip marks
  *  exactly the tabs its ring marks.
  *
- *  A tab running a COMMAND wears the ▶ in the shell colour instead
+ *  A tab running a COMMAND wears a ▶ in the shell colour instead
  *  (`--status-shell-working`) — a shell tab, or an agent whose turn is over
  *  while a shell it started keeps going. When an agent is working AND has a
  *  BACKGROUNDED command of its own running (`working job`), it gets BOTH marks,
@@ -420,10 +420,12 @@ export function TabStatusMark({ stateClass, slots }: { stateClass: string; slots
           ? "interrupted"
           : null;
   if (!state && !slots) return null;
-  // ▶ is drawn (`PlayMark`): as a character, a window's font fallback could
-  // swap it for a colour emoji. ■ (the stop square) is not emoji-capable.
+  // An agent's turn is "•••" (`WorkingDots`, a light walks through it); a
+  // command keeps the ▶ (`PlayMark`). Both are drawn: as characters, a window's
+  // font fallback could swap them for colour emoji. ■ (the stop square) is not
+  // emoji-capable.
   const glyph =
-    state === "working" ? <PlayMark /> : state === "decision" ? "?" : state === "interrupted" ? "■" : "✓";
+    state === "working" ? <WorkingDots /> : state === "decision" ? "?" : state === "interrupted" ? "■" : "✓";
   const label = t(
     state === "working"
       ? "tabBar.statusWorking"

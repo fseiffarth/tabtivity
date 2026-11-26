@@ -36,6 +36,21 @@ fn the_context_setting_overrides_the_automatic_window() {
 /// Only the offered keep-alive choices reach an environment or a drop-in;
 /// anything else is Ollama's default.
 #[test]
+fn an_unload_holds_the_model_until_a_load_under_either_spelling() {
+    // Names no other test uses: the hold is process-wide.
+    hold_unloaded(" held-spelling ");
+    assert!(is_held("held-spelling:latest"));
+    assert!(is_held("held-spelling"));
+    assert!(!is_held("held-spelling:7b"));
+    release_hold("held-spelling:latest");
+    assert!(!is_held("held-spelling"));
+    hold_unloaded("hf.co/org/held-repo:Q4");
+    assert!(is_held("hf.co/org/held-repo:Q4"));
+    assert!(!is_held("hf.co/org/held-repo"));
+    release_hold("hf.co/org/held-repo:Q4");
+}
+
+#[test]
 fn only_the_offered_keep_alive_choices_reach_ollama() {
     assert_eq!(configured_keep_alive(Some("30m")), Some("30m"));
     assert_eq!(configured_keep_alive(Some(" 1h ")), Some("1h"));
@@ -411,15 +426,36 @@ fn completion_backend_window_is_utf8_safe() {
 }
 
 #[test]
-fn partial_file_match_takes_the_layer_and_its_chunks_only() {
-    let main = "sha256-ab12-partial";
-    assert!(is_partial_file_of("sha256-ab12-partial", main));
-    assert!(is_partial_file_of("sha256-ab12-partial-0", main));
-    assert!(is_partial_file_of("sha256-ab12-partial-15", main));
-    assert!(!is_partial_file_of("sha256-ab12-partial-", main));
-    assert!(!is_partial_file_of("sha256-ab12-partial-x", main));
-    assert!(!is_partial_file_of("sha256-ab12", main));
-    assert!(!is_partial_file_of("sha256-ab123-partial", main));
+fn partial_blob_cleanup_removes_only_the_selected_layers_main_file_and_numeric_chunks() {
+    let temp = tempfile::tempdir().unwrap();
+    let orphan = temp.path().join("orphan");
+    let paused = temp.path().join("paused");
+    let remove = ["sha256-ab12-partial", "sha256-ab12-partial-0", "sha256-ab12-partial-15"];
+    let keep = [
+        "sha256-ab12", "sha256-ab12-partial-", "sha256-ab12-partial-x",
+        "sha256-ab123-partial", "sha256-ab123-partial-0",
+    ];
+    for dir in [&orphan, &paused] {
+        std::fs::create_dir(dir).unwrap();
+        for name in remove.iter().chain(&keep) {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+    }
+
+    let selected = orphan.join("sha256-ab12-partial");
+    assert!(remove_partial_blob(&selected, std::slice::from_ref(&paused)).is_err());
+    assert!(selected.exists());
+    remove_partial_blob(&selected, std::slice::from_ref(&orphan)).unwrap();
+    delete_partials_for_digests(&["sha256:ab12".into()], std::slice::from_ref(&paused));
+
+    for dir in [&orphan, &paused] {
+        for name in remove {
+            assert!(!dir.join(name).exists(), "{name} remained in {dir:?}");
+        }
+        for name in keep {
+            assert!(dir.join(name).is_file(), "{name} was removed from {dir:?}");
+        }
+    }
 }
 
 #[test]
@@ -440,9 +476,7 @@ fn write_agent_config(base: &std::path::Path, model: &str) -> (std::path::PathBu
     let vibe_home = base.join(&alias);
     std::fs::create_dir_all(&vibe_home).unwrap();
     let config_path = vibe_home.join("config.toml");
-    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
-    cfg.push_str(&ollama_provider_block());
-    cfg.push_str(&ollama_model_block(model, &alias));
+    let cfg = vibe_local_config(model, &alias, DEFAULT_OLLAMA_ADDR, false);
     std::fs::write(&config_path, &cfg).unwrap();
     (vibe_home, alias)
 }
@@ -549,8 +583,9 @@ fn a_missing_binary_is_not_reported_as_a_model_problem() {
 #[test]
 fn every_local_driver_needs_tools() {
     // vibe is the deliberate exception and is deliberately not in this
-    // list — it turns tools off (`enabled_tools = ["__no_tools__"]`), which
-    // is exactly why it still runs on a completion-only model. If an entry
+    // list — it turns tools off on a model without them
+    // (`enabled_tools = ["__no_tools__"]`), which is exactly why it still runs
+    // on a completion-only model. If an entry
     // here ever stops needing tools, this assertion is where to say so.
     assert!(LOCAL_DRIVERS.iter().all(|d| d.needs_tools));
 }
@@ -806,7 +841,7 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
         "127.0.0.1:11434",
         &[loaded("nemotron:30b", Some(32_768))],
         Some("qwen3:8b"),
-        false,
+        None,
     ))
     .unwrap();
     let p = &cfg["provider"]["ollama"];
@@ -817,27 +852,64 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
 
     // Nothing loaded: an empty whitelist, so stale config models drop out.
     let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &[], None, true)).unwrap();
+        serde_json::from_str(&opencode_ollama_config("h:1", &[], None, None)).unwrap();
     assert_eq!(cfg["provider"]["ollama"]["whitelist"], serde_json::json!([]));
 }
 
 #[test]
-fn opencode_2_measures_context_against_the_window_ollama_runs() {
+fn opencode_measures_context_against_the_window_ollama_runs() {
     let loaded = [loaded("qwen3-coder:30b", Some(32_768)), loaded("old:1b", None)];
     let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, Some("qwen3:8b"), true)).unwrap();
+        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, Some("qwen3:8b"), None)).unwrap();
     let models = &cfg["provider"]["ollama"]["models"];
     // The loaded window, not the trained 262 144 OpenCode 2 discovers.
     assert_eq!(models["qwen3-coder:30b"]["limit"], serde_json::json!({ "context": 32_768 }));
     // No reported window, or not loaded yet: OpenCode keeps its own figure.
     assert!(models["old:1b"].get("limit").is_none());
     assert!(models["qwen3:8b"].get("limit").is_none());
+}
 
-    // OpenCode 1 requires `output` beside `context`: a lone one would be
-    // an invalid config, so 1.x gets no limit at all.
-    let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, None, false)).unwrap();
-    assert!(cfg["provider"]["ollama"]["models"]["qwen3-coder:30b"].get("limit").is_none());
+#[test]
+fn opencode_gets_the_first_load_window_of_a_model_not_loaded_yet() {
+    let loaded = [loaded("qwen3-coder:30b", Some(65_536)), loaded("old:1b", None)];
+    let cfg: serde_json::Value = serde_json::from_str(&opencode_ollama_config(
+        "h:1",
+        &loaded,
+        Some("qwen3:8b"),
+        Some(32_768),
+    ))
+    .unwrap();
+    let models = &cfg["provider"]["ollama"]["models"];
+    assert_eq!(models["qwen3:8b"]["limit"], serde_json::json!({ "context": 32_768 }));
+    // It is the requested model's alone; a loaded one keeps its own.
+    assert_eq!(models["qwen3-coder:30b"]["limit"], serde_json::json!({ "context": 65_536 }));
+    assert!(models["old:1b"].get("limit").is_none());
+}
+
+#[test]
+fn next_load_window_is_the_server_default_or_modelfile_capped_at_training() {
+    use crate::services::ollama_client::next_load_window;
+    let show = |params: &str| {
+        serde_json::json!({
+            "model_info": { "general.architecture": "qwen3moe", "qwen3moe.context_length": 262_144 },
+            "parameters": params,
+        })
+        .to_string()
+    };
+    let plain = show("temperature                    0.7\ntop_k                          20");
+    assert_eq!(next_load_window(&plain, Some(32_768)), Some(32_768));
+    // Ollama never runs past the trained window.
+    assert_eq!(next_load_window(&plain, Some(1_048_576)), Some(262_144));
+    // The server's default unknown: nothing to say.
+    assert_eq!(next_load_window(&plain, None), None);
+    // The Modelfile's own num_ctx wins over the server default.
+    let pinned = show("num_ctx                        8192\ntemperature                    0.7");
+    assert_eq!(next_load_window(&pinned, Some(32_768)), Some(8_192));
+    assert_eq!(next_load_window(&pinned, None), Some(8_192));
+    // No trained window reported: the wanted one stands.
+    let bare = serde_json::json!({ "parameters": "" }).to_string();
+    assert_eq!(next_load_window(&bare, Some(32_768)), Some(32_768));
+    assert_eq!(next_load_window("garbage", Some(32_768)), None);
 }
 
 #[test]
@@ -1032,7 +1104,7 @@ fn the_pinned_local_line_is_the_drivers_own_and_takes_only_plain_names() {
     }
     assert!(model_name_ok("hf.co/org/model-GGUF:Q4_K_M") && model_name_ok("llama3:latest"));
     // The provider block always names the requested model, Ollama up or not.
-    let config: serde_json::Value = serde_json::from_str(&opencode_assistant_provider(m, true)).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&opencode_assistant_provider(m)).unwrap();
     assert!(config["provider"]["ollama"]["models"][m].is_object());
 }
 
@@ -1139,6 +1211,22 @@ fn prepare_local_agent_config_structure() {
         cfg.contains(&format!("alias = \"{alias}\"")),
         "model alias must appear"
     );
+}
+
+/// A model with Ollama's `tools` capability keeps Vibe's own tools: no
+/// `enabled_tools` line at all, which Vibe reads as every tool. Without the
+/// capability (or when Ollama cannot say) the line turns them all off.
+#[test]
+fn vibe_tools_follow_the_models_tools_capability() {
+    let on = vibe_local_config("qwen3:8b", "qwen3-8b", DEFAULT_OLLAMA_ADDR, true);
+    let off = vibe_local_config("qwen3:8b", "qwen3-8b", DEFAULT_OLLAMA_ADDR, false);
+    assert!(!on.contains("enabled_tools"), "{on}");
+    assert!(on.starts_with("active_model = \"qwen3-8b\"\n\n[[providers]]"), "{on}");
+    assert!(off.contains("enabled_tools = [\"__no_tools__\"]"), "{off}");
+    assert_eq!(off.replace("enabled_tools = [\"__no_tools__\"]\n", ""), on, "the tools line is the only difference");
+    assert!(vibe_config_keeps_tools(&on));
+    assert!(!vibe_config_keeps_tools(&off));
+    assert!(!vibe_config_keeps_tools("active_model = \"x\"\n  enabled_tools = []\n"), "any tool list reads as off");
 }
 
 // ── friendly error mapping: broken Ollama runner (#vibe 500) ─────────────

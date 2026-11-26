@@ -140,6 +140,8 @@ fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> 
     if admin.is_none() {
         crate::services::claude_token::inject_launch(opts);
     }
+    // Claude's trace spans as a token source (experimental, off by default).
+    crate::services::claude_otel::inject_launch(opts, scope_id);
     #[cfg(unix)]
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
@@ -197,6 +199,9 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
 /// names, sorted.
 #[cfg(any(unix, test))]
 fn drop_carriers(env: &mut std::collections::HashMap<String, String>) -> Vec<String> {
+    // The trace exporter's other variables go with its bearer: an exporter
+    // without its token would only be refused.
+    crate::services::claude_otel::drop_with_carrier(env);
     let carriers: Vec<String> = env
         .keys()
         .filter(|k| k.starts_with(crate::services::agent_exec::CARRIER_PREFIX))
@@ -1129,12 +1134,6 @@ pub async fn prepare(
     // Some resolvers consume --continue (Copilot pins a --session-id instead).
     let requested_resume = crate::services::agent_defaults::resumed(&opts.cmd, &opts.args);
     if !assistant {
-        // OpenCode's session plugin is listed per release (a directory for 2,
-        // the file for 1.x): probe first, so the resolve lists the one this
-        // binary loads even right after an upgrade. The check below reuses it.
-        if opts.cmd == "opencode" {
-            crate::services::agent_registry::opencode_is_v2().await;
-        }
         let resolving = opts.clone();
         opts = match tokio::task::spawn_blocking(move || crate::services::agent_session::resolve_agent_session_bounded(resolving)).await {
             Ok(resolved) => resolved,
@@ -1306,10 +1305,7 @@ pub async fn prepare(
         && std::env::var_os(OPENCODE_INLINE).is_none()
     {
         if let Some(requested) = crate::services::local_drivers::opencode_spawn_model(&opts.cmd, &opts.args) {
-            let v2 = crate::services::agent_registry::opencode_is_v2().await;
-            if let Some(cfg) =
-                crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref(), v2)
-            {
+            if let Some(cfg) = crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref()) {
                 let cfg = match opts.env.get(OPENCODE_INLINE) {
                     Some(lanes) => crate::services::root_mcp::merge_opencode_mcp(&cfg, lanes),
                     None => cfg,
@@ -1331,8 +1327,7 @@ pub async fn prepare(
         .await?;
         let provider = match (plan.launch.cli, plan.launch.model.as_deref()) {
             (crate::services::assistant::AssistantCli::OpenCodeLocal, Some(model)) => {
-                let v2 = crate::services::agent_registry::opencode_is_v2().await;
-                Some(crate::services::local_drivers::opencode_assistant_provider(model, v2))
+                Some(crate::services::local_drivers::opencode_assistant_provider(model))
             }
             _ => None,
         };
@@ -1346,11 +1341,9 @@ pub async fn prepare(
         assistant_home = Some(home);
     }
 
-    // The first v2 launch needs its new flags too; do not defer this probe to
-    // the next tab. Remote/container binaries have their own release.
-    if opts.cmd == "opencode" && !remote_agent_run && !opts.sandbox
-        && crate::services::agent_registry::opencode_is_v2().await
-    {
+    // OpenCode 2's launch flags. A remote or container run keeps its line as
+    // typed: its binary is the far host's or the image's.
+    if opts.cmd == "opencode" && !remote_agent_run && !opts.sandbox {
         crate::services::opencode_session::v2_launch_args(&mut opts.args);
     }
 

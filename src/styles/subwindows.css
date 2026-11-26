@@ -2883,6 +2883,27 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A local model's reasoning (`thinking` turn): no bubble, a folded muted
+   line on the agent's side; opened, the text under a thin rule. */
+.terminal-reader-thinking {
+  align-self: flex-start;
+  max-width: min(760px, 82%);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.terminal-reader-thinking > summary {
+  cursor: var(--cur-pointer, pointer);
+  padding: 2px 0;
+  font-style: italic;
+}
+.terminal-reader-thinking > p {
+  margin: 4px 0 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border-subtle);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .terminal-reader-plan-head {
   display: block;
   margin-bottom: 4px;
@@ -3208,6 +3229,16 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 }
 .terminal-reader-command.interrupted {
   color: var(--status-interrupted);
+}
+/* The session's turn ended (`turnFinishedRule`): the tab strip's green ✓ on a
+   solid rule in the finished hue, so the end of the work reads at a glance. */
+.terminal-reader-command.finished {
+  color: var(--status-done);
+  font-weight: 600;
+}
+.terminal-reader-command.finished::before,
+.terminal-reader-command.finished::after {
+  border-top-color: color-mix(in srgb, var(--status-done) 45%, transparent);
 }
 .terminal-reader-day {
   justify-content: center;
@@ -3672,6 +3703,15 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-style: dashed;
   cursor: var(--cur-default, default);
 }
+/* A subagent's pill shows its whole task while the row has room; only when
+   it runs out do the pills give way, the longest the most, each task
+   ellipsising before its role and time. The other pills hold their size. */
+.terminal-reader-agents-scroll > .terminal-reader-agent-pill:not(.main, .more, .compact) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: none;
+  overflow: hidden;
+}
 .terminal-reader-agent-pill.finished:not(.selected) b { color: var(--text-secondary); }
 /* Crowded: the role alone. */
 .terminal-reader-agent-pill.compact .terminal-reader-agent-pill-task { display: none; }
@@ -3792,43 +3832,6 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
    host sits — here, or in the side panel's slot. */
 .terminal-reader-stream-anchor,
 .terminal-reader-stream-host { display: contents; }
-/* The docked line's switch for the chat in the side panel: left of the mic
-   (or of Send without one), the mic's quiet round button. */
-.terminal-reader-side-chat {
-  position: absolute;
-  right: 36px;
-  bottom: 7px;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  color: var(--text-muted);
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  cursor: var(--cur-pointer, pointer);
-}
-.terminal-reader-side-chat svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-}
-.terminal-reader-side-chat:hover { color: var(--text-primary); background: var(--bg-hover); }
-.terminal-reader-side-chat.on { color: var(--accent); }
-.terminal-reader-input.with-mic .terminal-reader-side-chat { right: 60px; }
-.terminal-reader.panel-open:not(.dock-open) .terminal-reader-side-chat { bottom: 6px; }
-.terminal-reader-input:has(> .terminal-reader-side-chat) textarea { padding-right: 72px; }
-.terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) textarea,
-.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) textarea {
-  padding-right: 96px;
-}
-.terminal-reader.panel-open:not(.dock-open) .terminal-reader-input.with-mic:has(> .terminal-reader-side-chat) .terminal-reader-dock-tag {
-  right: 88px;
-}
 /* The side panel's cover holding the chat (`ReaderSideChat`): over the
    panel's view, under its resize sash (z-index 30); the Reader's ground and
    ink, a narrower column of bubbles. */
@@ -4041,6 +4044,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-files-link-meta > span { overflow: hidden; text-overflow: ellipsis; }
 .terminal-files-link-label { flex: 1 1 auto; min-width: 0; font-style: italic; }
 .terminal-files-link-meta > span:last-child { flex: none; }
+/* A shell command row: its first line in mono; the picked one whole in the viewer half. */
+.terminal-files-shell-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
+.terminal-files-shell { display: flex; flex-direction: column; gap: var(--space-2); min-height: 0; padding: var(--space-3); overflow: auto; }
+.terminal-files-shell-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.terminal-files-shell-head > strong { flex: 1 1 auto; min-width: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.terminal-files-shell-head > small { color: var(--text-muted); }
 .terminal-changes-path {
   flex: 1 1 auto;
   min-width: 0;
@@ -4539,6 +4548,17 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-view-tabs > button { padding: 4px 10px; font: inherit; font-weight: 500; color: var(--text-secondary); border: none; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
 .reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--text-primary); box-shadow: var(--shadow-1); }
 .reader-view-tabs > button:disabled { opacity: 0.45; cursor: var(--cur-not-allowed, not-allowed); }
+/* The chat-in-the-side-panel switch (`SideChatSwitch`): a one-segment
+   sibling of the view tabs, same ground and height; pressed, the lifted chip
+   of a picked view with the icon in accent. */
+.reader-side-chat-switch { display: inline-flex; align-items: center; flex: none; gap: 4px; padding: 3px; border-radius: var(--radius); background: var(--bg-subtle); }
+.reader-side-chat-switch > button { display: grid; place-items: center; padding: 4px 8px; font: inherit; color: var(--text-secondary); border: none; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
+.reader-side-chat-switch > button:hover { color: var(--text-primary); }
+.reader-side-chat-switch > button[aria-pressed="true"] { background: var(--bg-input); color: var(--accent); box-shadow: var(--shadow-1); }
+.reader-side-chat-switch svg { width: 16px; height: calc(1em * 1.25); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+/* Chat ⇄ Terminal in one pill: the mark says a click flips it. */
+.reader-view-tabs > .reader-view-flip { display: inline-flex; align-items: center; gap: 5px; }
+.reader-view-flip-mark { font-size: 0.85em; line-height: 1; color: var(--text-muted); }
 .reader-topbar .prompt-strip-reader { border-color: transparent; border-radius: var(--radius); }
 .reader-topbar .prompt-strip-panel { top: calc(100% + 6px); bottom: auto; height: min(560px, 65vh); max-height: 65vh; }
 .reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
@@ -4996,6 +5016,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-stray-screen {
   align-self: stretch;
   max-height: 24em;
+}
+.terminal-reader-unsaved-reply {
+  margin: 0;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .terminal-reader-question-ask {
   margin: 0;

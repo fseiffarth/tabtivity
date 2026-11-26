@@ -26,6 +26,7 @@ describe("friendlyError", () => {
     ["Not enough free space for this pull: it needs 1.0 GiB and the disk holding the local copy has 3.0 MiB free (sync_pull_needs_space)", "errors.pullNeedsSpace"],
     ["fatal: not a git repository (or any of the parent directories): .git", "errors.notGitRepo"],
     [" ! [rejected]        develop -> develop (fetch first)", "errors.pushRejected"],
+    [" ! [remote rejected] develop -> develop (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/security.yml` without `workflow` scope)", "errors.workflowPermission"],
     ["error: Your local changes to the following files would be overwritten by merge:", "errors.localChanges"],
     ["CONFLICT (content): Merge conflict in a.txt", "errors.mergeConflict"],
     ["fatal: Authentication failed for 'https://example.invalid/r.git/'", "errors.authFailed"],

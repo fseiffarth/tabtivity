@@ -1,6 +1,6 @@
 # Local-models-only projects — plan
 
-> **Status (screened against code 2026-11-22):** Phases 1 and 2 are in code: `services/agent/agent_privacy.rs` (gate, `cut_platform`, `CUT_VERIFIED_DRIVERS`), `commands/agent_privacy.rs`, `AgentPrivacyDialog.tsx`, `services/local_lane/{relay,server,policy,http}.rs`, `--unshare-net` in `agent_fence.rs`. Open: phase 3 (macOS Seatbelt network denial; Cut network is refused there), phase 4 (container and VM projects; refused), a real-namespace run of the cut fence. As built: `docs/context/local_models_only.md`, `docs/local_models_only_handoff.md`. Decisions D1–D4 at the end stand. Not live-tested unless the doc/todo says so.
+> **Status (screened against code 2026-11-22):** Phases 1 and 2 are in code: `services/agent/agent_privacy.rs` (gate, `cut_platform`, `CUT_VERIFIED_DRIVERS`), `commands/agent_privacy.rs`, `AgentPrivacyDialog.tsx`, `services/local_lane/{relay,server,policy,http}.rs`, `--unshare-net` in `agent_fence.rs`. Since 2026-11-25 an OpenCode tab in a locked project that keeps its network gets a cut fence of its own instead of a refusal (`CUT_ONLY_DRIVERS`). Open: phase 3 (macOS Seatbelt network denial; Cut network is refused there), phase 4b (VM projects; refused; 4a containers done 2026-11-24), a real-namespace run of the cut fence. As built: `docs/context/local_models_only.md`, `docs/local_models_only_handoff.md`. Decisions D1–D4 at the end stand. Not live-tested unless the doc/todo says so.
 
 ## Intent
 
@@ -234,11 +234,23 @@ Seatbelt can deny `network*` except the relay's Unix socket. Same lane,
 same relay. Until then, turning on Cut network on macOS is refused with a
 message (fail closed). The phase-1 gate works on macOS from the start.
 
-## Phase 4 — container and VM projects (later)
+## Phase 4 — container and VM projects
 
-The container's agent with `--network none` and the lane socket mounted in.
-The VM gets a model through a forwarded socket only. Until then the flag is
-refused for these project kinds (phase 1 settings check).
+**4a, containers (done 2026-11-24, not live-tested).** The user's choice: a locked
+container project's local-model tabs run host-bound in the fence (the path container
+projects' local tabs already took), shells stay in the container, no agent runs in it.
+As built: `docs/context/local_models_only.md`, "Container projects".
+The rejected alternative, an agent in a per-tab container with `--network none` and
+the lane socket mounted, needs a static relay helper (the app binary need not run in
+an arbitrary image), `ollama` and the CLIs in the image, the managed-settings and mask
+binds at container create (`docker exec` cannot add mounts), and new driver runs.
+
+**4b, VM projects (later, refused until then).** Agents run in the guest over SSH, so
+the host fence pins nothing. Needs: egress Off, a `guestfwd` channel from the guest to
+the local lane (model checked per request on the host), and the Claude pin and config
+masks inside the guest. Open problem: an agent that is root in its guest can rewrite
+any pin there, so the lane's per-request model check is the only hold that survives;
+whether that is enough for this mode is the user's decision.
 
 ## Tests
 

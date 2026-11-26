@@ -474,7 +474,7 @@ export interface TabEntry {
   // come back running; validated on the way in (`restoredLastUsedAt`).
   lastUsedAt?: number;
   // The tab's pick between its CLI's own login and the user's stored API key
-  // (`PtyOptions::api_key`): `true` from the ＋ menu's API section, `false`
+  // (`PtyOptions::api_key`): `true` from the ＋ menu's "(API)" rows, `false`
   // from its plain rows, unset (the phone, scheduled agents, older tabs) for
   // the Manage CLIs switch. Persisted, so a resumed tab keeps its billing;
   // the backend drops it from an adopted or imported layout.
@@ -719,6 +719,15 @@ export type DetachedEditPayload =
  */
 export interface LoadFromLayoutOptions {
   agentRoots?: readonly string[];
+  /** Saved cwds to move before anything else reads them (`movedCwd`): a box
+   *  scope's remote members' state folders to their local copies. */
+  cwdMoves?: readonly CwdMove[];
+}
+
+/** A folder a saved tab's cwd no longer belongs in, and where it goes instead. */
+export interface CwdMove {
+  from: string;
+  to: string;
 }
 
 export interface SavedTabEntry {

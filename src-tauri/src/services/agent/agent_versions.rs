@@ -43,8 +43,10 @@ use crate::services::agent_usage::strip_ansi;
 /// A version print answers immediately; unlike a warm-up (10 minutes, because
 /// it does real work) there is nothing here worth waiting for. The ceiling
 /// exists for the CLI that ignores the flag and opens its TUI instead — that
-/// process must die, not sit there holding a slot.
-pub const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+/// process must die, not sit there holding a slot. It is not 5 s: Copilot's
+/// npm loader took 4.9 s cold beside other probes (0.2 s warm, 2026-11-24), so
+/// it timed out, and a timeout is cached for [`PROBE_TTL`] like any answer.
+pub const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Longest version text kept. The real ones are tens of bytes; the bound is
 /// here so a CLI that answers `--version` with its whole help text cannot push
@@ -68,7 +70,7 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
     ("opencode", &["--version"]),
     // "2.1.319 (Claude Code)"
     ("claude", &["--version"]),
-    // "codex-cli 0.171.0"
+    // "codex-cli 0.172.0"
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
@@ -78,6 +80,9 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
     ("muse", &["--version"]),
     // "vibe 3.1.2" (Windows, uv tool shim, 2026-11-15)
     ("vibe", &["--version"]),
+    // "2026.11.22-e9042b2" (the hidden `--disable-auto-update` first, as a tab
+    // launches it: without it a probe may start the launcher's background update)
+    ("cursor-agent", &["--disable-auto-update", "--version"]),
 ];
 
 /// Environment a version probe sets for one agent, keyed like [`VERSION_ARGV`].
@@ -121,37 +126,37 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "claude",
-        version: "2.1.330",
+        version: "2.1.332",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
         agent: "codex",
-        version: "0.171.0",
+        version: "0.172.0",
         surface: "§1.2 — mobile mode lines and Shift+Tab (agentModes.ts)",
     },
     Verified {
         agent: "codex",
-        version: "0.171.0",
+        version: "0.172.0",
         surface: "§1.2 — decision lamp: title repaints, numbered approval rows",
     },
     Verified {
         agent: "codex",
-        version: "0.171.0",
+        version: "0.172.0",
         surface: "§1.2 — the two-step /model sheet read off the screen",
     },
     Verified {
         agent: "codex",
-        version: "0.171.0",
+        version: "0.172.0",
         surface: "§1.2 — resume writer lock: a second writer refused, a killed one released",
     },
     Verified {
         agent: "antigravity",
-        version: "1.5.15",
+        version: "1.5.17",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
         agent: "copilot",
-        version: "1.0.114",
+        version: "1.0.115",
         surface: "§1.5 — -p/--session-id/--continue, session-state store, authTokens login layout",
     },
     Verified {
@@ -160,8 +165,13 @@ const VERIFIED: &[Verified] = &[
         surface: "§1.5 — launcher's no-update switch, --model/--reasoning-effort, login file, the ⟩ menu lamp",
     },
     Verified {
+        agent: "cursor-agent",
+        version: "2026.11.22-e9042b2",
+        surface: "§1.5 — --disable-auto-update, --continue/--resume <id>, chat store (store.db), beforeSubmitPrompt hook, Write/StrReplace diffs",
+    },
+    Verified {
         agent: "vibe",
-        version: "3.1.4",
+        version: "3.1.5",
         surface: "§1.5 — hooks.toml session hooks, --resume <id> and the unified store, VIBE_ACTIVE_MODEL, .vibe/AGENTS.md",
     },
 ];
@@ -668,23 +678,9 @@ pub fn codex_runs_tui(args: &[String]) -> bool {
         .is_none_or(|arg| arg.starts_with('-') || arg == "resume" || arg == "fork")
 }
 
-pub fn opencode_is_v2(seen: Option<&Seen>) -> bool {
-    seen.and_then(|seen| seen.version.as_deref())
-        .is_some_and(|v| version_cmp(v, "2.0.0") != std::cmp::Ordering::Less)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn opencode_v2_startup_is_selected_only_for_a_known_v2_release() {
-        let seen = |v: &str| Seen { version: parse_version(v), ..Seen::default() };
-        assert!(opencode_is_v2(Some(&seen("opencode v2.1.2"))));
-        assert!(!opencode_is_v2(Some(&seen("1.18.34"))));
-        assert!(!opencode_is_v2(Some(&seen("unavailable"))));
-        assert!(!opencode_is_v2(None));
-    }
 
     #[test]
     fn codex_takes_no_daemon_from_0_156_0_on() {
@@ -825,13 +821,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
-        let (state, stale) = drift("codex", Some("0.171.0"));
+        let (state, stale) = drift("codex", Some("0.172.0"));
         assert_eq!(state, DriftState::Match);
         assert!(stale.is_empty());
-        let (state, stale) = drift("codex", Some("0.171.1"));
+        let (state, stale) = drift("codex", Some("0.172.1"));
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
-        assert!(stale.iter().all(|note| note.version == "0.171.0" && note.direction == Direction::Newer));
+        assert!(stale.iter().all(|note| note.version == "0.172.0" && note.direction == Direction::Newer));
     }
 
     #[test]
@@ -843,7 +839,7 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.330")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.332")).0, DriftState::Match);
         // A recipe with no recorded check — the honest answer is "nobody has
         // verified this", not a tick.
         assert_eq!(drift_in(&[], "muse", Some("1.3.0")).0, DriftState::Unverified);
@@ -852,6 +848,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
         assert_eq!(drift("claude", None).0, DriftState::Unknown);
+        // Cursor's first check: its dated builds, `<year>.<month>.<day>-<hash>`.
+        assert_eq!(drift("cursor-agent", Some("2026.11.22-e9042b2")).0, DriftState::Match);
+        let (state, stale) = drift("cursor-agent", Some("2026.09.28-64d2043"));
+        assert_eq!(state, DriftState::Moved);
+        assert!(stale.iter().all(|note| note.direction == Direction::Older));
+        assert_eq!(parse_version("2026.11.22-e9042b2\n").as_deref(), Some("2026.11.22-e9042b2"));
+        assert_eq!(version_argv("cursor-agent").unwrap(), ["--disable-auto-update", "--version"]);
     }
 
     /// `agentVersionNotice.ts` repeats these releases so a hot-reloaded window
@@ -865,6 +868,7 @@ mod tests {
         let rows: Vec<_> = table.lines().filter_map(|line| line.trim().split_once(": ")).collect();
         assert!(rows.len() >= 3, "the table was not read: {rows:?}");
         for (agent, version) in rows {
+            let agent = agent.trim_matches('"');
             let version = version.trim_end_matches(',').trim_matches('"');
             assert!(
                 VERIFIED.iter().any(|note| note.agent == agent && note.version == version),

@@ -9,7 +9,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   resolveProjectDirectory,
-  type GitHostingInfo,
   type GitProvider,
   type ProjectEntry,
   type PublishFrom,
@@ -30,13 +29,15 @@ import { PythonInterpreterWindow } from "./PythonInterpreterWindow";
 import { useGitDirtyStore } from "../../stores/gitDirty";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
 import { providerName, gitTypeLabel } from "./projectTypeTags";
-import { guessProvider, PublishWindow } from "./PublishWindow";
-import { GitTokenScopes, tokenPageUrl } from "../common/GitTokenScopes";
+import { PublishWindow } from "./PublishWindow";
+import { GitHostingWindow } from "./GitHostingWindow";
+import { usePillMenuRequestStore } from "../../stores/pillMenuRequest";
 import { ProjectHoverCard, projectDescription, useProjectHoverCard } from "./ProjectHoverCard";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { ActivityCalendar } from "./ActivityCalendar";
 import { CategoryEditor } from "./CategoryEditor";
 import { AgentPrivacyDialog } from "./AgentPrivacyDialog";
+import { ProjectMcpDialog } from "./ProjectMcpDialog";
 import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { ExtendToRemoteDialog } from "./ExtendToRemoteDialog";
 import { ProjectExportDialog } from "./ProjectExportDialog";
@@ -49,7 +50,6 @@ import { useRemoteMachinesStore, type DroppedGlobalMachine } from "../../stores/
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { KeepLocalCopyDialog, StopLocalCopyDialog } from "./LocalCopyDialogs";
 import { Dropdown } from "../common/Dropdown";
-import { PasswordInput } from "../common/PasswordInput";
 import { FolderPickerDialog } from "../common/FolderPickerDialog";
 import { AsyncConfirmDialog, useDialogs } from "../common/PromptDialogs";
 import { RemoteConnMenu } from "../header/RemoteConnMenu";
@@ -403,145 +403,6 @@ function RenameWindow({
   );
 }
 
-
-function GitHostingWindow({
-  project,
-  onClose,
-}: {
-  project: ProjectEntry;
-  onClose: () => void;
-}) {
-  const t = useT();
-  const modalRef = useModalFocus(onClose);
-  const getProjectGitHosting = useProjectsStore((s) => s.getProjectGitHosting);
-  const setProjectGitHosting = useProjectsStore((s) => s.setProjectGitHosting);
-  const [info, setInfo] = useState<GitHostingInfo | null>(null);
-  const [profileUrl, setProfileUrl] = useState("");
-  const [newToken, setNewToken] = useState("");
-  const [clearToken, setClearToken] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    void getProjectGitHosting(project.id)
-      .then((i) => {
-        if (cancelled) return;
-        setInfo(i);
-        setProfileUrl(i.profile_url ?? "");
-      })
-      .catch((e) => !cancelled && setError(String(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, [project.id, getProjectGitHosting]);
-
-  // A typed token always wins over a "remove" request, so clearing only applies
-  // when the user hasn't also entered a replacement.
-  const effectiveClear = clearToken && !newToken.trim();
-
-  const tokenStatus = (() => {
-    if (newToken.trim()) return t("pill.tokenStatusWillSet");
-    if (effectiveClear) return t("pill.tokenStatusWillRemove");
-    if (info?.has_token) return t("pill.tokenStatusHasToken");
-    if (info?.has_global_token) return t("pill.tokenStatusInherits");
-    return t("pill.tokenStatusNone");
-  })();
-
-  const save = async () => {
-    setSaving(true);
-    setError("");
-    try {
-      await setProjectGitHosting(project.id, {
-        profileUrl: profileUrl.trim() || null,
-        token: newToken.trim() || null,
-        clearToken: effectiveClear,
-      });
-      onClose();
-    } catch (err) {
-      setError(String(err));
-      setSaving(false);
-    }
-  };
-
-  const globalUrl = info?.global_profile_url ?? "";
-  // Which provider's token page to link to: the URL field being edited (live,
-  // so it updates as the user types) wins, else the field it inherits, else
-  // the project's own best guess.
-  const tokenProvider: GitProvider = (profileUrl || globalUrl).toLowerCase().includes("gitlab")
-    ? "gitlab"
-    : guessProvider(project);
-
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="settings-title-row">
-          <h2>{t("pill.gitHostingTitle", { name: project.name })}</h2>
-          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
-        </div>
-        <div className="project-dialog-path">{t("pill.gitHostingDesc")}</div>
-
-        <label>
-          {t("git.profileUrl")}
-          <input
-            type="text"
-            value={profileUrl}
-            placeholder={
-              globalUrl ? t("pill.inheritsGlobal", { url: globalUrl }) : t("git.profileUrlPlaceholder")
-            }
-            onChange={(e) => setProfileUrl(e.target.value)}
-          />
-        </label>
-
-        <label>
-          {info?.has_token ? t("pill.replaceToken") : t("git.accessToken")}
-          <PasswordInput
-            value={newToken}
-            placeholder={info?.has_token ? t("pill.enterNewToken") : t("git.tokenPlaceholder")}
-            onChange={(e) => {
-              setNewToken(e.target.value);
-              if (e.target.value) setClearToken(false);
-            }}
-          />
-        </label>
-        <span className="ssh-optional-hint">
-          {t("pill.getTokenHint")}{" "}
-          <button
-            type="button"
-            className="inline-link-btn"
-            onClick={() =>
-              void invoke("open_external_url", {
-                url: tokenPageUrl(tokenProvider, profileUrl || globalUrl),
-              })
-            }
-          >
-            {t("pill.getTokenCta", { provider: providerName(tokenProvider) })}
-          </button>
-        </span>
-        <GitTokenScopes provider={tokenProvider} />
-        <div className="project-dialog-path">{tokenStatus}</div>
-        {info?.has_token && !newToken.trim() && (
-          <label className="settings-switch-row">
-            <span>{t("pill.removeProjectToken")}</span>
-            <Toggle
-              checked={clearToken}
-              onChange={(e) => setClearToken(e.target.checked)}
-            />
-          </label>
-        )}
-
-        {error && <ErrorNote className="project-dialog-error" error={error} />}
-        <div className="project-dialog-actions">
-          <button type="button" onClick={onClose} disabled={saving}>{t("common.cancel")}</button>
-          <button type="button" onClick={() => void save()} disabled={saving || !info}>
-            {saving ? t("common.saving") : t("common.save")}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
 
 /**
  * Edit a project's container spec — image/Dockerfile source, network, resource
@@ -1054,6 +915,7 @@ export function ProjectPill({
   const [showExport, setShowExport] = useState(false);
   const [editCategories, setEditCategories] = useState(false);
   const [showAgentPrivacy, setShowAgentPrivacy] = useState(false);
+  const [showProjectMcp, setShowProjectMcp] = useState(false);
   const [extendRemote, setExtendRemote] = useState(false);
   // Set instead of `extendRemote` alone when a global machine was handed to this
   // (local-only) project from the header's Machines menu — seeds the "Extend to
@@ -1375,6 +1237,26 @@ export function ProjectPill({
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // Anchor to the pill's bottom-left corner so the menu opens downward, below
+    // the bar, with its left edge flush to the pill's left border.
+    const rect = pillRef.current?.getBoundingClientRect();
+    openContextMenu({
+      x: rect ? rect.left : e.clientX,
+      y: rect ? rect.bottom : e.clientY,
+    });
+  };
+
+  // The same menu, asked for from outside the pill (the side panel's project
+  // name): opened where that right-click was (`stores/pillMenuRequest`).
+  const menuRequest = usePillMenuRequestStore((s) => s.request);
+  useEffect(() => {
+    if (menuRequest?.projectId !== project.id) return;
+    const request = usePillMenuRequestStore.getState().take(project.id);
+    if (request) openContextMenu({ x: request.x, y: request.y });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires per request; openContextMenu is a fresh closure each render
+  }, [menuRequest, project.id]);
+
+  const openContextMenu = (pos: ContextMenuPos) => {
     hover.close();
     // The saved-password lookup that used to sit here is now `useSavedCredential`
     // above, gated on this very menu being open — same "only when asked" cost, but
@@ -1407,13 +1289,7 @@ export function ProjectPill({
         setHasPythonFiles(false);
       }
     }
-    // Anchor to the pill's bottom-left corner so the menu opens downward, below
-    // the bar, with its left edge flush to the pill's left border.
-    const rect = pillRef.current?.getBoundingClientRect();
-    setContextMenu({
-      x: rect ? rect.left : e.clientX,
-      y: rect ? rect.bottom : e.clientY,
-    });
+    setContextMenu(pos);
   };
 
   /**
@@ -2105,6 +1981,19 @@ export function ProjectPill({
                 <UntestedTag id="agentPrivacy.menuItem" />
               </button>
             )}
+            {/* The project's Tabtivity MCP tools, one switch per lane
+                (`services::project_lanes`). */}
+            <button
+              className="untested"
+              onClick={() => {
+                setContextMenu(null);
+                setShowProjectMcp(true);
+              }}
+              title={t("projectMcp.menuTitle")}
+            >
+              {t("projectMcp.menuItem")}
+              <UntestedTag id="projectMcp.menuItem" />
+            </button>
             <button
               className="untested"
               onClick={() => {
@@ -2427,6 +2316,10 @@ export function ProjectPill({
         <AgentPrivacyDialog project={project} onClose={() => setShowAgentPrivacy(false)} />
       )}
 
+      {showProjectMcp && (
+        <ProjectMcpDialog project={project} onClose={() => setShowProjectMcp(false)} />
+      )}
+
       {/* Category-tag editor */}
       {editCategories && (
         <CategoryEditor project={project} onClose={() => setEditCategories(false)} />
@@ -2507,7 +2400,9 @@ export function ProjectPill({
               title: t("pill.stopLocalCopyDoneTitle", { name: project.name }),
               body: outcome.moveError
                 ? t("pill.stopLocalCopyMoveFailed", { path: outcome.keptAt, error: outcome.moveError })
-                : outcome.keptAt
+                : outcome.originalKeptAt
+                  ? t("pill.stopLocalCopyCopiedBody", { path: outcome.keptAt, original: outcome.originalKeptAt })
+                  : outcome.keptAt
                   ? t("pill.stopLocalCopyDoneBody", { path: outcome.keptAt })
                   : t("pill.stopLocalCopyNoFolder"),
               error: !!outcome.moveError,

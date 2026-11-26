@@ -7,6 +7,7 @@ import { CloudIcon, HomeIcon } from "../common/icons/Icon";
 import type { TabLocation } from "../../stores/tabs";
 import { localityHostLabel, workerRunnable, type LocalityHost } from "../../stores/tabs/tabLocation";
 import type { AddMenuEntry } from "./AddTabMenuList";
+import { API_KEY_PREFIX } from "./apiKeyGroup";
 import {
   AGENT_ITEMS,
   TAB_ACCENT,
@@ -17,8 +18,9 @@ import {
   type StaticMenuItem,
 } from "../../lib/tabs/newTabItems";
 
-/** Keep only the selected built-in agents in the menu's idle compact view, but
- * always retain the management row. Searching still receives the full list. */
+/** Keep only the selected built-in agents (and their API rows) in the menu's
+ * idle compact view, but always retain the management row. Searching still
+ * receives the full list. */
 export function compactAgentMenuEntries(
   entries: AddMenuEntry[],
   compactBins: ReadonlySet<string>,
@@ -26,6 +28,7 @@ export function compactAgentMenuEntries(
   return entries.filter(
     (entry) =>
       compactBins.has(entry.key) ||
+      (entry.key.startsWith(API_KEY_PREFIX) && compactBins.has(entry.key.slice(API_KEY_PREFIX.length))) ||
       entry.key === "__add_custom_agent__" ||
       entry.key === CLOUD_SESSION_KEY ||
       entry.key === "__install_remote_agent__",
@@ -152,6 +155,7 @@ export function agentMenuEntries(opts: {
     label: item.label,
     color: TAB_ACCENT[item.kind],
     shortcut: chordByKey.get(item.cmd),
+    untested: item.untested,
     onPick: () => {
       const location = defaultMachine(item.cmd);
       if (location === undefined) opts.pick(onOwnLogin(item));

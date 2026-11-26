@@ -44,6 +44,7 @@ async function typeName(value: string) {
 
 describe("new project into an existing folder", () => {
   beforeEach(() => {
+    localStorage.clear(); // ProjectDialog reopens on its last answers (projectDialogMemory)
     invoke.mockReset();
     useSettingsStore.setState({ settings: { git_token: "", git_profile_url: "" } } as never);
     useProjectsStore.setState({ projects: [], activeId: null, loaded: true });

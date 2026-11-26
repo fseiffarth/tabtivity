@@ -13,7 +13,7 @@ import { jumpToRow, ScopeChip } from "./CockpitRoster";
 import { UntestedTag } from "../common/UntestedTag";
 import { CockpitResults } from "./CockpitResults";
 import { CockpitMessages } from "./CockpitMessages";
-import { CockpitAttention, CockpitBlocker, CockpitMilestones, CockpitProgress, CockpitVerification } from "./CockpitReports";
+import { CockpitAttention, CockpitBlocker, CockpitMilestones, CockpitProgress, CockpitScreenSteps, CockpitVerification } from "./CockpitReports";
 
 const NO_PROMPTS: readonly { text: string }[] = [];
 
@@ -104,6 +104,7 @@ export function CockpitDetail({
       )}
       <CockpitResults row={row} now={now} />
       <CockpitProgress row={row} now={now} />
+      <CockpitScreenSteps row={row} />
       <CockpitBlocker row={row} now={now} />
       <CockpitVerification row={row} now={now} />
       <CockpitMilestones row={row} now={now} />

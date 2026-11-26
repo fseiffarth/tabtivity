@@ -163,7 +163,7 @@ pub fn spawned_threads(db: &Path, parent: &str) -> Vec<SpawnedThread> {
     query_spawned(
         db,
         "SELECT t.id, t.first_user_message, t.title, t.agent_role, t.agent_nickname,
-                t.created_at_ms, t.created_at, t.rollout_path
+                t.created_at_ms, t.created_at, t.rollout_path, {agent_path}
            FROM thread_spawn_edges e JOIN threads t ON t.id = e.child_thread_id
           WHERE e.parent_thread_id = ?1
           ORDER BY coalesce(t.created_at_ms, t.created_at * 1000), t.id LIMIT ?2",
@@ -183,7 +183,7 @@ pub fn descendant_threads(db: &Path, root: &str, depth: usize) -> Vec<SpawnedThr
                FROM thread_spawn_edges e JOIN tree ON e.parent_thread_id = tree.id
               WHERE tree.depth < ?2)
          SELECT t.id, t.first_user_message, t.title, t.agent_role, t.agent_nickname,
-                t.created_at_ms, t.created_at, t.rollout_path
+                t.created_at_ms, t.created_at, t.rollout_path, {agent_path}
            FROM tree JOIN threads t ON t.id = tree.id LIMIT ?3",
         rusqlite::params![root, depth as i64, MAX_SPAWNED],
     )
@@ -193,7 +193,13 @@ fn query_spawned(db: &Path, sql: &str, params: impl rusqlite::Params) -> Vec<Spa
     let Some(conn) = open(db) else {
         return Vec::new();
     };
-    let Ok(mut stmt) = conn.prepare(sql) else {
+    // `agent_path` came with Codex's named subagents; an older store lacks it.
+    let has_path = conn
+        .prepare("SELECT 1 FROM pragma_table_info('threads') WHERE name = 'agent_path'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .unwrap_or(false);
+    let sql = sql.replace("{agent_path}", if has_path { "t.agent_path" } else { "NULL" });
+    let Ok(mut stmt) = conn.prepare(&sql) else {
         return Vec::new();
     };
     let text = |value: Option<String>| value.filter(|v| !v.trim().is_empty());
@@ -204,7 +210,9 @@ fn query_spawned(db: &Path, sql: &str, params: impl rusqlite::Params) -> Vec<Spa
         let created_s: Option<i64> = row.get(6)?;
         Ok(SpawnedThread {
             id: row.get(0)?,
-            task: text(first).or(text(title)).unwrap_or_default(),
+            // Codex 0.172 sends the task encrypted and stores neither: the
+            // name it was spawned under (`/root/ollama_cleanup`) then says it.
+            task: text(first).or(text(title)).or(text(row.get(8)?).and_then(|path| task_name(&path))).unwrap_or_default(),
             role: text(row.get(3)?),
             nickname: text(row.get(4)?),
             created_ms: created_ms.or(created_s.map(|s| s * 1000)),
@@ -213,6 +221,13 @@ fn query_spawned(db: &Path, sql: &str, params: impl rusqlite::Params) -> Vec<Spa
     })
     .map(|rows| rows.filter_map(Result::ok).collect())
     .unwrap_or_default()
+}
+
+/// The task name at the end of a subagent's `agent_path`, words spaced:
+/// `/root/ollama_cleanup` → `ollama cleanup`.
+fn task_name(agent_path: &str) -> Option<String> {
+    let leaf = agent_path.rsplit('/').next()?.trim();
+    (!leaf.is_empty()).then(|| leaf.replace('_', " "))
 }
 
 #[cfg(test)]

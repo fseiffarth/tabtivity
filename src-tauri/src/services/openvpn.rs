@@ -324,7 +324,13 @@ fn kill_root_pid(_pid: i32) {}
 
 /// Directory holding OpenVPN runtime files (askpass + pidfiles), created 0700.
 fn runtime_dir() -> PathBuf {
-    storage::state_dir().join("openvpn")
+    runtime_dir_in(&storage::state_dir())
+}
+
+/// [`runtime_dir`] under a given state dir, for a process that is handed its
+/// state dir instead of resolving it (the phone sidecar).
+fn runtime_dir_in(state_dir: &Path) -> PathBuf {
+    state_dir.join("openvpn")
 }
 
 /// Ready a pidfile path that ROOT will write (#868). OpenVPN opens `--writepid`
@@ -499,6 +505,7 @@ pub fn interactive_connect_argv(config: &str) -> Result<Vec<String>, String> {
     // The launcher first: a missing `openvpn.exe` must not leave a claim behind.
     let mut argv = interactive_launcher()?;
     let arm = arm_interactive(config)?;
+    let keep = if keep_connected(&arm.config) { keep_connected_args(&arm.config) } else { Vec::new() };
     argv.extend([
         "--config".to_string(),
         arm.config,
@@ -509,6 +516,7 @@ pub fn interactive_connect_argv(config: &str) -> Result<Vec<String>, String> {
         arm.pidfile.to_string_lossy().into_owned(),
     ]);
     argv.extend(mlock_args());
+    argv.extend(keep);
     argv.extend(arm.management);
     Ok(argv)
 }
@@ -573,6 +581,8 @@ fn arm_interactive(config: &str) -> Result<InteractiveArm, String> {
     let pidfile = interactive_pidfile(config);
     prepare_root_pidfile(&pidfile)?;
     let _ = std::fs::remove_file(&pidfile);
+    // Its output goes to the terminal tab: an older tunnel's kept lines are not its.
+    forget_tail(config);
     interactive_registry()
         .lock_ok()
         .insert(config.to_string(), pidfile.clone());
@@ -775,6 +785,195 @@ fn mlock_args() -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+/// Whether the user turned **Keep connected** on for `config` (the VPN menu's
+/// switch, `settings.vpn_keep_connected`). Read at connect: the options below
+/// are fixed for a tunnel's life, so a change applies from its next connect.
+fn keep_connected(config: &str) -> bool {
+    storage::load_settings()
+        .and_then(|settings| settings.vpn_keep_connected)
+        .is_some_and(|configs| configs.iter().any(|c| c == config))
+}
+
+/// The options that stop a tunnel from **ending itself**, for a config with
+/// Keep connected on. OpenVPN exits on three timers, each of which the `.ovpn`
+/// can set or the server can push:
+///   - `inactive n`: no real traffic for `n` seconds (its own keepalive pings
+///     do not count) — the tunnel that is gone after a long idle;
+///   - `ping-exit n`: the server silent for `n` seconds;
+///   - `session-timeout n`: `n` seconds after connect, whatever happened.
+///
+/// A pushed one is dropped by `--pull-filter ignore` (a prefix match on the
+/// pushed option). The file's own `inactive` is overridden by a later
+/// `--inactive 0`, and its `ping-exit n` by `--ping-restart n`, which shares its
+/// timer: same patience, a reconnect instead of an exit. With a pushed
+/// `ping-exit` ignored, the client's default `ping-restart 120` stands. The
+/// file's own `session-timeout` is left alone: `--session-timeout` is unknown
+/// to OpenVPN before 2.6, where passing it would fail the connect.
+///
+/// What the server enforces on its side still holds; it then drops the client,
+/// which reconnects on its own with the login it kept.
+pub fn keep_connected_args(config: &str) -> Vec<String> {
+    let mut args: Vec<String> = ["--inactive", "0"].map(str::to_string).to_vec();
+    for pushed in ["inactive", "ping-exit", "session-timeout"] {
+        args.extend(["--pull-filter", "ignore", pushed].map(str::to_string));
+    }
+    if let Some(seconds) = config_ping_exit(config) {
+        args.extend(["--ping-restart".to_string(), seconds.to_string()]);
+    }
+    args
+}
+
+/// The `n` of the config's own `ping-exit n`, if it has one (the last wins, as
+/// in OpenVPN). Same best-effort parse as [`config_requires_userpass`].
+fn config_ping_exit(config: &str) -> Option<u32> {
+    let text = std::fs::read_to_string(config.trim()).ok()?;
+    text.lines()
+        .filter_map(|line| {
+            let body = line.split(['#', ';']).next().unwrap_or("").trim();
+            let mut tok = body.split_whitespace();
+            (tok.next() == Some("ping-exit")).then(|| tok.next()?.parse().ok()).flatten()
+        })
+        .next_back()
+}
+
+/// [`openvpn_args`] for a real connect: plus [`keep_connected_args`] when the
+/// user turned Keep connected on for `config`.
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+fn connect_args(
+    config: &str,
+    userpass_file: Option<&Path>,
+    askpass_file: Option<&Path>,
+    pidfile: &Path,
+) -> Result<Vec<String>, String> {
+    let mut args = openvpn_args(config, userpass_file, askpass_file, pidfile)?;
+    if keep_connected(config.trim()) {
+        args.extend(keep_connected_args(config));
+    }
+    Ok(args)
+}
+
+// ── Why a tunnel ended ──────────────────────────────────────────────────────
+//
+// A tunnel that dies on its own says why in its last lines, and those used to
+// be thrown away: the handshake was read up to the ready marker and the pipe
+// then closed. They are kept now, the last few per config and in memory only,
+// so the VPN menu can name the reason instead of only going dark.
+
+/// How many of OpenVPN's last lines are kept per tunnel.
+const TAIL_LINES: usize = 40;
+
+/// One tunnel's last lines, shared between its reader threads and [`tunnel_end`].
+type Tail = std::sync::Arc<Mutex<std::collections::VecDeque<String>>>;
+
+/// The kept last lines, by config path.
+fn tails() -> &'static Mutex<HashMap<String, Tail>> {
+    static TAILS: OnceLock<Mutex<HashMap<String, Tail>>> = OnceLock::new();
+    TAILS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Start `config`'s tail afresh for a new connect; an earlier tunnel's last
+/// words must not be read as this one's.
+fn fresh_tail(config: &str) -> Tail {
+    let tail = Tail::default();
+    tails().lock_ok().insert(config.to_string(), tail.clone());
+    tail
+}
+
+/// Forget `config`'s tail: a tunnel whose output Tabtivity never sees (one typed
+/// into a terminal tab) must not inherit an older tunnel's reason.
+fn forget_tail(config: &str) {
+    tails().lock_ok().remove(config);
+}
+
+fn push_tail(tail: &Tail, line: &str) {
+    let mut lines = tail.lock_ok();
+    if lines.len() == TAIL_LINES {
+        lines.pop_front();
+    }
+    lines.push_back(line.to_string());
+}
+
+/// Keep the end of a daemonized tunnel's `--log` file as its tail, before the
+/// file is removed (macOS, and Windows' service-started tunnels).
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn remember_tail_from_logfile(config: &str, logfile: &Path) {
+    let Ok(text) = std::fs::read_to_string(logfile) else {
+        return;
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let tail = fresh_tail(config);
+    for line in &lines[lines.len().saturating_sub(TAIL_LINES)..] {
+        push_tail(&tail, line);
+    }
+}
+
+/// Why a tunnel is gone, as far as its last lines say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelEndKind {
+    /// OpenVPN's `inactive` timer: no real traffic for too long.
+    Inactive,
+    /// `ping-exit`: the server stopped answering.
+    PingExit,
+    /// `session-timeout`: the session's time limit.
+    SessionTimeout,
+    /// The server refused the login on a reconnect.
+    Auth,
+    /// The server told the client to disconnect.
+    ServerHalt,
+    /// Nothing recognized (or nothing kept).
+    Unknown,
+}
+
+/// What [`tunnel_end`] reports: the recognized reason and OpenVPN's last line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TunnelEnd {
+    pub kind: TunnelEndKind,
+    /// OpenVPN's last line, cut to a sentence's length; `None` with no output kept.
+    pub line: Option<String>,
+}
+
+/// Read the reason off a tunnel's last lines. OpenVPN names the signal that
+/// ends it (`SIGTERM[soft,inactive] received, process exiting`) and, before it,
+/// says the same in words; either is enough.
+pub fn classify_tunnel_end<S: AsRef<str>>(lines: &[S]) -> TunnelEnd {
+    let has = |needle: &str| lines.iter().any(|line| line.as_ref().contains(needle));
+    let kind = if has("[soft,inactive]") || has("(--inactive)") {
+        TunnelEndKind::Inactive
+    } else if has("[soft,ping-exit]") || has("(--ping-exit)") {
+        TunnelEndKind::PingExit
+    } else if has("[soft,session-timeout]") || has("Session timeout, exiting") {
+        TunnelEndKind::SessionTimeout
+    } else if has("[soft,auth-failure]") || has("AUTH_FAILED") {
+        TunnelEndKind::Auth
+    } else if has("[soft,server-pushed-halt]") {
+        TunnelEndKind::ServerHalt
+    } else {
+        TunnelEndKind::Unknown
+    };
+    let line = lines
+        .iter()
+        .rev()
+        .map(|line| line.as_ref().trim())
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(240).collect());
+    TunnelEnd { kind, line }
+}
+
+/// Why `config`'s tunnel is gone: `None` while it is up or when it never ran
+/// under this window (nothing to say), else what its last lines tell. A tunnel
+/// typed into a terminal tab keeps its output there, so it reads
+/// [`TunnelEndKind::Unknown`] with no line.
+pub fn tunnel_end(config: &str) -> Option<TunnelEnd> {
+    let config = config.trim();
+    if tunnel_up(config) {
+        return None;
+    }
+    let tail = tails().lock_ok().get(config).cloned()?;
+    let lines: Vec<String> = tail.lock_ok().iter().cloned().collect();
+    Some(classify_tunnel_end(&lines))
 }
 
 /// Whether `config` uses server-side username+password auth that OpenVPN would
@@ -1395,6 +1594,7 @@ pub fn is_connected(config: &str) -> bool {
                 _ => {
                     let dead = reg.remove(config);
                     if let Some(dead) = dead {
+                        remember_tail_from_logfile(config, &dead.logfile);
                         let _ = std::fs::remove_file(&dead.pidfile);
                         let _ = std::fs::remove_file(&dead.logfile);
                     }
@@ -1516,6 +1716,49 @@ fn adopt_config(config: &str) -> bool {
     false
 }
 
+/// Whether one of this machine's tunnels is up, read **off disk**, for a process
+/// that holds none of the registries: they live in the desktop window's memory,
+/// and the phone sidecar is another process. `None` when there is nothing to
+/// report (no stored config and no tunnel), else whether a pidfile in the
+/// runtime folder records a live OpenVPN daemon — the evidence [`adopt_config`]
+/// re-seats a tunnel from, so it also answers with no window open.
+///
+/// Like every lamp here it says the daemon is *running*: a tunnel that is
+/// re-handshaking reads up.
+pub fn disk_tunnel_up(state_dir: &Path) -> Option<bool> {
+    disk_tunnel_up_with(&runtime_dir_in(state_dir), pid_runs_openvpn)
+}
+
+/// [`disk_tunnel_up`] over a given runtime folder and liveness probe. Every
+/// `*.pid` there is a tunnel's (`{stem}.pid`, `{stem}.interactive.pid`), so the
+/// scan needs no config path and cannot miss one over how a path is spelled.
+fn disk_tunnel_up_with(runtime: &Path, live: impl Fn(i32) -> bool) -> Option<bool> {
+    let any_file = |dir: &Path, wanted: &dyn Fn(&Path) -> bool| {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.flatten().any(|entry| wanted(&entry.path())))
+            .unwrap_or(false)
+    };
+    let up = any_file(runtime, &|path| {
+        path.extension().is_some_and(|ext| ext == "pid") && pidfile_pid(path).is_some_and(&live)
+    });
+    let stored = any_file(&runtime.join("configs"), &|path| path.is_file());
+    (up || stored).then_some(up)
+}
+
+/// Whether `pid` is a live OpenVPN daemon. Where the kernel's name for the
+/// process can be read (Linux) it must be `openvpn`: a pidfile outlives a tunnel
+/// that died on its own, and after a reboot its pid is some other program's.
+fn pid_runs_openvpn(pid: i32) -> bool {
+    if !pid_alive(pid) {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(name) = std::fs::read_to_string(Path::new("/proc").join(pid.to_string()).join("comm")) {
+        return name.trim() == "openvpn";
+    }
+    true
+}
+
 /// Bring up the OpenVPN tunnel for `config`, authenticating with `password` (and
 /// `key_passphrase` for a config that *also* has an encrypted private key — see
 /// [`write_credfiles`]). No-op (returns `Ok`) if already connected. Blocks until
@@ -1566,7 +1809,7 @@ pub fn connect_streaming(
     // both, when it has an `auth-user-pass` account *and* an encrypted key.
     let (userpass_file, askpass_file) =
         write_credfiles(config, &stem, username, password, key_passphrase)?;
-    let mut args = openvpn_args(
+    let mut args = connect_args(
         config,
         userpass_file.as_deref(),
         askpass_file.as_deref(),
@@ -1613,7 +1856,7 @@ pub fn connect_streaming(
     };
 
     // Stream stdout/stderr until the ready marker, EOF, or timeout.
-    let ready = wait_for_ready(&mut child, &on_line);
+    let ready = wait_for_ready(&mut child, &on_line, &fresh_tail(config));
     remove_credfiles();
 
     match ready {
@@ -1689,9 +1932,29 @@ fn reap_or_register(config: &str, mut proc: VpnProc, timeout: Duration) -> bool 
 /// stalled handshake — would hang indefinitely instead of timing out. Reading
 /// stderr too means `pkexec`/driver errors (which never touch stdout) surface in
 /// the failure message instead of being lost.
+///
+/// The readers outlive this wait: once the tunnel is up they keep draining the
+/// pipes into `tail` until OpenVPN exits. Closing them at the marker (as this
+/// used to) left OpenVPN writing into closed pipes for the tunnel's whole life,
+/// and threw away the lines that say why it ended.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn wait_for_ready(child: &mut Child, on_line: &dyn Fn(&str)) -> Result<(), String> {
+fn wait_for_ready(child: &mut Child, on_line: &dyn Fn(&str), tail: &Tail) -> Result<(), String> {
     use std::sync::mpsc::{self, RecvTimeoutError};
+
+    /// Read `pipe` to its end: every line into `tail`, and into `tx` for as long
+    /// as the handshake's wait is still listening.
+    fn drain(pipe: impl std::io::Read + Send + 'static, tx: mpsc::Sender<String>, tail: Tail) {
+        std::thread::spawn(move || {
+            let mut tx = Some(tx);
+            for line in BufReader::new(pipe).lines() {
+                let Ok(line) = line else { break };
+                push_tail(&tail, &line);
+                if tx.as_ref().is_some_and(|tx| tx.send(line).is_err()) {
+                    tx = None; // the wait is over; keep reading for the tail
+                }
+            }
+        });
+    }
 
     let stdout = child
         .stdout
@@ -1700,38 +1963,12 @@ fn wait_for_ready(child: &mut Child, on_line: &dyn Fn(&str)) -> Result<(), Strin
     let stderr = child.stderr.take();
 
     let (tx, rx) = mpsc::channel::<String>();
-    let tx_err = tx.clone();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            match line {
-                Ok(l) => {
-                    if tx.send(l).is_err() {
-                        break; // receiver gone (timed out / found marker)
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    match stderr {
-        Some(stderr) => {
-            std::thread::spawn(move || {
-                for line in BufReader::new(stderr).lines() {
-                    match line {
-                        Ok(l) => {
-                            if tx_err.send(l).is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            });
-        }
-        // No stderr pipe: drop the spare sender so the channel can disconnect
-        // once the stdout reader finishes (otherwise `Disconnected` never fires).
-        None => drop(tx_err),
+    // Each reader owns its sender, so the channel disconnects once both pipes
+    // have ended; with no stderr pipe the only sender is stdout's.
+    if let Some(stderr) = stderr {
+        drain(stderr, tx.clone(), tail.clone());
     }
+    drain(stdout, tx, tail.clone());
 
     let start = Instant::now();
     let mut tail: Vec<String> = Vec::new();
@@ -2345,6 +2582,7 @@ fn svc_connected(config: &str) -> bool {
         Some(svc) if pipe_alive(&svc.pipe) => true,
         Some(_) => {
             if let Some(dead) = reg.remove(config) {
+                remember_tail_from_logfile(config, &dead.logfile);
                 let _ = std::fs::remove_file(&dead.pidfile);
                 let _ = std::fs::remove_file(&dead.logfile);
             }
@@ -2413,7 +2651,7 @@ pub fn connect_streaming(
     // both, when it has an `auth-user-pass` account *and* an encrypted key.
     let (userpass_file, askpass_file) =
         write_credfiles(config, &stem, username, password, key_passphrase)?;
-    let args = openvpn_args(
+    let args = connect_args(
         config,
         userpass_file.as_deref(),
         askpass_file.as_deref(),
@@ -2465,7 +2703,7 @@ pub fn connect_streaming(
     };
 
     // Stream stdout/stderr until the ready marker, EOF, or timeout.
-    let ready = wait_for_ready(&mut child, &on_line);
+    let ready = wait_for_ready(&mut child, &on_line, &fresh_tail(config));
     remove_credfiles();
 
     match ready {
@@ -2719,13 +2957,14 @@ pub fn connect_streaming(
     // spuriously — start clean.
     let _ = std::fs::remove_file(&pidfile);
     let _ = std::fs::remove_file(&logfile);
+    forget_tail(config);
     // Root writes both: refuse a symlinked runtime folder (#868).
     if let Err(e) = prepare_root_pidfile(&pidfile) {
         remove_credfiles();
         return Err(e);
     }
 
-    let mut args = openvpn_args(
+    let mut args = connect_args(
         config,
         userpass_file.as_deref(),
         askpass_file.as_deref(),

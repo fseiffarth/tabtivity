@@ -443,6 +443,11 @@ pub struct PublicTab {
     /// somewhere else to go.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub location_movable: bool,
+    /// An agent tab whose CLI has no chat view (not on
+    /// `agent_transcript::CHAT_AGENTS`): the phone opens it in, and keeps it
+    /// to, Terminal. A cloud or sign-in tab keeps its Focus screen.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_chat: bool,
     /// The tab runs on its project's remote host, and the phone reaches it
     /// through the desktop's ssh master for that host
     /// (`docs/done/mobile_remote_host_tabs_plan.md`): the phone wears a chip naming
@@ -1187,20 +1192,24 @@ pub(super) fn agent_label_for(cmd: &str, label: &str, local_launch: Option<&Valu
 
 /// The command a tab's transcript is read as: its own, except that a
 /// local-model tab driving OpenCode (`ollama launch opencode …`) reads as
-/// `opencode` — found by folder, it needs no launch id. The other local
-/// drivers keep their `ollama` line: Claude's and Codex's transcripts need the
-/// launch id a local tab never mints. The window's `agentTranscriptFor` makes
-/// the same call.
+/// `opencode` — found by folder, it needs no launch id — and one driving
+/// Claude Code reads as `claude` once it carries the launch id its line passes
+/// on (`-- --session-id`). The other local drivers keep their `ollama` line:
+/// Codex's transcript needs a launch id a local tab never mints. The window's
+/// `readerAgent` makes the same call.
 fn transcript_cmd_of(tab: &SavedTab) -> &str {
     let driver = tab
         .local_launch
         .as_ref()
         .and_then(|launch| launch.get("driver"))
         .and_then(Value::as_str);
-    if tab.kind == "local_agent" && driver == Some("opencode") {
-        "opencode"
-    } else {
-        &tab.cmd
+    // A local-model tab's `cmd` is its launcher. OpenCode's sessions are
+    // found by folder; Claude Code's by the key its line carries, and only
+    // a tab that has one says which conversation is its own.
+    match driver {
+        Some("opencode") if tab.kind == "local_agent" => "opencode",
+        Some("claude") if tab.kind == "local_agent" && tab.session_id.is_some() => "claude",
+        _ => &tab.cmd,
     }
 }
 
@@ -1994,6 +2003,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         assistant_launch: None,
         worktree_movable: false,
         location_movable: false,
+        no_chat: false,
         on_host: false,
         host_label: None,
         host_down: false,
@@ -2255,6 +2265,11 @@ fn resolve_scope(
                 && source.kind == ScopeKind::Project
                 && source.host == ProjectHost::Remote
                 && places >= 2,
+            no_chat: agent
+                && chat.is_none()
+                && !tab.sign_in
+                && !tab.cloud
+                && !crate::services::agent_transcript::chat_offered(transcript_cmd_of(&tab)),
             on_host: on_host.is_some(),
             host_label: on_host.as_ref().map(machine_label),
             host_down: on_host.is_some() && host_reach.is_none(),

@@ -22,7 +22,8 @@ it). The summary prints when the second prompt was recorded, against the
 moment the key went in, and whether it ended up back in the box.
 
 Uses the real login (`--model haiku`, one or two small paid turns), the tab
-variables unset.
+variables unset. The login home's settings apply, `tui` among them; set
+`VERIFY_CLAUDE_TUI=default` or `fullscreen` to pin the renderer.
 """
 import json
 import os
@@ -87,7 +88,11 @@ def main():
                     "{ echo first > \"$0.flag\"; sleep 12; }\n")
         os.chmod(hook, 0o755)
         hooks = {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": hook}]}]}
-    common.write_json(settings, {"hooks": hooks})
+    flags = {"hooks": hooks}
+    if os.environ.get("VERIFY_CLAUDE_TUI"):
+        # Outranks the login home's own `tui` (fullscreen reads keys differently).
+        flags["tui"] = os.environ["VERIFY_CLAUDE_TUI"]
+    common.write_json(settings, flags)
     session = str(uuid.uuid4())
     env = {k: os.environ[k] for k in ("HOME", "PATH", "USER", "LANG") if k in os.environ}
     env.update({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
@@ -104,8 +109,18 @@ def main():
                 break
             time.sleep(0.5)
         t.cap("ready")
-        t.type({"early": FIRST_EARLY, "stream": FIRST_STREAM}.get(case, FIRST_TOOL))
+        first = {"early": FIRST_EARLY, "stream": FIRST_STREAM}.get(case, FIRST_TOOL)
+        t.type(first)
         t.keys("Enter")
+        # An Enter that lands while Claude is still starting (its status line
+        # not drawn yet) is dropped and the prompt stays in the box; the key
+        # would then send both prompts as one (2026-11-24, 2.1.330 and 2.1.331).
+        for attempt in range(3):
+            time.sleep(1.5)
+            if not box_holds(t.plain(), first):
+                break
+            log.append(f"first Enter dropped, pressed again ({attempt + 1})")
+            t.keys("Enter")
         if case == "early":
             time.sleep(2.0)
         elif case == "stream":

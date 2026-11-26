@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
-import { commandArgsInline, commandLabel, commandRuns, slashCommand, transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { commandArgsInline, commandLabel, commandRuns, readableCommandLabel, slashCommand, transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { BRAND } from "../../lib/brand";
 
 const prompt = (text: string, at?: string): TranscriptEntry => ({ kind: "prompt", text, at });
@@ -112,6 +112,20 @@ describe("slashCommand", () => {
     // A day chip between two commands keeps them apart.
     expect(commandRuns(turns, new Set([1])).folded.has(0)).toBe(false);
     expect([...commandRuns(turns, new Set([1])).folded]).toEqual([1]);
+  });
+  it("draws a repeated model pick and an effort as one rule, as both chats label it", () => {
+    const names = { model: "Model", effort: "Effort" };
+    const turns = transcriptTurns([
+      { kind: "prompt", text: "/model", setting: "Fable 5.2", at: "1" },
+      { kind: "prompt", text: "/model", setting: "Fable 5.2", at: "2" },
+      { kind: "prompt", text: "/effort high", setting: "high", at: "3" },
+      { kind: "prompt", text: "/clear", at: "4" },
+    ]);
+    const label = (command: Parameters<typeof readableCommandLabel>[0]) => readableCommandLabel(command, names);
+    const runs = commandRuns(turns, new Set(), label);
+    expect([...runs.folded]).toEqual([0, 1]);
+    expect(`${runs.lead.get(2)} · ${label(turns[2].command!)}`).toBe("Model: Fable 5.2 · Effort: high");
+    expect(label(turns[3].command!)).toBe("clear");
   });
   it("shows only the final model choice among consecutive settings", () => {
     const turns = transcriptTurns([

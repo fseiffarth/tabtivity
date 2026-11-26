@@ -80,7 +80,7 @@ export interface MailAccount {
 
 /**
  * The per-account Mail AI (local) feature toggles — all opt-in, all **default
- * off/absent**. Per account rather than in `Settings`, because whether a mailbox
+ * off/absent**, except `autocomplete` (absent ⇒ on). Per account rather than in `Settings`, because whether a mailbox
  * wants summaries, auto-filing and extraction is a per-mailbox decision. The one
  * thing that stays global is the master switch `Settings.mail_ai_allow`.
  */
@@ -92,6 +92,10 @@ export interface MailAiPrefs {
   autoclassify?: boolean;
   /** Offer the composer's "Draft from notes" control. */
   formalize?: boolean;
+  /** Ghost-text completion in the composer and the phone's reply box. Absent ⇒ on
+   *  (the one Mail AI toggle that defaults on; it still needs the global switch and
+   *  a resolvable Mail model). Only `false` turns it off. */
+  autocomplete?: boolean;
   /** Offer "Add to calendar" extraction on a message. */
   calendar?: boolean;
   /** Offer "Add to-do" extraction on a message. */
@@ -761,4 +765,20 @@ export interface MailContactsImportReport {
   skipped: number;
   /** Mailing lists added or extended (Thunderbird imports only). */
   lists: number;
+}
+
+/** How a mail-composer completion request ended (`mail_ai_complete{,_warm}`,
+ *  `services::mail_complete::Status`). Every failure is a status, never an error. */
+export type MailCompleteStatus =
+  | "ok" | "warmed" | "skipped" | "busy" | "off" | "locked"
+  | "no_model" | "refused" | "not_running" | "unavailable";
+
+/** The backend's answer: `text` is what to append to the draft (one inert line,
+ *  ≤ 100 chars, opened by one space where a new word starts), `null` except with
+ *  `ok`. `reason` is English, never rendered. */
+export interface MailCompleteAnswer {
+  status: MailCompleteStatus;
+  text: string | null;
+  model?: string;
+  reason?: string;
 }

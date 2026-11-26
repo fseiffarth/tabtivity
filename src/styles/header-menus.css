@@ -2085,6 +2085,8 @@ html[data-header-drag] * {
 .vpn-indicator-glyph.connected { color: var(--success); }
 .mobile-indicator-icon.connecting,
 .vpn-indicator-glyph.connecting,
+/* A tunnel that died on its own, until the menu has been opened. */
+.vpn-indicator-glyph.ended,
 .dev-build-icon.active { color: var(--warning); }
 .mobile-indicator-icon.error,
 .dev-build-icon.error { color: var(--danger); }
@@ -2446,6 +2448,11 @@ html[data-header-drag] * {
   font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-secondary);
+}
+/* Why the tunnel is gone: OpenVPN's own last line can be one long token. */
+.vpn-indicator-ended {
+  color: var(--warning);
+  overflow-wrap: anywhere;
 }
 .vpn-indicator-empty,
 .vpn-indicator-error {

@@ -2,9 +2,12 @@
 //! for the phone's Focus view.
 //!
 //! OpenCode keeps no transcript file. Every session, message and message part
-//! is a row in one SQLite database (`session`, `message`, `part`, each row's
-//! body a JSON `data` column), shared by every OpenCode on the machine —
-//! fenced and containerized tabs included, which mount the same directory.
+//! is a row in one SQLite database (OpenCode 2's `session_v2`,
+//! `session_message`, `session_part`, each row's body a JSON `data` column),
+//! shared by every OpenCode on the machine — fenced and containerized tabs
+//! included, which mount the same directory. OpenCode 1.x is not supported: its
+//! `session`/`message`/`part` tables, which a store OpenCode 2 migrated still
+//! holds as a copy, are never read, and a store without `session_v2` is none.
 //!
 //! Which session is a tab's own is recorded by Tabtivity's OpenCode plugin
 //! (`services::opencode_session`): the session its OpenCode last took a
@@ -21,19 +24,20 @@
 //! conversation is read by the handle on that entry, looked up only among the
 //! tab's session's descendants.
 //!
-//! What is read is the conversation only: the user's typed text parts (not
-//! the `synthetic` ones OpenCode writes for itself, such as a file's content
-//! or its auto-continue nudge) and the assistant's text parts, each finished
-//! part one bubble. Reasoning, tool calls, patches and compaction summaries
+//! What is read is the conversation only: the user's messages (not the
+//! `synthetic` ones OpenCode writes for itself, such as a file's content or its
+//! auto-continue nudge) and the text parts of the assistant's finished
+//! messages, each part one bubble. Reasoning, tool calls and compaction records
 //! are stepped over — save the completed edit tool parts, which
-//! [`session_changes`] reads for the desktop Reader's Changes panel. A part still streaming is left out until it is finished,
-//! so a bubble never changes once shown.
+//! [`session_changes`] reads for the desktop Reader's Changes panel. A message
+//! still streaming is left out until it is finished, so a bubble never changes
+//! once shown.
 //!
 //! The Reader's Resume menu lists a folder's top-level sessions by their first
 //! prompt ([`folder_chats`]); a picked one is read as the `own` session is.
 //!
-//! The database also holds OpenCode's account tokens. Only the `session`,
-//! `message` and `part` tables are ever queried, and the file is opened
+//! The database also holds OpenCode's account tokens. Only the session and
+//! message tables are ever queried, and the file is opened
 //! strictly read-only: OpenCode is writing it while it is read. A missing
 //! file or a schema that moved answers `None` — no session — never an error.
 
@@ -43,7 +47,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::services::agent_chats::FolderChat;
-use crate::services::agent_changes::{opencode_part_changes, opencode_v2_tool_changes, AgentChanges};
+use crate::services::agent_changes::{opencode_v2_tool_changes, AgentChanges};
 use crate::services::agent_transcript::{
     agent_entry, agents_unlisted, insert_by_time, prompt_cut_off, running_agents, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
 };
@@ -58,46 +62,28 @@ const CHANGE_TAIL: i64 = 2000;
 /// Components of the store below its home (`.local/share/opencode/opencode.db`).
 const DB_DEPTH: usize = 4;
 /// The names read from the store; each must be a table, never a view.
-const STORE_TABLES: &[&str] = &["session", "session_v2", "session_message", "session_part", "message", "part"];
+const STORE_TABLES: &[&str] = &["session_v2", "session_message", "session_part"];
 
 fn table_exists(conn: &Connection, table: &str) -> bool {
     conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(()))
         .is_ok()
 }
 
-/// V2 keeps sessions in `session_v2` and complete messages in
-/// `session_message`. A connection-local view lets the session ownership and
-/// subagent queries serve both formats without changing the vendor database.
+/// The store, with `session` a connection-local view of `session_v2` — over
+/// the 1.x `session` table a migrated store still has, which it hides — so the
+/// queries below read as plainly as the vendor's own. `None` without
+/// `session_v2`: a store only OpenCode 1.x wrote.
 fn open_store(db: &Path) -> Option<Connection> {
     let conn = crate::services::agent_sqlite::open_below(db, DB_DEPTH, STORE_TABLES)?;
-    if table_exists(&conn, "session_v2") {
-        let mut sql = String::from(
-            "CREATE TEMP VIEW session AS SELECT id, parent_id, directory, time_created,
-             time_updated, time_archived, title, agent FROM main.session_v2",
-        );
-        if table_exists(&conn, "session") {
-            // Earlier V1 schemas have neither title nor agent. Those are
-            // optional Reader labels; keep their conversations readable too.
-            let has = |name: &str| conn.prepare("SELECT name FROM pragma_table_info('session')")
-                .ok().and_then(|mut stmt| stmt.query_map([], |r| r.get::<_, String>(0)).ok()
-                    .map(|rows| rows.filter_map(Result::ok).any(|column| column == name))).unwrap_or(false);
-            let title = if has("title") { "title" } else { "NULL" };
-            let agent = if has("agent") { "agent" } else { "NULL" };
-            sql.push_str(&format!(
-                " UNION ALL SELECT id, parent_id, directory, time_created, time_updated,
-                 time_archived, {title}, {agent} FROM main.session
-                 WHERE id NOT IN (SELECT id FROM main.session_v2)"
-            ));
-        }
-        conn.execute_batch(&sql).ok()?;
+    if !table_exists(&conn, "session_v2") {
+        return None;
     }
+    conn.execute_batch(
+        "CREATE TEMP VIEW session AS SELECT id, parent_id, directory, time_created,
+         time_updated, time_archived, title, agent FROM main.session_v2",
+    )
+    .ok()?;
     Some(conn)
-}
-
-fn v2_session(conn: &Connection, session: &str) -> bool {
-    table_exists(conn, "session_v2") && conn.query_row(
-        "SELECT 1 FROM session_v2 WHERE id = ?1", [session], |_| Ok(()),
-    ).is_ok()
 }
 
 /// The scope's OpenCode database: `.local/share/opencode/opencode.db` of its
@@ -159,6 +145,25 @@ pub fn session_transcript(
     version: Option<&str>,
     limit: usize,
 ) -> Option<AgentTranscript> {
+    session_transcript_with(db, directory, since, own, subagent, version, limit, false)
+}
+
+/// [`session_transcript`], with each finished `reasoning` part as a
+/// `thinking` entry when `thinking` is set — the desktop Chat of a
+/// local-model tab, where the model's reasoning is the user's own machine
+/// talking. Its fingerprint differs from a read without, so a version seen
+/// by one never answers `unchanged` to the other.
+#[allow(clippy::too_many_arguments)]
+pub fn session_transcript_with(
+    db: &Path,
+    directory: &str,
+    since: Option<i64>,
+    own: Option<&str>,
+    subagent: Option<&str>,
+    version: Option<&str>,
+    limit: usize,
+    thinking: bool,
+) -> Option<AgentTranscript> {
     let conn = open_store(db)?;
     let session = match tab_session(&conn, directory, since, own, subagent)? {
         TabSession::Id(id) => id,
@@ -171,7 +176,10 @@ pub fn session_transcript(
             })
         }
     };
-    let current = fingerprint(&conn, &session)?;
+    let mut current = fingerprint(&conn, &session)?;
+    if thinking {
+        current.push_str(":thinking");
+    }
     if version == Some(current.as_str()) {
         return Some(AgentTranscript {
             available: true,
@@ -180,7 +188,7 @@ pub fn session_transcript(
             ..Default::default()
         });
     }
-    let (mut entries, mut truncated) = read_entries(&conn, &session)?;
+    let (mut entries, mut truncated) = read_entries(&conn, &session, thinking)?;
     let children = children(&conn, &session);
     let spawned: Vec<String> = children.iter().filter_map(|entry| entry.subagent.clone()).collect();
     insert_by_time(&mut entries, children, truncated);
@@ -209,6 +217,7 @@ pub fn session_transcript(
         tokens: None,
         shells: Vec::new(),
         waiting_tools: Vec::new(),
+        shells_run: Vec::new(),
         context_card: None,
         cwd: None,
         running_cwds: Vec::new(),
@@ -365,55 +374,24 @@ pub fn folder_chats(
 fn session_prompts(conn: &Connection, session: &str) -> (Option<(String, i64)>, Option<String>) {
     let prompt = |newest: bool| -> Option<(String, i64)> {
         let order = if newest { "DESC" } else { "ASC" };
-        let (text, at) = if v2_session(conn, session) {
-            // 2.1.3 keeps the kind in the row's `type` column, earlier V2 in `data`.
-            let kind = if has_column(conn, "session_message", "type") {
-                "coalesce(type, json_extract(data, '$.type'))"
-            } else {
-                "json_extract(data, '$.type')"
-            };
-            let (at, data): (i64, String) = conn
-                .query_row(
-                    &format!(
-                        "SELECT time_created, data FROM session_message
-                          WHERE session_id = ?1 AND {kind} = 'user' ORDER BY seq {order} LIMIT 1"
-                    ),
-                    [session],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()?;
-            let message: Value = serde_json::from_str(&data).ok()?;
-            (message.get("text").and_then(Value::as_str)?.to_string(), at)
+        // 2.1.3 keeps the kind in the row's `type` column, earlier 2.x in `data`.
+        let kind = if has_column(conn, "session_message", "type") {
+            "coalesce(type, json_extract(data, '$.type'))"
         } else {
-            let (id, at): (String, i64) = conn
-                .query_row(
-                    &format!(
-                        "SELECT id, time_created FROM message
-                          WHERE session_id = ?1 AND json_extract(data, '$.role') = 'user'
-                          ORDER BY time_created {order}, id {order} LIMIT 1"
-                    ),
-                    [session],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok()?;
-            let mut stmt = conn
-                .prepare(
-                    "SELECT data FROM part
-                      WHERE message_id = ?1 AND json_extract(data, '$.type') = 'text'
-                      ORDER BY time_created, id",
-                )
-                .ok()?;
-            let text = stmt
-                .query_map([&id], |row| row.get::<_, String>(0))
-                .ok()?
-                .filter_map(Result::ok)
-                .filter_map(|data| serde_json::from_str::<Value>(&data).ok())
-                .filter(is_written)
-                .filter_map(|part| part_text(&part).map(str::to_string))
-                .collect::<Vec<_>>()
-                .join("\n");
-            (text, at)
+            "json_extract(data, '$.type')"
         };
+        let (at, data): (i64, String) = conn
+            .query_row(
+                &format!(
+                    "SELECT time_created, data FROM session_message
+                      WHERE session_id = ?1 AND {kind} = 'user' ORDER BY seq {order} LIMIT 1"
+                ),
+                [session],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok()?;
+        let message: Value = serde_json::from_str(&data).ok()?;
+        let text = message.get("text").and_then(Value::as_str)?.to_string();
         (!text.trim().is_empty()).then_some((text, at))
     };
     let first = prompt(false);
@@ -460,38 +438,12 @@ pub fn session_changes(
             ..Default::default()
         });
     }
-    // Edit tool parts only, filtered in SQL: the others carry whole file
-    // reads and command outputs.
-    if v2_session(&conn, &session) {
-        let (messages, truncated) = v2_messages(&conn, &session, CHANGE_TAIL)?;
-        let changes = messages.iter().flat_map(|(at, message)| {
-            message.get("content").and_then(Value::as_array).into_iter().flatten()
-                .filter(|part| part["type"] == "tool")
-                .flat_map(move |part| opencode_v2_tool_changes(*at, part))
-        }).collect();
-        return Some(AgentChanges::read(current, changes, truncated, limit));
-    }
-    let mut stmt = conn
-        .prepare(
-            "SELECT time_created, data FROM part
-              WHERE session_id = ?1 AND json_extract(data, '$.type') = 'tool'
-                AND json_extract(data, '$.tool') IN ('edit', 'multiedit', 'write', 'apply_patch')
-              ORDER BY time_created DESC, id DESC LIMIT ?2",
-        )
-        .ok()?;
-    let mut rows: Vec<(i64, String)> = stmt
-        .query_map(rusqlite::params![session, CHANGE_TAIL + 1], |row| Ok((row.get(0)?, row.get(1)?)))
-        .ok()?
-        .filter_map(Result::ok)
-        .collect();
-    let truncated = rows.len() as i64 > CHANGE_TAIL;
-    rows.truncate(CHANGE_TAIL as usize);
-    rows.reverse();
-    let changes = rows
-        .iter()
-        .filter_map(|(created, data)| Some((*created, serde_json::from_str::<Value>(data).ok()?)))
-        .flat_map(|(created, part)| opencode_part_changes(created, &part))
-        .collect();
+    let (messages, truncated) = v2_messages(&conn, &session, CHANGE_TAIL)?;
+    let changes = messages.iter().flat_map(|(at, message)| {
+        message.get("content").and_then(Value::as_array).into_iter().flatten()
+            .filter(|part| part["type"] == "tool")
+            .flat_map(move |part| opencode_v2_tool_changes(*at, part))
+    }).collect();
     Some(AgentChanges::read(current, changes, truncated, limit))
 }
 
@@ -553,101 +505,29 @@ fn descendants(conn: &Connection, session: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Moves whenever the session gains a message or a part, or a part is updated
+/// Moves whenever the session gains a message or a part, or either is updated
 /// (a streaming answer, a finished one) — two indexed aggregates, no bodies.
 fn fingerprint(conn: &Connection, session: &str) -> Option<String> {
-    if v2_session(conn, session) {
-        let (count, updated): (i64, Option<i64>) = conn.query_row(
-            "SELECT count(*), max(time_updated) FROM session_message WHERE session_id = ?1",
+    let (count, updated): (i64, Option<i64>) = conn.query_row(
+        "SELECT count(*), max(time_updated) FROM session_message WHERE session_id = ?1",
+        [session], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).ok()?;
+    let (parts, part_at): (i64, Option<i64>) = if table_exists(conn, "session_part") {
+        conn.query_row(
+            "SELECT count(*), max(time_updated) FROM session_part WHERE session_id = ?1",
             [session], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).ok()?;
-        let (parts, part_at): (i64, Option<i64>) = if table_exists(conn, "session_part") {
-            conn.query_row(
-                "SELECT count(*), max(time_updated) FROM session_part WHERE session_id = ?1",
-                [session], |row| Ok((row.get(0)?, row.get(1)?)),
-            ).ok()?
-        } else {
-            (0, None)
-        };
-        return Some(format!("oc2:{session}:{count}:{}:{parts}:{}", updated.unwrap_or(0), part_at.unwrap_or(0)));
-    }
-    let (messages, message_at): (i64, Option<i64>) = conn
-        .query_row(
-            "SELECT count(*), max(time_updated) FROM message WHERE session_id = ?1",
-            [session],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .ok()?;
-    let (parts, part_at): (i64, Option<i64>) = conn
-        .query_row(
-            "SELECT count(*), max(time_updated) FROM part WHERE session_id = ?1",
-            [session],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .ok()?;
-    Some(format!(
-        "oc:{session}:{messages}:{}:{parts}:{}",
-        message_at.unwrap_or(0),
-        part_at.unwrap_or(0)
-    ))
+        ).ok()?
+    } else {
+        (0, None)
+    };
+    Some(format!("oc2:{session}:{count}:{}:{parts}:{}", updated.unwrap_or(0), part_at.unwrap_or(0)))
 }
 
 /// The session's newest [`MESSAGE_TAIL`] messages as turns, oldest first, and
-/// whether older messages exist beyond them.
-fn read_entries(conn: &Connection, session: &str) -> Option<(Vec<TranscriptEntry>, bool)> {
-    if v2_session(conn, session) {
-        let (messages, truncated) = v2_messages(conn, session, MESSAGE_TAIL)?;
-        let entries = messages.iter().flat_map(|(created, message)| v2_message_entries(message, *created)).collect();
-        return Some((entries, truncated));
-    }
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, time_created, data FROM message WHERE session_id = ?1
-              ORDER BY time_created DESC, id DESC LIMIT ?2",
-        )
-        .ok()?;
-    let mut messages: Vec<(String, i64, String)> = stmt
-        .query_map(rusqlite::params![session, MESSAGE_TAIL + 1], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })
-        .ok()?
-        .filter_map(Result::ok)
-        .collect();
-    let truncated = messages.len() as i64 > MESSAGE_TAIL;
-    messages.truncate(MESSAGE_TAIL as usize);
-    messages.reverse();
-    let Some(oldest) = messages.first().map(|(_, at, _)| *at) else {
-        return Some((Vec::new(), truncated));
-    };
-    // Text parts only, filtered in SQL: a session's tool parts carry whole
-    // file reads and command outputs this never shows.
-    let mut stmt = conn
-        .prepare(
-            "SELECT message_id, time_created, data FROM part
-              WHERE session_id = ?1 AND time_created >= ?2
-                AND json_extract(data, '$.type') = 'text'
-              ORDER BY time_created, id",
-        )
-        .ok()?;
-    let mut parts: std::collections::HashMap<String, Vec<(i64, Value)>> = Default::default();
-    for row in stmt
-        .query_map(rusqlite::params![session, oldest], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
-        })
-        .ok()?
-        .filter_map(Result::ok)
-    {
-        if let Ok(data) = serde_json::from_str::<Value>(&row.2) {
-            parts.entry(row.0).or_default().push((row.1, data));
-        }
-    }
-    let mut entries = Vec::new();
-    for (id, created, data) in &messages {
-        let Ok(message) = serde_json::from_str::<Value>(data) else {
-            continue;
-        };
-        entries.extend(message_entries(&message, *created, parts.get(id).map(Vec::as_slice).unwrap_or(&[])));
-    }
+/// whether older messages exist beyond them. `thinking`: reasoning parts too.
+fn read_entries(conn: &Connection, session: &str, thinking: bool) -> Option<(Vec<TranscriptEntry>, bool)> {
+    let (messages, truncated) = v2_messages(conn, session, MESSAGE_TAIL)?;
+    let entries = messages.iter().flat_map(|(created, message)| v2_message_entries(message, *created, thinking)).collect();
     Some((entries, truncated))
 }
 
@@ -692,16 +572,18 @@ fn v2_messages(conn: &Connection, session: &str, tail: i64) -> Option<(Vec<(i64,
     Some((messages, truncated))
 }
 
-fn v2_message_entries(message: &Value, created: i64) -> Vec<TranscriptEntry> {
+fn v2_message_entries(message: &Value, created: i64, thinking: bool) -> Vec<TranscriptEntry> {
     match message["type"].as_str() {
         Some("user") => transcript_entry("prompt", message["text"].as_str().unwrap_or_default(), Some(epoch_ms_to_iso(created)))
             .into_iter().collect(),
         Some("assistant") if message.pointer("/time/completed").is_some_and(|t| !t.is_null()) => {
             let mut entries: Vec<_> = message["content"].as_array().into_iter().flatten()
-                .filter(|part| part["type"] == "text")
-                .filter_map(|part| transcript_entry("answer", part["text"].as_str()?, Some(epoch_ms_to_iso(created))))
+                .filter_map(|part| {
+                    let role = part_role(part, thinking)?;
+                    transcript_entry(role, part["text"].as_str()?, Some(epoch_ms_to_iso(created)))
+                })
                 .collect();
-            // V2 errors use a tagged public schema instead of V1's envelope.
+            // Why the turn ended early (a usage limit, a rejected key).
             if let Some(text) = message.pointer("/error/message").and_then(Value::as_str) {
                 entries.extend(transcript_entry("answer", text, Some(epoch_ms_to_iso(created))));
             }
@@ -711,71 +593,14 @@ fn v2_message_entries(message: &Value, created: i64) -> Vec<TranscriptEntry> {
     }
 }
 
-/// A part the user or the model actually wrote — not one OpenCode generated
-/// (`synthetic`) or set aside (`ignored`).
-fn is_written(part: &Value) -> bool {
-    let flagged = |key: &str| part.get(key).and_then(Value::as_bool) == Some(true);
-    !flagged("synthetic") && !flagged("ignored")
-}
-
-fn part_text(part: &Value) -> Option<&str> {
-    part.get("text").and_then(Value::as_str)
-}
-
-/// The turns one message contributes: a user message is one prompt (its text
-/// parts joined); an assistant message is one answer per finished text part.
-/// A compaction summary is OpenCode's note to itself, not an answer.
-fn message_entries(message: &Value, created: i64, parts: &[(i64, Value)]) -> Vec<TranscriptEntry> {
-    match message.get("role").and_then(Value::as_str) {
-        Some("user") => {
-            let text = parts
-                .iter()
-                .map(|(_, part)| part)
-                .filter(|part| is_written(part))
-                .filter_map(part_text)
-                .collect::<Vec<_>>()
-                .join("\n");
-            transcript_entry("prompt", &text, Some(epoch_ms_to_iso(created)))
-                .into_iter()
-                .collect()
-        }
-        Some("assistant") => {
-            if message.get("summary").and_then(Value::as_bool) == Some(true) {
-                return Vec::new();
-            }
-            let completed = message.pointer("/time/completed").is_some_and(|t| !t.is_null());
-            let failure = message_error(message).and_then(|text| {
-                let at = message.pointer("/time/completed").and_then(Value::as_i64).unwrap_or(created);
-                transcript_entry("answer", &text, Some(epoch_ms_to_iso(at)))
-            });
-            parts
-                .iter()
-                .filter(|(_, part)| is_written(part))
-                .filter(|(_, part)| completed || part.pointer("/time/end").is_some_and(|t| !t.is_null()))
-                .filter_map(|(part_created, part)| {
-                    let at = part
-                        .pointer("/time/start")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(*part_created);
-                    transcript_entry("answer", part_text(part)?, Some(epoch_ms_to_iso(at)))
-                })
-                .chain(failure)
-                .collect()
-        }
-        _ => Vec::new(),
+/// The entry kind an assistant part is shown as: a text part an `answer`, a
+/// reasoning part `thinking` when the read asks for it; anything else none.
+fn part_role(part: &Value, thinking: bool) -> Option<&'static str> {
+    match part.get("type").and_then(Value::as_str)? {
+        "text" => Some("answer"),
+        "reasoning" if thinking => Some("thinking"),
+        _ => None,
     }
-}
-
-/// Why OpenCode ended an assistant message early (`error.data.message`: a
-/// provider's usage limit, a rejected key, …), shown as the last answer of
-/// that turn. A turn the user stopped (`MessageAbortedError`) is not one.
-fn message_error(message: &Value) -> Option<String> {
-    let error = message.get("error").filter(|e| e.is_object())?;
-    if error.get("name").and_then(Value::as_str) == Some("MessageAbortedError") {
-        return None;
-    }
-    let text = error.pointer("/data/message")?.as_str()?.trim();
-    (!text.is_empty()).then(|| text.to_string())
 }
 
 #[cfg(test)]
@@ -792,8 +617,9 @@ mod tests {
         dir
     }
 
-    /// A store with OpenCode's own table shapes (the columns this reads, plus
-    /// the account table whose presence is why only three tables are read).
+    /// A store with OpenCode 2's own table shapes (the columns this reads, plus
+    /// the account table whose presence is why only the session and message
+    /// tables are read).
     fn store() -> (PathBuf, Connection) {
         let dir = unique_tmp(concat!(crate::app_slug!(), "-opencode-store"));
         let db = dir.join("opencode.db");
@@ -801,12 +627,10 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE account (id TEXT PRIMARY KEY, access_token TEXT NOT NULL);
              INSERT INTO account VALUES ('a', 'secret-token');
-             CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL,
-               time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER);
-             CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-               time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
-             CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
-               time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);",
+             CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+               time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
+             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+               time_created INTEGER, time_updated INTEGER, data TEXT);",
         )
         .unwrap();
         (db, conn)
@@ -814,26 +638,28 @@ mod tests {
 
     fn session(conn: &Connection, id: &str, parent: Option<&str>, dir: &str, updated: i64, archived: Option<i64>) {
         conn.execute(
-            "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+            "INSERT INTO session_v2 VALUES (?1, ?2, ?3, ?4, ?4, ?5, NULL, NULL)",
             rusqlite::params![id, parent, dir, updated, archived],
         )
         .unwrap();
     }
 
-    fn message(conn: &Connection, id: &str, session: &str, at: i64, data: Value) {
+    /// One `session_message` row, its `seq` the moment `at`.
+    fn message(conn: &Connection, id: &str, session: &str, at: i64, kind: &str, data: Value) {
         conn.execute(
-            "INSERT INTO message VALUES (?1, ?2, ?3, ?3, ?4)",
-            rusqlite::params![id, session, at, data.to_string()],
+            "INSERT INTO session_message VALUES (?1, ?2, ?3, ?4, ?4, ?4, ?5)",
+            rusqlite::params![id, session, kind, at, data.to_string()],
         )
         .unwrap();
     }
 
-    fn part(conn: &Connection, id: &str, message: &str, session: &str, at: i64, data: Value) {
-        conn.execute(
-            "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
-            rusqlite::params![id, message, session, at, data.to_string()],
-        )
-        .unwrap();
+    fn prompt(conn: &Connection, id: &str, session: &str, at: i64, text: &str) {
+        message(conn, id, session, at, "user", serde_json::json!({ "text": text }));
+    }
+
+    fn answer(conn: &Connection, id: &str, session: &str, at: i64, text: &str) {
+        let content = serde_json::json!([{ "type": "text", "text": text }]);
+        message(conn, id, session, at, "assistant", serde_json::json!({ "content": content, "time": { "completed": at + 1 } }));
     }
 
     fn kinds(t: &AgentTranscript) -> Vec<(&str, &str)> {
@@ -841,18 +667,11 @@ mod tests {
     }
 
     #[test]
-    fn v2_structured_messages_are_read_in_admission_order_beside_legacy_sessions() {
+    fn structured_messages_are_read_in_admission_order() {
         use serde_json::json;
         let (db, conn) = store();
-        session(&conn, "ses_legacy", None, "legacy", 10, None);
-        message(&conn, "msg_old", "ses_legacy", 10, json!({"role":"user"}));
-        part(&conn, "prt_old", "msg_old", "ses_legacy", 10, json!({"type":"text","text":"old question"}));
         conn.execute_batch(
-            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
-               time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
-             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
-               time_created INTEGER, time_updated INTEGER, data TEXT);
-             INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'v2', 20, 30, NULL, 'Test', 'build');
+            "INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'v2', 20, 30, NULL, 'Test', 'build');
              INSERT INTO session_v2 VALUES ('ses_child', 'ses_v2', 'v2', 21, 30, NULL, 'Explore', 'explore');",
         ).unwrap();
         // The kind is the row's `type` column; OpenCode 2.1.3 keeps none in `data`.
@@ -890,11 +709,60 @@ mod tests {
         assert_eq!(changed, [("again.txt", "write"), ("created.txt", "add"), ("file.rs", "edit"), ("lib.rs", "edit"), ("new.rs", "add")]);
         let created = changes.changes.iter().find(|c| c.path == "created.txt").unwrap();
         assert_eq!((created.added, created.diff.as_str()), (2, "@@ -0,0 +1,2 @@\n+one\n+two\n"));
-        let legacy = session_transcript(&db, "legacy", None, Some("ses_legacy"), None, None, 100).unwrap();
-        assert_eq!(kinds(&legacy), [("prompt", "old question")]);
         // Opening the read-only adapter creates no persistent views or tables.
         let views: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'view'", [], |r| r.get(0)).unwrap();
         assert_eq!(views, 0);
+    }
+
+    #[test]
+    fn the_1x_tables_are_never_read() {
+        use serde_json::json;
+        let (db, conn) = store();
+        // What OpenCode 2 leaves of a store it migrated: the 1.x tables beside
+        // its own. A session only they hold is not one.
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL,
+               time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER);
+             CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+               time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+             CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
+               time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+             INSERT INTO session VALUES ('ses_old', NULL, '/p', 900, 900, NULL);",
+        )
+        .unwrap();
+        conn.execute("INSERT INTO message VALUES ('m0', 'ses_old', 900, 900, ?1)", [json!({"role": "user"}).to_string()]).unwrap();
+        conn.execute("INSERT INTO part VALUES ('p0', 'm0', 'ses_old', 900, 900, ?1)", [json!({"type": "text", "text": "1.x prompt"}).to_string()])
+            .unwrap();
+        session(&conn, "ses_new", None, "/p", 100, None);
+        prompt(&conn, "u1", "ses_new", 100, "2.x prompt");
+        let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
+        assert_eq!(kinds(&t), [("prompt", "2.x prompt")]);
+        assert!(!resumable_session(&db, "ses_old"));
+        let (chats, _) = folder_chats(&db, "/p", 0, 10, 10).unwrap();
+        assert_eq!(chats.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["ses_new"]);
+
+        // A store only 1.x wrote is no store.
+        conn.execute_batch("DROP TABLE session_v2; DROP TABLE session_message;").unwrap();
+        assert!(session_transcript(&db, "/p", None, None, None, None, 120).is_none());
+        assert!(!resumable_session(&db, "ses_old"));
+    }
+
+    #[test]
+    fn a_thinking_read_keeps_its_reasoning_content() {
+        use serde_json::json;
+        let (db, conn) = store();
+        session(&conn, "ses_v2", None, "v2", 20, None);
+        prompt(&conn, "msg_1", "ses_v2", 1, "question");
+        message(&conn, "msg_2", "ses_v2", 2, "assistant",
+            json!({"content": [{"type": "reasoning", "text": "pondering"}, {"type": "text", "text": "answer"}], "time": {"completed": 40}}));
+        let plain = session_transcript(&db, "v2", None, Some("ses_v2"), None, None, 100).unwrap();
+        assert_eq!(kinds(&plain), [("prompt", "question"), ("answer", "answer")]);
+        let thinking = session_transcript_with(&db, "v2", None, Some("ses_v2"), None, None, 100, true).unwrap();
+        assert_eq!(kinds(&thinking), [("prompt", "question"), ("thinking", "pondering"), ("answer", "answer")]);
+        // One read's version never passes for the other's.
+        assert_ne!(plain.version, thinking.version);
+        assert!(!session_transcript_with(&db, "v2", None, Some("ses_v2"), None, plain.version.as_deref(), 100, true).unwrap().unchanged);
+        assert!(session_transcript_with(&db, "v2", None, Some("ses_v2"), None, thinking.version.as_deref(), 100, true).unwrap().unchanged);
     }
 
     #[test]
@@ -906,63 +774,27 @@ mod tests {
         session(&conn, "ses_child", Some("ses_new"), dir, 900, None);
         session(&conn, "ses_archived", None, dir, 800, Some(801));
         session(&conn, "ses_elsewhere", None, "/work/other", 950, None);
-        message(&conn, "m0", "ses_old", 10, serde_json::json!({"role": "user", "time": {"created": 10}}));
-        part(&conn, "p0", "m0", "ses_old", 10, serde_json::json!({"type": "text", "text": "old prompt"}));
-
-        message(&conn, "m1", "ses_new", 1_000, serde_json::json!({"role": "user", "time": {"created": 1_000}}));
-        part(&conn, "p1", "m1", "ses_new", 1_000, serde_json::json!({"type": "text", "text": "fix the tests"}));
-        part(&conn, "p2", "m1", "ses_new", 1_001, serde_json::json!({"type": "text", "text": "file body", "synthetic": true}));
-        message(&conn, "m2", "ses_new", 2_000, serde_json::json!({"role": "assistant", "time": {"created": 2_000, "completed": 5_000}}));
-        part(&conn, "p3", "m2", "ses_new", 2_001, serde_json::json!({"type": "step-start"}));
-        part(&conn, "p4", "m2", "ses_new", 2_002, serde_json::json!({"type": "reasoning", "text": "thinking"}));
-        part(&conn, "p5", "m2", "ses_new", 2_003, serde_json::json!({"type": "text", "text": "Let me look.", "time": {"start": 2_003, "end": 2_100}}));
-        part(&conn, "p6", "m2", "ses_new", 2_200, serde_json::json!({"type": "tool", "state": {"output": "huge"}}));
-        part(&conn, "p7", "m2", "ses_new", 3_000, serde_json::json!({"type": "text", "text": "Fixed.", "time": {"start": 3_000, "end": 3_100}}));
+        prompt(&conn, "m0", "ses_old", 10, "old prompt");
+        prompt(&conn, "m1", "ses_new", 1_000, "fix the tests");
+        answer(&conn, "m2", "ses_new", 3_000, "Fixed.");
 
         let t = session_transcript(&db, dir, None, None, None, None, 120).unwrap();
         assert!(t.available);
-        assert_eq!(kinds(&t), vec![("prompt", "fix the tests"), ("answer", "Let me look."), ("answer", "Fixed.")]);
+        assert_eq!(kinds(&t), vec![("prompt", "fix the tests"), ("answer", "Fixed.")]);
         assert_eq!(t.entries[0].at.as_deref(), Some("1970-01-01T00:00:01.000Z"));
-        assert_eq!(t.entries[2].at.as_deref(), Some("1970-01-01T00:00:03.000Z"));
+        assert_eq!(t.entries[1].at.as_deref(), Some("1970-01-01T00:00:03.000Z"));
         assert!(!t.truncated);
     }
 
     #[test]
-    fn a_message_ended_by_an_error_shows_it_after_its_text_unless_the_user_stopped_it() {
+    fn a_message_ended_by_an_error_shows_it_after_its_text() {
         let (db, conn) = store();
         session(&conn, "s", None, "/p", 1, None);
-        message(&conn, "m1", "s", 1_000, serde_json::json!({"role": "user"}));
-        part(&conn, "p1", "m1", "s", 1_000, serde_json::json!({"type": "text", "text": "go"}));
-        message(&conn, "m2", "s", 2_000, serde_json::json!({"role": "assistant", "time": {"created": 2_000, "completed": 2_500},
-            "error": {"name": "APIError", "data": {"message": "Usage limit reached. Try again at 3:20 PM.", "statusCode": 429}}}));
-        message(&conn, "m3", "s", 3_000, serde_json::json!({"role": "assistant", "time": {"created": 3_000, "completed": 3_100},
-            "error": {"name": "MessageAbortedError", "data": {"message": "The operation was aborted."}}}));
+        prompt(&conn, "m1", "s", 1_000, "go");
+        message(&conn, "m2", "s", 2_000, "assistant", serde_json::json!({"content": [], "time": {"completed": 2_500},
+            "error": {"type": "provider.error", "message": "Usage limit reached. Try again at 3:20 PM."}}));
         let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
         assert_eq!(kinds(&t), vec![("prompt", "go"), ("answer", "Usage limit reached. Try again at 3:20 PM.")]);
-    }
-
-    #[test]
-    fn a_streaming_answer_waits_until_its_part_is_finished() {
-        let (db, conn) = store();
-        session(&conn, "s", None, "/p", 1, None);
-        message(&conn, "m1", "s", 1_000, serde_json::json!({"role": "assistant", "time": {"created": 1_000}}));
-        part(&conn, "p1", "m1", "s", 1_001, serde_json::json!({"type": "text", "text": "Done part.", "time": {"start": 1_001, "end": 1_050}}));
-        part(&conn, "p2", "m1", "s", 1_100, serde_json::json!({"type": "text", "text": "Still wri", "time": {"start": 1_100}}));
-        let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
-        assert_eq!(kinds(&t), vec![("answer", "Done part.")]);
-    }
-
-    #[test]
-    fn compaction_summaries_and_empty_messages_are_not_turns() {
-        let (db, conn) = store();
-        session(&conn, "s", None, "/p", 1, None);
-        message(&conn, "m1", "s", 1_000, serde_json::json!({"role": "user"}));
-        part(&conn, "p1", "m1", "s", 1_000, serde_json::json!({"type": "compaction"}));
-        message(&conn, "m2", "s", 2_000, serde_json::json!({"role": "assistant", "summary": true, "time": {"completed": 3}}));
-        part(&conn, "p2", "m2", "s", 2_001, serde_json::json!({"type": "text", "text": "Summary of everything", "time": {"start": 1, "end": 2}}));
-        let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
-        assert!(t.available);
-        assert!(t.entries.is_empty());
     }
 
     #[test]
@@ -986,13 +818,11 @@ mod tests {
     fn a_fresh_tab_reads_only_sessions_created_since_its_launch() {
         let (db, conn) = store();
         session(&conn, "ses_before", None, "/p", 100, None);
-        message(&conn, "m0", "ses_before", 100, serde_json::json!({"role": "user"}));
-        part(&conn, "p0", "m0", "ses_before", 100, serde_json::json!({"type": "text", "text": "yesterday's chat"}));
+        prompt(&conn, "m0", "ses_before", 100, "yesterday's chat");
         let fresh = session_transcript(&db, "/p", Some(500), None, None, None, 120).unwrap();
         assert!(fresh.available && fresh.entries.is_empty());
         session(&conn, "ses_mine", None, "/p", 600, None);
-        message(&conn, "m1", "ses_mine", 600, serde_json::json!({"role": "user"}));
-        part(&conn, "p1", "m1", "ses_mine", 600, serde_json::json!({"type": "text", "text": "new question"}));
+        prompt(&conn, "m1", "ses_mine", 600, "new question");
         let mine = session_transcript(&db, "/p", Some(500), None, None, fresh.version.as_deref(), 120).unwrap();
         assert_eq!(kinds(&mine), vec![("prompt", "new question")]);
     }
@@ -1004,10 +834,8 @@ mod tests {
         session(&conn, "ses_sibling", None, "/p", 900, None);
         session(&conn, "ses_kid", Some("ses_mine"), "/p", 950, None);
         session(&conn, "ses_shelved", None, "/p", 50, Some(60));
-        for (m, s, text) in [("m1", "ses_mine", "my prompt"), ("m2", "ses_sibling", "their prompt")] {
-            message(&conn, m, s, 100, serde_json::json!({"role": "user"}));
-            part(&conn, &format!("{m}p"), m, s, 100, serde_json::json!({"type": "text", "text": text}));
-        }
+        prompt(&conn, "m1", "ses_mine", 100, "my prompt");
+        prompt(&conn, "m2", "ses_sibling", 100, "their prompt");
         let mine = session_transcript(&db, "/p", None, Some("ses_mine"), None, None, 120).unwrap();
         assert_eq!(kinds(&mine), vec![("prompt", "my prompt")]);
         // A record naming a child, an archived or a vanished session falls
@@ -1022,18 +850,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unchanged_session_answers_unchanged_and_a_new_part_moves_the_version() {
+    fn an_unchanged_session_answers_unchanged_and_a_new_message_moves_the_version() {
         let (db, conn) = store();
         session(&conn, "s", None, "/p", 1, None);
-        message(&conn, "m1", "s", 1_000, serde_json::json!({"role": "user"}));
-        part(&conn, "p1", "m1", "s", 1_000, serde_json::json!({"type": "text", "text": "hi"}));
+        prompt(&conn, "m1", "s", 1_000, "hi");
         let first = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
         let again = session_transcript(&db, "/p", None, None, None, first.version.as_deref(), 120).unwrap();
         assert!(again.unchanged && again.entries.is_empty());
-        part(&conn, "p2", "m1", "s", 1_500, serde_json::json!({"type": "text", "text": "more"}));
+        answer(&conn, "m2", "s", 1_500, "hello");
         let moved = session_transcript(&db, "/p", None, None, None, first.version.as_deref(), 120).unwrap();
         assert!(!moved.unchanged);
-        assert_eq!(kinds(&moved), vec![("prompt", "hi\nmore")]);
+        assert_eq!(kinds(&moved), vec![("prompt", "hi"), ("answer", "hello")]);
     }
 
     #[test]
@@ -1041,9 +868,7 @@ mod tests {
         let (db, conn) = store();
         session(&conn, "s", None, "/p", 1, None);
         for i in 0..5i64 {
-            let (m, p) = (format!("m{i}"), format!("p{i}"));
-            message(&conn, &m, "s", 1_000 * (i + 1), serde_json::json!({"role": "user"}));
-            part(&conn, &p, &m, "s", 1_000 * (i + 1), serde_json::json!({"type": "text", "text": format!("prompt {i}")}));
+            prompt(&conn, &format!("m{i}"), "s", 1_000 * (i + 1), &format!("prompt {i}"));
         }
         let t = session_transcript(&db, "/p", None, None, None, None, 2).unwrap();
         assert_eq!(kinds(&t), vec![("prompt", "prompt 3"), ("prompt", "prompt 4")]);
@@ -1058,16 +883,11 @@ mod tests {
         session(&conn, "grandkid", Some("kid"), "/p", 170, None);
         session(&conn, "other", None, "/q", 90, None);
         session(&conn, "strangers-kid", Some("other"), "/q", 95, None);
-        conn.execute_batch("ALTER TABLE session ADD COLUMN title TEXT; ALTER TABLE session ADD COLUMN agent TEXT;").unwrap();
-        conn.execute("UPDATE session SET title = 'Explore the repo (@explore subagent)', agent = 'explore' WHERE id = 'kid'", []).unwrap();
-        message(&conn, "m1", "root", 110, serde_json::json!({"role": "user"}));
-        part(&conn, "p1", "m1", "root", 110, serde_json::json!({"type": "text", "text": "map it"}));
-        message(&conn, "m2", "root", 200, serde_json::json!({"role": "assistant", "time": {"completed": 210}}));
-        part(&conn, "p2", "m2", "root", 200, serde_json::json!({"type": "text", "text": "Mapped.", "time": {"start": 200, "end": 210}}));
-        message(&conn, "k1", "kid", 151, serde_json::json!({"role": "user"}));
-        part(&conn, "kp1", "k1", "kid", 151, serde_json::json!({"type": "text", "text": "look at src"}));
-        message(&conn, "k2", "kid", 160, serde_json::json!({"role": "assistant", "time": {"completed": 165}}));
-        part(&conn, "kp2", "k2", "kid", 160, serde_json::json!({"type": "text", "text": "src holds the app.", "time": {"start": 160, "end": 165}}));
+        conn.execute("UPDATE session_v2 SET title = 'Explore the repo (@explore subagent)', agent = 'explore' WHERE id = 'kid'", []).unwrap();
+        prompt(&conn, "m1", "root", 110, "map it");
+        answer(&conn, "m2", "root", 200, "Mapped.");
+        prompt(&conn, "k1", "kid", 151, "look at src");
+        answer(&conn, "k2", "kid", 160, "src holds the app.");
 
         let t = session_transcript(&db, "/p", None, None, None, None, 120).unwrap();
         assert_eq!(kinds(&t), vec![("prompt", "map it"), ("agent", "Explore the repo"), ("answer", "Mapped.")]);
@@ -1094,15 +914,12 @@ mod tests {
         use serde_json::json;
         let (db, conn) = store();
         session(&conn, "ses_old", None, "dir", 10, None);
-        message(&conn, "msg_a", "ses_old", 10, json!({"role":"user"}));
-        part(&conn, "prt_a", "msg_a", "ses_old", 10, json!({"type":"text","text":"first ask"}));
-        part(&conn, "prt_s", "msg_a", "ses_old", 10, json!({"type":"text","text":"file body","synthetic":true}));
-        message(&conn, "msg_b", "ses_old", 11, json!({"role":"assistant"}));
-        message(&conn, "msg_c", "ses_old", 12, json!({"role":"user"}));
-        part(&conn, "prt_c", "msg_c", "ses_old", 12, json!({"type":"text","text":"then this"}));
+        prompt(&conn, "msg_a", "ses_old", 10, "first ask");
+        message(&conn, "msg_s", "ses_old", 11, "synthetic", json!({"text": "file body"}));
+        answer(&conn, "msg_b", "ses_old", 11, "ok");
+        prompt(&conn, "msg_c", "ses_old", 12, "then this");
         session(&conn, "ses_new", None, "dir", 20, None);
-        message(&conn, "msg_d", "ses_new", 20, json!({"role":"user"}));
-        part(&conn, "prt_d", "msg_d", "ses_new", 20, json!({"type":"text","text":"only ask"}));
+        prompt(&conn, "msg_d", "ses_new", 20, "only ask");
         session(&conn, "ses_empty", None, "dir", 30, None);
         session(&conn, "ses_child", Some("ses_new"), "dir", 40, None);
         session(&conn, "ses_gone", None, "dir", 50, Some(50));
@@ -1124,16 +941,10 @@ mod tests {
     }
 
     #[test]
-    fn a_v2_sessions_prompts_are_read_from_the_type_column_or_its_data() {
+    fn a_sessions_prompts_are_read_from_the_type_column_or_its_data() {
         use serde_json::json;
         let (db, conn) = store();
-        conn.execute_batch(
-            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
-               time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
-             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
-               time_created INTEGER, time_updated INTEGER, data TEXT);
-             INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'dir', 20, 30, NULL, 'Test', 'build');",
-        ).unwrap();
+        conn.execute("INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'dir', 20, 30, NULL, 'Test', 'build')", []).unwrap();
         for (seq, kind, data) in [
             (1, Some("user"), json!({"text":"question"})),
             (2, Some("assistant"), json!({"content":[]})),
@@ -1149,15 +960,11 @@ mod tests {
     }
 
     #[test]
-    fn a_v2_assistant_message_reads_its_part_rows_over_an_empty_content() {
+    fn an_assistant_message_reads_its_part_rows_over_an_empty_content() {
         use serde_json::json;
         let (db, conn) = store();
         conn.execute_batch(
-            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
-               time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
-             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
-               time_created INTEGER, time_updated INTEGER, data TEXT);
-             CREATE TABLE session_part (message_id TEXT, session_id TEXT, ordinal INTEGER, type TEXT, call_id TEXT,
+            "CREATE TABLE session_part (message_id TEXT, session_id TEXT, ordinal INTEGER, type TEXT, call_id TEXT,
                time_created INTEGER, time_updated INTEGER, data TEXT);
              INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'v2', 20, 30, NULL, 'Test', 'build');",
         ).unwrap();

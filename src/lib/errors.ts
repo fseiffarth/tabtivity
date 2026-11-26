@@ -37,6 +37,9 @@ const RULES: { test: RegExp; key: TranslationKey }[] = [
   { test: /Cannot connect to the Docker daemon|docker daemon is not running/i, key: "errors.dockerDown" },
   { test: /locked collection|keyring is locked|org\.freedesktop\.secrets was not provided/i, key: "errors.keyringLocked" },
   { test: /not a git repository/i, key: "errors.notGitRepo" },
+  // GitHub's refusal of a push touching .github/workflows/ from a token without
+  // the workflow permission: it signed in fine, so it is not errors.authFailed.
+  { test: /to create or update workflow .* without `workflow` scope/i, key: "errors.workflowPermission" },
   { test: /\[rejected\]|non-fast-forward|Updates were rejected/i, key: "errors.pushRejected" },
   { test: /would be overwritten by (merge|checkout)|Please commit your changes or stash them/i, key: "errors.localChanges" },
   { test: /CONFLICT \(|Automatic merge failed|you have unmerged files/i, key: "errors.mergeConflict" },

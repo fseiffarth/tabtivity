@@ -50,6 +50,7 @@ function agentTab(opts: { view?: ReaderViewId; offered?: ReaderViewId[]; strip?:
     buffer: { active: { type: "normal" } },
     scrollLines: vi.fn(),
     scrollToBottom: vi.fn(),
+    focus: vi.fn(),
   };
   registerTerminal(id, term as unknown as Terminal);
   cleanups.push(() => unregisterTerminal(id, term as unknown as Terminal));
@@ -66,7 +67,7 @@ function agentTab(opts: { view?: ReaderViewId; offered?: ReaderViewId[]; strip?:
       }),
     );
   }
-  return { show, id };
+  return { show, id, term };
 }
 
 beforeEach(() => {
@@ -120,16 +121,18 @@ describe("steering view cycle", () => {
     expect(show).toHaveBeenCalledTimes(2);
   });
 
-  it("wraps around the strip and skips views that are not offered", () => {
-    const { show } = agentTab({ view: "terminal", offered: ["chat", "files", "terminal"] });
+  it("cycles into Terminal and hands it the keyboard with Work here", () => {
+    const { show, term } = agentTab({ view: "terminal", offered: ["chat", "files", "terminal"] });
     render(<Harness />);
     press({ key: " ", shiftKey: true });
     press({ key: "Tab" });
     expect(show).toHaveBeenLastCalledWith("chat");
-    press({ key: "Tab" });
-    expect(show).toHaveBeenLastCalledWith("files");
+    expect(term.scrollToBottom).toHaveBeenCalled();
     press({ key: "Tab", shiftKey: true });
-    expect(show).toHaveBeenLastCalledWith("chat");
+    expect(show).toHaveBeenLastCalledWith("terminal");
+    press({ key: "Enter" });
+    expect(steering().active).toBe(false);
+    expect(term.focus).toHaveBeenCalled();
   });
 
   it("works at the panes level and Inside, and the level stays", () => {

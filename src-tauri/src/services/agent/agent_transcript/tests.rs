@@ -364,6 +364,48 @@ fn the_tool_calls_with_no_result_are_listed_with_what_they_act_on() {
 }
 
 #[test]
+fn every_shell_call_is_listed_in_order_finished_or_running() {
+    let bash = |call: &str, command: &str, at: &str| tool_call(call, "Bash", serde_json::json!({"command": command, "description": format!("run {command}")}), at);
+    let text = probe_prompt("first")
+        + &bash("toolu_1", "ls", "2026-11-18T09:20:00.000Z")
+        + &tool_result("toolu_1", false)
+        + &probe_prompt("second")
+        + &bash("toolu_2", "git status", "2026-11-18T09:21:00.000Z")
+        + &tool_result("toolu_2", true)
+        + &bash("toolu_3", "cargo test", "2026-11-18T09:22:00.000Z");
+    let read = read_claude(text);
+    // Only the one without its result is running …
+    assert_eq!(read.shells.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["cargo test"]);
+    // … but the Data tab's list has them all, an earlier turn's and a failed one too.
+    assert_eq!(
+        read.shells_run.iter().map(|s| (s.command.as_str(), s.description.as_deref(), s.at.as_deref())).collect::<Vec<_>>(),
+        vec![
+            ("ls", Some("run ls"), Some("2026-11-18T09:20:00.000Z")),
+            ("git status", Some("run git status"), Some("2026-11-18T09:21:00.000Z")),
+            ("cargo test", Some("run cargo test"), Some("2026-11-18T09:22:00.000Z")),
+        ]
+    );
+    let json = serde_json::to_value(&read).unwrap();
+    assert_eq!(json["shellsRun"][1]["command"], "git status");
+    assert!(serde_json::to_value(AgentTranscript::default()).unwrap().get("shellsRun").is_none());
+}
+
+#[test]
+fn the_shell_list_keeps_the_newest_within_its_bounds() {
+    let shell = |command: String| RunningShell { command, ..Default::default() };
+    let many: Vec<RunningShell> = (0..MAX_SHELLS_RUN + 5).map(|n| shell(n.to_string())).collect();
+    let kept = newest_shells(many);
+    assert_eq!(kept.len(), MAX_SHELLS_RUN);
+    assert_eq!(kept[0].command, "5");
+    assert_eq!(kept.last().unwrap().command, (MAX_SHELLS_RUN + 4).to_string());
+    // Long command lines: only as many of the newest as fit the character bound.
+    let long: Vec<RunningShell> = (0..40).map(|n| shell(format!("{n:02}{}", "x".repeat(MAX_SHELL_CHARS - 2)))).collect();
+    let kept = newest_shells(long);
+    assert_eq!(kept.len(), MAX_SHELLS_RUN_CHARS / MAX_SHELL_CHARS);
+    assert!(kept.last().unwrap().command.starts_with("39"));
+}
+
+#[test]
 fn a_rejected_call_a_new_prompt_or_an_interrupt_ends_the_wait() {
     let edit = |call: &str| tool_call(call, "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
     // A declined call has its (error) result, the interrupt notice follows.
@@ -1623,6 +1665,73 @@ fn a_codex_subagent_is_placed_when_its_thread_was_created() {
 }
 
 #[test]
+fn a_codex_subagent_rollout_reads_from_its_own_history_not_its_parents() {
+    // Codex forks a spawned agent's rollout: its `session_meta`, then the
+    // parent's conversation, then from line `subagent_history_start_ordinal`
+    // on the subagent's own (shape of Codex 0.172).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-child.jsonl");
+    let message = |role: &str, kind: &str, text: &str| {
+        format!("{{\"type\":\"response_item\",\"timestamp\":\"2026-11-24T16:50:04Z\",\"payload\":{{\"type\":\"message\",\"role\":\"{role}\",\"content\":[{{\"type\":\"{kind}\",\"text\":\"{text}\"}}]}}}}\n")
+    };
+    let inherited = [
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"parent\",\"thread_source\":\"user\"}}\n".to_string(),
+        message("user", "input_text", "write it to docs"),
+        message("assistant", "output_text", "Saved the plan."),
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"apply_patch\",\"call_id\":\"c0\",\"arguments\":\"{}\"}}\n".to_string(),
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"FileChange\",\"id\":\"p\",\"status\":\"completed\",\"changes\":{\"/p/parent.md\":{\"type\":\"add\",\"content\":\"x\"}}}}}\n".to_string(),
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"t\",\"reason\":\"interrupted\"}}\n".to_string(),
+        message("developer", "input_text", "You are now a newly spawned child agent."),
+    ];
+    let ordinal = inherited.len() + 1;
+    let mut text = format!(
+        "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"child\",\"forked_from_id\":\"parent\",\"thread_source\":\"subagent\",\"subagent_history_start_ordinal\":{ordinal}}}}}\n"
+    );
+    text.extend(inherited);
+    text.push_str(&message("assistant", "output_text", "Checking the cleanup paths."));
+    std::fs::write(&path, &text).unwrap();
+
+    let read = read_transcript_in(&path, TranscriptKind::Codex, &Spawns::None, true, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(kinds(&read), vec![("answer", "Checking the cleanup paths.")]);
+    assert!(!read.truncated);
+    let changes = crate::services::agent_changes::read_changes(&path, crate::services::agent_changes::Store::Codex, None, 50).unwrap();
+    assert!(changes.changes.is_empty(), "{:?}", changes.changes);
+
+    // A rollout still being written up to its own history shows nothing yet;
+    // one without the field (a tab's own thread) is read whole.
+    let short = dir.path().join("rollout-new.jsonl");
+    std::fs::write(&short, text.lines().take(3).map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+    assert!(read_transcript_in(&short, TranscriptKind::Codex, &Spawns::None, true, None, DEFAULT_LIMIT).unwrap().entries.is_empty());
+    let own = dir.path().join("rollout-own.jsonl");
+    std::fs::write(&own, text.lines().skip(1).map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+    let whole = read_transcript_in(&own, TranscriptKind::Codex, &Spawns::None, false, None, DEFAULT_LIMIT).unwrap();
+    assert!(kinds(&whole).contains(&("prompt", "write it to docs")));
+    let all = crate::services::agent_changes::read_changes(&own, crate::services::agent_changes::Store::Codex, None, 50).unwrap();
+    assert_eq!(all.changes.len(), 1);
+}
+
+#[test]
+fn a_codex_subagent_without_a_readable_task_is_named_by_its_agent_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state_5.sqlite");
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, created_at INTEGER, title TEXT NOT NULL,
+                   first_user_message TEXT NOT NULL DEFAULT '', agent_nickname TEXT, agent_role TEXT,
+                   created_at_ms INTEGER, agent_path TEXT);
+             CREATE TABLE thread_spawn_edges (parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL);
+             INSERT INTO threads VALUES ('child', '/r/c.jsonl', 1, '', '', 'Beauvoir', NULL, 1000, '/root/ollama_cleanup');
+             INSERT INTO thread_spawn_edges VALUES ('root', 'child', 'running');",
+        )
+        .unwrap();
+    let children = crate::services::codex_store::spawned_threads(&db, "root");
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].task, "ollama cleanup");
+    assert_eq!(crate::services::codex_store::descendant_threads(&db, "root", 1)[0].task, "ollama cleanup");
+}
+
+#[test]
 fn a_codex_subagent_rollout_named_as_the_fence_sees_it_is_found() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("agent-homes/p1/.codex/sessions");
@@ -1856,7 +1965,7 @@ fn only_a_tab_that_runs_remotely_has_its_opencode_store_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("opencode.db");
     let tab_dir = dir.path().to_string_lossy().into_owned();
-    let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10);
+    let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10, false);
     assert_eq!(read(true).reason.as_deref(), Some("unsupported"));
     assert_eq!(read(false).reason.as_deref(), Some("no_transcript"));
 }

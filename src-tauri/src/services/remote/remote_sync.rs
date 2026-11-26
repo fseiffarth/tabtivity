@@ -1663,6 +1663,17 @@ fn rsync_literal_host_path(path: &str) -> String {
 pub struct PullOutcome {
     /// Files that landed in the mirror and were recorded.
     pub pulled: usize,
+    /// An explicit-list pull's paths that did not land (absent, git-tracked,
+    /// or a failed transfer); always 0 for a path pull, which fails instead.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub failed: usize,
+    /// The first of those failures' reasons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_error: Option<String>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// The manifest base for a file rsync just wrote at `local`, or `None` to

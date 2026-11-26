@@ -20,6 +20,70 @@ fn only_a_pusher_binding_takes_a_fence_scope() {
     assert_eq!(after.identity.push.unwrap().fence_scope.as_deref(), Some("p"));
 }
 
+/// What git discovery counts as a repo: `HEAD`, `objects`, `refs`.
+fn make_git_dir(dir: &std::path::Path) {
+    for sub in ["objects", "refs"] { std::fs::create_dir_all(dir.join(".git").join(sub)).unwrap(); }
+    std::fs::write(dir.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+}
+
+/// A project agent tab gets the push lane only when its project folder is
+/// inside a git repo at spawn: a plain folder's tab is handed no token, no
+/// URL and no server entry, and gets them once the folder is a repo.
+#[test]
+fn a_non_git_project_gets_no_push_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path();
+    let project = state.join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(state.join("settings.json"), "{}").unwrap();
+    let entry = json!({"id":"p","name":"P","status":"active","position":0,"local_file":"","directory":project.to_string_lossy()});
+    std::fs::write(state.join("projects.json"), json!([entry]).to_string()).unwrap();
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
+    let grant = || {
+        let mut o = opts("claude", &[], Some("p"));
+        o.id = "p:git-lane".into();
+        grant_lanes(&mut o, true, Some(&serving), &TokenStore::default(), state);
+        o
+    };
+    let plain = grant();
+    assert!(!plain.env.contains_key(GIT_TOKEN_ENV) && !plain.env.contains_key(GIT_URL_ENV), "{:?}", plain.env.keys());
+    assert!(!wired(&plain).contains("/mcp/git"), "{}", wired(&plain));
+    assert!(plain.env.contains_key(HELP_TOKEN_ENV), "the other lanes are unaffected");
+    make_git_dir(&project);
+    let repo = grant();
+    assert!(repo.env.contains_key(GIT_TOKEN_ENV), "{:?}", repo.env.keys());
+    assert!(wired(&repo).contains("/mcp/git"), "{}", wired(&repo));
+}
+
+/// A local-model tab behind `ollama launch` takes no MCP config, so it gets no
+/// lane: no env pair arms the Claude hook's tab-naming reminder for tools the
+/// model never got. A local tab whose own CLI is wired (OpenCode's direct
+/// fallback line) and an ordinary tab keep theirs.
+#[test]
+fn an_ollama_launch_tab_gets_no_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path();
+    let project = state.join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(state.join("settings.json"), "{}").unwrap();
+    let entry = json!({"id":"p","name":"P","status":"active","position":0,"local_file":"","directory":project.to_string_lossy()});
+    std::fs::write(state.join("projects.json"), json!([entry]).to_string()).unwrap();
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
+    let lanes = |cmd: &str, args: &[&str], local: bool| {
+        let mut o = opts(cmd, args, Some("p"));
+        o.id = "p:local-lane".into();
+        o.local_model = local;
+        grant_lanes(&mut o, true, Some(&serving), &TokenStore::default(), state);
+        o.env.keys().filter(|k| k.ends_with("_MCP_TOKEN") || k.ends_with("_MCP_URL")).cloned().collect::<Vec<_>>()
+    };
+    let uuid = "0b9f3c2e-4d5a-4f6b-8c7d-9e0f1a2b3c4d";
+    for args in [&["launch", "claude", "--model", "qwen3:8b", "--", "--session-id", uuid][..], &["launch", "opencode", "--model", "qwen3:8b"][..]] {
+        assert!(lanes("ollama", args, true).is_empty(), "{args:?}");
+    }
+    assert!(lanes("opencode", &["--model", "ollama/qwen3:8b"], true).iter().any(|k| k == HELP_TOKEN_ENV), "a wired local CLI keeps its lanes");
+    assert!(lanes("claude", &[], false).iter().any(|k| k == HELP_TOKEN_ENV), "an ordinary tab keeps its lanes");
+}
+
 /// Gap 19: the push binding records the `.git` entry git discovery
 /// finds at spawn — none for a repo-less folder — so a repo made later is
 /// told apart (`git_push_mcp::repo_changed`).
@@ -28,11 +92,6 @@ fn a_push_grant_records_the_git_dir_found_at_spawn() {
     let store = TokenStore::default();
     let root = tempfile::tempdir().unwrap();
     let (plain, repo) = (root.path().join("plain"), root.path().join("repo"));
-    // What git discovery counts as a repo: `HEAD`, `objects`, `refs`.
-    let make_git_dir = |dir: &std::path::Path| {
-        for sub in ["objects", "refs"] { std::fs::create_dir_all(dir.join(".git").join(sub)).unwrap(); }
-        std::fs::write(dir.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
-    };
     make_git_dir(&repo);
     std::fs::create_dir(&plain).unwrap();
     let before = super::super::git_push_mcp::git_entry_identity(&plain);
@@ -711,7 +770,7 @@ fn local_vibe_home(share: &Path, leaf: &str, model: &str, addr: &str) -> String 
     let home = share.join("vibe_local").join(leaf);
     std::fs::create_dir_all(&home).unwrap();
     let alias = crate::services::ollama_client::sanitize_alias(model);
-    std::fs::write(home.join("config.toml"), crate::services::local_drivers::vibe_local_config(model, &alias, addr)).unwrap();
+    std::fs::write(home.join("config.toml"), crate::services::local_drivers::vibe_local_config(model, &alias, addr, false)).unwrap();
     home.to_string_lossy().into_owned()
 }
 
@@ -3728,6 +3787,58 @@ fn tabs_lane_grant_matrix() {
     assert!(!shell.env.contains_key(TABS_TOKEN_ENV));
 }
 
+/// A project's own per-lane switches (`services::project_lanes`): a lane in
+/// the entry's `mcp_off` is handed to none of its spawns, the others stay,
+/// and the listener's per-request check refuses a session of an off lane.
+#[test]
+fn project_mcp_off_drops_exactly_the_switched_off_lanes() {
+    use crate::services::project_lanes;
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path();
+    make_git_dir(state); // the git lane needs a repo at spawn
+    std::fs::write(state.join("settings.json"), json!({ "schedule_mcp": true }).to_string()).unwrap();
+    let projects = |off: Value| {
+        let entry = json!({"id":"p","name":"P","status":"active","position":0,"local_file":"","directory":state.to_string_lossy(),"mcp_off":off});
+        std::fs::write(state.join("projects.json"), json!([entry]).to_string()).unwrap();
+    };
+    let saved = {
+        let path = crate::services::mobile_control::headless::session_file(state, "p");
+        let tab = serde_json::from_value(json!({"key":"mine","label":"mine","cmd":"claude","cwd":state.to_string_lossy(),"kind":"agent"})).unwrap();
+        crate::services::workspace::tmux_of(&crate::services::workspace::create_tab_in(&path, "p", tab, None).unwrap().tab).map(str::to_string)
+    };
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
+    let env_of = |lane: &str| match lane {
+        "cockpit" => COCKPIT_TOKEN_ENV, "help" => HELP_TOKEN_ENV, "schedule" => SCHEDULE_TOKEN_ENV, "git" => GIT_TOKEN_ENV,
+        "markup" => MARKUP_TOKEN_ENV, "print" => PRINT_TOKEN_ENV, "tabs" => TABS_TOKEN_ENV, other => panic!("{other}"),
+    };
+    let granted = || {
+        let mut o = opts("claude", &[], Some("p"));
+        o.id = "p:mcp-off".into();
+        o.tmux_session = saved.clone();
+        let store = TokenStore::default();
+        grant_lanes(&mut o, true, Some(&serving), &store, state);
+        project_lanes::LANES.into_iter().filter(|lane| o.env.contains_key(env_of(lane))).collect::<Vec<_>>()
+    };
+    projects(json!([]));
+    let all = granted();
+    for lane in ["cockpit", "help", "git", "print", "tabs"] {
+        assert!(all.contains(&lane), "{lane} granted with nothing off: {all:?}");
+    }
+    for lane in all.clone() {
+        projects(json!([lane]));
+        let left = granted();
+        assert!(!left.contains(&lane), "{lane} switched off");
+        assert_eq!(left.len(), all.len() - 1, "only {lane} dropped: {left:?}");
+    }
+    projects(json!(project_lanes::LANES));
+    assert!(granted().is_empty(), "every lane off");
+    // The listener's half: an off lane's running session is refused now.
+    let printer = Identity { tab: "p:mcp-off".into(), caller: Caller::Printer, project: Some("p".into()), schedule_target: None, push: None, endpoint: None, model: None };
+    assert!(project_lanes::refuses_at(&state.join("projects.json"), &printer));
+    projects(json!([]));
+    assert!(!project_lanes::refuses_at(&state.join("projects.json"), &printer));
+}
+
 #[test]
 fn tabs_tools_are_served_to_the_tabs_identity_alone() {
     for tool in crate::services::tabs_mcp::TOOLS {
@@ -3853,4 +3964,44 @@ fn the_stamp_names_a_hash_never_a_token() {
     let rendered = root_mcp_mark::Mark { nonce: root_mcp_mark::new_nonce(), grant: Some(grant), port: 9 }.render();
     assert!(!rendered.contains(token));
     assert!(root_mcp_mark::Mark::parse(&rendered).is_some());
+}
+
+/// A project tab of a tool model keeps Vibe's own tools beside the MCP servers
+/// its lanes named; a tools-off home and a home outside `vibe_local` keep the
+/// narrowed list (`grant_lanes` never calls this for the root console).
+#[test]
+fn a_tool_models_vibe_tab_keeps_its_own_tools_beside_the_mcp_servers() {
+    let share = tempfile::tempdir().unwrap();
+    let write = |leaf: &str, tools: bool| {
+        let home = share.path().join("vibe_local").join(leaf);
+        std::fs::create_dir_all(&home).unwrap();
+        let cfg = crate::services::local_drivers::vibe_local_config("qwen3:8b", "qwen3-8b", "127.0.0.1:11434", tools);
+        std::fs::write(home.join("config.toml"), cfg).unwrap();
+        home.to_string_lossy().into_owned()
+    };
+    let on = write("qwen3-8b", true);
+    let off = write("qwen3-8b.p", false);
+    let cockpit = format!("{}_*", crate::services::cockpit_mcp::SERVER_NAME);
+    let narrowed = json!([cockpit]).to_string();
+    let spawn = |home: &str| {
+        let mut o = opts("vibe", &[], None);
+        o.env.insert("VIBE_ACTIVE_MODEL".into(), "qwen3-8b".into());
+        o.env.insert("VIBE_HOME".into(), home.to_string());
+        o.env.insert("VIBE_ENABLED_TOOLS".into(), narrowed.clone());
+        keep_vibe_tools(&mut o, share.path());
+        o.env.get("VIBE_ENABLED_TOOLS").cloned().unwrap()
+    };
+    assert_eq!(spawn(&on), json!([cockpit, "*"]).to_string());
+    assert_eq!(spawn(&off), narrowed, "a model without tools stays narrowed");
+    let foreign = tempfile::tempdir().unwrap();
+    std::fs::write(foreign.path().join("config.toml"), "active_model = \"qwen3-8b\"\n").unwrap();
+    assert_eq!(spawn(&foreign.path().to_string_lossy()), narrowed, "a home outside vibe_local");
+    assert_eq!(spawn(&format!("{on}/..")), narrowed, "no climbing out of vibe_local");
+
+    // No MCP lane, no env: the home's config alone decides.
+    let mut bare = opts("vibe", &[], None);
+    bare.env.insert("VIBE_ACTIVE_MODEL".into(), "qwen3-8b".into());
+    bare.env.insert("VIBE_HOME".into(), on.clone());
+    keep_vibe_tools(&mut bare, share.path());
+    assert!(!bare.env.contains_key("VIBE_ENABLED_TOOLS"));
 }

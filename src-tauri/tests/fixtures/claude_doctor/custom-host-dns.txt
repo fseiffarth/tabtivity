@@ -1,0 +1,12 @@
+Claude Code doctor
+...
+Last update attempt: none recorded
+
+API connectivity
+- API (custom host): failed after 12 ms: Can't reach the API server — check your internet or DNS (ENOTFOUND)
+- Sign-in (platform.claude.com): answered HTTP 200 in 171 ms
+- ANTHROPIC_BASE_URL: set to a custom host · NODE_EXTRA_CA_CERTS: not set · CLAUDE_CODE_CLIENT_CERT: not set
+  A proxy, firewall, VPN or security software between this machine and the host can cause these results. See https://code.claude.com/docs/en/network-config
+
+Remote Control
+...

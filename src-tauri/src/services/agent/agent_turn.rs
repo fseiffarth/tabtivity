@@ -37,8 +37,8 @@ use std::time::{Duration, Instant};
 use app_core::CoreCtx;
 
 use crate::services::agent_session::{
-    live_sessions_dir, project_live_sessions_dir, read_live_resume_in, read_live_source_in, ResumeCost,
-    LIVE_SOURCE_SUFFIX,
+    live_sessions_dir, project_live_sessions_dir, read_live_mode_in, read_live_resume_in, read_live_source_in,
+    ResumeCost, LIVE_MODE_SUFFIX, LIVE_SOURCE_SUFFIX,
 };
 use crate::services::home_io;
 
@@ -71,6 +71,11 @@ pub const TURN_EVENT: &str = "agent-turn";
 /// record: `{ id: <pty id>, source: "startup" | "resume" | "clear" | "compact" }`.
 /// A `clear` is what offers the terminal's "Undo clear".
 pub const ROLL_EVENT: &str = "agent-session-roll";
+
+/// The permission mode Claude's hook last recorded for a tab (`<uid>.mode`,
+/// written on every `Stop`): `{ id: <pty id>, mode: "default" | "auto" | … }`.
+/// A local-model tab warns on `auto`, whose classifier runs on the local model.
+pub const MODE_EVENT: &str = "agent-permission-mode";
 
 /// What the hook script may write. `Idle` (a `SessionEnd`) means the agent is
 /// gone and the tab is back to whatever its bytes say.
@@ -432,6 +437,22 @@ pub fn resolve_roll_event(path: &Path) -> Option<(String, String, Option<ResumeC
     // Only a resume carries one (the hook clears it on any other start).
     let resume = if source == "resume" { read_live_resume_in(dir, &uid) } else { None };
     Some((pty, source, resume))
+}
+
+/// What a write of a tab's mode record (`<uid>.mode`) means for the window:
+/// the PTY and the mode now recorded. `None` for any other file, a tab of
+/// another run, or a word outside `agent_session::is_permission_mode`.
+pub fn resolve_mode_event(path: &Path) -> Option<(String, String)> {
+    let uid = uid_with_suffix(path, LIVE_MODE_SUFFIX)?;
+    let pty = pty_for(&uid)?;
+    let mode = read_live_mode_in(path.parent()?, &uid)?;
+    Some((pty, mode))
+}
+
+#[derive(serde::Serialize, Clone)]
+struct ModePayload {
+    id: String,
+    mode: String,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -1318,7 +1339,9 @@ pub fn start(ctx: CoreCtx) {
             for p in ev.paths {
                 if p.file_name()
                     .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.ends_with(TURN_SUFFIX) || n.ends_with(LIVE_SOURCE_SUFFIX))
+                    .is_some_and(|n| {
+                        n.ends_with(TURN_SUFFIX) || n.ends_with(LIVE_SOURCE_SUFFIX) || n.ends_with(LIVE_MODE_SUFFIX)
+                    })
                 {
                     let _ = tx.send(p);
                 }
@@ -1355,6 +1378,10 @@ pub fn start(ctx: CoreCtx) {
                     // a `/resume`); it carries no turn state.
                     if let Some((id, source, resume)) = resolve_roll_event(&path) {
                         ctx.emit(ROLL_EVENT, RollPayload { id, source, resume });
+                        continue;
+                    }
+                    if let Some((id, mode)) = resolve_mode_event(&path) {
+                        ctx.emit(MODE_EVENT, ModePayload { id, mode });
                         continue;
                     }
                     if let (Some((id, state)), Some(uid)) = (resolve_event(&path), uid_of(&path)) {
@@ -1789,6 +1816,27 @@ mod tests {
         assert_eq!(pty_for(uid), None);
         std::fs::write(&rec, "done").unwrap();
         assert_eq!(resolve_event(&rec), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_mode_record_resolves_to_its_pty_and_only_a_known_mode() {
+        let dir = std::env::temp_dir().join(format!(concat!(crate::app_slug!(), "-mode-{}-{}"), std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uid = "5b0c8f1e-2a4d-4c6e-9f10-3d2b1a0e7c55";
+        let pty = "proj-a:agent-mode-1";
+        let rec = dir.join(format!("{uid}{LIVE_MODE_SUFFIX}"));
+        std::fs::write(&rec, "auto").unwrap();
+        assert_eq!(resolve_mode_event(&rec), None, "an unbound tab's record is nobody's");
+        bindings().lock().unwrap().insert(uid.to_string(), pty.to_string());
+        assert_eq!(resolve_mode_event(&rec), Some((pty.to_string(), "auto".to_string())));
+        std::fs::write(&rec, "acceptEdits").unwrap();
+        assert_eq!(resolve_mode_event(&rec), Some((pty.to_string(), "acceptEdits".to_string())));
+        std::fs::write(&rec, "yolo").unwrap();
+        assert_eq!(resolve_mode_event(&rec), None, "a word the hook should not write");
+        // Neither a turn record nor a source record is a mode record.
+        assert_eq!(resolve_mode_event(&dir.join(format!("{uid}{TURN_SUFFIX}"))), None);
+        on_tab_gone(pty);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

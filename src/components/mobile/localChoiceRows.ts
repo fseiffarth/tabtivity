@@ -14,9 +14,10 @@ export interface LocalChoiceRow {
  * The rows the phone offers for the local model, in the desktop's order: the
  * light-harness drivers (OpenCode), Mistral when installed and enabled, then the
  * other available drivers. In a Local models only project the same rule as the
- * desktop menus applies (`offeredLocalAgents`): OpenCode is hidden with the network
- * on and offered again with Cut network on, where only the drivers verified with
- * the network cut are listed. The backend refuses the rest either way.
+ * desktop menus applies (`offeredLocalAgents`): with the network on OpenCode runs in
+ * a cut sandbox of its own where the host can cut (Linux) and is hidden elsewhere;
+ * with Cut network on only the drivers verified with the network cut are listed.
+ * The backend refuses the rest either way.
  */
 export function localChoiceRows(
   drivers: readonly LocalDriverInfo[],

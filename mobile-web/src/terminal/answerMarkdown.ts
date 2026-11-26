@@ -56,11 +56,10 @@ function withoutLoneTags(text: string): string {
 /**
  * A prompt in the chat — the reader's own, or one an agent wrote for a
  * subagent — formatted as an answer is (`answerHtml`, same rewrites and
- * allowlist), except that a single line break stays a break: a prompt is
- * typed as a chat message, not as a Markdown document.
+ * allowlist), with single line breaks and leading plus signs kept as typed.
  */
 export function promptHtml(text: string): string {
-  return inert(renderMarkdown(text, { breaks: true }));
+  return inert(renderMarkdown(text, { breaks: true, literalPlus: true }));
 }
 
 /**

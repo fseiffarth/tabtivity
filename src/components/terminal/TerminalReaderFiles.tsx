@@ -15,7 +15,9 @@ import { registerReaderInside, useSteeringInside } from "../../lib/agents/reader
 import { largestScroller, scrollBox } from "../../lib/shortcuts/documentScroll";
 import { decide, effectiveCursor, rowsOf } from "../../lib/terminal/readerFilesSteer";
 import { ArrowUpRightIcon, CloseIcon, LinkIcon } from "../common/icons/Icon";
+import { copyText } from "../../lib/terminal/copyText";
 import type { ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
+import type { RunningShell } from "../../../mobile-web/src/api";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 
 /** How a file came into the conversation, the phone's Files groups
@@ -58,6 +60,28 @@ function entryFor(files: readonly ReaderFile[], path: string): FileEntry {
 }
 
 const NO_LINKS: readonly ChatLink[] = [];
+const NO_SHELLS: readonly RunningShell[] = [];
+
+/** A shell command as a row of the list: `key` is its steering / pick key. */
+export interface ShellRow {
+  shell: RunningShell;
+  key: string;
+}
+
+/** `shells` (newest first) as rows. A key is the call's stamp and its place
+ *  among the calls of that stamp counted from the oldest, so it stays put as
+ *  newer commands arrive above it. It never collides with a path or a URL. */
+export function shellRowsOf(shells: readonly RunningShell[]): ShellRow[] {
+  const seen = new Map<string, number>();
+  const keys: string[] = [];
+  for (let index = shells.length - 1; index >= 0; index -= 1) {
+    const stamp = `shell:${shells[index].at ?? ""}`;
+    const nth = seen.get(stamp) ?? 0;
+    seen.set(stamp, nth + 1);
+    keys[index] = `${stamp}#${nth}`;
+  }
+  return shells.map((shell, index) => ({ shell, key: keys[index] }));
+}
 /** Characters of a link's path and query a row shows before its middle goes. */
 const LINK_REST_MAX = 56;
 
@@ -83,12 +107,17 @@ function middle(text: string, max: number): string {
  * fetched, previewed or drawn as an `<a href>`, so nothing leaves the machine
  * before the user confirms.
  *
- * Under keyboard steering (`steerId`, Inside this view) the files and then the
- * links are one walkable list with a cursor of its own (`readerFilesSteer`):
- * `o` opens the row, `v` shows the file here, ←/→ scroll the viewer. Moving
- * the cursor opens nothing.
+ * Under the links, every shell command the conversation ran (`shells`, newest
+ * first: the transcript's `shellsRun`), running or done. A click shows the
+ * whole command in the viewer half, with the agent's description and a Copy
+ * button; nothing runs it.
+ *
+ * Under keyboard steering (`steerId`, Inside this view) the files, the links
+ * and the commands are one walkable list with a cursor of its own
+ * (`readerFilesSteer`): `o` opens the row, `v` shows the file or command here,
+ * ←/→ scroll the viewer. Moving the cursor opens nothing.
  */
-export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, projectId, disabled, visible, scopeNote, use24h, onPick, onOpenTab, onOpenLink, steerId, onClose }: {
+export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = NO_SHELLS, picked, projectId, disabled, visible, scopeNote, use24h, onPick, onOpenTab, onOpenLink, steerId, onClose }: {
   /** The agent tab hosting this Reader. Each picked file keeps its scroll/zoom
    *  under `<tab>#<path>` (the tab's `texPanes`, the TeX workspace's sub-pane
    *  slot), so leaving to Chat or another tab and coming back reopens the
@@ -97,6 +126,8 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
   files: readonly ReaderFile[];
   /** The links the conversation names; drawn only with `onOpenLink`. */
   links?: readonly ChatLink[];
+  /** The shell commands the conversation ran, newest first. */
+  shells?: readonly RunningShell[];
   /** The file in the viewer; it stays there when another chat's list lacks it. */
   picked: FileEntry | null;
   projectId: string | null;
@@ -114,20 +145,30 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
   onClose: () => void;
 }) {
   const t = useT();
-  const viewer = picked ? internalViewerFor(picked, disabled) : null;
   const linkRows = onOpenLink ? links : NO_LINKS;
+  const shellRows = useMemo(() => shellRowsOf(shells), [shells]);
+  // The command shown in the viewer half, by row key; a file picked after it
+  // takes the half back. One whose row is gone shows the file again.
+  const [shellShown, setShellShown] = useState<string | null>(null);
+  const shownShell = shellShown === null ? null : shellRows.find((row) => row.key === shellShown)?.shell ?? null;
+  const file = shownShell ? null : picked;
+  const viewer = file ? internalViewerFor(file, disabled) : null;
+  const pick = (entry: FileEntry) => {
+    setShellShown(null);
+    onPick(entry);
+  };
   const steering = useSteeringInside(steerId);
   // Grouped here so the drawn order and the steering walk are one order.
   const grouped = groupReaderFiles(files);
-  const rows = rowsOf(grouped, linkRows);
+  const rows = rowsOf(grouped, linkRows, shellRows);
   // The cursor is a key (path / URL), so rows arriving above it do not move it;
   // one whose row vanished snaps back to the start (the shown file's row).
   const [cursorSet, setCursorSet] = useState<string | null>(null);
   const cursor = effectiveCursor(rows, cursorSet, picked?.path);
   const bodyRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
-  const liveRef = useRef({ files, rows, cursor, disabled, onPick, onOpenTab, onOpenLink });
-  liveRef.current = { files, rows, cursor, disabled, onPick, onOpenTab, onOpenLink };
+  const liveRef = useRef({ files, rows, cursor, disabled, onPick: pick, onOpenTab, onOpenLink });
+  liveRef.current = { files, rows, cursor, disabled, onPick: pick, onOpenTab, onOpenLink };
   // TeX ⇄ PDF in this one pane (`texPdfHost`): a build, a forward search or
   // Open PDF shows the PDF here, a reverse click or an error row the source at
   // its line. A file no viewer here shows answers false, so it opens as a tab.
@@ -167,7 +208,7 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
           setCursorSet(result.cursor);
         }
         const path = result.row?.key;
-        const file = now.files.find((f) => f.entry.path === path)?.entry;
+        const target = now.files.find((f) => f.entry.path === path)?.entry;
         switch (result.effect) {
           case "out":
             return "leave";
@@ -177,12 +218,15 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
             break;
           }
           case "show":
-            if (file) now.onPick(file);
+            if (target) now.onPick(target);
+            break;
+          case "showShell":
+            if (result.row) setShellShown(result.row.key);
             break;
           case "openTab":
           case "openTabNew":
             // A file with no in-app viewer has no ↗ button either.
-            if (file && internalViewerFor(file, now.disabled)) now.onOpenTab(file, result.effect === "openTabNew");
+            if (target && internalViewerFor(target, now.disabled)) now.onOpenTab(target, result.effect === "openTabNew");
             break;
           case "openLink":
             if (result.row) now.onOpenLink?.(result.row.key);
@@ -206,10 +250,10 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
         <strong>{t("terminal.readerFiles.title")}</strong>
         <UntestedTag id="terminal.reader.files" />
         {(viewer === "tex" || viewer === "pdf") &&<UntestedTag id="terminal.reader.texPdf" />}
-        {picked && <small className="terminal-changes-path" title={picked.path}>{picked.name}</small>}
-        {picked && viewer && (
+        {file && <small className="terminal-changes-path" title={file.path}>{file.name}</small>}
+        {file && viewer && (
           <button type="button" className="terminal-changes-close terminal-files-open"
-            onClick={(event) => onOpenTab(picked, event.ctrlKey || event.metaKey)}
+            onClick={(event) => onOpenTab(file, event.ctrlKey || event.metaKey)}
             title={t("terminal.readerFiles.openTab")} aria-label={t("terminal.readerFiles.openTab")}>
             <ArrowUpRightIcon />
           </button>
@@ -220,7 +264,7 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
       </header>
       {scopeNote && <small className="terminal-changes-scope" title={scopeNote}>{scopeNote}</small>}
       <div className="terminal-changes-body" ref={bodyRef}>
-        {(files.length > 0 || linkRows.length > 0) && (
+        {(files.length > 0 || linkRows.length > 0 || shellRows.length > 0) && (
           <div className="terminal-changes-files">
             {READER_FILE_GROUPS.map(([from, heading, hint]) => {
               const group = grouped.filter((file) => file.from === from);
@@ -232,15 +276,15 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
                 {from === grouped[0]?.from && <UntestedTag id="terminal.reader.fileGroups" />}
               </div>
               <div className="terminal-files-group" role="listbox" aria-label={title}>
-                {group.map((file) => {
-                  const active = picked?.path === file.entry.path;
-                  const here = steering && cursor === file.entry.path;
+                {group.map((row) => {
+                  const active = file?.path === row.entry.path;
+                  const here = steering && cursor === row.entry.path;
                   return (
-                    <button type="button" role="option" key={file.entry.path} aria-selected={active}
+                    <button type="button" role="option" key={row.entry.path} aria-selected={active}
                       className={[active && "active", here && "steer-cursor"].filter(Boolean).join(" ") || undefined}
-                      aria-current={here || undefined} data-steer-row={file.entry.path} title={file.entry.path}
-                      onClick={(event) => (event.ctrlKey || event.metaKey ? onOpenTab(file.entry, true) : onPick(file.entry))}>
-                      <span className="terminal-changes-path"><strong>{file.label}</strong></span>
+                      aria-current={here || undefined} data-steer-row={row.entry.path} title={row.entry.path}
+                      onClick={(event) => (event.ctrlKey || event.metaKey ? onOpenTab(row.entry, true) : pick(row.entry))}>
+                      <span className="terminal-changes-path"><strong>{row.label}</strong></span>
                     </button>
                   );
                 })}
@@ -276,22 +320,83 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
                 })}
               </div>
             </>}
+            {shellRows.length > 0 && <>
+              <div className="terminal-files-heading">
+                {t("terminal.readerFiles.shellsHeading", { count: shellRows.length })}
+                <UntestedTag id="terminal.reader.shellsRun" />
+              </div>
+              <div className="terminal-files-group" role="listbox" aria-label={t("terminal.readerFiles.shellsList")}>
+                {shellRows.map(({ shell, key }) => {
+                  const moment = chatMoment(shell.at);
+                  const active = shellShown === key && !!shownShell;
+                  const here = steering && cursor === key;
+                  return (
+                    <button type="button" role="option" key={key} aria-selected={active}
+                      className={["terminal-files-link", active && "active", here && "steer-cursor"].filter(Boolean).join(" ")}
+                      aria-current={here || undefined} data-steer-row={key} title={t("terminal.readerFiles.shellShow")}
+                      onClick={() => setShellShown(key)}>
+                      <span className="terminal-files-link-main">
+                        <span className="terminal-reader-shell-mark" aria-hidden="true">$</span>
+                        <span className="terminal-files-shell-line">{shell.command.split("\n", 1)[0]}</span>
+                      </span>
+                      {(shell.description || moment || shell.background) && (
+                        <small className="terminal-files-link-meta">
+                          {shell.description && <span className="terminal-files-link-label">{shell.description}</span>}
+                          {shell.background && <span>{t("terminal.readerFiles.shellBackground")}</span>}
+                          {moment && <span>{chatTime(moment, use24h)}</span>}
+                        </small>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </>}
           </div>
         )}
         <div className="terminal-files-viewer" ref={viewerRef}>
-          {!picked ? (
-            <div className="terminal-reader-empty">{t(files.length ? "terminal.readerFiles.pick" : linkRows.length ? "terminal.readerFiles.onlyLinks" : "terminal.readerFiles.empty")}</div>
+          {shownShell ? (
+            <ShellCommand shell={shownShell} use24h={use24h} />
+          ) : !file ? (
+            <div className="terminal-reader-empty">{t(files.length ? "terminal.readerFiles.pick"
+              : linkRows.length ? "terminal.readerFiles.onlyLinks"
+                : shellRows.length ? "terminal.readerFiles.onlyShells" : "terminal.readerFiles.empty")}</div>
           ) : viewer ? (
             <TexPdfHostContext.Provider value={texPdfHost}>
-              <FileViewerPane key={picked.path} viewer={viewer} path={picked.path} projectId={projectId} visible={visible}
-                tabKey={tabKey ? `${tabKey}#${picked.path}` : undefined} />
+              <FileViewerPane key={file.path} viewer={viewer} path={file.path} projectId={projectId} visible={visible}
+                tabKey={tabKey ? `${tabKey}#${file.path}` : undefined} />
             </TexPdfHostContext.Provider>
           ) : (
-            <ViewlessFile key={picked.path} entry={picked} projectId={projectId} />
+            <ViewlessFile key={file.path} entry={file} projectId={projectId} />
           )}
         </div>
       </div>
     </aside>
+  );
+}
+
+/** A shell command picked in the list, whole: the agent's few words on it,
+ *  when it ran, and the command line itself with a Copy button. Shown only —
+ *  nothing here runs it. */
+function ShellCommand({ shell, use24h }: { shell: RunningShell; use24h?: boolean }) {
+  const t = useT();
+  const [copied, setCopied] = useState<"done" | "failed" | null>(null);
+  const moment = chatMoment(shell.at);
+  return (
+    <div className="terminal-files-shell">
+      <div className="terminal-files-shell-head">
+        <span className="terminal-reader-shell-mark" aria-hidden="true">$</span>
+        <strong>{shell.description || t("terminal.readerFiles.shellTitle")}</strong>
+        {moment && <small>{chatTime(moment, use24h)}</small>}
+        {shell.background && <small>{t("terminal.readerFiles.shellBackground")}</small>}
+        <button type="button" className="terminal-reader-earlier"
+          onClick={() => { void copyText(shell.command).then(() => setCopied("done"), () => setCopied("failed")); }}>
+          {t(copied === "done" ? "terminal.readerFiles.shellCopied" : "terminal.readerFiles.shellCopy")}
+        </button>
+      </div>
+      <pre className="terminal-reader-question-context terminal-reader-shell-command">{shell.command}{shell.cut && "…"}</pre>
+      {shell.cut && <small>{t("terminal.readerFiles.shellCut")}</small>}
+      {copied === "failed" && <small role="alert">{t("terminal.readerFiles.shellCopyFailed")}</small>}
+    </div>
   );
 }
 

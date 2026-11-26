@@ -93,6 +93,13 @@ const INPUT = /^\s*>(\s|$)/u;
 const INPUT_REACH = 2;
 /** Non-blank rows looked through under the list for its window note. */
 const BELOW_REACH = 8;
+/** The note 1.5.16 prints under the list while the highlight is on a model
+ * the account's plan does not include — `Unavailable · Gemini 4 Carbon is
+ * currently available to Ultra and paid Pro plan subscribers.` — drawing the
+ * row greyed and no effort slider. Enter on that row does nothing: the dialog
+ * stays up. The note names the model, so it is matched to the highlighted
+ * row by its label. */
+const UNAVAILABLE = /^Unavailable\s+·\s+(\S.*)$/u;
 
 export interface AntigravityPicker extends SelectPrompt {
   /** Index of the input line the dialog is drawn under. Antigravity puts the
@@ -115,6 +122,34 @@ function headingIndex(lines: readonly AntigravityLineLike[]): number {
     if (HEADING.test(lines[index].text.trim())) return index;
   }
   return -1;
+}
+
+/** The input line right above the dialog's heading, else the heading itself. */
+function dialogFrameStart(lines: readonly AntigravityLineLike[], heading: number): number {
+  for (let above = heading - 1, seen = 0; above >= 0 && seen < INPUT_REACH; above -= 1) {
+    const text = lines[above].text;
+    if (!text.trim()) continue;
+    seen += 1;
+    if (INPUT.test(text)) return above;
+    break;
+  }
+  return heading;
+}
+
+/**
+ * The row of the `Switch Model` heading on screen, or -1 when no dialog is up.
+ * The dialog is drawn under the input box and its rows begin with the same
+ * `> ` the box and a prompt's echo do, so a reader looking for prompts reads
+ * only the screen above it, input box included (`lastPromptEcho`): the
+ * highlighted model was once taken for the tab's first prompt and named the
+ * tab. A dialog caught mid-repaint counts too, unlike `readAntigravityPicker`,
+ * which needs rows it can answer.
+ */
+export function antigravityDialogStart(lines: readonly AntigravityLineLike[]): number {
+  const heading = headingIndex(lines);
+  if (heading < 0) return -1;
+  const field = skipBlank(lines, heading + 1);
+  return field < lines.length && SEARCH_FIELD.test(lines[field].text) ? heading : -1;
 }
 
 /**
@@ -147,6 +182,19 @@ export function readAntigravityPicker(lines: readonly AntigravityLineLike[]): An
   // mid-repaint, and walking from a highlight this cannot see is a guess.
   if (rows.length < 2 || rows.filter((row) => row.marked).length !== 1) return null;
 
+  const marked = rows.find((row) => row.marked);
+  let unavailable: string | undefined;
+  for (let below = index, seen = 0; below < lines.length && seen < BELOW_REACH; below += 1) {
+    const text = lines[below].text.trim();
+    if (!text) continue;
+    seen += 1;
+    const note = UNAVAILABLE.exec(text);
+    if (note && marked && note[1].startsWith(`${marked.label} `)) {
+      unavailable = text;
+      break;
+    }
+  }
+
   let first = 1;
   let total = rows.length;
   for (let below = index, seen = 0; below < lines.length && seen < BELOW_REACH; below += 1) {
@@ -164,17 +212,7 @@ export function readAntigravityPicker(lines: readonly AntigravityLineLike[]): An
     break;
   }
 
-  let frameStart = heading;
-  for (let above = heading - 1, seen = 0; above >= 0 && seen < INPUT_REACH; above -= 1) {
-    const text = lines[above].text;
-    if (!text.trim()) continue;
-    seen += 1;
-    if (INPUT.test(text)) {
-      frameStart = above;
-      break;
-    }
-    break;
-  }
+  const frameStart = dialogFrameStart(lines, heading);
 
   return {
     options: rows.map((row, at) => ({
@@ -182,6 +220,7 @@ export function readAntigravityPicker(lines: readonly AntigravityLineLike[]): An
       number: first + at,
       label: row.label,
       ...(row.current ? { description: "(current)" } : {}),
+      ...(row.marked && unavailable ? { description: unavailable, unavailable: true as const } : {}),
     })),
     current: rows.findIndex((row) => row.marked),
     title: lines[heading].text.trim(),
@@ -332,4 +371,137 @@ export function antigravityFooter(text: string): { model: string; effort?: strin
   // else beside it; an effort without a model is not a footer.
   if (!effort && !mode && EFFORT_WORD.test(model)) return null;
   return { model, ...(effort ? { effort: effort.toLowerCase() } : {}), ...(mode ? { mode } : {}) };
+}
+
+export type AntigravityStepStatus = "done" | "in_progress" | "pending" | "skipped" | "failed" | "unknown";
+
+export interface AntigravityStep {
+  title: string;
+  status: AntigravityStepStatus;
+}
+
+export interface AntigravitySteps {
+  /** `N` of `N/M steps`. */
+  done: number;
+  total: number;
+  /** The counts the status line adds for steps the model skipped or failed. */
+  skipped?: number;
+  failed?: number;
+  /** The checklist rows on screen: at most seven of the model's twelve. */
+  steps: AntigravityStep[];
+  /** `⋮ N earlier` / `⋮ N more`: rows of a longer list the box has cut off. */
+  moreBefore?: number;
+  moreAfter?: number;
+}
+
+/**
+ * The step checklist `agy` 1.5.16 draws above its input box while a turn runs
+ * (the model's `update_steps` tool), captured at 100×32:
+ *
+ *   ⣟  1/3 steps · Generating...
+ *     ⎿  ✓ Read the config
+ *        ● Patch the reader
+ *        ○ Run the tests
+ *   ────────────────────────────────────────────  (the input box)
+ *   >
+ *
+ * The line is `<spinner> N/M steps`, then ` · ` and whatever the turn is doing
+ * (it changes with every repaint, so none of it is read). The rows carry one
+ * glyph each: `✓` done, `●` in progress, `○` pending. The glyphs for a skipped
+ * or failed step were not captured, so a glyph this does not know is reported
+ * as `unknown`, never guessed to be one of the others. A longer list is cut to
+ * seven rows with `⋮ N earlier` / `⋮ N more` rows around them. The checklist
+ * is gone once every step has finished and when the turn ends.
+ *
+ * Only the frame's own checklist counts: the rows after it must lead straight
+ * into the input box, so the same words in the answer above it read nothing.
+ */
+const STEP_LINE = /^\s*(?:\S\s+)?(\d{1,3})\/(\d{1,3}) steps?(?=\s*(?:$|[·(,]))(.*)$/u;
+const SKIPPED = /\b(\d{1,3}) skipped\b/u;
+const FAILED = /\b(\d{1,3}) failed\b/u;
+const MORE_ROW = /^\s*(?:⎿\s+)?⋮\s+(\d{1,3}) (earlier|more)\b/u;
+/** A checklist row: an optional `⎿` on the first, then one non-word glyph and the title. */
+const STEP_ROW = /^\s*(?:⎿\s+)?([^\p{L}\p{N}\s])\s+(\S.*)$/u;
+/** A title the box wrapped: indented text that starts like words, not a glyph. */
+const STEP_WRAP = /^\s{2,}(?:⎿\s+)?([\p{L}\p{N}].*)$/u;
+const RULE = /^\s*[─━-]{8,}\s*$/u;
+/** Rows above the bottom searched for the status line: seven rows, two cut
+ * markers, wrapped titles, the box and the footer. */
+const STEPS_WINDOW = 30;
+const MAX_STEP_TITLE = 160;
+
+const STEP_GLYPHS: Record<string, AntigravityStepStatus> = {
+  "✓": "done", "✔": "done",
+  "●": "in_progress", "◉": "in_progress",
+  "○": "pending", "◌": "pending",
+  "✗": "failed", "✘": "failed", "✕": "failed", "×": "failed",
+  "⊘": "skipped", "⊖": "skipped",
+};
+
+/** Whether `index` is where the input box starts: its top rule, or its `>`
+ * row when the reading view has already dropped the rules. */
+function boxStartsAt(lines: readonly AntigravityLineLike[], index: number): boolean {
+  const at = skipBlank(lines, index);
+  return at < lines.length && (RULE.test(lines[at].text) || INPUT.test(lines[at].text));
+}
+
+export function readAntigravitySteps(lines: readonly AntigravityLineLike[]): AntigravitySteps | null {
+  const first = Math.max(0, lines.length - STEPS_WINDOW);
+  for (let head = lines.length - 1; head >= first; head -= 1) {
+    const match = STEP_LINE.exec(lines[head].text.replace(/\s+$/u, ""));
+    if (!match) continue;
+    const done = Number(match[1]);
+    const total = Number(match[2]);
+    if (total < 1 || done > total) continue;
+
+    const steps: AntigravityStep[] = [];
+    let moreBefore = 0;
+    let moreAfter = 0;
+    let index = head + 1;
+    for (; index < lines.length; index += 1) {
+      const text = lines[index].text.replace(/\s+$/u, "");
+      const more = MORE_ROW.exec(text);
+      if (more) {
+        if (more[2] === "earlier") moreBefore = Number(more[1]);
+        else moreAfter = Number(more[1]);
+        continue;
+      }
+      const row = STEP_ROW.exec(text);
+      if (row) {
+        steps.push({ title: row[2].trim().slice(0, MAX_STEP_TITLE), status: STEP_GLYPHS[row[1]] ?? "unknown" });
+        continue;
+      }
+      const wrapped = STEP_WRAP.exec(text);
+      if (wrapped && steps.length > 0) {
+        const last = steps[steps.length - 1];
+        last.title = `${last.title} ${wrapped[1].trim()}`.slice(0, MAX_STEP_TITLE);
+        continue;
+      }
+      break;
+    }
+    if (steps.length > total || !boxStartsAt(lines, index)) continue;
+
+    const rest = match[3];
+    const skipped = Number(SKIPPED.exec(rest)?.[1] ?? 0);
+    const failed = Number(FAILED.exec(rest)?.[1] ?? 0);
+    return {
+      done,
+      total,
+      ...(skipped ? { skipped } : {}),
+      ...(failed ? { failed } : {}),
+      steps,
+      ...(moreBefore ? { moreBefore } : {}),
+      ...(moreAfter ? { moreAfter } : {}),
+    };
+  }
+  return null;
+}
+
+/** Whether two readings are the same checklist: the cockpit redraws only then. */
+export function sameAntigravitySteps(a: AntigravitySteps | null, b: AntigravitySteps | null): boolean {
+  if (!a || !b) return a === b;
+  return a.done === b.done && a.total === b.total && a.skipped === b.skipped && a.failed === b.failed
+    && a.moreBefore === b.moreBefore && a.moreAfter === b.moreAfter
+    && a.steps.length === b.steps.length
+    && a.steps.every((step, at) => step.title === b.steps[at].title && step.status === b.steps[at].status);
 }

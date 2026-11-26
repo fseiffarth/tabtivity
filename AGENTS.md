@@ -26,16 +26,20 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 
 For implementation changes, before calling work done, run `scripts/gates.sh`:
 only the gates below that your change (diff vs HEAD + untracked) touches; `--all` runs every one. Runs
-are one at a time across sessions: a queued run waits, then reuses the
-last result if the tree is unchanged; run it in the background so a
-tool timeout can't kill it while it waits.
+are one at a time across sessions and batched: a queued run takes the result
+of the next run that started after it asked, since that run checked the
+shared tree with your edits in it. So start the gates once, after your last
+edit; later edits need a new run. A failure lists the changed files it names:
+one you did not touch is another session's work in progress, so leave it to
+that session (`tabs_send` it if it lingers) and report it.
 Use `scripts/gates-job.sh start` (add `--all` only for the pre-push/full-check
-routine), finish independent work, then `scripts/gates-job.sh status <printed
-directory>` for the saved summary and exit code. Do not poll each Clippy
-variant, repeatedly tail progress logs, or rerun a passing unchanged tree.
-If only waiting remains, use a blocking tool wait (up to 60 seconds per call)
-without extra progress reads; report the final result once. Inspect full logs
-only for a failure. A read-only review needs no build/test gate run unless the
+routine), finish independent work that edits nothing, then `scripts/gates-job.sh wait <printed
+directory>`, the one wait to use: it blocks up to 50 s (`--timeout <s>` if
+your tool call allows longer) and exits with the gates' code, 3 while still
+running (run it again), 2 when the run died or waited past its limit: NOT
+verified, say so. Do not poll each Clippy variant, tail progress logs, or
+rerun a passing unchanged tree; report the final result once. Inspect full
+logs only for a failure. A read-only review needs no build/test gate run unless the
 user asks for one; other sessions' edits alone are not a reason to run gates.
 All are CI gates, at zero warnings except `npm run lint`:
 

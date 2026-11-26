@@ -1,0 +1,11 @@
+Claude Code doctor
+...
+Last update attempt: none recorded
+
+API connectivity
+- API (api.anthropic.com): answered HTTP 200 in 196 ms
+- Sign-in (platform.claude.com): answered HTTP 200 in 194 ms
+- ANTHROPIC_BASE_URL: not set · NODE_EXTRA_CA_CERTS: not set · CLAUDE_CODE_CLIENT_CERT: not set
+
+Remote Control
+...

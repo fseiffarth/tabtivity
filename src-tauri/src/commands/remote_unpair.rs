@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::commands::projects::{entry_is_vm, move_tree, patch_project_entry_mirrored, sanitize_name};
+use crate::commands::projects::{copy_tree_core, entry_is_vm, patch_project_entry_mirrored, sanitize_name};
 use crate::schema::project::RemoteSpec;
 use crate::schema::projects::ProjectEntry;
 use crate::services::git_peer::{self, Peer, PeerSnapshot};
@@ -99,6 +99,9 @@ pub struct UnpairOutcome {
     pub moved: bool,
     /// The move out failed; the folder is still at `kept_at` (its old place).
     pub move_error: Option<String>,
+    /// The folder could only be copied (another drive): the copy is at
+    /// `kept_at` and the original is left here, never removed.
+    pub original_kept_at: Option<String>,
 }
 
 /// Why `entry` cannot be converted to remote-only, or `None`. Pure.
@@ -539,27 +542,82 @@ pub fn apply_unpair_blocking(project_id: &str, mirror: &Path) -> Result<UnpairPl
     Ok(UnpairPlan { entry, mirror: mirror.to_path_buf(), kept_at })
 }
 
+/// How [`keep_out`] took the folder out.
+#[derive(Debug, PartialEq, Eq)]
+enum KeptOut {
+    /// Renamed: the folder is at the destination and nowhere else.
+    Moved,
+    /// Copied to another drive; the original stays where it was.
+    Copied,
+}
+
+/// Take `src` to the free name `dst` without deleting anything: a `rename`,
+/// or across drives a copy (`.git` included) that leaves `src` in place —
+/// never copy-then-remove, so a file written into `src` during the copy, or
+/// one the copy skipped (a pipe, a socket), is never lost. A `dst` that is
+/// there already is refused, never merged into, so nothing at it is
+/// overwritten. A copy that fails half-way leaves its partial tree and the
+/// whole original. `rename` is `fs::rename` outside tests.
+fn keep_out(
+    src: &Path,
+    dst: &Path,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<KeptOut, String> {
+    if std::fs::symlink_metadata(dst).is_ok() {
+        return Err(format!("{} already exists", dst.display()));
+    }
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    match rename(src, dst) {
+        Ok(()) => Ok(KeptOut::Moved),
+        Err(e) if crate::paths::is_cross_device(&e) => {
+            copy_tree_core(src, dst, true).map(|()| KeptOut::Copied).map_err(|e| {
+                format!("copying to {} failed half-way, the original is untouched: {e}", dst.display())
+            })
+        }
+        Err(e) => Err(format!("could not move {}: {e}", src.display())),
+    }
+}
+
 /// Move the old mirror out of the state dir when the plan says so. Never
-/// deletes: `move_tree` removes the source only after a cross-device copy
-/// (`.git` included) finished, and a failure leaves the folder where it was.
+/// deletes ([`keep_out`]): across drives the folder is copied and the
+/// original left in place, and a failure leaves the folder where it was.
 pub fn move_out_blocking(plan: UnpairPlan) -> UnpairOutcome {
+    move_out_with(plan, |from, to| std::fs::rename(from, to))
+}
+
+fn move_out_with(plan: UnpairPlan, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> UnpairOutcome {
     let UnpairPlan { entry, mirror, kept_at } = plan;
+    let stays = |entry: ProjectEntry, move_error: Option<String>| UnpairOutcome {
+        entry,
+        kept_at: mirror.to_string_lossy().into_owned(),
+        moved: false,
+        move_error,
+        original_kept_at: None,
+    };
     let Some(dest) = kept_at else {
-        let kept = if mirror.is_dir() { mirror.to_string_lossy().into_owned() } else { String::new() };
-        let move_error = (!kept.is_empty() && inside(&mirror, &crate::storage::state_dir()))
+        if !mirror.is_dir() {
+            return UnpairOutcome { entry, kept_at: String::new(), moved: false, move_error: None, original_kept_at: None };
+        }
+        let move_error = inside(&mirror, &crate::storage::state_dir())
             .then(|| "no free folder name to move the local copy to".to_string());
-        return UnpairOutcome { entry, kept_at: kept, moved: false, move_error };
+        return stays(entry, move_error);
     };
     if dest == mirror {
-        return UnpairOutcome { entry, kept_at: mirror.to_string_lossy().into_owned(), moved: false, move_error: None };
+        return stays(entry, None);
     }
-    match move_tree(&mirror, &dest) {
-        Ok(()) => UnpairOutcome { entry, kept_at: dest.to_string_lossy().into_owned(), moved: true, move_error: None },
+    match keep_out(&mirror, &dest, rename) {
+        Ok(how) => UnpairOutcome {
+            entry,
+            kept_at: dest.to_string_lossy().into_owned(),
+            moved: true,
+            move_error: None,
+            original_kept_at: (how == KeptOut::Copied).then(|| mirror.to_string_lossy().into_owned()),
+        },
         Err(e) => {
             eprintln!("remote_unpair_mirror: moving '{}' out failed: {e}", mirror.display());
-            // A cross-device copy that failed half-way leaves a partial copy
-            // at `dest` and the whole original in place: report the original.
-            UnpairOutcome { entry, kept_at: mirror.to_string_lossy().into_owned(), moved: false, move_error: Some(e) }
+            stays(entry, Some(e))
         }
     }
 }
@@ -787,18 +845,61 @@ mod tests {
         std::fs::create_dir_all(&mirror).unwrap();
         std::fs::write(mirror.join("notes.txt"), "mine").unwrap();
         crate::services::home_io::mkfifo(&mirror.join("pipe"));
-        // A leftover in the destination makes `rename` fail, so the copy runs.
+        // Another drive: `rename` fails cross-device, so the copy runs.
         let dest = tmp.path().join("out").join("proj (local copy)");
-        std::fs::create_dir_all(&dest).unwrap();
-        std::fs::write(dest.join("leftover"), "x").unwrap();
         let e = entry(Some(remote(serde_json::json!({}))), false);
         let (m, d) = (mirror.clone(), dest.clone());
         let out = crate::services::home_io::within_deadline(move || {
-            move_out_blocking(UnpairPlan { entry: e, mirror: m, kept_at: Some(d) })
+            move_out_with(UnpairPlan { entry: e, mirror: m, kept_at: Some(d) }, cross_device)
         });
         assert!(out.moved && out.move_error.is_none(), "{:?}", out.move_error);
         assert_eq!(std::fs::read_to_string(dest.join("notes.txt")).unwrap(), "mine");
-        assert!(!mirror.exists());
+        assert!(mirror.join("pipe").exists(), "the original, with what the copy skipped, stays");
+    }
+
+    fn cross_device(_: &Path, _: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices))
+    }
+
+    /// Across drives the folder is copied and the original is left in place,
+    /// never removed after the copy.
+    #[test]
+    fn a_move_out_across_drives_copies_and_keeps_the_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        std::fs::create_dir_all(mirror.join(".git")).unwrap();
+        std::fs::write(mirror.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(mirror.join(".env"), "TOKEN=x").unwrap();
+        let dest = tmp.path().join("out").join("proj (local copy)");
+        let e = entry(Some(remote(serde_json::json!({}))), false);
+        let out = move_out_with(UnpairPlan { entry: e, mirror: mirror.clone(), kept_at: Some(dest.clone()) }, cross_device);
+        assert!(out.moved && out.move_error.is_none(), "{:?}", out.move_error);
+        assert_eq!(out.kept_at, dest.to_string_lossy());
+        assert_eq!(out.original_kept_at.as_deref(), Some(mirror.to_string_lossy().as_ref()));
+        assert_eq!(std::fs::read_to_string(dest.join(".env")).unwrap(), "TOKEN=x");
+        assert!(dest.join(".git").join("HEAD").is_file());
+        assert_eq!(std::fs::read_to_string(mirror.join(".env")).unwrap(), "TOKEN=x", "original untouched");
+    }
+
+    /// A destination that appeared since the plan is refused, not merged
+    /// into: nothing at it is overwritten and the folder stays where it was.
+    #[test]
+    fn a_move_out_never_writes_into_an_existing_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        std::fs::create_dir_all(&mirror).unwrap();
+        std::fs::write(mirror.join("notes.txt"), "mine").unwrap();
+        let dest = tmp.path().join("out").join("proj (local copy)");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("notes.txt"), "theirs").unwrap();
+        let e = entry(Some(remote(serde_json::json!({}))), false);
+        for rename in [cross_device as fn(&Path, &Path) -> std::io::Result<()>, |a, b| std::fs::rename(a, b)] {
+            let out = move_out_with(UnpairPlan { entry: e.clone(), mirror: mirror.clone(), kept_at: Some(dest.clone()) }, rename);
+            assert!(!out.moved && out.move_error.is_some());
+            assert_eq!(out.kept_at, mirror.to_string_lossy());
+            assert_eq!(std::fs::read_to_string(dest.join("notes.txt")).unwrap(), "theirs");
+            assert_eq!(std::fs::read_to_string(mirror.join("notes.txt")).unwrap(), "mine");
+        }
     }
 
     #[test]

@@ -88,7 +88,10 @@ dedicated GPU, otherwise system RAM. Sizes are approximate download sizes.
 
 For autocomplete, a small model (1.5b–3b) answers fastest even on a big
 machine. For agent tabs other than Mistral, the model must support tool
-calling; the Models & agents menu tags models without it "no tools".
+calling; the Models & agents menu tags models without it "no tools". A
+Mistral tab runs on any model: on a model with tool calling it can read
+files, edit and run commands in the project; on a "no tools" model it only
+chats.
 
 ## 4. Load a model onto the GPU
 
@@ -108,9 +111,15 @@ calling; the Models & agents menu tags models without it "no tools".
    your approval; clearing its conversations ends that for new tabs. Close
    the model's tabs first: the menu names any that are still open. Settings
    and logins are kept.
-6. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
+6. **Unload** frees a model's memory, and it stays unloaded: prompt
+   suggestions, prompt and mail autocomplete and the editor's automatic
+   completions skip it rather than load it back. **Load** it again (here or
+   from the phone) to bring them back; restarting Tabtivity does too. What
+   you start yourself — a Local Model tab, a mail summary, a completion you
+   ask for — still loads it.
+7. Optional: under **Load on Tabtivity start** in the Ollama panel, tick models to
    load automatically at launch (not in Energy Saver mode unless you allow it).
-7. From a paired phone, Home → **Local models** loads and unloads installed
+8. From a paired phone, Home → **Local models** loads and unloads installed
    models too (help topic `mobile`, "Local models from the phone").
 
 ## 5. Open a Local Model tab
@@ -168,6 +177,11 @@ calling; the Models & agents menu tags models without it "no tools".
   system service, **Apply to the service…** opens a terminal with the `sudo`
   command (a systemd drop-in), which restarts the service and unloads every
   model. `OLLAMA_KEEP_ALIVE` set in your environment wins.
+- **Claude Code on a local model refuses every command** ("auto mode's
+  check had no usable answer"): the tab is in Claude Code's auto mode, whose
+  safety check runs on the same local model and gets no usable answer. The tab
+  shows a card while its last turn ended in auto mode; press **Shift+Tab** in
+  the terminal to switch to another mode (Tabtivity never picks the mode).
 - **Integrated GPU ignored**: some Ollama versions need `OLLAMA_IGPU_ENABLE=1`
   in the server's environment; the Models & agents menu offers the fix.
 - **Server won't start**: run `ollama serve` in a terminal to see its error.
@@ -184,6 +198,12 @@ reads it: only agent tabs on an installed local Ollama model start in it, the
 agents see an empty folder where it is, and a file of the project cannot be
 dropped onto an agent that is not on a local model. Turning it on closes the
 project's running cloud agent tabs.
+
+A project in a **Docker container** can be set too. Its local-model tabs then
+run in this computer's agent sandbox, not in the container (they need the
+Ollama on this computer, and the sandbox is what holds them to it); its shells
+and builds stay in the container, and no agent starts inside the container.
+A remote or VM project cannot be set yet.
 
 OpenCode cannot be kept on the local model while the project keeps its network
 (it re-reads a config file the agent writes while it runs, so the agent could add

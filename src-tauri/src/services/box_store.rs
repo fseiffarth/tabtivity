@@ -265,13 +265,16 @@ pub(crate) fn box_id_of_scope(scope: &str) -> Option<&str> {
 }
 
 /// Pure core of [`box_allowed_roots`]: the directories a `box:<id>`-scoped tab
-/// or viewer may live in — the box folder (once resolved), every member
-/// project's root, and each member's explicit local-mirror override
-/// (`extra["mirror"]`, the browsable tree of a remote member). A remote-only
-/// member adds no root at all: it has no local tree, its `directory` is only
-/// its state dir, and a stale `extra["mirror"]` is not a copy it keeps. `None`
-/// for an unknown box id so callers fail closed, mirroring
-/// `compute_allowed_roots`.
+/// or viewer may live in — the box folder (once resolved), every local
+/// member's root, and each member's explicit local-mirror override
+/// (`extra["mirror"]`, the local copy of a remote member;
+/// [`box_allowed_roots`] adds the default copy of one without). A remote member's `directory` is never a root: it is its state
+/// folder (sync bookkeeping, no project file an agent should touch) or, in a
+/// legacy entry, typically the user's home, and every box tab is handed each
+/// root (the fence binds it, Claude gets `--add-dir` for it). A remote-only
+/// member adds no root at all: it has no local tree, and a stale
+/// `extra["mirror"]` is not a copy it keeps. `None` for an unknown box id so
+/// callers fail closed, mirroring `compute_allowed_roots`.
 pub(crate) fn compute_box_allowed_roots(
     boxes: &BoxesList,
     projects: &crate::schema::projects::ProjectsList,
@@ -293,8 +296,9 @@ pub(crate) fn compute_box_allowed_roots(
         if crate::services::agent_privacy::is_locked(p) {
             continue;
         }
-        if let Some(dir) = project_directory(p) {
-            roots.push(dir);
+        let remote = p.extra.get("remote").is_some_and(|v| !v.is_null());
+        if !remote {
+            roots.extend(project_directory(p));
         }
         if let Some(Value::String(mirror)) = p.extra.get("mirror") {
             if !mirror.trim().is_empty() {
@@ -373,5 +377,30 @@ mod tests {
             member_local_copies(&b, &projects, state),
             vec![PathBuf::from("/w/pl-mirror"), crate::services::remote_sync::default_mirror_dir_in(state, "df")]
         );
+    }
+
+    /// A remote member's `directory` is never a box root: in a legacy entry it
+    /// names the user's home, which every box tab would then be handed (fence
+    /// bind, Claude `--add-dir`); in a current one its state folder. Its local
+    /// copy is its only root; a local member keeps its folder.
+    #[test]
+    fn a_remote_members_directory_is_no_box_root() {
+        let projects: crate::schema::projects::ProjectsList = serde_json::from_value(serde_json::json!([
+            { "id": "loc", "name": "L", "status": "active", "position": 0, "local_file": "", "directory": "/w/loc" },
+            { "id": "legacy", "name": "G", "status": "active", "position": 1, "local_file": "", "directory": "/home/u",
+              "remote": { "host": "h", "remote_path": "/srv/g" }, "mirror": "/w/g-copy" },
+            { "id": "cur", "name": "C", "status": "active", "position": 2, "local_file": "/state/remote-projects/cur/project.json",
+              "remote": { "host": "h", "remote_path": "/srv/c" } },
+        ]))
+        .unwrap();
+        let b = ProjectBox {
+            id: "b".into(),
+            name: "B".into(),
+            member_ids: ["loc", "legacy", "cur"].map(String::from).to_vec(),
+            folder: Some("/boxes/b".into()),
+            ..ProjectBox::default()
+        };
+        let roots = compute_box_allowed_roots(&vec![b], &projects, "b").unwrap();
+        assert_eq!(roots, ["/boxes/b", "/w/loc", "/w/g-copy"].map(PathBuf::from).to_vec());
     }
 }

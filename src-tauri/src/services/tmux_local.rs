@@ -486,6 +486,9 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     crate::services::claude_token::CARRIER,
     // The tab messages lane's token (`Caller::Tabs`), slot 8643 — appended.
     crate::services::root_mcp::TABS_TOKEN_ENV,
+    // The bearer header of Claude's trace exporter (`claude_otel`), slot 8644 —
+    // appended; under its carrier, so the exporter's own variable stays free.
+    crate::services::claude_otel::CARRIER,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -1336,8 +1339,10 @@ mod tests {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
             assert_eq!(SECRET_UPDATE_ENV_SLOT + at, if i < 2 { 8636 + i } else { 8639 }, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 14);
-        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8643);
+        assert_eq!(SECRET_ENV.len(), 15);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8644);
+        let otel = SECRET_ENV.iter().position(|k| *k == crate::services::claude_otel::CARRIER).unwrap();
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + otel, 8644, "the trace exporter's bearer is appended, slot 8644");
         let print = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::PRINT_TOKEN_ENV).unwrap();
         assert_eq!(SECRET_UPDATE_ENV_SLOT + print, 8641, "the print token is appended, slot 8641");
         let claude = SECRET_ENV.iter().position(|k| *k == crate::services::claude_token::CARRIER).unwrap();

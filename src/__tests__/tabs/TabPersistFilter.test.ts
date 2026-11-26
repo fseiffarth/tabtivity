@@ -194,7 +194,10 @@ describe("a relaunchable local-model tab (#31bl)", () => {
 
     useTabsStore.getState().loadFromLayout(saved.tabs, "/tmp", "p", saved.tabGroups ?? undefined);
     const restored = useTabsStore.getState().tabs.find((t) => t.kind === "local_agent");
-    expect(restored).toMatchObject({ cmd: "ollama", args: launch.args, localLaunch: launch, tmuxSession: tab.tmuxSession });
+    expect(restored).toMatchObject({ cmd: "ollama", localLaunch: launch, tmuxSession: tab.tmuxSession });
+    // A Claude Code tab saved without a key gets one, handed on behind its line.
+    expect(restored?.sessionId).toBeTruthy();
+    expect(restored?.args).toEqual([...launch.args, "--", "--session-id", restored?.sessionId]);
   });
 });
 

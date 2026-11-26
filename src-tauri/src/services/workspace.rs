@@ -117,6 +117,14 @@ fn kind_of(tab: &TabEntry) -> &str {
     extra_str(tab, KIND_KEY).unwrap_or("")
 }
 
+/// A tab whose launch must run once only: a vendor cloud session (`cloud`;
+/// running `--cloud <task>` again starts a second session) or a sign-in
+/// (`signIn`). Neither has a session to resume, so neither is kept for a
+/// reopen or started again — the desktop's `canReopenAfterClose` rule.
+pub fn is_one_shot(tab: &TabEntry) -> bool {
+    ["cloud", "signIn"].iter().any(|key| tab.extra.get(*key).and_then(Value::as_bool) == Some(true))
+}
+
 // ── Owner-side minting ──────────────────────────────────────────────────────
 
 /// Mint the tmux session name of a scope's new PTY tab:
@@ -846,12 +854,13 @@ pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after:
 /// Take the tab behind `tmux` out of the set and hand it back, so the caller
 /// can end the session behind it (the desktop's own × ends a local session
 /// the tab minted). An agent tab joins the scope's closed list, under a fresh
-/// opaque id, for a reopen. `now_ms` is the close stamp.
+/// opaque id, for a reopen — not a one-shot one ([`is_one_shot`]). `now_ms`
+/// is the close stamp.
 pub fn close_tab_in(path: &Path, scope: &str, tmux: &str, now_ms: u64) -> Result<TabEntry, String> {
     let mut removed: Option<TabEntry> = None;
     edit_tab_in(path, scope, tmux, |session, i| {
         let tab = session.tab_layout.remove(i);
-        if matches!(kind_of(&tab), "agent" | "local_agent") {
+        if matches!(kind_of(&tab), "agent" | "local_agent") && !is_one_shot(&tab) {
             let mut closed = closed_tabs(session);
             closed.insert(0, ClosedTab { id: closed_id(), closed_at: now_ms, tab: tab.clone() });
             closed.truncate(MAX_CLOSED_TABS);
@@ -1301,6 +1310,19 @@ mod tests {
         assert_eq!(remembered[0].tab.label, "Claude");
         assert_ne!(remembered[0].id, "uid-1", "the closed id is never the session id");
         assert_eq!(close_tab_in(&path, "p", concat!(crate::app_slug!(), "-p--agent-2"), 3_000).unwrap_err(), TAB_NOT_FOUND);
+
+        // A cloud or sign-in tab is a one-shot: closing it keeps nothing, since
+        // reopening would run its launch again (a second cloud session).
+        for flag in ["cloud", "signIn"] {
+            let mut one_shot = tab(&format!("o-{flag}"), "Claude (cloud)");
+            one_shot.extra.insert("kind".into(), Value::String("agent".into()));
+            one_shot.extra.insert(flag.into(), Value::Bool(true));
+            let minted = create_tab_in(&path, "p", one_shot, None).unwrap().tab;
+            let tmux = tmux_of(&minted).expect("minted tmux name").to_string();
+            assert!(is_one_shot(&minted));
+            close_tab_in(&path, "p", &tmux, 2_500).unwrap();
+            assert_eq!(closed_tabs(&read_session(&path).unwrap()).len(), 1, "{flag}: only the plain agent is kept");
+        }
 
         // The window's stale snapshot neither resurrects the closed tabs nor
         // undoes the rename.

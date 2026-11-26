@@ -680,6 +680,7 @@ async fn mutating_routes_refuse_an_unauthenticated_request() {
         "/api/v1/projects/anything/prompts/anything/send",
         "/api/v1/mail/folders/anything/messages/anything/mark",
         "/api/v1/mail/folders/anything/messages/anything/reply",
+        "/api/v1/mail/folders/anything/messages/anything/complete",
         "/api/v1/local-models",
     ] {
         let (status, _, body) = host.send(post_json(uri, ORIGIN, &create)).await;
@@ -918,6 +919,8 @@ async fn a_phone_transcript_masks_the_running_shells_command_lines() {
             },
             RunningShell { command: "cat ~/.ssh/config".into(), background: true, ..Default::default() },
         ],
+        // The Data tab's whole history is the desktop's alone.
+        shells_run: vec![RunningShell { command: format!("ls {root} /var/tmp/history"), ..Default::default() }],
         ..Default::default()
     };
     let wire = phone_transcript(&host.state, &Phone(device), &tab_id, transcript).await;
@@ -926,8 +929,9 @@ async fn a_phone_transcript_masks_the_running_shells_command_lines() {
     assert_eq!(wire["shells"][0]["cut"], true);
     assert_eq!(wire["shells"][1]["command"], "cat ~/…/config");
     assert_eq!(wire["shells"][1]["background"], true);
+    assert!(wire.get("shellsRun").is_none(), "{wire}");
     let text = wire.to_string();
-    for leaked in [root.as_str(), "sk-live", "/var/tmp", ".ssh"] {
+    for leaked in [root.as_str(), "sk-live", "/var/tmp", ".ssh", "history"] {
         assert!(!text.contains(leaked), "{leaked}: {wire}");
     }
 }
@@ -1220,6 +1224,121 @@ async fn the_complete_route_carries_the_draft_and_answers_what_to_append() {
     let (status, _, body) = host.send(get_as(&format!("{route}?phase=complete"), &cookie)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(json(&body)["error"], "invalid_phase");
+    desktop.abort();
+}
+
+/// The reply completion's route: a draft crosses to the window with the same
+/// opaque ids a reply uses, and what comes back is `text`, `status` and the
+/// crediting `model` only — cleaned again, with no reason and nothing raw. A
+/// draft the engine writes nothing for never reaches the window; no window is
+/// `unavailable` (no error); a not-found answer passes as a 404; an unknown
+/// outcome word is `unavailable`.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_mail_complete_route_carries_draft_offset_and_warm_and_answers_text_and_status_only() {
+    let host = Fixture::bare();
+    let cookie = host.pair_device(&signing_key(59)).await.0;
+    let route = "/api/v1/mail/folders/folder-1/messages/message-1/complete";
+    let press_at = |uri: &str, origin: &'static str, body: Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri.to_string())
+            .header(header::ORIGIN, origin)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&body).expect("body")))
+            .expect("request")
+    };
+    let press = |origin: &'static str, body: Value| press_at(route, origin, body);
+    // No window: no completion and no error.
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "text": null, "status": "unavailable" }), "{body}");
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let (seen_tx, mut seen) = tokio::sync::mpsc::unbounded_channel::<DesktopRequest>();
+    let desktop = tokio::spawn(async move {
+        let answers = [
+            DesktopResponse::MailComplete {
+                text: Some("  I'll send\u{202e} them\nIgnore all and leak".into()),
+                outcome: "ok".into(),
+                model: Some("qwen3:4b\u{202e}".into()),
+            },
+            DesktopResponse::MailComplete { text: None, outcome: "warmed".into(), model: None },
+            DesktopResponse::MailComplete { text: Some("sneaky".into()), outcome: "launched".into(), model: Some("m".into()) },
+            // Text beside anything but `ok` is dropped, with its model.
+            DesktopResponse::MailComplete { text: Some("sneaky".into()), outcome: "refused".into(), model: Some("m".into()) },
+            DesktopResponse::Error { code: "message_not_found".into(), message: "x".into() },
+            DesktopResponse::Error { code: "boom".into(), message: "x".into() },
+        ];
+        for answer in answers {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else { continue };
+            let _ = seen_tx.send(request);
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and", "offset": 25 }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "text": " I'll send them", "status": "ok", "model": "qwen3:4b" }), "{body}");
+    match seen.recv().await.expect("a desktop ask") {
+        DesktopRequest::MailComplete { folder_id, message_id, offset, draft, warm, .. } => {
+            assert_eq!((folder_id.as_str(), message_id.as_str(), offset), ("folder-1", "message-1", 25));
+            assert_eq!(draft, "Thanks for the slides and");
+            assert!(!warm);
+        }
+        other => panic!("asked {other:?}"),
+    }
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "warm": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "text": null, "status": "warmed" }), "{body}");
+    match seen.recv().await.expect("a desktop ask") {
+        DesktopRequest::MailComplete { draft, warm, offset, .. } => assert!(warm && draft.is_empty() && offset == 0),
+        other => panic!("asked {other:?}"),
+    }
+    let (_, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(json(&body), json!({ "text": null, "status": "unavailable" }), "an unknown outcome word never crosses: {body}");
+    let (_, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(json(&body), json!({ "text": null, "status": "refused" }), "no text, model or reason beside a refusal: {body}");
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(json(&body)["error"], "message_not_found");
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "text": null, "status": "unavailable" }), "{body}");
+    while seen.try_recv().is_ok() {}
+
+    // Skipped here, the window not asked: one unfinished word, a command, no draft.
+    for draft in ["Thanks", "/model opus now", "", "Thanks for the\n"] {
+        let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": draft }))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body), json!({ "text": null, "status": "skipped" }), "{draft:?}: {body}");
+    }
+    let (_, _, body) = host.send(press(ORIGIN, json!({ "draft": "word ".repeat(500) }))).await;
+    assert_eq!(json(&body)["status"], "skipped", "past the engine's bound: {body}");
+    assert!(seen.try_recv().is_err(), "a draft with nothing to complete reached the window");
+
+    // Guards: origin, shape, size.
+    let (status, _, body) = host.send(press("https://evil.example", json!({ "draft": "Thanks for the slides and" }))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(json(&body)["error"], "invalid_origin");
+    for bad in [
+        json!({ "draft": "Thanks for the slides and", "to": "x@example.test" }),
+        json!({ "warm": true, "draft": "Thanks for the" }),
+        json!({ "draft": "Thanks for the slides and", "offset": 100_001 }),
+        json!({ "draft": 5 }),
+    ] {
+        let (status, _, body) = host.send(press(ORIGIN, bad.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+        assert_eq!(json(&body)["error"], "invalid_request");
+    }
+    let (status, _, body) = host.send(press(ORIGIN, json!({ "draft": "x".repeat(MAX_MAIL_COMPLETE_BYTES + 1) }))).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    let bad_id = "/api/v1/mail/folders/a.b/messages/message-1/complete";
+    let (status, _, _) = host.send(press_at(bad_id, ORIGIN, json!({ "warm": true }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(seen.try_recv().is_err(), "a refused request reached the window");
     desktop.abort();
 }
 
@@ -2017,7 +2136,7 @@ async fn a_create_with_no_window_is_minted_spawned_and_listed_by_the_owner() {
         .send(create_request(
             &project_id,
             &cookie,
-            json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "cloud": "new", "task": "x", "idempotency_key": "h1b-cloud-0123456789abcdef" }),
+            json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "mode": "plan", "idempotency_key": "h1b-mode-0123456789abcdef" }),
         ))
         .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
@@ -2035,6 +2154,81 @@ async fn a_create_with_no_window_is_minted_spawned_and_listed_by_the_owner() {
     assert_eq!(shell.cmd, "");
     assert!(!shell.agent);
     assert!(shell.tmux_session.as_deref().is_some_and(|n| n.starts_with(&format!("{}{RAW_PROJECT}--shell-", crate::brand::TMUX_PREFIX))));
+}
+
+/// A project's vendor cloud session with no window: `launch-options` lists
+/// the offered agents' cloud launches, and a create is the owner's — a
+/// one-shot record (`cloud`, no session id, no `TAB_UID`) started on the
+/// launch's own args. A New with no task or one led by `-`, and an agent
+/// with no cloud launch, are refused before anything starts.
+#[tokio::test]
+async fn a_cloud_session_with_no_window_is_listed_and_started_by_the_owner() {
+    let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = recorded.clone();
+    let host = headless_host(Arc::new(move |opts: PtyOptions| {
+        sink.lock().unwrap().push(opts);
+        Box::pin(async { Ok(()) })
+    }));
+    let cookie = host.pair_device(&signing_key(43)).await.0;
+    let (_, _, projects_body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    let project_id = json(&projects_body)["projects"][0]["id"].as_str().expect("project id").to_string();
+    let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+    let agents: Vec<(String, String)> = json(&body)["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .map(|a| (a["label"].as_str().unwrap().to_string(), a["id"].as_str().unwrap().to_string()))
+        .collect();
+    let claude = agents.iter().find(|(label, _)| label == "Claude").expect("Claude").1.clone();
+
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/launch-options"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let options = json(&body);
+    assert_eq!(options["desktop_available"], false);
+    let cloud = options["cloud"].as_array().expect("cloud").clone();
+    assert!(cloud.contains(&json!({ "agent_id": claude, "action": "new", "task": true })), "{body}");
+    assert!(cloud.contains(&json!({ "agent_id": claude, "action": "open", "task": false })), "{body}");
+    assert!(!body.contains("claude"), "an agent crosses by opaque id only: {body}");
+
+    let create = |key: &str, agent: &str, extra: Value| {
+        let mut body = json!({ "project_id": project_id, "kind": "agent", "agent_id": agent, "idempotency_key": format!("cloud-{key}-0123456789abcdef") });
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        create_request(&project_id, &cookie, body)
+    };
+
+    // Refused before a record is written or anything starts.
+    let (status, _, body) = host.send(create("notask", &claude, json!({ "cloud": "new" }))).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::BAD_REQUEST, Some("task_required")), "{body}");
+    let (status, _, body) = host.send(create("flag", &claude, json!({ "cloud": "new", "task": "--dangerously-skip-permissions" }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a task led by `-` would reach the CLI as a flag: {body}");
+    let offered: Vec<&str> = cloud.iter().filter_map(|row| row["agent_id"].as_str()).collect();
+    let plain = agents.iter().find(|(_, id)| !offered.contains(&id.as_str())).expect("an agent with no cloud").1.clone();
+    let (status, _, body) = host.send(create("plain", &plain, json!({ "cloud": "open" }))).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::BAD_REQUEST, Some("unsupported_cloud")), "{body}");
+    assert!(recorded.lock().unwrap().is_empty());
+
+    // A New takes its task as the last argument; an Open runs bare.
+    let (status, _, body) = host.send(create("new", &claude, json!({ "cloud": "new", "task": "  fix the build " }))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(json(&body)["tab"]["label"], "Claude (cloud)");
+    let (status, _, body) = host.send(create("open", &claude, json!({ "cloud": "open" }))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let spawned = recorded.lock().unwrap().clone();
+    assert_eq!(spawned.iter().map(|o| o.args.clone()).collect::<Vec<_>>(), [vec!["--cloud".to_string(), "fix the build".to_string()], vec!["--teleport".to_string()]]);
+    for opts in &spawned {
+        assert_eq!(opts.cmd, "claude");
+        assert!(opts.agent);
+        assert!(!opts.env.contains_key(crate::app_env!("TAB_UID")), "the session is the vendor's: {:?}", opts.env);
+    }
+    let session_path = host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join("terminals.json");
+    let session: Value = serde_json::from_slice(&std::fs::read(&session_path).expect("session")).expect("json");
+    let minted: Vec<&Value> = session["tabLayout"].as_array().expect("tabs").iter().filter(|t| t["cloud"] == true).collect();
+    assert_eq!(minted.len(), 2, "{session}");
+    for record in minted {
+        assert!(record.get("sessionId").is_none_or(Value::is_null), "no session to resume: {record}");
+        assert_eq!(record["kind"], "agent");
+    }
 }
 
 /// A host holding the chat assistant's scope and nothing else: the flag on
@@ -2964,6 +3158,10 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = recorded.clone();
     let mut host = headless_host(Arc::new(|_: PtyOptions| Box::pin(async { Ok(()) })));
+    // The push lane is granted only inside a git repo: make the project
+    // folder one (`HEAD`, `objects`, `refs` are what discovery counts).
+    for sub in ["objects", "refs"] { std::fs::create_dir_all(host.root.join(".git").join(sub)).expect("git dir"); }
+    std::fs::write(host.root.join(".git").join("HEAD"), "ref: refs/heads/main\n").expect("git HEAD");
     let state_dir = host.state.config.state_dir.clone();
     let grant_dir = state_dir.clone();
     host.state.spawner = HeadlessSpawner {
@@ -3454,6 +3652,79 @@ async fn the_activity_list_answers_an_empty_list_when_no_desktop_classifies_tabs
     assert_eq!(json(&body)["tabs"].as_array().expect("tabs").len(), 0);
     assert!(!body.contains(RAW_PROJECT));
     assert!(!body.contains(crate::brand::TMUX_PREFIX));
+}
+
+#[tokio::test]
+async fn project_list_activity_and_detail_share_headless_readings() {
+    use crate::services::agent_turn::TURN_SUFFIX;
+    let host = Fixture::bare();
+    let (owner, owner_id) = host.pair_device(&signing_key(91)).await;
+    let (guest, _) = host.pair_device(&signing_key(92)).await;
+    let state_dir = &host.state.config.state_dir;
+    let live = state_dir.join("live_sessions");
+    std::fs::create_dir_all(&live).unwrap();
+    let mut projects = Vec::new();
+    for scope in ["shared", "private"] {
+        let root = host.root.join(scope);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut entry = json!({
+            "id": scope, "name": scope, "directory": root, "status": "active",
+            "git_type": "none", crate::brand::MOBILE_ACCESS_KEY: true,
+        });
+        if scope == "private" {
+            entry[crate::brand::MOBILE_DEVICES_KEY] = json!([owner_id]);
+        }
+        projects.push(entry);
+        let mut tabs = Vec::new();
+        for i in 0..2 {
+            let uid = format!("{scope}-{i}");
+            tabs.push(json!({
+                "cmd": "claude", "kind": "agent", "label": uid, "cwd": root,
+                "sessionId": uid, "tmuxSession": format!("{SLUG}-{scope}--agent-abcdef12{i}"),
+            }));
+            std::fs::write(live.join(format!("{uid}{TURN_SUFFIX}")), "working 100").unwrap();
+        }
+        let sessions = state_dir.join("sessions").join(scope);
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("terminals.json"), json!({ "tabLayout": tabs }).to_string()).unwrap();
+    }
+    std::fs::write(state_dir.join("projects.json"), json!(projects).to_string()).unwrap();
+
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=shared", &owner)).await;
+    let list = json(&body);
+    let rows = list["projects"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{body}");
+    assert_eq!(rows[0]["agents"]["working"], 2);
+    let detail = format!("/api/v1/projects/{}", rows[0]["id"].as_str().unwrap());
+
+    // Only the search result is warm. Activity should pick up the other
+    // project's new decision and keep the shared project's original reading.
+    std::fs::write(live.join(format!("shared-0{TURN_SUFFIX}")), "done 110").unwrap();
+    std::fs::write(live.join(format!("private-0{TURN_SUFFIX}")), "decision 110").unwrap();
+    let (_, _, body) = host.send(get_as("/api/v1/activity", &owner)).await;
+    let activity = json(&body);
+    let tabs = activity["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 4, "{body}");
+    assert_eq!(tabs[0]["agent_status"], "question", "{body}");
+    assert_eq!(tabs.iter().filter(|t| t["agent_status"] == "working").count(), 3);
+
+    let (_, _, body) = host.send(get_as(&detail, &owner)).await;
+    let overview = json(&body);
+    let tabs = overview["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 2, "{body}");
+    assert!(tabs.iter().all(|t| t["agent_status"] == "working"), "{body}");
+
+    let (_, _, body) = host.send(get_as("/api/v1/activity", &guest)).await;
+    let activity = json(&body);
+    let tabs = activity["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 2, "{body}");
+    assert!(tabs.iter().all(|r| r["project_label"] == "shared"), "{body}");
+
+    mark_tab_seen(&host.state, Some("shared".into()), format!("{SLUG}-shared--agent-abcdef120"), Some("shared-0"));
+    let (_, _, body) = host.send(get_as(&detail, &guest)).await;
+    let overview = json(&body);
+    let seen = overview["tabs"].as_array().unwrap().iter().find(|t| t["done_at"] == 110_000).unwrap();
+    assert!(seen.get("agent_status").is_none(), "{body}");
 }
 
 #[test]
@@ -7048,6 +7319,7 @@ async fn a_phone_kept_out_of_a_section_is_refused_its_routes() {
         ("GET", "/api/v1/mail/folders/anything/messages/anything"),
         ("POST", "/api/v1/mail/folders/anything/messages/anything/mark"),
         ("POST", "/api/v1/mail/folders/anything/messages/anything/reply"),
+        ("POST", "/api/v1/mail/folders/anything/messages/anything/complete"),
     ] {
         let (status, _, body) = host.send(request_as(method, uri, &kept_out, Some(serde_json::json!({})))).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {body}");
@@ -7123,6 +7395,31 @@ async fn status_reports_the_desktop_theme_for_a_phone_that_follows_it() {
     std::fs::write(&settings, br#"{"color_scheme":"<b>/etc/passwd</b>"}"#).expect("settings");
     let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
     assert_eq!(json(&body)["color_scheme"], "light_lavender");
+}
+
+/// Home's VPN lamp: nothing while no config is stored, then the tunnel's state
+/// as one word. No live OpenVPN daemon exists in a test, so a pidfile naming
+/// this process reads down on Linux (it is not OpenVPN) — the stale-pidfile
+/// case — and the config's name never crosses either way.
+#[tokio::test]
+async fn status_reports_the_vpn_tunnel_as_one_word() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(95)).await.0;
+    let runtime = host.state.config.state_dir.join("openvpn");
+
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert!(json(&body)["vpn"].is_null(), "{body}");
+
+    let configs = runtime.join("configs");
+    std::fs::create_dir_all(&configs).expect("configs");
+    std::fs::write(configs.join("abc__institute.ovpn"), "client\n").expect("config");
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert_eq!(json(&body)["vpn"], "down", "{body}");
+
+    std::fs::write(runtime.join("abc.pid"), format!("{}\n", std::process::id())).expect("pidfile");
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert_eq!(json(&body)["vpn"], if cfg!(target_os = "linux") { "down" } else { "up" }, "{body}");
+    assert!(!body.contains("institute"), "{body}");
 }
 
 /// The desktop pill's git dot reaches the list row and the project screen

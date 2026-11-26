@@ -43,6 +43,8 @@ import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
+import type { AgentPrivacyChange } from "../../lib/projects/localModelsOnly";
+import { readProjectDialogMemory, writeProjectDialogMemory } from "./projectDialogMemory";
 import { NAMES } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
 import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
@@ -59,7 +61,7 @@ const GIT_INSTALL_CMD = IS_HOST_WINDOWS
     : "sudo apt-get install -y git";
 
 /** One step of a create/import submit, as the footer's progress list names it. */
-type SubmitStep = "clone" | "register" | "container" | "hostSetup" | "agents" | "publish";
+type SubmitStep = "clone" | "register" | "privacy" | "container" | "hostSetup" | "agents" | "publish";
 
 /** Where an import's files come from: a folder already on this machine, a
  *  repository cloned from GitHub/GitLab (any git URL), or a *fork* of one —
@@ -102,7 +104,9 @@ export function ProjectDialog({
   onProject: (project: ProjectEntry) => void | Promise<void>;
 }) {
   const t = useT();
-  const { confirmAction, dialogs } = useDialogs();
+  const { confirmAction, showMessage, dialogs } = useDialogs();
+  // The answers the dialog had when it was last closed (`projectDialogMemory`).
+  const [memory] = useState(() => readProjectDialogMemory(kind));
   const defaultAgentCmd = useSettingsStore((s) => s.settings?.default_agent_cmd ?? "claude");
   // A GitHub/GitLab "connection through Tabtivity" = a host token saved in
   // Settings → Git Hosting (the credential publishing actually uses). Used to
@@ -112,24 +116,37 @@ export function ProjectDialog({
   // The default (first) host's profile URL says which provider a publish goes
   // to when none was picked.
   const gitProfileUrl = gitHosts?.[0]?.profile_url ?? "";
-  const [projectsRoot, setProjectsRoot] = useState("");
+  const [projectsRoot, setProjectsRoot] = useState(memory.projectsRoot ?? "");
+  // Whether the location is the user's own pick (remembered) rather than the
+  // backend default (re-read at every open).
+  const [projectsRootPicked, setProjectsRootPicked] = useState(!!memory.projectsRoot);
   // Remote (SSH) projects only: the chosen parent dir for the LOCAL mirror (the
   // synced working copy). The mirror lands at `<mirrorParent>/<name>`. Seeded
   // from the backend default (`projects-ssh` root) so it matches
   // `default_remote_mirror`; editable via the "Local location" picker.
   const [mirrorParent, setMirrorParent] = useState("");
-  const [name, setName] = useState("");
+  const [name, setName] = useState(memory.name ?? "");
   // The folder a remote New (or host clone) makes on the host, as the user typed
   // it. `null` = not edited: it follows the project's sanitized name.
   const [hostFolder, setHostFolder] = useState<string | null>(null);
-  const [description, setDescription] = useState("");
-  const [descriptionFillMode, setDescriptionFillMode] = useState("manual");
+  const [description, setDescription] = useState(memory.description ?? "");
+  const [descriptionFillMode, setDescriptionFillMode] = useState(() =>
+    memory.localModelsOnly && memory.descriptionFillMode && AGENT_SCAFFOLD_FILL_MODES.has(memory.descriptionFillMode)
+      ? "manual"
+      : memory.descriptionFillMode ?? "manual",
+  );
+  // Local models only (`services::agent_privacy`), asked for at creation: stored
+  // right after the project is registered, before any of its tabs can open.
+  const [localModelsOnly, setLocalModelsOnly] = useState(memory.localModelsOnly ?? false);
   // Same default the import-source dropdown applies when the source is switched
   // by hand (`changeImportSource`) — a dialog opened *directly* on the clone
   // source (the New-tab menu's "Import from GitHub…") starts on the same answer
   // instead of on "Local repo only", which no cloned repository is.
+  // An import's follows its source (folder origin, clone URL); a New's is remembered.
   const [gitType, setGitType] = useState(
-    kind === "import" && initialImportSource !== "folder" ? "remote-private" : "local",
+    kind === "import"
+      ? initialImportSource !== "folder" ? "remote-private" : "local"
+      : memory.gitType ?? "local",
   );
   // Whether the user has answered the Git hosting field themselves. The clone
   // URL fills that field on their behalf (provider + visibility, below), and an
@@ -146,13 +163,13 @@ export function ProjectDialog({
   // the way a clone URL does, and nothing new is published for it.
   const [folderOrigin, setFolderOrigin] = useState<string | null>(null);
   const [mode, setMode] = useState("keep");
-  const [skipScaffold, setSkipScaffold] = useState(false);
+  const [skipScaffold, setSkipScaffold] = useState(memory.skipScaffold ?? false);
   // Trust tier at creation time (`docs/vm_projects_plan.md`): where the
   // project's tabs — and for the VM tier, its whole tree — live. `null` =
   // untouched, so the row tracks the source default until the user states a
   // preference; an explicit choice then sticks even if the import source
   // changes under it. (Subsumes the old boolean container choice.)
-  const [tierChoice, setTierChoice] = useState<"local" | "container" | "vm" | null>(null);
+  const [tierChoice, setTierChoice] = useState<"local" | "container" | "vm" | null>(memory.tierChoice ?? null);
   // `vm_doctor`'s verdict — probed once per dialog open; `null` while pending
   // (the VM option simply isn't offered until it answers).
   const [vmDoctor, setVmDoctor] = useState<VmDoctorReport | null>(null);
@@ -178,7 +195,7 @@ export function ProjectDialog({
   // "" follows the Tabtivity connection — the Settings → Git Hosting profile URL is
   // the only provider signal a *global* token carries, same sniff the pill's
   // publish window makes.
-  const [publishProvider, setPublishProvider] = useState("");
+  const [publishProvider, setPublishProvider] = useState(memory.publishProvider ?? "");
   // Whether that provider's CLI is on PATH here (`null` while probing, so a
   // pending answer never blocks submit or flashes the banner) — the publish runs
   // it, exactly as the pill's Publish… does.
@@ -192,6 +209,9 @@ export function ProjectDialog({
   // default — or work on the host alone (a remote-only project: no mirror, every
   // tab, file and git call on the host).
   const [keepLocalCopy, setKeepLocalCopy] = useState(true);
+  // A project was made from the typed name and description: they are not
+  // offered again, the choices are.
+  const [draftUsed, setDraftUsed] = useState(false);
   // The remote-only "Connect when I open this project" card (D14). `null` =
   // untouched, so it follows `autoConnectDefault` until the user answers it.
   const [autoConnectChoice, setAutoConnectChoice] = useState<boolean | null>(null);
@@ -408,6 +428,11 @@ export function ProjectDialog({
       : tierRaw;
   const runInContainer = tier === "container";
   const isVmProject = tier === "vm";
+  // The backend covers a project on this machine, contained or not
+  // (`agent_privacy::check_enable` refuses a remote or VM project): a container
+  // project's local-model tabs run host-bound, in the agent sandbox.
+  const localOnlyOffered = !isRemoteProject && tier !== "vm";
+  const localOnly = localOnlyOffered && localModelsOnly;
   // A git repo is created LOCALLY even for a remote (SSH) project — the local
   // mirror scaffolds with `git init` the same way a local project does — so this
   // gates on the chosen git type alone, not on isRemoteProject. A clone import
@@ -482,8 +507,28 @@ export function ProjectDialog({
   };
 
   useEffect(() => {
+    if (memory.projectsRoot) return;
     invoke<string>("projects_root_dir").then(setProjectsRoot).catch(() => {});
-  }, []);
+  }, [memory.projectsRoot]);
+
+  // Every answer is kept as it changes, so however the dialog closes the next
+  // one opens on them (`projectDialogMemory`).
+  useEffect(() => {
+    writeProjectDialogMemory(kind, {
+      projectsRoot: projectsRootPicked ? projectsRoot : undefined,
+      gitType: kind === "new" ? gitType : undefined,
+      publishProvider,
+      tierChoice: tierChoice ?? undefined,
+      localModelsOnly,
+      descriptionFillMode,
+      skipScaffold,
+      name: draftUsed ? undefined : name,
+      description: draftUsed ? undefined : description,
+    });
+  }, [
+    kind, projectsRoot, projectsRootPicked, gitType, publishProvider, tierChoice, localModelsOnly,
+    descriptionFillMode, skipScaffold, name, description, draftUsed,
+  ]);
 
   useEffect(() => {
     invoke<boolean>("git_available").then(setGitAvailable).catch(() => setGitAvailable(false));
@@ -720,6 +765,7 @@ export function ProjectDialog({
     const picked = await open({ directory: true, multiple: false, defaultPath: projectsRoot || undefined });
     if (typeof picked === "string") {
       setProjectsRoot(picked.replace(/\/+$/, ""));
+      setProjectsRootPicked(true);
     }
   };
 
@@ -753,12 +799,14 @@ export function ProjectDialog({
     setStep("details");
   };
 
+  // The fill agents are cloud CLIs: a Local models only project opens none.
   const selectedScaffoldAgentFills = () => {
+    if (localOnly) return new Map<string, string[]>();
     return collectScaffoldAgentFills(scaffoldPreview, scaffoldFillModes, defaultAgentCmd);
   };
 
   const selectedDescriptionAgent = () => {
-    if (!AGENT_SCAFFOLD_FILL_MODES.has(descriptionFillMode)) return "";
+    if (localOnly || !AGENT_SCAFFOLD_FILL_MODES.has(descriptionFillMode)) return "";
     const agent = agentForScaffoldFillMode(descriptionFillMode, defaultAgentCmd);
     return TERMINAL_OPTIONS.includes(agent) ? agent : "claude";
   };
@@ -855,6 +903,7 @@ export function ProjectDialog({
       setBootingVm(false);
     }
     await onProject(project);
+    setDraftUsed(true);
     if (isCloneImport && repoUrl.trim()) {
       const host = cloneUrlHost(repoUrl);
       if (host) {
@@ -1006,6 +1055,7 @@ export function ProjectDialog({
       const steps: SubmitStep[] = [
         ...(isCloneImport && !hostClone ? (["clone"] as const) : []),
         "register",
+        ...(localOnly ? (["privacy"] as const) : []),
         ...(runInContainer ? (["container"] as const) : []),
         ...(remoteOnly && kind === "new" ? (["hostSetup"] as const) : []),
         ...(willOpenAgentTabs ? (["agents"] as const) : []),
@@ -1082,7 +1132,13 @@ export function ProjectDialog({
                 // actually came from rather than by an `origin` sniff later.
                 gitProvider: originProvider || undefined,
                 mode: isRemoteProject || isCloneImport ? "keep" : mode,
-                scaffoldFillModes,
+                // No cloud fill agent in a Local models only project (the picker
+                // hides them; a pick made before the switch went on is dropped).
+                scaffoldFillModes: localOnly
+                  ? Object.fromEntries(
+                      Object.entries(scaffoldFillModes).filter(([, m]) => !AGENT_SCAFFOLD_FILL_MODES.has(m)),
+                    )
+                  : scaffoldFillModes,
                 manualValidationConfirmed,
                 skipScaffold,
                 remote: remoteSpec,
@@ -1096,6 +1152,26 @@ export function ProjectDialog({
       // renders it ticked. Advisory: a project that failed to become contained is
       // still a created project, and the toggle is one right-click away.
       let created = project;
+      // Before the project reaches the store, so no tab of it can open on a cloud
+      // model first. A refusal (an Ollama not on this machine, a project inside
+      // the folder) leaves a created project without the setting: said below.
+      let privacyError: string | null = null;
+      if (localOnly) {
+        enterStep("privacy");
+        try {
+          const change = await invoke<AgentPrivacyChange>("set_project_agent_privacy", {
+            projectId: project.id,
+            localModelsOnly: true,
+            cutNetwork: false,
+          });
+          created = {
+            ...project,
+            agent_privacy: { local_models_only: change.local_models_only, cut_network: change.cut_network },
+          };
+        } catch (e) {
+          privacyError = String(e);
+        }
+      }
       if (runInContainer) {
         enterStep("container");
         try {
@@ -1119,7 +1195,9 @@ export function ProjectDialog({
             });
           }
           const spec = outcome.outcome === "applied" ? outcome.spec : undefined;
-          created = spec ? { ...project, sandbox: spec } : project;
+          // From `created`, not `project`: the privacy step above already put
+          // `agent_privacy` on it, and the store must get both.
+          created = spec ? { ...created, sandbox: spec } : created;
           // Same preflight the pill's toggle runs: a missing image becomes a
           // one-click build in a fresh tab rather than an error at the first
           // spawn (house convention — never a copy-it-yourself message).
@@ -1139,6 +1217,14 @@ export function ProjectDialog({
         rememberChosenPath();
       }
       await onProject(created);
+      setDraftUsed(true);
+      if (privacyError) {
+        await showMessage({
+          title: t("projectDialog.localOnlyFailedTitle"),
+          body: t("projectDialog.localOnlyFailed", { name: created.name, error: privacyError }),
+          error: true,
+        });
+      }
       if (remoteOnly && kind === "new") {
         enterStep("hostSetup");
         if (await setUpHostFolder(created, descriptionAgent)) onClose();
@@ -1243,7 +1329,21 @@ export function ProjectDialog({
 
   // Resolved here rather than in `scaffold.ts` so the dropdown re-renders when
   // the language changes.
-  const fillOptions = SCAFFOLD_FILL_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
+  const fillOptions = SCAFFOLD_FILL_OPTIONS
+    .filter((o) => !localOnly || !AGENT_SCAFFOLD_FILL_MODES.has(o.value))
+    .map((o) => ({ value: o.value, label: t(o.labelKey) }));
+
+  // Switching Local models only on drops the cloud fill agents already picked.
+  const toggleLocalModelsOnly = (on: boolean) => {
+    setLocalModelsOnly(on);
+    if (!on) return;
+    if (AGENT_SCAFFOLD_FILL_MODES.has(descriptionFillMode)) setDescriptionFillMode("manual");
+    setScaffoldFillModes((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([path, mode]) => [path, AGENT_SCAFFOLD_FILL_MODES.has(mode) ? "none" : mode]),
+      ),
+    );
+  };
 
   const scaffoldStatusText = (item: ScaffoldPreviewItem) => {
     if (item.path === ".git")
@@ -1262,6 +1362,8 @@ export function ProjectDialog({
         return t(isForkImport ? "projectDialog.stepFork" : "projectDialog.stepClone");
       case "register":
         return t(kind === "new" ? "projectDialog.stepCreate" : "projectDialog.stepRegister");
+      case "privacy":
+        return t("projectDialog.stepPrivacy");
       case "container":
         return t("projectDialog.stepContainer");
       case "hostSetup":
@@ -1383,11 +1485,15 @@ export function ProjectDialog({
           onChange={setDescriptionFillMode}
           options={[
             { value: "manual", label: t("projectDialog.fillModeManual") },
-            { value: "agent_choice", label: t("projectDialog.fillModeAgentChoice") },
-            { value: "claude", label: "Claude" },
-            { value: "codex", label: "Codex" },
-            { value: "gemini", label: "Gemini" },
-            { value: "vibe", label: "Mistral" },
+            ...(localOnly
+              ? []
+              : [
+                  { value: "agent_choice", label: t("projectDialog.fillModeAgentChoice") },
+                  { value: "claude", label: "Claude" },
+                  { value: "codex", label: "Codex" },
+                  { value: "gemini", label: "Gemini" },
+                  { value: "vibe", label: "Mistral" },
+                ]),
           ]}
         />
       </div>
@@ -1831,7 +1937,11 @@ export function ProjectDialog({
               value={tier}
               onChange={(v) => setTierChoice(v as "local" | "container" | "vm")}
               options={[
-                { value: "local", label: t("projectDialog.tierLocalOpt") },
+                {
+                  value: "local",
+                  // Windows has no agent sandbox (`agent_fence`); elsewhere local agents run in it.
+                  label: t(IS_HOST_WINDOWS ? "projectDialog.tierLocalOptNoSandbox" : "projectDialog.tierLocalOpt"),
+                },
                 ...(containerAvailable
                   ? [{ value: "container", label: t("projectDialog.tierContainerOpt") }]
                   : []),
@@ -1902,6 +2012,33 @@ export function ProjectDialog({
           <div className="project-dialog-path">{t("projectDialog.vmBooting")}</div>
         )}
 
+        <h3 className="project-form-heading">{t("agentPrivacy.title")}</h3>
+        <label className={`toggle-card${localOnly ? " is-on" : ""}`}>
+          <span className="toggle-card-body">
+            <span className="toggle-card-title">
+              {t("agentPrivacy.localTitle")} <UntestedTag id="projectDialog.localModelsOnly" />
+            </span>
+            <span className="toggle-card-desc">
+              {localOnlyOffered ? t("projectDialog.localOnlyDesc") : t("projectDialog.localOnlyUnavailable")}
+              {localOnlyOffered && runInContainer && (
+                <>
+                  {" "}
+                  {t("projectDialog.localOnlyContainerNote")} <UntestedTag id="projectDialog.localModelsOnlyContainer" />
+                </>
+              )}
+            </span>
+          </span>
+          <span className="eld-switch">
+            <input
+              type="checkbox"
+              checked={localOnly}
+              disabled={!localOnlyOffered}
+              onChange={(e) => toggleLocalModelsOnly(e.target.checked)}
+            />
+            <span className="eld-switch-track" aria-hidden="true" />
+          </span>
+        </label>
+
         <h3 className="project-form-heading">{t("projectDialog.groupSetup")}</h3>
         {kind === "import" && !isRemoteProject && importSource === "folder" && (
           <label>
@@ -1917,6 +2054,11 @@ export function ProjectDialog({
               ]}
             />
           </label>
+        )}
+        {kind === "import" && !isRemoteProject && importSource === "folder" && mode === "move" && (
+          <div className="project-dialog-error" role="alert" data-testid="import-move-danger">
+            {t("projectDialog.modeMoveDanger")}
+          </div>
         )}
 
         {kind === "import" && isRemoteProject && !hostClone && (

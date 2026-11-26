@@ -12,7 +12,7 @@
 #   STUB:ERR <status> <error-type>           answers that HTTP error instead (400 invalid_request_error,
 #                                            401 authentication_error, 429 rate_limit_error, ...).
 # Every request is logged: offered tools, the directive's prompt, tool results.
-import json,re,sys,time
+import json,os,re,sys,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 port=int(sys.argv[1]); log=open(sys.argv[2],'a',buffering=1)
 def texts(m):
@@ -55,7 +55,8 @@ class H(BaseHTTPRequestHandler):
                 tn,_,arg=part.strip().partition(' '); seq.append((tn,arg.strip() or '{}'))
         call=seq[len(done)] if len(done)<len(seq) else None
         mid=f'msg_{int(time.time()*1000)}'
-        usage={'input_tokens':100,'output_tokens':10,'cache_creation_input_tokens':0,'cache_read_input_tokens':0}
+        # STUB_CACHE_READ / STUB_CACHE_WRITE (env) put cache tokens in the usage, to tell the counts apart.
+        usage={'input_tokens':100,'output_tokens':10,'cache_creation_input_tokens':int(os.environ.get('STUB_CACHE_WRITE','0')),'cache_read_input_tokens':int(os.environ.get('STUB_CACHE_READ','0'))}
         if call:
             block={'type':'tool_use','id':f'toolu_{int(time.time()*1000)}','name':call[0],'input':json.loads(call[1])}
             stop='tool_use'

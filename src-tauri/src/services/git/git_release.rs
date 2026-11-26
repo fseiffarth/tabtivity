@@ -23,7 +23,7 @@ use serde::Serialize;
 
 use super::git_ci::{self, TipCi};
 use crate::services::git_push_mcp::{
-    classify_remote_error, clean_output, git, join_streams, lane_opts, lane_text, ls_remote_raw, repo_rewrites_urls, validate_sha,
+    classify_remote_error, clean_output, workflow_permission_refused, WORKFLOW_PERMISSION_MESSAGE, git, join_streams, lane_opts, lane_text, ls_remote_raw, repo_rewrites_urls, validate_sha,
     Category, Failure, TRANSPORT_TIMEOUT,
 };
 use crate::services::git_bounded::RunError;
@@ -279,8 +279,10 @@ pub fn release(dir: &Path, plan: &ReleasePlan, message: &str, auth: &GitAuth) ->
                 if ran.output.status.success() {
                     Ok(output)
                 } else {
-                    let category = classify_remote_error(&format!("{stdout}\n{stderr}"));
+                    let text = format!("{stdout}\n{stderr}");
+                    let category = classify_remote_error(&text);
                     let message = match category {
+                        Category::RemoteRejected if workflow_permission_refused(&text) => WORKFLOW_PERMISSION_MESSAGE,
                         Category::AuthFailed => "The remote refused the credentials; check the token in Settings → Git Hosting.",
                         Category::Network => "The remote could not be reached; try again later.",
                         Category::RemoteRejected => "The remote rejected the tag (a server-side rule); read its output.",

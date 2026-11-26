@@ -900,15 +900,60 @@ fn moving_a_message_preserves_its_local_id_and_mark_across_sync() {
     let moved = store.header(&h.id).unwrap().unwrap();
     assert_eq!(moved.uid, 42);
     let mut synced = header(&archive, 42, "synced", "2026-07-01T09:00:00Z");
-    store.retain_header_id(&mut synced).unwrap();
+    assert!(!store.write_headers(|writer| writer.ingest(&mut synced, None)).unwrap());
     assert_eq!(synced.id, h.id);
-    assert!(!store.upsert_header(&synced).unwrap());
     let moved = store.header(&h.id).unwrap().unwrap();
     assert_eq!(moved.priority, Some(MailPriority::Important));
     assert_eq!(moved.subject, "synced");
     // Moving back uses the destination's UID, not the original inbox UID.
     store.move_messages(std::slice::from_ref(&h.id), &inbox.id, &[(42, 99)]).unwrap();
     assert_eq!(store.header(&h.id).unwrap().unwrap().uid, 99);
+}
+
+#[test]
+fn header_batch_rolls_back_rows_priorities_and_backfill_counts_before_retry() {
+    use crate::services::mail_crypt::Key;
+    let keys = Arc::new(MailKeys::derive(Key::from_bytes([9; 32])));
+    for keys in [None, Some(keys)] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MailStore::open_with_keys(dir.path(), keys).unwrap();
+        let inbox = folder("a1", "INBOX");
+        let mut sent = folder("a1", "Sent");
+        sent.kind = MailFolderKind::Sent;
+        store.upsert_folder(&inbox).unwrap();
+        store.upsert_folder(&sent).unwrap();
+        let original = header(&inbox, 1, "original", "2026-07-01T09:00:00Z");
+        store.upsert_header(&original).unwrap();
+        store.set_server_counts(&sent.id, 10, 4).unwrap();
+        store.refresh_counts(&sent.id).unwrap();
+        let mut reply = header(&sent, 2, "reply", "2026-07-02T09:00:00Z");
+        let aborted: Result<(), String> = store.write_headers(|writer| {
+            assert!(writer.ingest(&mut reply, original.rfc_message_id.as_deref())?);
+            assert!(writer.set_filter_priority(&reply.id, MailPriority::Important, "Rule")?);
+            writer.note_indexed(&sent.id, 1, 1)?;
+            Err("interrupted".into())
+        });
+        assert_eq!(aborted.unwrap_err(), "interrupted");
+        assert_eq!(store.folder_max_uid(&sent.id).unwrap(), None);
+        assert_eq!(store.unindexed_unread(&sent.id).unwrap(), 4);
+
+        for expected_insert in [true, false] {
+            store.write_headers(|writer| {
+                let inserted = writer.ingest(&mut reply, original.rfc_message_id.as_deref())?;
+                assert_eq!(inserted, expected_insert);
+                let added = u32::from(inserted);
+                writer.note_indexed(&sent.id, added, added)
+            }).unwrap();
+        }
+        store.refresh_counts(&sent.id).unwrap();
+        let summary = store.folder(&sent.id).unwrap().unwrap();
+        assert_eq!((summary.total, summary.unread), (10, 4));
+        assert_eq!(store.unindexed_unread(&sent.id).unwrap(), 3);
+        let replies = store.replies_to(&original.id).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0].subject, "reply");
+        assert_eq!(replies[0].priority, None);
+    }
 }
 
 #[test]

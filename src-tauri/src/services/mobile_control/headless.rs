@@ -296,12 +296,14 @@ pub fn prompts(state_dir: &Path, project_id: &str) -> Result<Vec<ProjectAgentPro
 
 // ── Transcript ──────────────────────────────────────────────────────────────
 
-/// The agents whose transcript Tabtivity reads at all (`TRANSCRIPT_AGENTS`).
-const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "copilot", "opencode", "gemini", "agy", "muse"];
+/// The agents whose conversation the phone's Chat reads (`TRANSCRIPT_AGENTS`):
+/// the chat CLIs that have a transcript reader.
+const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "copilot", "opencode", "agy", "muse", "cursor-agent"];
 
 /// `agentTranscriptFor` off the tab record: the same two "not yet" answers
 /// (`no_session` for a transcript family whose hook has not recorded a
-/// session yet, `unsupported` for the rest), then the CLI's own transcript.
+/// session yet, `unsupported` for the rest — every CLI off the chat list
+/// [`agent_transcript::CHAT_AGENTS`] included), then the CLI's own transcript.
 /// An OpenCode tab reads its folder's newest session — begun since the
 /// launch a headless create stamped (`ResolvedTab::since`), so a new tab is
 /// a new chat rather than the folder's last conversation — and needs no
@@ -319,6 +321,9 @@ pub fn transcript(
     if tab.place.on_host() {
         return AgentTranscript::unavailable("unsupported");
     }
+    if !agent_transcript::chat_offered(&tab.cmd) {
+        return AgentTranscript::unavailable("unsupported");
+    }
     if tab.local_model && tab.cmd == "opencode" {
         return agent_transcript::local_opencode_transcript(
             Some(project_id),
@@ -328,10 +333,11 @@ pub fn transcript(
             subagent,
             version,
             limit.unwrap_or(DEFAULT_LIMIT),
+            false,
         );
     }
     let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
-    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy" | "muse").then_some("")) else {
+    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "agy" | "muse" | "cursor-agent").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };
@@ -432,6 +438,26 @@ pub struct TurnReadings {
     pub prompts: Vec<AgentTabPrompts>,
 }
 
+/// Exactly the inputs used to read and identify a local agent's rows. A host
+/// tab's hooks and transcripts are on its own machine.
+#[derive(Debug, PartialEq, Eq)]
+struct ReadingTab {
+    tmux_name: String,
+    uid: String,
+    cmd: String,
+}
+
+fn reading_tabs(tabs: &[ResolvedTab]) -> Vec<ReadingTab> {
+    tabs.iter()
+        .filter(|tab| tab.public.kind == "agent" && !tab.place.on_host())
+        .filter_map(|tab| Some(ReadingTab {
+            tmux_name: tab.tmux_name.clone(),
+            uid: tab.session_id.as_ref().filter(|uid| !uid.is_empty())?.clone(),
+            cmd: tab.cmd.clone(),
+        }))
+        .collect()
+}
+
 /// The newest turn record of a tab: the shared root's and, for a project
 /// tab, the project's own slice (where a fenced agent's hook writes) — the
 /// one with the later stamp wins. The record is `<state> <epoch seconds>`.
@@ -458,13 +484,13 @@ pub(super) fn turn_record(state_dir: &Path, project_id: &str, uid: &str) -> Opti
 /// names a model or has subagents at work; every agent tab with a transcript
 /// gets its newest prompts.
 pub fn turn_readings(state_dir: &Path, project_id: &str, tabs: &[ResolvedTab]) -> TurnReadings {
+    read_turns(state_dir, project_id, &reading_tabs(tabs))
+}
+
+fn read_turns(state_dir: &Path, project_id: &str, tabs: &[ReadingTab]) -> TurnReadings {
     let mut readings = TurnReadings::default();
-    // A host tab's hooks record on the host: no local `.turn` record or
-    // transcript is its, whatever its session id says.
-    for tab in tabs.iter().filter(|t| t.public.kind == "agent" && !t.place.on_host()) {
-        let Some(uid) = tab.session_id.as_deref().filter(|id| !id.is_empty()) else {
-            continue;
-        };
+    for tab in tabs {
+        let uid = &tab.uid;
         let model = agent_session::agent_session_model(&tab.cmd, Some(project_id), uid);
         let subagents = agent_transcript::running_subagents(&tab.cmd, Some(project_id), uid);
         let record = turn_record(state_dir, project_id, uid);
@@ -577,18 +603,6 @@ pub fn schedule_summaries(
         .collect()
 }
 
-/// `Activity` with no window: the readings of every project's agent tabs.
-pub fn activity(state_dir: &Path, catalog: &super::discovery::Catalog) -> TurnReadings {
-    let mut all = TurnReadings::default();
-    for project in &catalog.projects {
-        let readings = turn_readings(state_dir, &project.raw_id, &project.tabs);
-        all.statuses.extend(readings.statuses);
-        all.timings.extend(readings.timings);
-        all.prompts.extend(readings.prompts);
-    }
-    all
-}
-
 /// The project pill's git dot, probed here rather than read off the pills:
 /// `gitDirtyState`'s ladder (untracked or unstaged ▸ staged ▸ unpushed),
 /// none for a clean tree or no repo. Blocking — one hardened git spawn (a
@@ -618,7 +632,33 @@ pub const READING_TTL: Duration = Duration::from_secs(10);
 #[derive(Debug, Default)]
 pub struct ReadingCache {
     git: HashMap<String, (Instant, Option<&'static str>)>,
-    readings: HashMap<String, (Instant, TurnReadings)>,
+    readings: HashMap<String, Arc<TurnSlot>>,
+}
+
+/// Concurrent polls for the same inputs await one disk read. Replacing the
+/// slot detaches an older worker, which can only fill its own cell.
+#[derive(Debug, Default)]
+pub(super) struct TurnSlot {
+    tabs: Vec<ReadingTab>,
+    result: tokio::sync::OnceCell<(Instant, TurnReadings)>,
+}
+
+impl TurnSlot {
+    pub(super) async fn read(self: &Arc<Self>, state_dir: &Path, project_id: &str) -> TurnReadings {
+        if self.tabs.is_empty() {
+            return TurnReadings::default();
+        }
+        let result = self.result.get_or_try_init(|| {
+            let slot = self.clone();
+            let dir = state_dir.to_owned();
+            let id = project_id.to_owned();
+            tokio::task::spawn_blocking(move || {
+                let rows = read_turns(&dir, &id, &slot.tabs);
+                (Instant::now(), rows)
+            })
+        }).await;
+        result.map(|(_, rows)| rows.clone()).unwrap_or_default()
+    }
 }
 
 impl ReadingCache {
@@ -631,16 +671,21 @@ impl ReadingCache {
         self.git.insert(raw_id.to_string(), (now, dot));
     }
 
-    /// The project's turn readings, taken now when the cached ones are stale.
-    pub fn readings(&mut self, state_dir: &Path, project: &ResolvedProject, now: Instant) -> TurnReadings {
-        if let Some((at, readings)) = self.readings.get(&project.raw_id) {
-            if now.duration_since(*at) < READING_TTL {
-                return readings.clone();
+    pub(super) fn turn_slot(&mut self, raw_id: &str, tabs: &[ResolvedTab], now: Instant) -> Arc<TurnSlot> {
+        let inputs = reading_tabs(tabs);
+        if let Some(slot) = self.readings.get(raw_id) {
+            let fresh = slot.result.get().is_none_or(|(at, _)| now.duration_since(*at) < READING_TTL);
+            if fresh && slot.tabs == inputs {
+                return slot.clone();
             }
         }
-        let readings = turn_readings(state_dir, &project.raw_id, &project.tabs);
-        self.readings.insert(project.raw_id.clone(), (now, readings.clone()));
-        readings
+        let slot = Arc::new(TurnSlot { tabs: inputs, result: Default::default() });
+        self.readings.insert(raw_id.to_owned(), slot.clone());
+        slot
+    }
+
+    pub(super) fn invalidate_turns(&mut self, raw_id: &str) {
+        self.readings.remove(raw_id);
     }
 }
 
@@ -652,10 +697,14 @@ pub type HeadlessLaunch =
 /// Why a headless create was refused, as the phone's error code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateRefusal {
-    /// The request needs the window: a sign-in, a cloud session, a worktree,
-    /// a local model, a mode, a sign-in like a tab, or the root console.
+    /// The request needs the window: a sign-in, a worktree, a local model, a
+    /// mode, a sign-in like a tab, or the root console.
     DesktopUnavailable,
     UnknownAgent,
+    /// A cloud session the agent or scope does not offer
+    /// (`unsupported_cloud`), or one whose launch takes a task and got none
+    /// (`task_required`) — the desktop's own codes for the same requests.
+    Cloud(&'static str),
     /// The tab would run where no local tmux session carries it (a remote
     /// host, a container, a VM): the phone cannot attach to it.
     NotAttachable,
@@ -674,7 +723,7 @@ impl CreateRefusal {
             Self::DesktopUnavailable => "desktop_unavailable",
             Self::UnknownAgent => "unknown_agent",
             Self::NotAttachable => "not_attachable",
-            Self::Assistant(code) => code,
+            Self::Assistant(code) | Self::Cloud(code) => code,
             Self::LaunchFailed(_) => "launch_failed",
             Self::Persist(_) => "persist_failed",
         }
@@ -796,6 +845,81 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
     }
 }
 
+/// One vendor cloud launch a built-in agent offers: the desktop's
+/// `CLOUD_LAUNCHES` (`src/lib/agents/cloudSessions.ts`), twinned for a create
+/// with no window and held to it by a source scan in the tests. `args` come
+/// first; a launch that takes the task (`task`) gets it as the last argument.
+pub(super) struct CloudLaunch {
+    pub bin: &'static str,
+    pub action: &'static str,
+    pub args: &'static [&'static str],
+    pub task: bool,
+}
+
+pub(super) const CLOUD_LAUNCHES: &[CloudLaunch] = &[
+    CloudLaunch { bin: "claude", action: "new", args: &["--cloud"], task: true },
+    CloudLaunch { bin: "claude", action: "open", args: &["--teleport"], task: false },
+    CloudLaunch { bin: "codex", action: "open", args: &["cloud"], task: false },
+    CloudLaunch { bin: "kiro-cli", action: "new", args: &["--cloud"], task: false },
+    CloudLaunch { bin: "vibe", action: "new", args: &["--remote"], task: true },
+    CloudLaunch { bin: "copilot", action: "open", args: &["--connect"], task: false },
+];
+
+fn cloud_launch(bin: &str, action: &str) -> Option<&'static CloudLaunch> {
+    CLOUD_LAUNCHES.iter().find(|launch| launch.bin == bin && launch.action == action)
+}
+
+/// The launch's command line. The task's text was bounded by the request's
+/// shape check (`CreateTabRequest::launch_shape_ok`: plain text, no leading
+/// `-` a CLI would read as a flag); a launch that takes one refuses none.
+fn cloud_args(launch: &CloudLaunch, task: Option<&str>) -> Result<Vec<String>, CreateRefusal> {
+    let mut args: Vec<String> = launch.args.iter().map(|arg| arg.to_string()).collect();
+    if launch.task {
+        let task = task.map(str::trim).filter(|task| !task.is_empty()).ok_or(CreateRefusal::Cloud("task_required"))?;
+        args.push(task.to_string());
+    }
+    Ok(args)
+}
+
+/// A cloud tab's record, as the desktop's `buildCloudTabSpec` writes it: no
+/// session id and no `TAB_UID` — the session is the vendor's, and a tab
+/// without one is never resumed or relaunched into a second cloud session
+/// (`workspace::is_one_shot`). The label is the window's English
+/// `newTabMenu.cloudTabLabel`, as a shell's "Shell" is.
+fn cloud_record(agent: &AgentChoice, args: Vec<String>, cwd: &Path, request_hash: &str) -> TabEntry {
+    let extra = HashMap::from([
+        ("kind".to_string(), json!("agent")),
+        ("args".to_string(), json!(args)),
+        ("env".to_string(), json!({})),
+        ("cloud".to_string(), json!(true)),
+        ("mobileRequestHash".to_string(), json!(request_hash)),
+    ]);
+    TabEntry {
+        key: format!("headless-{}", crate::storage::uuid_v4()),
+        label: format!("{} (cloud)", agent.public.label),
+        cmd: agent.bin.to_string(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        session_id: None,
+        extra,
+    }
+}
+
+/// The ＋ sheet's cloud rows with no window: each offered agent's cloud
+/// launches, agents first, as the desktop's `launchOptions` lists them. The
+/// caller offers them only for a project that is not pinned to its host.
+pub fn cloud_options(agents: &[AgentChoice]) -> Vec<super::protocol::MobileCloudLaunch> {
+    agents
+        .iter()
+        .flat_map(|agent| {
+            CLOUD_LAUNCHES.iter().filter(|launch| launch.bin == agent.bin).map(|launch| super::protocol::MobileCloudLaunch {
+                agent_id: agent.public.id.clone(),
+                action: launch.action.to_string(),
+                task: launch.task,
+            })
+        })
+        .collect()
+}
+
 /// The size a session started with no window gets. Nobody looks at it at that
 /// size, but the phone adopts the window's geometry, and at tmux's default
 /// 80×24 a long footer — Claude's status line, which carries the model — was
@@ -902,7 +1026,12 @@ fn options_for(state_dir: &Path, project_id: &str, tab: &TabEntry, restart: bool
         remote_host_id: None,
         tmux_session: Some(tmux),
         tmux_attach: None,
-        host_bound_uid: None,
+        // The window's own id for the tab's host-bound grant: a container
+        // project's local-model tab runs on the host, in the fence (and is the
+        // only agent a Local models only container project starts). Only an
+        // id: the grant is the marker file `sandbox::enforce_spawn_authority`
+        // looks up in the state dir, so a record cannot invent one.
+        host_bound_uid: tab.extra.get("hostBoundUid").and_then(serde_json::Value::as_str).map(str::to_string),
         local_model: kind == Some("local_agent"),
         host_session: false,
         // The ＋ menu's login-or-key pick, as the window would pass it.
@@ -965,8 +1094,9 @@ fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
 /// tab is minted into the scope's session file first (so a window opening
 /// meanwhile merges it in rather than overwriting it), then started
 /// detached through `launch`; a launch that fails takes the record back out.
-/// Everything that needs the window — a sign-in, a cloud session, a
-/// worktree, a local model, a mode, an API key, the root console — is refused with
+/// A project's vendor cloud session is the owner's too ([`CLOUD_LAUNCHES`]).
+/// Everything else that needs the window — a sign-in, a worktree, a local
+/// model, a mode, an API key, the root console — is refused with
 /// `desktop_unavailable`, as before this existed. Idempotent on the
 /// request's key, like the desktop's create.
 pub async fn create_tab(
@@ -988,7 +1118,6 @@ pub async fn create_tab(
         return create_chat(state_dir, host_key, project, request, assistant, launch).await;
     }
     if request.sign_in.is_some()
-        || request.cloud.is_some()
         || request.worktree.is_some()
         || request.local.is_some()
         || request.like_tab.is_some()
@@ -1016,7 +1145,16 @@ pub async fn create_tab(
         ),
     };
     let request_hash = key_id(host_key, "request", &[&request.idempotency_key]);
-    let mut record = tab_record(&request.kind, agent, &project.root, &request_hash);
+    let mut record = match (request.cloud.as_deref(), agent) {
+        (None, _) => tab_record(&request.kind, agent, &project.root, &request_hash),
+        // A cloud session clones the project's repository: a project's
+        // only, as the desktop's `launchOptions` lists it.
+        (Some(action), Some(agent)) if project.public.kind == ScopeKind::Project => {
+            let launch = cloud_launch(agent.bin, action).ok_or(CreateRefusal::Cloud("unsupported_cloud"))?;
+            cloud_record(agent, cloud_args(launch, request.task.as_deref())?, &project.root, &request_hash)
+        }
+        (Some(_), _) => return Err(CreateRefusal::Cloud("unsupported_cloud")),
+    };
     // A remote project's agent runs in the mirror (`project.root`), as the
     // window runs it; said on the record so a later change of the default
     // cannot move it (`discovery::tab_is_local`).
@@ -1051,7 +1189,7 @@ pub fn closed_tabs(state_dir: &Path, raw_id: &str) -> Vec<super::protocol::Close
     };
     crate::services::workspace::closed_tabs(&session)
         .into_iter()
-        .filter(|closed| launch_options(state_dir, raw_id, &closed.tab).is_ok())
+        .filter(|closed| !crate::services::workspace::is_one_shot(&closed.tab) && launch_options(state_dir, raw_id, &closed.tab).is_ok())
         .map(|closed| super::protocol::ClosedAgentTab {
             id: closed.id,
             label: closed.tab.label,
@@ -1095,7 +1233,9 @@ pub async fn reopen_tab(
             Some(id) => closed.iter().find(|c| c.id == id),
             None => closed.first(),
         };
-        if wanted.is_some_and(|c| launch_options(state_dir, &project.raw_id, &c.tab).is_err()) {
+        // A cloud or sign-in record an older build kept would start a second
+        // cloud session (or sign-in): left closed, like a host tab.
+        if wanted.is_some_and(|c| crate::services::workspace::is_one_shot(&c.tab) || launch_options(state_dir, &project.raw_id, &c.tab).is_err()) {
             return Err(CreateRefusal::NotAttachable);
         }
     }
@@ -1679,6 +1819,53 @@ fn zone_from_localtime_target(target: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// [`CLOUD_LAUNCHES`] is the desktop's `CLOUD_LAUNCHES` table, entry for
+    /// entry and in order: a launch changed on one side only would start a
+    /// different command with no window than with one.
+    #[test]
+    fn the_cloud_launches_match_the_desktops_table() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("src").join("lib").join("agents").join("cloudSessions.ts");
+        let source = std::fs::read_to_string(&path).expect("cloudSessions.ts");
+        let start = source.find("const CLOUD_LAUNCHES").expect("the table");
+        let table = &source[start..start + source[start..].find("\n};").expect("the table's end")];
+        let bin_re = regex::Regex::new(r#"^\s*"?([a-z][a-z-]*)"?: \["#).unwrap();
+        let entry_re = regex::Regex::new(r#"action: "(\w+)", needsTask: (true|false), args: \(\w*\) => \[([^\]]*)\]"#).unwrap();
+        let mut desktop = Vec::new();
+        let mut bin = String::new();
+        for line in table.lines() {
+            if let Some(caps) = bin_re.captures(line) {
+                bin = caps[1].to_string();
+            }
+            for caps in entry_re.captures_iter(line) {
+                desktop.push((bin.clone(), caps[1].to_string(), &caps[2] == "true", caps[3].to_string()));
+            }
+        }
+        let ours: Vec<_> = CLOUD_LAUNCHES
+            .iter()
+            .map(|launch| {
+                let mut args: Vec<String> = launch.args.iter().map(|arg| format!("\"{arg}\"")).collect();
+                if launch.task {
+                    args.push("task".to_string());
+                }
+                (launch.bin.to_string(), launch.action.to_string(), launch.task, args.join(", "))
+            })
+            .collect();
+        assert_eq!(ours, desktop);
+    }
+
+    /// A New that takes a task gets it, trimmed, as the last argument, and
+    /// none is refused; a launch without one ignores a task it was sent.
+    #[test]
+    fn a_cloud_launch_builds_its_command_line() {
+        let new = cloud_launch("claude", "new").unwrap();
+        assert_eq!(cloud_args(new, Some("  fix it \n")).unwrap(), ["--cloud", "fix it"]);
+        assert_eq!(cloud_args(new, None).unwrap_err(), CreateRefusal::Cloud("task_required"));
+        assert_eq!(cloud_args(new, Some("  ")).unwrap_err(), CreateRefusal::Cloud("task_required"));
+        assert_eq!(cloud_args(cloud_launch("kiro-cli", "new").unwrap(), Some("ignored")).unwrap(), ["--cloud"]);
+        assert!(cloud_launch("gemini", "new").is_none());
+        assert!(cloud_launch("claude", "attach").is_none());
+    }
+
     /// The phone's turn read is the same agent-written `.turn` record the
     /// watcher reads: a FIFO there reads as nothing, without blocking (gap 29).
     #[cfg(unix)]
@@ -2053,6 +2240,7 @@ mod tests {
                 assistant_launch: None,
                 worktree_movable: false,
                 location_movable: false,
+                no_chat: false,
                 on_host: false,
                 host_label: None,
                 host_down: false,
@@ -2068,6 +2256,34 @@ mod tests {
             place: super::super::discovery::TabPlace::Here,
             location: "local".into(),
         }
+    }
+
+    #[test]
+    fn overlapping_polls_share_a_slot_until_inputs_change_it_expires_or_the_tab_is_seen() {
+        let now = Instant::now();
+        let mut cache = ReadingCache::default();
+        let mut tabs = [tab("claude", Some("first"))];
+        let old = cache.turn_slot("project", &tabs, now);
+        assert!(Arc::ptr_eq(&old, &cache.turn_slot("project", &tabs, now)));
+
+        // The same tmux tab now hosts a different agent session. The earlier
+        // read finishes last, after the replacement has published its result.
+        tabs[0].session_id = Some("next".into());
+        let current = cache.turn_slot("project", &tabs, now);
+        assert!(!Arc::ptr_eq(&old, &current));
+        current.result.set((now, TurnReadings::default())).unwrap();
+        old.result.set((now, TurnReadings::default())).unwrap();
+        assert!(Arc::ptr_eq(&current, &cache.turn_slot("project", &tabs, now)));
+
+        let expired = cache.turn_slot("project", &tabs, now + READING_TTL);
+        assert!(!Arc::ptr_eq(&current, &expired));
+        cache.invalidate_turns("project");
+        let after_seen = cache.turn_slot("project", &tabs, now + READING_TTL);
+        assert!(!Arc::ptr_eq(&expired, &after_seen));
+
+        tabs[0].public.kind = "shell".into();
+        let no_agent = cache.turn_slot("project", &tabs, now + READING_TTL);
+        assert!(no_agent.tabs.is_empty());
     }
 
     /// A host tab names nothing on this machine: its transcript is
@@ -2417,6 +2633,23 @@ mod tests {
         }
     }
 
+    /// A container project's local-model tab keeps the window's host-bound id,
+    /// so `enforce_spawn_authority` runs it on the host where its marker
+    /// exists, as the window does; a record without one carries none.
+    #[test]
+    fn a_container_projects_local_tab_carries_its_host_bound_id() {
+        let state = state_dir();
+        write_projects(state.path());
+        let cwd = state.path().join("box1");
+        let mut record = stored("local_agent", None, &cwd);
+        record.cmd = "ollama".into();
+        record.extra.insert("hostBoundUid".into(), json!("hb-1"));
+        let opts = launch_options(state.path(), "box1", &record).unwrap();
+        assert_eq!(opts.host_bound_uid.as_deref(), Some("hb-1"));
+        assert!(opts.local_model && !opts.sandbox);
+        assert!(placed(state.path(), "box1", "local_agent", None, &cwd).unwrap().host_bound_uid.is_none());
+    }
+
     /// A remote-only project's tabs never launch here: no kind or saved
     /// location makes one `LocalMirror` — it has no mirror, whatever a stale
     /// `mirror` key or a leftover default folder says — not a local-model tab
@@ -2724,7 +2957,9 @@ mod tests {
         // OpenCode is read by folder, so a tab without a session id (a
         // local-model one) still reaches the reader instead of waiting on one.
         assert_ne!(transcript("p1", &tab("opencode", None), None, None, None).reason.as_deref(), Some("no_session"));
-        for cmd in ["gemini", "agy"] {
+        // Gemini's store is read for other uses, but it is off the chat list.
+        assert_eq!(transcript("p1", &tab("gemini", None), None, None, None).reason.as_deref(), Some("unsupported"));
+        for cmd in ["agy", "cursor-agent"] {
             let read = transcript("p1", &tab(cmd, None), None, None, None);
             assert_ne!(read.reason.as_deref(), Some("no_session"));
             assert_ne!(read.reason.as_deref(), Some("unsupported"));

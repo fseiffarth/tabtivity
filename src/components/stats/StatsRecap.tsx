@@ -29,6 +29,7 @@ import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
 import { formatWorkedTime } from "../../lib/formatWorkedTime";
 import { dayAnchorMs, type WelcomeBack } from "../../lib/welcomeBack";
 import {
+  CLAUDE_OTEL_LEAF,
   cacheHitShare,
   cacheLifetimes,
   fetchTokenReport,
@@ -278,7 +279,21 @@ function TokensSection({
                 const modelMax = Math.max(0, ...row.models.map((m) => grandTotal(m.split)));
                 return (
                   <Fragment key={row.cli}>
-                    <Bar label={agentLabel(row.cli)} value={total} max={max} suffix={formatTokens(total)} />
+                    <Bar
+                      label={
+                        row.cli === CLAUDE_OTEL_LEAF
+                          ? t("stats.tokensSpansRow", { cli: agentLabel("claude") })
+                          : agentLabel(row.cli)
+                      }
+                      value={total}
+                      max={max}
+                      suffix={formatTokens(total)}
+                    />
+                    {row.cli === CLAUDE_OTEL_LEAF && (
+                      <p className="settings-help">
+                        {t("stats.tokensSpansNote")} <UntestedTag id="stats.tokensSpansRow" />
+                      </p>
+                    )}
                     <p className="settings-help stats-token-split">
                       <span>{splitText(row.split, t)}</span>
                       {row.models.length > 0 && (
@@ -321,7 +336,7 @@ function TokensSection({
             <p className="settings-help">
               {t("stats.tokensNotReported", {
                 clis: notReported.map(agentLabel).join(", "),
-                sources: sources.map(agentLabel).join(", "),
+                sources: sources.filter((s) => s !== CLAUDE_OTEL_LEAF).map(agentLabel).join(", "),
               })}
             </p>
           )}

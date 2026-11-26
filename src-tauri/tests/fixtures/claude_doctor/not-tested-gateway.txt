@@ -1,0 +1,9 @@
+Claude Code doctor
+...
+Last update attempt: none recorded
+
+API connectivity
+- Not tested: this session uses a cloud provider or a gateway, or your settings name a gateway, not the Anthropic API
+
+Remote Control
+...

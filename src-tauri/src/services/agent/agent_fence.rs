@@ -1369,6 +1369,10 @@ fn write_keyring_filter() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// NixOS's current system profile, put back under the fence's private `/run`.
+#[cfg(any(target_os = "linux", test))]
+const NIXOS_SYSTEM_PROFILE: &str = "/run/current-system";
+
 /// Pure bubblewrap argv builder.  Later mounts intentionally shadow earlier
 /// ones: the scope home (or, with no `home_src`, an empty tmpfs) replaces the
 /// user's home and hides everything in it, selected toolchain paths and
@@ -1409,6 +1413,12 @@ pub(crate) fn bwrap_args(
         "--ro-bind-try".into(),
         "/run/systemd/resolve".into(),
         "/run/systemd/resolve".into(),
+        // NixOS keeps every system program (and nix-ld's loader behind
+        // `/lib64/ld-linux*`) under this link into the store; the store is
+        // already readable through `/`, so it shows nothing new. Skipped elsewhere.
+        "--ro-bind-try".into(),
+        NIXOS_SYSTEM_PROFILE.into(),
+        NIXOS_SYSTEM_PROFILE.into(),
     ];
     match home_src {
         Some(src) => args.extend(["--bind".into(), src.into(), home.into()]),
@@ -1825,6 +1835,8 @@ pub fn wrap_pty_options_bwrap(
         if admin.is_none() {
             crate::services::claude_token::inject_launch(opts);
         }
+        // Claude's trace spans as a token source (experimental, off by default).
+        crate::services::claude_otel::inject_launch(opts, scope_id);
     }
     // A self-updater switched off only by a flag (Cursor), like the env ones below.
     let agent_exe = if agent_cmd.contains('/') {
@@ -2725,6 +2737,8 @@ pub fn wrap_pty_options_sandbox_exec(
         if admin.is_none() {
             crate::services::claude_token::inject_launch(opts);
         }
+        // Claude's trace spans as a token source (experimental, off by default).
+        crate::services::claude_otel::inject_launch(opts, scope_id);
     }
     crate::services::agent_install::apply_fence_args(&agent_cmd, Some(&resolved), &mut opts.args);
     // Inside the profile: no ssh-agent, the scope's own TMPDIR (2442n).
@@ -3090,6 +3104,7 @@ pub fn abandon_spawn(tab_id: &str, seq: u64) -> bool {
     #[cfg(unix)]
     crate::services::local_lane::close(tab_id);
     crate::services::api_proxy::on_tab_gone(tab_id);
+    crate::services::claude_otel::on_tab_gone(tab_id);
     true
 }
 
@@ -3240,6 +3255,7 @@ pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
     // Its API proxy tokens go with it (those of a tmux-held agent once the
     // session is gone too).
     crate::services::api_proxy::on_tab_gone(tab_id);
+    crate::services::claude_otel::on_tab_gone(tab_id);
     // A tab's end is when a login it made lands in its home: carry it to the
     // other scopes now rather than at the keeper's next tick. Off-thread —
     // this runs on the PTY's teardown path.

@@ -8,6 +8,9 @@ pub mod mail_ai;
 // same-roots rule and read without following a link (`docs/mail_mcp_attachments_plan.md`).
 pub mod mail_attach;
 pub mod mail_authres;
+// Ghost-text completion of the sentence being typed in a mail reply, on the
+// local model, from the replied-to mail (`docs/context/mail_ai.md`).
+pub mod mail_complete;
 // The mail client's address book: cards, lists, collected addresses, vCard.
 pub mod mail_contacts;
 pub mod mail_crypt;

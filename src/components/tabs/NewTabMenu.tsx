@@ -24,7 +24,7 @@ import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useAddTabMenuData, type AddTabMenuSeed } from "./useAddTabMenuData";
 import { openInMember as openInMemberHelper, startInFlyout, targetHeading, type StartInKind } from "./startIn";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
-import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
+import { apiKeyMenuEntries, useKeyableAgents, withApiKeyRows } from "./apiKeyGroup";
 import { useAgentWorktreePicker } from "./agentWorktrees";
 import type { CloudLaunch } from "../../lib/agents/cloudSessions";
 import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
@@ -214,6 +214,20 @@ export function NewTabMenu({
     }
   };
 
+  // "<agent> (API)" rows, each under its agent's row. The popout cannot tell
+  // a remote project from a local one (its projects store is inert), so they
+  // carry no remote caution. A host-pinned scope (VM, remote-only) has no
+  // local tree, so none start there.
+  const apiRows = hostPinned
+    ? []
+    : apiKeyMenuEntries({
+        keyable: keyableAgents,
+        installedBuiltins: enabledAgents,
+        remoteScope: false,
+        pick: pickStatic,
+        t,
+      });
+
   return (
     <>
     {worktreePicker.dialogs}
@@ -232,7 +246,7 @@ export function NewTabMenu({
           ...(!cloudRowsOffered(localModelsOnly) ? [] : [{
             label: t("newTabMenu.groupAgents"),
             moreLabel: t("newTabMenu.moreAgents"),
-            entries: agentMenuEntries({
+            entries: withApiKeyRows(agentMenuEntries({
               installedBuiltins: enabledAgents,
               installedCmds: installedCustom,
               customAgents,
@@ -246,9 +260,9 @@ export function NewTabMenu({
                 onManageAgents();
               },
               t,
-            }),
+            }), apiRows),
             compactEntries: compactAgentMenuEntries(
-              agentMenuEntries({
+              withApiKeyRows(agentMenuEntries({
                 installedBuiltins: enabledAgents,
                 installedCmds: installedCustom,
                 customAgents,
@@ -262,24 +276,10 @@ export function NewTabMenu({
                   onManageAgents();
                 },
                 t,
-              }),
+              }), apiRows),
               compactAgentBins,
             ),
           }]),
-          // The popout cannot tell a remote project from a local one (its
-          // projects store is inert), so its rows carry no remote caution.
-          // A host-pinned scope (VM, remote-only) has no local tree: its
-          // API-key and local-model rows, which start here, are not offered;
-          // nor are a local-models-only project's API-key rows.
-          ...(hostPinned || !cloudRowsOffered(localModelsOnly)
-            ? []
-            : apiKeyMenuGroups({
-                keyable: keyableAgents,
-                installedBuiltins: enabledAgents,
-                remoteScope: false,
-                pick: pickStatic,
-                t,
-              })),
           // The root console's Host session (`docs/context/agent_authority.md`):
           // an agent with the user's full rights, for work that is not any
           // project's — repairing the machine. Root scope only, never a default.

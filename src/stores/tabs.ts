@@ -3848,6 +3848,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
 
   loadFromLayout: (layout, defaultCwd, targetScope, groups, opts) => {
     const agentRoots = opts?.agentRoots ?? [];
+    const cwdMoves = opts?.cwdMoves;
     // A built-in tab an older build saved carries its command under the app's
     // old name (the backend rewrites saved sessions at launch; this covers a
     // layout that reaches the window any other way). The identity while the
@@ -3902,7 +3903,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // stop sweep's restore wake starts the most recently used up to the cap.
     const restoredStopped: string[] = [];
     const tabs: TabEntry[] = layout.map((t) => {
-      const entry = restoreSavedTab(t, { defaultCwd, scope, agentRoots });
+      const entry = restoreSavedTab(t, { defaultCwd, scope, agentRoots, cwdMoves });
       keyMap.set(t.key, entry.key);
       if (!restoresStopped(scope, entry)) return entry;
       restoredStopped.push(entry.key);
@@ -4295,6 +4296,7 @@ export async function hydrateScopeFromDisk(
     .getState()
     .loadFromLayout(restorable, cwd, scope, savedLayoutTreeOf(saved.tabGroups), {
       agentRoots: opts.agentRoots,
+      cwdMoves: opts.cwdMoves,
     });
   // The restored tabs are the shared set as this window first agrees on it,
   // in the stored order (restored in that order, so the list holds it).

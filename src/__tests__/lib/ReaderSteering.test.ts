@@ -29,7 +29,7 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 const ALL: ReaderViewId[] = ["chat", "changes", "files", "terminal"];
 
 describe("cycleReaderView", () => {
-  it("walks Chat, Diffs, Files, Terminal and wraps", () => {
+  it("walks Chat, Diffs, Files and Terminal, then wraps to Chat", () => {
     expect(cycleReaderView("chat", ALL, 1)).toBe("changes");
     expect(cycleReaderView("changes", ALL, 1)).toBe("files");
     expect(cycleReaderView("files", ALL, 1)).toBe("terminal");
@@ -37,24 +37,28 @@ describe("cycleReaderView", () => {
   });
 
   it("goes back with -1 and wraps the other way", () => {
-    expect(cycleReaderView("terminal", ALL, -1)).toBe("files");
+    expect(cycleReaderView("files", ALL, -1)).toBe("changes");
     expect(cycleReaderView("chat", ALL, -1)).toBe("terminal");
   });
 
+  it("switches between Chat and Terminal when the other views are unavailable", () => {
+    expect(cycleReaderView("terminal", ALL, -1)).toBe("files");
+    expect(cycleReaderView("terminal", ["chat", "terminal"], 1)).toBe("chat");
+    expect(cycleReaderView("chat", ["chat", "terminal"], 1)).toBe("terminal");
+  });
+
   it("skips views that are not offered", () => {
-    const noDiffs: ReaderViewId[] = ["chat", "files", "terminal"];
+    const noDiffs: ReaderViewId[] = ["chat", "files"];
     expect(cycleReaderView("chat", noDiffs, 1)).toBe("files");
     expect(cycleReaderView("files", noDiffs, -1)).toBe("chat");
-    const chatTerminal: ReaderViewId[] = ["chat", "terminal"];
-    expect(cycleReaderView("chat", chatTerminal, 1)).toBe("terminal");
-    expect(cycleReaderView("terminal", chatTerminal, 1)).toBe("chat");
+    expect(cycleReaderView("files", noDiffs, 1)).toBe("chat");
   });
 
   it("keeps an open view selectable although it is no longer offered", () => {
-    // Diffs is shown but greyed: the way out and back in both pass through it.
-    expect(cycleReaderView("chat", ["chat", "terminal"], 1)).toBe("terminal");
-    expect(cycleReaderView("changes", ["chat", "terminal"], 1)).toBe("terminal");
-    expect(cycleReaderView("changes", ["chat", "terminal"], -1)).toBe("chat");
+    // Diffs is shown but greyed: the way out passes through Chat.
+    expect(cycleReaderView("changes", ["chat"], 1)).toBe("chat");
+    expect(cycleReaderView("changes", ["chat"], -1)).toBe("chat");
+    expect(cycleReaderView("chat", ["chat", "changes"], 1)).toBe("changes");
   });
 
   it("stays put when nothing else is offered", () => {

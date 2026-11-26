@@ -36,7 +36,7 @@ use super::{
     config::{verify_tailscale_serve, HostConfig},
     deadline,
     diverged,
-    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedProject, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     files_zip,
     git_overview,
@@ -53,7 +53,7 @@ use super::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
         LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobileMarkupTick, MobilePromptInput, MobileSchedule,
         MobileScheduleInput, PromptMutation, ScheduleMutation, SyncDirection, SyncOp,
-        TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
+        TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_COMPLETE_BYTES, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
     },
     presence,
@@ -372,6 +372,19 @@ struct MailReplyBody {
     body: String,
     #[serde(default)]
     offset: u32,
+}
+
+/// Body of a reply-completion ask (`…/complete`): the draft typed so far, the
+/// folder page that issued the opaque ids, or `warm` instead of a draft.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MailCompleteBody {
+    #[serde(default)]
+    draft: Option<String>,
+    #[serde(default)]
+    offset: u32,
+    #[serde(default)]
+    warm: bool,
 }
 
 /// Body of an alert row's ✓. The opaque row handle and nothing else: what the
@@ -820,11 +833,9 @@ async fn headless_git_dot(state: &HostState, raw_id: &str, root: &std::path::Pat
 }
 
 /// A project's agent readings with no window, from the cache while fresh.
-fn headless_readings(state: &HostState, project: &super::discovery::ResolvedProject) -> headless::TurnReadings {
-    state
-        .readings
-        .lock_ok()
-        .readings(&state.config.state_dir, project, Instant::now())
+async fn headless_readings(state: &HostState, project: &ResolvedProject) -> headless::TurnReadings {
+    let slot = state.readings.lock_ok().turn_slot(&project.raw_id, &project.tabs, Instant::now());
+    slot.read(&state.config.state_dir, &project.raw_id).await
 }
 
 /// Today as the desktop-local `YYYY-MM-DD` the board's date columns read.
@@ -1100,10 +1111,15 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
     .into_iter()
     .map(|origin| json!({ "origin": origin }))
     .collect();
+    // The machine's OpenVPN tunnel, for Home's lamp: read off the pidfiles,
+    // since the tunnel registry is the window's. Only the word crosses, never
+    // a config's path or name; null where no config is stored.
+    let vpn = crate::services::openvpn::disk_tunnel_up(&state.config.state_dir)
+        .map(|up| if up { "up" } else { "down" });
     (
         StatusCode::OK,
         Json(
-            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops }),
+            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops, "vpn": vpn }),
         ),
     )
 }
@@ -1145,7 +1161,7 @@ async fn projects(
     // Each row's agent tabs by state, from the readings the activity list
     // uses. Tmux session names are unique server-wide, so one map serves all.
     let agent_statuses = if listed.iter().any(|p| p.tabs.iter().any(|t| t.public.kind == "agent")) {
-        let (_, statuses, _) = activity_readings(&state, &catalog_snapshot).await;
+        let (_, statuses, _) = activity_readings(&state, listed.iter().copied()).await;
         statuses
             .into_iter()
             .map(|status| (status.tmux_session, status.status))
@@ -1244,17 +1260,23 @@ fn activity_rank(status: &str) -> u8 {
 /// Every agent tab's status and prompt rows in one desktop round trip, and
 /// whether the desktop answered. Without a window they come from the hooks'
 /// turn records and the tabs' transcripts (headless owner plan, H1b).
-async fn activity_readings(
+async fn activity_readings<'a>(
     state: &HostState,
-    catalog_snapshot: &Catalog,
+    projects: impl Iterator<Item = &'a ResolvedProject>,
 ) -> (bool, Vec<super::protocol::AgentTabStatus>, Vec<super::protocol::AgentTabPrompts>) {
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let request_id = new_request_id();
     match admin::desktop_call(&desktop_socket, &DesktopRequest::Activity { request_id }).await {
         Ok(DesktopResponse::Activity { statuses, prompts }) => (true, statuses, prompts),
         response if desktop_down(&response) => {
-            let readings = headless::activity(&state.config.state_dir, catalog_snapshot);
-            (false, readings.statuses, readings.prompts)
+            let mut statuses = Vec::new();
+            let mut prompts = Vec::new();
+            for project in projects {
+                let readings = headless_readings(state, project).await;
+                statuses.extend(readings.statuses);
+                prompts.extend(readings.prompts);
+            }
+            (false, statuses, prompts)
         }
         _ => (false, vec![], vec![]),
     }
@@ -1272,7 +1294,7 @@ async fn activity(State(state): State<HostState>, headers: HeaderMap) -> impl In
     let Ok(catalog_snapshot) = catalog(&state, &phone) else {
         return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
     };
-    let (desktop_available, statuses, prompts) = activity_readings(&state, &catalog_snapshot).await;
+    let (desktop_available, statuses, prompts) = activity_readings(&state, catalog_snapshot.projects.iter()).await;
     // Tmux session names are unique across the whole server, so one map covers
     // every project's tabs.
     let statuses = statuses
@@ -1432,7 +1454,7 @@ async fn project(
                 .into_iter()
                 .map(|choice| choice.public)
                 .collect();
-            let readings = headless_readings(&state, project);
+            let readings = headless_readings(&state, project).await;
             let schedules = headless::schedule_summaries(state_dir, &project.raw_id, &project.tabs, chrono::Local::now());
             let git = if is_git_project(project) {
                 headless_git_dot(&state, &project.raw_id, &project.root).await.map(str::to_string)
@@ -1903,7 +1925,7 @@ fn headless_create_error(refusal: headless::CreateRefusal) -> (StatusCode, Json<
         match refusal {
             headless::CreateRefusal::DesktopUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             headless::CreateRefusal::LaunchFailed(_) | headless::CreateRefusal::Persist(_) => StatusCode::BAD_GATEWAY,
-            headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) => StatusCode::BAD_REQUEST,
+            headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) | headless::CreateRefusal::Cloud(_) => StatusCode::BAD_REQUEST,
             headless::CreateRefusal::NotAttachable => StatusCode::CONFLICT,
         },
         refusal.code(),
@@ -2628,12 +2650,17 @@ async fn launch_options(
     .await;
     if desktop_down(&response) {
         // No window: the ＋ sheet offers what the owner can start — the
-        // project folder, a shell or a plain agent (headless owner plan,
-        // H3). Worktrees, cloud sessions, sign-ins, local models and API-key
-        // agents wait for the window, so none is listed.
+        // project folder, a shell, a plain agent (headless owner plan, H3)
+        // and a project's cloud sessions. Worktrees, sign-ins, local models
+        // and API-key agents wait for the window, so none is listed.
+        let cloud = if project.public.kind == ScopeKind::Project && !project.pinned {
+            headless::cloud_options(&headless::agents(&state.config.state_dir, &host_key(&state), &*state.spawner.installed))
+        } else {
+            Vec::new()
+        };
         return (
             StatusCode::OK,
-            Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
+            Json(json!({ "worktrees": [], "cloud": cloud, "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
         );
     }
     match response {
@@ -3893,6 +3920,86 @@ async fn mail_reply(
         )
         .await,
     )
+}
+
+/// `POST /api/v1/mail/folders/{folder_id}/messages/{message_id}/complete`
+/// `{ "draft"?, "offset"?, "warm"? }` — how the reply being typed on the phone
+/// goes on, by the local mail model (`services::mail_complete`). Only the
+/// window can answer: it resolves the opaque ids against its own copy of the
+/// original, and the sidecar never sees mail. With no window (or a wedged one)
+/// there is no completion and no error: `unavailable`. Answers `text`, `status`
+/// and the `model` that wrote the text — no id, path or reason. A draft the
+/// engine writes no completion for is `skipped` without asking the window.
+async fn mail_complete(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((folder_id, message_id)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    use crate::services::mail_complete::Status;
+    if let Err(error) = section_guard(&headers, &state, "mail") {
+        return error;
+    }
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let Ok(request) = request_body::parse_json::<MailCompleteBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let draft = request.draft.unwrap_or_default();
+    if !valid_mail_id(&folder_id)
+        || !valid_mail_id(&message_id)
+        || request.offset > 100_000
+        || (request.warm && !draft.is_empty())
+    {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    if draft.len() > MAX_MAIL_COMPLETE_BYTES {
+        return api_error(StatusCode::PAYLOAD_TOO_LARGE, "draft_too_long");
+    }
+    let answer = |status: Status, text: Option<&str>, model: Option<&str>| {
+        // The engine's cleaned line, cleaned again here whoever answered, and
+        // only beside `ok`; the model is credited only beside text.
+        let text = text
+            .filter(|_| status == Status::Ok)
+            .and_then(crate::services::next_prompt::clean_completion);
+        let model = text.as_ref().and(model).and_then(crate::services::next_prompt::clean_model);
+        let mut body = json!({ "text": text, "status": status });
+        if let Some(model) = model {
+            body["model"] = json!(model);
+        }
+        (StatusCode::OK, Json(body))
+    };
+    // A draft the engine writes no completion for never leaves this process.
+    if !request.warm
+        && (draft.chars().count() > crate::services::next_prompt::MAX_DRAFT_CHARS
+            || crate::services::next_prompt::draft_tail(&draft).is_none())
+    {
+        return answer(Status::Skipped, None, None);
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::MailComplete {
+            request_id: new_request_id(),
+            folder_id,
+            message_id,
+            offset: request.offset,
+            draft,
+            warm: request.warm,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::MailComplete { text, outcome, model }) => {
+            // Only a status word the engine knows crosses.
+            let status = serde_json::from_value::<Status>(json!(outcome)).unwrap_or(Status::Unavailable);
+            answer(status, text.as_deref(), model.as_deref())
+        }
+        Ok(DesktopResponse::Error { code, .. }) if code.ends_with("_not_found") => api_error(StatusCode::NOT_FOUND, &code),
+        // No window, a wedged one, its own error, an answer of another kind.
+        _ => answer(Status::Unavailable, None, None),
+    }
 }
 
 async fn tab(
@@ -5683,6 +5790,8 @@ async fn phone_transcript(
         mask_waiting_tools(&mut transcript, &folders);
     }
     transcript.context_card = None;
+    // Every command the session ran, unmasked: the desktop's Data tab only.
+    transcript.shells_run.clear();
     transcript.cwd = None;
     transcript.running_cwds.clear();
     if let Some(prompt) = transcript.cut_prompt.as_mut() {
@@ -6634,7 +6743,8 @@ fn mark_tab_seen(state: &HostState, project_id: Option<String>, tmux_session: St
     // and a turn the phone watched finish must not come back as `done` once
     // the window is closed.
     if let Some(uid) = uid {
-        headless::mark_seen(&state.config.state_dir, uid, now_ms() / 1000);
+        off_worker(|| headless::mark_seen(&state.config.state_dir, uid, now_ms() / 1000));
+        state.readings.lock_ok().invalidate_turns(&project_id);
     }
     let socket = state.config.control_dir.join("desktop-control.sock");
     tokio::spawn(async move {
@@ -9192,6 +9302,10 @@ fn router(state: HostState) -> Router {
         .route(
             "/api/v1/mail/folders/{folder_id}/messages/{message_id}/reply",
             post(mail_reply),
+        )
+        .route(
+            "/api/v1/mail/folders/{folder_id}/messages/{message_id}/complete",
+            post(mail_complete).layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/api/v1/activity", get(activity))
         .route("/api/v1/projects", get(projects).post(new_project))

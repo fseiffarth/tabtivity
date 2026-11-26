@@ -20,6 +20,7 @@
  */
 
 import { busyRow } from "./agentBusy";
+import { isCursorTab, readCursorDialog } from "./cursorAgent";
 import { readOpenCodeQuestion } from "./openCodeQuestion";
 
 export interface SelectOption {
@@ -51,6 +52,10 @@ export interface SelectOption {
   /** On a multi-select question read through the waiting entry: whether the
    * screen shows this answer's box ticked. */
   ticked?: boolean;
+  /** A row the dialog will not take (Antigravity's model outside the plan,
+   * `readAntigravityPicker`): its Enter is never pressed; `description`
+   * carries the dialog's own reason. */
+  unavailable?: true;
 }
 
 export interface SelectPrompt {
@@ -554,6 +559,10 @@ export function readSelectPrompt(
   if (/opencode/iu.test(agentLabel ?? "")) {
     const question = readOpenCodeQuestion(lines);
     if (question) return question;
+  }
+  if (isCursorTab(agentLabel)) {
+    const dialog = readCursorDialog(lines, { title: readTitle, context: readContext });
+    if (dialog) return dialog;
   }
   const option = radioMarkerAgent(agentLabel) ? RADIO_OPTION : OPTION;
   const hanglessWrap = HANGLESS_WRAP_AGENT.test(agentLabel ?? "");

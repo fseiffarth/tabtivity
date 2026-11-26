@@ -47,7 +47,17 @@ export interface ContinueStatus {
   sent: number;
   /** Why there is nothing armed, in the CLI's words where it had any. */
   error?: string;
+  /** A due continue is waiting on the tab, and this is what it waits on. */
+  holding?: ContinueHold;
+  /** Why the last due continue was given up unsent. Kept across the re-arm, so
+   *  a continue lost to a tab that never took it is not lost silently; cleared
+   *  by the next one that is delivered. */
+  missed?: ContinueHold;
 }
+
+/** What keeps a due continue out of the tab: no terminal taking input, output
+ *  still moving, a turn in flight, or a question on screen. */
+export type ContinueHold = "noInput" | "notReady" | "busy" | "decision";
 
 const BLANK: ContinueStatus = { phase: "reading", sent: 0 };
 

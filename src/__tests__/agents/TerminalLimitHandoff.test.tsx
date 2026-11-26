@@ -17,6 +17,9 @@ vi.mock("../../../mobile-web/src/terminal/readableScreen", () => ({ readableScre
 vi.mock("../../lib/agents/agentReader", () => ({ readerRequest: () => ({ sessionId: "session" }) }));
 vi.mock("../../lib/aiSwitch", () => ({ aiIsOff: () => false }));
 vi.mock("../../components/common/UntestedTag", () => ({ UntestedTag: () => null }));
+// The dialog's summary prompt (never offered from a limit notice) and its busy check.
+vi.mock("../../lib/shortcuts/steeringAgent", () => ({ sendSteeringPrompt: vi.fn() }));
+vi.mock("../../stores/activity", () => ({ useActivityStore: { getState: () => ({ busyByTab: {}, busyKindByTab: {} }) } }));
 import { envName } from "../../lib/brand";
 import { isResumableAgentTab } from "../../stores/tabs/tabKinds";
 import { TerminalLimitHandoff } from "../../components/terminal/TerminalLimitHandoff";

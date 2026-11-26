@@ -353,7 +353,7 @@ export function chatTurns(
         index += 1;
         continue;
       }
-      // The start-up banner and the `▣ Build · model · 6.2s` a turn ends with
+      // The start-up banner and the `Build · model · 6.2s` a turn ends with
       // are the TUI talking about itself; the model and the agent they name
       // reach the reader as the composer's chips (`statusLine`).
       if (isOpenCodeBanner(line.text) || openCodeTurnFooter(line.text) !== null) {

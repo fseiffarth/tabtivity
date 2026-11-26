@@ -1326,7 +1326,8 @@ pub async fn agent_tab_artifact(
 /// `available: false` with the reason, never an error. `remote_host` is the
 /// host (`primary` or a worker id) a remote project's tab runs on, whose
 /// conversation is on that host (`services::remote_transcript`); unset for a
-/// tab that runs here.
+/// tab that runs here. `thinking` adds a local-model OpenCode tab's reasoning
+/// as `thinking` entries (the desktop Chat's read; nothing else asks).
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn agent_tab_transcript(
@@ -1342,6 +1343,7 @@ pub async fn agent_tab_transcript(
     watch: Option<String>,
     chat: Option<String>,
     remote_host: Option<String>,
+    thinking: Option<bool>,
     ctx: Ctx,
 ) -> crate::services::agent_transcript::AgentTranscript {
     use crate::services::agent_transcript::{self, AgentTranscript, DEFAULT_LIMIT};
@@ -1403,6 +1405,7 @@ pub async fn agent_tab_transcript(
                 subagent.as_deref(),
                 version.as_deref(),
                 limit.unwrap_or(DEFAULT_LIMIT),
+                thinking == Some(true),
             )
         } else {
             agent_transcript::agent_session_transcript(
@@ -1421,6 +1424,8 @@ pub async fn agent_tab_transcript(
             read.unchanged,
             &agent,
             project_id.as_deref(),
+            tab_dir.as_deref(),
+            since,
             &session_id,
             subagent.as_deref(),
             local,
@@ -1442,6 +1447,8 @@ fn arm_transcript_watch(
     unchanged: bool,
     agent: &str,
     project_id: Option<&str>,
+    tab_dir: Option<&str>,
+    since: Option<i64>,
     session_id: &str,
     subagent: Option<&str>,
     local_model: bool,
@@ -1453,7 +1460,7 @@ fn arm_transcript_watch(
     if unchanged && transcript_watch::keep(id) {
         return true;
     }
-    let targets = agent_transcript::watch_targets(agent, project_id, session_id, subagent, local_model);
+    let targets = agent_transcript::tab_watch_targets(agent, project_id, tab_dir, since, session_id, subagent, local_model);
     transcript_watch::arm(id, targets)
 }
 
@@ -1554,6 +1561,7 @@ pub async fn agent_next_prompt(
         None,
         None,
         remote_host,
+        None,
         ctx,
     )
     .await;
@@ -1644,6 +1652,8 @@ pub async fn agent_tab_changes(
             read.unchanged,
             &agent,
             project_id.as_deref(),
+            tab_dir.as_deref(),
+            since,
             &session_id,
             subagent.as_deref(),
             false,
@@ -1661,7 +1671,9 @@ pub async fn agent_tab_changes(
 /// the identity `agent_tab_transcript` takes, plus `tab_id` (the saved tab's
 /// stable id, for its notes); `target` is the binary of the CLI to continue
 /// with, checked against the registry. `preview_only` writes nothing and
-/// answers the counts alone. An `Err` is a short code: `unknown_target`,
+/// answers the counts alone. `summary_nonce` names the summary prompt the
+/// dialog sent the tab: its answer goes into the file as the previous agent's
+/// own summary. An `Err` is a short code: `unknown_target`,
 /// `unsupported` (a remote host's tab, an unreadable CLI), `no_session`,
 /// `no_transcript`, `read_failed`, or the text of a failed write.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1677,6 +1689,7 @@ pub async fn agent_cli_handoff_prepare(
     tab_id: Option<String>,
     target: String,
     preview_only: bool,
+    summary_nonce: Option<String>,
 ) -> Result<crate::services::agent_cli_handoff::Prepared, String> {
     app_core::rt::try_blocking("agent", move || {
         agent_cli_handoff_prepare_blocking(crate::services::agent_cli_handoff::Request {
@@ -1690,6 +1703,7 @@ pub async fn agent_cli_handoff_prepare(
             tab_id,
             target,
             preview_only,
+            summary_nonce,
         })
     })
     .await
@@ -2281,15 +2295,29 @@ pub async fn remember_model_rows(agent: String, scope: String, rows: crate::serv
 /// and grows into the megabytes, and this is asked once per new Claude tab —
 /// parsing it inline would jank the window at launch. `sandbox` and
 /// `local_only` are accepted for older callers; the answer is the scope
-/// home's either way (`services::agent_home`).
+/// home's either way (`services::agent_home`). A tab of a remote project
+/// (`remote_host`: `primary` or a worker id; not `local_only`) runs Claude on
+/// that host, whose own `.claude.json` answers
+/// (`services::remote_transcript::claude_host_folder_trusted`): this machine's
+/// trust for a folder at the same path made the tab answer the host's dialog
+/// `No, exit` by itself.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn claude_folder_trusted(
     cwd: String,
     project_id: Option<String>,
     sandbox: Option<bool>,
     local_only: Option<bool>,
+    remote_host: Option<String>,
+    ctx: Ctx,
 ) -> bool {
-    let _ = (sandbox, local_only);
+    let _ = sandbox;
+    if let (Some(project), false) = (project_id.as_deref(), local_only == Some(true)) {
+        let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+        let host = remote_host.as_deref().unwrap_or(crate::services::remote::PRIMARY_HOST);
+        if let Some(trusted) = crate::services::remote_transcript::claude_host_folder_trusted(pool, project, host).await {
+            return trusted;
+        }
+    }
     app_core::rt::spawn_blocking(move || {
         crate::services::sandbox::claude_folder_trusted(&cwd, project_id.as_deref())
     })
@@ -2416,6 +2444,15 @@ pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn claude_token_status() -> Result<crate::services::claude_token::ClaudeTokenStatus, String> {
     app_core::rt::try_blocking("agent", || Ok(crate::services::claude_token::status())).await
+}
+
+/// Run `claude doctor` in the probe home and read its "API connectivity"
+/// section (`services::claude_doctor`): whether the API answers from this
+/// machine, with the HTTP status or the error, or why nothing was tested.
+/// A Claude older than 2.1.331 prints no such section (`verdict: missing`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn claude_api_check() -> Result<crate::services::claude_doctor::ApiCheck, String> {
+    crate::services::claude_doctor::check().await
 }
 
 /// Save a token `claude setup-token` printed (pasted by the user).

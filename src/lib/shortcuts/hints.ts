@@ -1,5 +1,6 @@
 import { IS_MAC } from "../platform";
-import { livePanelToggleLabel, liveShortcutLabel } from "./shortcutHint";
+import { livePanelToggleLabel, liveShortcutChord, liveShortcutLabel } from "./shortcutHint";
+import { chordLabel, isUnbound } from "./shortcuts";
 import type { TranslationKey } from "../i18n";
 import { FEATURE_HINTS, featureBodyKey, featureTitleKey, type FeatureHintId, type FeatureHintSpec } from "./featureHints";
 
@@ -173,6 +174,15 @@ export function resolveHintBody(
 ): string {
   if (def.id === "editor-autocomplete") {
     return t("hint.f.editor-autocomplete.body", { shortcut: liveShortcutLabel("editorAutocomplete") });
+  }
+  if (def.id === "steering-stations") {
+    const chord = liveShortcutChord("steeringMode");
+    return isUnbound(chord)
+      ? t("hint.f.steering-stations.unbound", {
+          action: t("shortcut.steeringMode"),
+          settings: t("nav.shortcuts.title"),
+        })
+      : t("hint.f.steering-stations.body", { shortcut: chordLabel(chord) });
   }
   return def.bodyKey ? t(def.bodyKey) : focusModeTip(t);
 }

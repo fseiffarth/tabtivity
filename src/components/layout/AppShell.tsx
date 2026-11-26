@@ -21,6 +21,7 @@ import { noteActivityDigests, type ActivityDigest } from "../../lib/terminal/act
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { noteAutoNameRoll, startAutoTabNames } from "../../stores/agents/autoTabNames";
 import { useAgentResumeCostStore, type ResumeCost } from "../../stores/agents/agentResumeCost";
+import { useAgentPermissionModeStore } from "../../stores/agents/agentPermissionMode";
 import type { AgentTurnState } from "../../stores/activity";
 import {
   usePowerStore,
@@ -53,6 +54,7 @@ import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
 import { OpenExternalHost } from "../common/OpenExternalHost";
+import { GpuFallbackHost } from "../common/GpuFallbackHost";
 import { CalDavSyncHost } from "../calendar/CalDavSyncHost";
 import { PrinterNetworkDefaultsHost } from "../printing/PrinterNetworkDefaultsHost";
 import { PrintRequestsHost } from "../printing/PrintRequests";
@@ -946,9 +948,16 @@ export function AppShell() {
         noteAutoNameRoll(ev.payload.id, ev.payload.source);
       }),
     );
+    // The permission mode Claude's hook last recorded for a tab (read only):
+    // a local-model tab in auto mode shows why its commands are refused.
+    const unlistenMode = subscribeTauri(() =>
+      listen<{ id: string; mode: string }>("agent-permission-mode", (ev) => {
+        useAgentPermissionModeStore.getState().note(ev.payload.id, ev.payload.mode);
+      }),
+    );
     // Agent tabs take the name of their first prompt (Settings → Agents).
     const stopAutoNames = startAutoTabNames();
-    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); stopAutoNames(); };
+    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); unlistenMode(); stopAutoNames(); };
   }, []);
 
   // The running-task indicators recompute on demand — a chunk, a keystroke, a
@@ -1524,6 +1533,9 @@ export function AppShell() {
           (services::exec_trust), raised by a gated commit/push/build/format. */}
       <ExecTrustHost />
       <OpenExternalHost />
+      {/* The one ask after a GPU-path renderer crash turned GPU compositing
+          off (services::webkit_gpu); main window only. */}
+      <GpuFallbackHost />
       {/* CalDAV's scheduled sync (docs/caldav_plan.md Phase 2). Renders nothing,
           and starts no timer at all until an account exists — at the shell for
           the alarm ticker's reason: the surfaces that read a synced calendar

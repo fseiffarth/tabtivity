@@ -95,6 +95,7 @@ import { revealSetting, searchTerms } from "./settingsSearch";
 import {
   SETTINGS_GROUPS,
   anchorOf,
+  isMainSection,
   pageLabelKey,
   pageValue,
   searchSettings,
@@ -103,6 +104,8 @@ import {
   type NavEntry,
   type SettingsPanelKind,
 } from "./settingsIndex";
+import { storageKey } from "../../lib/brand";
+import { readJson, writeJson } from "../../lib/persist";
 
 export type { SettingsPanelKind } from "./settingsIndex";
 import { useUse24h } from "../../lib/timeFormat";
@@ -1280,6 +1283,11 @@ function WindowZoomSettings() {
   </>;
 }
 
+const LAST_SETTINGS_PAGE_KEY = storageKey("settings.lastPage");
+
+// Voice needs the microphone on this machine, which browser clients lack.
+const settingsPageShown = (entry: NavEntry) => entry !== "voice" || voiceInputOffered();
+
 export function SettingsDialog({
   onClose,
   initialPanel = "main",
@@ -1305,25 +1313,37 @@ export function SettingsDialog({
     STOP_AGENT_TABS_MIN_FREE_DEFAULT_MB,
     STOP_AGENT_TABS_MIN_FREE_CHOICES_MB,
   );
-  const [panel, changePanel] = useState<SettingsPanelKind>(initialPanel);
-  const [section, changeSection] = useState<MainSection>(sectionOfAnchor(initialAnchor));
+  const [{ panel, section }, setLocation] = useState<{ panel: SettingsPanelKind; section: MainSection }>(() => {
+    if (initialPanel !== "main" || initialAnchor) {
+      return { panel: initialPanel, section: sectionOfAnchor(initialAnchor) };
+    }
+    const saved = readJson(LAST_SETTINGS_PAGE_KEY, (raw) =>
+      SETTINGS_GROUPS.flatMap((group) => group.entries).find((entry) =>
+        pageValue(entry) === raw && settingsPageShown(entry)), undefined);
+    if (!saved) return { panel: "main", section: "general" };
+    return isMainSection(saved)
+      ? { panel: "main", section: saved }
+      : { panel: saved, section: "general" };
+  });
+  const page = panel === "main" ? anchorOf(section) : panel;
+  useEffect(() => {
+    writeJson(LAST_SETTINGS_PAGE_KEY, page);
+  }, [page]);
   const [query, setQuery] = useState("");
   // Scroll position per page, so ‹ Back from a sub-panel — or a round trip
   // through another page — lands where the user left that page.
   const scrollBySection = useRef<Partial<Record<MainSection, number>>>({});
-  const lastInitialAnchor = useRef(initialAnchor);
   const saveScroll = () => {
     if (panel !== "main") return;
     scrollBySection.current[section] = modalRef.current?.querySelector(".dialog-scroll")?.scrollTop ?? 0;
   };
   const setPanel = (next: SettingsPanelKind) => {
     saveScroll();
-    changePanel(next);
+    setLocation({ panel: next, section });
   };
   const setSection = (next: MainSection) => {
     saveScroll();
-    changeSection(next);
-    changePanel("main");
+    setLocation({ panel: "main", section: next });
   };
   // The theme customizer is a window of its own, not a sub-panel: it is opened
   // INSTEAD of this dialog (‹ Back returns here), so the palette it edits is
@@ -1357,17 +1377,6 @@ export function SettingsDialog({
     return energyMode === "off" ? t("settings.energyOff") : t("settings.energyInactive");
   })();
 
-  // A deep link that arrives while the dialog is already open (the event
-  // re-fires with a new anchor) opens that page too.
-  useEffect(() => {
-    if (lastInitialAnchor.current === initialAnchor) return;
-    lastInitialAnchor.current = initialAnchor;
-    if (initialAnchor) {
-      changeSection(sectionOfAnchor(initialAnchor));
-      changePanel("main");
-    }
-  }, [initialAnchor]);
-
   useEffect(() => {
     if (showCustomizer || panel !== "main") return;
     const scroll = modalRef.current?.querySelector(".dialog-scroll");
@@ -1380,8 +1389,13 @@ export function SettingsDialog({
     initialReveal ? { ...initialReveal, n: 0 } : null,
   );
   useEffect(() => {
-    changePanel(initialPanel);
-    if (initialAnchor) changeSection(sectionOfAnchor(initialAnchor));
+    // Explicit requests also navigate a dialog that is already open.
+    if (initialPanel !== "main" || initialAnchor) {
+      setLocation((previous) => ({
+        panel: initialPanel,
+        section: initialAnchor ? sectionOfAnchor(initialAnchor) : previous.section,
+      }));
+    }
     setReveal((previous) => initialReveal ? { ...initialReveal, n: (previous?.n ?? 0) + 1 } : null);
   }, [initialPanel, initialAnchor, initialReveal]);
   useEffect(() => {
@@ -1390,16 +1404,13 @@ export function SettingsDialog({
     return revealSetting(root, reveal.path, reveal.open);
   }, [reveal, panel, section, modalRef]);
 
-  // Voice exists only where the microphone is this machine's (not a browser
-  // client). The assistant's page is always there: it holds its own switch.
-  const shown = (entry: NavEntry) => entry !== "voice" || voiceInputOffered();
   const navGroups = SETTINGS_GROUPS.map((group) => ({
     label: t(`settings.group.${group.key}` as TranslationKey),
-    entries: group.entries.filter(shown).map((entry) => ({ value: pageValue(entry), label: t(pageLabelKey(entry)) })),
+    entries: group.entries.filter(settingsPageShown).map((entry) => ({ value: pageValue(entry), label: t(pageLabelKey(entry)) })),
   }));
 
   const terms = searchTerms(query);
-  const results = searchSettings(query, t, shown);
+  const results = searchSettings(query, t, settingsPageShown);
 
   const navigate = (value: string) => {
     const hit = results.find((r) => r.value === value);
@@ -1423,7 +1434,7 @@ export function SettingsDialog({
     <div className="modal-backdrop how-to-start-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={t("settings.title")} className="settings-dialog settings-with-navigation" onMouseDown={(e) => e.stopPropagation()}>
         <SettingsNavigation
-          value={panel === "main" ? anchorOf(section) : panel}
+          value={page}
           groups={navGroups}
           results={terms.length > 0 ? results : undefined}
           onChange={navigate}
@@ -2399,6 +2410,14 @@ export function SettingsDialog({
 
             {/* Per-turn checkpoints: one switch for the controls and the backend's capture. */}
             <CheckpointsSettings />
+
+            {/* Claude's trace spans as a second, separate token source in the recap. */}
+            <ToggleCard
+              label={<>{t("settings.claudeOtelTokens")} <UntestedTag id="settings.claudeOtelTokens" /></>}
+              checked={experimentalEnabled(settings, "claude_otel_tokens")}
+              onChange={(e) => void updateSettings({ claude_otel_tokens: e.target.checked })}
+              help={t("settings.claudeOtelTokensHelp")}
+            />
 
             <ToggleCard
               label={t("settings.webBrowser")}

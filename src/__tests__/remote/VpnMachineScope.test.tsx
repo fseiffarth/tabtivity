@@ -36,6 +36,7 @@ import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { markVpnConnected, useVpnStatusStore } from "../../stores/remote/vpn/vpnStatus";
 import { useVpnPromptStore } from "../../stores/remote/vpn/vpnPrompt";
 import { useSettingsStore } from "../../stores/settings";
+import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import type { ProjectEntry } from "../../types";
 
 const invokeMock = vi.mocked(invoke);
@@ -416,5 +417,72 @@ describe("a stored config can be removed, not only connected", () => {
 
     await waitFor(() => expect(screen.getByText(/disconnect it first/i)).toBeTruthy());
     expect(screen.getByText("office.ovpn")).toBeTruthy();
+  });
+});
+
+describe("a tunnel can be kept connected, and one that ended says why", () => {
+  const stored = (reason: unknown = null) =>
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "openvpn_active") return Promise.resolve([]);
+      if (cmd === "openvpn_list_configs") return Promise.resolve([{ path: CONFIG, name: "office.ovpn" }]);
+      if (cmd === "openvpn_exit_reason") return Promise.resolve(reason);
+      return Promise.resolve();
+    });
+
+  beforeEach(() => {
+    useVpnStatusStore.setState({ ended: {} });
+    // An earlier test leaves the menu open, and an open menu has seen the end.
+    useHeaderHoverMenuStore.setState({ openId: null });
+  });
+
+  it("the Keep connected switch records the config, off by default", async () => {
+    stored();
+    render(<VpnIndicator />);
+    await userEvent.hover(await screen.findByRole("button", { name: /openvpn/i }));
+
+    const keep = await screen.findByRole("checkbox", { name: "Keep office.ovpn connected" });
+    expect((keep as HTMLInputElement).checked).toBe(false);
+    await userEvent.click(keep);
+    await waitFor(() => expect(useSettingsStore.getState().settings?.vpn_keep_connected).toEqual([CONFIG]));
+    expect(await screen.findByText(/Applies from this tunnel's next connect/)).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Keep office.ovpn connected" }));
+    await waitFor(() => expect(useSettingsStore.getState().settings?.vpn_keep_connected).toEqual([]));
+  });
+
+  it("a tunnel that died on its own marks the header and says why on its row", async () => {
+    // Up as far as the window knows; the backend's reconcile says it is gone.
+    useVpnStatusStore.getState().setState(CONFIG, "connected");
+    stored({ kind: "inactive", line: "SIGTERM[soft,inactive] received, process exiting" });
+    render(<VpnIndicator />);
+
+    const btn = await screen.findByRole("button", { name: /openvpn/i });
+    await waitFor(() => expect(btn.getAttribute("title")).toMatch(/ended on its own/));
+    expect(useProjectsStore.getState().connToast).toMatch(/office\.ovpn ended on its own: no traffic/);
+
+    await userEvent.hover(btn);
+    const line = await screen.findByText(/Ended on its own at/);
+    expect(line.textContent).toMatch(/no traffic for longer than the VPN's idle timer allows\. Keep connected prevents this\./);
+    // Opening the menu is having seen it: the header goes back to plain "no tunnel".
+    await waitFor(() => expect(btn.getAttribute("title")).toMatch(/no tunnel/));
+  });
+
+  it("does not point at the switch when it was already on, and shows OpenVPN's own line for an unknown end", async () => {
+    useSettingsStore.setState({ settings: { vpn_enabled: true, vpn_keep_connected: [CONFIG] } as never });
+    useVpnStatusStore.getState().setState(CONFIG, "connected");
+    stored({ kind: "session_timeout", line: "Session timeout, exiting" });
+    const first = render(<VpnIndicator />);
+    await userEvent.hover(await screen.findByRole("button", { name: /openvpn/i }));
+    const line = await screen.findByText(/Ended on its own at/);
+    expect(line.textContent).toMatch(/session time limit was reached\./);
+    expect(line.textContent).not.toMatch(/prevents this/);
+    first.unmount();
+
+    useVpnStatusStore.setState({ byConfig: {}, ended: {} });
+    useVpnStatusStore.getState().setState(CONFIG, "connected");
+    stored({ kind: "unknown", line: "SIGTERM[hard,] received, process exiting" });
+    render(<VpnIndicator />);
+    await userEvent.hover(await screen.findByRole("button", { name: /openvpn/i }));
+    expect((await screen.findByText(/Ended on its own at/)).textContent).toMatch(/SIGTERM\[hard,\] received, process exiting/);
   });
 });

@@ -337,4 +337,57 @@ describe("Mobile steering inside a tab", () => {
     cleanup();
     expect(getSteering().hasInside).toBe(false);
   });
+
+  describe("a sent draft that clears the composer late", () => {
+    const mountField = () => {
+      render(<><div className="composer-field"><textarea aria-label="draft" /></div><Harness /></>);
+      const field = screen.getByLabelText("draft") as HTMLTextAreaElement;
+      press(document.body, " ", { shift: true });
+      act(() => field.focus());
+      fireEvent.change(field, { target: { value: "hello" } });
+      return field;
+    };
+
+    it("puts the caret away once the field empties about a second after Enter", () => {
+      vi.useFakeTimers();
+      try {
+        const field = mountField();
+        press(field, "Enter");
+        act(() => { vi.advanceTimersByTime(1000); });
+        // React clears the field without an input event.
+        act(() => { field.value = ""; });
+        act(() => { vi.advanceTimersByTime(200); });
+        expect(document.activeElement).not.toBe(field);
+        expect(getSteering().active).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stops watching once the user types again, or once the window has passed", () => {
+      vi.useFakeTimers();
+      try {
+        const field = mountField();
+        press(field, "Enter");
+        act(() => { vi.advanceTimersByTime(500); });
+        // Typing again ends the watch: a clear later on leaves the caret alone.
+        act(() => { fireEvent.input(field, { target: { value: "hellox" } }); });
+        act(() => { field.value = ""; });
+        act(() => { vi.advanceTimersByTime(300); });
+        expect(document.activeElement).toBe(field);
+
+        // A send that clears only after the window has passed is not waited for.
+        act(() => { field.blur(); });
+        act(() => { fireEvent.change(field, { target: { value: "again" } }); });
+        act(() => { field.focus(); });
+        press(field, "Enter");
+        act(() => { vi.advanceTimersByTime(4500); });
+        act(() => { field.value = ""; });
+        act(() => { vi.advanceTimersByTime(500); });
+        expect(document.activeElement).toBe(field);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

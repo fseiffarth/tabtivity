@@ -1,6 +1,7 @@
 use std::io::Write;
 use app_core::sync::LockExt;
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 // The Ollama client (endpoint, owner gate, HTTP, capability and locality
@@ -601,11 +602,19 @@ fn keep_alive_of(
 }
 
 
-/// Unload a model from memory without deleting it (sets keep_alive=0).
+/// Unload a model from memory without deleting it (sets keep_alive=0), and
+/// hold it there: suggestions, autocomplete and the editor's automatic
+/// completions no longer load it back ([`hold_unloaded`]) until a Load.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stop_ollama_model(model: String) -> Result<(), String> {
     let body = serde_json::json!({"model": model, "keep_alive": 0}).to_string();
-    app_core::rt::try_blocking("unload", move || ollama_http("POST", "/api/generate", Some(&body)).map(drop)).await
+    app_core::rt::try_blocking("unload", move || {
+        // Held before the request: a warm-up checking in between must not
+        // reload what is being unloaded.
+        hold_unloaded(&model);
+        ollama_http("POST", "/api/generate", Some(&body)).map(drop)
+    })
+    .await
 }
 
 // ── Interrupted-pull tracking ─────────────────────────────────────────────
@@ -760,46 +769,49 @@ fn orphan_partial_blobs() -> Vec<PartialBlob> {
 /// anything else — the check matters because the removal may run elevated.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_partial_blob(path: String) -> Result<(), String> {
-    app_core::rt::try_blocking("blobs", move || remove_partial_blob(&path)).await
+    app_core::rt::try_blocking("blobs", move || {
+        remove_partial_blob(Path::new(&path), &ollama_blob_dirs())
+    }).await
 }
 
 /// The blocking body of [`delete_partial_blob`] (it may ask for elevation).
-fn remove_partial_blob(path: &str) -> Result<(), String> {
-    let p = std::path::Path::new(path);
-    let name = p
+fn remove_partial_blob(path: &Path, blob_dirs: &[PathBuf]) -> Result<(), String> {
+    let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or("invalid path")?
-        .to_string();
-    if !name.ends_with("-partial") {
-        return Err("not a partial blob".into());
-    }
-    let dir = p.parent().ok_or("no parent directory")?;
+        .ok_or("invalid path")?;
+    let stem = name.strip_suffix("-partial").ok_or("not a partial blob")?;
+    let dir = path.parent().ok_or("no parent directory")?;
     let canon = |d: &std::path::Path| std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf());
     let dir_canon = canon(dir);
-    if !ollama_blob_dirs().iter().any(|d| canon(d) == dir_canon) {
+    if !blob_dirs.iter().any(|d| canon(d) == dir_canon) {
         return Err("not inside an Ollama blobs directory".into());
     }
-    let files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir_canon)
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .filter(|entry| is_partial_file_of(&entry.file_name().to_string_lossy(), &name))
-        .map(|entry| entry.path())
-        .collect();
+    let files = partial_blob_files(&dir_canon, |candidate| candidate == stem)
+        .map_err(|e| e.to_string())?;
     if files.is_empty() {
         return Err("nothing to remove".into());
     }
     remove_blob_files(&files)
 }
 
-/// `fname` is the main `<stem>-partial` file or one of its `-partial-<N>` chunk
-/// records.
-fn is_partial_file_of(fname: &str, partial_name: &str) -> bool {
-    fname == partial_name
-        || fname
-            .strip_prefix(partial_name)
-            .and_then(|rest| rest.strip_prefix('-'))
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+/// The stem of a main partial file or a chunk with an ASCII decimal index.
+fn partial_blob_stem(name: &str) -> Option<&str> {
+    if let Some(stem) = name.strip_suffix("-partial") {
+        return Some(stem);
+    }
+    let (stem, chunk) = name.rsplit_once("-partial-")?;
+    (!chunk.is_empty() && chunk.bytes().all(|b| b.is_ascii_digit())).then_some(stem)
+}
+
+fn partial_blob_files(dir: &Path, matches_stem: impl Fn(&str) -> bool) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        if entry.file_name().to_str().and_then(partial_blob_stem).is_some_and(&matches_stem) {
+            files.push(entry.path());
+        }
+    }
+    Ok(files)
 }
 
 /// Remove Ollama blob files, escalating once for the ones this user may not
@@ -915,7 +927,9 @@ pub async fn delete_ollama_pull(model: String) -> Result<(), String> {
     .await?;
     // Remove the partial layers this model's pull was fetching.
     if let Ok(digests) = registry_layer_digests(&model).await {
-        app_core::rt::blocking("delete", move || delete_partials_for_digests(&digests)).await?;
+        app_core::rt::blocking("delete", move || {
+            delete_partials_for_digests(&digests, &ollama_blob_dirs())
+        }).await?;
     }
     Ok(())
 }
@@ -943,26 +957,14 @@ async fn registry_layer_digests(model: &str) -> Result<Vec<String>, String> {
 /// the given `sha256:<hex>` digests, across all known blob directories. Files the
 /// system service owns go through [`remove_blob_files`]'s one elevated retry —
 /// this runs only from the user's Delete on a paused download.
-fn delete_partials_for_digests(digests: &[String]) {
+fn delete_partials_for_digests(digests: &[String], blob_dirs: &[PathBuf]) {
     // Blob files are named `sha256-<hex>`; the manifest gives `sha256:<hex>`.
     let stems: std::collections::HashSet<String> =
         digests.iter().map(|d| d.replace(':', "-")).collect();
     let mut files = Vec::new();
-    for dir in ollama_blob_dirs() {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in rd.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let Some(rest) = name.strip_suffix("-partial").or_else(|| {
-                // per-chunk metadata file: `<stem>-partial-<N>`
-                name.rsplit_once("-partial-").map(|(head, _)| head)
-            }) else {
-                continue;
-            };
-            if stems.contains(rest) {
-                files.push(entry.path());
-            }
+    for dir in blob_dirs {
+        if let Ok(matches) = partial_blob_files(dir, |stem| stems.contains(stem)) {
+            files.extend(matches);
         }
     }
     if !files.is_empty() {
@@ -1047,6 +1049,7 @@ pub async fn load_ollama_model(
 fn run_load(ctx: &CoreCtx, model: &str, device: LoadDevice) -> Result<(), String> {
     // A load is the model's first run (an empty generate): none while AI is off.
     crate::services::ai_switch::check()?;
+    release_hold(model);
     ctx.emit(
         "ollama-load-progress",
         serde_json::json!({ "model": model, "status": "loading" }),
@@ -2801,12 +2804,16 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
 
     // The same entitlement, for the context window: the user's choice, else
     // [`spawned_context_length`]. A value set in the environment is left alone.
+    // Either way the window is remembered, so a local OpenCode tab can be told
+    // it before its model is loaded (`local_drivers::opencode_loaded_models_config`).
+    let mut spawned_context = std::env::var(CONTEXT_LENGTH_VAR).ok().and_then(|v| v.trim().parse::<u32>().ok());
     if std::env::var_os(CONTEXT_LENGTH_VAR).is_none() {
         if let Some(n) = configured_context(
             crate::services::ollama_client::configured_context_length(),
             max_vram_total(),
         ) {
             cmd.env(CONTEXT_LENGTH_VAR, n.to_string());
+            spawned_context = Some(n);
         }
     }
 
@@ -2823,6 +2830,7 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
     // the 8 s deadline is still *ours* and still running, and forgetting it here
     // is precisely how one outlives the app.
     record_owned_server(OwnedServer::Process(pid));
+    crate::services::ollama_client::record_spawned_context(spawned_context.filter(|n| *n > 0));
 
     let deadline = Instant::now() + Duration::from_secs(8);
     if wait_for_ollama(deadline) {
@@ -4029,6 +4037,10 @@ pub async fn complete_text(
         let sentence = mode == CompletionMode::Sentence && trailing_comment_intent(&prefix, &language).is_none();
         let fim = uses_fim(insert == Some(true));
         let automatic = trigger.as_deref() == Some("auto");
+        // An automatic completion never loads a model the user unloaded.
+        if automatic && is_held(&model) {
+            return Err(MODEL_HELD.to_string());
+        }
         for use_fim in if fim { vec![true, false] } else { vec![false] } {
             let CompletionPlan { endpoint, mut body, reference_bytes, references_dropped } = completion_plan(
                 &prefix, &suffix, &model, &language, mode, &references, file_name.as_deref(), use_fim,
@@ -4117,25 +4129,32 @@ pub struct LocalAgentPrep {
 /// Creates `~/.local/share/tabtivity/vibe_local/{alias}/config.toml` with:
 /// - `active_model = "{alias}"` so vibe selects the correct model even when
 ///   the `VIBE_ACTIVE_MODEL` env var is shadowed by the global `~/.vibe/config.toml`.
-/// - `enabled_tools = ["__no_tools__"]` to disable tool calls for local models.
-///   A root-console tab whose model wears the 🧠 menu's "MCP" chip gets the
-///   root MCP tools back through Vibe's env layer (`services::root_mcp`).
+/// - Vibe's own tools on for a model Ollama says has the `tools` capability,
+///   and off (`enabled_tools = ["__no_tools__"]`) for any other, or when Ollama
+///   cannot say: a completion-only model refuses a request carrying tools
+///   (`local_drivers::vibe_local_config`). A tab whose model wears the 🧠 menu's
+///   "MCP" chip gets the MCP tools through Vibe's env layer (`services::root_mcp`).
 /// - A single provider + model block for this Ollama model.
 ///
 /// Each Ollama tab gets its own VIBE_HOME subdirectory so there is no shared
 /// mutable config state and `active_model` is always unambiguous.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String> {
+    // The capability read is HTTP: off the runtime.
+    app_core::rt::blocking("prepare_local_agent", move || prepare_local_agent_blocking(model)).await?
+}
+
+/// The blocking body of [`prepare_local_agent`].
+fn prepare_local_agent_blocking(model: String) -> Result<LocalAgentPrep, String> {
     validate_model_name(&model)?;
     let alias = sanitize_alias(&model);
     let vibe_home = app_vibe_local_dir_for(&alias)?;
     std::fs::create_dir_all(&vibe_home).map_err(|e| format!("create vibe_local dir: {e}"))?;
 
     let config_path = vibe_home.join("config.toml");
-
-    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
-    cfg.push_str(&ollama_provider_block());
-    cfg.push_str(&ollama_model_block(&model, &alias));
+    let addr = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
+    let tools = model_supports_tools(&model) == Some(true);
+    let cfg = crate::services::local_drivers::vibe_local_config(&model, &alias, &addr, tools);
 
     std::fs::write(&config_path, cfg).map_err(|e| format!("write vibe_local config: {e}"))?;
     crate::services::agent_session::register_vibe_hook_in(&vibe_home)

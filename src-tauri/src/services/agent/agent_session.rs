@@ -44,12 +44,14 @@ const HOOK_SCRIPT_NAME: &str = crate::brand::SESSION_HOOK_PS1;
 pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
     match opts.cmd.as_str() {
         "claude" => resolve_claude_session(opts),
+        "ollama" if local_claude_launch(&opts) => resolve_claude_session(opts),
         "codex" => resolve_codex_session(opts),
         "vibe" => resolve_vibe_session(opts),
         "opencode" => crate::services::opencode_session::resolve(opts),
         "copilot" => crate::services::copilot_session::resolve(opts),
         "agy" => crate::services::google_chat::resolve(opts),
         "muse" => crate::services::muse_session::resolve(opts),
+        "cursor-agent" => crate::services::cursor_session::resolve(opts),
         _ => opts,
     }
 }
@@ -293,10 +295,11 @@ pub(crate) fn codex_session_log(root: &std::path::Path, uuid: &str) -> Option<Pa
 fn resolve_claude_session(opts: PtyOptions) -> PtyOptions {
     let project_id = opts.project_id.clone();
     // Every local tab's Claude lives in the scope's agent home
-    // (`services::agent_home`), so that is where its logs are. Reusing a
-    // `--session-id` Claude already has a log for is a hard error ("already
-    // in use"), so a missed log is a dead tab, not a fresh one.
-    let roots = claude_projects_roots(project_id.as_deref());
+    // (`services::agent_home`), or a local-model tab's in its local-model
+    // home, so that is where its logs are. Reusing a `--session-id` Claude
+    // already has a log for is a hard error ("already in use"), so a missed
+    // log is a dead tab, not a fresh one.
+    let roots = claude_transcript_roots(project_id.as_deref());
     let root_refs: Vec<&std::path::Path> = roots.iter().map(|p| p.as_path()).collect();
     resolve_claude_session_in(
         opts,
@@ -341,18 +344,25 @@ where
     F: Fn(&str) -> Option<String>,
     M: Fn(&str) -> Option<String>,
 {
-    if opts.cmd != "claude" {
+    // A local-model tab's Claude takes its own flags behind the launcher's
+    // `--` (`ollama launch claude --model <m> -- --session-id <id>`); only
+    // those are looked at, never the launcher's.
+    let first = if opts.cmd == "claude" {
+        0
+    } else if local_claude_launch(&opts) {
+        opts.args.iter().position(|a| a == "--").map_or(opts.args.len(), |cut| cut + 1)
+    } else {
         return opts;
-    }
+    };
     // Set unconditionally: a persisted layout's `env` is not where this comes
     // from, and a wrong marker would relax the hook's guard for this tab.
     opts.env
         .insert(TAB_AGENT_ENV.to_string(), "claude".to_string());
     let session_exists = |id: &str| roots.iter().any(|root| claude_session_exists(root, id));
-    let Some(i) = opts
-        .args
+    let Some(i) = opts.args[first..]
         .iter()
         .position(|a| a == "--session-id" || a == "--resume")
+        .map(|i| first + i)
     else {
         return opts;
     };
@@ -404,6 +414,30 @@ where
         }
     }
     opts
+}
+
+/// Whether `opts` is a local-model tab's Claude Code: the `ollama launch claude`
+/// line the ＋ menu builds (`services::local_drivers`). The chat assistant's
+/// local Claude is left out: its launch pins its own session tail
+/// (`assistant::claude_local_tail_ok`), which a resolve must not rewrite.
+fn local_claude_launch(opts: &PtyOptions) -> bool {
+    opts.cmd == "ollama"
+        && opts.assistant.is_none()
+        && opts.args.first().is_some_and(|a| a == "launch")
+        && opts.args.get(1).is_some_and(|a| a == "claude")
+}
+
+/// Every root a scope's Claude transcript may be under: its own
+/// ([`claude_projects_roots`]) and its local-model home's, where a local-model
+/// tab's Claude Code writes. A session id is a uuid, so a tab's own is in one
+/// of them only; what lists a folder's chats keeps to [`claude_projects_roots`].
+pub(crate) fn claude_transcript_roots(project_id: Option<&str>) -> Vec<PathBuf> {
+    let mut roots = claude_projects_roots(project_id);
+    let local = crate::services::agent_home::local_model_home(project_id).join(".claude").join("projects");
+    if !roots.contains(&local) {
+        roots.push(local);
+    }
+    roots
 }
 
 /// Where a scope's Claude keeps its transcripts: `<scope home>/.claude/projects`.
@@ -627,7 +661,7 @@ pub(crate) fn read_agent_transcript_from<T>(
     let live = read_live_session_for(project_id, launch_id);
     match cmd {
         "claude" => {
-            let roots = claude_projects_roots(project_id);
+            let roots = claude_transcript_roots(project_id);
             claude_transcript_ids(live, launch_id, fall_back_to_launch).iter().find_map(|id| {
                 roots
                     .iter()
@@ -803,13 +837,26 @@ const SCAN_CHUNK: u64 = 1024 * 1024;
 /// flag says the window starts after the file's first byte. The scan reaches
 /// back at most [`REPLAY_SCAN_FACTOR`] times `budget`.
 pub(crate) fn read_conversation_tail(file: &mut std::fs::File, len: u64, budget: u64) -> Option<(String, bool)> {
+    read_conversation_tail_from(file, len, budget, 0)
+}
+
+/// [`read_conversation_tail`] of the part of the file from byte `from` on — a
+/// line start, such as where a Codex subagent's own records begin
+/// (`agent_transcript::codex_own_history_start`). The flag says the window
+/// starts after `from`.
+pub(crate) fn read_conversation_tail_from(
+    file: &mut std::fs::File,
+    len: u64,
+    budget: u64,
+    from: u64,
+) -> Option<(String, bool)> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
-    let start = conversation_tail_start(file, len, budget)?;
+    let start = conversation_tail_start(file, len, budget)?.max(from);
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut reader = BufReader::new(file);
     let mut line = Vec::new();
     let mut text = String::new();
-    if start > 0 {
+    if start > from {
         // Whatever came before the seek point is missing from the first line.
         reader.read_until(b'\n', &mut line).ok()?;
     }
@@ -822,7 +869,7 @@ pub(crate) fn read_conversation_tail(file: &mut std::fs::File, len: u64, budget:
             text.push_str(&String::from_utf8_lossy(&line));
         }
     }
-    Some((text, start > 0))
+    Some((text, start > from))
 }
 
 /// Where [`read_conversation_tail`]'s window starts: walking back line by line
@@ -1603,6 +1650,10 @@ pub fn read_live_session_for(project_id: Option<&str>, uid: &str) -> Option<Stri
 /// `clear` or `compact`. Written by the hook on every start, before the id.
 pub const LIVE_SOURCE_SUFFIX: &str = ".src";
 
+/// Suffix of the record beside the session record holding the permission mode
+/// Claude's `Stop` payload last reported (`permission_mode`).
+pub const LIVE_MODE_SUFFIX: &str = ".mode";
+
 /// The `source` words Claude's `SessionStart` payload can carry. Anything else
 /// in the record is discarded: the file is written by a hook parsing
 /// attacker-visible JSON.
@@ -1663,7 +1714,7 @@ pub const LIVE_TITLE_SUFFIX: &str = ".title";
 /// on disk to resume.
 pub fn cleared_session_for(project_id: Option<&str>, uid: &str) -> Option<String> {
     let dir = live_record_dir(project_id, uid)?;
-    let roots = claude_projects_roots(project_id);
+    let roots = claude_transcript_roots(project_id);
     cleared_session_in(&dir, uid, |id| roots.iter().any(|root| claude_session_exists(root, id)))
 }
 
@@ -1730,7 +1781,8 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
 /// Copilot's record is pointed at `chat` and the tab relaunched too; its spawn
 /// pins `--session-id <chat>` (`copilot_session::resolve`). Muse's likewise,
-/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`).
+/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`),
+/// Cursor's `--continue` into `--resume <chat>` (`cursor_session::resolve`).
 /// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
     if !is_uuid_shaped(uid) {
@@ -1753,7 +1805,7 @@ pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: 
             restore_cleared_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
-        "agy" | "copilot" | "muse" => {
+        "agy" | "copilot" | "muse" | "cursor-agent" => {
             write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
@@ -1863,7 +1915,7 @@ pub fn read_live_session_in(dir: &std::path::Path, uid: &str) -> Option<String> 
 /// flag accepts ("manual" is a CLI-only alias that hooks report as "default").
 /// A recorded value outside this set is discarded: the record is written by a
 /// hook parsing attacker-visible JSON, and the value becomes a CLI argument.
-fn is_permission_mode(s: &str) -> bool {
+pub(crate) fn is_permission_mode(s: &str) -> bool {
     matches!(
         s,
         "default" | "plan" | "acceptEdits" | "auto" | "dontAsk" | "bypassPermissions"
@@ -1878,7 +1930,7 @@ pub fn read_live_mode_for(project_id: Option<&str>, uid: &str) -> Option<String>
     let mut best: Option<(std::time::SystemTime, String)> = None;
     let mut consider = |dir: &std::path::Path| {
         if let Some(mode) = read_live_mode_in(dir, uid) {
-            let stamp = std::fs::metadata(dir.join(format!("{uid}.mode")))
+            let stamp = std::fs::metadata(dir.join(format!("{uid}{LIVE_MODE_SUFFIX}")))
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
             if best.as_ref().is_none_or(|(t, _)| stamp >= *t) {
@@ -1894,11 +1946,11 @@ pub fn read_live_mode_for(project_id: Option<&str>, uid: &str) -> Option<String>
 }
 
 /// Testable core of [`read_live_mode_for`] against an explicit directory.
-fn read_live_mode_in(dir: &std::path::Path, uid: &str) -> Option<String> {
+pub(crate) fn read_live_mode_in(dir: &std::path::Path, uid: &str) -> Option<String> {
     if !is_uuid_shaped(uid) {
         return None;
     }
-    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}.mode")))?;
+    let raw = crate::services::home_io::read_record(&dir.join(format!("{uid}{LIVE_MODE_SUFFIX}")))?;
     let mode = raw.trim().to_string();
     if is_permission_mode(&mode) {
         Some(mode)
@@ -2559,6 +2611,7 @@ pub fn install_session_start_hook() -> std::io::Result<()> {
     crate::services::opencode_session::write_plugin()?;
     crate::services::antigravity_session::write_script()?;
     crate::services::muse_session::write_hook()?;
+    crate::services::cursor_session::write_hook()?;
     crate::services::copilot_session::write_turn_hook()?;
     crate::services::agent_hint::write_script()
 }
@@ -2602,6 +2655,8 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     crate::services::antigravity_session::register_in_home(home);
     // Muse's session hook (`services::muse_session`), on a Muse that takes it.
     crate::services::muse_session::register_in_home(home);
+    // Cursor's session hook (`services::cursor_session`).
+    crate::services::cursor_session::register_in_home(home);
     // Copilot's turn hooks (`services::copilot_session`), on a Copilot that takes them.
     crate::services::copilot_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the

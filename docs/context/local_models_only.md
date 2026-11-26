@@ -5,7 +5,8 @@ only** is read by no cloud model: only an agent on an installed local Ollama
 model starts in it, nothing in Tabtivity hands its files to a cloud model, and
 no other tab's fence can see its folder. The switch below it, **Cut network**
 (phase 2, Linux), takes the network away from the project's local tabs: their fence
-has none, and the only way out is a relay in the app (see "Cut network" below). On
+has none, and the only way out is a relay in the app (see "Cut network" below). An
+OpenCode tab gets that cut fence on its own even with the switch off (see the gate below). On
 macOS and Windows it is stored in the record's shape and refused.
 
 The code is `services/agent/agent_privacy.rs` (all of it `AppHandle`-free), the
@@ -37,7 +38,7 @@ touches only status and position, so a stale window cannot clear it.
 
 `set_project_agent_privacy` (`command_class` `client`: desktop only, decision
 D4; the phone reads the record and has no setter) refuses with a message naming
-the project when the project is remote, VM or has its container on; its record
+the project when the project is remote or VM; its record
 names no folder; another registered project's folder (or mirror) or a box folder
 lies **inside** it; `ollama_host` is not loopback (`mail_ai::resolve_endpoint`,
 which refuses a remote host even with `ollama_allow_remote_host`). It refuses
@@ -96,7 +97,8 @@ counts). Only agents are gated; a shell tab is the user's.
 
 A subject spawn is allowed only when `vet` accepts it:
 
-- not remote, not a worker host, not a container, not the Host session, not the
+- not remote, not a worker host, not inside a container (`opts.sandbox`, refused with
+  `CONTAINER_AGENT`; see "Container projects" below), not the Host session, not the
   assistant, Cut network not recorded on the project. A `remote` or `vm` value of
   `null` on the record is absent, in the setting and in the gate alike
   (`remote_or_vm`, the reading `remote_target_for` has);
@@ -109,17 +111,22 @@ A subject spawn is allowed only when `vet` accepts it:
   not needed because the argv itself is what runs;
 - Cut network not recorded on the project, or `Probe::can_cut` (`cut_platform`, Linux);
   when it is recorded and the platform cannot cut, the project is closed to agents;
-- the driver is allowed for the project's mode. **Network on:** not **OpenCode**
-  (`agent_privacy::REFUSED_DRIVERS`): a launch line that would be OpenCode's is refused,
-  before Ollama is asked, with "OpenCode cannot be kept on the local model in a Local models
-  only project that keeps its network" and the local agents that can run
-  (`agents_that_can_run_locked(pins_claude, cut)`: the `LOCAL_DRIVERS` labels but OpenCode,
-  Claude Code only where it can be pinned, and Mistral (vibe)). **Cut network on:** only
+- the driver is allowed for the project's mode. **Network on:** every driver, but a
+  cut-only one (**OpenCode**, `agent_privacy::CUT_ONLY_DRIVERS`) runs in a cut fence of its
+  own: the gate records `Verified::cut = true` for that tab, so it gets `--unshare-net`, the
+  local lane, the relay address as `OLLAMA_HOST` and `cut_quiet_env`, while the project's other
+  tabs keep their network (2026-11-25, never live). Where the sandbox cannot cut
+  (`cut_platform`: not Linux) it is refused, before Ollama is asked, with "OpenCode cannot be kept
+  on the local model in a Local models only project on this operating system" and the local
+  agents that can run (`agents_that_can_run_locked(pins_claude, cut, can_cut)`: the
+  `LOCAL_DRIVERS` labels, the cut-only ones only with `can_cut`, Claude Code only where it can be
+  pinned, and Mistral (vibe)). Such a tab is cut whatever the project's switch, so
+  `restart_for_cut_in` never lists it. **Cut network on:** only
   `CUT_VERIFIED_DRIVERS` (OpenCode, Claude Code, Codex; the per-driver table below); any other
   driver is refused naming itself ("has not been verified with the network cut"). Every route
   into a locked project passes `vet` or the fence's stamp check (window, phone, restore,
   schedule, a box tab or the root console with a cwd inside, the shell-tab shim). The ＋ menus
-  follow (`driversForLockedProject(drivers, cut)`, `LOCKED_REFUSED_DRIVERS` and
+  follow (`driversForLockedProject(drivers, cut, canCut = IS_HOST_LINUX)`, `CUT_ONLY_DRIVERS` and
   `CUT_VERIFIED_DRIVERS` in `localModelsOnly.ts`, `vibeOfferedInLockedProject`; the phone's
   sheet lists all rows, as it does the cloud ones, and gets the backend's text);
 - `OLLAMA_HOST` of the Tabtivity process, if set, is loopback;
@@ -143,7 +150,8 @@ removed by `--unsetenv` in the Linux fence and `env_remove` on the PTY
 **Vibe** gets a per-project home, `vibe_local/<alias>.<project key>`, instead of the
 `vibe_local/<alias>` every scope shares (gap 30), and the gate writes its
 `config.toml` itself (`local_drivers::vibe_local_config`: the verified model on the
-verified endpoint, one provider, tools off), so the config that runs is the one that
+verified endpoint, one provider, Vibe's tools on only when that endpoint reports the
+model's `tools` capability, `Probe::tools`), so the config that runs is the one that
 was checked, not what the renderer's `prepare_local_agent` call left.
 
 Refusals start with `Local models only: "<project>" is set to Local models only, so
@@ -160,9 +168,9 @@ Refusals start with `Local models only: "<project>" is set to Local models only,
   gets the folder; `compute_fence_roots`/`roots_for_scope` give a locked project's own
   tabs **its folder only**, no box roots.
 - `root_project_read_only_paths` skips locked projects.
-- A container never carries one: `set_project_sandbox*` refuse for a locked project and
+- No agent runs in a container that shows a locked folder:
   `sandbox::wrap_pty_options_docker` refuses an agent whose project is locked or
-  whose mount contains a locked folder.
+  whose mount contains a locked folder (`container_refusal`).
 
 - A fence that cannot read the project list is not built: `mask_dirs_now` is an error,
   not "no masks", and every fence caller propagates it.
@@ -208,7 +216,7 @@ prompts):
 | CLI | Re-reads mid-session? | What pins it |
 | --- | --- | --- |
 | Claude Code 2.1.319 | **Yes**, project `.claude/settings.json`, `.claude/settings.local.json` and the user's `~/.claude/settings.json` (the agent home's, writable in the fence). An `env.ANTHROPIC_BASE_URL` moved the next `POST /v1/messages`; so did `env.HTTP_PROXY`/`HTTPS_PROXY` (the whole request goes through the proxy even to a loopback base URL) and `env.CLAUDE_CODE_USE_BEDROCK` + `ANTHROPIC_BEDROCK_BASE_URL` (the request went to the attacker as `/model/<m>/invoke-with-response-stream`). | A **managed-settings file** (`local_drivers::claude_managed_settings`), written by the backend into `<state>/claude_managed/<digest>/claude-code/managed-settings.json` (content-addressed, `home_io` handles, pinned by inode and re-checked last by `verify_control_pins`) and bound read-only into the fence at Claude's machine-wide path `/etc/claude-code/managed-settings.json`. It outranks project and user settings. It pins `env` (`ANTHROPIC_BASE_URL` to the verified endpoint, the model variables `ollama launch claude` sets, the proxy and `CLAUDE_CODE_USE_*` variables emptied, `NO_PROXY` to loopback), `model`, `availableModels: [model]` and `allowedProviders: ["customEndpoint"]` (Claude Code refuses a session on any other provider; the custom endpoint is admitted only at the value this file pins). Built from what the gate recorded for the tab (driver, model, endpoint), not from the argv. |
-| OpenCode 2.2.6 | **Yes**: a project `opencode.json` / `.opencode/opencode.json` written mid-session moved the next request when the provider came from a project file (`opencode mini --standalone`). | **Nothing holds it, so OpenCode is refused in a locked project until Phase 2.** An inline `OPENCODE_CONFIG_CONTENT` (which fix round 3 gave a verified tab) pinned the `ollama` provider's endpoint, but config arrays merge as a union: a project file that adds a provider and sets `enabled_providers`, `model`, `small_model` or a per-agent `model` still lists and uses its own (`opencode models --standalone`, review 3). The only closure would be to create the files in the project to mask them, which the app must not do. The inline-config code in `apply` is removed (it is in git history, `17f447d3`); `local_drivers::opencode_ollama_config` stays, since `launch_prep` builds the loaded-models config with it for every other OpenCode tab. |
+| OpenCode 2.2.6 | **Yes**: a project `opencode.json` / `.opencode/opencode.json` written mid-session moved the next request when the provider came from a project file (`opencode mini --standalone`). | **Nothing holds it at launch, so OpenCode runs only in a cut fence in a locked project** (its own one when the project keeps its network; refused where the sandbox cannot cut): a provider a written file adds has no network, and the relay judges every model it asks the local Ollama for. An inline `OPENCODE_CONFIG_CONTENT` (which fix round 3 gave a verified tab) pinned the `ollama` provider's endpoint, but config arrays merge as a union: a project file that adds a provider and sets `enabled_providers`, `model`, `small_model` or a per-agent `model` still lists and uses its own (`opencode models --standalone`, review 3). The only closure would be to create the files in the project to mask them, which the app must not do. The inline-config code in `apply` is removed (it is in git history, `17f447d3`); `local_drivers::opencode_ollama_config` stays, since `launch_prep` builds the loaded-models config with it for every other OpenCode tab. |
 | Codex 0.167.0 | **No** (measured): `.codex/config.toml` written mid-session with another `model`/`model_provider`/`openai_base_url` changed nothing; later requests kept the launch model on the launch endpoint. The provider keys in a project file are ignored at start anyway. | Nothing needed. |
 | Pi, Droid, Cline, OpenClaw, Vibe | Not installed, not measured. | The spawn-time masks only. Vibe's home is pinned read-only. |
 
@@ -364,12 +372,34 @@ The ＋ menus, the allowed-agents list and the phone's sheet follow it (`offered
 **The phone's ＋ sheet** (`NewTabSheet`, `localChoiceRows`) reads the same rule as the desktop menus:
 `PublicProject` (`mobile_control::discovery`) carries `local_models_only` and `cut_network` as plain booleans,
 absent when off (read with `agent_privacy::privacy_of_value`, so a malformed record counts as locked, as in
-the gate). In a locked project the sheet lists the local model's agents (OpenCode only with the cut on, and then
-only the verified drivers) and shells, not the cloud agents, their cloud sessions, the API and sign-in rows;
+the gate). In a locked project the sheet lists the local model's agents (OpenCode where the host can cut, Linux; with
+the cut on only the verified drivers) and shells, not the cloud agents, their cloud sessions, the API and sign-in rows;
 `cloudRowsOffered`, `offeredLocalAgents` are the one shared TS rule. `the_frontends_driver_lists_are_the_backends`
 ties the Rust and TS driver lists. The baked PWA needs `npm run mobile:bundle` to carry the sheet change.
 
+## Container projects (phase 4)
+
+A locked project may have its Docker container on (`check_enable` and both
+`set_project_sandbox*` commands accept it). Its **local-model tabs run host-bound**,
+the path every container project's local-model tab already took
+(`sandbox::resolve_spawn_authority`: a registered `host_bound` marker plus a
+`HOST_BOUND_LOCAL_AGENT_CMDS` command resolves `sandbox` off), so they get the fence,
+the gate, the config masks, the Claude pin and Cut network exactly as in a plain local
+project. Shells and other non-agent tabs run in the container (the user's, like a
+local shell tab). **No agent runs inside the container**: `vet` refuses a subject spawn
+with `opts.sandbox` (`CONTAINER_AGENT`), and `container_refusal` repeats it in the docker
+wrap. A container could not hold one: it hides nothing of its mount, `docker exec`
+cannot add the per-tab managed-settings and mask binds, the image has no `ollama`, and
+the host's loopback Ollama is not reachable without `--network host` or a non-loopback
+listener. A CLI typed into a container shell hits the `agent_bin` shim, whose
+`--agent-shim` binary is not in the container, so it fails rather than running.
+
+The phone's launch of a stored tab passes the record's `hostBoundUid`
+(`mobile_control::headless::options_for`), so a local tab the window made runs
+host-bound from the phone too; the marker file stays the authority. The phone
+creates no tab in a container project (`create_verdict`). Chosen over the plan's per-tab `--network none` container: see the plan, phase 4.
+
 ## Not done
 
-macOS Seatbelt network denial (phase 3: Cut network is refused there), container and VM projects
-(phase 4), and what "Cut network (phase 2, Linux)" below lists as not run in a real namespace.
+macOS Seatbelt network denial (phase 3: Cut network is refused there), VM projects
+(phase 4b in the plan), and what "Cut network (phase 2, Linux)" below lists as not run in a real namespace.

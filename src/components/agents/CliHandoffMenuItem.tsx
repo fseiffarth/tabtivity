@@ -5,7 +5,7 @@ import type { TabEntry } from "../../stores/tabs";
 import { ArrowRightIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 
-/** Which tabs can hand their work to another CLI: an agent tab of a local
+/** Which tabs can hand their work to a new session: an agent tab of a local
  * project, not the assistant and not the root console's Host session. The
  * backend (`services::agent_cli_handoff`) refuses every remote project, its
  * here-running tabs included, and reads the scope's agent home, which is not
@@ -16,7 +16,8 @@ export function canContinueInAnotherCli(scope: string, tab: TabEntry): boolean {
 }
 
 /**
- * The tab right-click menu's "Continue with another CLI…" row. It opens
+ * The tab right-click menu's "Continue in a new session…" row (its own CLI or
+ * another). It opens
  * `CliHandoffDialog`; it is disabled while the tab's own turn is running, since
  * the file would hold a half-finished turn. A shell command the agent started
  * (`shell` busy kind) is not a turn. Hidden for a tab that cannot hand off.

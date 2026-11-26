@@ -70,7 +70,7 @@ import { relativePathWithin } from "../../lib/paths";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
 import { SERVER_CHIPS_CLASS, TerminalServerChips } from "./TerminalServerChips";
-import { isLoopbackServerHost, localPageUrl, forwardedUrl, type ServerUrl } from "../../lib/terminal/serverUrls";
+import { DEFAULT_PHONE_PORT, isLoopbackServerHost, localPageUrl, forwardedUrl, withoutOwnServers, type ServerUrl } from "../../lib/terminal/serverUrls";
 import { watchServers } from "../../lib/terminal/serverWatch";
 import { routeLink, tabLocality, type LinkRoute } from "../../lib/terminal/linkRoute";
 import { forwardAndOpen, hostLabelOf } from "../../lib/remote/portForward";
@@ -87,6 +87,7 @@ import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentRea
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
+import { TerminalLocalAutoModeCard } from "./TerminalLocalAutoModeCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalMcpStaleCard } from "./TerminalMcpStaleCard";
 import { noteMcpStale } from "../../stores/agents/mcpStale";
@@ -102,7 +103,7 @@ import { noteTypedLine, screenAtCursor } from "../../lib/agents/typedClear";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { notePromptTrailInput } from "../../stores/agents/promptTrail";
 import "@xterm/xterm/css/xterm.css";
-import { envName, storageKey } from "../../lib/brand";
+import { MOBILE_HOST_KEY, envName, storageKey } from "../../lib/brand";
 import { noteCheckpointKey } from "../../lib/agents/checkpoints";
 import { useCheckpointsStore } from "../../stores/agents/checkpoints";
 import type { AssistantLaunch } from "../../lib/assistant";
@@ -257,10 +258,18 @@ function terminalTheme(scheme: string | undefined) {
 // pays full escape-sequence parsing + render scheduling per chunk. With many
 // parallel agent tabs streaming (Tabtivity's normal shape) that made background
 // tabs the renderer's biggest standing cost. The buffer flushes when the pane
-// is next shown; agent TUIs repaint whole screens, so the flush converges on
-// the current frame. Cap the retained text so a chatty background agent can't
+// is next shown. Cap the retained text so a chatty background agent can't
 // grow this without bound; xterm trims to its own scrollback on flush anyway.
+// A capped catch-up does NOT converge on the current frame by itself (Claude
+// Code redraws only changed cells): the pane asks for a repaint after it
+// (`catchUpLost`).
 const PENDING_OUTPUT_CAP = 1_000_000;
+
+/** How long a lost catch-up's width nudge holds before the true width goes
+ *  back (`nudgeRepaint`). The program reads its size when it handles the
+ *  SIGWINCH, and Node compares that with the size it last knew: if the
+ *  restoring resize lands first it sees no change and draws nothing. */
+const LOST_CATCH_UP_REPAINT_MS = 300;
 
 /** Trailing delay before a refit's new size reaches the PTY (see `doFit`). */
 const PTY_RESIZE_DEBOUNCE_MS = 80;
@@ -522,6 +531,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const [servers, setServers] = useState<ServerUrl[]>([]);
   const [dismissedServers, setDismissedServers] = useState<string[]>([]);
   const forwardRows = usePortForwardStore((s) => s.rows);
+  // The phone server's port: on this machine it is Tabtivity, never a server chip.
+  const phonePort = useSettingsStore((s) => s.settings?.[MOBILE_HOST_KEY]?.port ?? DEFAULT_PHONE_PORT);
 
   // The sign-in link the program on screen is waiting on (see
   // `TerminalSignInCard`), and the links the user already closed the card for.
@@ -945,6 +956,42 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // direction — a backend too old to answer must not leave a pane mute.
     let historyPending = attachOnly || waking;
     const historyOutput: Array<{ data: string; range?: TerminalOutputRange }> = [];
+    // A catch-up that lost bytes off its front: a cap cut it at a byte count
+    // (here or in the backend's hidden-spell buffer, whose replay then starts
+    // past the last offset this pane saw). Claude Code redraws only the cells
+    // that changed, from where it believes the cursor and the screen are, so
+    // a fragment of that stream written over the screen this pane last showed
+    // leaves both frames interleaved — a dialog drawn through an old diff —
+    // and the Reader reads that mess as the question. Only a full repaint
+    // recovers, which a size change makes every TUI do.
+    let catchUpLost = false;
+    /** End offset of the last output this pane took, live or replayed. */
+    let seenEnd: number | undefined;
+    let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+    const restoreWidth = () => {
+      if (repaintTimer) clearTimeout(repaintTimer);
+      repaintTimer = null;
+      if (!term) return;
+      notePtyResize(id);
+      invoke("pty_resize", { id, cols: term.cols, rows: term.rows }).catch(() => {});
+    };
+    const nudgeRepaint = () => {
+      if (!term || term.cols < 3 || repaintTimer) return;
+      notePtyResize(id);
+      invoke("pty_resize", { id, cols: term.cols - 1, rows: term.rows }).catch(() => {});
+      repaintTimer = setTimeout(restoreWidth, LOST_CATCH_UP_REPAINT_MS);
+    };
+    const keepPending = (data: string) => {
+      pendingOutput.current += data;
+      // Trim with hysteresis: cutting exactly to the cap on every chunk past
+      // it re-copies the whole buffer per chunk (a ~1 MB memcpy up to ~60×/s
+      // per chatty hidden tab, forever). Letting it grow to 2× and cutting
+      // back to the cap costs one copy per megabyte of new output instead.
+      if (pendingOutput.current.length > PENDING_OUTPUT_CAP * 2) {
+        pendingOutput.current = pendingOutput.current.slice(-PENDING_OUTPUT_CAP);
+        catchUpLost = true;
+      }
+    };
     const flushPending = () => {
       if (historyPending || !term) return;
       const buffered = pendingOutput.current;
@@ -956,6 +1003,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       term.write(catchUp, () => {
         staleParse = Math.max(0, staleParse - 1);
       });
+      if (catchUpLost) {
+        catchUpLost = false;
+        nudgeRepaint();
+      }
     };
 
     // Write PTY output to the terminal only while the pane is open AND visible;
@@ -969,14 +1020,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         flushPending();
         term.write(data);
       } else {
-        pendingOutput.current += data;
-        // Trim with hysteresis: cutting exactly to the cap on every chunk past
-        // it re-copies the whole buffer per chunk (a ~1 MB memcpy up to ~60×/s
-        // per chatty hidden tab, forever). Letting it grow to 2× and cutting
-        // back to the cap costs one copy per megabyte of new output instead.
-        if (pendingOutput.current.length > PENDING_OUTPUT_CAP * 2) {
-          pendingOutput.current = pendingOutput.current.slice(-PENDING_OUTPUT_CAP);
-        }
+        keepPending(data);
       }
     };
 
@@ -1571,6 +1615,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // initialInput before it can accept keystrokes (see below).
       if (firstOutputAt.current === null) firstOutputAt.current = Date.now();
       armScheduledReady();
+      if (range) seenEnd = range.endOffset;
       if (historyPending) historyOutput.push({ data, range });
       else writeTerm(data);
     });
@@ -1586,13 +1631,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (firstOutputAt.current === null) firstOutputAt.current = Date.now();
       armScheduledReady();
       if (historyPending) {
+        if (range) seenEnd = range.endOffset;
         historyOutput.push({ data, range });
         return;
       }
-      pendingOutput.current += data;
-      if (pendingOutput.current.length > PENDING_OUTPUT_CAP * 2) {
-        pendingOutput.current = pendingOutput.current.slice(-PENDING_OUTPUT_CAP);
-      }
+      // The backend's cap cut the hidden spell's front off: the replay starts
+      // past what this pane last took (`catchUpLost`).
+      if (range && seenEnd !== undefined && range.startOffset > seenEnd) catchUpLost = true;
+      if (range) seenEnd = range.endOffset;
+      keepPending(data);
       if (openedRef.current && visibleRef.current) flushPending();
     });
 
@@ -1704,11 +1751,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             // The scope decides which `.claude.json` the spawn reads — the
             // fence's staged copy carries trust Tabtivity recorded, the host
             // file does not — so the probe needs it, not just the folder.
+            // A remote project's tab runs Claude on its host, whose own
+            // `.claude.json` answers: the host is named so the backend asks it.
             return await invoke<boolean>("claude_folder_trusted", {
               cwd,
               projectId: projectId ?? null,
               sandbox,
               localOnly,
+              remoteHost: remoteHostId ?? null,
             });
           } catch {
             // An older backend does not expose the probe — preserve the
@@ -1806,6 +1856,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           pendingOutput.current = tail + live + pendingOutput.current;
           if (pendingOutput.current.length > PENDING_OUTPUT_CAP * 2) {
             pendingOutput.current = pendingOutput.current.slice(-PENDING_OUTPUT_CAP);
+            catchUpLost = true;
           }
           if (firstOutputAt.current === null) firstOutputAt.current = Date.now();
           // A re-adopted tab's whole TUI can arrive as this one restored
@@ -2306,7 +2357,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (openWatchTimer.current) clearTimeout(openWatchTimer.current);
       if (silentStartTimer.current) clearTimeout(silentStartTimer.current);
       // The size a resize burst was still holding back: an attach-only or
-      // persisted PTY keeps running, and must not keep a stale geometry.
+      // persisted PTY keeps running, and must not keep a stale geometry —
+      // nor the narrower width a repaint nudge is holding.
+      if (repaintTimer) restoreWidth();
       flushResize();
       // Everything registered on the terminal (link providers, the OSC 52
       // handler, the mouse-mode guard, the sign-in watch), none when the pane
@@ -2536,6 +2589,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const filesOn = panelPicked === "files" && readerTopBar;
   const panelOn = changesOn || filesOn;
   const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || panelOn);
+  /** The chat in the side panel (`reader_side_chat`, the top bar's switch
+   * beside the views): only the main window's own panes have its side panel;
+   * an attach-only view (cockpit, root, Tabby) would pull the chat out from
+   * under its own window. */
+  const sideChatOffered = readerTopBar && !attachOnly && !isDetachedWindow();
+  const sideChatOn = useSettingsStore((s) => s.settings?.reader_side_chat ?? false);
+  /** On Terminal with the switch on, the chat stays read for the side panel,
+   * beside the CLI's own screen. */
+  const chatBesideTerminal = sideChatOffered && sideChatOn && !readerOn;
   const [readerNavigationSlot, setReaderNavigationSlot] = useState<HTMLSpanElement | null>(null);
   const [readerActionSlot, setReaderActionSlot] = useState<HTMLSpanElement | null>(null);
   const setReader = (on: boolean) => {
@@ -2557,7 +2619,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const readerViewsOffered: ReaderViewId[] = ["chat"];
   if (changesOffered(readerAgent) && !readerOnHost && (changesOn || changesKnown)) readerViewsOffered.push("changes");
   if (readerTopBar && (filesOn || filesKnown)) readerViewsOffered.push("files");
-  readerViewsOffered.push("terminal");
+  if (readerTopBar) readerViewsOffered.push("terminal");
   /** Put the keys where `view` takes them: the chat's text box, a panel's own
    * root, else the terminal. */
   const focusReaderView = (view: ReaderViewId) => {
@@ -2802,6 +2864,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           } } : undefined,
           cwd,
           onHost: readerOnHost ? readerAgent : undefined,
+          sideChat: sideChatOffered,
         } : undefined}
       />
     )}
@@ -2825,13 +2888,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         tabKey={splitId.key}
         cwd={cwd}
         localOnly={localOnly}
-        visible={visible && readerOn}
+        visible={visible && (readerOn || chatBesideTerminal)}
         focused={focused && readerOn && !panelOn}
         paneFocused={focused}
-        // The chat beside Diffs or Data: only the main window's own panes
-        // have its side panel; an attach-only view (cockpit, root, Tabby)
-        // would pull the chat out from under its own window.
-        sideChatOffered={readerTopBar && !attachOnly && !isDetachedWindow()}
+        sideChatOffered={sideChatOffered}
         shown={readerOn}
         changesOpen={changesOn}
         filesOpen={filesOn}
@@ -2883,7 +2943,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     {host && visible && !signIn && (
       <TerminalServerChips
         host={host}
-        servers={servers.filter((server) => !dismissedServers.includes(server.url))}
+        servers={(locality.kind === "local" ? withoutOwnServers(servers, [phonePort]) : servers)
+          .filter((server) => !dismissedServers.includes(server.url))}
         forwardedLocalPort={(server) => forwardOfServer(server)?.localPort ?? null}
         onOpen={openServer}
         onCopy={copyServer}
@@ -2907,6 +2968,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     )}
     {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
+    )}
+    {paneKind === "local_agent" && !attachOnly && !undoClearOffered && !signIn && !signInDone && host && (
+      <TerminalLocalAutoModeCard host={host} ptyId={id} />
     )}
     {agentPane && !attachOnly && !signIn && !signInDone && <TerminalLimitHandoff ptyId={id} visible={visible} cwd={cwd} />}
     {agentPane && !attachOnly && !signIn && !signInDone && host && (

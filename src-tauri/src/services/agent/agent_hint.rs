@@ -92,10 +92,14 @@ pub const SKILL_NAME: &str = concat!(crate::app_slug!(), "-send");
 /// against the installed binaries on 2026-11-08: Claude 2.1.319 reads
 /// `.claude/skills`, and so does OpenCode 2.2.6; Codex 0.167.0 reads
 /// `$CODEX_HOME/skills` (`.codex` in a tab's home); Copilot 1.0.107 reads
-/// `.copilot/skills`. OpenCode, Codex and Copilot also read the shared
+/// `.copilot/skills`. Antigravity 1.5.16 reads `.gemini/config/skills` (its
+/// migration target for legacy workflows; verified 2026-11-24 offline: `/skills`
+/// lists a skill there and the request to the model carries its description).
+/// OpenCode, Codex, Copilot and Antigravity also read the shared
 /// `.agents/skills`, which is left out: each of them would list the skill
 /// twice. A CLI not listed here gets only the hint.
-pub(crate) const SKILL_DIRS: &[&str] = &[".claude/skills", ".codex/skills", ".copilot/skills"];
+pub(crate) const SKILL_DIRS: &[&str] =
+    &[".claude/skills", ".codex/skills", ".copilot/skills", ".gemini/config/skills"];
 
 /// The skill's `SKILL.md`: the Agent Skills frontmatter (`name`,
 /// `description` only — the two keys every reader takes, Codex's own skill
@@ -1034,7 +1038,7 @@ mod tests {
         std::fs::write(at(SKILL_DIRS[0]), "an agent's edit").unwrap();
         write_skill_in_home(tmp.path());
         assert_eq!(std::fs::read_to_string(at(SKILL_DIRS[0])).unwrap(), skill_md());
-        // Not the shared folder three of the CLIs also read: they would list it twice.
+        // Not the shared folder four of the CLIs also read: they would list it twice.
         assert!(!tmp.path().join(".agents").exists());
     }
 

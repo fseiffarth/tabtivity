@@ -66,10 +66,10 @@ export function stopAgentTabsMinFreeBytes(settings: StopSettings | null | undefi
  *  fall back to the folder's latest, which may be another tab's: the same
  *  backend check refuses those. Keyed by the tab's `cmd`. */
 export const ID_RESUME_CLIS: ReadonlySet<string> = new Set(["claude", "codex"]);
-export const PINNED_ONLY_CLIS: ReadonlySet<string> = new Set(["agy", "vibe", "opencode", "copilot", "muse"]);
+export const PINNED_ONLY_CLIS: ReadonlySet<string> = new Set(["agy", "vibe", "opencode", "copilot", "muse", "cursor-agent"]);
 
 /** Whether a tab's CLI is on the stop allow-list at all. Everything else —
- *  the `--continue`/`latest` CLIs (Gemini, Cursor, Grok, Qwen, Droid), CLIs
+ *  the `--continue`/`latest` CLIs (Gemini, Grok, Qwen, Droid), CLIs
  *  with no resume, custom agents — stays always-live. */
 export function isStoppableCli(cmd: string): boolean {
   return ID_RESUME_CLIS.has(cmd) || PINNED_ONLY_CLIS.has(cmd);

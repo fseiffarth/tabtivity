@@ -4,6 +4,7 @@ import { boxScopeId, useBoxesStore } from "../../stores/boxes";
 import type { TabEntry } from "../../stores/tabs";
 import { registerHostBoundTab } from "../remote/hostBound";
 import { MOBILE_ACCESS_KEY, envName } from "../brand";
+import { localDriverKeyed, localSessionTail } from "../../stores/tabs/tabKinds";
 
 /**
  * The tab a local (Ollama) model opens — ONE builder for the main window's
@@ -77,11 +78,15 @@ export async function localLaunchTabSpec(
     "prepare_local_launch",
     { agent: driver, model },
   );
-  const sessionId = cmd === "opencode" ? crypto.randomUUID() : undefined;
+  // OpenCode is bound to its key directly; Claude Code through `ollama
+  // launch` takes it behind the line (`localSessionTail`), which only the
+  // launcher form can carry.
+  const keyed = cmd === "opencode" || (cmd === "ollama" && localDriverKeyed(driver));
+  const sessionId = keyed ? crypto.randomUUID() : undefined;
   return {
     label: `${model} · ${driverLabel}`,
     cmd,
-    args,
+    args: sessionId && cmd === "ollama" ? [...args, ...localSessionTail(driver, sessionId)] : args,
     // Nothing else here names the model — cmd/args are the resolved launcher —
     // so record it for the usage recap's per-model breakdown. It is a label,
     // not an authority: see the `hostBoundUid` note above (#150).

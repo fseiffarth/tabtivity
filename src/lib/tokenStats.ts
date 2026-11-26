@@ -14,6 +14,10 @@
 import { METRIC } from "./usageMetrics";
 import type { BucketReport, Counters } from "./usageRollup";
 
+/** The leaf of the experimental span source (`services::claude_otel`): Claude's
+ *  trace spans, filed beside `claude` and never added into it. */
+export const CLAUDE_OTEL_LEAF = "claude_otel";
+
 /** What `usage_token_stats` returns (`commands::usage_stats::TokenReport`). */
 export interface TokenReport extends BucketReport<Counters> {
   /** The scan stopped at its byte budget; the counts are short and the next

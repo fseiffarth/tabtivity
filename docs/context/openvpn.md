@@ -102,3 +102,33 @@ Referenced from `AGENTS.md`.
   account quietly while down and check it on the tunnel's **rising edge** — a
   reconciled `false → true` only, never the store's first sight of a tunnel at
   launch, which would be a check at mount by the back door.
+- **The phone shows the tunnel, read off disk.** The registries are the desktop
+  window's memory and the phone sidecar is another process, so
+  `disk_tunnel_up(state_dir)` scans the runtime folder's `*.pid` files instead
+  (the evidence `adopt_config` uses) and `/api/v1/status` carries one word,
+  `vpn: "up" | "down"`, null with no stored config. Home's header draws it as a
+  pill beside the link's lamp. On Linux the pid must also be named `openvpn`
+  (`/proc/<pid>/comm`): a tunnel that dies on its own leaves its pidfile behind,
+  and after a reboot that pid is another program's. Like the desktop lamp it
+  means *the daemon runs*: a tunnel that is re-handshaking still reads up.
+- **Keep connected is a per-config switch, off by default** (`settings.vpn_keep_connected`,
+  the VPN menu; 2026-11-25). A tunnel "gone after a long idle" is OpenVPN's
+  `inactive` timer: the client exits *itself* after N seconds without real traffic
+  (its keepalive pings do not count), and the server can push it. With the switch
+  on, `keep_connected_args` adds `--inactive 0` and `--pull-filter ignore` for
+  `inactive`, `ping-exit` and `session-timeout`; the file's own `ping-exit n`
+  becomes `--ping-restart n`. Never `--session-timeout 0`: OpenVPN before 2.6
+  rejects the option and the connect would fail. It is opt-in because it overrides
+  what the VPN's operator asked the client to do; what the server enforces on its
+  side still holds (it drops the client, which reconnects with the login it kept).
+  The backend reads the list at connect, for headless and terminal tunnels alike,
+  so a change applies from the next connect.
+- **A tunnel that dies on its own says why.** The pipes are drained for the
+  tunnel's whole life now (they used to be closed at the ready marker, which left
+  OpenVPN writing into closed pipes and threw its last words away); the last 40
+  lines per config stay in memory, a daemonized tunnel's come off its `--log`
+  before the file is removed. `tunnel_end` classifies them by the signal OpenVPN
+  names (`SIGTERM[soft,inactive]` …) and `vpnStatus.refresh` asks it for every
+  drop it detects: the row reads "Ended on its own at …", a toast says it once and
+  the header glyph stays amber until the menu is opened. No automatic reconnect: a
+  connect costs a polkit prompt, and one raised at an empty desk times out.

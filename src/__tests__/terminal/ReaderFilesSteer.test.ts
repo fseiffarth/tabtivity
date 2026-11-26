@@ -126,3 +126,28 @@ describe("decide", () => {
     expect(decide([], null, "viewOpenAlt", plain)).toEqual({});
   });
 });
+
+describe("shell command rows", () => {
+  const withShells = rowsOf([file("/p/a.md")], [link("https://x.test/1")], [{ key: "shell:t#0" }, { key: "shell:t#1" }]);
+  const filesAndShells = rowsOf([file("/p/a.md")], [], [{ key: "shell:t#0" }]);
+
+  it("come after the links", () => {
+    expect(withShells.map((r) => r.kind)).toEqual(["file", "link", "shell", "shell"]);
+  });
+
+  it("are a section of their own, an empty one between skipped", () => {
+    expect(jumpSection(withShells, "https://x.test/1", 1)).toBe("shell:t#0");
+    expect(jumpSection(withShells, "shell:t#1", -1)).toBe("https://x.test/1");
+    expect(jumpSection(filesAndShells, "/p/a.md", 1)).toBe("shell:t#0");
+    expect(jumpSection(filesAndShells, "shell:t#0", -1)).toBe("/p/a.md");
+    expect(jumpSection(withShells, "shell:t#0", 1)).toBe("shell:t#0");
+  });
+
+  it("are shown, never opened, by either key", () => {
+    const row = { kind: "shell", key: "shell:t#1" };
+    expect(decide(withShells, "shell:t#1", "viewOpen", plain)).toEqual({ effect: "showShell", row });
+    expect(decide(withShells, "shell:t#1", "viewOpen", { shift: true, repeat: false })).toEqual({ effect: "showShell", row });
+    expect(decide(withShells, "shell:t#1", "viewOpenAlt", plain)).toEqual({ effect: "showShell", row });
+    expect(decide(withShells, "shell:t#1", "viewOpenAlt", { shift: false, repeat: true })).toEqual({});
+  });
+});

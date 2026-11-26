@@ -67,7 +67,7 @@ const UNKNOWN_MODEL: &str = "unknown";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
 
 /// The split kinds, in the order every `[u64; 4]` here uses them.
-const SPLIT: [&str; 4] = [
+pub(crate) const SPLIT: [&str; 4] = [
     metric::TOKENS_IN,
     metric::TOKENS_CACHE_W,
     metric::TOKENS_CACHE_R,
@@ -80,7 +80,7 @@ const LIFETIME: [&str; 2] = [metric::TOKENS_CACHE_W5M, metric::TOKENS_CACHE_W1H]
 
 /// What subagents used, in [`SPLIT`] order — a detail of the split, filed as
 /// well as (not instead of) the split kinds.
-const SUB: [&str; 4] = [
+pub(crate) const SUB: [&str; 4] = [
     metric::TOKENS_SUB_IN,
     metric::TOKENS_SUB_CACHE_W,
     metric::TOKENS_SUB_CACHE_R,
@@ -317,7 +317,7 @@ type Buckets = HashMap<String, HashMap<String, Counters>>;
 
 /// Saturating sum of `src` into `dst`, hours and days separately (a day
 /// bucket can outlive its hours).
-fn merge_into(dst: &mut UsageStats, src: &UsageStats) {
+pub(crate) fn merge_into(dst: &mut UsageStats, src: &UsageStats) {
     for (to, from) in [(&mut dst.hours, &src.hours), (&mut dst.days, &src.days)] {
         for (bucket, by_scope) in from {
             for (scope, counters) in by_scope {
@@ -887,22 +887,14 @@ struct OpenCodeTable {
     model: &'static str,
 }
 
-const OPENCODE_TABLES: [OpenCodeTable; 2] = [
-    // OpenCode 2: the kind is a column.
-    OpenCodeTable {
-        tag: "v2",
-        table: "session_message",
-        assistant: "type = 'assistant'",
-        model: "$.model.id",
-    },
-    // OpenCode 1: the role is inside `data`.
-    OpenCodeTable {
-        tag: "v1",
-        table: "message",
-        assistant: "json_valid(data) AND json_extract(data, '$.role') = 'assistant'",
-        model: "$.modelID",
-    },
-];
+/// OpenCode 2's messages, the kind a column. (The `message` table a store
+/// migrated from 1.x still holds is a copy of the same messages: never read.)
+const OPENCODE_TABLE: OpenCodeTable = OpenCodeTable {
+    tag: "v2",
+    table: "session_message",
+    assistant: "type = 'assistant'",
+    model: "$.model.id",
+};
 
 fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
     conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(()))
@@ -1417,19 +1409,17 @@ impl Scan<'_> {
     }
 
     /// The assistant messages of the home's OpenCode store that finished since
-    /// the last scan, one cursor per message table.
+    /// the last scan.
     fn opencode(&mut self, ctx: &HomeCtx) {
-        let tables: Vec<&str> = OPENCODE_TABLES.iter().map(|t| t.table).collect();
-        let Some((conn, meta)) = self.open_store(ctx, OPENCODE_DB, &tables) else { return };
+        let table = &OPENCODE_TABLE;
+        let Some((conn, meta)) = self.open_store(ctx, OPENCODE_DB, &[table.table]) else { return };
+        if !table_exists(&conn, table.table) {
+            return;
+        }
         let now_ms = self.now_ms;
-        for table in &OPENCODE_TABLES {
-            if !table_exists(&conn, table.table) {
-                continue;
-            }
-            let cursor = self.store_cursor(ctx, OPENCODE_DB, table.tag, Kind::OpenCode, &meta);
-            if !opencode_table(&conn, table, cursor, now_ms) {
-                self.partial = true;
-            }
+        let cursor = self.store_cursor(ctx, OPENCODE_DB, table.tag, Kind::OpenCode, &meta);
+        if !opencode_table(&conn, table, cursor, now_ms) {
+            self.partial = true;
         }
     }
 
@@ -2318,7 +2308,7 @@ mod tests {
     }
 
     /// The scope's OpenCode store with both message tables, as OpenCode 2
-    /// leaves a store it migrated from 1.
+    /// leaves a store it migrated from 1.x (whose `message` is never read).
     fn oc_store(state: &Path, scope: &str) -> rusqlite::Connection {
         let db = agent_home::scope_home_in(state, scope).join(OPENCODE_DB);
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
@@ -2371,23 +2361,20 @@ mod tests {
         let conn = oc_store(tmp.path(), "p1");
         oc_v2(&conn, "m1", "assistant", ms(T1), true, SONNET, [10, 20, 5, 1000, 300]);
         oc_v2(&conn, "u1", "user", ms(T1), true, SONNET, [999, 999, 999, 999, 999]);
+        // A migrated store's 1.x copy of a message is not counted a second time.
         oc_v1(
             &conn,
-            "old1",
-            &json!({"role": "assistant", "modelID": "gpt-6-sol", "tokens": oc_tokens([1, 2, 0, 40, 0]),
+            "m1",
+            &json!({"role": "assistant", "modelID": SONNET, "tokens": oc_tokens([10, 20, 5, 1000, 300]),
                     "time": {"created": ms(T1), "completed": ms(T1) + 9}})
             .to_string(),
             ms(T1),
         );
-        // Malformed or non-assistant V1 rows are stepped over, not fatal.
-        oc_v1(&conn, "bad", "{not json", ms(T1));
-        oc_v1(&conn, "user", &json!({"role": "user", "tokens": oc_tokens([5; 5])}).to_string(), ms(T1));
         let stats = run(tmp.path());
         assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_IN, SONNET)), 10);
         assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_OUT, SONNET)), 25);
         assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_CACHE_R, SONNET)), 1000);
         assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_CACHE_W, SONNET)), 300);
-        assert_eq!(total(&stats, "p1", &ok(metric::TOKENS_CACHE_R, "gpt-6-sol")), 40);
         assert_eq!(stats.stats.hourly_for("p1")["2026-09-30T10"][&ok(metric::TOKENS_IN, SONNET)], 10);
         assert!(!stats.partial);
     }

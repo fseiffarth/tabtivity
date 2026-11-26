@@ -1545,6 +1545,28 @@ unchanged; the new agents are additive.
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+    - **2026-11-24: a Codex limit went unanswered.** A Codex tab hit its 5-hour
+      limit at 18:48 ("try again at 8:35 PM"); its own rate-limit snapshot put
+      the reset at 20:35:51, yet no `continue` reached it before the user
+      restarted the tab at 23:10. The frontend state was not seen, so the gate
+      that held it is not proven. Changed: a limit notice as the last thing on
+      the screen now outweighs a "working" verdict (Codex ends a limit turn
+      without `Stop`, and its title timer keeps the verdict from expiring); a
+      due continue the tab cannot take shows why on the row, and one given up
+      after the catch-up hour stays noted ("the last continue was not sent: …").
+      Untested register: `agentContinue.hold`.
+    - [ ] 🖐️ Manual test — turn ⟳ Continue on for a Codex tab, let it hit its
+      limit, and confirm one `continue` lands within about two minutes of the
+      reset. If it does not, read the row: "waiting until the tab can take it:
+      …" or "the last continue was not sent: …" names the gate that held it.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
 
 258. **Agents view: the ◷ Schedules menu reads as two panes, not one scroll.**
     The per-tab schedules dialog opened every time on the same three screens of
@@ -3262,6 +3284,29 @@ unchanged; the new agents are additive.
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [ ] **Cloud sessions from the phone with no window** (built 2026-11-24,
+  uncommitted; never live). The Mobile host starts a project's cloud
+  session itself (`headless::CLOUD_LAUNCHES`, twin of `cloudSessions.ts`);
+  a cloud/sign-in tab no longer joins the owner's closed list or the
+  scheduler's relaunch (`workspace::is_one_shot`); a task led by `-` is
+  refused on desktop and phone.
+  - [ ] 🖐️ Manual test — Keep running when Tabtivity is closed on; quit the
+    window. Phone → a project → hold ＋: **Cloud sessions** is listed (not
+    under "Needs the window"). Claude → New session → "say hello" → Start:
+    a "Claude (cloud)" tab opens, shows `Created cloud session … View:
+    https://claude.ai/code/session_…`, and the session is on claude.ai/code.
+    Open existing starts `claude --teleport`'s picker. Close the tab: it is
+    not under Recently closed. Open the window: the cloud tab is not
+    restored.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [ ] **Follow a Claude cloud session live in a tab** (idea 2026-10-23, not
   started): the `+` menu's *open a cloud session* runs `claude --teleport`,
   which copies the session into the tab — the cloud session runs on and the
@@ -3427,7 +3472,7 @@ unchanged; the new agents are additive.
   Copilot 1.0.107; not live.
 - [ ] 🖐️ Manual test — in a new Claude tab type `/tabtivity-send README.md`:
   the file goes to the screen you typed from (the desktop chat names it, or
-  the phone gets it). In a new Codex, Copilot and OpenCode tab, `/skills` (or
+  the phone gets it). In a new Codex, Copilot, OpenCode and Antigravity tab, `/skills` (or
   the CLI's skill list) shows `tabtivity-send` **once**. Ask any of them to
   "send me the output of `ls` on my phone": it pipes through `-n` rather than
   writing a file first. Tabby's (assistant) chat lists no such skill.

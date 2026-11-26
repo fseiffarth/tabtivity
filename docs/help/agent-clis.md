@@ -60,6 +60,18 @@ too. Turn it on before launching a new agent to give that agent the tools.
 Existing MCP tools retain their separate permissions. Tabby keeps its web and
 help tools.
 
+## Switch Tabtivity's tools off for one project
+
+Right-click a project's pill and choose **Tabtivity tools…**: one switch per
+MCP server Tabtivity hands that project's agent tabs (Cockpit, Help,
+Scheduled prompts, Push/release/CI, PDF markup questions, Printing, Tab
+messages). A server switched off is not given to the project's new agent tabs,
+and a running tab's next call to it is refused; Help stays in a running tab
+until it restarts. Other projects keep their tools. The switches in **Settings
+→ Agents → Tabtivity tools** still apply to every project: a server off there
+stays off whatever the project says. The project's choice is kept in
+Tabtivity's own project list, never in the project folder.
+
 ## Let agent tabs of a project message each other
 
 Local agent tabs of one project can leave each other short messages through
@@ -315,12 +327,15 @@ what each installed CLI supports:
 - **GitHub Copilot**: *open a cloud session* (attaches with `--connect`).
 
 A cloud tab is labelled "(cloud)" and is not restored after a restart — the
-session lives on with the vendor; open it again from the same menu. The
-vendor's cloud needs a plan that includes it.
+session lives on with the vendor; open it again from the same menu. Closing
+one does not add it to **Recently closed**. The phone's ＋ offers the same
+group, also while no Tabtivity window is open (with **Keep running when
+Tabtivity is closed** on). A task may not start with `-`, which the CLI would
+read as an option. The vendor's cloud needs a plan that includes it.
 
 ## Talk to an agent as a chat
 
-Claude, Codex, OpenCode, Antigravity, Copilot and Meta Muse Code tabs can be
+Claude, Codex, OpenCode, Antigravity, Copilot, Meta Muse Code and Cursor tabs can be
 used as a chat instead of the terminal — the same chat view the phone's Focus uses. Click **Chat** at the
 right end of the prompt row above the terminal:
 your prompts show on the right, the agent's answers on the left as
@@ -331,14 +346,17 @@ while the agent works waits in its queue as a typed one would. When the
 agent asks something — a permission prompt ("Do you want to make this
 edit?") or a question with choices — the choices show as buttons under the
 chat; click one to answer. While the agent works, a **working** row shows
-how long it has been busy, and its **Stop** button interrupts it. Press Esc in
+how long it has been busy, and its **Stop** button interrupts it (in a Cursor
+tab that is Ctrl+C, the one key Cursor stops a turn on). Press Esc in
 that box, or click **Terminal**, to go back. The terminal keeps running
 underneath, so nothing is lost by switching. The chat is optional: tabs
 open on their terminal until you pick Chat. The choice is kept per agent
 and remembered: picking Chat (or Terminal) in a Claude tab switches every
 open Claude tab, and new Claude tabs open the same way, while each other
 agent's tabs keep their own choice. Agents without a chat view keep their
-terminal.
+terminal: the chat is offered only for the CLIs above, whose screens and
+stores have been checked; Gemini and the other CLIs stay terminal-only, on
+the phone too.
 
 **Cache cold.** The provider keeps a conversation's prompt cache only for a
 while after each answer: Claude for 1 hour on a subscription (5 minutes on an
@@ -407,9 +425,27 @@ While AI is off:
 
 Claude, Codex, Mistral, OpenCode and Copilot tabs reopen their exact
 conversation (an OpenCode tab that never got a prompt starts fresh).
-Antigravity and Meta Muse Code tabs reopen their own conversation once they
-have taken a prompt; before that they start fresh. Gemini, Qwen, Grok, Cursor
+Antigravity, Meta Muse Code and Cursor tabs reopen their own conversation once
+they have taken a prompt; before that they start fresh. Gemini, Qwen, Grok
 and Droid continue the project's most recent conversation. Others start fresh.
+
+## Continue in a new session
+
+A long conversation gets expensive: every prompt sends the whole context
+again, tool output included. Right-click an agent tab → **Continue in a new
+session…** opens a new tab that picks the work up in a fresh session. It starts
+with the same CLI ("(new session)"); you can pick another installed CLI instead.
+The new tab reads a file with the first request, the newest prompts and
+answers, the agent's notes and `git status`, without tool output, so it starts
+with a much smaller context. The original tab stays open. When a CLI shows a
+usage-limit notice, the same dialog opens with only the other CLIs.
+
+While the original session's prompt cache is still warm (Claude and Codex; it
+lasts up to an hour after the last answer), the dialog offers **Ask for a
+summary first**. The original session is sent one prompt asking it to
+summarize its own work. That costs about two of its turns, and the summary goes
+into the file beside the chat. Once the cache has expired, the summary is not
+offered, because it would re-read the whole conversation at full price.
 
 ## Permission modes
 
