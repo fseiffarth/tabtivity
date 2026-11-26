@@ -1,7 +1,7 @@
 /**
  * Prompts waiting in an agent CLI's queue, taken back out of it to be edited
  * (the desktop Reader's ↑ in an empty composer on Claude), and sent at once.
- * Codex and OpenCode's mini have their own walks below. Claude Code, probed
+ * Codex and OpenCode (mini and full TUI) have their own walks below. Claude Code, probed
  * on 2.1.303 —
  *
  *   while messages wait behind a turn, the empty input box reads `Press up
@@ -25,9 +25,10 @@
 import { openCodeBoxReset } from "./composer";
 import { isOpenCodePlaceholder, openCodeComposer } from "./openCodeMini";
 
-/** The CLIs whose queue can be read off the screen. Copilot and OpenCode's
- * full TUI mark nothing, and `ctrl+x q` quits the full TUI: only the mini
- * footer's count may ever lead to that key. Mirrors `queue_hint` in
+/** The CLIs whose queue can be read off the screen. Copilot marks nothing,
+ * and `ctrl+x q` quits OpenCode's full TUI when nothing is queued: only the
+ * mini footer's count or the full TUI's `N queued` row may ever lead to that
+ * key. Mirrors `queue_hint` in
  * `src-tauri/src/services/mobile_control/pty_bridge.rs`. */
 export type QueueFamily = "claude" | "codex" | "opencode";
 
@@ -83,12 +84,24 @@ const SHIFT_LEFT = "\u001b[1;2D";
 const ALT_UP = "\u001b[1;3A";
 /** OpenCode 2.2.5 mini: the footer's count, and its `ctrl+x q` panel — a
  * header, a Search row, then one row a prompt, words left and kind right,
- * down to a rule. */
+ * down to a rule. The full TUI (2.4.2) counts what waits in the top row of
+ * its box (`┃  2 queued · <first prompt>`) and opens a dialog of the same
+ * `ctrl+x q`: `Search queued prompts` over one row a prompt (its first line,
+ * then `1 of 2` at the right), a hint row under them. Both queue what the
+ * chat types with Ctrl+X Enter (`agentQueueWrites`); Ctrl+X Q with nothing
+ * queued quits the full TUI, so every press waits on one of these signs. */
 const OPENCODE_PENDING = /· ctrl\+x q \d+ pending\b/u;
+const OPENCODE_QUEUED_ROW = /^\s*┃\s+\d+ queued · /u;
 const OPENCODE_PANEL = /^\s*Pending prompts (\d+)\b/u;
 const OPENCODE_SEARCH = /^\s*Search\s*$/u;
 const OPENCODE_RULE = /^\s*▀{3,}/u;
 const OPENCODE_KIND = /\s{2,}\S+\s*$/u;
+const OPENCODE_DIALOG = /Search queued prompts/u;
+const OPENCODE_DIALOG_END = /\bdelete ctrl\+d\b/u;
+const OPENCODE_DIALOG_COUNT = /\s{2,}\d+ of \d+\s*$/u;
+/** OpenCode's busy row: `esc interrupt`, `esc stop` where narrow, and the
+ * `esc again` of a first Esc. */
+const OPENCODE_BUSY = /\besc (?:interrupt|stop|again(?: to interrupt|: stop)?)\b/u;
 /** OpenCode 2's busy row after a first Esc: `esc again to interrupt`, or
  * `esc again: stop` where the pane is narrow. */
 const OPENCODE_STOP_AGAIN = /\besc again(?: to interrupt|: stop)\b/u;
@@ -140,7 +153,11 @@ export function inputBoxLines(rows: readonly string[]): string[] | null {
  * box, where ↑ would take them back. */
 export function queuedHintShown(rows: readonly string[], family: QueueFamily = "claude"): boolean {
   if (family === "codex") return rows.some((row) => CODEX_QUEUED.test(codexRow(row)));
-  if (family === "opencode") return rows.slice(-6).some((row) => OPENCODE_PENDING.test(row));
+  if (family === "opencode") {
+    // The mini draws inline, so blank rows may follow its footer.
+    const drawn = rows.filter((row) => row.trim());
+    return drawn.slice(-6).some((row) => OPENCODE_PENDING.test(row)) || drawn.slice(-14).some((row) => OPENCODE_QUEUED_ROW.test(row));
+  }
   const box = inputBoxLines(rows);
   return !!box && QUEUED_HINT.test(box[0]);
 }
@@ -169,8 +186,21 @@ function codexEditKey(rows: readonly string[]): string | null {
   return null;
 }
 
-/** The prompts OpenCode's panel lists, or null while it is not up. */
+/** The prompts OpenCode's panel lists, or null while it is not up. The full
+ * TUI's dialog floats over the chat, whose rows run on at its left: its text
+ * starts where the heading's does. */
 export function openCodePanelRows(rows: readonly string[]): string[] | null {
+  const dialog = rows.findIndex((row) => OPENCODE_DIALOG.test(row));
+  if (dialog >= 0) {
+    const column = rows[dialog].search(OPENCODE_DIALOG);
+    const listed: string[] = [];
+    for (const row of rows.slice(dialog + 1)) {
+      if (OPENCODE_DIALOG_END.test(row)) break;
+      const text = row.slice(column).replace(OPENCODE_DIALOG_COUNT, "").trim();
+      if (text) listed.push(text);
+    }
+    return listed;
+  }
   const header = rows.findIndex((row) => OPENCODE_PANEL.test(row));
   if (header < 0) return null;
   const listed: string[] = [];
@@ -277,10 +307,27 @@ export function takenPrompts<T>(sent: readonly T[], result: { pulled: number; ol
   return result.oldest ? sent.slice(0, result.pulled) : sent.slice(sent.length - result.pulled);
 }
 
+/** OpenCode 2.4.2 keeps what waits after its turn was stopped (mini and the
+ * full TUI alike: `2 pending` / `2 queued` stay, nothing runs): the panel's
+ * Enter (`steer`) sends the top prompt, and the ones behind it follow as turns
+ * of their own. Waits for the stop to land, and presses only while the queue
+ * still shows. */
+async function releaseOpenCodeQueue(driver: QueuePullDriver, timing: QueuePullTiming): Promise<void> {
+  const stopped = (rows: readonly string[]) => !rows.filter((row) => row.trim()).slice(-4).some((row) => OPENCODE_BUSY.test(row));
+  const rows = await pollUntil(() => driver.rows(), stopped, { ...timing, waitMs: 2 * timing.waitMs });
+  if (!stopped(rows) || !queuedHintShown(rows, "opencode")) return;
+  if (!(await driver.key(CTRL_X)) || !(await driver.key("q"))) return;
+  const listed = await pollUntil(() => openCodePanelRows(driver.rows()), (now) => !!now && now.length > 0, timing);
+  if (listed && listed.length > 0) await driver.key("\r");
+  if (openCodePanelRows(driver.rows()) !== null) await driver.key(ESCAPE);
+}
+
 /** What a stop leaves to do once the desktop has pressed Esc. Codex drops
  * what Tab queued back into its box: Enter sends it, once the list is gone,
- * and does nothing if the turn had ended and sent it first. */
+ * and does nothing if the turn had ended and sent it first. OpenCode's queue
+ * is released through its panel ({@link releaseOpenCodeQueue}). */
 export async function finishSendNow(driver: QueuePullDriver, family: QueueFamily, timing: QueuePullTiming = TIMING): Promise<void> {
+  if (family === "opencode") return releaseOpenCodeQueue(driver, timing);
   if (family !== "codex") return;
   const gone = (rows: readonly string[]) => !queuedHintShown(rows, family);
   if (gone(await pollUntil(() => driver.rows(), gone, { ...timing, waitMs: 4000 }))) await driver.key("\r");

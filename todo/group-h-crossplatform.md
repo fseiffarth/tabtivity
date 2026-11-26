@@ -4791,9 +4791,11 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ `opencode --mini`, agent working: the pair shows once the footer
-    counts `pending`; Send now and Cancel and edit both work. A full `opencode`
-    tab shows no pair and never quits.
+  - [ ] 🖐️ `opencode --mini` and a full `opencode` tab, agent working: send two
+    prompts from the Chat (they go in with Ctrl+X Enter). The pair shows once
+    the footer counts `pending` / the box says `N queued`; Send now stops the
+    turn and both prompts then go, one after the other; Cancel and edit brings
+    both back into the composer. A full tab with nothing queued never quits.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

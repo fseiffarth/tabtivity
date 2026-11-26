@@ -140,12 +140,18 @@ const CODEX_TAB_TAKES = /^\s*\/|(?:^|\s)[@$]\S*\s*$/u;
  * follow-up inputs`, which can be taken back (`queuePull.ts`), so a chat's
  * prompt goes in with Tab. Tab on an idle Codex leaves the words in the box
  * and Enter on an empty one does nothing, so the Enter after it delivers the
- * prompt either way. Every other CLI queues on Enter.
+ * prompt either way. OpenCode 2.4.2's full TUI takes a plain Enter mid-turn
+ * as a steer, into the running turn, which nothing can take back, and marks
+ * nowhere; its `queue prompt` (Ctrl+X Enter) lists the prompt (`N queued`)
+ * where the panel can delete or send it. The mini takes the same chord and
+ * counts it as pending, and an idle OpenCode just submits it
+ * (`scripts/verify-cli/opencode/queue.py`). Every other CLI queues on Enter.
  */
 export function agentQueueWrites(writes: readonly string[], agent: string | undefined, message: string): string[] {
-  if (writes.length === 0 || agent === undefined || agentFamily(agent) !== "codex" || CODEX_TAB_TAKES.test(message)) {
-    return [...writes];
-  }
+  if (writes.length === 0 || agent === undefined) return [...writes];
+  const family = agentFamily(agent);
+  if (family === "opencode") return [...writes.slice(0, -1), "\x18", "\r"];
+  if (family !== "codex" || CODEX_TAB_TAKES.test(message)) return [...writes];
   return [...writes.slice(0, -1), "\t", "\r"];
 }
 

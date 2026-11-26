@@ -145,9 +145,16 @@ describe("agentQueueWrites", () => {
   });
 
   it("leaves every other CLI on Enter", () => {
-    for (const agent of ["claude", "opencode", "copilot", undefined]) {
+    for (const agent of ["claude", "copilot", undefined]) {
       expect(agentQueueWrites(typed, agent, "fix it")).toEqual(typed);
     }
+  });
+
+  it("queues OpenCode's prompt with Ctrl+X Enter, full TUI and mini alike, so its panel can take it back", () => {
+    expect(agentQueueWrites(typed, "opencode", "fix it")).toEqual(["\u0001\u000b", "fix it", "\u0018", "\r"]);
+    // An `@file` mention's closing space stays before the chord.
+    expect(agentQueueWrites(["\u0001\u000b", "see @a", " ", "\r"], "OpenCode (API)", "see @a")).toEqual(["\u0001\u000b", "see @a", " ", "\u0018", "\r"]);
+    expect(agentQueueWrites([], "opencode", "")).toEqual([]);
   });
 
   it("keeps Enter where Codex's Tab would take a picker's row instead", () => {

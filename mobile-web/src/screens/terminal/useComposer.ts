@@ -695,6 +695,7 @@ export function useComposerSend({
     if (!sent) return;
     setSendNowWaiting(false);
     if (queueCli === "codex") void releaseCodexQueue();
+    else if (queueCli === "opencode") void finishSendNow(screenDriver, "opencode", SUBAGENT_WALK);
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setSendNowWaiting(false), [tab.id]);

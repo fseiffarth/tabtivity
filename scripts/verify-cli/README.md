@@ -133,6 +133,10 @@ gives its usage.
   that is not OpenCode, or with `OPENCODE*` and `TABTIVITY_OPENCODE_SESSION`
   unset: inside an OpenCode tab the session plugin takes the probe for a
   nested run and records nothing (`turns.py`'s `live record None`).
+  `queue.py <label> <bin> <port> full|mini [case…]` queues two prompts mid-turn
+  the way the Chat does (Ctrl+X Enter) and reads the full TUI's `N queued` row
+  or the mini's footer, the `ctrl+x q` panel, ctrl+d deleting, a stop leaving
+  the queue, and the panel's Enter releasing it.
   `takeback.py <label> <bin> <port> full|mini [case…]` holds an answer
   (`STUB:SLOW`), presses the Chat's Stop on it before the first token and
   reads what 2.4.2 hands back into the box, whether the session still stores
