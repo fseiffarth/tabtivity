@@ -459,3 +459,119 @@ with `baseURL http://127.0.0.1:9/custom-1` and two models.
   until the next `add_custom`/`remove_custom` for it.
 - Slot grants are keyed by provider only: `revoke_provider` ends them for every tab,
   which is what a removal wants.
+
+## A3 — commands, UI, i18n, docs (decision 9)
+
+Commits on top of `72535df49`: `af0a13b75` (all code, tests, i18n, docs), then the
+commit that adds this section.
+
+### What exists now
+
+- **Commands** (`commands/agents.rs`, `#[cfg_attr(feature = "desktop", tauri::command)]`,
+  registered in `lib.rs`, class `Core` in `services::command_class`,
+  `commandClasses.ts` regenerated):
+  `agent_api_custom_endpoint_add { label, baseUrl, key, limitTokens }` (`async`,
+  straight over `agent_api_keys::add_custom`, which does its own network and
+  `try_blocking`), `agent_api_custom_endpoint_remove { slot }` (`async` over
+  `try_blocking(remove_custom)`: keychain), `agent_api_custom_endpoint_refresh_models
+  { slot }` (`async` over `refresh_custom`). Add and refresh answer with the saved
+  `CustomEndpoint` (snake_case, as the Rust struct serialises; the UI ignores it and
+  re-reads the status).
+- **`agent_api_key_clear` on a custom slot refuses** (chose refuse over routing to
+  `remove_custom`: a silent endpoint delete from a "clear key" call is a surprise):
+  "a custom endpoint's key is removed together with the endpoint: use Remove
+  endpoint". Test `clearing_the_key_of_a_custom_endpoint_is_refused_and_points_at_remove`.
+  `agent_api_key_set` on a custom slot still works (replaces the key); the UI does
+  not offer that.
+- **Types**: `src/types/index.ts` has `CustomEndpoint` and
+  `Settings.agent_api_custom_endpoints?`. The status payload type moved out of
+  `AgentApiKeysRows.tsx` into `settings/agentApiKeysShared.ts` (`AgentApiKeyStatus`,
+  `ApiProviderStatus` with `priced`/`endpoint`, `ApiEndpointStatus`, `parseApiLimit`,
+  `asMillions`, `tokenCount`, `usd`, `DEFAULT_API_LIMIT_MTOK`, `apiProviderName`) so
+  the two row files do not import each other.
+- **UI**: `settings/AgentCustomEndpointsRows.tsx`, rendered by `AgentApiKeysRows`
+  under the built-in rows (the built-in loop now skips providers that carry an
+  `endpoint`). Inline add form (name, base URL with `https://llm.example.org/v1`
+  placeholder, password field, limit in M tokens, default 5), per-slot row: label,
+  state (saved / not saved / locked), host, "Models: n", "no price", billed tokens of
+  the limit (no dollar figure), limit field + Set limit (an ordinary
+  `agent_api_token_limits` settings write, as for built-ins), Refresh models, Remove
+  (asks through `useDialogs().confirmAction`, `danger`), per-model usage lines
+  without `≈ $`, and the 0-model warning (host named, missing `/v1` hint). Help in a
+  fold. Hidden on a hosted server (`store === "vault"`: the service refuses there).
+  The Add form is gone at 8 slots. The key field is cleared the moment Add is
+  pressed. The `UntestedTag` row is `opencode-custom-endpoint`.
+- **CLI rows** name a `custom-<n>` provider by the slot's label
+  (`apiProviderName`), e.g. "my API key (Anthropic, Institute API)".
+- **i18n**: 16 `settings.agentCustom*` keys in en/de/es/fr/it (the repo's
+  `every language covers every English key` test requires all five; the first full
+  vitest run caught it). German/Spanish/French/Italian are mine, not a native
+  review.
+- **Phone**: `npm run build` includes `mobile:build` and `web:bundle`, both green.
+  The phone never reads the provider list (only the keyable/ready flags), so the new
+  `custom-<n>` entries cannot crash it; no phone UI added.
+- **Docs**: help topic `docs/help/agent-clis.md` ("Custom endpoint (OpenCode)"
+  paragraph after the monthly-limit one), rows of `docs/filemap_frontend.md`
+  (the settings row) and `docs/filemap_backend.md` (`commands/agents.rs`). The
+  backend filemap rows for `agent_api_keys.rs`/`api_proxy.rs` still do not mention
+  the custom slots (A1/A2 did not touch them; I did not rewrite them).
+
+### Gotchas
+
+- A custom slot's limit is written by `add_custom`; the UI therefore does **not**
+  write `agent_api_token_limits` before Add (unlike a built-in's Save). A later
+  limit change goes through `updateSettings`, which R1's patch rule leaves alone.
+- `updateSettings` in the frontend must never be given `agent_api_custom_endpoints`
+  (the backend drops it from a patch and keeps the file's on a save); the field is in
+  the TS type only so the store type matches the file.
+- `status.providers` now carries custom entries with `endpoint`; any other consumer
+  that maps `providers` by id must filter or use `apiProviderName`.
+
+### Gates (worktree, after the last code edit)
+
+- `npm run build`: clean (tsc, desktop, mobile, web bundles).
+- `npm test -- --reporter=dot`: 1319 files, 13894 tests passed (full suite; 9 of them
+  are the new `AgentCustomEndpoints.test.tsx`).
+- `npm run lint`: 0 errors, 31 warnings, none in a file I touched.
+- `cargo test -q -p tabtivity --lib`: 6649 passed, 23 ignored (no flake).
+- `cargo test -q -p tabtivity --no-default-features --lib --test server_secrets`:
+  6440 + 1 passed, 20 ignored.
+- Clippy `--workspace --all-targets`, `-p tabtivity --no-default-features --lib`,
+  `-p app-serverd --all-targets`: clean.
+- `scripts/brand-check.sh`: only the old `scripts/verify-cli/opencode/queue.py:26`.
+  `scripts/privacy-check.sh` (staged): clean. `git diff --check`: clean.
+- The generated-file test `the_generated_command_classes_ts_is_current` passes.
+
+### Flagged for user (not acted on)
+
+- Not run live (rule: never start the app). `npm run backend:stale` was not run in
+  this worktree: the three commands are a backend change, so the running window needs
+  a new build before the Add/Remove/Refresh buttons work (the rows render, then the
+  command fails as unknown).
+- Remove deletes the key and endpoint at once; this month's ledger row stays, so the
+  slot number is not reused until next month and the row is simply gone (the use is
+  no longer visible in the panel).
+- A locked keyring disables Refresh/limit/Remove/Add (same as the built-ins: nothing
+  to do without the key store); there is no "replace the key" action in the UI.
+- Non-English strings are machine-grade (see above).
+
+### Click-through for the user (needs the backend of this branch in the running window)
+
+1. Settings → Manage CLIs → Agent accounts → API keys; scroll below the three
+   provider rows to **Custom endpoints** (an "untested" pill beside it). Open "How
+   custom endpoints work" to read the help.
+2. In the **Add endpoint** row: Name `Institute API`, base URL of your endpoint
+   (`https://…/v1`), paste the key, keep or change the limit (M tokens / month), press
+   **Add endpoint**. The key field empties at once; a wrong key or URL shows an error
+   under the group. On success a row appears: name, host, "Models: n", "no price",
+   "0 of 5M billed tokens this month".
+3. If it shows "Models: 0" and the yellow warning, fix the base URL (add `/v1`), remove
+   the endpoint and add it again, or press **Refresh models** after the server is fixed.
+4. Under "Runs on" for OpenCode, pick "my API key (… Institute API)".
+5. Open a new local OpenCode tab, type `/model`: the endpoint's models are listed under
+   "Institute API". Send one short prompt; back in Manage CLIs the row's billed tokens
+   rise within seconds.
+6. Change the limit to a tiny number (for example 0.001) and press **Set limit**: the
+   next request is refused with the budget message; set it back.
+7. Press **Remove**: a confirm dialog names the endpoint; Cancel keeps it, Remove deletes
+   it and the row disappears; the OpenCode row falls back to its other keys.
