@@ -8,6 +8,7 @@ import { useT } from "../../lib/i18n";
 import { AgentsStatus, AgentsFold } from "./agentsUi";
 import {
   asMillions,
+  currentApiLimits,
   DEFAULT_API_LIMIT_MTOK,
   parseApiLimit,
   tokenCount,
@@ -95,7 +96,7 @@ export function AgentCustomEndpointsRows({
     const tokens = parseApiLimit(limitDrafts[id] ?? "");
     if (tokens === null) return;
     void act(id, async () => {
-      await updateSettings({ agent_api_token_limits: { ...limits, [id]: tokens } });
+      await updateSettings({ agent_api_token_limits: { ...(await currentApiLimits(limits)), [id]: tokens } });
       setLimitDrafts((d) => {
         const next = { ...d };
         delete next[id];

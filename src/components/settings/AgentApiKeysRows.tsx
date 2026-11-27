@@ -13,6 +13,7 @@ import { AgentCustomEndpointsRows } from "./AgentCustomEndpointsRows";
 import {
   apiProviderName,
   asMillions,
+  currentApiLimits,
   DEFAULT_API_LIMIT_MTOK,
   parseApiLimit,
   tokenCount,
@@ -74,8 +75,10 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
     const tokens = current ?? limits[id];
     return limitDrafts[id] ?? (tokens != null ? asMillions(tokens) : String(DEFAULT_API_LIMIT_MTOK));
   };
-  const writeLimit = (id: string, limit: number) =>
-    updateSettings({ agent_api_token_limits: { ...limits, [id]: limit } });
+  // Over the file's own map, not the cached one: a custom endpoint's limit is
+  // written by its add command, which the cache has not seen.
+  const writeLimit = async (id: string, limit: number) =>
+    updateSettings({ agent_api_token_limits: { ...(await currentApiLimits(limits)), [id]: limit } });
   const act = (id: string, call: () => Promise<unknown>) => {
     setError(null);
     setBusy(id);

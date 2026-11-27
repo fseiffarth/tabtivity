@@ -195,6 +195,26 @@ describe("custom endpoints in the API keys panel", () => {
     );
   });
 
+  it("writes a limit over the file's limits, not the window's cached copy", async () => {
+    // Another endpoint was added after this window loaded its settings: the
+    // add command wrote its limit in the backend, and the cache lacks it.
+    const onDisk = { "custom-2": 5_000_000, "custom-3": 7_000_000 };
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "agent_api_keys_status") return Promise.resolve(status());
+      if (cmd === "get_settings") return Promise.resolve({ agent_api_token_limits: onDisk });
+      return Promise.resolve(null);
+    });
+    render(<AgentApiKeysRows />);
+    const row = await slotRow();
+    fireEvent.change(within(row).getByLabelText(/Monthly limit for Institute API/), { target: { value: "8" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Set limit" }));
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        agent_api_token_limits: { "custom-2": 8_000_000, "custom-3": 7_000_000 },
+      }),
+    );
+  });
+
   it("is not offered on a hosted server's vault", async () => {
     store = "vault";
     render(<AgentApiKeysRows />);

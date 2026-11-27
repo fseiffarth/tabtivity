@@ -4,6 +4,8 @@
  * formatting. Split out so the custom-endpoint rows (`AgentCustomEndpointsRows`)
  * and the provider rows (`AgentApiKeysRows`) do not import each other.
  */
+import { invoke } from "@tauri-apps/api/core";
+import type { Settings } from "../../types";
 
 /** One model's month on a provider, input and output apart. */
 export interface ApiModelUsage {
@@ -120,4 +122,20 @@ const API_KEY_PROVIDERS: Record<string, string> = {
  *  endpoint's own label (never the raw `custom-<n>`), else the id. */
 export function apiProviderName(id: string, providers: ApiProviderStatus[]): string {
   return API_KEY_PROVIDERS[id] ?? providers.find((p) => p.id === id)?.endpoint?.label ?? id;
+}
+
+/** The limits a limit write starts from. A patch replaces the whole
+ *  `agent_api_token_limits` map, and the window's cached copy does not know
+ *  the limit `agent_api_custom_endpoint_add` wrote in the backend after the
+ *  settings were loaded: spreading the cache would erase it, and that
+ *  endpoint would then be refused for having no limit. So read the file's
+ *  map; the cache only when it cannot be read. */
+export async function currentApiLimits(cached: Record<string, number> | undefined): Promise<Record<string, number>> {
+  try {
+    const fresh = await invoke<Settings | null>("get_settings");
+    if (fresh && typeof fresh === "object") return fresh.agent_api_token_limits ?? {};
+  } catch {
+    // Unreadable now: the cached map is the best there is.
+  }
+  return cached ?? {};
 }
