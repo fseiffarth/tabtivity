@@ -421,3 +421,44 @@ describe("repaint fingerprint (pageFingerprint.ts)", () => {
     }
   });
 });
+
+/**
+ * A filled-in form whose field appearance draws its value in `/Helvetica` without
+ * embedding it — what form fillers (pypdf, Acrobat's own appearances) usually write.
+ * The desktop viewer showed such a form's check boxes and none of its text
+ * (2026-11-27): with `disableFontFace`, a font pdf.js has no outlines for goes to
+ * the canvas's `fillText` fallback. `loadPdf` hands pdf.js the bundled standard
+ * fonts, so the value's glyphs are outlines like an embedded font's. (Here from
+ * disk, through `realPdfjs.ts`.)
+ */
+describe("a form value in a non-embedded standard font", () => {
+  const formPdf = () =>
+    assemblePdf([
+      /* 1 */ "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+      /* 2 */ "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      /* 3 */ "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>",
+      /* 4 */ "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Alice) /F 4" +
+        " /Rect [72 700 272 720] /DA (/Helvetica 10 Tf 0 g) /AP << /N 5 0 R >> >>",
+      /* 5 */ stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 200 20] /Resources << /Font << /Helvetica 6 0 R >> >>",
+        "/Tx BMC q BT /Helvetica 10 Tf 0 g 2 6 Td (Alice) Tj ET Q EMC",
+      ),
+      /* 6 */ "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+
+  it("is drawn from the bundled outlines, not the fillText fallback", async () => {
+    const doc = await loadPdf(formPdf());
+    try {
+      const page = await doc.getPage(1);
+      const ops = await page.getOperatorList({ annotationMode: pdfjs.AnnotationMode.ENABLE_STORAGE });
+      const fonts = ops.argsArray.filter((_, i) => ops.fnArray[i] === pdfjs.OPS.setFont).map((a) => a[0] as string);
+      expect(fonts.length).toBeGreaterThan(0);
+      for (const name of fonts) {
+        const font = page.commonObjs.get(name) as { missingFile: boolean; data?: Uint8Array };
+        expect(font.missingFile).toBe(false);
+      }
+    } finally {
+      await doc.loadingTask.destroy();
+    }
+  });
+});

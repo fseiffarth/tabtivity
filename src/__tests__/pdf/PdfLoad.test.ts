@@ -22,7 +22,9 @@ vi.mock("pdfjs-dist", () => ({
   },
 }));
 
-import { PdfWorkerSlot, loadPdf } from "../../lib/viewers/pdfLoad";
+// @ts-expect-error node:fs has no type declarations in this project (no @types/node)
+import { readFileSync, readdirSync } from "node:fs";
+import { BundledPdfData, PdfWorkerSlot, loadPdf } from "../../lib/viewers/pdfLoad";
 
 function task(promise: Promise<unknown>, destroy = vi.fn(() => Promise.resolve())) {
   return { promise, destroy };
@@ -38,6 +40,7 @@ describe("loadPdf", () => {
     expect(getDocument).toHaveBeenCalledWith({
       data: new Uint8Array([1, 2, 3]),
       disableFontFace: true,
+      BinaryDataFactory: BundledPdfData,
     });
   });
 
@@ -67,6 +70,40 @@ describe("loadPdf", () => {
   });
 });
 
+/** Where the bundled standard fonts sit on disk, and a `fetch` that serves the
+ *  asset URLs Vite gave them from there (vitest has no asset server). */
+const FONT_DIR = "node_modules/pdfjs-dist/standard_fonts/";
+async function serveAssets(url: RequestInfo | URL): Promise<Response> {
+  const path = String(url).split("?")[0];
+  // Vite's dev URL: root-relative, or `/@fs/<absolute>` outside the root.
+  const file: string = path.startsWith("/@fs/") ? path.slice(4) : path.slice(1);
+  return new Response(new Uint8Array(readFileSync(file) as Uint8Array));
+}
+
+describe("BundledPdfData (the standard fonts pdf.js asks for)", () => {
+  it("serves every standard-font file pdf.js ships, byte for byte", async () => {
+    vi.stubGlobal("fetch", vi.fn(serveAssets));
+    try {
+      const names = (readdirSync(FONT_DIR) as string[]).filter((n) => /\.(pfb|ttf)$/.test(n));
+      expect(names).toContain("LiberationSans-Regular.ttf");
+      const data = new BundledPdfData();
+      for (const filename of names) {
+        const bytes = await data.fetch({ kind: "standardFontDataUrl", filename });
+        expect(bytes).toEqual(new Uint8Array(readFileSync(FONT_DIR + filename) as Uint8Array));
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses what no URL was ever configured for: CMaps, wasm, unknown files", async () => {
+    const data = new BundledPdfData();
+    await expect(data.fetch({ kind: "cMapUrl", filename: "UniJIS-UCS2-H.bcmap" })).rejects.toThrow();
+    await expect(data.fetch({ kind: "wasmUrl", filename: "openjpeg.wasm" })).rejects.toThrow();
+    await expect(data.fetch({ kind: "standardFontDataUrl", filename: "../secret.ttf" })).rejects.toThrow();
+  });
+});
+
 describe("loadPdf on a caller's worker", () => {
   it("hands the worker to pdf.js", async () => {
     const worker = { id: "w" };
@@ -76,6 +113,7 @@ describe("loadPdf on a caller's worker", () => {
       data: new Uint8Array([1]),
       worker,
       disableFontFace: true,
+      BinaryDataFactory: BundledPdfData,
     });
   });
 });
