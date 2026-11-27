@@ -37,6 +37,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+#[cfg(unix)]
 use crate::brand::DISPLAY;
 use crate::services::agent_versions::{version_cmp, Seen};
 use crate::services::home_io::HomeFile;
@@ -97,6 +98,7 @@ pub(super) fn hook_events(seen: Option<&Seen>) -> Vec<&'static Event> {
 
 /// What the script prints at a session's start in a project tab: the send
 /// hint as context for the model.
+#[cfg(any(unix, test))]
 fn hint_output() -> String {
     json!({
         "hookSpecificOutput": {
@@ -255,6 +257,7 @@ fn add_hook(root: &mut Value, cmd: &str, events: &[&Event]) -> bool {
 /// counts: 1.4.15 names it to the hook (`MUSE_SESSION_ID`), and a subagent's
 /// events carry the subagent's. `UserPromptSubmit` records the session; the
 /// other turn events move the turn record only for the session recorded.
+#[cfg(unix)]
 pub(super) fn script_body(live_dir: &str, proc_root: &str) -> String {
     format!(
         r#"#!/bin/sh

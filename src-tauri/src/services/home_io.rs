@@ -557,6 +557,21 @@ impl HomeFile {
         }
     }
 
+    /// Set a regular file's modification time, never through a link. Unix
+    /// sets it on the [`open_read`](Self::open_read) descriptor (the owner
+    /// may); Windows' `SetFileTime` needs a handle opened for writing, which
+    /// a read-only one is not — opened without truncating.
+    pub fn set_modified(&self, at: std::time::SystemTime) -> io::Result<()> {
+        #[cfg(unix)]
+        let file = self.open_read();
+        #[cfg(not(unix))]
+        let file = std::fs::symlink_metadata(self.path())
+            .ok()
+            .filter(|meta| meta.is_file())
+            .and_then(|_| std::fs::OpenOptions::new().write(true).open(self.path()).ok());
+        file.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?.set_modified(at)
+    }
+
     pub fn read(&self) -> Option<Vec<u8>> {
         use std::io::Read;
         let mut file = self.open_read()?;

@@ -307,9 +307,9 @@ fn rewrite_file_at(home: &Path, rel: &str, rewrites: &[(String, String)]) -> Res
     }
     let modified = file.open_read().and_then(|f| f.metadata().ok()).and_then(|m| m.modified().ok());
     file.write(&rewritten).map_err(|e| e.to_string())?;
-    if let (Some(at), Some(handle)) = (modified, file.open_read()) {
-        // Best effort (Windows' read handle may not set times).
-        let _ = handle.set_modified(at);
+    if let Some(at) = modified {
+        // Best effort: the content is already re-pointed.
+        let _ = file.set_modified(at);
     }
     Ok(true)
 }
@@ -599,7 +599,9 @@ mod tests {
             conn.execute("INSERT INTO conversation_summaries VALUES ('c', ?1)", [serde_json::json!([old_uri]).to_string()]).unwrap();
         }
 
-        let done = repoint_home(home, &[(old.clone(), new.clone())]);
+        // The pairs `repoint_project` passes: on Windows they carry the
+        // `/`-spelled path a `file:///C:/…` URI holds.
+        let done = repoint_home(home, &folder_pairs(&old, &new));
         assert!(done.failed.is_empty(), "{:?}", done.failed);
         assert_eq!(done.rewritten, 2);
 

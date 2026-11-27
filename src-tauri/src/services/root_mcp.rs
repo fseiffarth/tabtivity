@@ -313,7 +313,7 @@ impl TokenStore {
     }
     /// Mark the session `id` revived into the mux session `into`, for tests
     /// of who may present a revived token.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn mark_revived_for_test(&self, id: &str, into: &str) {
         if let Some(s) = self.map().get_mut(id) {
             s.revived = Some(into.to_string());

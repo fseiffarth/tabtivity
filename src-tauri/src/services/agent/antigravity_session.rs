@@ -285,6 +285,7 @@ mod tests {
     use super::*;
 
     const UID: &str = "0b9f6a52-3c1d-4e8a-9f00-1a2b3c4d5e6f";
+    #[cfg(unix)]
     const CONV: &str = "34677561-c045-4e36-b9e9-1c368eda897d";
 
     fn read_json(path: &Path) -> Value {

@@ -3035,6 +3035,7 @@ fn service_dropin_command(dropin: &str, vars: &[(&str, &str)], systemd: bool) ->
 
 /// `var` among the `Environment=` assignments `systemctl show` prints for the
 /// service (space-separated `KEY=value` pairs). Pure + tested.
+#[cfg(any(target_os = "linux", test))]
 fn var_in_unit_env(env: &str, var: &str) -> Option<String> {
     env.split_whitespace()
         .find_map(|pair| pair.strip_prefix(var)?.strip_prefix('='))
