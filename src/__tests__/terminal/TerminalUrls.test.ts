@@ -153,6 +153,9 @@ describe("isSignInUrl", () => {
     expect(isSignInUrl("http://localhost:1455/auth/callback?client_id=x")).toBe(false);
     expect(isSignInUrl("https://example.com/devices")).toBe(false);
     expect(isSignInUrl("https://example.com/activated")).toBe(false);
+    // A page about a device, cited in an agent's answer, is not a device login.
+    expect(isSignInUrl("https://llmrun.dev/device/amd-ryzen-ai-9-hx-370-strix-point")).toBe(false);
+    expect(isSignInUrl("https://example.com/activate/account-settings")).toBe(false);
     expect(isSignInUrl("ftp://example.com/login/device")).toBe(false);
     expect(isSignInUrl("https://antigravity.google/docs/cli/install/")).toBe(false);
     expect(isSignInUrl("https://example.com/?client=1")).toBe(false);

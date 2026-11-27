@@ -90,9 +90,10 @@ export function findWrappedUrls(
 const SIGN_IN_KEYS = ["response_type", "code_challenge", "user_code", "challenge"];
 /** Device-login pages, which take their code on the page: GitHub's
  *  `/login/device`, Microsoft's `/devicelogin`, and the generic `/device` and
- *  `/activate` other providers use — as a whole path segment, so `/devices`
- *  or `/activated` are not. */
-const DEVICE_PATH = /\/(?:login\/device|devicelogin|device|activate)(?:\/|$)/iu;
+ *  `/activate` other providers use — as the path's last segment, so
+ *  `/devices`, `/activated` and a page *about* a device
+ *  (`llmrun.dev/device/amd-ryzen-…`, cited by an agent) are not. */
+const DEVICE_PATH = /\/(?:login\/device|devicelogin|device|activate)\/?$/iu;
 /** An OAuth authorization endpoint. With a query it is a request on its own,
  *  `client_id` or not: Claude Code 2.1.330 prints
  *  `https://claude.ai/oauth/authorize?<opaque>`, a short link the server
