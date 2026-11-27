@@ -2331,8 +2331,34 @@
   from { background-position: 50% 50%; }
   to { background-position: calc(50% + 7px) 50%; }
 }
+/* The clickable agent bar (`button`; the inert `.static` spans in a dropdown
+   row keep the marching row above) carries the tab mark's own animation
+   instead: three dots (`.pill-bar-dot`) with the light walking through them on
+   the same 1.2 s beat and stagger as `.tab-status-mark .working-dot`. Opacity
+   only. Paused, the dots stand at full strength — same shape, the light stops. */
+button.pill-status-bar.working:not(.shell) {
+  background-image: none;
+  animation: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+}
+.pill-bar-dot {
+  flex: none;
+  width: 4.5px;
+  height: 4.5px;
+  border-radius: 50%;
+  background: var(--pill-status-dot, var(--status-working));
+  animation: agent-working-walk 1.2s ease-in-out infinite;
+}
+.pill-bar-dot:nth-child(2) { animation-delay: 0.2s; }
+.pill-bar-dot:nth-child(3) { animation-delay: 0.4s; }
 :root[data-software-paint] .pill-status-bar.working,
-:root[data-energy-saver="on"] .pill-status-bar.working {
+:root[data-energy-saver="on"] .pill-status-bar.working,
+:root[data-software-paint] .pill-bar-dot,
+:root[data-energy-saver="on"] .pill-bar-dot {
   animation: none;
 }
 

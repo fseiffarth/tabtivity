@@ -163,7 +163,18 @@ function StatusStrip({
               leave(item);
               jumpToTab(item.scope, item.key);
             }}
-          />
+          >
+            {/* An agent's turn: the tab mark's three dots, a light walking
+                through them (`button.pill-status-bar.working` in
+                projects-tabs.css). A shell command's bar stays plain dots. */}
+            {item.state === "working" && !item.shell && (
+              <>
+                <i className="pill-bar-dot" />
+                <i className="pill-bar-dot" />
+                <i className="pill-bar-dot" />
+              </>
+            )}
+          </button>
         );
       })}
       {cards && hovered && !gone && (

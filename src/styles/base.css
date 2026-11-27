@@ -253,6 +253,7 @@ body {
   .tab.install-pending::before,
   .tab-status-mark.working .working-dot,
   .pill-status-bar.working,
+  .pill-bar-dot,
   .print-progress-steps > i.next,
   .cal-block.arrived,
   .cal-month-bar.arrived,
