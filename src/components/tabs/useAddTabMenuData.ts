@@ -20,9 +20,15 @@ import { memberTableOf, type MemberTable } from "./TabMemberChip";
 export interface AddTabMenuData {
   /** The local (Ollama) model a "Local Model" tab launches: the model tagged
    *  for the "tabs" task in the 🧠 menu, falling back to the default
-   *  `ollama_model`. The menu offers ONE "Local Model" entry that launches it,
-   *  rather than listing every installed model. */
+   *  `ollama_model`. The group's agents launch it; its "Model: …" row lists the
+   *  installed models and `chooseLocalModel` makes the pick this model. */
   localModel: string | undefined;
+  /** Make `model` the Tabs model (`ollama_roles.tabs`): the "+" menus' model
+   *  pick, the same setting the Models & agents menu tags. */
+  chooseLocalModel: (model: string) => void;
+  /** Root scope only: the models switched off for the root console, which its
+   *  model pick leaves out. Empty elsewhere. */
+  localModelsOffHere: string[];
   /** Root scope only: the "tabs" model the user switched off for the root
    *  console (its 🧠 "Root" chip). `localModel` is then `undefined`, and the
    *  menus say why instead of "no local model set". */
@@ -107,6 +113,17 @@ export function useAddTabMenuData(
   const localModelOffInRoot =
     isRoot && tabsModel && rootOffModels?.includes(tabsModel) ? tabsModel : undefined;
   const localModel = localModelOffInRoot ? undefined : tabsModel;
+  const localModelsOffHere = useMemo(() => (isRoot ? rootOffModels ?? [] : []), [isRoot, rootOffModels]);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  // Against the roles as they are when the pick lands, never a render's copy.
+  const chooseLocalModel = useCallback(
+    (model: string) => {
+      const roles = useSettingsStore.getState().settings?.ollama_roles ?? {};
+      if (roles.tabs === model) return;
+      void updateSettings({ ollama_roles: { ...roles, tabs: model } }).catch(() => {});
+    },
+    [updateSettings],
+  );
   const [localDrivers, setLocalDrivers] = useState<LocalDriverInfo[]>([]);
   const refreshLocalDrivers = useCallback(() => {
     void listLocalDrivers(localModel)
@@ -200,6 +217,8 @@ export function useAddTabMenuData(
 
   return {
     localModel,
+    chooseLocalModel,
+    localModelsOffHere,
     localModelOffInRoot,
     localDrivers,
     enabledAgents,

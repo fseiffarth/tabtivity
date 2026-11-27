@@ -109,6 +109,7 @@ export const UNTESTED = {
   // --- agents — Agent sessions, schedules and the prompt chart ------
   "localDriver.pi": { area: "agents", what: "+ menu · Local Model → Pi: `ollama launch pi` drives the active local model" },
   "localDriver.cline": { area: "agents", what: "+ menu · Local Model → Cline: `ollama launch cline` drives the active local model; its Ollama provider stays out of other Cline tabs" },
+  "newTabMenu.localModelPick": { area: "agents", what: "+ menu · Local Model → Model: <name> ▾: the installed models (embedding-only and root-off ones left out, ✓ on the current, ⚠ on one without tools); a pick sets the Tabs model (ollama_roles.tabs), the + menu stays open and its agent rows re-read for the new model (Load onto GPU row while it is cold); main window and popout" },
   "agentSchedule.title": { area: "agents", what: "AgentScheduleDialog · Scheduled prompts · {tab}" },
   "agentSchedule.in": { area: "agents", what: "AgentScheduleDialog · Recurrence In … : hours + minutes boxes send the prompt once that long after Save (stored as an ordinary one-time rule; the line under the boxes shows the resulting time)" },
   "agentSchedule.headless": { area: "agents", what: "AgentScheduleDialog · delivery note: with no window open the Mobile sidecar fires scheduled prompts (tmux send-keys into the tab, restarting a stopped session first) while no window holds the timer lease; two windows plus the sidecar fire each occurrence once (claim under the file lock)", tested: "2026-10-02" },

@@ -48,6 +48,10 @@ export interface AddMenuEntry {
    *  ("Claude in api") — a box member is found by typing its name without
    *  opening the ▾. Off for a remote project's machine names ("Local"). */
   searchable?: boolean;
+  /** On a fly-out entry: picking it changes the menu rather than opening a tab
+   *  (the local-model group's model list), so the "+" menu stays open and only
+   *  the fly-out closes, focus back on its row. */
+  keepsMenu?: boolean;
   onPick: () => void;
 }
 
@@ -109,16 +113,19 @@ export interface AddMenuGroup {
   /** Non-pickable explainer rendered when the group has no entries (only while
    *  the search box is empty — a hint is not a search result). */
   hint?: string;
+  /** Show `hint` under the entries too: the group's rows are none of them tab
+   *  choices (the local-model group's lone "Model: …" row). */
+  hintBeside?: boolean;
 }
 
 /** One row of a fly-out: no cursor of its own, a click picks it. */
-function flyoutRow(e: AddMenuEntry) {
+function flyoutRow(e: AddMenuEntry, onPick: () => void = e.onPick) {
   return (
     <button
       key={e.key}
       className={`tab-new-menu-item${isUntested(e.untested) ? " untested" : ""}`}
       disabled={e.disabled}
-      onClick={e.onPick}
+      onClick={onPick}
     >
       <span className="tab-new-menu-dot" style={{ color: e.color }}>
         {e.dot ?? <DotIcon />}
@@ -223,6 +230,7 @@ export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; he
         .map((g) => ({
           label: g.label,
           hint: undefined,
+          hintBeside: false,
           entries: g.label.toLowerCase().includes(q)
             ? g.entries
             : g.entries.flatMap((e) => [
@@ -485,7 +493,7 @@ export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; he
               {e.shortcut && <MenuShortcut chord={e.shortcut} />}
             </button>,
           ))}
-          {g.entries.length === 0 && g.hint && (
+          {(g.entries.length === 0 || g.hintBeside) && g.hint && (
             <div className="tab-new-menu-hint">{g.hint}</div>
           )}
         </Fragment>
@@ -509,7 +517,14 @@ export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; he
         >
           <div className="tab-new-menu-group-label">{moreMenu.label}</div>
           <div className="menu-scroll-region">
-            {moreMenu.entries.map((e) => withMachines(e, flyoutRow(e)))}
+            {moreMenu.entries.map((e) => withMachines(e, flyoutRow(e, () => {
+              e.onPick();
+              if (!e.keepsMenu) return;
+              clearHover();
+              setMachineMenu(null);
+              setMoreMenu(null);
+              moreMenu.trigger?.focus();
+            })))}
           </div>
         </div>
       )}
@@ -532,7 +547,7 @@ export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; he
         >
           <div className="tab-new-menu-group-label">{machineMenu.label}</div>
           <div className="menu-scroll-region">
-            {machineMenu.entries.map(flyoutRow)}
+            {machineMenu.entries.map((e) => flyoutRow(e))}
           </div>
         </div>
       )}

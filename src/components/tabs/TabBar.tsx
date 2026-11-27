@@ -587,6 +587,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // one implementation with the popout's NewTabMenu, so the two cannot drift.
   const {
     localModel,
+    chooseLocalModel,
+    localModelsOffHere,
     localModelOffInRoot,
     localDrivers,
     enabledAgents,
@@ -1995,6 +1997,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     cutNetwork,
                     vibeForLocalModel,
                     gpu: localModelGpu,
+                    onChooseModel: chooseLocalModel,
+                    modelsOffHere: localModelsOffHere,
                     onVibe: (model) => void handleOllamaModel(model),
                     onLaunch: (id, label, model) => void handleLocalLaunch(id, label, model),
                     t,

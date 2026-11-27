@@ -118,6 +118,8 @@ export function NewTabMenu({
   // hook — one implementation with TabBar's "+" menu, so the two cannot drift.
   const {
     localModel,
+    chooseLocalModel,
+    localModelsOffHere,
     localModelOffInRoot,
     localDrivers,
     enabledAgents,
@@ -315,6 +317,8 @@ export function NewTabMenu({
                 cutNetwork,
                 vibeForLocalModel,
                 gpu: localModelGpu,
+                onChooseModel: chooseLocalModel,
+                modelsOffHere: localModelsOffHere,
                 onVibe: (model) => void pickOllamaModel(model),
                 onLaunch: (id, label, model) => void pickLocalLaunch(id, label, model),
                 t,
