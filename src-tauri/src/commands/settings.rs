@@ -61,10 +61,13 @@ fn save_settings_at(path: &std::path::Path, settings: Settings) -> Result<(), St
         previous = Some(current.clone());
         let rev = current.rev + 1;
         let git_token = current.git_token.take();
+        let endpoints = current.agent_api_custom_endpoints.take();
         *current = settings.clone();
         current.rev = rev;
         // Never the renderer's to write: it is never sent one (`get_settings`).
         current.git_token = git_token;
+        // Where a saved API key goes is the add/remove commands' to say.
+        current.agent_api_custom_endpoints = endpoints;
         Ok(current.clone())
     })?;
     if let Some(previous) = previous {
@@ -92,6 +95,10 @@ fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> R
     patch.remove("rev");
     // Tokens go to the keyring through `set_git_hosts`, never into this file.
     patch.remove("git_token");
+    // A custom endpoint's address is where its saved API key is sent: only
+    // `agent_api_custom_endpoint_add`/`_remove`/`_refresh_models` change the
+    // list, never a patch (a paired browser can send one too).
+    patch.remove("agent_api_custom_endpoints");
     let mut previous = None;
     let saved = storage::patch_json(path, Settings::default(), |settings| {
         seed_default_global_apps(settings);
@@ -532,6 +539,28 @@ mod tests {
         loaded.git_token = None;
         save_settings_at(&path, loaded).unwrap();
         assert_eq!(storage::read_json::<Settings>(&path).unwrap().git_token.as_deref(), Some("old-plaintext"));
+    }
+
+    /// Where a custom endpoint's key is sent is not a setting a patch or a
+    /// whole-document save can change: the key would go to the new address.
+    #[test]
+    fn a_patch_or_a_save_cannot_retarget_a_custom_endpoint() {
+        use crate::schema::settings::CustomEndpoint;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let endpoint = |url: &str| CustomEndpoint { slot: 1, label: "Lab".into(), base_url: url.into(), models: vec!["m".into()] };
+        let ours = endpoint("https://llm.example.org/v1");
+        let start = Settings { agent_api_custom_endpoints: Some(vec![ours.clone()]), ..Settings::default() };
+        storage::write_json(&path, &start).unwrap();
+        let theirs = serde_json::to_value(vec![endpoint("https://llm.example.com/v1")]).unwrap();
+        let patch = serde_json::from_value::<Map<String, Value>>(serde_json::json!({"agent_api_custom_endpoints": theirs, "language": "de"})).unwrap();
+        let saved = patch_settings_at(&path, patch).unwrap();
+        assert_eq!(saved.language.as_deref(), Some("de"), "the rest of the patch lands");
+        assert_eq!(saved.agent_api_custom_endpoints, Some(vec![ours.clone()]));
+        let mut whole = storage::read_json::<Settings>(&path).unwrap();
+        whole.agent_api_custom_endpoints = Some(vec![endpoint("https://llm.example.com/v1")]);
+        save_settings_at(&path, whole).unwrap();
+        assert_eq!(storage::read_json::<Settings>(&path).unwrap().agent_api_custom_endpoints, Some(vec![ours]));
     }
 
     /// The Mobile host block round-trips every key through a patch: the phone

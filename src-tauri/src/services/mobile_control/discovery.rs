@@ -1196,20 +1196,24 @@ pub(super) fn agent_label_for(cmd: &str, label: &str, local_launch: Option<&Valu
 
 /// The command a tab's transcript is read as: its own, except that a
 /// local-model tab driving OpenCode (`ollama launch opencode …`) reads as
-/// `opencode` — found by folder, it needs no launch id. The other local
-/// drivers keep their `ollama` line: Claude's and Codex's transcripts need the
-/// launch id a local tab never mints. The window's `agentTranscriptFor` makes
-/// the same call.
+/// `opencode` — found by folder, it needs no launch id — and one driving
+/// Claude Code reads as `claude` once it carries the launch id its line passes
+/// on (`-- --session-id`). The other local drivers keep their `ollama` line:
+/// Codex's transcript needs a launch id a local tab never mints. The window's
+/// `readerAgent` makes the same call.
 fn transcript_cmd_of(tab: &SavedTab) -> &str {
     let driver = tab
         .local_launch
         .as_ref()
         .and_then(|launch| launch.get("driver"))
         .and_then(Value::as_str);
-    if tab.kind == "local_agent" && driver == Some("opencode") {
-        "opencode"
-    } else {
-        &tab.cmd
+    // A local-model tab's `cmd` is its launcher. OpenCode's sessions are
+    // found by folder; Claude Code's by the key its line carries, and only
+    // a tab that has one says which conversation is its own.
+    match driver {
+        Some("opencode") if tab.kind == "local_agent" => "opencode",
+        Some("claude") if tab.kind == "local_agent" && tab.session_id.is_some() => "claude",
+        _ => &tab.cmd,
     }
 }
 
@@ -1491,7 +1495,9 @@ pub(super) fn terminals_support_of(mux: &dyn crate::services::session_mux::Sessi
     terminals_support_on(mux.kind(), || mux.available())
 }
 
-/// Whether a paired phone may see and open shell tabs. Off unless
+/// Whether any paired phone may see and open shell tabs — the host-wide half
+/// of the gate; each phone's own switch (`auth::Device::shell_tabs`) is the
+/// other, applied in [`Catalog::for_device`]. Off unless
 /// `tabtivity_mobile_host.shell_tabs` is set: a shell is the whole account with
 /// nothing between it and a lost phone, so Mobile is agents-only by default.
 /// Read per catalog load, like `root_open`, so turning it off unlists every
@@ -1945,11 +1951,24 @@ impl ScopeAccess {
 
 impl Catalog {
     /// This snapshot as the phone paired as `device_id` sees it: every scope
-    /// whose per-phone list leaves that phone out is gone, so `project`, `tab`
-    /// and `grants` answer for it exactly as for an unknown id. The cache stays
-    /// one device-agnostic snapshot; each request filters its own copy.
-    pub fn for_device(mut self, device_id: &str) -> Self {
+    /// whose per-phone list leaves that phone out is gone, and with `shells`
+    /// false (its own switch, `auth::AuthStore::shells_for`) so is every shell
+    /// tab, so `project`, `tab` and `grants` answer for it exactly as for an
+    /// unknown id. The cache stays one device-agnostic snapshot, listing
+    /// shells whenever the host-wide [`shells_open`] does; each request
+    /// filters its own copy.
+    pub fn for_device(mut self, device_id: &str, shells: bool) -> Self {
         self.projects.retain(|project| project.reaches(device_id));
+        if !shells {
+            for project in &mut self.projects {
+                if project.tabs.iter().any(|tab| tab.public.kind == "shell") {
+                    project.tabs.retain(|tab| tab.public.kind != "shell");
+                    // The row's counts were the shells' too.
+                    project.public.live_sessions = project.tabs.iter().filter(|t| t.public.available).count();
+                    project.public.last_activity = project.tabs.iter().filter_map(|t| t.public.last_activity).max();
+                }
+            }
+        }
         self
     }
 

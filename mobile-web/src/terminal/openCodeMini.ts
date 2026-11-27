@@ -1,27 +1,22 @@
 /**
- * What OpenCode draws in its **minimal interface** (`opencode --mini`), which
- * is the one shape of it the phone can read at all.
+ * What OpenCode 2 draws in its **minimal interface** (`opencode mini`, which a
+ * tab launched with a model runs: `opencode_session::v2_launch_args`), the one
+ * shape of it whose conversation the phone reads off the screen. OpenCode 1.x
+ * is not supported.
  *
  * Plain `opencode` is a full-screen (alternate-screen) TUI: it has no
  * scrollback, so its conversation comes from OpenCode's session store, and
  * only its composer — model, agent, the working hint — is read off the live
  * frame (`openCodeComposer`, `openCodeFullFooter`, below).
- * `--mini` writes the conversation into ordinary scrollback and keeps a live
- * area — an input box and one status row — pinned under it. That live area is
- * drawn with absolute cursor moves and no input marker of its own, so none of
- * the shapes the other families are found by is present: there is no `>` box
- * row for `statusLine` to anchor on, and the status row has no mode word on
- * it, only the agent's name in capitals.
- *
- * Everything here was read off a real `opencode --mini` 1.18.31 session
- * (captures at 60, 80 and 100 columns, replayed through the phone's own
- * emulator), not out of the bundle, and it is deliberately scoped to a tab
- * whose label names OpenCode — the same tie-break `agentModes` uses, and the
- * only way a bare ` BUILD` row can be told from a line of output.
+ * `mini` writes the conversation into ordinary scrollback and keeps a live
+ * area — an input box and one status row — pinned under it (`openCodeMiniRow`).
+ * It is deliberately scoped to a tab whose label names OpenCode — the same
+ * tie-break `agentModes` uses, and the only way a bare `Build · …` row can be
+ * told from a line of output.
  *
  * The shapes, in the order a session prints them:
  *
- *   `█▀▀█  OpenCode` / `█  █  ~/project`   the banner, once, at the top
+ *   `▪ oc mini v2.3.0 · ~/project`         the banner, once, at the top
  *   `› the prompt as it was submitted`      the echo — **hard-wrapped** by
  *                                           OpenCode itself, at the pane
  *                                           width, with no indent on the
@@ -36,10 +31,10 @@
  *                                           is kept: it is output, not a label
  *   `Thinking: …`                           reasoning, kept like Claude's
  *   the answer                              plain text, wrapped by OpenCode
- *   `▣ Build · Muse Spark 1.3 Free · 6.2s`  the turn footer: agent, model,
+ *   `Build · gemma4:e4b · 16.9s`            the turn footer: agent, model,
  *                                           duration
- *   ` BUILD   223.0K (21%) · ctrl+p cmd`    the live status row, always the
- *                                           last non-blank row on screen
+ *   `Build · gemma4:e4b · Ollama · ctrl+p menu`  the live status row, always
+ *                                           the last non-blank row on screen
  *
  * Because OpenCode wraps its own rows, a continuation carries no marker and no
  * indent — nothing on the row says it belongs to the row above. What *does*
@@ -61,15 +56,12 @@ export function isOpenCodeTab(agentLabel?: string): boolean {
   return agentLabel !== undefined && OPENCODE_AGENT.test(agentLabel);
 }
 
-/** The two rows of the start-up banner that carry text beside their block
- * glyphs (`readableScreen` drops the stroke-only third row itself). */
-const BANNER = /^[█▀▄▌▐]+\s/u;
-/** OpenCode 2's banner, one row: `▪ oc mini v2.1.3 · ~/project` (`[O] oc
- * mini` when it draws without Unicode). */
-const BANNER_V2 = /^\s*(?:▪|\[O\]) oc mini\b/u;
+/** The banner, one row: `▪ oc mini v2.1.3 · ~/project` (`[O] oc mini` when
+ * it draws without Unicode). */
+const BANNER = /^\s*(?:▪|\[O\]) oc mini\b/u;
 
 export function isOpenCodeBanner(text: string): boolean {
-  return BANNER.test(text) || BANNER_V2.test(text);
+  return BANNER.test(text);
 }
 
 /** The hint OpenCode draws inside its *empty* input box, in three shapes:
@@ -84,8 +76,7 @@ export function isOpenCodePlaceholder(text: string): boolean {
 }
 
 /** A tool call's first row. The glyph set is OpenCode's own (`→ ✱ ◈ % ✗`),
- * read off a live session and confirmed against the title functions in the
- * 1.18.31 bundle.
+ * read off a live session and its title functions.
  *
  * `#` is only claimed as a subagent task (`# General Task explore the repo`):
  * on its own it is the markdown heading an answer opens a section with, and
@@ -108,47 +99,20 @@ export interface OpenCodeTurnFooter {
   duration?: string;
 }
 
-/** `▣ Build · Muse Spark 1.3 Free · 6.2s` — the row OpenCode closes a turn
- * with. It is the only place a mini session prints the model's display name,
- * which is why `statusLine` reads the chip out of it. */
-const TURN_FOOTER = /^\s*▣\s+(\S.*)$/u;
-/** OpenCode 2 dropped the `▣`: `Build · gemma4:e4b · 16.9s` (2.1.3). Without
- * the glyph only its shape tells it from prose — an agent in title case, a
+/** `Build · gemma4:e4b · 16.9s` (2.1.3) — the row OpenCode closes a turn
+ * with, where `statusLine` finds the model when the status row has no room
+ * for it. Only its shape tells it from prose — an agent in title case, a
  * model, and a duration to close it. */
-const TURN_FOOTER_V2 = /^\s*([A-Z][\w-]*(?: [A-Z][\w-]*){0,2} · \S.*? · \d+(?:\.\d+)?(?:ms|s|m(?: \d+(?:\.\d+)?s)?|h(?: \d+m)?))\s*$/u;
+const TURN_FOOTER = /^\s*([A-Z][\w-]*(?: [A-Z][\w-]*){0,2} · \S.*? · \d+(?:\.\d+)?(?:ms|s|m(?: \d+(?:\.\d+)?s)?|h(?: \d+m)?))\s*$/u;
 
 export function openCodeTurnFooter(text: string): OpenCodeTurnFooter | null {
-  const match = TURN_FOOTER.exec(text) ?? TURN_FOOTER_V2.exec(text);
+  const match = TURN_FOOTER.exec(text);
   if (!match) return null;
   const [agent, model, duration] = match[1].split(" · ").map((part) => part.trim());
   if (!agent) return null;
   return { agent, model: model || undefined, duration: duration || undefined };
 }
 
-export interface OpenCodeStatus {
-  /** The agent the session is in, lower-cased (`build`, `plan`, …) — what
-   * `agentModes` calls a mode for every other family. */
-  mode: string;
-  /** Context left, from the share the row prints used (`223.0K (21%)` → `79%`). */
-  context?: string;
-  /** The model id from the row's notice slot, right after a switch. */
-  model?: string;
-}
-
-/** The live status row: one space of padding, the agent's name in capitals,
- * then — two or more columns over — a notice (`model union-alpha`, `no
- * variants available`), the progress dots and `esc interrupt` while the
- * session is working, and the token count and key hint when it is idle. At 60
- * columns there is room for the chip alone.
- *
- * The tail is not required to be a shape this knows: an unrecognized notice
- * must still leave the row readable as the frame, or the phone would paint
- * OpenCode's own status bar into the conversation. What the tail is *asked*
- * for is only the two facts below. */
-const CHIP_ROW = /^ ([A-Z][A-Z0-9]*(?:[ ._-][A-Z0-9]+)*)(?:\s{2,}(\S.*?))?\s*$/u;
-/** Longer than any agent name OpenCode draws; a longer run of capitals is a
- * line of output that happens to be shouting. */
-const MAX_CHIP = 24;
 /** `223.0K (21%)` — tokens used and the share of the window they are. The
  * chip says what is *left*, so the share is flipped (`21%` → `79%`), the same
  * way Gemini CLI's `25% used` is. */
@@ -159,47 +123,22 @@ function contextLeft(text: string): string | undefined {
   const used = CONTEXT.exec(text)?.[1];
   return used === undefined ? undefined : `${Math.max(0, 100 - Number(used))}%`;
 }
-/** The notice OpenCode shows in the status row after a model switch, its own
- * column: `model union-alpha`. */
-const MODEL_NOTICE = /(?:^|\s{2,})model\s+([A-Za-z0-9][\w.:/-]*)/u;
-
-/** The folder a mini session's banner names: `▪ oc mini v2.3.0 · ~/work`
- * (OpenCode 2) or the second row of 1.x's block logo, `█  █  ~/project`. Mini
- * draws the folder nowhere else, and no branch at all. The newest banner on
- * screen wins (`/new` prints another). */
-const BANNER_V2_PATH = /^\s*(?:▪|\[O\]) oc mini\b.*? · (\S.*?)\s*$/u;
-const BANNER_V1_PATH = /^[█▀▄▌▐]+\s+[█▀▄▌▐]+\s+((?:~|\/|[A-Za-z]:[\\/])\S*.*?)\s*$/u;
+/** The folder a mini session's banner names: `▪ oc mini v2.3.0 · ~/work`.
+ * Mini draws the folder nowhere else, and no branch at all. The newest banner
+ * on screen wins (`/new` prints another). */
+const BANNER_PATH = /^\s*(?:▪|\[O\]) oc mini\b.*? · (\S.*?)\s*$/u;
 
 export function openCodeBannerPath(lines: readonly { text: string }[]): string | undefined {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const text = lines[index].text;
-    const path = (BANNER_V2_PATH.exec(text) ?? BANNER_V1_PATH.exec(text))?.[1];
+    const path = BANNER_PATH.exec(text)?.[1];
     if (path) return path;
   }
   return undefined;
 }
 
-/** The status the row carries, or `null` when the row is not one. */
-export function openCodeStatusRow(text: string): OpenCodeStatus | null {
-  const match = CHIP_ROW.exec(text.replace(/\s+$/u, ""));
-  if (!match) return null;
-  const chip = match[1];
-  if (chip.length > MAX_CHIP) return null;
-  const status: OpenCodeStatus = { mode: chip.toLowerCase() };
-  const tail = match[2];
-  if (tail) {
-    const context = contextLeft(tail);
-    if (context) status.context = context;
-    const model = MODEL_NOTICE.exec(tail);
-    if (model) status.model = model[1];
-  }
-  return status;
-}
-
 /*
- * OpenCode 2's `mini` (what a tab launched with a model runs, `opencode_session
- * ::v2_launch_args`) draws its live area differently: a `┃` box, and under it
- * one row of ` · `-joined groups in a fixed order (`ur` in the 2.1.3 bundle) —
+ * `mini`'s live area: a `┃` box, and under it one row of ` · `-joined groups in a fixed order (`ur` in the 2.1.3 bundle) —
  * spinner, status, escape, queued, subagents, background, agent, model,
  * context, provider, cost, menu — as many as the width holds:
  *
@@ -237,10 +176,10 @@ const MINI_COST = /^\$\d/u;
 const MINI_AGENT = /^[A-Z][\w-]*(?: [A-Z][\w-]*){0,2}$/u;
 const MINI_VARIANT = /^(.*?) \[([\w.-]+)\]$/u;
 
-/** OpenCode 2's mini status row, or `null` when `text` is not one. */
+/** `mini`'s status row, or `null` when `text` is not one. */
 export function openCodeMiniRow(text: string): OpenCodeMiniRow | null {
   const row = text.trim();
-  if (!row || BANNER_V2.test(row)) return null;
+  if (!row || BANNER.test(row)) return null;
   const busy = MINI_BUSY.exec(row);
   const rest = busy ? row.slice(busy[0].length) : row;
   if (busy && !rest) return { busy: true };
@@ -271,9 +210,9 @@ export function openCodeMiniRow(text: string): OpenCodeMiniRow | null {
 }
 
 /*
- * The *full* TUI — what a plain `opencode` tab runs — draws no ` BUILD` row.
- * Its composer box (`component/prompt/index.tsx`, unchanged from 1.18.31 to
- * 1.18.34) ends in two rows of its own, the facts this reads:
+ * The *full* TUI — what a plain `opencode` tab runs — draws no mini status
+ * row. Its composer box (`component/prompt/index.tsx`) ends in two rows of its
+ * own, the facts this reads:
  *
  *   `┃  Build · Muse Spark 1.3 Free OpenCode Zen · high`   inside the box: the
  *                                                         agent (title case,
@@ -872,6 +811,11 @@ const CLEAR_SEARCH = "\u007f".repeat(MAX_QUERY);
 /** The keys that open the model picker: the palette, the word that finds
  * "Switch model" in it, and Enter. */
 export const OPENCODE_MODEL_KEYS = [PALETTE, "model", "\r"];
+/** The keys that open the current model's effort list (`Select variant`) by
+ * its palette entry's full name: `variant` alone finds `Variant cycle` (ctrl+t)
+ * first, which steps the effort on instead (2.4.2). Picking a model asks for
+ * no effort in 2.4, so this is the only way to the list. */
+export const OPENCODE_VARIANT_KEYS = [PALETTE, "Switch model variant", "\r"];
 
 /** The keys that answer the picker with `label`: clear the search, type the
  * label, submit. A label the pane truncated (`Ling 3.0 Flash Fin…`) is typed
@@ -1006,11 +950,18 @@ export class OpenCodePickerWalk {
   private steps = 0;
   private held = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Moves on every hold and reset: a step's keys still being typed then
+   * stop (`send`'s `live`). */
+  private epoch = 0;
 
-  /** `send` types keys into the session; `changed` says the list grew or the
-   * walk ended without a new frame (a caller that reads only on frames). */
+  /** `send` types keys into the session — a caller that paces them checks
+   * `live` before each one: a ↓ typed after a tap's search query moved the
+   * highlight off the match it typed, and Enter took the row below (`Claude
+   * Opus 5.5` answered as `Claude Opus 5.5 Fast`). `changed` says the list
+   * grew or the walk ended without a new frame (a caller that reads only on
+   * frames). */
   constructor(
-    private readonly send: (keys: string[]) => void,
+    private readonly send: (keys: string[], live: () => boolean) => void,
     private readonly changed: () => void = () => {},
   ) {}
 
@@ -1052,10 +1003,12 @@ export class OpenCodePickerWalk {
   /** No more keys: a row was tapped, or the picker is being closed. */
   hold(): void {
     this.held = true;
+    this.epoch += 1;
     this.clearTimer();
   }
 
   reset(): void {
+    this.epoch += 1;
     this.clearTimer();
     this.page = null;
     this.rows = null;
@@ -1073,7 +1026,8 @@ export class OpenCodePickerWalk {
       return;
     }
     this.steps += 1;
-    this.send(walkKeys(this.page));
+    const epoch = this.epoch;
+    this.send(walkKeys(this.page), () => this.epoch === epoch);
     this.timer = setTimeout(() => {
       this.timer = null;
       this.still += 1;
@@ -1127,6 +1081,11 @@ export function openCodeDialogCloseKeys(rows: readonly (string | { text: string 
  * palette's keys vanish into it (`OPENCODE_MODEL_KEYS`). */
 export function openCodeModelKeys(rows: readonly (string | { text: string })[]): string[] {
   return [...openCodeDialogCloseKeys(rows), ...OPENCODE_MODEL_KEYS];
+}
+
+/** …and the keys that open the effort list over them (`OPENCODE_VARIANT_KEYS`). */
+export function openCodeVariantKeys(rows: readonly (string | { text: string })[]): string[] {
+  return [...openCodeDialogCloseKeys(rows), ...OPENCODE_VARIANT_KEYS];
 }
 
 /** A notice's footer: the one key that closes it, at the dialog's right edge

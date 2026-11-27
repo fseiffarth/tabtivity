@@ -564,8 +564,9 @@ pub(crate) fn first_prompt_of(path: &Path, kind: TranscriptKind) -> Option<Strin
     crate::services::agent_session::chat_prompts(path, kind).0.map(|p| p.text)
 }
 
-/// The session's first prompt, for the CLIs whose transcript file can be read
-/// from its head: Claude, Codex and Copilot.
+/// The session's first prompt: read from the transcript file's head for
+/// Claude, Codex and Copilot, from the tab's chat in its folder's store for
+/// OpenCode, Antigravity, Muse and Cursor.
 fn head_prompt(req: &Request) -> Option<String> {
     let project = req.project_id.as_deref();
     let (path, kind) = match req.agent.as_str() {
@@ -575,7 +576,10 @@ fn head_prompt(req: &Request) -> Option<String> {
             let live = crate::services::copilot_session::live_id(project, &req.session_id)?;
             (crate::services::copilot_session::events_file(project, &live)?, TranscriptKind::Copilot)
         }
-        _ => return None,
+        _ if req.local_model => return None,
+        other => {
+            return crate::services::agent_chats::current_first_prompt(other, project, req.tab_dir.as_deref(), &req.session_id);
+        }
     };
     first_prompt_of(&path, kind)
 }

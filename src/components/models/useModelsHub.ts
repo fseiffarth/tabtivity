@@ -410,10 +410,11 @@ export function useModelsHub(active: boolean) {
   // a local model reaches nothing beyond this machine), so what is stored is
   // the models switched OFF there.
   const rootOffModels = settings?.root_excluded_models ?? [];
-  // Tools for a local model are opt-in, per model: without the chip a Vibe tab
-  // runs with tools off, which is what lets a completion-only model answer at
-  // all. With it, a root-console tab gets the root MCP tools (and only those) —
-  // wired at spawn by the backend, so it applies to tabs opened afterwards.
+  // MCP tools for a local model are opt-in, per model. A Vibe tab keeps Vibe's
+  // own tools only on a model with Ollama's `tools` capability (off otherwise,
+  // which is what lets a completion-only model answer at all). With the chip, a
+  // root-console tab gets the root MCP tools (and only those) — wired at spawn
+  // by the backend, so it applies to tabs opened afterwards.
   const mcpModels = settings?.ollama_mcp_models ?? [];
   const toggleRootModel = (model: string) => {
     if (rootOffModels.includes(model)) {

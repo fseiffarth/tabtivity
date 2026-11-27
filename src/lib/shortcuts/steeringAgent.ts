@@ -3,7 +3,7 @@
  * composer's Clear / Plan / Goal chips, acting on the focused pane's active
  * agent tab.
  *
- *  - Clear submits `/clear` the way a scheduled prefix command goes in
+ *  - Clear submits `/clear` (OpenCode: `/new`, `newConversationCommand`) the way a scheduled prefix command goes in
  *    (`submitScheduledAgentCommand`), and offers "Undo clear" as a typed one
  *    does (`noteTypedClear`). Every agent CLI Tabtivity launches reads `/clear` as
  *    a new conversation (see the phone's `NEW_CONVERSATION_COMMAND`).
@@ -18,7 +18,7 @@
  * Tabtivity chooses nothing here: each key types what the user could have typed
  * into the agent's own CLI (AGENTS.md, agent authority).
  */
-import { AGENT_LINE_RESET, agentDraftPrefixes, agentFamily } from "../../../shared/agentComposer";
+import { AGENT_LINE_RESET, agentDraftPrefixes, agentFamily, newConversationCommand } from "../../../shared/agentComposer";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { codexComposerFrame } from "../../../mobile-web/src/terminal/statusLine";
 import {
@@ -29,7 +29,7 @@ import {
   submitScheduledAgentCommand,
   submitScheduledAgentMessage,
 } from "../agents/scheduledAgentInput";
-import { confirmFreshSubmit, freshClaude } from "../agents/freshSubmit";
+import { confirmFreshSubmit, freshStart } from "../agents/freshSubmit";
 import { noteSentPrompt } from "../agents/sentPrompts";
 import { noteInputFrom } from "../agents/inputFrom";
 import { useActivityStore } from "../../stores/activity";
@@ -41,9 +41,6 @@ import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/k
 import { steeringTabsActive } from "./steeringScope";
 import { openReaderComposer } from "../agents/readerSteering";
 import { terminalFor } from "../terminal/terminalRegistry";
-
-/** What the Clear key types. */
-const NEW_CONVERSATION_COMMAND = "/clear";
 
 export type SteeringAgentCommand = "/plan" | "/goal";
 
@@ -74,7 +71,7 @@ export function steeringActiveTab(): { scope: string; tab: TabEntry } | null {
 }
 
 /**
- * `/clear` into the tab. False when it did not go in: not an agent tab, the
+ * `/clear` (`newConversationCommand`) into the tab. False when it did not go in: not an agent tab, the
  * pane not ready for input, or Codex at work (it answers "disabled while a task
  * is in progress" and keeps the conversation, so no undo is offered either).
  */
@@ -85,7 +82,7 @@ export async function clearAgentTab(scope: string, tab: TabEntry): Promise<boole
   if (agentFamily(agentTabLabel(tab)) === "codex" && busy) return false;
   try {
     await wakeStoppedForInput(tab.scheduleTargetId);
-    await submitScheduledAgentCommand(tab.scheduleTargetId, NEW_CONVERSATION_COMMAND);
+    await submitScheduledAgentCommand(tab.scheduleTargetId, newConversationCommand(agentTabLabel(tab)));
   } catch {
     return false;
   }
@@ -181,9 +178,9 @@ export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<v
     await new Promise((resolve) => setTimeout(resolve, START_POLL_MS));
   }
   const input = scheduledAgentInput(target);
-  // A Claude still starting can take the Enter as a newline or drop it
+  // A Claude or OpenCode still starting can take the Enter as a newline or drop it
   // (`freshSubmit.ts`); a slash command begins no turn for a hook to confirm.
-  const fresh = !!input && freshClaude(input.agent, input.ptyId) && !text.trimStart().startsWith("/");
+  const fresh = !!input && freshStart(input.agent, input.ptyId) && !text.trimStart().startsWith("/");
   const since = Date.now();
   const draftReset = steering && input && agentFamily(input.agent ?? tab.cmd) === "codex" ? codexDraftReset(input.ptyId) : undefined;
   await submitScheduledAgentMessage(target, text, { whileBusy: true, draftReset });

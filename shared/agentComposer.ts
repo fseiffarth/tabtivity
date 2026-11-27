@@ -1,6 +1,25 @@
 /** Ctrl-A, Ctrl-K: move to the start of the agent composer and remove its draft. */
 export const AGENT_LINE_RESET = "\u0001\u000b";
 
+/** How many lines above the cursor {@link openCodeBoxReset} empties by default. */
+const OPENCODE_RESET_LINES = 32;
+
+/**
+ * Empties OpenCode 2's input box from the cursor's line up: per line Ctrl-E
+ * (`input_line_end`), Ctrl-U (`input_delete_to_line_start`) and Backspace,
+ * which joins the line onto the one above, then {@link AGENT_LINE_RESET}.
+ * The line reset alone empties only the cursor's line, and the box holds more:
+ * a draft typed over several lines, or the prompt 2.4.2 hands back when a
+ * stop lands before its first token, so the next prompt went out with those
+ * lines in front of it. A Backspace on an empty box does nothing. Its own
+ * `input_clear` (Ctrl+C) is not used: on an empty box it quits. Probed 2.4.1
+ * and 2.4.2, full TUI and mini, 2026-11-26
+ * (`scripts/verify-cli/opencode/takeback.py`). `lines` covers `lines + 1`.
+ */
+export function openCodeBoxReset(lines = OPENCODE_RESET_LINES): string {
+  return "\u0005\u0015\u007f".repeat(Math.max(0, lines)) + AGENT_LINE_RESET;
+}
+
 /** DECSET 2004 bracketed-paste markers. */
 export const PASTE_START = "\u001b[200~";
 export const PASTE_END = "\u001b[201~";
@@ -80,22 +99,35 @@ function typedPieces(line: string): string[] {
  * single message. Keep these split: some TUIs discard the remainder of a stdin
  * chunk that starts with a control key, and some absorb a CR into pasted text.
  * A typed line longer than {@link TYPED_CHUNK} goes in several writes.
+ * `agent` (the launch command or tab label) lets a CLI's own quirks in: see
+ * {@link OPENCODE_MENTION_OPEN}.
  */
-export function agentInputWrites(draft: string, bracketedPaste = false): string[] {
+export function agentInputWrites(draft: string, bracketedPaste = false, agent?: string): string[] {
   const text = sanitizeAgentMessage(draft);
   if (!text) return [];
+  // OpenCode's `@` picker takes the Enter (a pick, or nothing when no file
+  // matches), so the words stay in the box. A space closes the picker first;
+  // OpenCode keeps it at the stored prompt's end (probed 2.4.2, full TUI and
+  // mini, 2026-11-26, `scripts/verify-cli/opencode/chat_send.py`).
+  const openCode = agent !== undefined && agentFamily(agent) === "opencode";
+  const closeMention = openCode && OPENCODE_MENTION_OPEN.test(text);
+  const submit = closeMention ? [" ", "\r"] : ["\r"];
+  const reset = openCode ? openCodeBoxReset() : AGENT_LINE_RESET;
   // A lone character is a key press, never a paste: a TUI screen that reads
   // keys — Codex's pager ("q close"), an approval's "y" — ignores pasted text,
   // and one character cannot form the burst the markers guard against.
-  if (bracketedPaste && Array.from(text).length > 1) return [AGENT_LINE_RESET, `${PASTE_START}${text}${PASTE_END}`, "\r"];
-  const writes = [AGENT_LINE_RESET];
+  if (bracketedPaste && Array.from(text).length > 1) return [reset, `${PASTE_START}${text}${PASTE_END}`, ...submit];
+  const writes = [reset];
   text.split("\n").forEach((line, index) => {
     if (index) writes.push("\n");
     writes.push(...typedPieces(line));
   });
-  writes.push("\r");
+  writes.push(...submit);
   return writes;
 }
+
+/** A last word that opens OpenCode's `@` file/agent picker. */
+const OPENCODE_MENTION_OPEN = /(?:^|\s)@\S*$/u;
 
 /** Words Codex's Tab would act on instead of queueing them: a `/command`, or
  * a last word opening its `@` or `$` picker, whose highlighted row Tab takes. */
@@ -108,12 +140,18 @@ const CODEX_TAB_TAKES = /^\s*\/|(?:^|\s)[@$]\S*\s*$/u;
  * follow-up inputs`, which can be taken back (`queuePull.ts`), so a chat's
  * prompt goes in with Tab. Tab on an idle Codex leaves the words in the box
  * and Enter on an empty one does nothing, so the Enter after it delivers the
- * prompt either way. Every other CLI queues on Enter.
+ * prompt either way. OpenCode 2.4.2's full TUI takes a plain Enter mid-turn
+ * as a steer, into the running turn, which nothing can take back, and marks
+ * nowhere; its `queue prompt` (Ctrl+X Enter) lists the prompt (`N queued`)
+ * where the panel can delete or send it. The mini takes the same chord and
+ * counts it as pending, and an idle OpenCode just submits it
+ * (`scripts/verify-cli/opencode/queue.py`). Every other CLI queues on Enter.
  */
 export function agentQueueWrites(writes: readonly string[], agent: string | undefined, message: string): string[] {
-  if (writes.length === 0 || agent === undefined || agentFamily(agent) !== "codex" || CODEX_TAB_TAKES.test(message)) {
-    return [...writes];
-  }
+  if (writes.length === 0 || agent === undefined) return [...writes];
+  const family = agentFamily(agent);
+  if (family === "opencode") return [...writes.slice(0, -1), "\x18", "\r"];
+  if (family !== "codex" || CODEX_TAB_TAKES.test(message)) return [...writes];
   return [...writes.slice(0, -1), "\t", "\r"];
 }
 
@@ -140,6 +178,15 @@ export function agentFamily(agentLabel: string): string {
   for (const [pattern, key] of AGENT_FAMILIES) if (pattern.test(agentLabel)) return key;
   const word = agentLabel.trim().toLowerCase().split(/\s+/u)[0]?.replace(/[^\p{L}\p{N}_-]/gu, "");
   return word || "agent";
+}
+
+/** What a composer's Clear types: `/clear`, every CLI's new conversation —
+ * but OpenCode's `mini` lists no `/clear`: its slash popup took the word for
+ * `/goal`, which printed its usage and kept the conversation (2.4.2,
+ * 2026-11-26, `scripts/verify-cli/opencode/chat_send.py`). `/new` starts one
+ * in the full TUI and in `mini`. `agent` is a family or a label. */
+export function newConversationCommand(agent: string): string {
+  return agentFamily(agent) === "opencode" ? "/new" : "/clear";
 }
 
 /** The commands a composer offers to lead a draft with — the phone's Plan /

@@ -570,6 +570,8 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
     - **Known limit:** pdf-lib's `copyPages` preserves page content and most
       annotations, but AcroForm fields and some tagged-PDF structure can be lost on
       rebuild. Fine for a page organiser; not a lossless editor for interactive forms.
+      (2026-11-26, #pdf-forms: a save with nothing rearranged now edits the file in
+      place and keeps all of it; a rearranged save flattens a form after asking.)
     - [x] 🤖 Automated test (`PageModel`, `PageStrip`, `PdfSave` — real pdf-lib
       round-trips asserting page order/rotation in the written bytes —, `PdfPageDrag`,
       and Rust `pdf_clip`)
@@ -3074,3 +3076,37 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
   `docs/markup_refactor_handoff.md` ("Flagged for user" has the live click-through).
   The PdfViewer split's phase 4 (document load and viewport hooks) stays
   not-now: `docs/pdf_viewer_split_plan.md`.
+
+### Fill PDF forms (2026-11-26, unnumbered, #pdf-forms)
+
+- [x] Fill in a PDF form in the native viewer (uncommitted; never live). Always on:
+  a PDF with fields shows a **Fields** toggle (tint, per tab); click a text field to
+  type (Enter / Tab / click away commits, Escape cancels, Ctrl+S commits and
+  saves), check boxes and radio buttons toggle, drop-downs and lists pick; Tab and
+  Shift+Tab walk every field across pages; a field shown twice takes the value on
+  both. The value lives in pdf.js's annotation storage, which the canvas paints;
+  saving writes it with pdf.js's incremental `saveDocument`. Values autosave with
+  the remarks switch (renamed "Save remarks and filled-in fields automatically").
+  No field JavaScript runs (format/calculate actions are ignored); signature fields
+  and push buttons are not offered. Fixed on the way: a save with nothing
+  rearranged no longer rebuilds the file (kept the form, bookmarks and named
+  destinations it used to drop), and an autosave no longer bases the next save on
+  the bytes the document was opened from (a later save could drop earlier
+  autosaved remarks). A rearranged save of a form PDF flattens the fields after a
+  banner asks. Pills `pdfViewer.forms`, `pdfViewer.formFlatten`.
+  - [x] 🤖 Automated test (`src/__tests__/pdf/PdfForms.test.ts`)
+  - [ ] 🖐️ Manual test — open a fillable PDF (a tax or visa form): fields are
+    tinted, Fields toggles the tint. Type into a text field, Tab through a few,
+    tick a box, pick a radio button and a drop-down entry; the page shows each
+    value in the form's own font. Wait ~2 s (autosave on) or Ctrl+S, close and
+    reopen: the values are there, and also in another reader (Firefox, Okular).
+    Add a remark and save: the form is still fillable. Move a page and Save: the
+    banner asks, Flatten fields and save keeps the values as page content.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

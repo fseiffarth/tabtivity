@@ -44,7 +44,7 @@ import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
 import type { AgentPrivacyChange } from "../../lib/projects/localModelsOnly";
-import { readProjectDialogMemory, writeProjectDialogMemory } from "./projectDialogMemory";
+import { clearProjectDialogMemory, readProjectDialogMemory, writeProjectDialogMemory } from "./projectDialogMemory";
 import { NAMES } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
 import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
@@ -130,14 +130,11 @@ export function ProjectDialog({
   // it. `null` = not edited: it follows the project's sanitized name.
   const [hostFolder, setHostFolder] = useState<string | null>(null);
   const [description, setDescription] = useState(memory.description ?? "");
-  const [descriptionFillMode, setDescriptionFillMode] = useState(() =>
-    memory.localModelsOnly && memory.descriptionFillMode && AGENT_SCAFFOLD_FILL_MODES.has(memory.descriptionFillMode)
-      ? "manual"
-      : memory.descriptionFillMode ?? "manual",
-  );
+  const [descriptionFillMode, setDescriptionFillMode] = useState(memory.descriptionFillMode ?? "manual");
   // Local models only (`services::agent_privacy`), asked for at creation: stored
   // right after the project is registered, before any of its tabs can open.
-  const [localModelsOnly, setLocalModelsOnly] = useState(memory.localModelsOnly ?? false);
+  // Always starts off; the dialog memory does not carry it.
+  const [localModelsOnly, setLocalModelsOnly] = useState(false);
   // Same default the import-source dropdown applies when the source is switched
   // by hand (`changeImportSource`) — a dialog opened *directly* on the clone
   // source (the New-tab menu's "Import from GitHub…") starts on the same answer
@@ -514,19 +511,23 @@ export function ProjectDialog({
   // Every answer is kept as it changes, so however the dialog closes the next
   // one opens on them (`projectDialogMemory`).
   useEffect(() => {
+    // A New dialog that made its project starts the next one from the defaults.
+    if (draftUsed && kind === "new") {
+      clearProjectDialogMemory(kind);
+      return;
+    }
     writeProjectDialogMemory(kind, {
       projectsRoot: projectsRootPicked ? projectsRoot : undefined,
       gitType: kind === "new" ? gitType : undefined,
       publishProvider,
       tierChoice: tierChoice ?? undefined,
-      localModelsOnly,
       descriptionFillMode,
       skipScaffold,
       name: draftUsed ? undefined : name,
       description: draftUsed ? undefined : description,
     });
   }, [
-    kind, projectsRoot, projectsRootPicked, gitType, publishProvider, tierChoice, localModelsOnly,
+    kind, projectsRoot, projectsRootPicked, gitType, publishProvider, tierChoice,
     descriptionFillMode, skipScaffold, name, description, draftUsed,
   ]);
 
@@ -1195,7 +1196,9 @@ export function ProjectDialog({
             });
           }
           const spec = outcome.outcome === "applied" ? outcome.spec : undefined;
-          created = spec ? { ...project, sandbox: spec } : project;
+          // From `created`, not `project`: the privacy step above already put
+          // `agent_privacy` on it, and the store must get both.
+          created = spec ? { ...created, sandbox: spec } : created;
           // Same preflight the pill's toggle runs: a missing image becomes a
           // one-click build in a fresh tab rather than an error at the first
           // spawn (house convention — never a copy-it-yourself message).

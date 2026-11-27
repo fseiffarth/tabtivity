@@ -6,17 +6,18 @@ import { answerKeys, answerTextKeys, readReaderLive } from "../../lib/agents/rea
 
 const line = (text: string, background?: string): ReadableLine => ({ key: text, text, spans: [{ text, background }] });
 const tabs = (focus: number): ReadableLine => {
-  const spans = ["Which model picker fails", "Failure symptoms", "Confirm"].flatMap((text, index) => [
+  const spans = ["Which model picker fails", "Failure symptoms", "Submit"].flatMap((text, index) => [
     { text: ` ${text} `, background: index === focus ? "#cc8800" : "#222222" },
     { text: " ", background: "#222222" },
   ]);
   return { key: "tabs", text: spans.map((span) => span.text).join(""), spans };
 };
 
-/** The screenshot's question, with the full tab row retained from the TUI.
- * Colours and Confirm/custom-input behaviour follow QuestionPrompt 1.18.34. */
+/** A question with the full tab row retained from the TUI, from a phone
+ * screenshot of 2026-10-16, its last step labelled as OpenCode 2 labels it.
+ * The background highlight is the one `mini` draws (2.2.4, below). */
 const screenshot = (multi = false): ReadableLine[] => [
-  line("Asked 2 questions"), line("▣ Build · Muse Spark 1.3 Free"), line(""), tabs(0), line(""),
+  line("Asked 2 questions"), line("Build · Muse Spark 1.3 Free · 6.2s"), line(""), tabs(0), line(""),
   line(`Which OpenCode model picker do you mean?${multi ? " (select all that apply)" : ""}`, "#222222"), line(""),
   line(`1. ${multi ? "[ ] " : ""}Desktop Reader Chat view`, "#333333"),
   line("   Chat/Terminal switch facts-row model chip", "#222222"),
@@ -109,7 +110,7 @@ describe("OpenCode live questions shared by phone Chat and desktop Reader", () =
     expect(answerRowKeys(before, before.options[1])).toEqual(["2"]);
   });
 
-  it("keeps Confirm as a Submit card, with review answers and working back navigation", () => {
+  it("keeps the Submit step as a Submit card, with review answers and working back navigation", () => {
     const screen = [line("1. Earlier prose"), line("2. More prose"), line(""), tabs(2), line(""), line("Review", "#222222"), line("Which model picker fails: Phone model sheet"), line("Failure symptoms: (not answered)"), line(""), line("⇆ tab  enter submit  esc dismiss")];
     const prompt = read(screen);
     expect(prompt.review).toBe(true);

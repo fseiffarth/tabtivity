@@ -2389,9 +2389,15 @@ pub enum AdminRequest {
     PairingCode,
     Devices,
     Revoke { device_id: String },
+    /// Give one paired phone another name (`auth::AuthStore::rename_device`):
+    /// the desktop's label only, trimmed and cut like a pairing name.
+    RenameDevice { device_id: String, name: String },
     /// Keep one phone out of exactly these sections (`auth::HIDEABLE_SECTIONS`);
     /// an empty list lets it into all of them again.
     SetHiddenSections { device_id: String, sections: Vec<String> },
+    /// Let one phone have shell tabs, or not (`auth::Device::shell_tabs`);
+    /// the host-wide `shell_tabs` switch still has to be on too.
+    SetShellTabs { device_id: String, on: bool },
     ForgetAll,
     Shutdown,
     /// A calendar reminder for every subscribed phone (`push.rs`). Answered
@@ -2545,6 +2551,10 @@ pub struct AdminDevice {
     /// Phone sections (`auth::HIDEABLE_SECTIONS`) this device is kept out of.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_sections: Vec<String>,
+    /// This device's own shell switch (`auth::Device::shell_tabs`). Defaulted
+    /// off, so a sidecar from before the field reads as no shells.
+    #[serde(default)]
+    pub shell_tabs: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

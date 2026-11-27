@@ -1109,6 +1109,17 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
     })
 }
 
+/// A local-model tab (`PtyOptions::local_model`) started through a launcher no
+/// lane can name a server to: `ollama launch claude|opencode …`, since `ollama`
+/// has no registry row. Vibe is not one: its tool-tagged models take the
+/// servers through `VIBE_MCP_SERVERS` ([`is_local_model`]). Such a tab gets no
+/// lane at all. The env pairs alone would arm the Claude hook's tab-naming and
+/// tab-message reminders (`agent_session`) for tools the model was never given.
+fn unwired_local_model(opts: &PtyOptions) -> bool {
+    opts.local_model && !is_local_model(opts)
+        && matches!(super::agent_registry::mcp_wiring(basename(&opts.cmd)), McpWiring::None)
+}
+
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
 /// Every lane's token ([`LANE_TOKEN_ENVS`]) is taken, so no lane is left out;
 /// the guard holds their hashes ([`Session::id`]), never the tokens.
@@ -1257,6 +1268,7 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         return false;
     }
     let root_agent = is_root_agent(opts, agent_spawn);
+    if unwired_local_model(opts) { return root_agent; }
     let Some(runtime) = runtime else { return root_agent };
     let trusted = Trusted::read(state, opts.project_id.as_deref());
     if root_agent && runtime.serves_root {
@@ -1329,7 +1341,39 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         && tabs_reaches(opts, &trusted) {
         grant_tabs(opts, runtime, store, &trusted.state, &trusted.tool_models());
     }
+    if !root_agent {
+        keep_vibe_tools(opts, &trusted.share);
+    }
     root_agent
+}
+
+/// A local Vibe tab outside the root console whose home keeps Vibe's own tools
+/// on (a model with the `tools` capability, `local_drivers::vibe_local_config`)
+/// keeps them beside the MCP servers the lanes above named: their
+/// `VIBE_ENABLED_TOOLS` outranks the home's config and would otherwise narrow the
+/// tab to those servers' tools. The root console keeps that narrowing (a short
+/// tool list and no shell). `VIBE_HOME` comes from the renderer, so only one of
+/// the `vibe_local` homes under `share` is read; anything else changes nothing.
+fn keep_vibe_tools(opts: &mut PtyOptions, share: &Path) {
+    if !is_local_model(opts) || !opts.env.contains_key("VIBE_ENABLED_TOOLS") {
+        return;
+    }
+    let Some(home) = opts.env.get("VIBE_HOME").map(std::path::PathBuf::from) else { return };
+    let Ok(leaf) = home.strip_prefix(share.join("vibe_local")) else { return };
+    if leaf.components().count() != 1 || leaf.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else { return };
+    if !super::local_drivers::vibe_config_keeps_tools(&text) {
+        return;
+    }
+    let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+        .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+    let every = json!("*");
+    if !enabled.contains(&every) {
+        enabled.push(every);
+    }
+    opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
 }
 
 /// Whether a project-lane spawn may hold the tab messages lane beyond

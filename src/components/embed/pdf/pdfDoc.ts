@@ -14,17 +14,30 @@ import {
   PDFDict,
   PDFHexString,
   PDFName,
+  PDFNumber,
   PDFRef,
   PDFStream,
   PDFString,
+  concatTransformationMatrix,
   degrees,
+  drawObject,
+  popGraphicsState,
+  pushGraphicsState,
 } from "pdf-lib";
 import type { PDFContext, PDFPage } from "pdf-lib";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFWorker } from "pdfjs-dist";
 import { loadPdf } from "../../../lib/viewers/pdfLoad";
-import type { PageList, PageRef, PdfNote, SourceId } from "../../../lib/viewers/pageModel";
+import {
+  isPristineExceptNotes,
+  SELF,
+  type PageList,
+  type PageRef,
+  type PdfNote,
+  type SourceId,
+} from "../../../lib/viewers/pageModel";
 import { isHighlight } from "../../../lib/viewers/pdfNotes";
+import { fieldIndexOf, type FieldObjects, type FormValue } from "./formFields";
 import {
   HIGHLIGHT_DEFAULT_COLOR,
   highlightRectInPdfSpace,
@@ -618,6 +631,233 @@ export interface BuildPdfOptions {
   noteViewport?: NoteViewportFor;
   /** Write the file with no metadata at all (#pdf-meta) — see {@link scrubMetadata}. */
   stripMetadata?: boolean;
+  /** The values typed into the viewed file's form fields (#pdf-forms), keyed by
+   *  annotation id — see {@link applyFormValues}. Only ever the `SELF` source's. */
+  formValues?: ReadonlyMap<string, FormValue>;
+  /** Overrides how {@link formValues} are written into the bytes (tests; the
+   *  default is pdf.js's own save). */
+  applyForm?: FormApplier;
+  /** The pdf.js worker the default {@link applyForm} opens its document on. */
+  worker?: PDFWorker;
+}
+
+// ── Form fields (#pdf-forms) ────────────────────────────────────────────────
+
+/** Writes form values into a PDF's bytes; see {@link applyFormValues}. */
+export type FormApplier = (
+  bytes: Uint8Array,
+  values: ReadonlyMap<string, FormValue>,
+) => Promise<Uint8Array>;
+
+/**
+ * Write form values into a PDF with pdf.js's own save.
+ *
+ * pdf.js, not pdf-lib, for two reasons. It is the code that has been painting the
+ * values on screen (`ANNOT_MODE` reads the same storage), so the appearance it writes
+ * is the one the reader saw — in the field's own font, comb boxes and all — where
+ * pdf-lib's would be Helvetica and refuse every character outside WinAnsi. And it
+ * writes an INCREMENTAL update: the original bytes stay as they are with the changed
+ * fields appended, which keeps everything else in the file exactly as it was.
+ *
+ * A fresh document over `bytes` rather than the one on screen: the save has to start
+ * from the bytes the file holds NOW, which after an autosave are no longer the ones
+ * the reader's document was opened from. The ids still match, because neither this
+ * save nor pdf-lib's in-place one renumbers an object that already exists.
+ */
+export async function applyFormValues(
+  bytes: Uint8Array,
+  values: ReadonlyMap<string, FormValue>,
+  worker?: PDFWorker,
+): Promise<Uint8Array> {
+  // pdf.js detaches what it is handed; the caller's bytes are a source's pristine copy.
+  const doc = await loadPdf(bytes.slice(), worker);
+  try {
+    for (const [id, value] of values) {
+      doc.annotationStorage.setValue(id, { value: Array.isArray(value) ? [...value] : value });
+    }
+    return await doc.saveDocument();
+  } finally {
+    void doc.loadingTask.destroy().catch(() => {});
+  }
+}
+
+/** The annotation flags that keep a widget off the screen: `Hidden` (2), `NoView` (32). */
+const UNSEEN_FLAGS = 2 | 32;
+
+/**
+ * The stream a widget currently shows: its normal appearance, or — for a check box
+ * or radio button, whose `/N` is a dict of states — the state its `/AS` names.
+ * Registered if it was a direct object, since a page can only draw a referenced one.
+ */
+function widgetAppearance(doc: PDFDocument, widget: PDFDict): PDFRef | undefined {
+  const ctx = doc.context;
+  const ap = widget.lookupMaybe(PDFName.of("AP"), PDFDict);
+  const normal = ap?.get(PDFName.of("N"));
+  let chosen: unknown = normal;
+  const normalObj = normal instanceof PDFRef ? ctx.lookup(normal) : normal;
+  if (normalObj instanceof PDFDict && !(normalObj instanceof PDFStream)) {
+    const state = widget.get(PDFName.of("AS"));
+    chosen = state instanceof PDFName ? normalObj.get(state) : undefined;
+  }
+  if (chosen instanceof PDFRef) {
+    return ctx.lookup(chosen) instanceof PDFStream ? chosen : undefined;
+  }
+  if (chosen instanceof PDFStream) return ctx.register(chosen);
+  return undefined;
+}
+
+function numbersOf(arr: PDFArray | undefined, n: number): number[] | undefined {
+  if (!arr || arr.size() < n) return undefined;
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const v = arr.get(i);
+    if (!(v instanceof PDFNumber)) return undefined;
+    out.push(v.asNumber());
+  }
+  return out;
+}
+
+/**
+ * Where a form XObject has to be drawn so it lands in its widget's `/Rect`: the
+ * algorithm of the PDF spec (12.5.5) — the appearance's `/BBox` through its own
+ * `/Matrix`, boxed, then mapped onto the rect. Pure. `undefined` for a degenerate box.
+ */
+export function appearanceToRect(
+  rect: readonly number[],
+  bbox: readonly number[],
+  matrix: readonly number[] = [1, 0, 0, 1, 0, 0],
+): [number, number, number, number, number, number] | undefined {
+  const [a, b, c, d, e, f] = matrix;
+  const corners = [
+    [bbox[0], bbox[1]],
+    [bbox[2], bbox[1]],
+    [bbox[0], bbox[3]],
+    [bbox[2], bbox[3]],
+  ].map(([x, y]) => [a * x + c * y + e, b * x + d * y + f]);
+  const xs = corners.map((p) => p[0]);
+  const ys = corners.map((p) => p[1]);
+  const tx = Math.min(...xs);
+  const ty = Math.min(...ys);
+  const tw = Math.max(...xs) - tx;
+  const th = Math.max(...ys) - ty;
+  const rx = Math.min(rect[0], rect[2]);
+  const ry = Math.min(rect[1], rect[3]);
+  const rw = Math.abs(rect[2] - rect[0]);
+  const rh = Math.abs(rect[3] - rect[1]);
+  if (!(tw > 0 && th > 0 && rw > 0 && rh > 0)) return undefined;
+  const sx = rw / tw;
+  const sy = rh / th;
+  return [sx, 0, 0, sy, rx - sx * tx, ry - sy * ty];
+}
+
+/**
+ * Burn a document's form fields into its pages: every widget's current appearance
+ * is drawn as plain page content and the widget and the form are removed. Returns
+ * how many sheets changed.
+ *
+ * This is what a REARRANGED save does with a form (the reader is told first): the
+ * rebuild copies pages into a fresh document, whose catalog has no `/AcroForm`, so
+ * the widgets would arrive as orphans — drawn by some readers, fillable by none.
+ * Flattening keeps every value that was filled in, as what it looks like.
+ *
+ * Not pdf-lib's `PDFForm.flatten`: that one throws on the first widget without an
+ * appearance (an empty field in most forms) and removes widgets by their
+ * appearance's reference rather than their own. A widget with nothing to show is
+ * simply dropped here — an empty field draws nothing either way.
+ */
+export function flattenFormFields(doc: PDFDocument): number {
+  const ctx = doc.context;
+  let changedPages = 0;
+  for (const page of doc.getPages()) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    const kept: unknown[] = [];
+    const draws: ReturnType<typeof drawObject>[][] = [];
+    let changed = false;
+    for (let i = 0; i < annots.size(); i++) {
+      const el = annots.get(i);
+      const dict =
+        el instanceof PDFRef ? ctx.lookupMaybe(el, PDFDict) : el instanceof PDFDict ? el : undefined;
+      if (!dict || dict.get(PDFName.of("Subtype")) !== PDFName.of("Widget")) {
+        kept.push(el);
+        continue;
+      }
+      changed = true;
+      const flags = dict.get(PDFName.of("F"));
+      if (flags instanceof PDFNumber && (flags.asNumber() & UNSEEN_FLAGS) !== 0) continue;
+      const appearance = widgetAppearance(doc, dict);
+      const rect = numbersOf(dict.lookupMaybe(PDFName.of("Rect"), PDFArray), 4);
+      if (!appearance || !rect) continue;
+      const stream = ctx.lookup(appearance) as PDFStream;
+      const bbox = numbersOf(stream.dict.lookupMaybe(PDFName.of("BBox"), PDFArray), 4);
+      if (!bbox) continue;
+      const matrix = numbersOf(stream.dict.lookupMaybe(PDFName.of("Matrix"), PDFArray), 6);
+      const m = appearanceToRect(rect, bbox, matrix);
+      if (!m) continue;
+      const key = page.node.newXObject("FlatWidget", appearance);
+      draws.push([pushGraphicsState(), concatTransformationMatrix(...m), drawObject(key), popGraphicsState()]);
+    }
+    if (!changed) continue;
+    changedPages += 1;
+    if (kept.length === 0) page.node.delete(PDFName.of("Annots"));
+    else page.node.set(PDFName.of("Annots"), ctx.obj(kept as never));
+    if (draws.length > 0) {
+      // Drawn OUTSIDE the page's own content: a content stream may leave the
+      // graphics state wherever it likes, so it is wrapped in q … Q first and the
+      // widgets go after, in the page's untouched user space. A page with no
+      // content of its own has nothing to wrap and just gets the drawing.
+      page.node.normalize();
+      const start = ctx.register(ctx.contentStream([pushGraphicsState()]));
+      const end = ctx.register(ctx.contentStream([popGraphicsState(), ...draws.flat()]));
+      if (!page.node.wrapContentStreams(start, end)) {
+        ctx.delete(start);
+        ctx.delete(end);
+        page.node.addContentStream(ctx.register(ctx.contentStream(draws.flat())));
+      }
+    }
+  }
+  doc.catalog.delete(PDFName.of("AcroForm"));
+  return changedPages;
+}
+
+/** Does this source carry a form a reader could fill? Read from pdf.js's own field
+ *  list, so a document with an empty `/AcroForm` (LaTeX's `hyperref` writes one)
+ *  does not count. */
+export async function sourceHasForm(src: PdfSource): Promise<boolean> {
+  try {
+    return fieldIndexOf((await src.doc.getFieldObjects()) as FieldObjects) != null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Will a save of `list` write the viewed file IN PLACE ({@link buildPdf}'s first
+ * path)? Only the identity arrangement can — nothing moved, turned, merged or
+ * blacked out — and not while the metadata is to be deleted, which wants the rebuild
+ * (see {@link scrubMetadata}).
+ */
+export function savesInPlace(list: PageList, selfPageCount: number, stripMetadata: boolean): boolean {
+  return !stripMetadata && isPristineExceptNotes(list, selfPageCount);
+}
+
+/**
+ * Would saving `list` flatten a form (#pdf-forms)? True for a rebuild that copies
+ * pages of a source with fillable fields — the reader is asked first, the way a
+ * blackout is.
+ */
+export async function saveFlattensForm(
+  list: PageList,
+  sources: PdfSources,
+  stripMetadata: boolean,
+): Promise<boolean> {
+  const self = sources.get(SELF);
+  if (self && savesInPlace(list, self.doc.numPages, stripMetadata)) return false;
+  for (const id of new Set(list.filter((r) => !r.marks?.length).map((r) => r.src))) {
+    const src = sources.get(id);
+    if (src && (await sourceHasForm(src))) return true;
+  }
+  return false;
 }
 
 /**
@@ -702,6 +942,35 @@ export async function buildPdf(
   if (list.length === 0) {
     throw new Error(emptyMsg);
   }
+  const applyForm: FormApplier = opts.applyForm ?? ((b, v) => applyFormValues(b, v, opts.worker));
+  const formValues = opts.formValues?.size ? opts.formValues : undefined;
+
+  // ── In place: the identity arrangement (#pdf-forms) ──────────────────────
+  // Nothing moved, turned, merged or blacked out, so the file is EDITED rather than
+  // rebuilt: form values through pdf.js's incremental save, remarks onto the pages
+  // where they sit. A rebuild copies pages into a fresh document and loses whatever
+  // lives in the catalog rather than on a page — the form, the bookmarks, named
+  // destinations, page labels, the structure tree — which is why saving one remark
+  // must not take that path.
+  const self = sources.get(SELF);
+  if (self && !stripMetadata && list.every((r) => r.src === SELF)) {
+    let bytes = await sourceBytes(self).catch(() => undefined);
+    if (!bytes) throw new Error(sourceClosedMsg);
+    const count = self.doc?.numPages ?? (await PDFDocument.load(bytes, { ignoreEncryption: true })).getPageCount();
+    if (savesInPlace(list, count, stripMetadata)) {
+      if (formValues) bytes = await applyForm(bytes, formValues);
+      const owned = list.filter((r) => r.notes);
+      if (owned.length === 0) return bytes;
+      // `updateMetadata: false`: pdf-lib would otherwise stamp its own Producer and
+      // Creator and a CreationDate of now over the author's.
+      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+      for (const ref of owned) {
+        writePageNotes(doc, doc.getPage(ref.page - 1), ref.notes!, await noteViewport(self, ref));
+      }
+      doc.setModificationDate(new Date());
+      return doc.save();
+    }
+  }
 
   // `updateMetadata` is pdf-lib's own `/Info` dict: a Producer and Creator naming the
   // library, a ModDate of now, and a CreationDate of now. Harmless on an ordinary
@@ -720,9 +989,14 @@ export async function buildPdf(
     // `sourceBytes` re-reads for a source that does not hold its bytes (see
     // {@link PdfSource}). A read that fails — the file is gone, or the backend
     // refuses it — is the same situation as a source that was never open.
-    const bytes = held && (await sourceBytes(held).catch(() => undefined));
+    let bytes = held && (await sourceBytes(held).catch(() => undefined));
     if (!bytes) throw new Error(sourceClosedMsg);
+    // What was typed into the form goes into the bytes first, so the flatten below
+    // burns in the values the reader sees rather than the ones the file had.
+    if (src === SELF && formValues) bytes = await applyForm(bytes, formValues);
     const from = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    // A rebuild cannot keep a form (see `flattenFormFields`); it keeps its values.
+    flattenFormFields(from);
     const refs = plain.filter((r) => r.src === src);
     const copied = await out.copyPages(
       from,

@@ -13,11 +13,14 @@ export interface PathLinkHover {
   isDir: boolean;
   /** A file no in-app viewer shows: a click shows it in the chat's Files tab. */
   viewless?: boolean;
+  /** Ctrl+click shows it in the side panel's file tree (`sidePanelRevealOf`). */
+  sidePanel?: boolean;
 }
 
 /**
  * The hint over a hovered path link, terminal and chat alike: what it names and
- * that a click opens it in a tab (Ctrl+click: a new subwindow). The editor's file-link hint (#49,
+ * that a click opens it in a tab (Ctrl+click: in the side panel's file tree, or
+ * where that panel cannot show it, a new subwindow). The editor's file-link hint (#49,
  * `.link-open-hint`), portaled to the body above every pane overlay so neither
  * the xterm canvas nor the chat's scroller clips it.
  */
@@ -40,7 +43,13 @@ export function PathLinkHint({ hover }: { hover: PathLinkHover | null }) {
       {hover.name} · {action}
       <UntestedTag id="terminal.pathLink.open" />
       {hover.viewless && <UntestedTag id="terminal.reader.viewlessFiles" />}
-      {!hover.isDir && !hover.viewless && (
+      {hover.sidePanel ? (
+        <>
+          <br />
+          {forPlatformKeys(t("terminal.pathLink.sidePanel"))}
+          <UntestedTag id="terminal.pathLink.sidePanel" />
+        </>
+      ) : !hover.isDir && !hover.viewless && (
         <>
           <br />
           {forPlatformKeys(t("terminal.pathLink.newSubwindow"))}

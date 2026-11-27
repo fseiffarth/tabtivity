@@ -55,7 +55,7 @@ import type { LoginTarget } from "../../lib/remote/loginTarget";
 import { scrollbackRowsFor } from "../../lib/terminal/scrollback";
 import { PaneSleepHoldContext } from "../../lib/sleepWhenHidden";
 import { wakePhoneHolds } from "../../lib/agents/phoneHolds";
-import { confirmFreshSubmit, isClaude } from "../../lib/agents/freshSubmit";
+import { confirmFreshSubmit, dropsFreshEnter } from "../../lib/agents/freshSubmit";
 import { terminalYieldsChord } from "../../lib/shortcuts/terminalTabChord";
 import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
@@ -63,7 +63,7 @@ import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startK
 import { findSignInDone, findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
 import { isAppLink, parseAppLink } from "../../lib/navigation/appLinks";
 import { openAppLink } from "../layout/openAppLink";
-import { openPathLink } from "../../lib/terminal/pathLinks";
+import { openPathLink, revealInSidePanel, sidePanelRevealOf } from "../../lib/terminal/pathLinks";
 import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
@@ -87,6 +87,7 @@ import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentRea
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
+import { TerminalLocalAutoModeCard } from "./TerminalLocalAutoModeCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalMcpStaleCard } from "./TerminalMcpStaleCard";
 import { noteMcpStale } from "../../stores/agents/mcpStale";
@@ -257,10 +258,18 @@ function terminalTheme(scheme: string | undefined) {
 // pays full escape-sequence parsing + render scheduling per chunk. With many
 // parallel agent tabs streaming (Tabtivity's normal shape) that made background
 // tabs the renderer's biggest standing cost. The buffer flushes when the pane
-// is next shown; agent TUIs repaint whole screens, so the flush converges on
-// the current frame. Cap the retained text so a chatty background agent can't
+// is next shown. Cap the retained text so a chatty background agent can't
 // grow this without bound; xterm trims to its own scrollback on flush anyway.
+// A capped catch-up does NOT converge on the current frame by itself (Claude
+// Code redraws only changed cells): the pane asks for a repaint after it
+// (`catchUpLost`).
 const PENDING_OUTPUT_CAP = 1_000_000;
+
+/** How long a lost catch-up's width nudge holds before the true width goes
+ *  back (`nudgeRepaint`). The program reads its size when it handles the
+ *  SIGWINCH, and Node compares that with the size it last knew: if the
+ *  restoring resize lands first it sees no change and draws nothing. */
+const LOST_CATCH_UP_REPAINT_MS = 300;
 
 /** Trailing delay before a refit's new size reaches the PTY (see `doFit`). */
 const PTY_RESIZE_DEBOUNCE_MS = 80;
@@ -739,8 +748,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // A file path the program printed opens the file's tab, on the same click
       // (after the double-click window) — no question first, since it only ever
       // opens an in-app viewer of a file inside the tab's folder or project; a
-      // double-click copies it, like a URL. Ctrl (⌘) + click opens it in a new
-      // subwindow.
+      // double-click copies it, like a URL. Ctrl (⌘) + click shows it in the
+      // side panel's file tree — where that panel cannot (a popout, a path
+      // outside the project), in a new subwindow.
       termDisposables.push(registerPathLinkProvider(term, () => pathLinkContextRef.current, {
         activate: (event, entry, at) => {
           if (event.detail > 1) return;
@@ -751,8 +761,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             linkOpenTimer = null;
             const ctx = pathLinkContextRef.current;
             const owner = splitPtyId(id);
+            const linkScope = owner?.scope ?? ROOT_SCOPE;
+            if (newSubwindow && revealInSidePanel(entry, { scope: linkScope, projectId, projectDir: ctx.projectDir })) return;
             openPathLink(entry, at, {
-              scope: owner?.scope ?? ROOT_SCOPE, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled,
+              scope: linkScope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled,
               t: tRef.current, newSubwindow, fromTab: owner?.key,
             });
           }, LINK_OPEN_DELAY_MS);
@@ -761,7 +773,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           hoveredLink = text;
           const ctx = pathLinkContextRef.current;
           const name = relativePathWithin(ctx.projectDir || cwd, entry.path) || entry.path;
-          setPathHover({ left: event.clientX, top: event.clientY - 4, name, line: at.line, isDir: entry.is_dir });
+          const sidePanel = sidePanelRevealOf(entry, { scope: splitPtyId(id)?.scope ?? ROOT_SCOPE, projectId, projectDir: ctx.projectDir }) !== null;
+          setPathHover({ left: event.clientX, top: event.clientY - 4, name, line: at.line, isDir: entry.is_dir, sidePanel });
         },
         leave: () => {
           hoveredLink = null;
@@ -947,6 +960,42 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // direction — a backend too old to answer must not leave a pane mute.
     let historyPending = attachOnly || waking;
     const historyOutput: Array<{ data: string; range?: TerminalOutputRange }> = [];
+    // A catch-up that lost bytes off its front: a cap cut it at a byte count
+    // (here or in the backend's hidden-spell buffer, whose replay then starts
+    // past the last offset this pane saw). Claude Code redraws only the cells
+    // that changed, from where it believes the cursor and the screen are, so
+    // a fragment of that stream written over the screen this pane last showed
+    // leaves both frames interleaved — a dialog drawn through an old diff —
+    // and the Reader reads that mess as the question. Only a full repaint
+    // recovers, which a size change makes every TUI do.
+    let catchUpLost = false;
+    /** End offset of the last output this pane took, live or replayed. */
+    let seenEnd: number | undefined;
+    let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+    const restoreWidth = () => {
+      if (repaintTimer) clearTimeout(repaintTimer);
+      repaintTimer = null;
+      if (!term) return;
+      notePtyResize(id);
+      invoke("pty_resize", { id, cols: term.cols, rows: term.rows }).catch(() => {});
+    };
+    const nudgeRepaint = () => {
+      if (!term || term.cols < 3 || repaintTimer) return;
+      notePtyResize(id);
+      invoke("pty_resize", { id, cols: term.cols - 1, rows: term.rows }).catch(() => {});
+      repaintTimer = setTimeout(restoreWidth, LOST_CATCH_UP_REPAINT_MS);
+    };
+    const keepPending = (data: string) => {
+      pendingOutput.current += data;
+      // Trim with hysteresis: cutting exactly to the cap on every chunk past
+      // it re-copies the whole buffer per chunk (a ~1 MB memcpy up to ~60×/s
+      // per chatty hidden tab, forever). Letting it grow to 2× and cutting
+      // back to the cap costs one copy per megabyte of new output instead.
+      if (pendingOutput.current.length > PENDING_OUTPUT_CAP * 2) {
+        pendingOutput.current = pendingOutput.current.slice(-PENDING_OUTPUT_CAP);
+        catchUpLost = true;
+      }
+    };
     const flushPending = () => {
       if (historyPending || !term) return;
       const buffered = pendingOutput.current;
@@ -958,6 +1007,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       term.write(catchUp, () => {
         staleParse = Math.max(0, staleParse - 1);
       });
+      if (catchUpLost) {
+        catchUpLost = false;
+        nudgeRepaint();
+      }
     };
 
     // Write PTY output to the terminal only while the pane is open AND visible;
@@ -971,14 +1024,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         flushPending();
         term.write(data);
       } else {
-        pendingOutput.current += data;
-        // Trim with hysteresis: cutting exactly to the cap on every chunk past
-        // it re-copies the whole buffer per chunk (a ~1 MB memcpy up to ~60×/s
-        // per chatty hidden tab, forever). Letting it grow to 2× and cutting
-        // back to the cap costs one copy per megabyte of new output instead.
-        if (pendingOutput.current.length > PENDING_OUTPUT_CAP * 2) {
-          pendingOutput.current = pendingOutput.current.slice(-PENDING_OUTPUT_CAP);
-        }
+        keepPending(data);
       }
     };
 
@@ -1573,6 +1619,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // initialInput before it can accept keystrokes (see below).
       if (firstOutputAt.current === null) firstOutputAt.current = Date.now();
       armScheduledReady();
+      if (range) seenEnd = range.endOffset;
       if (historyPending) historyOutput.push({ data, range });
       else writeTerm(data);
     });
@@ -1588,13 +1635,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (firstOutputAt.current === null) firstOutputAt.current = Date.now();
       armScheduledReady();
       if (historyPending) {
+        if (range) seenEnd = range.endOffset;
         historyOutput.push({ data, range });
         return;
       }
-      pendingOutput.current += data;
-      if (pendingOutput.current.length > PENDING_OUTPUT_CAP * 2) {
-        pendingOutput.current = pendingOutput.current.slice(-PENDING_OUTPUT_CAP);
-      }
+      // The backend's cap cut the hidden spell's front off: the replay starts
+      // past what this pane last took (`catchUpLost`).
+      if (range && seenEnd !== undefined && range.startOffset > seenEnd) catchUpLost = true;
+      if (range) seenEnd = range.endOffset;
+      keepPending(data);
       if (openedRef.current && visibleRef.current) flushPending();
     });
 
@@ -1675,9 +1724,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             initialInputPending.current = false;
             const enteredAt = Date.now();
             writePtyInput(id, new Uint8Array([0x0d])).catch(console.error);
-            // A Claude still starting can drop this Enter (`freshSubmit.ts`).
+            // A Claude or OpenCode still starting can drop this Enter (`freshSubmit.ts`).
             // A slash command (`/rename`) begins no turn for a hook to confirm.
-            if (kind === "agent" && isClaude(cmd) && !initialInput.trimStart().startsWith("/")) {
+            if (kind === "agent" && dropsFreshEnter(cmd) && !initialInput.trimStart().startsWith("/")) {
               void confirmFreshSubmit(
                 id,
                 enteredAt,
@@ -1811,6 +1860,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           pendingOutput.current = tail + live + pendingOutput.current;
           if (pendingOutput.current.length > PENDING_OUTPUT_CAP * 2) {
             pendingOutput.current = pendingOutput.current.slice(-PENDING_OUTPUT_CAP);
+            catchUpLost = true;
           }
           if (firstOutputAt.current === null) firstOutputAt.current = Date.now();
           // A re-adopted tab's whole TUI can arrive as this one restored
@@ -2311,7 +2361,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (openWatchTimer.current) clearTimeout(openWatchTimer.current);
       if (silentStartTimer.current) clearTimeout(silentStartTimer.current);
       // The size a resize burst was still holding back: an attach-only or
-      // persisted PTY keeps running, and must not keep a stale geometry.
+      // persisted PTY keeps running, and must not keep a stale geometry —
+      // nor the narrower width a repaint nudge is holding.
+      if (repaintTimer) restoreWidth();
       flushResize();
       // Everything registered on the terminal (link providers, the OSC 52
       // handler, the mouse-mode guard, the sign-in watch), none when the pane
@@ -2920,6 +2972,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     )}
     {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
+    )}
+    {paneKind === "local_agent" && !attachOnly && !undoClearOffered && !signIn && !signInDone && host && (
+      <TerminalLocalAutoModeCard host={host} ptyId={id} />
     )}
     {agentPane && !attachOnly && !signIn && !signInDone && <TerminalLimitHandoff ptyId={id} visible={visible} cwd={cwd} />}
     {agentPane && !attachOnly && !signIn && !signInDone && host && (

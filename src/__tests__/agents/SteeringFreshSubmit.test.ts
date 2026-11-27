@@ -56,6 +56,16 @@ describe("a chat prompt into a fresh Claude", () => {
     expect(enters()).toBe(1 + FRESH_SUBMIT_TRIES);
   });
 
+  it("presses Enter again into a fresh OpenCode too", async () => {
+    // `mini` dropped the first Enter for a second or two after drawing (2.4.2).
+    register("opencode");
+    const sent = sendSteeringPrompt({ ...tab, label: "OpenCode", cmd: "opencode" }, "fix the bug");
+    await vi.advanceTimersByTimeAsync(400);
+    await sent;
+    await vi.advanceTimersByTimeAsync(FRESH_SUBMIT_CHECK_MS * FRESH_SUBMIT_TRIES + 100);
+    expect(enters()).toBe(1 + FRESH_SUBMIT_TRIES);
+  });
+
   it("leaves a slash command and another CLI's prompt at one Enter", async () => {
     register("claude");
     const command = sendSteeringPrompt(tab, "/model");

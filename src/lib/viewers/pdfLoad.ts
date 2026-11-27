@@ -11,6 +11,47 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 /**
+ * The asset URLs of pdf.js's outlines for the fourteen standard fonts, keyed by file
+ * name — what its worker asks for when a PDF names Helvetica, Times or Courier
+ * without embedding it. Only the URLs are in the bundle's code; a font's bytes are
+ * fetched the first time a document needs it (pdf.js caches them per worker).
+ *
+ * Needed because of `disableFontFace` (see {@link loadPdf}): pdf.js then draws every
+ * glyph from outlines, and a font it has no outlines for is handed to the canvas's
+ * `fillText` in a fallback family instead. The desktop window drew nothing that way:
+ * a filled-in form whose field appearances use the usual non-embedded `/Helvetica`
+ * showed its check boxes and none of its text (2026-11-27), while the OS viewer and
+ * the flattened copy (fonts embedded) showed everything. With the outlines there,
+ * those glyphs take the same path as an embedded font's.
+ */
+const STANDARD_FONT_URLS: ReadonlyMap<string, string> = new Map(
+  Object.entries(
+    import.meta.glob<string>("../../../node_modules/pdfjs-dist/standard_fonts/*.{pfb,ttf}", {
+      query: "?url",
+      import: "default",
+      eager: true,
+    }),
+  ).map(([path, url]) => [path.slice(path.lastIndexOf("/") + 1), url]),
+);
+
+/**
+ * pdf.js's `BinaryDataFactory`, serving the standard fonts from the bundle (pdf.js
+ * constructs it with the URL options, which are not used). Being a factory of our
+ * own also keeps the worker from fetching anything itself (`useWorkerFetch` stays
+ * off). CMaps and the image-decoder wasm are refused, as they were before any
+ * factory was passed: no URL for them has ever been configured.
+ */
+export class BundledPdfData {
+  async fetch({ kind, filename }: { kind: string; filename: string }): Promise<Uint8Array> {
+    const url = kind === "standardFontDataUrl" ? STANDARD_FONT_URLS.get(filename) : undefined;
+    if (!url) throw new Error(`No bundled pdf.js data for ${kind} ${filename}`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Unable to load font data ${filename}: ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+}
+
+/**
  * Open PDF bytes with pdf.js — the one call every opener goes through, so that a
  * load which FAILS gives back the Worker it was given.
  *
@@ -49,8 +90,10 @@ export async function loadPdf(
   // instead of handing the embedded font programs to WebKit's `FontFace` — the
   // window that renders this holds the whole IPC bridge and, on Linux, its
   // WebKit process is not sandboxed (docs/browser_plan_b.md), so a PDF's font
-  // bytes never reach WebKit's font parser.
-  const task = pdfjs.getDocument(worker ? { data, worker, disableFontFace: true } : { data, disableFontFace: true });
+  // bytes never reach WebKit's font parser. The standard fonts' outlines come from
+  // the bundle (`BundledPdfData`) and are parsed by pdf.js the same way.
+  const opts = { data, disableFontFace: true, BinaryDataFactory: BundledPdfData };
+  const task = pdfjs.getDocument(worker ? { ...opts, worker } : opts);
   try {
     return await task.promise;
   } catch (e) {

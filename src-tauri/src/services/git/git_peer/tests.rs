@@ -2606,6 +2606,9 @@ fn the_ls_parsers_read_git_records() {
 fn tracked_repo_behind(dir: &Path) -> String {
     use crate::test_util::git;
     git(dir, &["init", "-q", "-b", "main"]);
+    // The code under test runs git with the system config, where Git for
+    // Windows turns `core.autocrlf` on: the repo's own config pins it off.
+    git(dir, &["config", "core.autocrlf", "false"]);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     for (f, c) in [("a.txt", "a\n"), ("b.txt", "b\n"), ("gone.txt", "g\n"), ("keep.txt", "k\n")] {
         std::fs::write(dir.join(f), c).unwrap();
@@ -2850,7 +2853,7 @@ fn the_force_reset_predicate_reads_the_target_from_the_source_peer() {
     // `--single-branch` of `main`: the clone never receives `feat`'s commit.
     crate::test_util::git(
         tmp.path(),
-        &["clone", "-q", "--no-local", "--branch", "main", "--single-branch", &src.to_string_lossy(), &dst.to_string_lossy()],
+        &["clone", "-q", "--config", "core.autocrlf=false", "--no-local", "--branch", "main", "--single-branch", &src.to_string_lossy(), &dst.to_string_lossy()],
     );
     assert!(
         Peer::Local(dst.clone()).answer(&["cat-file", "-t", &sha]).is_none(),
@@ -2883,7 +2886,7 @@ fn force_reset_pair(tmp: &Path) -> (std::path::PathBuf, std::path::PathBuf, Stri
     let sha = tracked_repo_behind(&src);
     crate::test_util::git(
         tmp,
-        &["clone", "-q", "--no-local", "--branch", "main", "--single-branch", &src.to_string_lossy(), &dst.to_string_lossy()],
+        &["clone", "-q", "--config", "core.autocrlf=false", "--no-local", "--branch", "main", "--single-branch", &src.to_string_lossy(), &dst.to_string_lossy()],
     );
     (src, dst, sha)
 }

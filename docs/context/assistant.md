@@ -137,7 +137,8 @@ Ollama 0.40.3 (A0). All four are offered and listed (cloud Claude was
 unlisted on 2026-10-26 and listed again on 2026-10-27, the user's call).
 OpenCode (local) was re-checked on 2.2.5 (2026-10-31): the lane's tools are
 offered and every built-in is off, but `skill` stays listed and refuses each
-call, with no config that hides it. 2.2.5 runs a call to a missing `bash` as
+call, with no config that hides it; 2.4.2 hides it like the others
+(2026-11-26). 2.2.5 runs a call to a missing `bash` as
 `shell`; the pin turns `shell` off, so that is refused as well, forced through
 a stub model (`docs/third_party_update_checklist.md`).
 
@@ -152,11 +153,15 @@ a stub model (`docs/third_party_update_checklist.md`).
   so at every spawn the catalog is built from the home's `models_cache.json`
   with every entry's `apply_patch_tool_type` forced to `null`, written through
   `home_io` and re-read and checked; anything missing or malformed refuses the
-  spawn (`Refusal::CodexCatalog`). A home Codex never ran in copies the newest
-  usable cache from a sibling Tabtivity agent home (shape-checked, regular
-  file, size capped; only from a folder named `agent-homes`); none anywhere
-  refuses with "start Codex once in any tab, then try again". The home's own
-  cache is never overwritten. The cache's prompt text is never used: every
+  spawn (`Refusal::CodexCatalog`). A home with no cache, or whose cache is older
+  than a sibling's, copies the newest usable cache from a sibling Tabtivity
+  agent home (shape-checked, regular file, size capped; only from a folder named
+  `agent-homes`; local-model homes skipped): the chat's Codex runs on the catalog
+  and never refreshes its own cache, so without this the model list froze at the
+  first chat's. It is the same pick as the other tabs' "Default model" list
+  (`agent_defaults::discovered_models`), and `codex_offered_models` (the head
+  dropdown) reads it too, so the two lists match; none anywhere
+  refuses with "start Codex once in any tab, then try again". The cache's prompt text is never used: every
   entry carries Tabtivity's own `base_instructions` (a catalog entry needs a
   base prompt or a template, probed with 0.162.1; the cache's `model_messages`
   and `base_instructions` are dropped), so a planted cache cannot rewrite what

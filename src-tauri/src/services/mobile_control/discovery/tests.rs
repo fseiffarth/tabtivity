@@ -495,7 +495,7 @@ fn the_assistant_scope_has_a_per_phone_list_absent_is_every_phone_empty_is_none(
         let env = RootEnv { dir: dir.path().join("root"), fenced: || true };
         let catalog = Catalog::load_with(dir.path(), &[7; 32], &env, &HashMap::new(), &HostLive::default(), true).expect("catalog");
         let listed = catalog.projects.iter().any(|p| p.raw_id == "assistant");
-        let seen = catalog.for_device(phone).projects.iter().any(|p| p.raw_id == "assistant");
+        let seen = catalog.for_device(phone, true).projects.iter().any(|p| p.raw_id == "assistant");
         let access = ScopeAccess::load_with(dir.path(), &env).expect("access").reaches("assistant", phone);
         (listed, seen, access)
     };
@@ -540,7 +540,7 @@ fn the_root_scope_is_off_for_every_phone_until_the_list_names_it() {
         let env = RootEnv { dir: dir.path().join("root"), fenced: || true };
         let catalog = Catalog::load_with(dir.path(), &[7; 32], &env, &HashMap::new(), &HostLive::default(), true).expect("catalog");
         let listed = catalog.projects.iter().any(|p| p.raw_id == "root");
-        let seen = catalog.for_device(phone).projects.iter().any(|p| p.raw_id == "root");
+        let seen = catalog.for_device(phone, true).projects.iter().any(|p| p.raw_id == "root");
         let access = ScopeAccess::load_with(dir.path(), &env).expect("access").reaches("root", phone);
         (listed, seen, access)
     };
@@ -1980,13 +1980,13 @@ fn a_scope_with_a_device_list_reaches_only_those_phones() {
         ["box:b-all", "box:b-bad", "box:b-two", "p-all", "p-bad", "p-empty", "p-one"],
         "the unfiltered snapshot lists every opted-in scope"
     );
-    assert_eq!(ids(&catalog.clone().for_device("d1")), ["box:b-all", "p-all", "p-one"]);
-    assert_eq!(ids(&catalog.clone().for_device("d2")), ["box:b-all", "box:b-two", "p-all"]);
-    assert_eq!(ids(&catalog.clone().for_device("d3")), ["box:b-all", "p-all"]);
+    assert_eq!(ids(&catalog.clone().for_device("d1", true)), ["box:b-all", "p-all", "p-one"]);
+    assert_eq!(ids(&catalog.clone().for_device("d2", true)), ["box:b-all", "box:b-two", "p-all"]);
+    assert_eq!(ids(&catalog.clone().for_device("d3", true)), ["box:b-all", "p-all"]);
     // A filtered-out scope answers like an unknown one.
     let one = catalog.projects.iter().find(|p| p.raw_id == "p-one").expect("p-one").public.id.clone();
-    assert!(catalog.clone().for_device("d1").project(&one).is_some());
-    assert!(catalog.for_device("d2").project(&one).is_none());
+    assert!(catalog.clone().for_device("d1", true).project(&one).is_some());
+    assert!(catalog.for_device("d2", true).project(&one).is_none());
 }
 
 #[test]
@@ -2288,4 +2288,30 @@ fn a_scopes_saved_tabs_name_the_sessions_to_end_with_it() {
     fs::write(sessions.join("terminals.json"), serde_json::json!({ "tabLayout": tabs }).to_string()).expect("session");
     assert_eq!(saved_scope_sessions(state, "box:b1"), vec![own]);
     assert!(saved_scope_sessions(state, "box:none").is_empty());
+}
+
+/// A phone without shells of its own gets the snapshot without its shell
+/// tabs, and the row's counts without them too; with shells it keeps them.
+#[test]
+fn for_device_without_shells_drops_the_shell_tabs_and_their_counts() {
+    let mut scope = super::fixture_scope("agent-tab", "tmux-agent", None);
+    let mut shell = scope.tabs[0].clone();
+    shell.public.id = "shell-tab".into();
+    shell.public.kind = "shell".into();
+    shell.public.last_activity = Some(99);
+    shell.tmux_name = "tmux-shell".into();
+    scope.tabs[0].public.last_activity = Some(5);
+    scope.tabs.push(shell);
+    scope.public.live_sessions = 2;
+    scope.public.last_activity = Some(99);
+    let catalog = Catalog { projects: vec![scope] };
+
+    let with = catalog.clone().for_device("d1", true);
+    assert!(with.grants("shell-tab", "tmux-shell"));
+    assert_eq!((with.projects[0].public.live_sessions, with.projects[0].public.last_activity), (2, Some(99)));
+
+    let without = catalog.for_device("d1", false);
+    assert!(!without.grants("shell-tab", "tmux-shell") && without.tab("shell-tab").is_none());
+    assert!(without.grants("agent-tab", "tmux-agent"));
+    assert_eq!((without.projects[0].public.live_sessions, without.projects[0].public.last_activity), (1, Some(5)));
 }

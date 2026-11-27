@@ -5,7 +5,7 @@ import type { TranslationKey } from "../../lib/i18n";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import type { AddMenuEntry, AddMenuGroup } from "./AddTabMenuList";
 import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
-import { offeredLocalAgents } from "../../lib/projects/localModelsOnly";
+import { CUT_ONLY_DRIVERS, offeredLocalAgents } from "../../lib/projects/localModelsOnly";
 
 /**
  * Where the "tabs" local model sits right now, as far as the "+" menu cares:
@@ -21,10 +21,13 @@ import { offeredLocalAgents } from "../../lib/projects/localModelsOnly";
  */
 export type LocalModelPlacement = "probing" | "ready" | "cpu" | "unloaded";
 
-interface ResidentModel {
+/** One installed model as the "+" menu reads it (`list_ollama_models_detailed`). */
+export interface InstalledLocalModel {
   name: string;
   running: boolean;
   size_vram: number;
+  /** Ollama's capability list; empty means unknown, never "none". */
+  capabilities?: string[];
 }
 
 /** `/api/tags` names carry an explicit tag; a setting may omit `:latest`. */
@@ -32,14 +35,17 @@ function sameModel(listed: string, wanted: string): boolean {
   return listed === wanted || (!wanted.includes(":") && listed === `${wanted}:latest`);
 }
 
-export async function probeLocalModelPlacement(model: string): Promise<LocalModelPlacement> {
-  let models: ResidentModel[];
+/** The installed models, or `null` when Ollama isn't answering. */
+async function readInstalledModels(): Promise<InstalledLocalModel[] | null> {
   try {
-    models = await invoke<ResidentModel[]>("list_ollama_models_detailed");
+    return await invoke<InstalledLocalModel[]>("list_ollama_models_detailed");
   } catch {
-    return "unloaded";
+    return null;
   }
-  const hit = models.find((m) => sameModel(m.name, model));
+}
+
+async function placementIn(models: InstalledLocalModel[] | null, model: string): Promise<LocalModelPlacement> {
+  const hit = models?.find((m) => sameModel(m.name, model));
   if (!hit?.running) return "unloaded";
   if (hit.size_vram > 0) return "ready";
   // Resident with no GPU bytes. Only now is the (process-spawning) GPU probe
@@ -51,6 +57,10 @@ export async function probeLocalModelPlacement(model: string): Promise<LocalMode
   }
 }
 
+export async function probeLocalModelPlacement(model: string): Promise<LocalModelPlacement> {
+  return placementIn(await readInstalledModels(), model);
+}
+
 export interface LocalModelPlacementState {
   placement: LocalModelPlacement;
   loading: boolean;
@@ -58,6 +68,9 @@ export interface LocalModelPlacementState {
   failed: boolean;
   /** Start Ollama if needed and load `model` onto the GPU, kept resident. */
   load: () => void;
+  /** The installed models, read by the same probe (empty until it answers or
+   *  while Ollama isn't): what the group's model fly-out lists. */
+  installed: InstalledLocalModel[];
 }
 
 /**
@@ -77,18 +90,29 @@ export function useLocalModelPlacement(
   // started anywhere else.
   const [ownLoading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [installed, setInstalled] = useState<InstalledLocalModel[]>([]);
   const loads = useOllamaActivityStore((s) => s.loads);
   const loadKey = model ? Object.keys(loads).find((k) => sameModel(k, model)) : undefined;
   const storeLoading = loadKey !== undefined && loads[loadKey] === "loading";
   const loading = ownLoading || storeLoading;
 
+  // The model changes under an open menu now (its fly-out picks one): only the
+  // newest probe may answer, or a slow read for the old model would land last.
+  const probeSeq = useRef(0);
   const reprobe = useCallback(() => {
-    if (!model) return;
-    void probeLocalModelPlacement(model).then(setPlacement);
+    const seq = ++probeSeq.current;
+    void readInstalledModels().then(async (models) => {
+      if (seq !== probeSeq.current) return;
+      // An empty answer keeps the empty list it replaces: no re-render for nothing.
+      setInstalled((prev) => (!models?.length && prev.length === 0 ? prev : models ?? []));
+      if (!model) return;
+      const next = await placementIn(models, model);
+      if (seq === probeSeq.current) setPlacement(next);
+    });
   }, [model]);
 
   useEffect(() => {
-    if (!active || !model) return;
+    if (!active) return;
     setPlacement("probing");
     reprobe();
     // The store's listeners are ref-counted; a popout has no header menu to
@@ -117,7 +141,7 @@ export function useLocalModelPlacement(
       });
   }, [model, reprobe]);
 
-  return { placement, loading, failed, load };
+  return { placement, loading, failed, load, installed };
 }
 
 /**
@@ -136,12 +160,61 @@ const DRIVER_UNTESTED: Record<string, Pick<AddMenuEntry, "untested">> = {
   cline: { untested: "localDriver.cline" },
 };
 
+/** Ollama says this model only embeds: it cannot run an agent at all. */
+const embedsOnly = (m: InstalledLocalModel) =>
+  !!m.capabilities?.includes("embedding") && !m.capabilities.includes("completion");
+
+/**
+ * The group's "Model: <name>" row: a fly-out of the installed models, and a
+ * pick makes that model the Tabs model (`ollama_roles.tabs`, the setting the
+ * group already follows), so the rows beneath re-read for it — drivers, GPU
+ * gate and all. `undefined` when there is nothing else to pick.
+ */
+function modelPickRow(
+  current: string | undefined,
+  installed: InstalledLocalModel[],
+  offHere: string[],
+  onChoose: (model: string) => void,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
+): AddMenuEntry | undefined {
+  const isCurrent = (m: InstalledLocalModel) => !!current && sameModel(m.name, current);
+  const choices = installed.filter(
+    (m) => !embedsOnly(m) && !offHere.some((off) => sameModel(m.name, off)),
+  );
+  if (!choices.some((m) => !isCurrent(m))) return undefined;
+  return {
+    key: "__local_model_pick__",
+    label: current ? t("newTabMenu.localModelPick", { model: current }) : t("newTabMenu.localModelPickNone"),
+    untested: "newTabMenu.localModelPick",
+    dot: "◇",
+    color: TAB_ACCENT["local_agent"],
+    moreTitle: t("newTabMenu.localModelPickTitle"),
+    moreEntries: choices.map((m): AddMenuEntry => ({
+      key: m.name,
+      label: m.name,
+      ...(isCurrent(m) ? { dot: "✓" } : {}),
+      color: TAB_ACCENT["local_agent"],
+      // Known to lack tools: no local agent here can run on it.
+      caution:
+        m.capabilities?.length && !m.capabilities.includes("tools")
+          ? t("newTabMenu.localModelPickNoTools", { model: m.name })
+          : undefined,
+      keepsMenu: true,
+      onPick: () => {
+        if (!isCurrent(m)) onChoose(m.name);
+      },
+    })),
+    onPick: () => {},
+  };
+}
+
 export function localModelMenuGroup(opts: {
   localModel: string | undefined;
   localModelOffInRoot: string | undefined;
   localDrivers: LocalDriverInfo[];
   /** The scope is a Local models only project: the drivers the backend gate
-   *  refuses there (OpenCode, `driversForLockedProject`) are not offered. */
+   *  refuses there (`driversForLockedProject`) are not offered, and a cut-only one
+   *  (OpenCode) says it runs without network. */
   lockedProject?: boolean;
   /** The locked project has Cut network on: only the drivers verified with the
    *  network cut are offered, and Mistral is not. */
@@ -150,6 +223,12 @@ export function localModelMenuGroup(opts: {
   gpu: LocalModelPlacementState;
   onVibe: (model: string) => void;
   onLaunch: (agentId: string, label: string, model: string) => void;
+  /** Offer the "Model: …" row; a pick makes that model the Tabs model. Absent:
+   *  no row (the group follows the setting as before). */
+  onChooseModel?: (model: string) => void;
+  /** Models the scope may not use (the root console's switched-off ones): left
+   *  out of the model fly-out. */
+  modelsOffHere?: string[];
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
 }): AddMenuGroup {
   const { localModel, localModelOffInRoot, vibeForLocalModel, gpu, t } = opts;
@@ -159,14 +238,20 @@ export function localModelMenuGroup(opts: {
   // `heavy_harness` cautions, it never withholds — see
   // lib/agents/localDrivers.ts. The row stays pickable because which local
   // models cope is not something the backend can probe.
+  // In a locked project that keeps its network a cut-only driver still runs, in a
+  // sandbox of its own with no network (`agent_privacy::CUT_ONLY_DRIVERS`).
+  const cutAlone = (d: LocalDriverInfo) => Boolean(opts.lockedProject) && !opts.cutNetwork && CUT_ONLY_DRIVERS.includes(d.id);
   const driverRow = (d: LocalDriverInfo, model: string): AddMenuEntry => ({
     key: d.id,
     label: d.label,
     ...DRIVER_UNTESTED[d.id],
+    ...(cutAlone(d) ? { untested: "localModelsOnly.cutOnlyDriver" } : {}),
     color: TAB_ACCENT["local_agent"],
     caution: d.heavy_harness
       ? t("newTabMenu.localDriverHeavyHarness", { agent: d.label })
-      : undefined,
+      : cutAlone(d)
+        ? t("newTabMenu.localDriverCutAlone", { agent: d.label })
+        : undefined,
     onPick: () => opts.onLaunch(d.id, d.label, model),
   });
   const drivers = (heavy: boolean, model: string) =>
@@ -187,6 +272,10 @@ export function localModelMenuGroup(opts: {
         ...drivers(true, localModel),
       ]
     : [];
+
+  const pick = opts.onChooseModel
+    ? modelPickRow(localModel ?? localModelOffInRoot, gpu.installed, opts.modelsOffHere ?? [], opts.onChooseModel, t)
+    : undefined;
 
   let entries = agents;
   if (agents.length > 0 && gpu.placement !== "ready") {
@@ -213,7 +302,9 @@ export function localModelMenuGroup(opts: {
     label: localModel
       ? t("newTabMenu.groupLocalModelWithName", { model: localModel })
       : t("newTabMenu.groupLocalModel"),
-    entries,
+    entries: pick ? [pick, ...entries] : entries,
+    // The hint explains an empty list; beside the model row it still does.
+    ...(pick && entries.length === 0 ? { hintBeside: true } : {}),
     // An empty list has several causes and they need different sentences: no
     // agent is installed, or the model can't drive the ones that are. Without
     // the second, withholding the entries would read as a bug — the agent is

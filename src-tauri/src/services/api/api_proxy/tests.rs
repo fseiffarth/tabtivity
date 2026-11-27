@@ -226,8 +226,11 @@ async fn refusals_speak_the_providers_error_shapes() {
 
 #[test]
 fn production_dials_only_the_providers_https_host() {
-    assert_eq!(Upstream::Provider.base(Provider::Anthropic), "https://api.anthropic.com");
-    assert_eq!(Upstream::Provider.base(Provider::Gemini), "https://generativelanguage.googleapis.com");
+    assert_eq!(Upstream::Provider.base(Provider::Anthropic).as_deref(), Some("https://api.anthropic.com"));
+    assert_eq!(Upstream::Provider.base(Provider::Gemini).as_deref(), Some("https://generativelanguage.googleapis.com"));
+    assert_eq!(Upstream::Provider.base(Provider::OpenAi).as_deref(), Some("https://api.openai.com"));
+    // A custom slot has no fixed host: only the user's saved base URL.
+    assert_eq!(upstream_host(Provider::Custom(1)), None);
     assert_eq!(base_url_on(4321, Provider::Gemini), "http://127.0.0.1:4321/gemini");
     assert!(is_proxy_base(&base_url_on(4321, Provider::Gemini), Provider::Gemini));
     assert!(!is_proxy_base(&base_url_on(4321, Provider::Gemini), Provider::Anthropic));
@@ -1475,4 +1478,426 @@ async fn requests_in_flight_hold_the_limit_until_they_end_however_they_end() {
     assert_eq!(book.reserved(Provider::Anthropic), 0);
     assert_eq!(book.billed(Provider::Anthropic, chrono::Utc::now()), 0);
     on_tab_gone("e2e:inflight-dead");
+}
+
+// ---- custom endpoints (OpenAI-compatible Chat Completions) -------------
+
+const CHAT_SSE: &str = concat!(
+    "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"stub-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"STUB-REPLY-OK\"}}],\"usage\":null}\n\n",
+    "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"stub-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\n",
+    "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"stub-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":300,\"total_tokens\":1300,\"prompt_tokens_details\":{\"cached_tokens\":800}}}\n\n",
+    "data: [DONE]\n\n",
+);
+
+const CHAT_JSON: &str = r#"{"id":"c1","object":"chat.completion","model":"stub-model","choices":[{"index":0,"message":{"role":"assistant","content":"STUB-REPLY-OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":300,"total_tokens":1300,"prompt_tokens_details":{"cached_tokens":800}}}"#;
+
+/// A stub Chat Completions server: records every request, answers `body`.
+async fn chat_stub(seen: Arc<Seen>, body: &'static str, content_type: &'static str) -> String {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().fallback(move |req: Request| {
+        let seen = seen.clone();
+        async move {
+            let (parts, body_in) = req.into_parts();
+            let sent = axum::body::to_bytes(body_in, MAX_BODY).await.unwrap();
+            seen.hits.fetch_add(1, Ordering::SeqCst);
+            seen.requests.lock_ok().push((parts.method.to_string(), parts.uri.to_string(), parts.headers, sent.to_vec()));
+            let mut response = Response::new(Body::from(body));
+            response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+            response
+        }
+    });
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+#[test]
+fn a_custom_slot_has_its_own_route_and_only_its_two_paths() {
+    assert_eq!(split_route("/custom-3/chat/completions"), Some((Provider::Custom(3), "/chat/completions")));
+    assert_eq!(split_route("/custom-8"), Some((Provider::Custom(8), "")));
+    assert_eq!(split_route("/custom-9/models"), None);
+    assert_eq!(split_route("/custom-03/models"), None);
+    assert_eq!(base_url_on(4321, Provider::Custom(2)), "http://127.0.0.1:4321/custom-2");
+    assert!(is_proxy_base(&base_url_on(4321, Provider::Custom(2)), Provider::Custom(2)));
+    assert!(!is_proxy_base(&base_url_on(4321, Provider::Custom(2)), Provider::Custom(3)));
+    assert!(!is_proxy_base(&base_url_on(4321, Provider::Custom(2)), Provider::OpenAi));
+    let (get, post) = (Method::GET, Method::POST);
+    let custom = Provider::Custom(1);
+    assert!(path_allowed(custom, &post, "/chat/completions"));
+    assert!(path_allowed(custom, &get, "/models"));
+    for (m, p) in [
+        (&get, "/chat/completions"),
+        (&post, "/models"),
+        (&Method::PUT, "/chat/completions"),
+        (&Method::DELETE, "/models"),
+        (&Method::HEAD, "/models"),
+        (&post, "/v1/chat/completions"),
+        (&get, "/v1/models"),
+        (&get, "/models/gpt-4o"),
+        (&post, "/embeddings"),
+        (&post, "/completions"),
+        (&post, "/responses"),
+        (&post, "/files"),
+        (&post, "/batches"),
+        (&get, "/files/file-1/content"),
+        (&post, "/audio/transcriptions"),
+        (&post, "/chat/completions/"),
+        (&post, "/chat//completions"),
+        (&post, "/chat/../chat/completions"),
+        (&post, "/chat/%63ompletions"),
+        (&post, "/chat/completions/x"),
+        (&post, "chat/completions"),
+        (&post, ""),
+        (&get, "/"),
+    ] {
+        assert!(!path_allowed(custom, m, p), "{m} {p}");
+    }
+    // The built-ins' paths are not a custom slot's, nor the other way round.
+    assert!(!path_allowed(custom, &post, "/v1/responses"));
+    assert!(!path_allowed(Provider::OpenAi, &post, "/chat/completions"));
+    // No query parameter travels on, whatever it is called.
+    for q in ["key=abc", "api-version=1", "alt=sse", "beta=true", "limit=5", "x=1&y=2"] {
+        assert_eq!(forwarded_query(custom, Some(q)), "", "{q}");
+    }
+    // Bearer, in the key's own header.
+    assert_eq!(auth_header(custom), "authorization");
+    assert!(custom.bearer());
+}
+
+#[tokio::test]
+async fn a_custom_endpoint_gets_the_bearer_key_streams_back_and_is_charged_to_its_slot() {
+    let seen = Arc::new(Seen::default());
+    let upstream = chat_stub(seen.clone(), CHAT_SSE, "text/event-stream").await;
+    let budget = test_budget(ROOMY);
+    let book = budget.book.clone();
+    let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+    let provider = Provider::Custom(3);
+    let token = issue_grant(grant(provider, "e2e:custom", None)).unwrap();
+    let url = format!("{}/chat/completions", base_url_on(port, provider));
+    assert!(url.ends_with("/custom-3/chat/completions"));
+    let request = r#"{"model":"stub-model","stream":true,"stream_options":{"include_usage":true},"max_tokens":500,"messages":[{"role":"user","content":"hi"}]}"#;
+    let response = plain_client()
+        .post(format!("{url}?api-version=1&key={token}"))
+        .bearer_auth(&token)
+        .header("x-api-key", &token)
+        .header("accept-encoding", "gzip")
+        .header("content-type", "application/json")
+        .body(request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), CHAT_SSE);
+    {
+        let requests = seen.requests.lock_ok();
+        let (method, uri, headers, body) = &requests[0];
+        assert_eq!((method.as_str(), uri.as_str()), ("POST", "/chat/completions"), "no query parameter is forwarded");
+        assert_eq!(headers["authorization"], format!("Bearer {FAKE_KEY}"));
+        assert!(headers.get("x-api-key").is_none());
+        assert_eq!(headers["accept-encoding"], "identity");
+        assert_eq!(body, request.as_bytes());
+        for (_, value) in headers.iter() {
+            assert!(!value.to_str().unwrap_or("").contains(&token), "the token never travels on");
+        }
+    }
+    // 200 input + 300 output + 800 cached at a tenth, on this slot's row and
+    // no other: no price, and not "priced at the highest rate".
+    let models = charged(&book, provider).await;
+    assert_eq!(models["stub-model"].billed, 200 + 300 + 80);
+    assert_eq!((models["stub-model"].input, models["stub-model"].output, models["stub-model"].cache_read), (200, 300, 800));
+    assert_eq!(models["stub-model"].requests, 1);
+    let ledger = book.snapshot(chrono::Utc::now());
+    assert_eq!(ledger.billed(provider), 580);
+    assert_eq!(ledger.spent_usd(provider), 0.0);
+    assert!(ledger.unknown_models(provider).is_empty() && !models["stub-model"].unknown);
+    assert_eq!(ledger.providers.keys().collect::<Vec<_>>(), ["custom-3"]);
+    assert_eq!(book.reserved(provider), 0, "released once charged");
+    on_tab_gone("e2e:custom");
+    // The token died with its tab.
+    let r = plain_client().post(&url).bearer_auth(&token).body("{}").send().await.unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
+async fn a_whole_custom_answer_is_metered_and_the_model_listing_is_passed_unmetered() {
+    let seen = Arc::new(Seen::default());
+    let upstream = chat_stub(seen.clone(), CHAT_JSON, "application/json").await;
+    let budget = test_budget(ROOMY);
+    let book = budget.book.clone();
+    let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+    let provider = Provider::Custom(1);
+    let token = issue_grant(grant(provider, "e2e:custom-json", None)).unwrap();
+    let base = base_url_on(port, provider);
+    let c = plain_client();
+    let r = c.post(format!("{base}/chat/completions")).bearer_auth(&token).body(r#"{"model":"stub-model","stream":false}"#).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.text().await.unwrap(), CHAT_JSON);
+    assert_eq!(charged(&book, provider).await["stub-model"].billed, 580);
+    // The listing costs nothing and is not metered; its query is dropped.
+    let r = c.get(format!("{base}/models?limit=5")).bearer_auth(&token).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let _ = r.bytes().await.unwrap();
+    {
+        let requests = seen.requests.lock_ok();
+        assert_eq!((requests[1].0.as_str(), requests[1].1.as_str()), ("GET", "/models"));
+        assert_eq!(requests[1].2["authorization"], format!("Bearer {FAKE_KEY}"));
+    }
+    assert_eq!(book.snapshot(chrono::Utc::now()).providers["custom-1"].models["stub-model"].requests, 1);
+    // Other paths and methods stop at the proxy.
+    for (method, path) in [("POST", "/embeddings"), ("GET", "/chat/completions"), ("POST", "/models"), ("GET", "/v1/models"), ("DELETE", "/models")] {
+        let r = c.request(method.parse().unwrap(), format!("{base}{path}")).bearer_auth(&token).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 404, "{method} {path}");
+        let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["type"], "invalid_request_error", "OpenAI's error shape");
+    }
+    assert_eq!(seen.hits.load(Ordering::SeqCst), 2, "nothing else reached the endpoint");
+    // A token of another provider, or of another slot, is no token here.
+    let other_slot = issue_grant(grant(Provider::Custom(2), "e2e:custom-json", None)).unwrap();
+    let anthropic = issue_grant(grant(Provider::Anthropic, "e2e:custom-json", None)).unwrap();
+    for wrong in [other_slot, anthropic] {
+        let r = c.post(format!("{base}/chat/completions")).bearer_auth(&wrong).body("{}").send().await.unwrap();
+        assert_eq!(r.status(), 401);
+    }
+    assert_eq!(seen.hits.load(Ordering::SeqCst), 2);
+    on_tab_gone("e2e:custom-json");
+}
+
+#[tokio::test]
+async fn a_custom_request_the_meter_cannot_read_is_refused_before_it_is_sent() {
+    let seen = Arc::new(Seen::default());
+    let upstream = chat_stub(seen.clone(), CHAT_JSON, "application/json").await;
+    let budget = test_budget(ROOMY);
+    let book = budget.book.clone();
+    let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+    let provider = Provider::Custom(4);
+    let token = issue_grant(grant(provider, "e2e:custom-refused", None)).unwrap();
+    let url = format!("{}/chat/completions", base_url_on(port, provider));
+    let c = plain_client();
+    for body in [
+        "not json",
+        "[]",
+        "",
+        r#"{"model":"m","stream":true}"#,
+        r#"{"model":"m","stream":true,"stream_options":{"include_usage":false}}"#,
+        r#"{"model":"m","stream":true,"stream_options":{}}"#,
+        r#"{"model":"m","stream":false,"stream":true}"#,
+        r#"{"stream":"true"}"#,
+    ] {
+        let r = c.post(&url).bearer_auth(&token).body(body).send().await.unwrap();
+        assert_eq!(r.status(), 400, "{body}");
+        assert_eq!(r.headers()["x-should-retry"], "false");
+        let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+        assert_eq!(json["error"]["type"], "invalid_request_error", "{body}");
+        let message = json["error"]["message"].as_str().unwrap();
+        assert!(message.contains("include_usage"), "{body}: {message}");
+    }
+    assert_eq!(seen.hits.load(Ordering::SeqCst), 0, "nothing reached the endpoint");
+    assert_eq!(book.reserved(provider), 0, "a refusal holds nothing");
+    // A body it can read goes through.
+    let r = c.post(&url).bearer_auth(&token).body(r#"{"model":"stub-model","stream":false}"#).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let _ = r.bytes().await.unwrap();
+    let r = c
+        .post(&url)
+        .bearer_auth(&token)
+        .body(r#"{"model":"stub-model","stream":true,"stream_options":{"include_usage":true}}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let _ = r.bytes().await.unwrap();
+    assert_eq!(seen.hits.load(Ordering::SeqCst), 2);
+    on_tab_gone("e2e:custom-refused");
+}
+
+#[tokio::test]
+async fn a_custom_slot_is_held_to_its_own_monthly_limit() {
+    let seen = Arc::new(Seen::default());
+    let upstream = chat_stub(seen.clone(), CHAT_JSON, "application/json").await;
+    let provider = Provider::Custom(2);
+    let body = r#"{"model":"stub-model","max_tokens":100}"#;
+    let post = |port: u16, token: &str| {
+        plain_client().post(format!("{}/chat/completions", base_url_on(port, provider))).bearer_auth(token).body(body).send()
+    };
+    // Spent to the limit: refused in OpenAI's quota shape, in the slot's own words.
+    let budget = test_budget(Some(10_000));
+    let book = budget.book.clone();
+    let (port, _) = proxy_with(upstream.clone(), Some(FAKE_KEY), |s| s.budget = budget).await;
+    let token = issue_grant(grant(provider, "e2e:custom-budget", None)).unwrap();
+    book.record(provider, &spent_charge(10_000), chrono::Utc::now());
+    let r = post(port, &token).await.unwrap();
+    assert_eq!(r.status(), 429);
+    let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+    assert_eq!(json["error"]["code"], "insufficient_quota");
+    assert!(json["error"]["message"].as_str().unwrap().contains("custom endpoint"));
+    // Another slot's use is not this one's.
+    let other = test_budget(Some(10_000));
+    other.book.record(Provider::Custom(1), &spent_charge(10_000), chrono::Utc::now());
+    let (port, _) = proxy_with(upstream.clone(), Some(FAKE_KEY), |s| s.budget = other).await;
+    let r = post(port, &token).await.unwrap();
+    assert_eq!(r.status(), 200);
+    let _ = r.bytes().await.unwrap();
+    // No limit at all: refused until one is set.
+    let (port, _) = proxy_with(upstream.clone(), Some(FAKE_KEY), |s| s.budget = test_budget(None)).await;
+    let r = post(port, &token).await.unwrap();
+    assert_eq!(r.status(), 429);
+    let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+    assert!(json["error"]["message"].as_str().unwrap().contains("no monthly API budget"));
+    // A worst case (the body's own cap plus its input) past what is left: refused.
+    let (port, _) = proxy_with(upstream.clone(), Some(FAKE_KEY), |s| s.budget = test_budget(Some(100))).await;
+    let r = post(port, &token).await.unwrap();
+    assert_eq!(r.status(), 429);
+    let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+    assert!(json["error"]["message"].as_str().unwrap().contains("could cost more"));
+    assert_eq!(seen.hits.load(Ordering::SeqCst), 1, "only the one request that fit reached the endpoint");
+    // No key saved: refused with the reason.
+    let (port, _) = proxy_with(upstream, None, |_| {}).await;
+    let r = post(port, &token).await.unwrap();
+    assert_eq!(r.status(), 401);
+    on_tab_gone("e2e:custom-budget");
+}
+
+#[tokio::test]
+async fn a_custom_endpoint_that_refuses_the_key_is_said_in_the_proxys_words_and_costs_nothing() {
+    let seen = Arc::new(Seen::default());
+    let upstream = answering(StatusCode::UNAUTHORIZED, r#"{"error":{"message":"invalid x-api-key"}}"#, seen.clone()).await;
+    let budget = test_budget(ROOMY);
+    let book = budget.book.clone();
+    let (port, _) = proxy_with(upstream, Some(FAKE_KEY), |s| s.budget = budget).await;
+    let provider = Provider::Custom(5);
+    let token = issue_grant(grant(provider, "e2e:custom-rejected", None)).unwrap();
+    let r = plain_client()
+        .post(format!("{}/chat/completions", base_url_on(port, provider)))
+        .bearer_auth(&token)
+        .body(r#"{"model":"m"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+    let json: serde_json::Value = serde_json::from_slice(&r.bytes().await.unwrap()).unwrap();
+    assert!(json["error"]["message"].as_str().unwrap().contains("custom endpoint rejected the API key"));
+    assert_eq!(book.snapshot(chrono::Utc::now()).billed(provider), 0);
+    assert_eq!(book.reserved(provider), 0);
+    on_tab_gone("e2e:custom-rejected");
+}
+
+#[test]
+fn production_asks_the_settings_for_a_custom_slots_base_and_refuses_the_rest() {
+    // Not configured, not valid: no token is issued for such a slot, and a
+    // spawn gets nothing for it. (Slots 7 and 8 are never in a test's settings.)
+    assert_eq!(upstream_host(Provider::Custom(7)), None);
+    assert!(issue(Provider::Custom(7), None, "p1", "e2e:none", None).is_none());
+    assert!(issue(Provider::Custom(8), Some("claude"), "p1", "e2e:none", None).is_none());
+    // The refusal a request for a removed slot gets names the way out.
+    let message = Refusal::NoEndpoint.message(Some(Provider::Custom(7)));
+    assert!(message.contains("custom endpoint") && message.contains("Manage CLIs"));
+    assert_eq!(Refusal::NoEndpoint.status(), StatusCode::NOT_FOUND);
+    assert_eq!(Refusal::NoUsage.status(), StatusCode::BAD_REQUEST);
+    assert!(!Refusal::NoUsage.retryable() && !Refusal::NoEndpoint.retryable());
+}
+
+/// A server answering every request with a redirect to `to`.
+async fn redirecting(to: String) -> String {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().fallback(move || {
+        let to = to.clone();
+        async move {
+            let mut r = Response::new(Body::empty());
+            *r.status_mut() = StatusCode::TEMPORARY_REDIRECT;
+            r.headers_mut().insert(header::LOCATION, HeaderValue::from_str(&to).unwrap());
+            r
+        }
+    });
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn a_custom_endpoint_is_checked_with_its_model_listing_before_a_key_is_saved() {
+    let seen = Arc::new(Seen::default());
+    let listing = r#"{"object":"list","data":[{"id":"m-1"},{"id":"bad id"},{"id":"org/m-2"},{"id":"m-1"},{"object":"x"},{"id":"qwen2.5:7b"}]}"#;
+    let ok = answering(StatusCode::OK, listing, seen.clone()).await;
+    let models = custom_check(&format!("{ok}/v1/"), FAKE_KEY).await.unwrap();
+    assert_eq!(models, ["m-1", "org/m-2", "qwen2.5:7b"]);
+    {
+        let requests = seen.requests.lock_ok();
+        let (method, uri, headers, _) = &requests[0];
+        assert_eq!((method.as_str(), uri.as_str()), ("GET", "/v1/models"));
+        assert_eq!(headers["authorization"], format!("Bearer {FAKE_KEY}"));
+        assert_eq!(headers["accept-encoding"], "identity");
+    }
+    // An empty listing is allowed; the UI warns.
+    let empty = answering(StatusCode::OK, r#"{"object":"list","data":[]}"#, seen.clone()).await;
+    assert_eq!(custom_check(&empty, FAKE_KEY).await.unwrap(), Vec::<String>::new());
+    // At most 200 ids.
+    let many: Vec<String> = (0..300).map(|i| format!(r#"{{"id":"model-{i}"}}"#)).collect();
+    let body: &'static str = Box::leak(format!(r#"{{"data":[{}]}}"#, many.join(",")).into_boxed_str());
+    let big = answering(StatusCode::OK, body, seen.clone()).await;
+    assert_eq!(custom_check(&big, FAKE_KEY).await.unwrap().len(), 200);
+    // The key refused: the save is refused, in plain words.
+    for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+        let refusing = answering(status, r#"{"error":"no"}"#, seen.clone()).await;
+        let err = custom_check(&refusing, FAKE_KEY).await.unwrap_err();
+        assert!(err.contains("rejected this API key"), "{err}");
+    }
+    // An endpoint with no listing cannot check the key: accepted, empty.
+    for status in [StatusCode::NOT_FOUND, StatusCode::METHOD_NOT_ALLOWED, StatusCode::NOT_IMPLEMENTED] {
+        let none = answering(status, "", seen.clone()).await;
+        assert!(custom_check(&none, FAKE_KEY).await.unwrap().is_empty(), "{status}");
+    }
+    // Any other error, or something that is no listing, is not a verdict to save on.
+    let broken = answering(StatusCode::INTERNAL_SERVER_ERROR, "oops", seen.clone()).await;
+    assert!(custom_check(&broken, FAKE_KEY).await.unwrap_err().contains("HTTP 500"));
+    let html = answering(StatusCode::OK, "<html>welcome</html>", seen.clone()).await;
+    assert!(custom_check(&html, FAKE_KEY).await.unwrap_err().contains("not with a model listing"));
+    let wrong_shape = answering(StatusCode::OK, r#"{"models":[{"name":"x"}]}"#, seen.clone()).await;
+    assert!(custom_check(&wrong_shape, FAKE_KEY).await.is_err());
+    // Not reachable.
+    let gone = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap().local_addr().unwrap();
+    assert!(custom_check(&format!("http://{gone}"), FAKE_KEY).await.unwrap_err().contains("could not be reached"));
+    // A redirect is not followed with the key.
+    let target = Arc::new(Seen::default());
+    let landing = answering(StatusCode::OK, listing, target.clone()).await;
+    let redirect = redirecting(format!("{landing}/models")).await;
+    assert!(custom_check(&redirect, FAKE_KEY).await.is_err());
+    assert_eq!(target.requests.lock_ok().len(), 0, "the key never followed a redirect");
+    // The address and the key are validated before anything is asked.
+    let before = seen.requests.lock_ok().len();
+    for base in ["http://llm.example.org/v1", "https://u:p@llm.example.org", "https://llm.example.org/v1?x=1", "llm.example.org", ""] {
+        assert!(custom_check(base, FAKE_KEY).await.is_err(), "{base}");
+    }
+    for key in ["", "has space", "new\nline"] {
+        assert!(custom_check(&ok, key).await.is_err(), "{key:?}");
+    }
+    assert_eq!(seen.requests.lock_ok().len(), before);
+}
+
+#[test]
+fn revoking_a_provider_takes_only_its_grants() {
+    let slot2 = issue_provider_for_test(Provider::Custom(6), "p1", "tab-rev-a").unwrap();
+    let slot2_other_tab = issue_provider_for_test(Provider::Custom(6), "p1", "tab-rev-b").unwrap();
+    let slot3 = issue_provider_for_test(Provider::Custom(7), "p1", "tab-rev-a").unwrap();
+    let built_in = issue_provider_for_test(Provider::OpenAi, "p1", "tab-rev-a").unwrap();
+    revoke_provider(Provider::Custom(6));
+    assert!(!token_live(&slot2));
+    assert!(!token_live(&slot2_other_tab));
+    assert!(token_live(&slot3));
+    assert!(token_live(&built_in));
+    // The slot's next grant is a fresh token, never the revoked one.
+    let again = issue_provider_for_test(Provider::Custom(6), "p1", "tab-rev-a").unwrap();
+    assert_ne!(again, slot2);
+    for token in [again, slot3, built_in] {
+        grants().lock_ok().remove(&token);
+    }
+}
+
+#[test]
+fn the_loopback_client_ignores_a_system_proxy_and_the_https_one_keeps_it() {
+    // A built `reqwest::Client` prints its `proxies` only when it has some;
+    // one that honours the environment always holds the system matcher.
+    let has_proxies = |https_only: bool| format!("{:?}", client_builder(https_only).build().unwrap()).contains("proxies");
+    assert!(!has_proxies(false), "plain HTTP to the loopback must not go to HTTP_PROXY");
+    assert!(has_proxies(true), "the HTTPS client keeps the system proxy");
+    assert!(!format!("{:?}", client(false).unwrap()).contains("proxies"));
 }

@@ -9,8 +9,9 @@ import type { ProjectBox, ProjectEntry } from "../../types";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 
-import { memberOfCwd, memberOfCwdInScope, newTabTarget, scopeDisplayName, type BoxMemberDir } from "../../stores/boxes";
+import { boxMembersOfScope, memberOfCwd, memberOfCwdInScope, newTabTarget, remoteMemberCwdMoves, scopeDisplayName, type BoxMemberDir } from "../../stores/boxes";
 import { autoBoxColor, memberColor } from "../../lib/theme/boxColor";
+import { movedCwd } from "../../stores/tabs/tabEntries";
 
 const m = (id: string, dir: string): BoxMemberDir => ({ id, name: id.toUpperCase(), dir });
 
@@ -82,6 +83,56 @@ describe("box scope helpers", () => {
     // Outside a box scope the caller keeps its own target.
     expect(newTabTarget("p1", "/w/p1", boxes, projects)).toBeNull();
     expect(newTabTarget("root", undefined, boxes, projects)).toBeNull();
+  });
+
+  it("a remote member's root is its local copy, where its box tabs run, never its state folder", () => {
+    const remote = { host: "h", remote_path: "/srv/r" };
+    const mixed = [
+      ...projects,
+      proj("mir", "/state/remote-projects/mir", { remote, mirror: "/w/mir-copy" } as Partial<ProjectEntry>),
+      proj("dflt", "/state/remote-projects/dflt", { remote } as Partial<ProjectEntry>),
+      proj("ro", "/state/remote-projects/ro", { remote: { ...remote, remote_only: true } } as Partial<ProjectEntry>),
+    ];
+    const box: ProjectBox[] = [
+      { id: "r", name: "Remote", member_ids: ["p1", "mir", "dflt", "ro"], position: 3, folder: "/boxes/remote" },
+    ];
+    expect(boxMembersOfScope("box:r", box, mixed).map((x) => [x.id, x.dir])).toEqual([
+      ["p1", "/w/p1"],
+      ["mir", "/w/mir-copy"],
+      ["dflt", "/state/remote-projects/dflt/mirror"],
+    ]);
+    // A tab in a remote member's copy belongs to that member, and "+" starts there.
+    expect(memberOfCwdInScope("/w/mir-copy/src", "box:r", box, mixed)?.id).toBe("mir");
+    expect(newTabTarget("box:r", "/state/remote-projects/dflt/mirror/x", box, mixed)).toMatchObject({
+      cwd: "/state/remote-projects/dflt/mirror",
+      member: { id: "dflt" },
+    });
+  });
+
+  it("a saved tab in a remote member's state folder restores into its local copy, and only that exact folder moves", () => {
+    const remote = { host: "h", remote_path: "/srv/r" };
+    const mixed = [
+      proj("p1", "/w/p1"),
+      proj("cur", "/state/remote-projects/cur", { remote } as Partial<ProjectEntry>),
+      // A legacy entry: its directory is the user's home.
+      proj("old", "/home/u", { remote, mirror: "/home/u/copies/old" } as Partial<ProjectEntry>),
+      proj("ro", "/state/remote-projects/ro", { remote: { ...remote, remote_only: true } } as Partial<ProjectEntry>),
+    ];
+    const box: ProjectBox = { id: "r", name: "R", member_ids: ["p1", "cur", "old", "ro"], position: 1, folder: "/home/u/boxes/r" };
+    const moves = remoteMemberCwdMoves(box, mixed);
+    expect(moves).toEqual([
+      { from: "/state/remote-projects/cur", to: "/state/remote-projects/cur/mirror" },
+      { from: "/home/u", to: "/home/u/copies/old" },
+    ]);
+    expect(movedCwd("/state/remote-projects/cur", moves)).toBe("/state/remote-projects/cur/mirror");
+    expect(movedCwd("/state/remote-projects/cur/", moves)).toBe("/state/remote-projects/cur/mirror");
+    expect(movedCwd("/home/u", moves)).toBe("/home/u/copies/old");
+    // Nothing under a moved folder follows it: the box folder and other members stay.
+    expect(movedCwd("/home/u/boxes/r", moves)).toBe("/home/u/boxes/r");
+    expect(movedCwd("/state/remote-projects/cur/mirror/src", moves)).toBe("/state/remote-projects/cur/mirror/src");
+    expect(movedCwd("/w/p1", moves)).toBe("/w/p1");
+    expect(movedCwd(undefined, moves)).toBeUndefined();
+    expect(remoteMemberCwdMoves(undefined, mixed)).toEqual([]);
   });
 
   it("newTabTarget gives an empty cwd for a box with no folder yet", () => {

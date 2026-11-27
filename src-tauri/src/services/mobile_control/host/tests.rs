@@ -246,8 +246,17 @@ impl Fixture {
     }
 
     /// The real pair → challenge → sign → session flow, returning the
-    /// session cookie and the paired device id.
+    /// session cookie and the paired device id. The phone's own shell switch
+    /// is then turned on, so the host-wide `shell_tabs` alone decides in these
+    /// tests ([`Self::pair_device_as_paired`] keeps it as pairing left it).
     async fn pair_device(&self, signing: &SigningKey) -> (String, String) {
+        let (cookie, device_id) = self.pair_device_as_paired(signing).await;
+        self.state.auth.lock().unwrap().set_shell_tabs(&device_id, true).expect("phone shells on");
+        (cookie, device_id)
+    }
+
+    /// [`Self::pair_device`] without touching the new phone's shell switch.
+    async fn pair_device_as_paired(&self, signing: &SigningKey) -> (String, String) {
         let origin = self.state.config.origin.clone();
         let code = self
             .state
@@ -1618,6 +1627,56 @@ async fn an_archived_tab_restores_from_the_phone_only_as_a_tab_it_could_create()
     assert_eq!(status, StatusCode::OK, "answered: {body}");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     desktop.abort();
+}
+
+/// Shells are two switches: the host-wide `shell_tabs` and each phone's own
+/// (`auth::Device::shell_tabs`), which a new pairing leaves off. With the
+/// host switch on, a phone whose own is off lists no shell tab, is told it
+/// may not offer one and has a shell create refused `shells_off`; a phone
+/// whose own is on lists them; turning that one off unlists them at once.
+#[tokio::test]
+async fn a_phone_has_shells_only_while_its_own_switch_allows_them() {
+    let host = Fixture::with_box();
+    let (without, without_id) = host.pair_device_as_paired(&signing_key(201)).await;
+    assert!(!host.state.auth.lock().unwrap().shells_for(&without_id), "a new pairing starts without shells");
+    let (with, with_id) = host.pair_device(&signing_key(202)).await;
+    let box_of = |cookie: String| {
+        let host = &host;
+        async move {
+            let (_, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+            let box_id = json(&body)["projects"].as_array().expect("rows").iter().find(|row| row["kind"] == "box").expect("box row")["id"]
+                .as_str()
+                .expect("box id")
+                .to_string();
+            let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{box_id}"), &cookie)).await;
+            assert_eq!(status, StatusCode::OK, "answered: {body}");
+            (box_id, json(&body))
+        }
+    };
+    let shell_count = |detail: &Value| detail["tabs"].as_array().expect("tabs").iter().filter(|tab| tab["kind"] == "shell").count();
+
+    let (_, detail) = box_of(with.clone()).await;
+    assert_eq!(shell_count(&detail), 2, "{detail}");
+    assert_eq!(detail["shells"], true, "{detail}");
+
+    let (box_id, detail) = box_of(without.clone()).await;
+    assert_eq!(shell_count(&detail), 0, "{detail}");
+    assert_eq!(detail["shells"], false, "{detail}");
+    let (status, _, answer) = host
+        .send(request_as(
+            "POST",
+            &format!("/api/v1/projects/{box_id}/tabs"),
+            &without,
+            Some(json!({ "project_id": box_id, "kind": "shell", "idempotency_key": "0123456789abcdef" })),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "answered: {answer}");
+    assert_eq!(json(&answer)["error"], "shells_off");
+
+    host.state.auth.lock().unwrap().set_shell_tabs(&with_id, false).expect("phone shells off");
+    let (_, detail) = box_of(with).await;
+    assert_eq!(shell_count(&detail), 0, "{detail}");
+    assert_eq!(detail["shells"], false, "{detail}");
 }
 
 /// Bind the `with_project` host's agent tab to schedule target `tgt-1`.

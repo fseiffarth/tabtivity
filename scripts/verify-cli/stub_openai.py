@@ -7,7 +7,8 @@
 # A user prompt holding
 #   STUB:CALL <tool> <json>                  makes the model call that tool, then answer "stub answer done";
 #   STUB:SEQ <tool> <json> ;; <tool> <json>  calls them one per turn step;
-#   STUB:FAIL <status> [<type>]              answers that HTTP status with an error body (of that type).
+#   STUB:FAIL <status> [<type>]              answers that HTTP status with an error body (of that type);
+#   STUB:SLOW <secs>                         sends nothing for that long first (chat completions only).
 # A Responses tool inside a namespace is named `<namespace>.<tool>`.
 # Every request is logged: offered tools, last prompt, tool results; a chat
 # completion also its `model` and every `STUBMARK-<WORD>` it carries (what an
@@ -61,6 +62,10 @@ class H(BaseHTTPRequestHandler):
         if m:
             for part in m.group(1).split(';;'):
                 tn,_,arg=part.strip().partition(' '); seq.append((tn,arg.strip() or '{}'))
+        # `STUB:SLOW <secs>`: no byte of the answer before then (a model still
+        # loading), only on the turn's first request, not after a tool result.
+        m=re.search(r'STUB:SLOW (\d+(?:\.\d+)?)',prompt)
+        if m and ntool==0: time.sleep(float(m.group(1)))
         self.send_response(200); self.send_header('content-type','text/event-stream'); self.send_header('cache-control','no-cache'); self.send_header('connection','close'); self.end_headers()
         def chunk(delta,finish=None):
             o={'id':'c1','object':'chat.completion.chunk','created':int(time.time()),'model':'stub','choices':[{'index':0,'delta':delta,'finish_reason':finish}]}

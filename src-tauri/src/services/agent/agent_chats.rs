@@ -193,6 +193,52 @@ fn folder_store_chats(
     if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
         return ChatList::default();
     }
+    let (found, next, current) = folder_store_read(cmd, project_id, dir, launch_id, offset, limit);
+    let chats = found
+        .into_iter()
+        .map(|chat| {
+            let title = row_text(&chat.title);
+            StoredChat {
+                current: current.as_deref() == Some(chat.id.as_str()),
+                last: chat.last.map(|text| row_text(&text)).filter(|text| *text != title),
+                title,
+                started: chat.started,
+                updated: chat.updated,
+                id: chat.id,
+            }
+        })
+        .collect();
+    ChatList { supported: true, chats, next }
+}
+
+/// The first prompt, whole, of the conversation a tab of a CLI whose store is
+/// read by folder (OpenCode, Antigravity, Muse, Cursor) is in — what the tab's
+/// record names, among the folder's newest chats. The hand-off's "first
+/// request" for a conversation longer than its transcript read
+/// (`agent_cli_handoff`); `None` for any other CLI, a tab with no record, or
+/// a remote project.
+pub fn current_first_prompt(cmd: &str, project_id: Option<&str>, tab_dir: Option<&str>, launch_id: &str) -> Option<String> {
+    if !matches!(cmd, "opencode" | "agy" | "muse" | "cursor-agent") {
+        return None;
+    }
+    let dir = tab_dir.map(normal_dir).filter(|dir| Path::new(dir).is_absolute())?;
+    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+        return None;
+    }
+    let (found, _, current) = folder_store_read(cmd, project_id, &dir, launch_id, 0, MAX_PAGE);
+    let current = current?;
+    found.into_iter().find(|chat| chat.id == current).map(|chat| chat.title).filter(|title| !title.trim().is_empty())
+}
+
+/// One page of a folder-read store's chats and the id of the tab's own.
+fn folder_store_read(
+    cmd: &str,
+    project_id: Option<&str>,
+    dir: &str,
+    launch_id: &str,
+    offset: usize,
+    limit: usize,
+) -> (Vec<FolderChat>, Option<usize>, Option<String>) {
     let home = crate::services::agent_home::scope_home(project_id);
     let (read, current) = if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
@@ -217,21 +263,7 @@ fn folder_store_chats(
         )
     };
     let (found, next) = read.unwrap_or_default();
-    let chats = found
-        .into_iter()
-        .map(|chat| {
-            let title = row_text(&chat.title);
-            StoredChat {
-                current: current.as_deref() == Some(chat.id.as_str()),
-                last: chat.last.map(|text| row_text(&text)).filter(|text| *text != title),
-                title,
-                started: chat.started,
-                updated: chat.updated,
-                id: chat.id,
-            }
-        })
-        .collect();
-    ChatList { supported: true, chats, next }
+    (found, next, current)
 }
 
 /// Whether `chat` is one of the conversations [`list_chats`] would list for

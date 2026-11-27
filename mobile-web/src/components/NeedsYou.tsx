@@ -3,7 +3,7 @@ import type { IconProps } from "../../../src/components/common/icons/Icon";
 import { lastPrompt } from "../agentPrompts";
 import { getActivity, holdPrompt, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts } from "../api";
 import { describeFailure } from "../connection";
-import { CheckIcon, PlayMark, QuestionIcon, SECTION_ICON } from "../glyphs";
+import { CheckIcon, PlayMark, SECTION_ICON } from "../glyphs";
 import { ageLabel } from "../terminal/fileLabels";
 import { useVisiblePoll } from "../visiblePoll";
 import { needsYouGroups, since } from "../needsYouGroups";
@@ -65,9 +65,9 @@ const CONTINUE_PROMPT = "continue";
  * this phone yet (`seenDone.ts`), then the desktop's mail, to-do and calendar
  * alerts. Three rows, then "Show all" opens the rest in place.
  *
- * Above it, always, three tiles count the agent tabs waiting on the reader,
- * at work and finished unseen; each opens the Agents view, which has no
- * other door on Home. Their numbers wait for the first answer.
+ * Above it, always, one segmented bar counts the agent tabs waiting on the
+ * reader, at work and finished unseen; each segment opens the Agents view,
+ * which has no other door on Home. Their numbers wait for the first answer.
  *
  * The group itself is not drawn until there is something to show — not a
  * heading over an empty box, and not a second "loading" beside the project
@@ -227,18 +227,19 @@ export function NeedsYou({ onTabs, alerts, onAlerts, seen, open, todo, mail, sho
     }),
   ];
   const shown = expanded ? rows : rows.slice(0, CAP);
-  const tiles: { key: string; count: number; label: TranslationKey; glyph: ReactNode }[] = [
-    { key: "waiting", count: asking.length, label: "mobile.home.glanceWaiting", glyph: <QuestionIcon size="1em" /> },
-    { key: "working", count: working, label: "mobile.home.glanceWorking", glyph: <PlayMark /> },
-    { key: "done", count: finished.length, label: "mobile.home.glanceDone", glyph: <CheckIcon size="1em" /> },
+  const tiles: { key: string; count: number; label: TranslationKey }[] = [
+    { key: "waiting", count: asking.length, label: "mobile.home.glanceWaiting" },
+    { key: "working", count: working, label: "mobile.home.glanceWorking" },
+    { key: "done", count: finished.length, label: "mobile.home.glanceDone" },
   ];
+  // One bar of three segments, count and word on one line. Only a segment
+  // with something in it takes colour — amber is the one that needs the
+  // reader — and the working one carries a ▶ while anything runs.
   const glance = <nav className="home-glance" aria-label={t("mobile.home.glance")}>
     {tiles.map((tile) => <button key={tile.key} className={`home-glance-tile ${tile.key}${tile.count > 0 ? " lit" : ""}`} aria-label={tabs ? t("mobile.home.glanceCount", { label: t(tile.label), count: tile.count }) : t(tile.label)} onClick={showAgents}>
-      <span className="home-glance-top">
-        <strong>{tabs ? tile.count : ""}</strong>
-        <span className="home-glance-glyph" aria-hidden="true">{tile.glyph}</span>
-      </span>
-      <span className="home-glance-label">{t(tile.label)}</span>
+      {tile.key === "working" && tile.count > 0 && <span className="home-glance-glyph" aria-hidden="true"><PlayMark /></span>}
+      <strong aria-hidden="true">{tabs ? tile.count : ""}</strong>
+      <span className="home-glance-label" aria-hidden="true">{t(tile.label)}</span>
     </button>)}
     {isUntested("mobile.home.glance") && <span className="untested">{t("mobile.newTab.untested")}</span>}
   </nav>;

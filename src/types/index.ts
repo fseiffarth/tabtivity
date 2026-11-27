@@ -88,6 +88,17 @@ export interface KeyboardChord {
   altGr?: boolean;
 }
 
+/** A custom OpenAI-compatible endpoint (`Settings::agent_api_custom_endpoints`,
+ *  backend `schema::settings::CustomEndpoint`). Slot `n` is the provider
+ *  `custom-<n>`; its key is in the keyring, its limit in
+ *  `agent_api_token_limits`. Never a secret. */
+export interface CustomEndpoint {
+  slot: number;
+  label: string;
+  base_url: string;
+  models: string[];
+}
+
 /**
  * A user-defined "custom agent" — an arbitrary CLI the user wants offered in the
  * add-tab menu's Agents group alongside the built-in agents (Claude, Codex, …).
@@ -205,9 +216,10 @@ export interface Settings {
      * Settings → Mobile → Browser access). Unset is off; loopback only; read
      * by the sidecar at start. */
     browser_client?: boolean;
-    /** A paired phone may see and open shell tabs. Unset is off (the phone is
-     * agents-only); read by the sidecar per catalog load and repeated by the
-     * desktop bridge. */
+    /** Paired phones may see and open shell tabs at all; each phone's own
+     * switch (its device record's `shell_tabs`) must allow it too. Unset is
+     * off (the phone is agents-only); read by the sidecar per catalog load
+     * and repeated by the desktop bridge. */
     shell_tabs?: boolean;
     /** A paired phone may list and attach this desktop's clipboard image and
      * newest screenshots, downloads and pictures (+ → Desktop). Unset is off;
@@ -542,7 +554,7 @@ export interface Settings {
    *  menu's "Root" chips. Opt-out: unset means every model is offered there. */
   root_excluded_models?: string[];
   /** Local (Ollama) model names given the root MCP tools by the 🧠 menu's
-   *  "MCP" chips. Opt-in: other local-model tabs run with tools off. Read at
+   *  "MCP" chips. Opt-in: other local-model tabs get no MCP tools. Read at
    *  spawn by the backend (`services::root_mcp`). */
   ollama_mcp_models?: string[];
   /** Prefix chips per agent command for the side panel's agent composer; unset
@@ -580,6 +592,11 @@ export interface Settings {
    *  for the stored API keys (backend `services::api_usage`), enforced by the
    *  API proxy. Saving a key requires one. */
   agent_api_token_limits?: Record<string, number>;
+  /** Custom OpenAI-compatible endpoints for OpenCode (`custom-<slot>` in
+   *  `agent_api_token_limits`), written only by the add/remove/refresh
+   *  commands (`agent_api_custom_endpoint_*`): a settings patch cannot change
+   *  them. Never a key. */
+  agent_api_custom_endpoints?: CustomEndpoint[];
   /** The order of the Agents group's rows, which is the order Ctrl+1–9 number
    *  them: row keys (a built-in's command, `"claude"`; a custom agent's
    *  `"custom:<id>"`). Set by Manage CLIs' ↑/↓. Unset = the default agent
@@ -638,6 +655,10 @@ export interface Settings {
    *  Ollama's 5 minutes. A server Tabtivity starts gets it; a systemd service
    *  through the drop-in `ollama_keep_alive_plan` offers. */
   ollama_keep_alive?: string | null;
+  /** How Ollama stores context and cached prompts, as `OLLAMA_KV_CACHE_TYPE`
+   *  (with flash attention): `"q8_0"` or `"q4_0"`; `null` = Ollama's f16.
+   *  Applied like `ollama_keep_alive` (`ollama_kv_cache_plan`). */
+  ollama_kv_cache_type?: string | null;
   /** Per-task local-model assignments (🧠 menu role chips). Maps a task key —
    *  `"autocomplete"`, `"autocomplete_prose"`, `"tabs"` or `"mail"` —
    *  to the model name that should serve it (`autocomplete_prose` covers plain

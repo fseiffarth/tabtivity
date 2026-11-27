@@ -15,13 +15,20 @@ import { agentDeliveryTurn, lastUserInputAt, useActivityStore } from "../../stor
 export const FRESH_SUBMIT_CHECK_MS = 2_500;
 export const FRESH_SUBMIT_TRIES = 3;
 
-/** Whether `agent` is a Claude no turn has begun in yet — a fresh tab. */
-export function freshClaude(agent: string | undefined, ptyId: string): boolean {
-  return isClaude(agent) && agentDeliveryTurn(ptyId) === undefined;
+/** The CLIs that drop a fresh tab's first Enter and report a turn begun.
+ * OpenCode's `mini` keeps the words in its box and drops the Enter for a
+ * second or two after drawing it — longer on a loaded machine (2.4.1 and
+ * 2.4.2, probed 2026-11-26); its session plugin writes the turn. An Enter on
+ * its empty box does nothing, busy or idle. */
+const DROPS_FRESH_ENTER = new Set(["claude", "opencode"]);
+
+/** Whether `agent` drops a fresh tab's first Enter and no turn has begun in it yet. */
+export function freshStart(agent: string | undefined, ptyId: string): boolean {
+  return dropsFreshEnter(agent) && agentDeliveryTurn(ptyId) === undefined;
 }
 
-export function isClaude(agent: string | undefined): boolean {
-  return agentFamily(agent ?? "") === "claude";
+export function dropsFreshEnter(agent: string | undefined): boolean {
+  return DROPS_FRESH_ENTER.has(agentFamily(agent ?? ""));
 }
 
 /**

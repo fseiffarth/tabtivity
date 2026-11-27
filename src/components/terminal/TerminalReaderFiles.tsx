@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { basename, dirname } from "../../lib/paths";
@@ -16,6 +16,10 @@ import { largestScroller, scrollBox } from "../../lib/shortcuts/documentScroll";
 import { decide, effectiveCursor, rowsOf } from "../../lib/terminal/readerFilesSteer";
 import { ArrowUpRightIcon, CloseIcon, LinkIcon } from "../common/icons/Icon";
 import { copyText } from "../../lib/terminal/copyText";
+import { startFilePointerDrag, warmDragIcon } from "../files/fileTreeDrag";
+import { PLATFORM } from "../../lib/window/dragPlatform";
+import { FileDropContext } from "../files/fileDropContext";
+import { setLinkDragData } from "../../lib/terminal/linkDrag";
 import type { ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
 import type { RunningShell } from "../../../mobile-web/src/api";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
@@ -116,8 +120,13 @@ function middle(text: string, max: number): string {
  * and the commands are one walkable list with a cursor of its own
  * (`readerFilesSteer`): `o` opens the row, `v` shows the file or command here,
  * ←/→ scroll the viewer. Moving the cursor opens nothing.
+ *
+ * A file row drags like a file-tree row (`startFilePointerDrag`): onto a tab
+ * bar or pane it opens as a tab, out of the window it is copied into the app
+ * under the cursor. Never moved. A link row drags its address (a browser,
+ * a mail, a text box take it); nothing opens it but the click's ask.
  */
-export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = NO_SHELLS, picked, projectId, disabled, visible, scopeNote, use24h, onPick, onOpenTab, onOpenLink, steerId, onClose }: {
+export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = NO_SHELLS, picked, projectId, projectDir = "", hostFiles = false, disabled, visible, scopeNote, use24h, onPick, onOpenTab, onOpenLink, steerId, onClose }: {
   /** The agent tab hosting this Reader. Each picked file keeps its scroll/zoom
    *  under `<tab>#<path>` (the tab's `texPanes`, the TeX workspace's sub-pane
    *  slot), so leaving to Chat or another tab and coming back reopens the
@@ -131,6 +140,10 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
   /** The file in the viewer; it stays there when another chat's list lacks it. */
   picked: FileEntry | null;
   projectId: string | null;
+  /** The folder a dragged file's tab is opened in. */
+  projectDir?: string;
+  /** The paths are a remote host's: a drag stays in the app. */
+  hostFiles?: boolean;
   disabled?: ReadonlySet<InternalViewer>;
   visible: boolean;
   /** Whose files these are, when not the session's own chat (a subagent's, an earlier chat's). */
@@ -158,6 +171,14 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
     onPick(entry);
   };
   const steering = useSteeringInside(steerId);
+  // Inside a popout, the drop goes through its controller (null in the main window).
+  const fileDrop = useContext(FileDropContext);
+  // When a drag last ended: the click its release fires on the row is swallowed.
+  const dragClickGuard = useRef(0);
+  // The OS drag-out's icon, ready before a drag needs it (Windows / macOS).
+  useEffect(() => {
+    if (PLATFORM !== "linux" && !hostFiles) void warmDragIcon();
+  }, [hostFiles]);
   // Grouped here so the drawn order and the steering walk are one order.
   const grouped = groupReaderFiles(files);
   const rows = rowsOf(grouped, linkRows, shellRows);
@@ -249,6 +270,7 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
       <header className="terminal-changes-head">
         <strong>{t("terminal.readerFiles.title")}</strong>
         <UntestedTag id="terminal.reader.files" />
+        {(files.length > 0 || linkRows.length > 0) && <UntestedTag id="terminal.reader.fileDrag" />}
         {(viewer === "tex" || viewer === "pdf") &&<UntestedTag id="terminal.reader.texPdf" />}
         {file && <small className="terminal-changes-path" title={file.path}>{file.name}</small>}
         {file && viewer && (
@@ -282,8 +304,14 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
                   return (
                     <button type="button" role="option" key={row.entry.path} aria-selected={active}
                       className={[active && "active", here && "steer-cursor"].filter(Boolean).join(" ") || undefined}
-                      aria-current={here || undefined} data-steer-row={row.entry.path} title={row.entry.path}
-                      onClick={(event) => (event.ctrlKey || event.metaKey ? onOpenTab(row.entry, true) : pick(row.entry))}>
+                      aria-current={here || undefined} data-steer-row={row.entry.path}
+                      title={`${row.entry.path}\n${t("terminal.readerFiles.dragHint")}`}
+                      onPointerDown={(event) => startFilePointerDrag(event, row.entry, { projectId, projectDir, disabled, host: hostFiles, fileDrop, dragClickGuard })}
+                      onClick={(event) => {
+                        if (Date.now() - dragClickGuard.current < 400) return;
+                        if (event.ctrlKey || event.metaKey) onOpenTab(row.entry, true);
+                        else pick(row.entry);
+                      }}>
                       <span className="terminal-changes-path"><strong>{row.label}</strong></span>
                     </button>
                   );
@@ -304,7 +332,8 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
                   return (
                     <button type="button" role="option" key={link.url} aria-selected={false}
                       className={here ? "terminal-files-link steer-cursor" : "terminal-files-link"}
-                      aria-current={here || undefined} data-steer-row={link.url} title={`${link.url}\n${t("terminal.readerFiles.linkOpen")}`}
+                      aria-current={here || undefined} data-steer-row={link.url} title={`${link.url}\n${t("terminal.readerFiles.linkOpen")}\n${t("terminal.readerFiles.linkDragHint")}`}
+                      draggable onDragStart={(event) => setLinkDragData(event.dataTransfer, link.url)}
                       onClick={() => onOpenLink(link.url)}>
                       <span className="terminal-files-link-main">
                         <LinkIcon />

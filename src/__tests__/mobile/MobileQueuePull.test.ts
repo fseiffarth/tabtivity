@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { claudeBoxWords, codexBoxLines, inputBoxLines, openCodePanelRows, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts } from "../../../mobile-web/src/terminal/queuePull";
+import { finishSendNow, claudeBoxWords, codexBoxLines, finishStop, inputBoxLines, openCodeBoxLines, openCodePanelRows, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, stopBoxWords, takeBackStopped, takenPrompts, takesBackStopped } from "../../../mobile-web/src/terminal/queuePull";
+import { openCodeBoxReset } from "../../../mobile-web/src/terminal/composer";
 
 const FAST = { waitMs: 30, pollMs: 2 };
 const RULE = "────────────────────────────────────────";
@@ -229,23 +230,48 @@ describe("queuePull on Codex", () => {
 });
 
 /**
- * OpenCode 2.2.5 mini, as probed: the footer counts what waits; `ctrl+x q`
- * opens a panel listing it, oldest on top, where ctrl+d deletes the top row
- * and esc closes. Esc twice, apart, stops the turn.
+ * OpenCode 2.4.2, as probed. Mini: the footer counts what waits; `ctrl+x q`
+ * opens a panel listing it, oldest on top, where ctrl+d deletes the top row,
+ * enter sends it and esc closes. The full TUI counts it in the top row of its
+ * box and opens a dialog of the same chord, which closes itself once empty
+ * (and where the chord quits with nothing queued). Esc twice, apart, stops
+ * the turn, and what waits stays queued.
  */
 function fakeOpenCode(queue: string[], options: { full?: boolean; refuse?: boolean } = {}) {
-  const state = { queue: [...queue], panel: false, leader: false, keys: [] as string[] };
-  const rows = () => state.panel
-    ? ["› first", `  Pending prompts ${state.queue.length}                      esc`, "  Search", ...state.queue.map((line) => `  ${line}          steering`), "▀▀▀▀▀▀▀▀▀▀"]
-    : ["› first", "┃", options.full
-      ? "   ■⬝⬝⬝⬝ esc interrupt      ctrl+p commands"
-      : `🯦 esc stop${state.queue.length ? ` · ctrl+x q ${state.queue.length} pending` : ""} · Build · stub`];
+  const state = { queue: [...queue], panel: false, leader: false, escs: 0, sent: [] as string[], keys: [] as string[] };
+  const busy = () => state.escs < 2;
+  const rows = () => {
+    if (options.full) {
+      const box = state.queue.length ? [`  ┃  ${state.queue.length} queued · ${state.queue[0].split("\n")[0]}`] : [];
+      const dialog = state.panel
+        ? ["                                  Search queued prompts                            esc",
+          ...state.queue.map((line, at) => `${"  ┃  half a chat row".padEnd(30)}${at ? " " : "┃"}   ${line.split("\n")[0]}     ${at + 1} of ${state.queue.length}`),
+          "                                             delete ctrl+d   undo ctrl+u   steer enter"]
+        : [];
+      return ["  ┃  Say first", ...dialog, ...box, "  ┃  Build · stub Ollama (local)", "  ╹▀▀▀▀▀▀▀▀",
+        busy() ? "   ■⬝⬝⬝⬝ esc interrupt      ↓ 1 shell  ctrl+p commands" : "  ~/work:develop       ctrl+p commands"];
+    }
+    return state.panel
+      ? ["› first", `  Pending prompts ${state.queue.length}                      esc`, "  Search", ...state.queue.map((line) => `  ${line}          steering`), "▀▀▀▀▀▀▀▀▀▀"]
+      : ["› first", "┃", `🯦 ${busy() ? "esc stop" : "Build"}${state.queue.length ? ` · ctrl+x q ${state.queue.length} pending` : ""} · Build · stub`];
+  };
   const key = async (pressed: string) => {
     state.keys.push(pressed);
     if (pressed === "\u0018") state.leader = true;
-    else if (pressed === "q" && state.leader) state.panel = true;
-    else if (pressed === "\u0004" && state.panel && !options.refuse) state.queue.shift();
-    else if (pressed === "\u001b") state.panel = false;
+    else if (pressed === "q" && state.leader) {
+      state.leader = false;
+      if (state.queue.length) state.panel = true;
+    } else if (pressed === "\u0004" && state.panel && !options.refuse) {
+      state.queue.shift();
+      if (options.full && state.queue.length === 0) state.panel = false;
+    } else if (pressed === "\r" && state.panel) {
+      const head = state.queue.shift();
+      if (head !== undefined) state.sent.push(head);
+      state.panel = false;
+    } else if (pressed === "\u001b") {
+      if (state.panel) state.panel = false;
+      else state.escs += 1;
+    }
     return true;
   };
   return { state, driver: { rows, key } };
@@ -259,9 +285,18 @@ describe("queuePull on OpenCode", () => {
     expect(openCodePanelRows(["  Pending prompts 2   esc", "  Search", "  one two     steering", "  three     queue", "▀▀▀▀"])).toEqual(["one two", "three"]);
   });
 
-  it("never opens the panel on the full TUI, where ctrl+x q quits", async () => {
-    const { state, driver } = fakeOpenCode(["one"], { full: true });
-    expect(queuedHintShown(driver.rows(), "opencode")).toBe(false);
+  it("reads the full TUI's queue row and its dialog", () => {
+    const full = fakeOpenCode(["one", "two\nsecond line"], { full: true });
+    expect(queuedHintShown(full.driver.rows(), "opencode")).toBe(true);
+    expect(queuedHintShown(fakeOpenCode([], { full: true }).driver.rows(), "opencode")).toBe(false);
+    // A chat line that opens like the row is not it: it has no box edge.
+    expect(queuedHintShown(["it said 2 queued · here", "  ┃  Build · stub Ollama (local)"], "opencode")).toBe(false);
+    full.state.panel = true;
+    expect(openCodePanelRows(full.driver.rows())).toEqual(["one", "two"]);
+  });
+
+  it("never opens the panel on the full TUI with nothing queued, where ctrl+x q quits", async () => {
+    const { state, driver } = fakeOpenCode([], { full: true });
     expect(await pullQueuedPrompts(driver, ["one"], FAST, "opencode")).toEqual({ ok: false, reason: "not_queued" });
     expect(await sendQueuedNow(driver, "opencode")).toBe(false);
     expect(state.keys).toEqual([]);
@@ -274,11 +309,22 @@ describe("queuePull on OpenCode", () => {
     expect(state).toMatchObject({ queue: [], panel: false });
   });
 
+  it("does the same on the full TUI, whose dialog shows a prompt's first line and closes itself", async () => {
+    const { state, driver } = fakeOpenCode(["one", "two\nsecond line"], { full: true });
+    const result = await pullQueuedPrompts(driver, ["older", "one", "two\nsecond line"], FAST, "opencode");
+    expect(result).toMatchObject({ ok: true, text: "one\ntwo\nsecond line", pulled: 2, oldest: false, cleared: true });
+    expect(state).toMatchObject({ queue: [], panel: false });
+    // Nothing was left open for an Esc to land on the turn.
+    expect(state.keys.filter((key) => key === "\u001b")).toEqual([]);
+  });
+
   it("touches nothing when a row is not a prompt it sent", async () => {
-    const { state, driver } = fakeOpenCode(["typed in the terminal"]);
-    expect(await pullQueuedPrompts(driver, ["sent from the chat"], FAST, "opencode")).toEqual({ ok: false, reason: "not_pulled" });
-    expect(state).toMatchObject({ queue: ["typed in the terminal"], panel: false });
-    expect(state.keys).not.toContain("\u0004");
+    for (const full of [false, true]) {
+      const { state, driver } = fakeOpenCode(["typed in the terminal"], { full });
+      expect(await pullQueuedPrompts(driver, ["sent from the chat"], FAST, "opencode")).toEqual({ ok: false, reason: "not_pulled" });
+      expect(state).toMatchObject({ queue: ["typed in the terminal"], panel: false });
+      expect(state.keys).not.toContain("\u0004");
+    }
   });
 
   it("says which prompts left when the panel stops deleting", async () => {
@@ -288,10 +334,46 @@ describe("queuePull on OpenCode", () => {
     expect(takenPrompts(["a", "b", "c"], { pulled: 2 })).toEqual(["b", "c"]);
   });
 
-  it("presses Esc twice, apart, for Send now", async () => {
-    const { state, driver } = fakeOpenCode(["one"]);
-    expect(await sendQueuedNow(driver, "opencode")).toBe(true);
-    expect(state.keys).toEqual(["\u001b", "\u001b"]);
+  it("presses Esc twice, apart, then sends the queue through the panel, mini and full TUI alike", async () => {
+    for (const full of [false, true]) {
+      const { state, driver } = fakeOpenCode(["one", "two"], { full });
+      expect(await sendQueuedNow(driver, "opencode")).toBe(true);
+      expect(state.keys).toEqual(["\u001b", "\u001b", "\u0018", "q", "\r"]);
+      expect(state.sent).toEqual(["one"]);
+      expect(state.panel).toBe(false);
+    }
+  });
+
+  it("leaves the queue alone when the stop did not land or the queue went on its own", async () => {
+    const stuck = fakeOpenCode(["one"]);
+    await finishSendNow(stuck.driver, "opencode", FAST);
+    expect(stuck.state.keys).toEqual([]);
+    const drained = fakeOpenCode([], { full: true });
+    drained.state.escs = 2;
+    await finishSendNow(drained.driver, "opencode", FAST);
+    expect(drained.state.keys).toEqual([]);
+  });
+
+  it("stops a turn with the second Esc only while the busy row asks for it", async () => {
+    // 2.4.2: one Esc leaves the turn running under `esc again to interrupt`.
+    const stopping = (row: string) => {
+      const keys: string[] = [];
+      return { keys, driver: { rows: () => ["› fix it", "", row, ""], key: async (key: string) => { keys.push(key); return true; } } };
+    };
+    for (const row of [
+      "   ⬝⬝⬝⬝⬝⬝⬝■ esc again to interrupt          ↓ 1 shell · 110 (0%)  ctrl+p commands",
+      "🯦 esc again: stop · Build · stub",
+    ]) {
+      const { keys, driver } = stopping(row);
+      await finishStop(driver, "opencode");
+      expect(keys).toEqual(["\u001b"]);
+    }
+    const ended = stopping("Build · stub · 110 (0%) · Ollama (local) · ctrl+p menu");
+    await finishStop(ended.driver, "opencode");
+    expect(ended.keys).toEqual([]);
+    const claude = stopping("esc again to interrupt");
+    await finishStop(claude.driver, "claude");
+    expect(claude.keys).toEqual([]);
   });
 });
 
@@ -350,5 +432,99 @@ describe("queueFamily", () => {
       expect(await takeBackStopped(driver, ["sent from the chat"], before, FAST)).toBeNull();
       expect(state.keys).toEqual([]);
     });
+  });
+});
+
+/** OpenCode 2.4.2's full TUI at 120×40, rows 30–39 of the probe's frames
+ * (`scripts/verify-cli/opencode/takeback.py`, `takeback-full/`): the last
+ * answer, then the input box over its agent row and `╹▀` edge. */
+const OPENCODE_EDGE = `  ╹${"▀".repeat(60)}`;
+const OPENCODE_IDLE = "  ~/work:develop                                       110 (0%)  ctrl+p commands";
+function openCodeFullRows(box: string[], footer = OPENCODE_IDLE): string[] {
+  return [
+    "  ┃",
+    "  ┃  Say NEXTSINGLEMARK.",
+    "  ┃",
+    "",
+    "     stub answer done",
+    "",
+    ...(box.length ? ["  ┃", ...box.map((line) => `  ┃  ${line}`)] : ["  ┃", "  ┃"]),
+    "  ┃",
+    "  ┃  Build · stub Ollama (local)",
+    OPENCODE_EDGE,
+    footer,
+  ];
+}
+
+/** OpenCode's box with the cursor at its end, as after a stop handed a prompt
+ * back: Ctrl-E there stays, Ctrl-U empties the line, Backspace on an empty
+ * line joins it onto the one above (else takes a character), Ctrl-A Ctrl-K
+ * empties the line. A stop's Esc hands `back` over a moment later. */
+function fakeOpenCodeFull(back: string) {
+  const state = { lines: [] as string[], keys: [] as string[] };
+  const rows = () => openCodeFullRows(state.lines);
+  const key = async (pressed: string) => {
+    state.keys.push(pressed);
+    if (pressed === "\u001b") {
+      setTimeout(() => { state.lines = back.split("\n"); }, 5);
+      return true;
+    }
+    for (const char of pressed) {
+      const last = state.lines.length - 1;
+      if (last < 0) continue;
+      if (char === "\u0015" || char === "\u000b") state.lines[last] = "";
+      else if (char === "\u007f") {
+        if (state.lines[last]) state.lines[last] = state.lines[last].slice(0, -1);
+        else if (last > 0) state.lines.pop();
+      }
+    }
+    if (state.lines.length === 1 && !state.lines[0]) state.lines = [];
+    return true;
+  };
+  return { state, driver: { rows, key } };
+}
+
+describe("a stop OpenCode answers by handing the prompt back (2.4.2)", () => {
+  it("reads the full TUI's box, not the prompts above it", () => {
+    expect(openCodeBoxLines(openCodeFullRows(["STUB:SLOW 12 Say MULTIMARK.", "Second line TWOMARK."])))
+      .toEqual(["STUB:SLOW 12 Say MULTIMARK.", "Second line TWOMARK."]);
+    expect(openCodeBoxLines(openCodeFullRows([], "   ⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt            110 (0%)  ctrl+p commands"))).toEqual([]);
+    // The start screen: the box centred, its placeholder no draft.
+    expect(openCodeBoxLines([
+      "                       ┃",
+      "                       ┃  Ask anything… \"Fix a TODO in the codebase\"",
+      "                       ┃",
+      "                       ┃  Build · stub Ollama (local)",
+      `                       ╹${"▀".repeat(40)}`,
+      "                       ~/work:develop                            shift+tab agents  ctrl+p commands",
+    ])).toEqual([]);
+    // mini draws no such box; neither does Claude.
+    expect(openCodeBoxLines(["┃", "Build · stub · Ollama (local) · ctrl+p menu"])).toBeNull();
+    expect(openCodeBoxLines(["❯ fix it", RULE])).toBeNull();
+  });
+
+  it("takes a two-line prompt the chat sent back out of the box, every line of it", async () => {
+    const { state, driver } = fakeOpenCodeFull("STUB:SLOW 12 Say MULTIMARK.\nSecond line TWOMARK.");
+    const before = stopBoxWords(driver.rows(), "opencode");
+    expect(before).toBe("");
+    await driver.key("\u001b");
+    const back = await takeBackStopped(driver, ["older one", "STUB:SLOW 12 Say MULTIMARK.\nSecond line TWOMARK."], before, FAST, "opencode");
+    expect(back).toEqual({ index: 1, cleared: true });
+    expect(state.lines).toEqual([]);
+    expect(state.keys).toContain(openCodeBoxReset(2));
+    // Never OpenCode's Ctrl+C: on an empty box it quits.
+    expect(state.keys.join("")).not.toContain("\u0003");
+  });
+
+  it("leaves the user's own words in the box", async () => {
+    const { state, driver } = fakeOpenCodeFull("typed in the terminal");
+    await driver.key("\u001b");
+    expect(await takeBackStopped(driver, ["sent from the chat"], "", FAST, "opencode")).toBeNull();
+    expect(state.lines).toEqual(["typed in the terminal"]);
+    expect(state.keys).toEqual(["\u001b"]);
+  });
+
+  it("is asked only of the CLIs that hand a prompt back", () => {
+    expect(["claude", "opencode", "codex", null].map(takesBackStopped)).toEqual([true, true, false, false]);
   });
 });

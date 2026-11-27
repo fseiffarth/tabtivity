@@ -329,15 +329,41 @@ describe("the + menu's local-model rows", () => {
       lockedProject,
       cutNetwork,
       vibeForLocalModel: true,
-      gpu: { placement: "ready", loading: false, failed: false, load: vi.fn() },
+      gpu: { placement: "ready", loading: false, failed: false, load: vi.fn(), installed: [] },
       onVibe: vi.fn(),
       onLaunch: vi.fn(),
       t: ((k: string) => k) as never,
     }).entries.map((e) => e.key);
 
-  it("hides OpenCode, which the backend refuses in such a project, and keeps the other local agents", () => {
+  it("keeps OpenCode where the host can cut its sandbox's network, saying so, and hides it elsewhere", () => {
     expect(keys(false)).toEqual(["opencode", "pi", "vibe", "claude"]);
-    expect(keys(true)).toEqual(["pi", "vibe", "claude"]);
+    expect(keys(true)).toEqual(["opencode", "pi", "vibe", "claude"]);
+    host.linux = false;
+    try {
+      expect(keys(true)).toEqual(["pi", "vibe", "claude"]);
+    } finally {
+      host.linux = true;
+    }
+  });
+
+  it("marks OpenCode as running without network only in a locked project that keeps its network", () => {
+    const entry = (lockedProject: boolean, cutNetwork: boolean) =>
+      localModelMenuGroup({
+        localModel: "qwen3:8b",
+        localModelOffInRoot: undefined,
+        localDrivers: drivers,
+        lockedProject,
+        cutNetwork,
+        vibeForLocalModel: true,
+        gpu: { placement: "ready", loading: false, failed: false, load: vi.fn(), installed: [] },
+        onVibe: vi.fn(),
+        onLaunch: vi.fn(),
+        t: ((k: string) => k) as never,
+      }).entries.find((e) => e.key === "opencode");
+    expect(entry(true, false)?.caution).toBe("newTabMenu.localDriverCutAlone");
+    expect(entry(true, false)?.untested).toBe("localModelsOnly.cutOnlyDriver");
+    expect(entry(false, false)?.caution).toBeUndefined();
+    expect(entry(true, true)?.caution).toBeUndefined();
   });
 
   it("offers OpenCode again with Cut network on, and only the drivers that were run with the network cut", () => {

@@ -28,7 +28,7 @@ pub fn resume_pinned(agent: &str, project_id: Option<&str>, uid: &str, cwd: &str
     }
     match agent {
         "claude" => {
-            let roots = agent_session::claude_projects_roots(project_id);
+            let roots = agent_session::claude_transcript_roots(project_id);
             claude_pinned(read_live_session_for(project_id, uid), uid, |id| {
                 roots.iter().any(|root| agent_session::claude_session_exists(root, id))
             })

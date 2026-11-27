@@ -59,6 +59,12 @@ pub fn configured_keep_alive() -> Option<String> {
     crate::storage::load_settings().and_then(|s| s.ollama_keep_alive)
 }
 
+/// The user's chosen KV cache type (`Settings::ollama_kv_cache_type`), read on
+/// every use like [`configured_keep_alive`].
+pub fn configured_kv_cache_type() -> Option<String> {
+    crate::storage::load_settings().and_then(|s| s.ollama_kv_cache_type)
+}
+
 /// The user's chosen context window (`Settings::ollama_context_length`), read
 /// on every use like [`configured_models_dir`].
 pub(crate) fn configured_context_length() -> Option<u32> {
@@ -933,7 +939,32 @@ pub(crate) enum OwnedServer {
 
 pub(crate) static OWNED_SERVER: std::sync::Mutex<Option<OwnedServer>> = std::sync::Mutex::new(None);
 
+/// The `OLLAMA_CONTEXT_LENGTH` the `ollama serve` in [`OWNED_SERVER`] was
+/// started with; `None` when it got none (Ollama's own default) or the owned
+/// server is not a process we gave an environment.
+static SPAWNED_CONTEXT: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+
+/// Records the window an `ollama serve` just spawned was given; call right
+/// after [`record_owned_server`], which clears it.
+pub(crate) fn record_spawned_context(context: Option<u32>) {
+    if let Ok(mut slot) = SPAWNED_CONTEXT.lock() {
+        *slot = context;
+    }
+}
+
+/// The default context window of the server this run spawned, if it still
+/// owns one. A server Tabtivity only talks to (a unit, one the user started)
+/// keeps its environment to itself, so it has no answer here.
+pub(crate) fn owned_server_context() -> Option<u32> {
+    let owns_process = matches!(OWNED_SERVER.lock().ok()?.as_ref(), Some(OwnedServer::Process(_)));
+    if !owns_process {
+        return None;
+    }
+    *SPAWNED_CONTEXT.lock().ok()?
+}
+
 pub(crate) fn record_owned_server(owned: OwnedServer) {
+    record_spawned_context(None);
     if let Ok(mut slot) = OWNED_SERVER.lock() {
         // A previous entry can only be a server that has since died (we reach
         // the start paths at all only when nothing is listening), so replacing
@@ -1000,15 +1031,54 @@ pub(crate) fn installed_model_names_within(read_timeout: Duration) -> Result<Vec
 /// so it is found by suffix rather than by a table of architectures that would
 /// need an entry per new model family.
 pub(crate) fn model_context_length(model: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(&show_model(model)?).ok()?;
+    trained_window(&v)
+}
+
+/// `/api/show` for `model`, or `None` when Ollama cannot be asked.
+fn show_model(model: &str) -> Option<String> {
     let body = serde_json::json!({ "model": model }).to_string();
-    let v: serde_json::Value =
-        serde_json::from_str(&ollama_http("POST", "/api/show", Some(&body)).ok()?).ok()?;
-    v["model_info"]
+    ollama_http("POST", "/api/show", Some(&body)).ok()
+}
+
+/// The trained window in an `/api/show` document (see [`model_context_length`]).
+fn trained_window(show: &serde_json::Value) -> Option<u64> {
+    show["model_info"]
         .as_object()?
         .iter()
         .find(|(k, _)| k.ends_with(".context_length"))
         .and_then(|(_, v)| v.as_u64())
         .filter(|n| *n > 0)
+}
+
+/// The window Ollama gives a model on its next load, from the model's
+/// `/api/show` body and the default of the server answering. Pure + tested.
+///
+/// A `num_ctx` in the model's own Modelfile wins over the server default, and
+/// Ollama caps either at the trained window. `None` when neither is known: the
+/// API does not report a server's default.
+pub(crate) fn next_load_window(show_body: &str, server_default: Option<u64>) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(show_body).ok()?;
+    let modelfile = v["parameters"]
+        .as_str()
+        .and_then(|params| {
+            params.lines().find_map(|line| {
+                let mut words = line.split_whitespace();
+                if words.next()? != "num_ctx" {
+                    return None;
+                }
+                words.next()?.parse::<u64>().ok()
+            })
+        })
+        .filter(|n| *n > 0);
+    let want = modelfile.or(server_default)?;
+    Some(trained_window(&v).map_or(want, |trained| want.min(trained)))
+}
+
+/// [`next_load_window`] for `model` on the server answering now: the default
+/// is known only for a server this run spawned ([`owned_server_context`]).
+pub(crate) fn expected_context_length(model: &str) -> Option<u64> {
+    next_load_window(&show_model(model)?, owned_server_context().map(u64::from))
 }
 
 pub(crate) fn sanitize_alias(model: &str) -> String {

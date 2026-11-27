@@ -489,6 +489,16 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     // The bearer header of Claude's trace exporter (`claude_otel`), slot 8644 —
     // appended; under its carrier, so the exporter's own variable stays free.
     crate::services::claude_otel::CARRIER,
+    // The proxy tokens of OpenCode's custom endpoint slots 1–8
+    // (`agent_api_keys::CUSTOM_CARRIER`), slots 8645–8652 — appended.
+    crate::services::agent_api_keys::CUSTOM_CARRIER[0],
+    crate::services::agent_api_keys::CUSTOM_CARRIER[1],
+    crate::services::agent_api_keys::CUSTOM_CARRIER[2],
+    crate::services::agent_api_keys::CUSTOM_CARRIER[3],
+    crate::services::agent_api_keys::CUSTOM_CARRIER[4],
+    crate::services::agent_api_keys::CUSTOM_CARRIER[5],
+    crate::services::agent_api_keys::CUSTOM_CARRIER[6],
+    crate::services::agent_api_keys::CUSTOM_CARRIER[7],
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -1337,10 +1347,18 @@ mod tests {
     fn key_carriers_hold_the_slots_after_the_mcp_tokens() {
         for (i, carrier) in crate::services::agent_api_keys::CARRIERS.iter().enumerate() {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
-            assert_eq!(SECRET_UPDATE_ENV_SLOT + at, if i < 2 { 8636 + i } else { 8639 }, "{carrier}");
+            // The three built-ins keep their slots; the eight custom endpoint
+            // carriers are appended after the trace exporter's, 8645 on.
+            let slot = match i {
+                0 | 1 => 8636 + i,
+                2 => 8639,
+                _ => 8645 + (i - 3),
+            };
+            assert_eq!(SECRET_UPDATE_ENV_SLOT + at, slot, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 15);
-        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8644);
+        assert_eq!(crate::services::agent_api_keys::CARRIERS.len(), 3 + 8);
+        assert_eq!(SECRET_ENV.len(), 23);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8652);
         let otel = SECRET_ENV.iter().position(|k| *k == crate::services::claude_otel::CARRIER).unwrap();
         assert_eq!(SECRET_UPDATE_ENV_SLOT + otel, 8644, "the trace exporter's bearer is appended, slot 8644");
         let print = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::PRINT_TOKEN_ENV).unwrap();

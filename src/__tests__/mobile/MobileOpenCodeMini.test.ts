@@ -8,7 +8,9 @@ import {
   openCodeComposer,
   openCodeDialogCloseKeys,
   openCodeModelKeys,
+  openCodeVariantKeys,
   OPENCODE_MODEL_KEYS,
+  OPENCODE_VARIANT_KEYS,
   mergeOpenCodePage,
   openCodeMiniRow,
   openCodePickKeys,
@@ -24,10 +26,10 @@ import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../../lib
 import { BRAND } from "../../lib/brand";
 
 /**
- * `opencode --mini` as the phone reads it. Every screen below is a real one:
- * the rows come from captures of an OpenCode 1.18.31 session replayed through
- * the phone's own emulator at 60 and 100 columns, after `readableScreen` (so
- * trailing padding is gone and runs of blanks are one).
+ * `opencode mini` as the phone reads it, after `readableScreen` (so trailing
+ * padding is gone and runs of blanks are one). The status rows are captures of
+ * OpenCode 2.1.3; the conversation rows (tool calls, wraps) were first read
+ * off a 1.x session and are drawn the same way by 2.x's mini.
  */
 
 /** What clears the picker's search field: backspaces, never ctrl+u. */
@@ -50,69 +52,32 @@ const heading = (text: string): ReadableLine => {
 
 /** The live area at the bottom of every mini frame: the empty input box, then
  * the status row. */
-const FRAME = ["", " BUILD                                                    223.0K (21%) · ctrl+p cmd"];
+const FRAME = ["", "Build · gemma4:e4b · 7.8K (6%) · Ollama · ctrl+p menu"];
 
-describe(`${BRAND.display} Mobile OpenCode mini status`, () => {
-  it("reads the agent, the context and the model a turn footer named", () => {
-    expect(sessionStatus(lines(
-      "The tests pass.",
-      "",
-      "▣ Build · Muse Spark 1.3 Free · 6.2s",
-      ...FRAME,
-    ), "OpenCode")).toEqual({
-      mode: "build",
-      context: "79%",
-      model: "Muse Spark 1.3 Free",
-    });
-  });
-
-  it("reads the chip alone, which is all a narrow pane has room for", () => {
-    expect(sessionStatus(lines("The tests pass.", "", " PLAN"), "OpenCode"))
-      .toEqual({ mode: "plan" });
-  });
-
-  it("prefers the model OpenCode notices in the status row after a switch", () => {
-    expect(sessionStatus(lines(
-      "▣ Build · Muse Spark 1.3 Free · 6.2s",
-      "",
-      " BUILD  model union-alpha                                            ctrl+p cmd",
-    ), "OpenCode")?.model).toBe("union-alpha");
-  });
-
-  it("is not confused by a notice it does not know", () => {
-    expect(sessionStatus(lines("", " BUILD  no variants available                      ctrl+p cmd"), "OpenCode"))
-      .toEqual({ mode: "build" });
-  });
-
+describe(`${BRAND.display} Mobile OpenCode mini frame`, () => {
   it("belongs to a tab whose label names OpenCode, and to no other", () => {
+    expect(sessionStatus(lines("The tests pass.", "", ...FRAME), "OpenCode")).toEqual({ mode: "build", model: "gemma4:e4b", context: "94%" });
     expect(sessionStatus(lines("The tests pass.", "", ...FRAME), "Claude")).toBeNull();
     expect(sessionStatus(lines("The tests pass.", "", ...FRAME))).toBeNull();
   });
 
   it("cuts the box and the status row out of the reading view", () => {
-    const screen = lines("The tests pass.", "", "▣ Build · Muse Spark 1.3 Free · 6.2s", ...FRAME);
+    const screen = lines("The tests pass.", "", "Build · gemma4:e4b · 6.2s", ...FRAME);
     expect(inputFrameStart(screen, "OpenCode")).toBe(3);
     // Without the label the frame is not found, and nothing is cut.
     expect(inputFrameStart(screen, "Claude")).toBe(screen.length);
   });
 
-  it("takes the empty box's placeholder into the frame", () => {
-    const screen = lines(
-      "▣ Build · Muse Spark 1.3 Free · 6.2s",
-      "",
-      "Ask anything... \"Fix a TODO in the codebase\"",
-      "",
-      " BUILD",
-    );
-    expect(inputFrameStart(screen, "OpenCode")).toBe(1);
+  it("is no longer read off OpenCode 1.x's status row", () => {
+    expect(sessionStatus(lines("The tests pass.", "", " BUILD                    223.0K (21%) · ctrl+p cmd"), "OpenCode")).toBeNull();
   });
 });
 
 /**
  * The *full* TUI's composer — a plain `opencode` tab — as `readableScreen`
  * leaves it: the box's `┃` stripped with one space of its padding, its `╹▀▀`
- * bottom edge dropped. Built from the 1.18.34 prompt component's source, not
- * a capture; the model row comes with spans so the provider's muted colour
+ * bottom edge dropped. Built from the prompt component's source and 2.1.3's
+ * start screen; the model row comes with spans so the provider's muted colour
  * can mark where the model's name ends.
  */
 const composerRow = (agent: string, model: string, provider: string, variant?: string): ReadableLine => {
@@ -206,7 +171,7 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
 });
 
 /** OpenCode 2's `mini` status rows, captured from 2.1.3 at the widths named. */
-describe(`${BRAND.display} Mobile OpenCode 2 mini status`, () => {
+describe(`${BRAND.display} Mobile OpenCode mini status`, () => {
   it("reads the idle row, wide and narrow", () => {
     expect(openCodeMiniRow("Build · gemma4:26b · Ollama (local) · ctrl+p menu"))
       .toEqual({ busy: false, mode: "build", model: "gemma4:26b" });
@@ -281,8 +246,7 @@ describe(`${BRAND.display} Mobile OpenCode mini turns`, () => {
 
   it("drops the banner, the tool calls and the turn footer", () => {
     const turns = chatTurns(lines(
-      "█▀▀█  OpenCode",
-      `█  █  ~/${BRAND.slug}/projects/project${BRAND.slug}`,
+      `▪ oc mini v2.3.0 · ~/${BRAND.slug}/projects/project${BRAND.slug}`,
       "",
       "› fix the failing test",
       "",
@@ -292,7 +256,7 @@ describe(`${BRAND.display} Mobile OpenCode mini turns`, () => {
       "",
       "The second assertion was wrong.",
       "",
-      "▣ Build · Muse Spark 1.3 Free · 6.2s",
+      "Build · Muse Spark 1.3 Free · 6.2s",
     ), "OpenCode", 60);
     expect(turns.map((turn) => turn.role)).toEqual(["user", "agent"]);
     expect(texts(turns[0].prompt ?? [])).toEqual(["fix the failing test"]);
@@ -339,9 +303,9 @@ describe(`${BRAND.display} Mobile OpenCode mini turns`, () => {
   });
 
   it("leaves every other family's tab exactly as it was", () => {
-    const screen = lines("█▀▀█  OpenCode", "", "› ask", "", "→ Read src/app.ts", "", "done");
+    const screen = lines("▪ oc mini v2.3.0 · ~/app", "", "› ask", "", "→ Read src/app.ts", "", "done");
     expect(texts(chatTurns(screen, "Claude", 60).flatMap((turn) => turn.lines)))
-      .toEqual(["█▀▀█  OpenCode", "› ask", "→ Read src/app.ts", "", "done"]);
+      .toEqual(["▪ oc mini v2.3.0 · ~/app", "› ask", "→ Read src/app.ts", "", "done"]);
   });
 });
 
@@ -386,7 +350,7 @@ describe(`${BRAND.display} Mobile OpenCode wrapped rows`, () => {
     )).toHaveLength(2);
     expect(joined(60,
       "It reads the catalog, the tabs and the schedules in order,",
-      "▣ Build · Muse Spark 1.3 Free · 6.2s",
+      "Build · Muse Spark 1.3 Free · 6.2s",
     )).toHaveLength(2);
   });
 
@@ -777,6 +741,38 @@ describe(`${BRAND.display} Mobile OpenCode dialogs over the composer`, () => {
     ])).toEqual(["\u001b", ...OPENCODE_MODEL_KEYS]);
     expect(openCodeModelKeys([" Build · DeepSeek V4.1 Flash Free OpenCode", " ~/proj:develop   ctrl+p commands"])).toEqual(OPENCODE_MODEL_KEYS);
   });
+
+  it("opens the effort list by its palette entry's full name, not Variant cycle", () => {
+    // 2.4.2's palette: `variant` lists `Variant cycle` (ctrl+t) first.
+    expect(OPENCODE_VARIANT_KEYS).toEqual(["\u0010", "Switch model variant", "\r"]);
+    expect(openCodeVariantKeys(["            Select model                         esc"])).toEqual(["\u001b", ...OPENCODE_VARIANT_KEYS]);
+    expect(openCodeVariantKeys([" ~/proj:develop   ctrl+p commands"])).toEqual(OPENCODE_VARIANT_KEYS);
+  });
+
+  it("reads 2.4.2's effort list with the highlight on the session's own effort", () => {
+    // Captured 2026-11-26 at 120×40 from "Switch model variant".
+    const rows = [
+      "                                  Select variant                                   esc",
+      "",
+      "                                  Default",
+      "                                  low",
+      "                                  medium",
+      "                              ┃ ▪ high",
+      "                                  xhigh",
+      "                                  max",
+      "",
+      "                       ┃",
+      "                       ┃  Ask anything… \"Fix broken tests\"",
+      "                       ┃",
+      "                       ┃  Build · Claude Opus 5.5 Anthropic · high",
+    ];
+    const page = readOpenCodeModelPage({ length: rows.length, getLine: (at) => ({ translateToString: () => rows[at] }) });
+    expect(page?.variantCursor).toBe(3);
+    const prompt = readOpenCodePicker(readableScreen({ length: rows.length, getLine: (at) => ({ translateToString: () => rows[at] }) }).lines);
+    expect(prompt?.options.map((option) => option.label)).toEqual(["Default", "low", "medium", "high", "xhigh", "max"]);
+    expect(prompt?.options[4].keys).toEqual(["\u001b[B", "\r"]);
+    expect(prompt?.options[3].keys).toEqual(["\r"]);
+  });
 });
 
 /**
@@ -896,6 +892,25 @@ describe(`${BRAND.display} Mobile OpenCode model picker walk`, () => {
     expect(walk.prompt()).toBeNull();
     vi.advanceTimersByTime(10_000);
     expect(typed.length).toBe(sent);
+  });
+
+  it("stops a step's keys still being typed once a row is tapped", () => {
+    // A ↓ landing after the tap's search query moved the highlight to the
+    // next match, and Enter picked `Claude Opus 5.5 Fast` for `Claude Opus 5.5`.
+    vi.useFakeTimers();
+    const live: (() => boolean)[] = [];
+    const walk = new OpenCodePickerWalk((_keys, stillLive) => live.push(stillLive));
+    walk.read(openCodeDialog(groups, 9, "Zen model 2").page());
+    expect(live).toHaveLength(1);
+    expect(live[0]()).toBe(true);
+    walk.hold();
+    expect(live[0]()).toBe(false);
+    // …and once the query has filtered the list into no picker the walk knows.
+    const next = new OpenCodePickerWalk((_keys, stillLive) => live.push(stillLive));
+    next.read(openCodeDialog(groups, 9, "Zen model 2").page());
+    expect(live[1]()).toBe(true);
+    next.read(null);
+    expect(live[1]()).toBe(false);
   });
 
   it("starts over for the dialog's next step", () => {

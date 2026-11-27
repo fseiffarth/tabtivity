@@ -52,7 +52,17 @@ gate_lock() {
     fi
     said=1
   fi
-  flock "$lock" bash -c 'touch "$1"; while kill -0 "$2" 2>/dev/null; do sleep 2; done' \
+  # The caller counts as gone once it exited, reaped or not: `kill -0` still
+  # reaches a zombie, and a parent that waits on its children one at a time
+  # (a test runner, a shell) may not reap this one until a later run that
+  # waits on this lock has ended — so neither would ever end (2026-11-25).
+  # Without `ps`, `kill -0` alone decides.
+  flock "$lock" bash -c '
+    touch "$1"
+    while kill -0 "$2" 2>/dev/null; do
+      case "$(ps -o stat= -p "$2" 2>/dev/null)" in Z*) break ;; esac
+      sleep 2
+    done' \
     gate-lock "$ready" "$$" </dev/null >/dev/null 2>&1 &
   GATE_LOCK_PID=$!
   until [ -e "$ready" ]; do

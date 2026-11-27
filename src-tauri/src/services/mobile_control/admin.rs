@@ -225,10 +225,18 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
                 Err(message) => AdminResponse::Error { message },
             }
         }
+        Ok(AdminRequest::RenameDevice { device_id, name }) => match auth.lock_ok().rename_device(&device_id, &name) {
+            Ok(()) => AdminResponse::Ok,
+            Err(message) => AdminResponse::Error { message },
+        },
         Ok(AdminRequest::SetHiddenSections { device_id, sections }) => match auth
             .lock_ok()
             .set_hidden_sections(&device_id, &sections)
         {
+            Ok(()) => AdminResponse::Ok,
+            Err(message) => AdminResponse::Error { message },
+        },
+        Ok(AdminRequest::SetShellTabs { device_id, on }) => match auth.lock_ok().set_shell_tabs(&device_id, on) {
             Ok(()) => AdminResponse::Ok,
             Err(message) => AdminResponse::Error { message },
         },
@@ -1024,6 +1032,7 @@ mod frame_tests {
             last_seen_at: None,
             online: true,
             hidden_sections: vec![],
+            shell_tabs: false,
         }];
         let held = |device: &str, tmux: &str, watched| HeldTab {
             tmux_session: tmux.into(),

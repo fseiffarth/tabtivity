@@ -1,4 +1,4 @@
-import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type SyntheticEvent, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type SyntheticEvent, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type DragEvent as ReactDragEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import { wrapStep } from "../../lib/wrapStep";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -65,6 +65,9 @@ import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges } from "./TerminalReaderChanges";
 import { useCheckpointNow, useReaderCheckpoints } from "./ReaderCheckpoints";
 import { TerminalReaderFiles, type ReaderFile } from "./TerminalReaderFiles";
+import { startFilePointerDrag } from "../files/fileTreeDrag";
+import { FileDropContext } from "../files/fileDropContext";
+import { setLinkDragData } from "../../lib/terminal/linkDrag";
 import { inboxLeaves } from "../../../mobile-web/src/terminal/inboxRefs";
 import { stopKey } from "../../../mobile-web/src/terminal/agentBusy";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
@@ -76,7 +79,7 @@ import { PromptGhost } from "./PromptGhost";
 import { ReaderAnswerAlbum, ReaderAnswerFilesContext, useReaderAnswerFiles } from "./ReaderAnswerFiles";
 import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
-import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
+import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, revealInSidePanel, sidePanelRevealOf, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { isPathWithin, relativePathWithin, resolvePath } from "../../lib/paths";
 import { NAMES } from "../../lib/brand";
@@ -87,7 +90,7 @@ import { parseAppLink } from "../../lib/navigation/appLinks";
 import { ReaderArtifactDialog } from "./ReaderArtifactDialog";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, viewSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
-import { claudeBoxWords, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
+import { finishStop, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, stopBoxWords, takeBackStopped, takenPrompts, takesBackStopped, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, leadDraft, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu, slashMenuKey } from "./ReaderSlashMenu";
@@ -1982,21 +1985,24 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [takenBack, setTakenBack] = useState<string | null>(null);
   /** The stop key (`stopWith`), the working row's Stop. With a queue on screen it is Send now where
    * a lone Esc would not send it: Codex would drop it into a box the chat
-   * does not show, OpenCode asks for a second press. */
+   * does not show, OpenCode asks for a second press — as it does to stop a
+   * turn at all (`finishStop`). */
   const pressEscape = useCallback(() => {
     const driver = paneDriver();
     if (tabFamily && tabFamily !== "claude" && queuedHintShown(driver.rows(), tabFamily)) {
       void sendQueuedNow(driver, tabFamily);
       return;
     }
-    // Claude hands a prompt back, unsent, when the stop lands before the
-    // turn answered: it comes back into the composer, not left in a box the
-    // next send empties.
-    const sent = tabFamily === "claude" && workingRef.current ? stoppableRef.current() : [];
-    const before = sent.length > 0 ? claudeBoxWords(driver.rows()) : "";
+    // Claude, and OpenCode 2.4.2's full TUI, hand a prompt back, unsent, when
+    // the stop lands before the turn answered: it comes back into the
+    // composer, not left in a box the next send empties.
+    const family = takesBackStopped(tabFamily) ? tabFamily : null;
+    const sent = family && workingRef.current ? stoppableRef.current() : [];
+    const before = family && sent.length > 0 ? stopBoxWords(driver.rows(), family) : "";
     void typeIntoPane([stopWith]).then(async () => {
-      if (sent.length === 0) return;
-      const back = await takeBackStopped(driver, sent.map((item) => item.text), before);
+      await finishStop(driver, tabFamily);
+      if (!family || sent.length === 0) return;
+      const back = await takeBackStopped(driver, sent.map((item) => item.text), before, undefined, family);
       if (!back) return;
       const item = sent[back.index];
       if (item.id !== undefined && sendTargetRef.current) forgetSentPrompts(sendTargetRef.current, [item.id]);
@@ -2231,8 +2237,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const ctx = pathContextRef.current;
     setPathHover(null);
     const at = { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined };
-    // A file opens in the Files tab; a folder, or Ctrl+click, still as a tab —
-    // except a file no in-app viewer shows, which has no tab to open.
+    // Ctrl+click shows it in the side panel's file tree where that panel can.
+    // Otherwise a file opens in the Files tab; a folder, or Ctrl+click, still
+    // as a tab — except a file no in-app viewer shows, which has no tab to open.
+    if (newSubwindow && revealInSidePanel(entry, { scope, projectId, projectDir: ctx.projectDir })) return;
     if (onShowFiles && !entry.is_dir && (!newSubwindow || !internalViewerFor(entry, ctx.disabled))) {
       showInFiles(entry, at);
       return;
@@ -2267,7 +2275,36 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setArtifact({ target: name, request: readerRequest(scope, current, cwd, undefined, 0) ?? {} });
     return true;
   };
+  // Inside a popout, a dragged file link's drop goes through its controller.
+  const fileDrop = useContext(FileDropContext);
+  // When a file link's drag last ended: the click its release fires is swallowed.
+  const dragClickGuard = useRef(0);
+  // A file link drags like a Data row (`startFilePointerDrag`): onto a tab
+  // bar or pane as a tab, out of the window as a copy into another app.
+  const onPathPointerDown = (event: ReactPointerEvent) => {
+    const el = pathLinkAt(event.target);
+    const entry = el ? pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "") : null;
+    if (!entry) return;
+    const ctx = pathContextRef.current;
+    startFilePointerDrag(event, entry, {
+      projectId, projectDir: ctx.projectDir || tabDir, disabled: ctx.disabled, host: !!remoteHost, fileDrop, dragClickGuard,
+    });
+  };
+  const webLinkAt = (target: EventTarget | null) =>
+    target instanceof Element ? target.closest<HTMLElement>(".web-link[data-href]") : null;
+  // A web link drags its address out (HTML5: a browser, a mail, a text box);
+  // `draggable` is set on the first hover, the chat's markup has none.
+  const onPathDragStart = (event: ReactDragEvent) => {
+    const url = chatLinkUrl(webLinkAt(event.target)?.getAttribute("data-href"));
+    if (!url) return;
+    setPathHover(null);
+    setLinkDragData(event.dataTransfer, url);
+  };
   const onPathClick = (event: ReactMouseEvent) => {
+    if (Date.now() - dragClickGuard.current < 400) {
+      event.preventDefault();
+      return;
+    }
     if (openWebAt(event.target) || openArtifactAt(event.target)) {
       event.preventDefault();
       return;
@@ -2288,6 +2325,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     openPathAt(el, event.ctrlKey || event.metaKey);
   };
   const onPathOver = (event: ReactMouseEvent) => {
+    const web = webLinkAt(event.target);
+    if (web && !web.draggable && chatLinkUrl(web.getAttribute("data-href"))) web.draggable = true;
     const el = pathLinkAt(event.target);
     const entry = el ? pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "") : null;
     if (!el || !entry) return;
@@ -2299,6 +2338,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       line: Number(el.dataset.line) || undefined,
       isDir: entry.is_dir,
       viewless: !entry.is_dir && !internalViewerFor(entry, pathContextRef.current.disabled),
+      sidePanel: sidePanelRevealOf(entry, { scope, projectId, projectDir: pathContextRef.current.projectDir }) !== null,
     });
   };
   const onPathOut = (event: ReactMouseEvent) => {
@@ -2900,7 +2940,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    *  screen and the tab's own hooks both idle, no prompt waiting — so the
    *  chat's end says so, as the tab strip's ✓ does (`turnFinishedRule`). */
   const tabBusy = useActivityStore((s) => !!s.busyByTab[ptyId]);
-  const finishedRule = sessionTurn && !tabBusy && pending.length === 0 && !unsavedReply
+  const sessionAgentsWorking = !browsed && entries.some((entry) => entry.kind === "agent" && subagentAtWork(entry, !!live.working));
+  const finishedRule = sessionTurn && !tabBusy && !sessionAgentsWorking && pending.length === 0 && !unsavedReply
     ? turnFinishedRule(turns)
     : null;
   /** The conversation the bar and the Main pill go back up to. */
@@ -3271,6 +3312,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           className="terminal-reader-list"
           onScroll={() => { onScroll(); setPathHover(null); }}
           onClick={onPathClick}
+          onPointerDown={onPathPointerDown}
+          onDragStart={onPathDragStart}
           onKeyDown={onPathKey}
           onMouseOver={onPathOver}
           onMouseOut={onPathOut}
@@ -3517,6 +3560,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           use24h={use24h}
           picked={shownFile}
           projectId={projectId}
+          projectDir={pathContext.projectDir || tabDir}
+          hostFiles={!!remoteHost}
           disabled={pathContext.disabled}
           visible={visible}
           scopeNote={openStep ? t("terminal.changes.subagent", { name: openStep.task || openStep.role || "" })

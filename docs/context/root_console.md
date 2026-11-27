@@ -271,7 +271,9 @@ and one reply out).
   Codex gets `-c mcp_servers.tabtivity.url=…` plus `bearer_token_env_var`. Vibe
   (a local-model tab) gets `VIBE_MCP_SERVERS` (naming the token via
   `api_key_env`) and `VIBE_ENABLED_TOOLS=["tabtivity_*"]` — its env layer outranks
-  the per-model `config.toml` that turns tools off — but only when the model
+  the per-model `config.toml` (tools off, or Vibe's own on for a model with the
+  `tools` capability), so a root tab gets the MCP tools and no shell; a project
+  tab of a tools-on model also gets `"*"` (`root_mcp::keep_vibe_tools`) — but only when the model
   wears the Models & agents menu's opt-in "MCP" chip
   (`settings.ollama_mcp_models`). Every other agent gets `TABTIVITY_ROOT_MCP_URL`
   and `TABTIVITY_ROOT_MCP_TOKEN` only. `root_mcp::WIRED_CLIS` lists the CLIs that

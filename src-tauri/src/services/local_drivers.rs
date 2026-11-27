@@ -5,7 +5,7 @@
 //! re-exports these names.
 
 use crate::services::ollama_client::{
-    model_context_length, model_has_capability, ollama_addr, ollama_status_read, sanitize_alias,
+    expected_context_length, model_context_length, model_has_capability, ollama_addr, ollama_status_read, sanitize_alias,
     validate_model_name, DEFAULT_OLLAMA_ADDR,
 };
 
@@ -42,8 +42,9 @@ pub(crate) struct LocalDriver {
     /// on arrival. Every entry below is `true`, because every entry is a coding
     /// agent; the flag is explicit rather than assumed because `vibe` — which is
     /// deliberately *not* in this list — takes the opposite route and turns
-    /// tools off (`enabled_tools = ["__no_tools__"]` in `prepare_local_agent`),
-    /// which is exactly why it still works on a completion-only model.
+    /// tools off on a model without the `tools` capability
+    /// (`enabled_tools = ["__no_tools__"]`, [`vibe_local_config`]), which is
+    /// exactly why it still works on a completion-only model.
     pub(crate) needs_tools: bool,
     /// Extra **fallback** args that switch the agent's reasoning off, for the
     /// agents that send a reasoning effort whether or not the model can take
@@ -290,6 +291,13 @@ pub(crate) fn local_launch_line_ok(driver: &str, model: &str, cmd: &str, args: &
 /// for any other line. What a local-models-only project (`services::
 /// agent_privacy`) checks a spawn's own argv with, never a renderer's claim.
 pub(crate) fn identify_local_launch(cmd: &str, args: &[String]) -> Option<(&'static str, String)> {
+    // A local Claude Code tab's line carries its conversation behind `--`
+    // ([`claude_session_tail_ok`]); the line in front of it is judged as any.
+    if let Some(cut) = args.iter().position(|a| a == "--") {
+        let (line, tail) = (&args[..cut], &args[cut + 1..]);
+        return identify_local_launch(cmd, line)
+            .filter(|(driver, _)| *driver == "claude" && claude_session_tail_ok(tail));
+    }
     let candidates = args.iter().flat_map(|arg| {
         let bare = arg.strip_prefix("ollama/").unwrap_or(arg);
         [arg.as_str(), bare]
@@ -302,6 +310,24 @@ pub(crate) fn identify_local_launch(cmd: &str, args: &[String]) -> Option<(&'sta
         }
     }
     None
+}
+
+/// Whether `tail` (what follows `--` on `ollama launch claude --model <m>`,
+/// handed to Claude Code as is) is only the tab's conversation: the
+/// `--session-id <uuid>` the ＋ menu adds, or the `--resume <uuid>` the spawn's
+/// resolver turns it into, optionally followed by the `--permission-mode
+/// <mode>` it re-applies (`agent_session::resolve_claude_session`). Never
+/// persisted: a saved `localLaunch` stays the plain line
+/// ([`local_launch_line_ok`]) and the restore adds the tail from the tab's key.
+pub(crate) fn claude_session_tail_ok(tail: &[String]) -> bool {
+    use crate::services::agent_session::{is_permission_mode, is_uuid_shaped};
+    match tail {
+        [flag, id] if flag == "--session-id" || flag == "--resume" => is_uuid_shaped(id),
+        [flag, id, mode_flag, mode] if flag == "--resume" => {
+            is_uuid_shaped(id) && mode_flag == "--permission-mode" && is_permission_mode(mode)
+        }
+        _ => false,
+    }
 }
 
 /// The `vibe` provider stanza for an Ollama at `addr` (`host:port`): the
@@ -319,13 +345,31 @@ pub(crate) fn vibe_model_block(model: &str, alias: &str) -> String {
     )
 }
 
+/// The line that turns every Vibe tool off: no tool is named `__no_tools__`, and
+/// Vibe's `enabled_tools` is an allowlist of name globs.
+const VIBE_NO_TOOLS: &str = "enabled_tools = [\"__no_tools__\"]\n";
+
 /// A whole `config.toml` for a local `vibe` tab on `model` at `addr`: the
-/// model active, tools off, one Ollama provider and nothing else.
-pub(crate) fn vibe_local_config(model: &str, alias: &str, addr: &str) -> String {
-    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
+/// model active, one Ollama provider and nothing else. `tools` is whether the
+/// model reports Ollama's `tools` capability: with it, Vibe keeps its own tools
+/// (no `enabled_tools` line: Vibe reads an empty allowlist as all of them);
+/// without it they are off, since such a model refuses any request that carries
+/// a tool list.
+pub(crate) fn vibe_local_config(model: &str, alias: &str, addr: &str, tools: bool) -> String {
+    let mut cfg = format!("active_model = \"{alias}\"\n");
+    if !tools {
+        cfg.push_str(VIBE_NO_TOOLS);
+    }
     cfg.push_str(&vibe_provider_block(addr));
     cfg.push_str(&vibe_model_block(model, alias));
     cfg
+}
+
+/// Whether a local `vibe` home's `config.toml` keeps Vibe's own tools on: what
+/// [`vibe_local_config`] writes for a tool model. Any `enabled_tools` line
+/// (an older build's tools-off config included) reads as off.
+pub(crate) fn vibe_config_keeps_tools(text: &str) -> bool {
+    !text.lines().any(|l| l.trim_start().starts_with("enabled_tools"))
 }
 
 /// The environment names whose value, set in a project's or the user's Claude settings,
@@ -391,6 +435,36 @@ pub(crate) fn claude_managed_settings(model: &str, addr: &str) -> String {
         "allowedProviders": ["customEndpoint"],
     }))
     .unwrap_or_default()
+}
+
+/// The timeouts a local-model Claude Code gets, 30 minutes each (the most Claude Code
+/// accepts for the idle one). Claude Code drops a response after 5 minutes with no
+/// streamed byte, and Ollama streams nothing while it re-reads a prompt: measured
+/// 2026-11-25, two forks of one qwen3-coder:30b tab on the 890M kept evicting each
+/// other's prompt cache, each re-read 12k–23k tokens at 55–110 t/s, and every request
+/// died at 5 min 20 s–5 min 50 s and started over. The retry re-reads the same prompt,
+/// so the default turns a slow answer into none.
+pub(crate) const LOCAL_CLAUDE_TIMEOUT_ENV: &[(&str, &str)] =
+    &[("CLAUDE_STREAM_IDLE_TIMEOUT_MS", "1800000"), ("API_TIMEOUT_MS", "1800000")];
+
+/// Whether `cmd args` starts a local-model Claude Code: `ollama launch claude`, its
+/// only launch form ([`LOCAL_DRIVERS`]). Pure.
+pub(crate) fn is_local_claude_line(cmd: &str, args: &[String]) -> bool {
+    let bin = std::path::Path::new(cmd).file_stem().and_then(|s| s.to_str()).unwrap_or(cmd);
+    bin == "ollama" && args.first().is_some_and(|a| a == "launch") && args.get(1).is_some_and(|a| a == "claude")
+}
+
+/// Adds [`LOCAL_CLAUDE_TIMEOUT_ENV`] to a local Claude Code's spawn `env`, leaving a
+/// value already there or in `inherited` (the environment the app runs in) alone.
+pub(crate) fn add_local_claude_timeouts(
+    env: &mut std::collections::HashMap<String, String>,
+    inherited: impl Fn(&str) -> bool,
+) {
+    for (name, value) in LOCAL_CLAUDE_TIMEOUT_ENV {
+        if !inherited(name) {
+            env.entry((*name).to_string()).or_insert_with(|| (*value).to_string());
+        }
+    }
 }
 
 /// The CLI a local driver runs (`claude` for `"claude"`), for naming the agent
@@ -515,31 +589,34 @@ pub(crate) fn loaded_models(ps_body: &str) -> Option<Vec<LoadedModel>> {
 /// picker. An empty list is kept deliberately: nothing loaded means no Ollama
 /// models to offer. Pure + tested.
 ///
-/// With `context_limits` (OpenCode 2), a loaded model also carries
-/// `limit.context`: the window Ollama runs it with. OpenCode 2 discovers Ollama's
+/// A loaded model also carries `limit.context`: the window Ollama runs it
+/// with. OpenCode 2 discovers Ollama's
 /// models itself and takes each one's *trained* window from `/api/show`
 /// (262 144 for `qwen3-coder`), so its context % and its compaction measured
 /// against a window the server never gave — Ollama runs it at 32 768, or what
 /// the context setting says, and silently cuts the rest. A config `limit` wins
-/// over that discovery (checked on 2.3.2). OpenCode 1's schema requires
-/// `output` beside `context`, so 1.x gets none. A model not loaded yet has no
-/// window to report and is left to OpenCode's own figure.
+/// over that discovery (checked on 2.3.2). A requested model not loaded
+/// yet carries `requested_window`, the window its first load will get
+/// ([`expected_context_length`]); without one it is left to OpenCode's own
+/// figure.
 pub(crate) fn opencode_ollama_config(
     addr: &str,
     loaded: &[LoadedModel],
     requested: Option<&str>,
-    context_limits: bool,
+    requested_window: Option<u64>,
 ) -> String {
     let mut names: Vec<&str> = loaded.iter().map(|m| m.name.as_str()).collect();
+    let mut unloaded = None;
     if let Some(r) = requested.filter(|r| !r.is_empty() && !names.contains(r)) {
         names.push(r);
+        unloaded = Some(r);
     }
     let window = |name: &str| {
         loaded
             .iter()
             .find(|m| m.name == name)
             .and_then(|m| m.context)
-            .filter(|_| context_limits)
+            .or_else(|| requested_window.filter(|_| unloaded == Some(name)))
     };
     let models: serde_json::Map<String, serde_json::Value> = names
         .iter()
@@ -567,22 +644,24 @@ pub(crate) fn opencode_ollama_config(
 
 /// `OPENCODE_CONFIG_CONTENT` for an OpenCode spawn asking for `requested`, or
 /// `None` when Ollama cannot be asked — an unreachable server leaves the user's
-/// own config alone rather than emptying its model list on a guess. `v2`: the
-/// OpenCode being spawned is 2.x (see [`opencode_ollama_config`]).
-pub(crate) fn opencode_loaded_models_config(requested: Option<&str>, v2: bool) -> Option<String> {
+/// own config alone rather than emptying its model list on a guess.
+pub(crate) fn opencode_loaded_models_config(requested: Option<&str>) -> Option<String> {
     let loaded = loaded_models(&ollama_status_read("/api/ps").ok()?)?;
     let addr = ollama_addr().ok()?;
-    Some(opencode_ollama_config(&addr, &loaded, requested, v2))
+    let requested_window = requested
+        .filter(|r| !r.is_empty() && !loaded.iter().any(|m| m.name == *r))
+        .and_then(expected_context_length);
+    Some(opencode_ollama_config(&addr, &loaded, requested, requested_window))
 }
 
 /// The inline OpenCode config an assistant chat merges its own settings into:
 /// [`opencode_loaded_models_config`], or — when Ollama cannot be asked — the
 /// same `ollama` provider block with no loaded models and `requested` alone,
 /// since the assistant home holds no config of the user's to fall back on.
-pub(crate) fn opencode_assistant_provider(requested: &str, v2: bool) -> String {
-    opencode_loaded_models_config(Some(requested), v2).unwrap_or_else(|| {
+pub(crate) fn opencode_assistant_provider(requested: &str) -> String {
+    opencode_loaded_models_config(Some(requested)).unwrap_or_else(|| {
         let addr = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
-        opencode_ollama_config(&addr, &[], Some(requested), v2)
+        opencode_ollama_config(&addr, &[], Some(requested), None)
     })
 }
 
@@ -638,8 +717,9 @@ pub(crate) fn local_catalog_path(model: &str) -> std::path::PathBuf {
 ///
 /// The field set is Ollama's own for that generated file — the shape its
 /// authors established Codex accepts — with the two model-dependent facts read
-/// off `/api/show` rather than assumed: the context window, and whether any
-/// reasoning level may be offered at all.
+/// off Ollama rather than assumed: the context window (the one Ollama runs the
+/// model with, [`served_context_length`]), and whether any reasoning level may
+/// be offered at all.
 pub(crate) fn write_local_catalog(model: &str, thinking: Option<bool>) -> Result<std::path::PathBuf, String> {
     validate_model_name(model)?;
     let path = local_catalog_path(model);
@@ -650,11 +730,24 @@ pub(crate) fn write_local_catalog(model: &str, thinking: Option<bool>) -> Result
     let body = local_catalog_json(
         model,
         thinking,
-        model_context_length(model),
+        served_context_length(model),
         model_has_capability(model, "vision") == Some(true),
     );
     std::fs::write(&path, body).map_err(|e| format!("catalog write: {e}"))?;
     Ok(path)
+}
+
+/// The window Ollama runs `model` with: as loaded now, else as its next load
+/// will give it, else its trained window. The trained one alone made Codex
+/// compact against 262 144 tokens for a `qwen3-coder` Ollama ran at 32 768 and
+/// silently cut; it stays only as the last resort it was before.
+fn served_context_length(model: &str) -> Option<u64> {
+    ollama_status_read("/api/ps")
+        .ok()
+        .and_then(|body| loaded_models(&body))
+        .and_then(|loaded| loaded.into_iter().find(|m| m.name == model)?.context)
+        .or_else(|| expected_context_length(model))
+        .or_else(|| model_context_length(model))
 }
 
 /// The catalog document itself — pure, so the shape Codex is handed is a unit

@@ -128,7 +128,7 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "opencode",
-        version: "2.4.1",
+        version: "2.4.2",
         surface: "§1.5 — launch flags, session plugin, stored messages and tools, TUI screens, Tabby's tool pin",
     },
     Verified {
@@ -158,12 +158,12 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "antigravity",
-        version: "1.5.17",
+        version: "1.5.18",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
         agent: "copilot",
-        version: "1.0.115",
+        version: "1.0.116",
         surface: "§1.5 — -p/--session-id/--continue, session-state store, authTokens login layout",
     },
     Verified {
@@ -685,23 +685,9 @@ pub fn codex_runs_tui(args: &[String]) -> bool {
         .is_none_or(|arg| arg.starts_with('-') || arg == "resume" || arg == "fork")
 }
 
-pub fn opencode_is_v2(seen: Option<&Seen>) -> bool {
-    seen.and_then(|seen| seen.version.as_deref())
-        .is_some_and(|v| version_cmp(v, "2.0.0") != std::cmp::Ordering::Less)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn opencode_v2_startup_is_selected_only_for_a_known_v2_release() {
-        let seen = |v: &str| Seen { version: parse_version(v), ..Seen::default() };
-        assert!(opencode_is_v2(Some(&seen("opencode v2.1.2"))));
-        assert!(!opencode_is_v2(Some(&seen("1.18.34"))));
-        assert!(!opencode_is_v2(Some(&seen("unavailable"))));
-        assert!(!opencode_is_v2(None));
-    }
 
     #[test]
     fn codex_takes_no_daemon_from_0_156_0_on() {

@@ -1744,6 +1744,155 @@ with two synthetic checks; nothing was run live and nothing is fixed.
     - [ ] 🤖 Automated test — a Build on an engine that ignores `p` writes
       nothing outside the document and output folders.
 
+### Threat-model recheck follow-ups (2026-11-26)
+
+From the review of the week's code (`4cf65018d..367e24e9a`) and of every
+viewer as it stands, in `docs/threat_model.md` ("Gaps found 2026-11-26", gaps
+123–155) and its evidence file `docs/threat_recheck_2026_11_26_handoff.md`.
+Read from the code with synthetic checks; nothing was run live and nothing is
+fixed. Order: the two high gaps, then by severity.
+
+2453. **Validate every ref a host prints before it reaches local git.** A
+    ref's "sha" is any text; it becomes an option of `rev-list` and `bundle
+    create`: truncates any file, uploads reflog and stashes (gap 123, high).
+    Hex-only shas and `valid_rev` names in `parse_refs`/`parse_head`, the
+    same filter on `known_shas`'s result and the bundle excludes,
+    `--end-of-options` as a second layer.
+    - [ ] 🤖 Automated test — a ref line `--output=x y` yields no entry; no
+      host string reaches a local argv unvalidated.
+2454. **No TeX build without a click, and confined reads for every build.**
+    Mark up rebuilds agent-edited sources on the host with reads open (gap
+    124, high). Keep the Rebuild button and hold Submit until it is pressed;
+    `openin_any=p` for pdfLaTeX/XeLaTeX builds.
+    - [ ] Decide: run Build inside the folder's fence (LuaLaTeX cannot run
+      under `openin_any=p`).
+    - [ ] 🤖 Automated test
+2455. **Extract archives through held directory handles, with a budget.**
+    Check-then-create by path lets a racing agent write outside the project
+    (gap 125, medium to high; #869's residual).
+    - [ ] 🤖 Automated test
+2456. **Lockstep must not write through links in `.git/`.** The bundle moves
+    to the state directory (as `worker_sync` has it); every fetch in a tree
+    an agent can write gets `--no-write-fetch-head`, `git_pull.rs` and
+    `branch_exchange.rs` included (gap 126, medium).
+    - [ ] 🤖 Automated test
+2457. **The checkpoint snapshot must not follow a swapped folder.** Stage
+    from a handle-held view or inside a one-shot fence; re-check a
+    linked-worktree folder at every git call (gap 127, medium).
+    - [ ] 🤖 Automated test
+2458. **One bounded, regular-file-only reader for every TeX source read.**
+    `resolve_tex_root`, `auto_engine`, `scan_tex_includes`,
+    `detect_engine_hint`; `synctex_edit` returns only paths inside the
+    scope's roots (gap 128, medium).
+    - [ ] 🤖 Automated test — a `.tex` linked to `/dev/zero` opens with an
+      error, not a growing read.
+2459. **Refuse network paths a `.tex` names before any canonicalize or
+    stat.** `magic_root`, the include walk, the engine-hint scan;
+    `open_confined` checks roots lexically first (gap 129, medium on
+    Windows).
+    - [ ] 🤖 Automated test
+2460. **File-tree operations act through a held parent handle.** Delete,
+    rename, move, create and `write_confined`; a link is removed as a link
+    (gap 130, medium). Same change for skill Uninstall and overwrite-copy
+    (gap 131, medium).
+    - [ ] 🤖 Automated test
+2461. **The Prettier trust gate must see every shape that loads code.**
+    `overrides[].options.plugins`, a `package.yaml` string config, an
+    escaped key (gap 132, medium).
+    - [ ] Decide: parse properly and walk `overrides`, or run Prettier with
+      `--no-config --no-plugin-search` unless approved.
+    - [ ] 🤖 Automated test
+2462. **`watch_dir` off the main thread, with the bounded reader.** A FIFO at
+    the `.git` pointer or `commondir` freezes every window (gap 133, medium).
+    - [ ] 🤖 Automated test
+2463. **Share only the login record of a credentials file.** Claude's file
+    also holds MCP OAuth tokens (gap 134, medium); logins are adopted with no
+    real account guard and three CLIs' files may carry an endpoint (gap 135).
+    - [ ] Check the file layouts on the real CLIs (Claude MCP tokens; Qwen,
+      Auggie, Plandex endpoints).
+    - [ ] 🤖 Automated test
+2464. **An untouched suggestion is not a draft for hands-free.** The phone
+    sends the local model's suggestion on any sound (gap 136, medium).
+    - [ ] Check the desktop Reader's hands-free for the same shape.
+    - [ ] 🤖 Automated test
+2465. **Strip control characters from text pasted into a terminal and from
+    text the viewers copy.** ESC ends bracketed paste early (gap 137,
+    medium).
+    - [ ] 🤖 Automated test
+2466. **Markdown renderer: a linear heading split, a nesting cap, an error
+    boundary around the Chat's answers.** One line hangs the window; deep
+    quotes unmount the UI (gap 138, medium).
+    - [ ] 🤖 Automated test — timing tests for the heading, `$$`, link-label
+      and URL patterns.
+2467. **Finish gap 114.** Accept a `file://` reference only with a matching
+    `Files` entry; `pty_drop_files` refuses fence-hidden roots and opens with
+    no link followed; the SSH copy is removed when the tab ends (gap 139).
+    - [ ] 🤖 Automated test
+2468. **An entry-only question card needs the CLI's own question hook.**
+    Same for steering's raw digit (gap 140).
+    - [ ] 🤖 Automated test
+2469. **Screen text must not raise the app's controls unchecked.** Keep the
+    auto-continue's busy hold; show the host on the sign-in card (gap 141).
+    - [ ] 🤖 Automated test
+2470. **Local models only: fail closed at creation; no cloud logins in a
+    locked project's container home** (gap 142).
+    - [ ] 🤖 Automated test
+2471. **The backend refuses an empty `relPath` without `relPaths`** (gap 143).
+    - [ ] 🤖 Automated test
+2472. **Claude OTel receiver: guarded listener, model and key caps, a size
+    bound on load** (gap 144).
+    - [ ] 🤖 Automated test
+2473. **Box tabs seed folder trust only from what the user trusted** (gap
+    145).
+    - [ ] 🤖 Automated test
+2474. **The capped reader everywhere an agent or a project chose the file.**
+    `HomeFile::read`, the Codex rollout scan, the trust gate's subjects,
+    project search (gap 146).
+    - [ ] 🤖 Automated test
+2475. **No by-path create through a plantable link.** The seeded marker
+    through `home_io`; gate state out of `.git/` or created exclusively (gap
+    147).
+    - [ ] 🤖 Automated test
+2476. **Mail autocomplete drops a completion holding a domain, an address or
+    a long digit run that is not in the user's own draft** (gap 148).
+    - [ ] 🤖 Automated test
+2477. **Strip userinfo from `remote.origin.url` at pairing** (gap 149).
+    - [ ] 🤖 Automated test
+2478. **Remote scripts must not depend on the login shell's quoting** (gap
+    150, fish).
+    - [ ] 🤖 Automated test
+2479. **No interpreter probe on view** (gap 151; with #2444, gap 116).
+    - [ ] 🤖 Automated test
+2480. **The SQLite viewer on the hardened opener** (gap 152).
+    - [ ] 🤖 Automated test
+2481. **Quoted page words go through `strip_invisible`** (gap 153).
+    - [ ] 🤖 Automated test
+2482. **Ask before loading a deck's fonts** (gap 154).
+    - [ ] 🤖 Automated test
+2483. **A budget per viewer before the first draw.** pdf.js `maxImageSize`
+    and `canvasMaxAreaInBytes`, a page ceiling, capped canvases, GIF frame
+    count, TeX highlighter and BibTeX scans linear, the SyncTeX box walk, CSV
+    columns (gap 155); the diff viewer's file count (gap 112, #2438) and the
+    print ceilings (gap 113, #2439) belong to the same pass.
+    - [ ] 🤖 Automated test
+2484. **Correct the CodeQL review note for `request_body.rs`.** "Every route
+    authenticates before parsing" is wrong as worded: `open_ticket` parses
+    before its guard and answers a caller with no session.
+    - [ ] 🤖 Automated test
+2485. **Hardening from the 2026-11-26 recheck** (handoff, "Hardening
+    notes"): never re-apply a raised permission mode from a fence-writable
+    record; accept only `localhost` and IP literals in the loopback rule; an
+    origin check on the phone's next-prompt route; the share dialog must not
+    write "all phones, future ones too" by default; printer names and job ids
+    after `--`; `apply_mode` honours the umask; a pixel budget for notebook
+    and ODT pictures; Mermaid labels lose `class`, `style` and `data-*`.
+    - [ ] 🤖 Automated test
+2486. **Read what the 2026-11-26 recheck left unread** (handoff, "Coverage
+    limits"), and settle its open questions (handoff, "Open questions").
+    First: `agent_transcript.rs` parse bodies, `terminal/**`, the bulk of
+    `remote_sync.rs`/`worker_sync.rs`, `printing.rs`'s IPP client,
+    `default_apps.rs`/`ide.rs`/`os_open`, the YAML and CSV edit code.
+
 ### Safe for everyone — non-expert users (2026-09-24)
 
 Plan: `docs/safe_for_everyone_plan.md`. Goal: every "⚠️ yours" row in

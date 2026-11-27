@@ -20,6 +20,7 @@ import {
 import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
+import { useSidePanelRevealStore } from "../../stores/sidePanelReveal";
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
@@ -369,7 +370,25 @@ describe("the Reader's path links", () => {
     await waitFor(() => expect(document.body.querySelector(".link-open-hint")).toBeNull());
   });
 
-  it("opens the file in a new subwindow on Ctrl+click", async () => {
+  it("shows the file in the side panel's tree on Ctrl+click", async () => {
+    useProjectsStore.setState({ activeId: "p" });
+    useSidePanelRevealStore.setState({ pending: null });
+    const asked = vi.fn();
+    window.addEventListener("app:reveal-side-panel", asked);
+    render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
+    const link = await screen.findByText((_, el) => el?.tagName === "A" && el.textContent === "docs/plan.md");
+    fireEvent.mouseOver(link);
+    expect(document.body.querySelector(".link-open-hint")?.textContent).toContain("Ctrl+click: show in the side panel");
+    await act(async () => { fireEvent.click(link, { ctrlKey: true }); });
+    window.removeEventListener("app:reveal-side-panel", asked);
+    expect(openFileEntry).not.toHaveBeenCalled();
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(useSidePanelRevealStore.getState().pending).toMatchObject({ projectId: "p", rel: "docs/plan.md", isDir: false });
+    useProjectsStore.setState({ activeId: null });
+  });
+
+  it("opens the file in a new subwindow on Ctrl+click where the side panel cannot show it", async () => {
+    useProjectsStore.setState({ activeId: null });
     render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
     const link = await screen.findByText((_, el) => el?.tagName === "A" && el.textContent === "docs/plan.md");
     fireEvent.mouseOver(link);

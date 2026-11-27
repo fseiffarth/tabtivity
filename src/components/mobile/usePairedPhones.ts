@@ -16,6 +16,8 @@ export interface PairedPhone {
   online?: boolean;
   /** Phone sections the desktop keeps this phone out of (absent = none). */
   hidden_sections?: string[];
+  /** This phone's own shell switch, under the host-wide `shell_tabs`; absent is off. */
+  shell_tabs?: boolean;
 }
 
 type AdminDevicesAnswer = { status: "devices"; devices: PairedPhone[] } | { status: string };

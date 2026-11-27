@@ -31,6 +31,17 @@
 //!   refused before it is sent ([`openai_refusal`]): `background: true`
 //!   (billed after the answer, unbounded), a priced `service_tier`, or a body
 //!   that does not parse as one JSON object.
+//! - **A custom OpenAI-compatible endpoint (Chat Completions):** `usage` and
+//!   `model` at the root of the JSON answer or of a streamed chunk (the last
+//!   chunk carries the usage when the request asked for it with
+//!   `stream_options.include_usage`); `prompt_tokens` is input including
+//!   `prompt_tokens_details.cached_tokens`, `completion_tokens` is output.
+//!   There is no price table: the charge has `usd: 0.0` and `known: false`,
+//!   only the token limit guards. A request it cannot meter is refused before
+//!   it is sent ([`custom_refusal`]): a body that is not one JSON object, or
+//!   `"stream": true` without `include_usage`. Worst case: the body's
+//!   `max_completion_tokens` / `max_tokens` (the larger), else
+//!   [`CUSTOM_MAX_OUTPUT`], and `body_bytes / 3` input tokens.
 //!
 //! A key of that name anywhere else — inside a tool call's arguments, in the
 //! text of an answer (escaped in a string) — is not read. Usage counts are
@@ -330,6 +341,9 @@ impl Scanner {
         match provider {
             Provider::OpenAi => matches!(key, Key::Usage | Key::Model)
                 && (rest.is_empty() || matches!(rest, [Frame { object: true, key: Key::Response, .. }])),
+            // Chat Completions: `usage` and `model` at the root of the answer
+            // or of each streamed chunk; nothing nested counts.
+            Provider::Custom(_) => matches!(key, Key::Usage | Key::Model) && rest.is_empty(),
             Provider::Anthropic => {
                 matches!(key, Key::Usage | Key::Model)
                     && (rest.is_empty() || (rest.len() == 1 && rest[0].object && rest[0].key == Key::Message))
@@ -564,6 +578,7 @@ pub fn billing(provider: Provider, method: &str, path: &str) -> Option<Billing> 
         return None;
     }
     match provider {
+        Provider::Custom(_) => (path == "/chat/completions").then_some(Billing::Usage { model: None }),
         Provider::OpenAi => matches!(path, "/v1/responses" | "/v1/responses/compact").then_some(Billing::Usage { model: None }),
         Provider::Anthropic => (path == "/v1/messages").then_some(Billing::Usage { model: None }),
         Provider::Gemini => {
@@ -607,6 +622,9 @@ struct RequestFacts {
     by_reference: bool,
     /// OpenAI: the hosted-tool calls the body's tools may make.
     tools: ToolCalls,
+    /// Custom endpoint: the answers (`n`) a Chat Completions request asks
+    /// for; each one costs its own output. 0 reads as 1.
+    choices: u64,
 }
 
 /// OpenAI hosted-tool call counts.
@@ -730,6 +748,9 @@ impl<'de> serde::de::Visitor<'de> for RefScan<'_> {
                 Provider::OpenAi => matches!(key.as_str(), "previousresponseid" | "fileid" | "fileurl" | "imageurl" | "encryptedcontent" | "conversation"),
                 Provider::Anthropic => key == "fileid",
                 Provider::Gemini => GEMINI_REFERENCE_KEYS.contains(&key.as_str()),
+                // An unknown endpoint's window is not worth holding for a
+                // URL it may or may not fetch: its answer reports what it used.
+                Provider::Custom(_) => false,
             };
             if hit {
                 *found = true;
@@ -812,6 +833,56 @@ struct OpenAiRequest {
     max_tool_calls: Option<u64>,
     background: Option<serde_json::Value>,
     service_tier: Option<serde_json::Value>,
+}
+
+/// The fields of a Chat Completions request body (custom endpoints) the meter
+/// reads. A body that does not parse as one object, or repeats or mistypes one
+/// of these, is refused ([`custom_refusal`]).
+#[derive(serde::Deserialize)]
+struct CustomRequest {
+    model: Option<String>,
+    max_tokens: Option<u64>,
+    max_completion_tokens: Option<u64>,
+    /// How many answers the request asks for (each is generated and billed).
+    n: Option<u64>,
+    stream: Option<bool>,
+    stream_options: Option<CustomStreamOptions>,
+}
+
+#[derive(serde::Deserialize)]
+struct CustomStreamOptions {
+    include_usage: Option<bool>,
+}
+
+/// Output assumed for a Chat Completions request that names no
+/// `max_tokens` / `max_completion_tokens`: the endpoint's own cap is not
+/// known, and the token limit is the guard.
+pub const CUSTOM_MAX_OUTPUT: u64 = 32_768;
+/// Input a custom endpoint's request can hold at most, as an estimate bound.
+const CUSTOM_MAX_INPUT: u64 = super::api_prices::CUSTOM_WINDOW;
+/// Output tokens per second assumed for an answer that never reported its
+/// count (an overcount on purpose, as the other providers').
+pub const CUSTOM_TOKENS_PER_SEC: u64 = 1_000;
+
+/// Why a metered Chat Completions request is not forwarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomRefusal {
+    /// The body is not one JSON object with well-formed meter fields.
+    Unparsable,
+    /// `"stream": true` without `"stream_options": {"include_usage": true}`:
+    /// the endpoint would not report what the answer used.
+    StreamWithoutUsage,
+}
+
+/// Whether a metered custom-endpoint request must be refused before it is
+/// sent: usage is read off the answer, so a body the proxy cannot read, or a
+/// stream that will not carry its final usage chunk, would spend unseen.
+pub fn custom_refusal(body: &[u8]) -> Option<CustomRefusal> {
+    let Ok(r) = serde_json::from_slice::<CustomRequest>(body) else {
+        return Some(CustomRefusal::Unparsable);
+    };
+    let counted = r.stream_options.and_then(|o| o.include_usage) == Some(true);
+    (r.stream == Some(true) && !counted).then_some(CustomRefusal::StreamWithoutUsage)
 }
 
 /// Why a metered OpenAI request is not forwarded.
@@ -1026,10 +1097,20 @@ impl Meter {
                 self.request.tools = openai_tool_calls(body, None);
             }
         }
+        if self.provider.is_custom() {
+            if let Ok(r) = serde_json::from_slice::<CustomRequest>(body) {
+                self.request.model = r.model.filter(|m| !m.is_empty() && m.len() <= MAX_STRING);
+                // Both names are in use; the larger bounds the worst case.
+                self.request.max_output = r.max_tokens.into_iter().chain(r.max_completion_tokens).max();
+                self.request.choices = r.n.unwrap_or(1).max(1);
+            }
+        }
         if self.provider == Provider::Gemini && matches!(self.billing, Billing::Usage { .. }) {
             self.request.may_ground = may_ground(body);
         }
-        if matches!(self.billing, Billing::Usage { .. }) {
+        // A custom endpoint's window is unknown, so there is none to hold for
+        // input it may fetch: the answer reports what it used.
+        if matches!(self.billing, Billing::Usage { .. }) && !self.provider.is_custom() {
             self.request.by_reference = names_input_by_reference(self.provider, body);
         }
         if self.provider == Provider::Anthropic {
@@ -1061,7 +1142,7 @@ impl Meter {
                 Found::Usage(bytes, root) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
                     Ok(v) => {
                         self.merge(&v);
-                        if self.provider != Provider::OpenAi {
+                        if !matches!(self.provider, Provider::OpenAi | Provider::Custom(_)) {
                             self.final_usage |= root;
                         }
                     }
@@ -1142,6 +1223,19 @@ impl Meter {
                 // Null usage in response.created/in_progress is not captured;
                 // a final Responses usage object reports both totals.
                 self.final_usage = n(v, "input_tokens").is_some() && n(v, "output_tokens").is_some();
+            }
+            Provider::Custom(_) => {
+                // Chat Completions: `prompt_tokens` includes cached ones
+                // (`prompt_tokens_details.cached_tokens`), as OpenAI's input
+                // does, so the same usage record prices it. A stream repeats
+                // `usage: null` until its last chunk; counts only grow.
+                let u = &mut self.openai;
+                max(&mut u.input, n(v, "prompt_tokens"));
+                max(&mut u.output, n(v, "completion_tokens"));
+                if let Some(details) = v.get("prompt_tokens_details") {
+                    max(&mut u.cached, n(details, "cached_tokens"));
+                }
+                self.final_usage = n(v, "prompt_tokens").is_some() && n(v, "completion_tokens").is_some();
             }
             Provider::Anthropic => {
                 let u = &mut self.anthropic;
@@ -1232,11 +1326,20 @@ impl Meter {
         // chunk's, known only from a clean end.
         let settled = !self.lost
             && match self.provider {
-                Provider::OpenAi => self.final_usage,
+                Provider::OpenAi | Provider::Custom(_) => self.final_usage,
                 Provider::Anthropic => self.final_usage,
                 Provider::Gemini => self.saw_usage && end.complete,
             };
         let (max_input, max_output, per_sec) = match self.provider {
+            Provider::Custom(_) => {
+                // `n` answers are generated side by side, each up to the cap.
+                let choices = self.request.choices.max(1);
+                (
+                    CUSTOM_MAX_INPUT,
+                    self.request.max_output.unwrap_or(CUSTOM_MAX_OUTPUT).saturating_mul(choices),
+                    CUSTOM_TOKENS_PER_SEC.saturating_mul(choices),
+                )
+            }
             Provider::OpenAi => (1_050_000, self.request.max_output.unwrap_or(128_000), 1_000),
             Provider::Anthropic => {
                 (ANTHROPIC_MAX_INPUT, self.request.max_output.unwrap_or(ANTHROPIC_MAX_OUTPUT), ANTHROPIC_TOKENS_PER_SEC)
@@ -1254,6 +1357,16 @@ impl Meter {
             Billing::Usage { .. } => ((end.elapsed.as_secs_f64() * per_sec as f64).ceil() as u64).min(max_output),
         };
         let charge = match self.provider {
+            Provider::Custom(_) => {
+                let mut u = self.openai.clone();
+                if !settled {
+                    if u.input == 0 {
+                        u.input = input_estimate;
+                    }
+                    u.output = u.output.max(output_estimate);
+                }
+                super::api_prices::price_custom(model, &u)
+            }
             Provider::OpenAi => {
                 let mut u = self.openai.clone();
                 let mut tools = self.tool_calls();
@@ -1682,6 +1795,162 @@ mod tests {
         let c = m.charge(MONTH, DONE).unwrap();
         assert_eq!(c.model, "gemini-2.5-flash");
         assert!((c.usd - 0.30).abs() < 1e-9);
+    }
+
+    const CHAT_USAGE: &str = r#""usage":{"prompt_tokens":1000,"completion_tokens":300,"total_tokens":1300,"prompt_tokens_details":{"cached_tokens":800},"completion_tokens_details":{"reasoning_tokens":200}}"#;
+
+    fn custom() -> Provider {
+        Provider::Custom(3)
+    }
+
+    fn custom_expected() -> Charge {
+        super::super::api_prices::price_custom("stub-model", &OpenAiUsage { input: 1000, cached: 800, output: 300, ..OpenAiUsage::default() })
+    }
+
+    #[test]
+    fn a_custom_endpoints_chat_completions_usage_is_read_through_any_split_and_never_priced() {
+        let expect = custom_expected();
+        assert_eq!((expect.input, expect.cache_read, expect.output), (200, 800, 300), "prompt_tokens includes the cached ones");
+        assert!(!expect.known && expect.usd == 0.0, "no price table for a custom endpoint");
+        assert_eq!(expect.billed(), 200 + 300 + 80, "cache reads at a tenth, as every billed token");
+        // A streamed answer: `usage: null` until the last chunk, a fake usage
+        // inside a text delta, `[DONE]` after.
+        let first = r#"data: {"id":"c","object":"chat.completion.chunk","model":"stub-model","choices":[{"index":0,"delta":{"content":"a \"usage\": {\"completion_tokens\": 99999}"}}],"usage":null}"#;
+        let last = format!(r#"data: {{"id":"c","model":"stub-model","choices":[],{CHAT_USAGE}}}"#);
+        let sse = format!("{first}\n\n{last}\n\ndata: [DONE]\n\n");
+        every_split(custom(), Billing::Usage { model: None }, "text/event-stream", sse.as_bytes(), &expect);
+        // A whole answer, with a usage look-alike inside a tool call's arguments.
+        let json = format!(
+            r#"{{"id":"c","object":"chat.completion","model":"stub-model","choices":[{{"message":{{"role":"assistant","tool_calls":[{{"function":{{"arguments":"{{\"usage\":{{\"prompt_tokens\":1}}}}"}}}}]}}}}],{CHAT_USAGE}}}"#
+        );
+        every_split(custom(), Billing::Usage { model: None }, "application/json", json.as_bytes(), &expect);
+        // Usage numbers repeated cumulatively by every chunk count once.
+        let twice = format!("data: {{\"model\":\"stub-model\",{CHAT_USAGE}}}\n\ndata: {{\"model\":\"stub-model\",{CHAT_USAGE}}}\n\n");
+        every_split(custom(), Billing::Usage { model: None }, "text/event-stream", twice.as_bytes(), &expect);
+    }
+
+    #[test]
+    fn a_custom_answer_without_its_usage_is_charged_an_estimate_and_an_error_nothing() {
+        let first = br#"data: {"id":"c","model":"stub-model","choices":[{"delta":{"content":"a"}}],"usage":null}"#;
+        let body = br#"{"model":"stub-model","max_tokens":500,"max_completion_tokens":400,"stream":true,"messages":[{"role":"user","content":"hello"}]}"#;
+        let mut m = Meter::new(custom(), Billing::Usage { model: None });
+        m.request(body);
+        m.answer(200, Some("text/event-stream"));
+        m.feed(first);
+        m.feed(b"\n\n");
+        // The stream broke off two seconds in: output at the assumed rate,
+        // capped by the larger of the body's two limits; input from the body.
+        let c = m.charge(MONTH, cut(2)).unwrap();
+        assert_eq!(c.output, 500);
+        assert_eq!(c.input, (body.len() as u64).div_ceil(3));
+        assert_eq!(c.model, "stub-model");
+        assert_eq!(c.usd, 0.0);
+        let c = m.charge(MONTH, cut(0)).unwrap();
+        assert_eq!(c.output, 0, "nothing generated yet by the clock");
+        // A non-streamed answer that reports no usage at all is not free.
+        let mut m = Meter::new(custom(), Billing::Usage { model: None });
+        m.request(br#"{"model":"m"}"#);
+        m.answer(200, Some("application/json"));
+        m.feed(br#"{"model":"m","choices":[]}"#);
+        assert!(m.charge(MONTH, DONE).is_some_and(|c| c.input > 0));
+        // An error answer costs nothing.
+        let mut m = Meter::new(custom(), Billing::Usage { model: None });
+        m.request(br#"{"model":"m"}"#);
+        m.answer(429, Some("application/json"));
+        m.feed(br#"{"error":{"message":"slow down"}}"#);
+        assert_eq!(m.charge(MONTH, DONE), None);
+    }
+
+    #[test]
+    fn a_custom_requests_worst_case_is_its_output_cap_plus_its_bodys_input() {
+        let worst = |body: &[u8]| {
+            let mut m = Meter::new(custom(), Billing::Usage { model: None });
+            m.request(body);
+            m.worst_case_billed(MONTH)
+        };
+        let input = |body: &[u8]| (body.len() as u64).div_ceil(3);
+        let capped = br#"{"model":"m","max_tokens":100,"max_completion_tokens":700}"#;
+        assert_eq!(worst(capped), input(capped) + 700, "the larger of the two caps");
+        let only_old = br#"{"model":"m","max_tokens":123}"#;
+        assert_eq!(worst(only_old), input(only_old) + 123);
+        let uncapped = br#"{"model":"m","messages":[]}"#;
+        assert_eq!(worst(uncapped), input(uncapped) + CUSTOM_MAX_OUTPUT);
+        // An unreadable body (refused before this in the proxy) still gets the default.
+        assert_eq!(worst(b"not json"), input(b"not json") + CUSTOM_MAX_OUTPUT);
+    }
+
+    #[test]
+    fn a_custom_request_asking_for_several_answers_holds_the_cost_of_each() {
+        let worst = |body: &[u8]| {
+            let mut m = Meter::new(custom(), Billing::Usage { model: None });
+            m.request(body);
+            m.worst_case_billed(MONTH)
+        };
+        let input = |body: &[u8]| (body.len() as u64).div_ceil(3);
+        let three = br#"{"model":"m","max_tokens":100,"n":3}"#;
+        assert_eq!(worst(three), input(three) + 300, "every choice may use the whole cap");
+        let uncapped = br#"{"model":"m","n":4}"#;
+        assert_eq!(worst(uncapped), input(uncapped) + 4 * CUSTOM_MAX_OUTPUT);
+        let zero = br#"{"model":"m","max_tokens":100,"n":0,"x":null}"#;
+        assert_eq!(worst(zero), input(zero) + 100, "n 0 or null is one answer");
+        let huge = br#"{"model":"m","max_tokens":100,"n":18446744073709551615}"#;
+        assert!(worst(huge) > 1 << 60, "a count past any limit saturates, never wraps");
+        // The elapsed-time estimate of a cut-off stream scales with them too.
+        let body = br#"{"model":"m","max_tokens":5000,"n":2,"stream":true}"#;
+        let mut m = Meter::new(custom(), Billing::Usage { model: None });
+        m.request(body);
+        m.answer(200, Some("text/event-stream"));
+        assert_eq!(m.charge(MONTH, cut(2)).unwrap().output, 4_000);
+        // A count that is not a whole number is not a request the meter reads.
+        assert_eq!(custom_refusal(br#"{"n":"2"}"#), Some(CustomRefusal::Unparsable));
+        assert_eq!(custom_refusal(br#"{"n":2.5}"#), Some(CustomRefusal::Unparsable));
+        assert_eq!(custom_refusal(br#"{"n":2,"n":1}"#), Some(CustomRefusal::Unparsable));
+        assert_eq!(custom_refusal(br#"{"n":null}"#), None);
+    }
+
+    #[test]
+    fn a_custom_request_the_meter_cannot_read_is_refused() {
+        let ok = |body: &str| custom_refusal(body.as_bytes());
+        assert_eq!(ok(r#"{"model":"m","messages":[]}"#), None);
+        assert_eq!(ok("{}"), None);
+        assert_eq!(ok(r#"{"stream":false}"#), None);
+        assert_eq!(ok(r#"{"stream":true,"stream_options":{"include_usage":true}}"#), None);
+        assert_eq!(ok(r#"{"stream":true,"stream_options":{"include_usage":true,"other":1}}"#), None);
+        for body in [
+            r#"{"stream":true}"#,
+            r#"{"stream":true,"stream_options":{}}"#,
+            r#"{"stream":true,"stream_options":null}"#,
+            r#"{"stream":true,"stream_options":{"include_usage":false}}"#,
+        ] {
+            assert_eq!(ok(body), Some(CustomRefusal::StreamWithoutUsage), "{body}");
+        }
+        // Not one object, trailing bytes, a repeated or mistyped field (the
+        // endpoint may read the first or the last), an escaped repeat.
+        for body in [
+            "",
+            "not json",
+            "[]",
+            "null",
+            r#"{"model":"m"} x"#,
+            r#"{"stream":true,"stream":false,"stream_options":{"include_usage":true}}"#,
+            r#"{"stream":false,"stream":true}"#,
+            r#"{"stream":"true"}"#,
+            r#"{"stream":1}"#,
+            r#"{"max_tokens":-1}"#,
+            r#"{"model":3}"#,
+            r#"{"stream":true,"stream":false}"#,
+            r#"{"stream":true,"stream_options":{"include_usage":true,"include_usage":false}}"#,
+        ] {
+            assert_eq!(ok(body), Some(CustomRefusal::Unparsable), "{body}");
+        }
+    }
+
+    #[test]
+    fn only_chat_completions_cost_money_on_a_custom_endpoint() {
+        assert_eq!(billing(custom(), "POST", "/chat/completions"), Some(Billing::Usage { model: None }));
+        for (method, path) in [("GET", "/chat/completions"), ("GET", "/models"), ("POST", "/models"), ("POST", "/v1/chat/completions"), ("POST", "/embeddings")] {
+            assert_eq!(billing(custom(), method, path), None, "{method} {path}");
+        }
     }
 
     #[test]

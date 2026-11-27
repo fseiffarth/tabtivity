@@ -329,6 +329,7 @@ function BoxRootSection({
   searchOpen,
   onSearchOpenChange,
   refreshNonce,
+  takeReveals = false,
   reorder,
   expanded,
   onToggle,
@@ -348,6 +349,7 @@ function BoxRootSection({
   searchOpen?: boolean;
   onSearchOpenChange?: (open: boolean) => void;
   refreshNonce?: number;
+  takeReveals?: boolean;
   reorder?: RootReorder;
   /** Accordion state, owned by the pane (`useBoxAccordion`): the section is
    *  open, its header click, the member's Files/Git view, its agent tabs. */
@@ -612,6 +614,7 @@ function BoxRootSection({
             onSearchOpenChange={onSearchOpenChange}
             refreshNonce={refreshNonce}
             sharedSearch={sharedSearch}
+            takeReveals={takeReveals}
           />
         </div>
       )}
@@ -834,6 +837,8 @@ interface Props {
    *  one row of chrome with the breadcrumb — and get a row of their own where
    *  no single tree draws one (a box's sections, a disconnected host). */
   toolbarActions?: ReactNode;
+  /** The side panel's pane: its trees take an agent tab's Ctrl+click reveal. */
+  takeReveals?: boolean;
 }
 
 export function ProjectFilesPane({
@@ -864,6 +869,7 @@ export function ProjectFilesPane({
   onSearchOpenChange,
   refreshNonce,
   toolbarActions,
+  takeReveals = false,
 }: Props) {
   const t = useT();
   const { activeBox, boxRoots } = useBoxRoots(scope);
@@ -1271,6 +1277,7 @@ export function ProjectFilesPane({
                     : undefined
                 }
                 refreshNonce={refreshNonce}
+                takeReveals={takeReveals}
               />
             ))
           )
@@ -1352,6 +1359,7 @@ export function ProjectFilesPane({
                 onSearchOpenChange={onSearchOpenChange}
                 refreshNonce={refreshNonce}
                 toolbarEnd={toolbarActions}
+                takeReveals={takeReveals}
               />
             );
           })()

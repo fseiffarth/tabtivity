@@ -878,9 +878,13 @@ Chat's queue (`mobile-web/src/terminal/queuePull.ts`, `queue_hint` in
 `pty_bridge.rs`, `agentQueueWrites`): mid-turn, Tab still lists a prompt under
 `• Queued follow-up inputs` with `… edit last queued message`, that key still
 takes one back at a time, Esc still drops the list into the box, Tab on an idle
-box still leaves the words, Enter on an empty box still does nothing. OpenCode's
-mini footer still reads `· ctrl+x q N pending`, its panel's rows and ctrl+d
-still work, and two Escs still have to come in separate calls.
+box still leaves the words, Enter on an empty box still does nothing. OpenCode:
+a chat's mid-turn prompt goes in with Ctrl+X Enter (`agentQueueWrites`);
+the mini footer still reads `· ctrl+x q N pending`, the full TUI's box
+`N queued · <prompt>`, the panel's rows (the full TUI's `Search queued
+prompts`, `1 of 2` at the right) and ctrl+d still work, a stop (two Escs, in
+separate calls) still leaves the queue, and the panel's Enter still sends it
+(`scripts/verify-cli/opencode/queue.py <label> <bin> <port> full|mini`).
 
 API keys: `services/agent_api_keys.rs` selects a launch-only custom Codex
 provider with `env_key=OPENAI_API_KEY`, `wire_api="responses"`,
@@ -2060,6 +2064,20 @@ ask); the footer shows the model and effort on resume (not read);
 `-p --continue` now resumes by directory (Tabtivity pins `--session-id`).
 Real sign-in, model pickers and a model's own output were not exercised.
 
+Re-checked **1.0.116** (2026-11-26, `npm pack @github/copilot-linux-x64`,
+beside 1.0.115, offline against the stub): all 13 `copilot-events-probe.py`
+checks pass on both; `screens.sh`, `chat_send.py` (all five arrived word for
+word), `hooks.py events` and `turn` (12 checks, the same final words) and
+`remote_store.py` (every case) print the same lines with ids and times
+masked. `--help` only adds `--decision`/`--choice` (one-shot decision
+inference, opt-in, not used). The frame replay reads the same options, asks
+and decision lamp; the context above a dialog lost the "No Copilot
+instructions found" notice. Changelog items near what Tabtivity reads: the
+folder-trust "Yes" no longer waits for MCP reconnects; sub-agent events gain
+`occurredAt` (not read); plan approval drops its fleet choice (not read); an
+`env` setting for every process Copilot starts (Tabtivity sets none).
+Real sign-in, model pickers and a model's own output were not exercised.
+
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
 Auggie, CodeBuddy: `settings.json` `hooks.SessionStart[].hooks[]`, stdout JSON
@@ -2241,6 +2259,15 @@ binary's strings only, never run): `event` gets `{type, properties}` with
 `session.idle`, `session.status`, `session.error`, `permission.asked` /
 `replied`, `question.asked` / `replied` / `rejected`; the shell tool's
 environment is `process.env` plus the `shell.env` hook.
+
+**OpenCode 1.x dropped (2026-11-25).** Every launch, the session plugin, the
+store reader, token stats, API-key routing and the phone's mini parser assume
+OpenCode 2; nothing probes the version first. A 1.x binary still installed is
+not refused: the daily update check offers 2.x (`agent_latest`, `@opencode/cli`)
+and Update runs the V2 installer. A store OpenCode 2 migrated keeps its 1.x
+`session`/`message`/`part` tables as a copy of rows it also holds in its own
+(checked on the user's store: all 8 migrated sessions have their messages in
+`session_message`); they are never read.
 
 **OpenCode 2 (2026-10-22).** The standalone binary installed in the fenced
 project home (not a verified host-wide installation) answers
@@ -2508,6 +2535,35 @@ exercised: the SDK's subscription-abort fix (the session plugin's
 `ctx.event.subscribe()` was unaffected), compaction, and the experimental
 `model_speeds` and plugin `ctx.experimental.automation` APIs.
 [OpenCode release notes](https://opencode.ai/changelog/v2.4.1)
+
+**2.4.2** (2026-11-26, Linux, local stub, npm binaries of both versions run
+side by side). `round.sh`'s eight probes print the same lines with ids
+masked (every turn word PASS, the nested run moves neither record, 12
+snapshots pass `quick_check`); the store reader reads 18 entries, the
+subagent and two changes; help is unchanged; `chat_send.py` reads the same
+on both, full TUI and mini; the frame replay reads 92 of 94 frames the same,
+the other two differ only in the binary's own path inside a permission
+prompt. Two changes reach Tabtivity. **The take-back** ("Esc takes back your
+last message"): in the full TUI, a stop that lands before the model's first
+token or tool call — the Chat's Stop, Esc and the second Esc `finishStop`
+sends — drops the prompt from `session_message` and puts it back in the
+input box (`mini` keeps it, as 2.4.1 did). The Chat's next send emptied only
+the cursor's line, so a one-line prompt was lost without a word and a
+two-line one went out with its first line in front of the new prompt
+(`opencode/takeback.py`, with `STUB:SLOW` holding the answer). Fixed: every
+OpenCode send starts with `openCodeBoxReset` (Ctrl-E Ctrl-U Backspace per
+line, 32 lines, then Ctrl-A Ctrl-K; OpenCode's own Ctrl+C quits on an empty
+box), which also stops a draft typed over several lines in the terminal
+from riding along (2.4.1 did that too), and the desktop Chat's Stop takes the
+prompt back into its composer as it does for Claude (`takeBackStopped` with
+`openCodeBoxLines`). **Tabby's pin:** `skill` is no longer offered at all
+(upstream: tools stay hidden when narrower denies follow a blanket one), so
+the pin now hides all 15 named built-ins. At start the plugin sees
+`models-dev.refreshed` first and no repeated `provider`/`model.updated`
+(the plugin reads neither). Not exercised: the per-site web-fetch "Always
+allow", Plan mode's rules moving into the system prompt, automations, the
+picker's large-catalog speed-up, and narrow-width picker frames (120 columns
+only this round). [OpenCode release notes](https://opencode.ai/changelog/v2.4.2)
 
 Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
 run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
@@ -2890,6 +2946,21 @@ prompt/answer pairs decoded and the store schemas matched 1.5.16. Upstream
 added mouse selection in the fullscreen composer and changed Orchestrator
 to run a single agent when planner and executor share both model and effort.
 [Antigravity release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.5.17)
+
+**1.5.18 (2026-11-26, Linux).** A read-only copy of the updater manifest's
+build (sha512 checked; unchanged after every probe, so it never updated
+itself) beside 1.5.17's GitHub asset, against the Gemini stub. `--help` and
+`models` help are unchanged. `main.py` (80, 42) and `second.py` ran as on
+1.5.17; `hooks.py events|turns|tabs|format` print the same events, records
+and turn words on both; `queued.py` (44, 56), `steps.py` and `signin.py`
+(42×24, 80×24) were run on both; `remote.py` reads the same processes, held
+files, `presence/<id>.lock`, WAL growth, subagent and `/clear` with ids
+masked; `store.py` decodes the same three prompt/answer pairs and finds the
+schemas identical. Frame replay: 96 frames the same, the eight sign-in
+frames differ only in the PKCE challenge. Upstream fixed image attachments,
+`file:///` paths under permission rules and the Remote Control browser view,
+none of which Tabtivity reads.
+[Antigravity release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.5.18)
 
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one

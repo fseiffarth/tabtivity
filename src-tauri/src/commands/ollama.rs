@@ -2804,12 +2804,16 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
 
     // The same entitlement, for the context window: the user's choice, else
     // [`spawned_context_length`]. A value set in the environment is left alone.
+    // Either way the window is remembered, so a local OpenCode tab can be told
+    // it before its model is loaded (`local_drivers::opencode_loaded_models_config`).
+    let mut spawned_context = std::env::var(CONTEXT_LENGTH_VAR).ok().and_then(|v| v.trim().parse::<u32>().ok());
     if std::env::var_os(CONTEXT_LENGTH_VAR).is_none() {
         if let Some(n) = configured_context(
             crate::services::ollama_client::configured_context_length(),
             max_vram_total(),
         ) {
             cmd.env(CONTEXT_LENGTH_VAR, n.to_string());
+            spawned_context = Some(n);
         }
     }
 
@@ -2820,12 +2824,25 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
         }
     }
 
+    // And for how compactly it stores context and the prompts it caches.
+    if std::env::var_os(KV_CACHE_TYPE_VAR).is_none() {
+        if let Some(value) =
+            configured_kv_cache_type(crate::services::ollama_client::configured_kv_cache_type().as_deref())
+        {
+            cmd.env(KV_CACHE_TYPE_VAR, value);
+            if std::env::var_os(FLASH_ATTENTION_VAR).is_none() {
+                cmd.env(FLASH_ATTENTION_VAR, "1");
+            }
+        }
+    }
+
     let pid = crate::paths::spawn_reaped(cmd)
         .map_err(|e| format!("failed to start ollama serve: {e}"))?;
     // Recorded before the wait, not after: a server that came up too slowly for
     // the 8 s deadline is still *ours* and still running, and forgetting it here
     // is precisely how one outlives the app.
     record_owned_server(OwnedServer::Process(pid));
+    crate::services::ollama_client::record_spawned_context(spawned_context.filter(|n| *n > 0));
 
     let deadline = Instant::now() + Duration::from_secs(8);
     if wait_for_ollama(deadline) {
@@ -2991,73 +3008,143 @@ const KEEP_ALIVE_DROPIN: &str = concat!(crate::app_slug!(), "-keep-alive.conf");
 /// takes the drop-in back out), then restarts it — which unloads every model.
 /// Empty when there is no service to configure.
 fn keep_alive_service_command(value: Option<&str>, systemd: bool) -> String {
+    let vars: Vec<(&str, &str)> = value
+        .and_then(|v| configured_keep_alive(Some(v)))
+        .map(|v| vec![(KEEP_ALIVE_VAR, v)])
+        .unwrap_or_default();
+    service_dropin_command(KEEP_ALIVE_DROPIN, &vars, systemd)
+}
+
+/// The terminal command that writes `vars` into the service's drop-in `dropin`
+/// (or, with none, deletes that file), then reloads and restarts the service —
+/// which unloads every model. Empty without a service. It runs in a root
+/// shell, so every value must come from a fixed choice list. Pure + tested.
+fn service_dropin_command(dropin: &str, vars: &[(&str, &str)], systemd: bool) -> String {
     if !systemd {
         return String::new();
     }
-    let dropin = format!("/etc/systemd/system/ollama.service.d/{KEEP_ALIVE_DROPIN}");
-    let write = match value.and_then(|v| configured_keep_alive(Some(v))) {
-        Some(v) => format!(
-            "sudo mkdir -p /etc/systemd/system/ollama.service.d && \
-             printf '[Service]\\nEnvironment=\"{KEEP_ALIVE_VAR}={v}\"\\n' | sudo tee {dropin} && "
-        ),
-        None => format!("sudo rm -f {dropin} && "),
+    let path = format!("/etc/systemd/system/ollama.service.d/{dropin}");
+    let write = if vars.is_empty() {
+        format!("sudo rm -f {path} && ")
+    } else {
+        let lines: String = vars.iter().map(|(k, v)| format!("Environment=\"{k}={v}\"\\n")).collect();
+        format!("sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\\n{lines}' | sudo tee {path} && ")
     };
     format!("{write}sudo systemctl daemon-reload && sudo systemctl restart ollama")
 }
 
-/// `OLLAMA_KEEP_ALIVE` among the `Environment=` assignments `systemctl show`
-/// prints for the service (space-separated `KEY=value` pairs). Pure + tested.
-fn keep_alive_in_unit_env(env: &str) -> Option<String> {
+/// `var` among the `Environment=` assignments `systemctl show` prints for the
+/// service (space-separated `KEY=value` pairs). Pure + tested.
+fn var_in_unit_env(env: &str, var: &str) -> Option<String> {
     env.split_whitespace()
-        .find_map(|pair| pair.strip_prefix(KEEP_ALIVE_VAR)?.strip_prefix('='))
+        .find_map(|pair| pair.strip_prefix(var)?.strip_prefix('='))
         .map(str::to_string)
 }
 
-/// What the keep-alive field on the Local models page needs to say truthfully.
+/// What a Local models page field backed by one of the server's environment
+/// variables (keep-alive, KV cache type) needs to say truthfully.
 #[derive(serde::Serialize, Clone, Default)]
-pub struct OllamaKeepAlivePlan {
-    /// `OLLAMA_KEEP_ALIVE` as this process sees it, which every server it
-    /// starts inherits and the setting never overrides.
+pub struct OllamaServicePlan {
+    /// The variable as this process sees it, which every server it starts
+    /// inherits and the setting never overrides.
     pub env: Option<String>,
     /// A systemd unit runs the server, keeping its own environment.
     pub systemd: bool,
     /// The service's own value, from its unit and drop-ins; `None` is
     /// Ollama's default.
     pub service_value: Option<String>,
-    /// The command that gives the service `value`, for `runInstallInTab`;
-    /// empty without a service.
+    /// The command that gives the service the picked value, for
+    /// `runInstallInTab`; empty without a service.
     pub service_cmd: String,
     pub shell_kind: String,
+}
+
+/// The facts behind a setting carried by `var`, with `service_cmd` building
+/// the drop-in command once it is known whether a service runs Ollama.
+/// Blocking: it spawns `systemctl`.
+fn service_env_plan(var: &str, service_cmd: impl FnOnce(bool) -> String) -> OllamaServicePlan {
+    let systemd = ollama_under_systemd();
+    #[cfg(target_os = "linux")]
+    let service_value = if systemd {
+        std::process::Command::new("systemctl")
+            .args(["show", "-p", "Environment", "--value", "ollama"])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .and_then(|out| var_in_unit_env(&String::from_utf8_lossy(&out.stdout), var))
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let service_value = None;
+    let service_cmd = service_cmd(systemd);
+    OllamaServicePlan {
+        env: std::env::var(var).ok().filter(|v| !v.trim().is_empty()),
+        systemd,
+        service_value,
+        shell_kind: if service_cmd.is_empty() { String::new() } else { "bash".to_string() },
+        service_cmd,
+    }
 }
 
 /// The facts behind the keep-alive setting, for `value` (the setting as it
 /// stands or as just picked). On demand (a page opening, a pick), never a
 /// poll: it spawns `systemctl`.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn ollama_keep_alive_plan(value: Option<String>) -> OllamaKeepAlivePlan {
+pub async fn ollama_keep_alive_plan(value: Option<String>) -> OllamaServicePlan {
     app_core::rt::spawn_blocking(move || {
-        let systemd = ollama_under_systemd();
-        #[cfg(target_os = "linux")]
-        let service_value = if systemd {
-            std::process::Command::new("systemctl")
-                .args(["show", "-p", "Environment", "--value", "ollama"])
-                .stderr(std::process::Stdio::null())
-                .output()
-                .ok()
-                .and_then(|out| keep_alive_in_unit_env(&String::from_utf8_lossy(&out.stdout)))
-        } else {
-            None
-        };
-        #[cfg(not(target_os = "linux"))]
-        let service_value = None;
-        let service_cmd = keep_alive_service_command(value.as_deref(), systemd);
-        OllamaKeepAlivePlan {
-            env: std::env::var(KEEP_ALIVE_VAR).ok().filter(|v| !v.trim().is_empty()),
-            systemd,
-            service_value,
-            shell_kind: if service_cmd.is_empty() { String::new() } else { "bash".to_string() },
-            service_cmd,
-        }
+        service_env_plan(KEEP_ALIVE_VAR, |systemd| keep_alive_service_command(value.as_deref(), systemd))
+    })
+    .await
+    .unwrap_or_default()
+}
+
+// ── KV cache type ─────────────────────────────────────────────────────────────
+
+/// How Ollama stores a loaded model's context, and with it each prompt
+/// llama-server saves to its RAM prompt cache between conversations (`f16`
+/// unless set). That cache is capped at 8 GiB, and on qwen3-coder:30b a 40k-token
+/// conversation is ~3.6 GiB at f16, so only two fit: measured 2026-11-25, two
+/// forks of one Claude Code tab plus a third conversation kept evicting each
+/// other, and every switch re-read 12k–23k tokens for minutes. `q8_0` halves
+/// every saved prompt and the loaded context (`q4_0` quarters them, with a
+/// larger quality cost).
+const KV_CACHE_TYPE_VAR: &str = "OLLAMA_KV_CACHE_TYPE";
+
+/// Ollama applies a quantized cache type only with flash attention on (its FAQ),
+/// so a choice sets both.
+const FLASH_ATTENTION_VAR: &str = "OLLAMA_FLASH_ATTENTION";
+
+/// The values the setting may hold; anything else (a hand edit) is unset.
+const KV_CACHE_CHOICES: &[&str] = &["q8_0", "q4_0"];
+
+/// The setting as a value to hand Ollama, or `None` for its default. Pure +
+/// tested: only the listed choices reach an environment or a drop-in.
+fn configured_kv_cache_type(setting: Option<&str>) -> Option<&'static str> {
+    let setting = setting?.trim();
+    KV_CACHE_CHOICES.iter().copied().find(|c| *c == setting)
+}
+
+/// The KV cache type's own drop-in, beside the keep-alive one.
+const KV_CACHE_DROPIN: &str = concat!(crate::app_slug!(), "-kv-cache.conf");
+
+/// The terminal command that gives the **service** the cache type `value` with
+/// flash attention (or, for `None`, takes the drop-in back out), then restarts
+/// it. Empty when there is no service to configure.
+fn kv_cache_service_command(value: Option<&str>, systemd: bool) -> String {
+    let vars: Vec<(&str, &str)> = value
+        .and_then(|v| configured_kv_cache_type(Some(v)))
+        .map(|v| vec![(KV_CACHE_TYPE_VAR, v), (FLASH_ATTENTION_VAR, "1")])
+        .unwrap_or_default();
+    service_dropin_command(KV_CACHE_DROPIN, &vars, systemd)
+}
+
+/// The facts behind the KV cache setting, for `value` (the setting as it
+/// stands or as just picked). On demand, never a poll: it spawns `systemctl`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn ollama_kv_cache_plan(value: Option<String>) -> OllamaServicePlan {
+    app_core::rt::spawn_blocking(move || {
+        service_env_plan(KV_CACHE_TYPE_VAR, |systemd| kv_cache_service_command(value.as_deref(), systemd))
     })
     .await
     .unwrap_or_default()
@@ -4124,25 +4211,32 @@ pub struct LocalAgentPrep {
 /// Creates `~/.local/share/tabtivity/vibe_local/{alias}/config.toml` with:
 /// - `active_model = "{alias}"` so vibe selects the correct model even when
 ///   the `VIBE_ACTIVE_MODEL` env var is shadowed by the global `~/.vibe/config.toml`.
-/// - `enabled_tools = ["__no_tools__"]` to disable tool calls for local models.
-///   A root-console tab whose model wears the 🧠 menu's "MCP" chip gets the
-///   root MCP tools back through Vibe's env layer (`services::root_mcp`).
+/// - Vibe's own tools on for a model Ollama says has the `tools` capability,
+///   and off (`enabled_tools = ["__no_tools__"]`) for any other, or when Ollama
+///   cannot say: a completion-only model refuses a request carrying tools
+///   (`local_drivers::vibe_local_config`). A tab whose model wears the 🧠 menu's
+///   "MCP" chip gets the MCP tools through Vibe's env layer (`services::root_mcp`).
 /// - A single provider + model block for this Ollama model.
 ///
 /// Each Ollama tab gets its own VIBE_HOME subdirectory so there is no shared
 /// mutable config state and `active_model` is always unambiguous.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn prepare_local_agent(model: String) -> Result<LocalAgentPrep, String> {
+    // The capability read is HTTP: off the runtime.
+    app_core::rt::blocking("prepare_local_agent", move || prepare_local_agent_blocking(model)).await?
+}
+
+/// The blocking body of [`prepare_local_agent`].
+fn prepare_local_agent_blocking(model: String) -> Result<LocalAgentPrep, String> {
     validate_model_name(&model)?;
     let alias = sanitize_alias(&model);
     let vibe_home = app_vibe_local_dir_for(&alias)?;
     std::fs::create_dir_all(&vibe_home).map_err(|e| format!("create vibe_local dir: {e}"))?;
 
     let config_path = vibe_home.join("config.toml");
-
-    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
-    cfg.push_str(&ollama_provider_block());
-    cfg.push_str(&ollama_model_block(&model, &alias));
+    let addr = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
+    let tools = model_supports_tools(&model) == Some(true);
+    let cfg = crate::services::local_drivers::vibe_local_config(&model, &alias, &addr, tools);
 
     std::fs::write(&config_path, cfg).map_err(|e| format!("write vibe_local config: {e}"))?;
     crate::services::agent_session::register_vibe_hook_in(&vibe_home)

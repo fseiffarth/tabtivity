@@ -512,8 +512,8 @@ pub fn agent_session_transcript(
     }
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
-        let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_transcript(&db, runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit, false);
+        let reader = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, &reader, subagent, version, limit, false);
     }
     if matches!(cmd, "gemini" | "agy") {
         if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
@@ -614,7 +614,8 @@ pub fn stored_chat_transcript(
             return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_transcript(&db, runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit, false);
+        let reader = crate::services::opencode_session::ReaderSession { own: Some(chat.to_string()), ..Default::default() };
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, &reader, subagent, version, limit, false);
     }
     let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
         return AgentTranscript::unavailable("no_transcript");
@@ -1308,8 +1309,8 @@ pub fn local_opencode_transcript(
         return AgentTranscript::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
-    let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
-    opencode_transcript(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT), thinking)
+    let reader = crate::services::opencode_session::reader_session(project_id, launch_id, since);
+    opencode_transcript(&db, false, tab_dir, &reader, subagent, version, limit.clamp(1, MAX_LIMIT), thinking)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1317,8 +1318,7 @@ fn opencode_transcript(
     db: &Path,
     remote: bool,
     tab_dir: Option<&str>,
-    since: Option<i64>,
-    own: Option<&str>,
+    reader: &crate::services::opencode_session::ReaderSession,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
@@ -1333,7 +1333,17 @@ fn opencode_transcript(
     if !db.is_file() {
         return AgentTranscript::unavailable("no_transcript");
     }
-    crate::services::opencode_store::session_transcript_with(db, dir, since, own, subagent, version, limit, thinking)
+    crate::services::opencode_store::session_transcript_with(
+        db,
+        dir,
+        reader.since,
+        reader.own.as_deref(),
+        &reader.claimed,
+        subagent,
+        version,
+        limit,
+        thinking,
+    )
         .unwrap_or_else(|| AgentTranscript::unavailable("read_failed"))
 }
 

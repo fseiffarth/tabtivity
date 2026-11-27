@@ -21,7 +21,7 @@ and the new version through the same probe, then compare the two labels.
 |------|---------------|
 | `flags.sh <cli> <label> <bin> [sub ...]` | `--version`, `--help`, each subcommand's `--help` → `flags/`; `diff -ru` two labels' `flags/` to see flags that moved. |
 | `tui.py <cli> <label> <name> [--step …] -- <bin> [args]` | Drives the TUI with steps (`sleep:`, `wait:TEXT[:SECS]`, `cap:`, `key:`, `type:`, `enter:`, `size:COLSxROWS`) and saves frames as `<name>/<frame>@<cols>x<rows>.esc`. `--home DIR` reuses a home (resume tests); `--env K=V`; `--stub openai\|gemini --port N` starts a stub. Default steps: one frame each at 120, 60 and 42 columns. |
-| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is); a Responses tool inside a namespace is `<namespace>.<tool>` (Codex's `multi_agent_v1.spawn_agent`; the GPT-6 family's `functions` namespace is plain names). It logs every request (offered tools, tool results; a chat completion also its `model` and every `STUBMARK-<WORD>` it carries), so you can force calls no real model would make. |
+| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is), `STUB:SLOW <secs>` sends nothing for that long first (a chat completion's first request of a turn: a stop before the first token); a Responses tool inside a namespace is `<namespace>.<tool>` (Codex's `multi_agent_v1.spawn_agent`; the GPT-6 family's `functions` namespace is plain names). It logs every request (offered tools, tool results; a chat completion also its `model` and every `STUBMARK-<WORD>` it carries), so you can force calls no real model would make. |
 | `hookdump.py <log> <event>` | A hook command that appends its event, pid, environment names (and the tab, Copilot and hook-depth values) and stdin payload to a JSONL log. Register it for every event to see which fire, with what. |
 | `stub_anthropic.py <port> <log>` | Anthropic Messages API (`ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`), streaming or not. `STUB:CALL`/`STUB:SEQ` as above (only in a request that offers tools), `STUB:ERR <status> <type>` answers that API error. Lets Claude run with no login and no paid turn. |
 | `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` anywhere in the current user turn (agy's `-p`
@@ -124,7 +124,29 @@ gives its usage.
   `VERIFY_OPENCODE_DB=<home>/.local/share/opencode/opencode.db
   VERIFY_OPENCODE_DIR=<home>/work VERIFY_OPENCODE_SESSION=<live record>
   cargo test -p tabtivity --no-default-features --lib verify_cli_reads_a_captured_store -- --ignored --nocapture`
-  (entries, the subagent through its handle, completed changes). Get a binary without installing it:
+  (entries, the subagent through its handle, completed changes).
+  `chat_send.py <label> <bin> <port> full|mini [case…]` replays the Chat's
+  exact writes (`agentInputWrites`, its pacing) — a plain, two-line, long and
+  one-character prompt, one ending or holding an `@file`, a dialog closed
+  first, one sent mid-turn, the Stop's Esc pair, `/new` and `/clear` — and
+  reads the stub's log for whether each Enter submitted. Run it from a tab
+  that is not OpenCode, or with `OPENCODE*` and `TABTIVITY_OPENCODE_SESSION`
+  unset: inside an OpenCode tab the session plugin takes the probe for a
+  nested run and records nothing (`turns.py`'s `live record None`).
+  `queue.py <label> <bin> <port> full|mini [case…]` queues two prompts mid-turn
+  the way the Chat does (Ctrl+X Enter) and reads the full TUI's `N queued` row
+  or the mini's footer, the `ctrl+x q` panel, ctrl+d deleting, a stop leaving
+  the queue, and the panel's Enter releasing it.
+  `takeback.py <label> <bin> <port> full|mini [case…]` holds an answer
+  (`STUB:SLOW`), presses the Chat's Stop on it before the first token and
+  reads what 2.4.2 hands back into the box, whether the session still stores
+  the prompt, and what the Chat's next send gets to the model: a one-line,
+  two-line and twelve-line prompt, a stop after the answer, and a draft typed
+  over three lines. It sends `openCodeBoxReset`'s bytes;
+  `VERIFY_OC_RESET=line` the line reset alone (the bug), and
+  `VERIFY_OC_RESET_LINES` sizes the box reset. Keep its and `chat_send.py`'s
+  `RESET` equal to what `agentInputWrites` writes.
+  Get a binary without installing it:
   `npm pack @opencode/cli-linux-x64@<v>`, unpack, `package/bin/opencode`.
 - **Antigravity** (`antigravity/`): `main.py <label> <bin> <port> [cols]`
   covers first run, `/model`, `/effort`, turns, a second `--continue`,

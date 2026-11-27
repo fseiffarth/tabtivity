@@ -76,12 +76,13 @@ export function withDevice(
 /**
  * One paired phone's own access, under its row in Settings → Mobile: which
  * sections it may open (To-do, Calendar, Mail — the sidecar refuses a hidden
- * one's routes and drops its alerts and reminders), and which projects and
+ * one's routes and drops its alerts and reminders), whether it may have shell
+ * tabs (under the host-wide "No shells on the phone"), and which projects and
  * boxes reach it, each with Disconnect, plus Add for one that does not.
  *
  * The project list is the per-phone access lists (`MobileAccessPicker`) seen
  * from the phone's side: Disconnect and Add write the same project/box record.
- * Sections are written to the sidecar's device file over `mobile_admin`, so
+ * Sections and shells are written to the sidecar's device file over `mobile_admin`, so
  * they need the host running — as the device list itself does.
  */
 export function PairedDeviceAccess({
@@ -176,6 +177,20 @@ export function PairedDeviceAccess({
       onChanged();
     });
 
+  // The phone's own shell switch, under the host-wide one ("No shells on the
+  // phone"), which must let shells through too — while it does not, this one
+  // shows what it holds and cannot be pressed.
+  const shellsMaster = hostSettings?.shell_tabs === true;
+  const shellsOn = device.shell_tabs === true;
+  const toggleShells = () =>
+    void run(async () => {
+      const answer = await invoke<{ status: string; message?: string }>("mobile_admin", {
+        request: { type: "set_shell_tabs", device_id: device.id, on: !shellsOn },
+      });
+      if (answer.status === "error") throw new Error(answer.message);
+      onChanged();
+    });
+
   return (
     <div className="mobile-device-access">
       <div className="mobile-device-access-label">
@@ -201,6 +216,22 @@ export function PairedDeviceAccess({
             </button>
           );
         })}
+      </div>
+
+      <div className="mobile-device-access-label">
+        {t("mobile.device.shells")} <UntestedTag id="mobile.deviceShells" />
+      </div>
+      <div className="settings-list project-ending-list mobile-device-sections">
+        <button
+          type="button"
+          className={`project-ending-toggle${shellsOn && shellsMaster ? "" : " is-hidden"}`}
+          aria-pressed={shellsOn && shellsMaster}
+          disabled={busy || !shellsMaster}
+          title={shellsMaster ? t(shellsOn ? "mobile.device.shellsOn" : "mobile.device.shellsOff", { device: device.name }) : t("mobile.device.shellsMasterOff")}
+          onClick={toggleShells}
+        >
+          {t("mobile.device.shellsButton")}
+        </button>
       </div>
 
       <div className="mobile-device-access-label">

@@ -147,15 +147,16 @@ const GEMINI: ModeFamily = {
 
 /** OpenCode: what it calls the *agent* — `build` and `plan` are the two
  * primary ones it ships, and a project can add more — is what the phone's mode
- * chip shows, read out of the capitals in its status row (` BUILD  …`).
+ * chip shows, read off its status row (`Build · …`).
  *
- * `fixed`, because `opencode --mini` binds no key that switches it: its
+ * `fixed`, because `opencode mini` binds no key that switches it (checked on
+ * 1.18.31, before 2.x): its
  * `agent.cycle`/`agent.cycle.reverse` (Tab and Shift+Tab) and its leader
  * keybinds belong to the full-screen TUI, and pressing any of them in a mini
- * session does nothing at all — verified against 1.18.31, whose command
+ * session does nothing at all — its command
  * palette (ctrl+p, the only commands mini has) offers "Switch model" and
  * "Variant cycle" and no agent switch. The agent a mini session runs as is the
- * one it started with (`opencode --mini --agent plan`).
+ * one it started with (`opencode mini --agent plan`).
  *
  * Both are `labelled`: "plan" is Claude Code's, Codex's, Qwen's and Gemini's
  * word too, and "build" would otherwise be claimed for any session whose

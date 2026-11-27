@@ -33,7 +33,7 @@ export function PdfMarkupModel({ tab, ptyId, label, model, agent, disabled }: {
     tab,
     ptyId,
     agentLabel: agentTabLabel(tab),
-    typeKeys: (keys) => typePaneKeys(ptyId, keys),
+    typeKeys: (keys, canWrite) => typePaneKeys(ptyId, keys, undefined, canWrite),
   });
   const { picking, picker, step, shownStep, busy, choose, close } = session;
   const boxRef = useRef<HTMLSpanElement>(null);

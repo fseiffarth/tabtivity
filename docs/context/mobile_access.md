@@ -103,6 +103,21 @@ other lists do, so the catalog, `pty_bridge`'s re-check and `phone_origin` all
 apply it. The list narrows the switch and the review gate; it never opens
 either. The phone draws no root row: the logo on its start page opens it.
 
+**Shell tabs** are behind two switches on top of the layers above: the
+host-wide `tabtivity_mobile_host.shell_tabs` (Settings → Mobile, "No shells on
+the phone", off unless set; `discovery::shells_open`) and each phone's own
+`auth::Device::shell_tabs` in `devices.json` (the **Shells** button under its
+row, admin `set_shell_tabs`). Both must allow. A new pairing starts without;
+a device saved before the field reads as allowed (serde default `true`), so
+it keeps what the host-wide switch alone gave it. The catalog cache lists
+shells whenever the host-wide switch does; `Catalog::for_device(device,
+shells)` drops them (and their share of `live_sessions`/`last_activity`) for a
+phone without its own, so listing, `grants`, `pty_bridge`'s 5 s re-check
+(an open shell detaches), the detail's `shells`, archived rows and the
+create/restore `403 shells_off` all follow it (`host::phone_shells`). The
+desktop bridge repeats only the host-wide half: its requests name no phone it
+could trust.
+
 ## Linked desktops (framing, not access)
 
 `tabtivity_mobile_host.linked_desktops` names other desktops' phone hosts

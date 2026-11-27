@@ -76,8 +76,11 @@ rest follows from:
    tab's cwd (`memberOfCwd`), never stored: a stored field would go stale when
    a tab is renamed or its member leaves, and the old " — name" label suffix
    (which a rename erased) was the only trace before. "Start in…" picks another
-   place. Remote members whose tabs run in a local copy get no chip, because
-   remoteness is never inferred from paths.
+   place. A remote member's root is its local copy (the mirror its box tabs
+   run in, as the backend's box roots have it), never its `directory`, which
+   is the project's state folder: rooting it there (until 2026-11-25) started
+   "Shell/agent — ⟨member⟩" in the state folder, gave its tabs no chip and
+   reset its restored agent tabs to the box folder.
 4. **The side panel is one collapsible section per member**, rich headers; the
    collapse state is per-viewer `localStorage`, not a data file. First built as
    a strict accordion (one member open); on 2026-11-16 the user asked for
@@ -150,7 +153,11 @@ A first-class persisted scope, disjoint from project ids and `"root"`:
   project's pill is the gesture that must exit the box.
 - **Spawn/read authority**: the PTY gate (`pty_spawn`) and the absolute-path
   confinement (`compute_allowed_roots`) both accept the box folder ∪ member
-  roots ∪ remote members' mirrors and fail closed on an unknown box. A tab may
+  roots ∪ remote members' mirrors and fail closed on an unknown box. A remote
+  member's `directory` is no spawn/fence root (2026-11-25): it is its state
+  folder, or a legacy entry's whole home, and every box agent is handed each
+  root (fence bind, Claude `--add-dir`). A box tab saved there restores into
+  the member's local copy (`remoteMemberCwdMoves`). A tab may
   be rooted in a member root — deliberately, since Claude keys its resume
   history by cwd, so a member-rooted agent tab resumes that member's
   conversations.

@@ -169,25 +169,33 @@ describe("Mobile home — project list states", () => {
     expect(screen.queryByText(/No project/)).toBeNull();
   });
 
-  it("says in the header whether the desktop's VPN tunnel is up, and nothing where it has none", async () => {
+  it("says in the status line whether the desktop's VPN tunnel is up, and nothing where it has none", async () => {
     answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
     const home = (vpn?: "up" | "down" | null) => <Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} vpn={vpn} />;
     const view = render(home());
     await screen.findByText("Alpha");
-    expect(screen.queryByRole("img", { name: /^VPN on the desktop/ })).toBeNull();
+    const line = () => screen.getByRole("group", { name: /^Connected/ });
+    expect(line().getAttribute("aria-label")).toBe("Connected");
+    expect(line().querySelector(".home-status-vpn")).toBeNull();
     view.rerender(home("up"));
-    expect(screen.getByRole("img", { name: "VPN on the desktop is connected" }).className).toBe("home-vpn up");
+    expect(line().getAttribute("aria-label")).toBe("Connected · VPN on the desktop is connected");
+    expect(line().querySelector(".home-status-vpn")?.className).toBe("home-status-vpn up");
+    expect(line().textContent).toContain("VPN on");
     view.rerender(home("down"));
-    expect(screen.getByRole("img", { name: "VPN on the desktop is not connected" }).className).toBe("home-vpn");
+    expect(line().getAttribute("aria-label")).toBe("Connected · VPN on the desktop is not connected");
+    expect(line().querySelector(".home-status-vpn")?.className).toBe("home-status-vpn");
+    expect(line().textContent).toContain("VPN off");
     // A link that is down says nothing about the tunnel.
     fetchMock.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")));
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
     await screen.findByText(/Showing the last list this session loaded/);
-    expect(screen.queryByRole("img", { name: /^VPN on the desktop/ })).toBeNull();
+    const offline = screen.getByRole("group", { name: "Offline" });
+    expect(offline.className).toBe("home-status offline");
+    expect(offline.querySelector(".home-status-vpn")).toBeNull();
   });
 });
 
-describe("Mobile home — local model pill", () => {
+describe("Mobile home — status line's local model", () => {
   const model = (name: string, state: string) => ({ name, size: 1, parameter_size: null, quantization: null, state, for_tabs: false, remote: false });
   function serveModels(models: unknown[]) {
     fetchMock.mockImplementation(async (input: string | URL | Request) => {
@@ -199,23 +207,49 @@ describe("Mobile home — local model pill", () => {
     });
   }
 
-  it("names the model in memory in the header, and opens the Local models sheet on a tap", async () => {
+  it("names the model in memory in the status line, and opens the Local models sheet on a tap", async () => {
     serveModels([model("qwen3.8:27b", "loaded"), model("llama3:latest", "loaded"), model("gemma3:4b", "idle")]);
     render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
-    const pill = await screen.findByRole("button", { name: "Local model in memory on the desktop: llama3, qwen3.8:27b" });
-    expect(pill.className).toBe("home-model");
-    expect(pill.textContent).toContain("llama3");
-    expect(pill.textContent).toContain("+1");
-    fireEvent.click(pill);
+    const line = await screen.findByRole("button", { name: "Local model in memory on the desktop: llama3, qwen3.8:27b" });
+    expect(line.className).toBe("home-status");
+    expect(line.textContent).toContain("llama3");
+    expect(line.textContent).toContain("+1");
+    fireEvent.click(line);
     expect(await screen.findByRole("dialog", { name: "Local models" })).toBeTruthy();
   });
 
-  it("shows no pill while no model is in memory", async () => {
+  it("says only Connected while no model is in memory, and still opens the sheet", async () => {
     serveModels([model("gemma3:4b", "idle")]);
     render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
     await waitFor(() => expect(screen.getByRole("button", { name: /Ollama models on the desktop/ }).textContent).toContain("0 loaded · 1 installed"));
     expect(screen.queryByRole("button", { name: /^Local model in memory/ })).toBeNull();
+    const line = screen.getByRole("button", { name: "Connected" });
+    expect(line.className).toBe("home-status");
+    fireEvent.click(line);
+    expect(await screen.findByRole("dialog", { name: "Local models" })).toBeTruthy();
+  });
+
+  it("leaves the status line a plain line where the desktop offers no local models", async () => {
+    answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    expect(screen.getByRole("group", { name: "Connected" }).tagName).toBe("DIV");
+    expect(screen.queryByRole("button", { name: "Connected" })).toBeNull();
+  });
+});
+
+describe("Mobile home — Favorites chip", () => {
+  it("opens the Favorites page from beside the Projects heading; the bar keeps only Search and the gear", async () => {
+    answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    const header = document.querySelector(".home-header") as HTMLElement;
+    expect(within(header).queryByRole("button", { name: /^Favorites/ })).toBeNull();
+    expect(within(header).getByRole("button", { name: "Search" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Search all projects" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Favorites/ }));
+    expect(screen.getByRole("heading", { name: "Favorites" })).toBeTruthy();
   });
 });
 

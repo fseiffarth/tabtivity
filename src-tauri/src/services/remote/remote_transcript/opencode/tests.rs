@@ -278,15 +278,12 @@ fn the_tabs_start_replaces_the_local_clock_and_a_restored_tab_has_none() {
 async fn a_snapshot_is_read_as_a_local_tabs_store_is() {
     let (dir, local, conn) = host();
     conn.execute_batch(
-        "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL,
-           time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER);
-         CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-           time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
-         CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
-           time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
-         INSERT INTO session VALUES ('ses_a', NULL, '/srv/p', 5000, 5000, NULL);
-         INSERT INTO message VALUES ('m1', 'ses_a', 5000, 5000, '{\"role\":\"user\"}');
-         INSERT INTO part VALUES ('p1', 'm1', 'ses_a', 5000, 5000, '{\"type\":\"text\",\"text\":\"hello host\"}');",
+        "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+           time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
+         CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+           time_created INTEGER, time_updated INTEGER, data TEXT);
+         INSERT INTO session_v2 VALUES ('ses_a', NULL, '/srv/p', 5000, 5000, NULL, NULL, NULL);
+         INSERT INTO session_message VALUES ('m1', 'ses_a', 'user', 1, 5000, 5000, '{\"text\":\"hello host\"}');",
     )
     .unwrap();
     let mut snapshot = fetch_base(&local, DB, WAL, &dir.path().join("snap")).await.unwrap();
@@ -301,8 +298,8 @@ async fn a_snapshot_is_read_as_a_local_tabs_store_is() {
     assert!(texts(&snapshot, "/link/p", None, None).is_empty());
 
     conn.execute_batch(
-        "INSERT INTO message VALUES ('m2', 'ses_a', 6000, 6000, '{\"role\":\"assistant\",\"time\":{\"created\":6000,\"completed\":6100}}');
-         INSERT INTO part VALUES ('p2', 'm2', 'ses_a', 6001, 6001, '{\"type\":\"text\",\"text\":\"answer from host\",\"time\":{\"start\":6001,\"end\":6050}}');",
+        "INSERT INTO session_message VALUES ('m2', 'ses_a', 'assistant', 2, 6000, 6000,
+           '{\"content\":[{\"type\":\"text\",\"text\":\"answer from host\"}],\"time\":{\"created\":6000,\"completed\":6100}}');",
     )
     .unwrap();
     extend(&local, WAL, &mut snapshot).await.unwrap();

@@ -56,12 +56,15 @@ export function localTabDriver(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver
 
 /** The agent whose transcript `tab` keeps, as `agent_tab_transcript` names
  * it: a local-model tab runs its driver through `ollama launch <driver>`, so
- * its `cmd` names no agent. Only an OpenCode driver is readable there:
- * OpenCode is found by folder, while Claude's and Codex's transcripts need
- * the launch id a local tab never mints. */
-export function readerAgent(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch">): string {
+ * its `cmd` names no agent. Two drivers are readable there: OpenCode, found
+ * by folder, and Claude Code once its tab has the key its line hands on
+ * (`localSessionTail`) — a tab opened before then has none. Codex's
+ * transcript needs a launch id a local tab never mints. */
+export function readerAgent(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch" | "sessionId">): string {
   if (tab.kind !== "local_agent") return tab.cmd;
-  return localTabDriver(tab) === "opencode" ? "opencode" : "";
+  const driver = localTabDriver(tab);
+  if (driver === "opencode") return "opencode";
+  return driver === "claude" && tab.cmd === "ollama" && tab.sessionId ? "claude" : "";
 }
 
 /** The agents whose transcript is read for a tab that runs on a remote
@@ -74,10 +77,11 @@ export function readerAgent(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" |
 const HOST_READER_AGENTS = new Set(["claude", "codex", "agy", "muse", "copilot", "opencode"]);
 
 /** Whether `tab` can be shown as a Reader: an agent tab whose CLI keeps a
- * transcript Tabtivity reads — a local-model tab only when OpenCode drives it,
- * a tab on a remote host (`onHost`) only for `HOST_READER_AGENTS`. */
+ * transcript Tabtivity reads — a local-model tab only when OpenCode or a keyed
+ * Claude Code drives it (`readerAgent`), a tab on a remote host (`onHost`)
+ * only for `HOST_READER_AGENTS`. */
 export function readerOffered(
-  tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch"> | undefined,
+  tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch" | "sessionId"> | undefined,
   onHost = false,
 ): boolean {
   if (!tab || (tab.kind !== "agent" && tab.kind !== "local_agent")) return false;

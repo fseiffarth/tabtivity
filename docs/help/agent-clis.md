@@ -285,6 +285,25 @@ the one that holds whatever happens on this computer. The record is kept in
 cannot be read it is set aside, this month's count restarts from zero and the
 API keys section says so.
 
+**Custom endpoint (OpenCode).** Under the provider rows, **Custom endpoints**
+takes an OpenAI-compatible API of your own, such as an institute's: press
+**Add endpoint**, type a name, the base URL (for example
+`https://llm.example.org/v1`; plain `http://` only to this computer), the
+endpoint's API key and a monthly limit, and Save. Tabtivity checks the key
+against the endpoint's model list first and refuses one it rejects. Up to
+eight endpoints fit. OpenCode lists each endpoint as a provider under the name
+you gave, so pick its models in `/model`, in new OpenCode tabs; no other CLI
+uses it. The key stays in your system keyring and never reaches the agent:
+an OpenCode tab gets a token of its own that works only through Tabtivity,
+the same as for the other keys. The limit counts billed tokens exactly like the
+others (new requests are refused once it is reached; **Set limit** raises it),
+but a custom endpoint has no price table, so its row says **no price** instead
+of a dollar estimate. If the row warns that the endpoint answered with no model
+list, check the base URL (a missing `/v1` looks the same) and press **Refresh
+models**, which also picks up models the endpoint added later. **Remove** asks
+first, then deletes the key, the endpoint and its limit; running tabs on it
+stop at their next request.
+
 ## Open an agent tab
 
 - In a project: `+` on the tab bar → **Agents & CLIs** → the agent. The tab

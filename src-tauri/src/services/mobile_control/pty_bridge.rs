@@ -205,8 +205,10 @@ const ESC_GAP: std::time::Duration = std::time::Duration::from_millis(300);
 /// Codex 0.166 lists what was queued with Tab (how a chat types it,
 /// `agentQueueWrites`) under a heading of its own; Esc drops that list back
 /// into its box, and the phone then presses Enter (`finishSendNow`). OpenCode
-/// 2.2.5's mini footer counts what waits and needs Esc twice; its full TUI
-/// marks a queue nowhere, and neither does Copilot. Any other CLI is unprobed.
+/// 2.4.2 counts what waits in the mini's footer and in the full TUI's box
+/// (`queue_hint_full`), needs Esc twice, and keeps the queue after the stop:
+/// the phone releases it through its panel (`finishSendNow`). Copilot marks
+/// none. Any other CLI is unprobed.
 fn queue_hint(family: &str) -> Option<QueueHint> {
     match family {
         "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages", row_tail: "", keys: &["C-x", "C-s"], presses: 1 }),
@@ -216,6 +218,12 @@ fn queue_hint(family: &str) -> Option<QueueHint> {
         "opencode" => Some(QueueHint { row_start: "", words: " · ctrl+x q ", row_tail: " pending", keys: &["Escape"], presses: 2 }),
         _ => None,
     }
+}
+
+/// OpenCode's full TUI draws the count as the top row of its input box,
+/// `  ┃  2 queued · <first prompt>`; the mini's footer is [`queue_hint`].
+fn queue_hint_full(family: &str) -> Option<QueueHint> {
+    (family == "opencode").then_some(QueueHint { row_start: "  ┃  ", words: " queued · ", row_tail: "", keys: &["Escape"], presses: 2 })
 }
 
 fn queue_hint_shown(screen: &str, hint: &QueueHint) -> bool {
@@ -1295,9 +1303,11 @@ where
                     // The session's phone: a session never changes device, so
                     // this is the phone the upgrade route checked, and the
                     // per-phone list is re-read for it below.
-                    let (device, key) = {
+                    let (device, key, shells) = {
                         let mut auth = auth.lock_ok();
-                        (auth.authenticate(&token), auth.host_key().to_vec())
+                        let device = auth.authenticate(&token);
+                        let shells = device.as_deref().is_some_and(|device| auth.shells_for(device));
+                        (device, auth.host_key().to_vec(), shells)
                     };
                     // Two different facts, told apart on the wire: a session
                     // that ran out (a sidecar restart, the idle window) is the
@@ -1313,7 +1323,7 @@ where
                         })
                         .await
                     };
-                    if let Err(reason) = recheck(loaded.ok().and_then(Result::ok), &device, &tab_id, &tmux_name) {
+                    if let Err(reason) = recheck(loaded.ok().and_then(Result::ok), &device, shells, &tab_id, &tmux_name) {
                         break Err(reason.into());
                     }
                 }
@@ -1446,8 +1456,12 @@ where
                         TerminalControl::SendNow { family } => {
                             let sent = match queue_hint(&family) {
                                 Some(hint) if !ai_off => {
-                                    let (target, mux) = (target.clone(), mux.clone());
-                                    tokio::task::spawn_blocking(move || target.send_now_on(hint, &*mux)).await.unwrap_or(false)
+                                    let (target, mux, full) = (target.clone(), mux.clone(), queue_hint_full(&family));
+                                    tokio::task::spawn_blocking(move || {
+                                        target.send_now_on(hint, &*mux) || full.is_some_and(|full| target.send_now_on(full, &*mux))
+                                    })
+                                    .await
+                                    .unwrap_or(false)
                                 }
                                 _ => false,
                             };
@@ -1497,8 +1511,8 @@ where
 /// session, that has gone unavailable closes as `host_offline` when the last
 /// round found no master for its host, and as `session_gone` when it found
 /// the master but the host's tmux no longer lists the session.
-fn recheck(loaded: Option<Catalog>, device: &str, tab_id: &str, tmux_name: &str) -> Result<(), &'static str> {
-    let Some(catalog) = loaded.map(|catalog| catalog.for_device(device)) else {
+fn recheck(loaded: Option<Catalog>, device: &str, shells: bool, tab_id: &str, tmux_name: &str) -> Result<(), &'static str> {
+    let Some(catalog) = loaded.map(|catalog| catalog.for_device(device, shells)) else {
         return Err("catalog_unavailable");
     };
     if catalog.grants(tab_id, tmux_name) {
@@ -1517,7 +1531,7 @@ mod winhost_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_window_size, queue_hint, queue_hint_shown, MOBILE_SCROLLBACK_LINES};
+    use super::{parse_window_size, queue_hint, queue_hint_full, queue_hint_shown, MOBILE_SCROLLBACK_LINES};
     use crate::services::session_mux::{normalize_scrollback, tmux::TmuxMux};
     use super::{
         ack_frame, closing_retries, deliver, input_gap, input_report_due, is_interrupt_frame, replay_frames, OutputQueue,
@@ -1556,11 +1570,11 @@ mod tests {
     fn narrowing_the_phone_list_detaches_an_open_terminal() {
         use crate::services::mobile_control::discovery::{fixture_scope, Catalog};
         let with = |devices: Option<Vec<String>>| Catalog { projects: vec![fixture_scope("t", "tmux-t", devices)] };
-        assert_eq!(super::recheck(Some(with(None)), "d1", "t", "tmux-t"), Ok(()));
-        assert_eq!(super::recheck(Some(with(Some(vec!["d1".into()]))), "d1", "t", "tmux-t"), Ok(()));
-        assert_eq!(super::recheck(Some(with(Some(vec!["d2".into()]))), "d1", "t", "tmux-t"), Err("access_revoked"));
-        assert_eq!(super::recheck(Some(with(Some(vec![]))), "d1", "t", "tmux-t"), Err("access_revoked"));
-        assert_eq!(super::recheck(None, "d1", "t", "tmux-t"), Err("catalog_unavailable"));
+        assert_eq!(super::recheck(Some(with(None)), "d1", true, "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(with(Some(vec!["d1".into()]))), "d1", true, "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(with(Some(vec!["d2".into()]))), "d1", true, "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(Some(with(Some(vec![]))), "d1", true, "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(None, "d1", true, "t", "tmux-t"), Err("catalog_unavailable"));
     }
 
     /// A host tab's three commands ride the master's literal socket through
@@ -1684,9 +1698,9 @@ mod tests {
             };
             Catalog { projects: vec![scope] }
         };
-        assert_eq!(super::recheck(Some(host(true)), "d1", "t", "tmux-t"), Ok(()));
-        assert_eq!(super::recheck(Some(host(false)), "d1", "t", "tmux-t"), Err("host_offline"));
-        assert_eq!(super::recheck(Some(host(false)), "d1", "t", "tmux-other"), Err("access_revoked"));
+        assert_eq!(super::recheck(Some(host(true)), "d1", true, "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(host(false)), "d1", true, "t", "tmux-t"), Err("host_offline"));
+        assert_eq!(super::recheck(Some(host(false)), "d1", true, "t", "tmux-other"), Err("access_revoked"));
         assert!(!closing_retries("host_offline"));
         // The master is there, but the host's tmux no longer lists the
         // session: it ended, the host did not go away.
@@ -1695,10 +1709,10 @@ mod tests {
             spec: Box::new(serde_json::from_value(serde_json::json!({ "host": "h.example", "remote_path": "/srv/p" })).unwrap()),
             control_path: Some(std::env::temp_dir().join("cm-h")),
         };
-        assert_eq!(super::recheck(Some(ended), "d1", "t", "tmux-t"), Err("session_gone"));
+        assert_eq!(super::recheck(Some(ended), "d1", true, "t", "tmux-t"), Err("session_gone"));
         let mut local = fixture_scope("t", "tmux-t", None);
         local.tabs[0].public.available = false;
-        assert_eq!(super::recheck(Some(Catalog { projects: vec![local] }), "d1", "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(Some(Catalog { projects: vec![local] }), "d1", true, "t", "tmux-t"), Err("access_revoked"));
     }
 
     #[test]
@@ -2020,6 +2034,15 @@ mod tests {
         assert!(!queue_hint_shown("   ■⬝⬝⬝⬝⬝⬝⬝ esc interrupt     ↓ 1 shell  ctrl+p commands", &opencode));
         // The key named in prose, with no count after it.
         assert!(!queue_hint_shown("the panel opens with · ctrl+x q here", &opencode));
+
+        // 2.4.2's full TUI counts the queue in the top row of its box.
+        let full = queue_hint_full("opencode").expect("opencode's full TUI has a hint");
+        assert_eq!((full.keys, full.presses), (&["Escape"][..], 2));
+        assert!(queue_hint_shown("     ⠼ Running command…\n  ┃  2 queued · Say QA1.\n  ┃  Build · stub Ollama (local)\n", &full));
+        assert!(!queue_hint_shown("  ┃  Say QA1.\n  ┃  Build · stub Ollama (local)\n   ⬝⬝⬝⬝ esc interrupt", &full));
+        // A chat line that says it is not the box's row.
+        assert!(!queue_hint_shown("  it said 2 queued · here\n", &full));
+        assert!(queue_hint_full("codex").is_none());
     }
 
     /// The two local halves read and append; neither writes an index.

@@ -15,6 +15,9 @@ import { rectFromDrag, isDraggedFar, snapToText, type Rect } from "../../../lib/
 import { loadPageLinks, type PdfLink } from "./links";
 import { pageTextItemBoxesUnturned } from "./pageText";
 import { PdfNoteLayer, type NoteMenuState, type NoteEditState } from "./PdfNoteLayer";
+import { PdfFormLayer } from "./PdfFormLayer";
+import { loadPageFields, type FormValue, type PdfFormField } from "./formFields";
+import type { FieldFocus } from "./usePdfForm";
 import type { PdfWordPhrase } from "../../../lib/viewers/tex/reverseWord";
 import { clickedPdfWord } from "./clickedWord";
 import { PdfTextLayer } from "./PdfTextLayer";
@@ -108,6 +111,7 @@ export function PdfPageCanvas({
   markup,
   questionPins,
   tickBadges,
+  form,
   onSize,
   onPainted,
 }: {
@@ -243,6 +247,19 @@ export function PdfPageCanvas({
     disabled: boolean;
     onApprove: (marks: TickBadge["marks"]) => void;
   } | null;
+  /** The document's form (#pdf-forms), on a sheet of the viewed file that has
+   *  fields to fill. Absent = no form layer at all, the link layer's rule. */
+  form?: {
+    valueOf: (field: PdfFormField) => FormValue;
+    highlight: boolean;
+    focus: FieldFocus | null;
+    /** Bumped when a value on this sheet changed: the canvas repaints, since the
+     *  value is painted from the document's annotation storage. */
+    rev: number;
+    onCommit: (field: PdfFormField, value: FormValue) => void;
+    onStep: (fromId: string, dir: 1 | -1) => void;
+    onSaveRequest: () => void;
+  } | null;
 }) {
   const t = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -363,7 +380,15 @@ export function PdfPageCanvas({
      *  its pixels because nothing it *draws* changed would otherwise keep painting a
      *  highlight the viewer has since taken over and is now drawing itself. */
     hidden: string;
+    /** The form revision painted (#pdf-forms): a filled-in value changes the
+     *  pixels without changing what the page itself draws. */
+    formRev: number;
   } | null>(null);
+  const formRev = form?.rev ?? 0;
+  /** Paints of this canvas, counted only while it carries form fields: the form
+   *  layer holds a just-typed value up until the repaint that shows it. */
+  const [paints, setPaints] = useState(0);
+  const countPaints = useRef(false);
   // The document whose page this canvas last fetched to draw (or compare) —
   // the one a scroll-away's `cleanup()` has something to give back for.
   const touchedDoc = useRef<PDFDocumentProxy | null>(null);
@@ -454,7 +479,8 @@ export function PdfPageCanvas({
         prev.scale === scale &&
         prev.rot === rot &&
         prev.dpr === dpr &&
-        prev.hidden === hiddenHighlights;
+        prev.hidden === hiddenHighlights &&
+        prev.formRev === formRev;
       // Only ask what the page draws when the pixels could actually be reused —
       // a zoom or a turn has to repaint whatever the answer would be.
       const fp = sameGeometry ? await fingerprintPage(page, rot) : null;
@@ -532,14 +558,35 @@ export function PdfPageCanvas({
       // reader is actually looking at.
       const finalFp = fp ?? (await fingerprintPage(page, rot));
       if (cancelled) return;
-      painted.current = { fp: finalFp, scale, rot, dpr, hidden: hiddenHighlights };
+      painted.current = { fp: finalFp, scale, rot, dpr, hidden: hiddenHighlights, formRev };
       onPaintedRef.current?.();
+      if (countPaints.current) setPaints((n) => n + 1);
     })();
     return () => {
       cancelled = true;
       task?.cancel();
     };
-  }, [doc, pageNumber, rot, scale, near, hiddenHighlights, catchUp]);
+  }, [doc, pageNumber, rot, scale, near, hiddenHighlights, formRev, catchUp]);
+
+  // The sheet's form fields (#pdf-forms), read when it comes near — the link
+  // layer's gate and key, for its reasons (boxes in big points, so a zoom re-reads
+  // nothing).
+  const [fields, setFields] = useState<PdfFormField[]>([]);
+  const wantFields = form != null;
+  useEffect(() => {
+    if (!wantFields || !near) {
+      setFields([]);
+      return;
+    }
+    let cancelled = false;
+    void loadPageFields(doc, pageNumber, rot).then((fs) => {
+      if (!cancelled) setFields(fs);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [doc, pageNumber, rot, wantFields, near]);
+  countPaints.current = fields.length > 0;
 
   // The page's own hyperlinks (#pdf-links). Keyed off the sheet and its turn but
   // NOT off `scale` — the boxes are stored in big points and multiplied into CSS
@@ -946,6 +993,21 @@ export function PdfPageCanvas({
           <UntestedTag id="pdfViewer.syncReverseWord" />
           {clickMark.turned && <UntestedTag id="pdfViewer.syncTurnedPage" />}
         </span>
+      )}
+      {/* The form's fields (#pdf-forms), over the links and the text: a click on a
+          field fills it. Out of the way of the two tools that own the pointer. */}
+      {form && fields.length > 0 && !redacting && !marking && (
+        <PdfFormLayer
+          fields={fields}
+          scale={scale}
+          valueOf={form.valueOf}
+          highlight={form.highlight}
+          focus={form.focus && form.focus.page === pageNumber ? form.focus : null}
+          paints={paints}
+          onCommit={form.onCommit}
+          onStep={form.onStep}
+          onSaveRequest={form.onSaveRequest}
+        />
       )}
       {/* The blackout surface (#pdf-redact), under the marks so an armed click on an
           existing one removes it rather than starting a drag on top of it. */}

@@ -10,11 +10,14 @@
 //! - **The plugin.** One directory of Tabtivity's in `<state_dir>/hooks/`
 //!   (read-only in the fence, at its own path), listed by file URL in every
 //!   agent home's `.config/opencode/opencode.json` `plugin` list — the
-//!   directory for OpenCode 2 (2.1.3 skips a configured plugin file), its
-//!   `index.js` for 1.x. Each time the tab's
+//!   directory, as OpenCode 2 loads it (2.1.3 skips a configured plugin file;
+//!   1.x is not supported). Each time the tab's
 //!   OpenCode takes a prompt it writes that session's id to
 //!   `live_sessions/<uid>`, beside the other CLIs' records — a `/new` or a
-//!   session picked from `/sessions` moves it at the next prompt. Only the
+//!   session picked from `/sessions` moves it at the next prompt. A prompt
+//!   that reached the server before the plugin was loaded (it re-boots its
+//!   instance on a prompt after a while idle) is caught by the session's run
+//!   events instead, while the tab has none recorded. Only the
 //!   tab's own OpenCode records: `TAB_AGENT` names OpenCode (set at the spawn,
 //!   so one nested under another CLI's tab stays out), a claim it sets in its
 //!   environment keeps one nested under the tab out, and a subagent's child
@@ -26,8 +29,9 @@
 //!   is restored fresh — not into a sibling's. A tab from before the plugin
 //!   (no note) keeps its `--continue` until its first prompt records one.
 //! - **The Reader** (`agent_transcript`, `agent_changes`) reads the recorded
-//!   session while the store still has it; otherwise the folder's newest, as
-//!   before, created since the last fresh launch.
+//!   session while the store still has it; otherwise the folder's newest
+//!   created since the last fresh launch that no other tab's record claims
+//!   (a sibling's chat is never shown as a fresh tab's).
 //!
 //! A local-model tab records and resumes the same way, against its local-model
 //! home's store. Remote tabs (their store is on the far host) and assistant
@@ -48,7 +52,7 @@ use crate::terminal::PtyOptions;
 /// The plugin's directory in `<state_dir>/hooks/`, and its entry file.
 /// OpenCode 2 loads a configured local plugin only as a directory (2.1.3 skips
 /// a file with "configured plugin path must be a directory") and resolves its
-/// `index`; 1.x imports the file itself.
+/// `index`.
 const PLUGIN_DIR: &str = concat!(crate::app_slug!(), "_opencode_session");
 const PLUGIN_ENTRY: &str = "index.js";
 /// The single file earlier builds wrote and listed: taken back out of homes.
@@ -74,29 +78,19 @@ fn file_url(path: PathBuf) -> Option<String> {
     url::Url::from_file_path(path).ok().map(String::from)
 }
 
-/// The `plugin` entry OpenCode loads the plugin by: the directory for V2, the
-/// entry file for V1.
-fn plugin_url(v2: bool) -> Option<String> {
-    let dir = plugin_dir();
-    file_url(if v2 { dir } else { dir.join(PLUGIN_ENTRY) })
+/// The `plugin` entry OpenCode loads the plugin by: its directory.
+fn plugin_url() -> Option<String> {
+    file_url(plugin_dir())
 }
 
-/// Every entry of Tabtivity's that is not `url`: the other release's, and the
-/// single file earlier builds listed.
-fn stale_urls(url: &str) -> Vec<String> {
+/// The entries of Tabtivity's that earlier builds listed and homes may still
+/// carry: the entry file listed for OpenCode 1.x, and the single file before it.
+fn stale_urls() -> Vec<String> {
     let hooks = storage::state_dir().join("hooks");
-    [plugin_url(true), plugin_url(false), file_url(hooks.join(LEGACY_PLUGIN_FILE))]
+    [file_url(plugin_dir().join(PLUGIN_ENTRY)), file_url(hooks.join(LEGACY_PLUGIN_FILE))]
         .into_iter()
         .flatten()
-        .filter(|u| u != url)
         .collect()
-}
-
-/// Whether the OpenCode Tabtivity last probed is 2.x (`agent_versions`; a
-/// spawn probes it before resolving, `launch_prep::prepare`).
-fn installed_v2() -> bool {
-    let store = crate::services::agent_versions::load();
-    crate::services::agent_versions::opencode_is_v2(store.get("opencode"))
 }
 
 fn plugin_body(live_dir: &str) -> String {
@@ -113,14 +107,13 @@ fn plugin_body(live_dir: &str) -> String {
          const TAB = /^[0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}}$/;\n\
          const SESSION = /^ses_[A-Za-z0-9]{{1,64}}$/;\n\
          const CLAIM = {claim};\n\
-         // The bus events that move the turn (V1 `event` hook, V2 subscription):\n\
-         // a question waits on the user, an answer resumes, the end of a run is done.\n\
+         // The bus events that move the turn: a question waits on the user, an\n\
+         // answer resumes, the end of a run is done.\n\
          const TURN = {{\n\
-         \x20 \"permission.asked\": \"decision\", \"question.asked\": \"decision\", \"form.created\": \"decision\",\n\
-         \x20 \"permission.replied\": \"working\", \"question.replied\": \"working\", \"question.rejected\": \"working\",\n\
-         \x20 \"form.replied\": \"working\", \"form.cancelled\": \"working\",\n\
-         \x20 \"session.idle\": \"done\", \"session.error\": \"done\", \"session.execution.succeeded\": \"done\",\n\
-         \x20 \"session.execution.failed\": \"done\", \"session.execution.interrupted\": \"done\",\n\
+         \x20 \"permission.asked\": \"decision\", \"form.created\": \"decision\",\n\
+         \x20 \"permission.replied\": \"working\", \"form.replied\": \"working\", \"form.cancelled\": \"working\",\n\
+         \x20 \"session.execution.succeeded\": \"done\", \"session.execution.failed\": \"done\",\n\
+         \x20 \"session.execution.interrupted\": \"done\",\n\
          }};\n\
          \n\
          const TabSession = async () => {{\n\
@@ -148,13 +141,13 @@ fn plugin_body(live_dir: &str) -> String {
          \x20   if (recorded && id === recorded) put(\".turn\", `${{word}} ${{Math.floor(Date.now() / 1000)}}`);\n\
          \x20 }};\n\
          \x20 return {{\n\
-         \x20   // V1 passes `{{type, properties}}`, V2 `{{type, data}}`.\n\
+         \x20   // An event as the subscription yields it: `{{type, data}}`.\n\
          \x20   event: async ({{ event }}) => {{\n\
          \x20     const type = String(event?.type);\n\
-         \x20     const props = event?.properties ?? event?.data ?? {{}};\n\
+         \x20     const props = event?.data ?? {{}};\n\
          \x20     const info = props.info;\n\
          \x20     if (type.startsWith(\"session.\") && info?.parentID && typeof info.id === \"string\") children.add(info.id);\n\
-         \x20     const word = type === \"session.status\" ? (props.status?.type === \"idle\" ? \"done\" : undefined) : TURN[type];\n\
+         \x20     const word = TURN[type];\n\
          \x20     if (word) turn(props.sessionID ?? props.form?.sessionID, word);\n\
          \x20   }},\n\
          \x20   \"chat.message\": async (input) => {{\n\
@@ -163,23 +156,28 @@ fn plugin_body(live_dir: &str) -> String {
          \x20     if (id !== recorded && put(\"\", id)) recorded = id;\n\
          \x20     turn(id, \"working\");\n\
          \x20   }},\n\
-         \x20   // Every command the shell tool runs carries the claim, also where the\n\
-         \x20   // shell's environment is not this process's.\n\
-         \x20   \"shell.env\": async (_input, output) => {{\n\
-         \x20     if (output?.env) output.env[CLAIM] = \"1\";\n\
+         \x20   // A session running in this tab's own server while it has none\n\
+         \x20   // recorded: the prompt that booted the instance reached it before\n\
+         \x20   // this plugin was loaded, so the prompt hook never saw it.\n\
+         \x20   unrecorded: () => !recorded,\n\
+         \x20   adopt: (id) => {{\n\
+         \x20     if (recorded || typeof id !== \"string\" || children.has(id) || !SESSION.test(id)) return;\n\
+         \x20     if (put(\"\", id)) recorded = id;\n\
          \x20   }},\n\
          \x20 }};\n\
          }};\n\
          \n\
-         // V1 (1.18.29+) calls server; V2 calls setup. No runtime dependency:\n\
-         // Plugin.define is the identity function in @opencode/plugin.\n\
+         // The events that say a session is running here — not one only viewed.\n\
+         const runs = (type) => type.startsWith(\"session.step.\") || type.startsWith(\"session.execution.\") || type in TURN;\n\
+         \n\
+         // OpenCode 2 calls setup. No runtime dependency: Plugin.define is the\n\
+         // identity function in @opencode/plugin.\n\
          export default {{\n\
          \x20 id: {plugin_id},\n\
-         \x20 server: TabSession,\n\
          \x20 async setup(ctx) {{\n\
          \x20   const hooks = await TabSession();\n\
          \x20   if (!hooks[\"chat.message\"]) return;\n\
-         \x20   // V2 gives the shell tool a per-session copy of the environment, so the\n\
+         \x20   // The shell tool gets a per-session copy of the environment, so the\n\
          \x20   // claim set above never reached it and a nested `opencode run` took the\n\
          \x20   // record over (2.3.0): each shell gets it here.\n\
          \x20   try {{\n\
@@ -198,7 +196,16 @@ fn plugin_body(live_dir: &str) -> String {
          \x20   try {{\n\
          \x20     const events = await ctx.event.subscribe();\n\
          \x20     (async () => {{\n\
-         \x20       for await (const event of events) await hooks.event({{ event }});\n\
+         \x20       for await (const event of events) {{\n\
+         \x20         const id = event?.data?.sessionID ?? event?.data?.form?.sessionID;\n\
+         \x20         if (hooks.unrecorded() && typeof id === \"string\" && runs(String(event?.type))) {{\n\
+         \x20           try {{\n\
+         \x20             const session = await ctx.session.get({{ sessionID: id }});\n\
+         \x20             if (!session.parentID) hooks.adopt(id);\n\
+         \x20           }} catch {{}}\n\
+         \x20         }}\n\
+         \x20         await hooks.event({{ event }});\n\
+         \x20       }}\n\
          \x20     }})().catch(() => {{}});\n\
          \x20   }} catch {{}}\n\
          \x20 }},\n\
@@ -232,8 +239,8 @@ pub fn write_plugin() -> std::io::Result<()> {
 /// listed afterwards — a config that isn't plain JSON is left alone, and then
 /// the tab records nothing.
 pub fn register_in_home(home: &Path) -> bool {
-    let Some(url) = plugin_url(installed_v2()) else { return false };
-    let stale = stale_urls(&url);
+    let Some(url) = plugin_url() else { return false };
+    let stale = stale_urls();
     let Some(file) = HomeFile::open(home, crate::services::agent_hint::OPENCODE_CONFIG) else {
         return false;
     };
@@ -248,8 +255,7 @@ pub fn register_in_home(home: &Path) -> bool {
 /// OpenCode 2's managed background service listens on one fixed loopback
 /// port shared by every home, and a typed `opencode` does not get
 /// `--standalone`. `disabled: true` in the home's service config makes every
-/// launch from it use a private server (`standalone || disabled`). A 1.x
-/// home ignores the file.
+/// launch from it use a private server (`standalone || disabled`).
 const SERVICE_CONFIG: &str = ".config/opencode/service.json";
 
 pub fn disable_service_in_home(home: &Path) {
@@ -295,10 +301,10 @@ fn add_plugin(root: &mut Value, url: &str, stale: &[String]) -> bool {
     true
 }
 
-/// V2's private server keeps the tab's environment, MCP grants and plugin
-/// claim in its own process tree. Its model flag belongs to `mini`/`run`,
-/// whereas V1 also accepted it on the full TUI. Preserve those saved launches
-/// through the minimal interface, which accepts both the model and session.
+/// OpenCode 2's private server keeps the tab's environment, MCP grants and
+/// plugin claim in its own process tree. Its model flag belongs to
+/// `mini`/`run`, not the full TUI: saved launch lines carrying one go through
+/// the minimal interface, which accepts both the model and session.
 pub fn v2_launch_args(args: &mut Vec<String>) {
     let first = args.first().map(String::as_str);
     if first.is_some_and(|a| matches!(a, "debug" | "upgrade" | "update" | "uninstall" | "service" | "plugin" | "mcp" | "serve" | "pair" | "reload" | "models" | "stats" | "session" | "api")) {
@@ -481,23 +487,71 @@ fn now_ms() -> i64 {
     crate::clock::now_ms() as i64
 }
 
-/// What the Reader reads for the OpenCode tab `launch_id`: the session its
-/// plugin recorded (the store checks it is still there), and the moment since
-/// which the folder's sessions are the tab's own — the caller's `since`, or
-/// the tab's last fresh launch when it has been relaunched since.
-pub fn reader_session(project_id: Option<&str>, launch_id: Option<&str>, since: Option<i64>) -> (Option<String>, Option<i64>) {
-    let Some(uid) = launch_id.filter(|uid| is_uuid_shaped(uid)) else {
-        return (None, since);
-    };
-    reader_session_in(&live_sessions_dir(), recorded_session(project_id, uid), uid, since)
+/// What the Reader reads for an OpenCode tab: see [`reader_session`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ReaderSession {
+    /// The session the tab's plugin recorded (the store checks it is still there).
+    pub own: Option<String>,
+    /// The moment since which the folder's sessions are the tab's own — the
+    /// caller's `since`, or the tab's last fresh launch when it has been
+    /// relaunched since.
+    pub since: Option<i64>,
+    /// Without `own`: the sessions other tabs' plugins recorded as theirs,
+    /// which the folder's newest is never taken from — or a tab that has not
+    /// prompted yet would show a sibling's chat as its own.
+    pub claimed: Vec<String>,
 }
 
-fn reader_session_in(notes: &Path, own: Option<String>, uid: &str, since: Option<i64>) -> (Option<String>, Option<i64>) {
+/// What the Reader reads for the OpenCode tab `launch_id`.
+pub fn reader_session(project_id: Option<&str>, launch_id: Option<&str>, since: Option<i64>) -> ReaderSession {
+    let Some(uid) = launch_id.filter(|uid| is_uuid_shaped(uid)) else {
+        return ReaderSession { since, ..Default::default() };
+    };
+    let mut read = reader_session_in(&live_sessions_dir(), recorded_session(project_id, uid), uid, since);
+    if read.own.is_none() {
+        let slice = project_live_sessions_dir(project_id.unwrap_or(storage::ROOT_SCOPE));
+        read.claimed = claimed_in(&[live_sessions_dir(), slice], uid, read.since);
+    }
+    read
+}
+
+fn reader_session_in(notes: &Path, own: Option<String>, uid: &str, since: Option<i64>) -> ReaderSession {
     let since = match read_launch_in(notes, uid) {
         Some(Launch::Fresh(at)) => Some(since.map_or(at, |s| s.max(at))),
         _ => since,
     };
-    (own, since)
+    ReaderSession { own, since, claimed: Vec::new() }
+}
+
+/// Slack under `since` for a record's modification time: it is stamped by the
+/// file system, the session's creation by OpenCode.
+const CLAIM_SLACK_MS: i64 = 5_000;
+
+/// The OpenCode sessions recorded in `dirs` by tabs other than `uid`. With
+/// `since`, only records written since then are read: a session the Reader
+/// could take was created since, and its record after it.
+fn claimed_in(dirs: &[PathBuf], uid: &str, since: Option<i64>) -> Vec<String> {
+    let floor = since
+        .and_then(|ms| u64::try_from(ms.saturating_sub(CLAIM_SLACK_MS)).ok())
+        .map(|ms| std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms));
+    let mut claimed: Vec<String> = dirs
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_name().to_str().is_some_and(|name| name != uid && is_uuid_shaped(name)))
+        .filter(|entry| {
+            entry.metadata().is_ok_and(|meta| {
+                meta.is_file() && floor.is_none_or(|floor| meta.modified().is_ok_and(|at| at >= floor))
+            })
+        })
+        .filter_map(|entry| crate::services::home_io::read_record(&entry.path()))
+        .map(|id| id.trim().to_string())
+        .filter(|id| is_session_id(id))
+        .collect();
+    claimed.sort();
+    claimed.dedup();
+    claimed
 }
 
 #[cfg(test)]
@@ -664,12 +718,48 @@ mod tests {
     #[test]
     fn the_reader_reads_only_sessions_since_a_fresh_relaunch() {
         let notes = tmp("reader");
-        assert_eq!(reader_session_in(&notes, None, UID, None), (None, None));
+        let read = |own: Option<&str>, since| {
+            let read = reader_session_in(&notes, own.map(str::to_string), UID, since);
+            (read.own, read.since)
+        };
+        assert_eq!(read(None, None), (None, None));
         write_launch_in(&notes, UID, Launch::Fresh(500)).unwrap();
-        assert_eq!(reader_session_in(&notes, None, UID, None), (None, Some(500)));
-        assert_eq!(reader_session_in(&notes, None, UID, Some(900)), (None, Some(900)));
+        assert_eq!(read(None, None), (None, Some(500)));
+        assert_eq!(read(None, Some(900)), (None, Some(900)));
         write_launch_in(&notes, UID, Launch::Continued).unwrap();
-        assert_eq!(reader_session_in(&notes, Some("ses_a".into()), UID, None), (Some("ses_a".into()), None));
+        assert_eq!(read(Some("ses_a"), None), (Some("ses_a".into()), None));
+    }
+
+    /// Three OpenCode tabs in one folder, two not prompted yet: those two must
+    /// not take the third's session as the folder's newest. Their own records,
+    /// Claude's records beside them, launch notes and records older than the
+    /// launch are not claims.
+    #[test]
+    fn other_tabs_records_are_claims() {
+        let root = tmp("claims-root");
+        let slice = tmp("claims-slice");
+        const OTHER: &str = "6a0d7654-9781-48d2-9d10-55353bba0963";
+        const FENCED: &str = "a6e9a1c0-a56f-40e2-9768-ff30b1c80740";
+        const CLAUDE: &str = "9e0f0ff9-c7b4-4945-b958-f2791377994a";
+        const OLD: &str = "c078300f-a1f1-40ae-9604-fa1379fd9d6d";
+        std::fs::write(root.join(UID), "ses_mine").unwrap();
+        std::fs::write(root.join(OTHER), "ses_other\n").unwrap();
+        std::fs::write(slice.join(FENCED), "ses_fenced").unwrap();
+        std::fs::write(slice.join(format!("{FENCED}.turn")), "done 1").unwrap();
+        std::fs::write(root.join(format!("{OTHER}{LAUNCH_SUFFIX}")), "fresh 1").unwrap();
+        std::fs::write(root.join(CLAUDE), "0b9f6a52-3c1d-4e8a-9f00-1a2b3c4d5e6f").unwrap();
+        std::fs::create_dir_all(root.join("p1")).unwrap();
+        let old = root.join(OLD);
+        std::fs::write(&old, "ses_old").unwrap();
+        let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(an_hour_ago).unwrap();
+        let dirs = [root.clone(), slice.clone()];
+        assert_eq!(claimed_in(&dirs, UID, None), ["ses_fenced", "ses_old", "ses_other"]);
+        let launched = crate::clock::now_ms() as i64 - 60_000;
+        assert_eq!(claimed_in(&dirs, UID, Some(launched)), ["ses_fenced", "ses_other"]);
+        assert_eq!(claimed_in(&dirs, OTHER, Some(launched)), ["ses_fenced", "ses_mine"]);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&slice);
     }
 
     #[test]
@@ -682,27 +772,23 @@ mod tests {
     }
 
     #[test]
-    fn a_release_switch_replaces_the_other_entry_of_ours() {
-        // OpenCode 2.1.3 skips the file entry an earlier build listed; the
-        // directory takes its place, and back for 1.x.
+    fn an_entry_an_earlier_build_listed_is_replaced_by_the_directory() {
+        // OpenCode 2.1.3 skips the file entries earlier builds listed.
         let stale = ["file:///h/x.js".to_string(), "file:///h/x/index.js".to_string()];
-        let mut root = json!({ "plugin": ["mine", "file:///h/x.js"] });
-        assert!(add_plugin(&mut root, "file:///h/x", &stale));
-        assert_eq!(root["plugin"], json!(["mine", "file:///h/x"]));
-        assert!(!add_plugin(&mut root, "file:///h/x", &stale));
-        let back = ["file:///h/x".to_string()];
-        assert!(add_plugin(&mut root, "file:///h/x/index.js", &back));
-        assert_eq!(root["plugin"], json!(["mine", "file:///h/x/index.js"]));
+        for old in &stale {
+            let mut root = json!({ "plugin": ["mine", old] });
+            assert!(add_plugin(&mut root, "file:///h/x", &stale));
+            assert_eq!(root["plugin"], json!(["mine", "file:///h/x"]));
+            assert!(!add_plugin(&mut root, "file:///h/x", &stale));
+        }
     }
 
     #[test]
-    fn v2_lists_the_plugin_directory_and_v1_its_entry_file() {
-        let v2 = plugin_url(true).unwrap();
-        let v1 = plugin_url(false).unwrap();
-        assert!(v2.ends_with(PLUGIN_DIR), "{v2}");
-        assert_eq!(v1, format!("{v2}/{PLUGIN_ENTRY}"));
-        let stale = stale_urls(&v2);
-        assert!(stale.contains(&v1) && !stale.contains(&v2));
+    fn the_plugin_is_listed_by_its_directory() {
+        let url = plugin_url().unwrap();
+        assert!(url.ends_with(PLUGIN_DIR), "{url}");
+        let stale = stale_urls();
+        assert!(stale.contains(&format!("{url}/{PLUGIN_ENTRY}")) && !stale.contains(&url));
         assert!(stale.iter().any(|u| u.ends_with(LEGACY_PLUGIN_FILE)));
     }
 
@@ -777,14 +863,8 @@ mod tests {
             process.env[agentKey] = 'codex';
             await plugin.setup({session: {hook: async () => { nested = true; }}});
             assert.equal(nested, false);
-            delete process.env[claimKey];
-            process.env[agentKey] = 'opencode';
-            const legacy = await plugin.server();
-            await legacy.event({event: {type: 'session.created', properties: {info: {id: 'ses_child', parentID: 'ses_parent'}}}});
-            await legacy['chat.message']({sessionID: 'ses_child'});
-            assert.equal(readFileSync(record, 'utf8'), 'ses_new');
-            await legacy['chat.message']({sessionID: 'ses_legacy'});
-            assert.equal(readFileSync(record, 'utf8'), 'ses_legacy');
+            // OpenCode 1.x's entry point is gone.
+            assert.equal(plugin.server, undefined);
         "#).unwrap();
         run_node_check(dir.path(), &live);
     }
@@ -808,8 +888,8 @@ mod tests {
     /// a permission or question asked is a decision, its answer working, the
     /// end of a run done. Only the session the tab is in counts — a
     /// subagent's child and any other session say nothing — and a nested
-    /// OpenCode (the claim in its environment, which V2 puts in every shell
-    /// itself) records nothing at all.
+    /// OpenCode (the claim in its environment, which the plugin puts in every
+    /// shell itself) records nothing at all.
     #[test]
     fn the_plugin_writes_the_turn_of_the_tabs_own_session_only() {
         let dir = tempfile::tempdir().unwrap();
@@ -842,9 +922,20 @@ mod tests {
                 shell: { hook: async (name, cb) => { assert.equal(name, 'create.before'); shell = cb; } },
                 event: { subscribe: async () => stream },
             });
-            // Nothing before the tab's first prompt: no session is the tab's yet.
-            await emit('permission.asked', { sessionID: 'ses_main' });
+            const record = join(dir, uid);
+            // A session only looked at, or a subagent's child running, is not the tab's.
+            await emit('session.updated', { sessionID: 'ses_main' });
+            await emit('session.step.started', { sessionID: 'ses_child' });
+            assert.equal(existsSync(record), false);
             assert.equal(word(), null);
+            // The prompt that booted the instance came before the plugin: the
+            // session's run makes it the tab's all the same.
+            await emit('permission.asked', { sessionID: 'ses_main' });
+            assert.equal(readFileSync(record, 'utf8'), 'ses_main');
+            assert.equal(word(), 'decision');
+            // Once recorded, another session's run takes nothing over.
+            await emit('session.step.started', { sessionID: 'ses_other' });
+            assert.equal(readFileSync(record, 'utf8'), 'ses_main');
             await prompt({ sessionID: 'ses_main' });
             assert.equal(word(), 'working');
             assert.match(readFileSync(turnFile, 'utf8'), /^working \d+$/);
@@ -876,32 +967,6 @@ mod tests {
             await plugin.setup({ session: { hook: async () => { hooked = true; } }, shell: { hook: async () => { hooked = true; } }, event: { subscribe: async () => { hooked = true; } } });
             assert.equal(hooked, false);
 
-            // V1: the `event` hook with `{type, properties}`, `session.status`
-            // and the idle and error events, `question.*`, `shell.env`.
-            delete process.env[claimKey];
-            reset();
-            const v1 = await plugin.server();
-            await v1.event({ event: { type: 'session.created', properties: { info: { id: 'ses_kid', parentID: 'ses_v1' } } } });
-            await v1['chat.message']({ sessionID: 'ses_kid' });
-            assert.equal(word(), null);
-            await v1['chat.message']({ sessionID: 'ses_v1' });
-            assert.equal(word(), 'working');
-            for (const [type, props, want] of [
-                ['question.asked', { sessionID: 'ses_v1' }, 'decision'], ['question.replied', { sessionID: 'ses_v1' }, 'working'],
-                ['permission.asked', { sessionID: 'ses_v1' }, 'decision'], ['permission.replied', { sessionID: 'ses_v1' }, 'working'],
-                ['session.status', { sessionID: 'ses_v1', status: { type: 'busy' } }, 'working'],
-                ['session.status', { sessionID: 'ses_v1', status: { type: 'idle' } }, 'done'],
-                ['permission.asked', { sessionID: 'ses_kid' }, 'done'],
-                ['question.asked', { sessionID: 'ses_v1' }, 'decision'], ['question.rejected', { sessionID: 'ses_v1' }, 'working'],
-                ['session.error', { sessionID: 'ses_v1' }, 'done'],
-                ['permission.asked', { sessionID: 'ses_v1' }, 'decision'], ['session.idle', { sessionID: 'ses_v1' }, 'done'],
-            ]) {
-                await v1.event({ event: { type, properties: props } });
-                assert.equal(word(), want, `${type} ${JSON.stringify(props)}`);
-            }
-            const out = { env: {} };
-            await v1['shell.env']({ cwd: '/' }, out);
-            assert.equal(out.env[claimKey], '1');
             process.exit(0);
         "#).unwrap();
         run_node_check(dir.path(), &live);

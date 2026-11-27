@@ -79,10 +79,10 @@ fn the_keep_alive_drop_in_writes_a_choice_and_removes_the_default() {
 /// The service's value is read off `systemctl show -p Environment`.
 #[test]
 fn the_service_keep_alive_is_read_from_its_environment() {
-    assert_eq!(keep_alive_in_unit_env("PATH=/usr/bin OLLAMA_KEEP_ALIVE=30m OLLAMA_IGPU_ENABLE=1\n"), Some("30m".into()));
-    assert_eq!(keep_alive_in_unit_env("OLLAMA_IGPU_ENABLE=1"), None);
-    assert_eq!(keep_alive_in_unit_env("OLLAMA_KEEP_ALIVE_X=1"), None);
-    assert_eq!(keep_alive_in_unit_env(""), None);
+    assert_eq!(var_in_unit_env("PATH=/usr/bin OLLAMA_KEEP_ALIVE=30m OLLAMA_IGPU_ENABLE=1\n", KEEP_ALIVE_VAR), Some("30m".into()));
+    assert_eq!(var_in_unit_env("OLLAMA_IGPU_ENABLE=1", KEEP_ALIVE_VAR), None);
+    assert_eq!(var_in_unit_env("OLLAMA_KEEP_ALIVE_X=1", KEEP_ALIVE_VAR), None);
+    assert_eq!(var_in_unit_env("", KEEP_ALIVE_VAR), None);
 }
 
 /// An interrupted-pull list that does not parse keeps its entries: a new
@@ -476,9 +476,7 @@ fn write_agent_config(base: &std::path::Path, model: &str) -> (std::path::PathBu
     let vibe_home = base.join(&alias);
     std::fs::create_dir_all(&vibe_home).unwrap();
     let config_path = vibe_home.join("config.toml");
-    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
-    cfg.push_str(&ollama_provider_block());
-    cfg.push_str(&ollama_model_block(model, &alias));
+    let cfg = vibe_local_config(model, &alias, DEFAULT_OLLAMA_ADDR, false);
     std::fs::write(&config_path, &cfg).unwrap();
     (vibe_home, alias)
 }
@@ -585,8 +583,9 @@ fn a_missing_binary_is_not_reported_as_a_model_problem() {
 #[test]
 fn every_local_driver_needs_tools() {
     // vibe is the deliberate exception and is deliberately not in this
-    // list — it turns tools off (`enabled_tools = ["__no_tools__"]`), which
-    // is exactly why it still runs on a completion-only model. If an entry
+    // list — it turns tools off on a model without them
+    // (`enabled_tools = ["__no_tools__"]`), which is exactly why it still runs
+    // on a completion-only model. If an entry
     // here ever stops needing tools, this assertion is where to say so.
     assert!(LOCAL_DRIVERS.iter().all(|d| d.needs_tools));
 }
@@ -842,7 +841,7 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
         "127.0.0.1:11434",
         &[loaded("nemotron:30b", Some(32_768))],
         Some("qwen3:8b"),
-        false,
+        None,
     ))
     .unwrap();
     let p = &cfg["provider"]["ollama"];
@@ -853,27 +852,64 @@ fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
 
     // Nothing loaded: an empty whitelist, so stale config models drop out.
     let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &[], None, true)).unwrap();
+        serde_json::from_str(&opencode_ollama_config("h:1", &[], None, None)).unwrap();
     assert_eq!(cfg["provider"]["ollama"]["whitelist"], serde_json::json!([]));
 }
 
 #[test]
-fn opencode_2_measures_context_against_the_window_ollama_runs() {
+fn opencode_measures_context_against_the_window_ollama_runs() {
     let loaded = [loaded("qwen3-coder:30b", Some(32_768)), loaded("old:1b", None)];
     let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, Some("qwen3:8b"), true)).unwrap();
+        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, Some("qwen3:8b"), None)).unwrap();
     let models = &cfg["provider"]["ollama"]["models"];
     // The loaded window, not the trained 262 144 OpenCode 2 discovers.
     assert_eq!(models["qwen3-coder:30b"]["limit"], serde_json::json!({ "context": 32_768 }));
     // No reported window, or not loaded yet: OpenCode keeps its own figure.
     assert!(models["old:1b"].get("limit").is_none());
     assert!(models["qwen3:8b"].get("limit").is_none());
+}
 
-    // OpenCode 1 requires `output` beside `context`: a lone one would be
-    // an invalid config, so 1.x gets no limit at all.
-    let cfg: serde_json::Value =
-        serde_json::from_str(&opencode_ollama_config("h:1", &loaded, None, false)).unwrap();
-    assert!(cfg["provider"]["ollama"]["models"]["qwen3-coder:30b"].get("limit").is_none());
+#[test]
+fn opencode_gets_the_first_load_window_of_a_model_not_loaded_yet() {
+    let loaded = [loaded("qwen3-coder:30b", Some(65_536)), loaded("old:1b", None)];
+    let cfg: serde_json::Value = serde_json::from_str(&opencode_ollama_config(
+        "h:1",
+        &loaded,
+        Some("qwen3:8b"),
+        Some(32_768),
+    ))
+    .unwrap();
+    let models = &cfg["provider"]["ollama"]["models"];
+    assert_eq!(models["qwen3:8b"]["limit"], serde_json::json!({ "context": 32_768 }));
+    // It is the requested model's alone; a loaded one keeps its own.
+    assert_eq!(models["qwen3-coder:30b"]["limit"], serde_json::json!({ "context": 65_536 }));
+    assert!(models["old:1b"].get("limit").is_none());
+}
+
+#[test]
+fn next_load_window_is_the_server_default_or_modelfile_capped_at_training() {
+    use crate::services::ollama_client::next_load_window;
+    let show = |params: &str| {
+        serde_json::json!({
+            "model_info": { "general.architecture": "qwen3moe", "qwen3moe.context_length": 262_144 },
+            "parameters": params,
+        })
+        .to_string()
+    };
+    let plain = show("temperature                    0.7\ntop_k                          20");
+    assert_eq!(next_load_window(&plain, Some(32_768)), Some(32_768));
+    // Ollama never runs past the trained window.
+    assert_eq!(next_load_window(&plain, Some(1_048_576)), Some(262_144));
+    // The server's default unknown: nothing to say.
+    assert_eq!(next_load_window(&plain, None), None);
+    // The Modelfile's own num_ctx wins over the server default.
+    let pinned = show("num_ctx                        8192\ntemperature                    0.7");
+    assert_eq!(next_load_window(&pinned, Some(32_768)), Some(8_192));
+    assert_eq!(next_load_window(&pinned, None), Some(8_192));
+    // No trained window reported: the wanted one stands.
+    let bare = serde_json::json!({ "parameters": "" }).to_string();
+    assert_eq!(next_load_window(&bare, Some(32_768)), Some(32_768));
+    assert_eq!(next_load_window("garbage", Some(32_768)), None);
 }
 
 #[test]
@@ -1068,7 +1104,7 @@ fn the_pinned_local_line_is_the_drivers_own_and_takes_only_plain_names() {
     }
     assert!(model_name_ok("hf.co/org/model-GGUF:Q4_K_M") && model_name_ok("llama3:latest"));
     // The provider block always names the requested model, Ollama up or not.
-    let config: serde_json::Value = serde_json::from_str(&opencode_assistant_provider(m, true)).unwrap();
+    let config: serde_json::Value = serde_json::from_str(&opencode_assistant_provider(m)).unwrap();
     assert!(config["provider"]["ollama"]["models"][m].is_object());
 }
 
@@ -1175,6 +1211,22 @@ fn prepare_local_agent_config_structure() {
         cfg.contains(&format!("alias = \"{alias}\"")),
         "model alias must appear"
     );
+}
+
+/// A model with Ollama's `tools` capability keeps Vibe's own tools: no
+/// `enabled_tools` line at all, which Vibe reads as every tool. Without the
+/// capability (or when Ollama cannot say) the line turns them all off.
+#[test]
+fn vibe_tools_follow_the_models_tools_capability() {
+    let on = vibe_local_config("qwen3:8b", "qwen3-8b", DEFAULT_OLLAMA_ADDR, true);
+    let off = vibe_local_config("qwen3:8b", "qwen3-8b", DEFAULT_OLLAMA_ADDR, false);
+    assert!(!on.contains("enabled_tools"), "{on}");
+    assert!(on.starts_with("active_model = \"qwen3-8b\"\n\n[[providers]]"), "{on}");
+    assert!(off.contains("enabled_tools = [\"__no_tools__\"]"), "{off}");
+    assert_eq!(off.replace("enabled_tools = [\"__no_tools__\"]\n", ""), on, "the tools line is the only difference");
+    assert!(vibe_config_keeps_tools(&on));
+    assert!(!vibe_config_keeps_tools(&off));
+    assert!(!vibe_config_keeps_tools("active_model = \"x\"\n  enabled_tools = []\n"), "any tool list reads as off");
 }
 
 // ── friendly error mapping: broken Ollama runner (#vibe 500) ─────────────
@@ -2278,4 +2330,60 @@ async fn the_install_strategy_is_the_script_everywhere_but_windows() {
         assert!(s.command.contains("https://ollama.com/install.sh"), "{}", s.command);
     }
     assert_eq!(s.auto, cfg!(any(windows, target_os = "linux", target_os = "macos")));
+}
+
+/// Only the listed cache types reach an environment or the root shell.
+#[test]
+fn only_a_listed_kv_cache_type_is_configured() {
+    assert_eq!(configured_kv_cache_type(Some("q8_0")), Some("q8_0"));
+    assert_eq!(configured_kv_cache_type(Some(" q4_0 ")), Some("q4_0"));
+    assert_eq!(configured_kv_cache_type(Some("f16")), None);
+    assert_eq!(configured_kv_cache_type(Some("q8_0; reboot")), None);
+    assert_eq!(configured_kv_cache_type(None), None);
+}
+
+/// The cache type's drop-in carries flash attention with it, is its own file,
+/// and is taken back out for the default.
+#[test]
+fn the_kv_cache_drop_in_sets_flash_attention_and_removes_the_default() {
+    assert_eq!(kv_cache_service_command(Some("q8_0"), false), "");
+    let on = kv_cache_service_command(Some("q8_0"), true);
+    assert!(on.contains("Environment=\"OLLAMA_KV_CACHE_TYPE=q8_0\"\\nEnvironment=\"OLLAMA_FLASH_ATTENTION=1\"\\n"), "{on}");
+    assert!(on.contains(&format!("| sudo tee /etc/systemd/system/ollama.service.d/{KV_CACHE_DROPIN} && ")), "{on}");
+    assert!(on.ends_with("sudo systemctl daemon-reload && sudo systemctl restart ollama"));
+    let off = kv_cache_service_command(None, true);
+    assert!(off.starts_with(&format!("sudo rm -f /etc/systemd/system/ollama.service.d/{KV_CACHE_DROPIN} && ")), "{off}");
+    assert_eq!(kv_cache_service_command(Some("q8_0; reboot"), true), off);
+    assert!(KV_CACHE_DROPIN.ends_with("-kv-cache.conf"));
+    assert_ne!(KV_CACHE_DROPIN, KEEP_ALIVE_DROPIN);
+}
+
+/// Any variable is read off `systemctl show -p Environment`, whole names only.
+#[test]
+fn a_service_variable_is_read_by_its_whole_name() {
+    let env = "OLLAMA_IGPU_ENABLE=1 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_FLASH_ATTENTION=1\n";
+    assert_eq!(var_in_unit_env(env, KV_CACHE_TYPE_VAR), Some("q8_0".into()));
+    assert_eq!(var_in_unit_env("OLLAMA_KV_CACHE_TYPE_X=q4_0", KV_CACHE_TYPE_VAR), None);
+}
+
+/// A local-model Claude Code gets the long timeouts; a value already set wins,
+/// and only `ollama launch claude` is one.
+#[test]
+fn a_local_claude_gets_long_timeouts_unless_set() {
+    use crate::services::local_drivers::{add_local_claude_timeouts, is_local_claude_line};
+    let line = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(is_local_claude_line("ollama", &line(&["launch", "claude", "--model", "qwen3:8b"])));
+    assert!(is_local_claude_line("/usr/local/bin/ollama", &line(&["launch", "claude"])));
+    assert!(!is_local_claude_line("ollama", &line(&["launch", "codex", "--model", "qwen3:8b"])));
+    assert!(!is_local_claude_line("claude", &line(&["--model", "qwen3:8b"])));
+
+    let mut env = std::collections::HashMap::new();
+    add_local_claude_timeouts(&mut env, |_| false);
+    assert_eq!(env["CLAUDE_STREAM_IDLE_TIMEOUT_MS"], "1800000");
+    assert_eq!(env["API_TIMEOUT_MS"], "1800000");
+
+    let mut env = std::collections::HashMap::from([("API_TIMEOUT_MS".to_string(), "60000".to_string())]);
+    add_local_claude_timeouts(&mut env, |name| name == "CLAUDE_STREAM_IDLE_TIMEOUT_MS");
+    assert_eq!(env["API_TIMEOUT_MS"], "60000", "the tab's own value wins");
+    assert!(!env.contains_key("CLAUDE_STREAM_IDLE_TIMEOUT_MS"), "the app's environment wins");
 }

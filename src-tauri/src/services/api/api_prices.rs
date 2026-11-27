@@ -135,6 +135,26 @@ pub fn price_openai(model: &str, u: &OpenAiUsage) -> Charge {
     }
 }
 
+/// What a custom OpenAI-compatible endpoint's answer used, in the tokens the
+/// limit counts. There is no price table for it: the charge carries
+/// `usd: 0.0` and `known: false` ([`Provider::priced`] says the panel shows
+/// "no price", and the ledger does not list the model as priced at the
+/// highest rate). `u` is Chat Completions' usage read as [`OpenAiUsage`]:
+/// `prompt_tokens` as input including cached ones, `completion_tokens` as
+/// output.
+pub fn price_custom(model: &str, u: &OpenAiUsage) -> Charge {
+    let cache_read = u.cached.min(u.input);
+    Charge {
+        model: model.to_string(),
+        known: false,
+        input: u.input.saturating_sub(cache_read),
+        cache_read,
+        output: u.output,
+        usd: 0.0,
+        ..Charge::default()
+    }
+}
+
 /// Prompt size past which a long-context rate applies (Gemini Pro tiers,
 /// Anthropic Sonnet 4 / 4.5).
 pub const LONG_CONTEXT: u64 = 200_000;
@@ -368,6 +388,8 @@ pub fn normalize(provider: Provider, raw: &str) -> String {
             }
             strip_suffix_in_place(&mut id, "-latest");
         }
+        // No table to look a custom endpoint's model up in.
+        Provider::Custom(_) => {}
     }
     id
 }
@@ -484,6 +506,8 @@ pub fn output_rate(provider: Provider, model: &str) -> f64 {
             let r = gemini_rates(model, "").0;
             r.long.map_or(r.output, |l| l.1.max(r.output))
         }
+        // No price, so no model is dearer than another.
+        Provider::Custom(_) => 0.0,
     }
 }
 
@@ -523,8 +547,15 @@ pub fn context_window(provider: Provider, model: &str) -> u64 {
             }
         }
         Provider::Gemini => GEMINI_WINDOW,
+        // Unknown: the largest window of the three, which only matters for a
+        // request that names input by reference (never read for a custom
+        // endpoint, `api_meter::names_input_by_reference`).
+        Provider::Custom(_) => CUSTOM_WINDOW,
     }
 }
+
+/// A custom endpoint's context window as far as `api_meter` assumes one.
+pub const CUSTOM_WINDOW: u64 = 2_000_000;
 
 /// One answer's Anthropic usage, as reported (`usage` of `message_start`,
 /// `message_delta` or a non-streaming message; counts are cumulative).

@@ -1847,6 +1847,12 @@ fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEn
     if let Err(e) = crate::services::tab_archive::rewrite_paths(project_id, old_s, new_s) {
         eprintln!("rename_project_dir: tab archive not updated: {e}");
     }
+    // Every CLI files or names its conversations by the folder: re-pointed in
+    // the project's agent homes, so they resume from the new one.
+    let carried = crate::services::agent_history::repoint_project(project_id, old_s, new_s);
+    for problem in &carried.failed {
+        eprintln!("rename_project_dir: agent conversation not carried: {problem}");
+    }
     if new.join(".git").exists() {
         if let Err(e) = repair_moved_worktrees(&new, old_s, new_s) {
             eprintln!("rename_project_dir: git worktree repair: {e}");

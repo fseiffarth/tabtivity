@@ -22,6 +22,9 @@ const h = vi.hoisted(() => ({
   observer: null as null | ((entries: { isIntersecting: boolean }[]) => void),
   // The sentinel sits in view: observing reports it at once, as a browser does.
   sentinelVisible: false,
+  // `ollama_registry_details` answers by `name:tag`; a test swaps one to hold it.
+  details: {} as Record<string, Promise<unknown>>,
+  detailsAsked: [] as string[],
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -34,6 +37,11 @@ vi.mock("@tauri-apps/api/core", () => ({
       throw new Error(
         'pull model manifest: realm host "huggingface.co" does not match original host "hf.co"',
       );
+    }
+    if (cmd === "ollama_registry_details") {
+      const model = (args as { model: string }).model;
+      h.detailsAsked.push(model);
+      return h.details[model] ?? Promise.reject(new Error("no details"));
     }
     if (cmd === "search_ollama_registry") {
       h.searches.push(args as SearchArgs);
@@ -67,6 +75,8 @@ beforeEach(() => {
   h.searches = [];
   h.observer = null;
   h.sentinelVisible = false;
+  h.details = {};
+  h.detailsAsked = [];
   h.answer = ({ page }) =>
     Promise.resolve(
       page === 1
@@ -153,6 +163,55 @@ describe("Ollama registry browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "≤ 16 GB" }));
     await flush();
     expect(last()).toMatchObject({ size: "", page: 1 });
+  });
+
+  it("filters a download floor here, on each model's largest variant, before the next page", async () => {
+    const GiB = 1024 ** 3;
+    const sized = (gib: number) => Promise.resolve({ size_bytes: gib * GiB, params: null, quant: null, cloud: gib === 0 });
+    let releaseSmall: (v: unknown) => void = () => {};
+    h.details = {
+      "big:70b": sized(40),
+      "small:8b": new Promise((r) => (releaseSmall = r)),
+      "hosted:cloud": sized(0),
+    };
+    h.answer = ({ page }) =>
+      Promise.resolve(
+        page === 1
+          ? {
+              models: [
+                { ...row("big"), sizes: ["8b", "70b"] },
+                { ...row("small"), sizes: ["1b", "8b"] },
+                { ...row("hosted"), capabilities: ["cloud"], sizes: [] },
+              ],
+              hasMore: true,
+            }
+          : { models: [{ ...row("later"), sizes: ["70b"] }], hasMore: false },
+      );
+    h.details["later:70b"] = sized(20);
+    render(<OllamaPanel onBack={() => {}} onClose={() => {}} />);
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: /^≥ 16 GB/ }));
+    await flush();
+    // ollama.com has no floor: the page comes unfiltered.
+    expect(last()).toMatchObject({ size: "", page: 1 });
+    expect(h.detailsAsked).toEqual(expect.arrayContaining(["big:70b", "small:8b", "hosted:cloud"]));
+    expect(screen.getByText("big")).toBeTruthy();
+    expect(screen.queryByText("hosted")).toBeNull(); // nothing to download
+
+    // A size still loading holds the next page back.
+    await act(async () => h.observer?.([{ isIntersecting: true }]));
+    await flush();
+    expect(h.searches.filter((s) => s.page === 2)).toHaveLength(0);
+
+    await act(async () => releaseSmall({ size_bytes: 5 * GiB, params: null, quant: null, cloud: false }));
+    await flush();
+    expect(screen.queryByText("small")).toBeNull();
+    await act(async () => h.observer?.([{ isIntersecting: true }]));
+    await flush();
+    await flush();
+    expect(last()).toMatchObject({ size: "", page: 2 });
+    expect(screen.getByText("later")).toBeTruthy();
   });
 
   it("drops an answer for a request a newer one replaced", async () => {

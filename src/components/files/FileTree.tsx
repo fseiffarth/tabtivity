@@ -21,6 +21,7 @@ import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { useActivityStore } from "../../stores/activity";
 import { useFileClipboardStore } from "../../stores/fileClipboard";
 import { type FileEntry, type InternalViewer, fmtSize, fmtModified, visibleEntries, internalViewerFor, disabledViewers, fileEntriesEqual, stringMapsEqual, nextSelection } from "../../lib/viewers/fileUtils";
+import { useSidePanelRevealStore } from "../../stores/sidePanelReveal";
 import {
   dropFileTreeSnapshot,
   readFileTreeSnapshot,
@@ -80,6 +81,7 @@ import { AGENT_MEMORY_CLI_NAME, AgentMemoryDialog } from "./AgentMemoryDialog";
 import { createProjectDoc, type AgentMemoryEntry, type DocState } from "../../lib/projects/projectDocs";
 import { usePaneVisible } from "../../lib/files/fileAccess";
 import { useFileTreeDirSizes } from "./useFileTreeSizes";
+import { type FileTreeColumn, useFileTreeColumns } from "./useFileTreeColumns";
 
 // The context menu's Delete rows name their keyboard twin (handleTreeKeyDown).
 const DELETE_KEY: ChordDescriptor = { key: "Delete" };
@@ -131,11 +133,11 @@ const TREE_SORT_KEYS: TreeSortKey[] = ["name", "size", "type", "created", "modif
 
 /** The wide layout's sortable column heads, left to right (Share of folder,
  *  the last column, is a plain label). */
-const COLUMN_SORTS: { key: TreeSortKey; label: TranslationKey; cls: string }[] = [
-  { key: "name", label: "fileTree.colName", cls: "file-cols-name" },
-  { key: "git", label: "fileTree.colGit", cls: "file-cols-git" },
-  { key: "modified", label: "fileTree.colModified", cls: "file-cols-mod" },
-  { key: "size", label: "fileTree.colSize", cls: "file-cols-size" },
+const COLUMN_SORTS: { key: TreeSortKey; col: FileTreeColumn; label: TranslationKey; cls: string }[] = [
+  { key: "name", col: "name", label: "fileTree.colName", cls: "file-cols-name" },
+  { key: "git", col: "git", label: "fileTree.colGit", cls: "file-cols-git" },
+  { key: "modified", col: "mod", label: "fileTree.colModified", cls: "file-cols-mod" },
+  { key: "size", col: "size", label: "fileTree.colSize", cls: "file-cols-size" },
 ];
 
 interface Props {
@@ -215,7 +217,13 @@ interface Props {
    *  total on the left, actions on the right. Omitted by hosts that draw their
    *  actions elsewhere (a box's member roots, a bare tree). */
   toolbarEnd?: React.ReactNode;
+  /** The side panel's tree: takes this project's pending reveal (an agent
+   *  tab's Ctrl+click on a path link, `stores/sidePanelReveal`). */
+  takeReveals?: boolean;
 }
+
+/** How long a reveal waits for its entry to show up in the folder's listing. */
+const REVEAL_WAIT_MS = 4000;
 
 /** `rowRect` is the right-clicked row's bounding box, captured at open time, so
  *  a glowing frame can float onto it and show which entry the menu targets. */
@@ -734,6 +742,7 @@ export function FileTree({
   sharedSearch,
   refreshNonce,
   toolbarEnd,
+  takeReveals = false,
 }: Props) {
   const t = useT();
   // Non-null inside a detached popout: replaces the main window's CenterPanel
@@ -981,6 +990,8 @@ export function FileTree({
 
   useFileTreeEmbedCaps({ entries, embedByExt, setEmbedByExt, projectId });
 
+  // The wide layout's hand-set column widths, shared by every file list.
+  const columns = useFileTreeColumns();
   const { groupSizes } = useFileTreeDirSizes({
     active, fastMode, rowWindow, sections, requestedSizes, sizeGeneration, isScanExcluded,
     relForEntry, projectDir, scanExcludedList, dirSizes, setDirSizes, dirIgnoredBytes,
@@ -1258,17 +1269,33 @@ export function FileTree({
     if (parent !== relPath) load(parent);
   }
 
+  // An agent tab's Ctrl+click on a path link asked the side panel to show it.
+  const sideReveal = useSidePanelRevealStore((s) =>
+    takeReveals && projectId && s.pending?.projectId === projectId ? s.pending : null,
+  );
+  useEffect(() => {
+    if (!sideReveal || !active || !projectId) return;
+    const ask = useSidePanelRevealStore.getState().take(projectId);
+    if (ask) revealPath(ask.rel, ask.isDir);
+    // `revealPath` reads only setters and the current `relPath`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sideReveal, active, projectId]);
+
   // Resolve a pending reveal once the target folder is listed: select the entry
-  // and scroll its row into view, then clear the request. Gives up (clears) if
-  // the entry isn't in the listing — e.g. hidden by a filter.
+  // and scroll its row into view, then clear the request. A folder painted from
+  // its last snapshot may not hold a file made since (an agent's new file), so
+  // a miss waits for the fresh listing (or the watch's re-list) and gives up
+  // after `REVEAL_WAIT_MS` — e.g. an entry hidden by a filter.
+  useEffect(() => {
+    if (!pendingReveal) return;
+    const timer = setTimeout(() => setPendingReveal(null), REVEAL_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [pendingReveal]);
   useEffect(() => {
     if (!pendingReveal) return;
     if (pendingReveal.parent !== relPath) return; // still navigating
     const entry = entries.find((e) => e.name === pendingReveal.name);
-    if (!entry) {
-      setPendingReveal(null);
-      return;
-    }
+    if (!entry) return;
     anchorRef.current = entry.path;
     setSelected(new Set([entry.path]));
     const path = entry.path;
@@ -2730,6 +2757,7 @@ export function FileTree({
     <div
       ref={treeRootRef}
       className={`file-tree${isDragOver ? " drag-over" : ""}${moveTargetRel === relPath ? " move-drop-target" : ""}`}
+      style={columns.style}
       // The listing itself is a drop target for the folder it shows: after a
       // spring-load navigated the tree mid-drag, releasing over a file row or
       // empty space lands in the folder now on screen. Folder rows and crumbs
@@ -3102,7 +3130,7 @@ export function FileTree({
         <div className="file-cols" role="row">
           <span className="file-cols-pad" aria-hidden="true" />
           <span className="file-cols-pad" aria-hidden="true" />
-          {COLUMN_SORTS.map(({ key, label, cls }) => {
+          {COLUMN_SORTS.map(({ key, col, label, cls }) => {
             const on = sortKey === key;
             return (
               <span
@@ -3125,12 +3153,25 @@ export function FileTree({
                   {t(label)}
                   {on && (descending ? <ArrowDownIcon /> : <ArrowUpIcon />)}
                 </button>
+                {/* Drag the column's right edge to size it; a double-click
+                    gives it back its default (useFileTreeColumns). */}
+                <span
+                  className="file-cols-grip"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label={t("fileTree.colResizeTitle", { key: t(label) })}
+                  title={t("fileTree.colResizeTitle", { key: t(label) })}
+                  onPointerDown={(e) => columns.onGripPointerDown(col, e)}
+                  onDoubleClick={() => columns.resetColumn(col)}
+                  onClick={(e) => e.stopPropagation()}
+                />
               </span>
             );
           })}
           <span role="columnheader" className="file-cols-cell file-cols-share">
             {t("fileTree.colShare")}
             <UntestedTag id="fileTree.columns" />
+            <UntestedTag id="fileTree.columnResize" />
           </span>
         </div>
       )}

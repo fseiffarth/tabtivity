@@ -179,9 +179,6 @@ export function AgentsPanel({
         const stored = rows.flatMap((row) => (row.update ? [[row.agent, row.update] as const] : []));
         setUpdates((u) => ({ ...u, ...Object.fromEntries(stored) }));
         useAgentVersionNoticeStore.getState().update(rows);
-        // Version-dependent startup options (OpenCode v2 variants) may have
-        // become known during this probe, including on a first installation.
-        void invoke<AgentInfo[]>("list_agents").then(setAgents).catch(() => {});
       })
       .catch(() => {})
       .finally(() => setCheckingVersions(false));

@@ -236,7 +236,7 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     render(<Terminal tab={{ ...TAB, label: "OpenCode", agent_label: "OpenCode" }} back={() => {}} />);
     await act(async () => {});
     await paint([
-      "Asked 2 questions", "", "Which model picker fails   Failure symptoms   Confirm", "",
+      "Asked 2 questions", "", "Which model picker fails   Failure symptoms   Submit", "",
       "Which OpenCode model picker do you mean?", "",
       `${CARD}1. Desktop Reader Chat view`, "   Chat/Terminal switch facts-row model chip",
       "2. Steering prompt chip", "   Keyboard-steering prompt box",

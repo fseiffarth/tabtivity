@@ -201,7 +201,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     tab: target.tab,
     ptyId,
     agentLabel: agent,
-    typeKeys: (keys) => typePaneKeys(ptyId, keys),
+    typeKeys: (keys, canWrite) => typePaneKeys(ptyId, keys, undefined, canWrite),
   });
   // Which list is under the text: the session's picker, or Claude's levels.
   const [effortOpen, setEffortOpen] = useState(false);
@@ -327,7 +327,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     setEffortSending("");
     setCommitOpen(false);
   };
-  const openModel = () => {
+  const openModel = (options?: { effortOnly?: boolean }) => {
     if (picking) {
       session.close();
       return;
@@ -335,11 +335,12 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     if (!canPick || !modelPickable) return;
     setEffortOpen(false);
     setNote(null);
-    session.open("/model");
+    session.open("/model", options);
   };
   const openEffort = () => {
     if (!claude) {
-      openModel();
+      // OpenCode's effort is a list of its own, not the model list's next step.
+      openModel({ effortOnly: isOpenCodeTab(agent) });
       return;
     }
     if (effortOpen) {

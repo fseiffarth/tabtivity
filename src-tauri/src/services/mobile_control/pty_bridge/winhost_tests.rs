@@ -285,7 +285,7 @@ async fn a_live_session_stays_on_the_phone_with_the_setting_off() {
     let mut cache = CatalogCache::with_live(live);
     let catalog = cache.load(&state, auth.host_key()).unwrap();
     let tab_id = catalog.projects.iter().flat_map(|p| &p.tabs).find(|t| t.tmux_name == TMUX).expect("listed").public.id.clone();
-    assert_eq!(super::recheck(Some(catalog), "d1", &tab_id, TMUX), Ok(()), "an open terminal is kept");
+    assert_eq!(super::recheck(Some(catalog), "d1", true, &tab_id, TMUX), Ok(()), "an open terminal is kept");
 
     let m = off.clone();
     let (pane, typed) = tokio::task::spawn_blocking(move || {

@@ -67,8 +67,11 @@ pub struct RouteFacts {
     pub has_session: bool,
     /// The launch resolved local: no ssh or container wrap rewrote it.
     pub local: bool,
-    /// An AI launch (an agent or an assistant chat; a CLI sign-in is not).
-    pub ai: bool,
+    /// An agent launch: an agent, its CLI's sign-in or an assistant chat (a
+    /// shell is not). Not the AI switch's `is_ai_spawn`, which leaves a
+    /// sign-in out: a sign-in tab must reach the host too, or a phone can
+    /// never attach to it.
+    pub agent: bool,
     /// The root scope's tab.
     pub root_scope: bool,
     /// The root console's unfenced Host session.
@@ -81,7 +84,7 @@ pub fn routes_through_host(facts: &RouteFacts) -> bool {
         && facts.persist_local
         && facts.has_session
         && facts.local
-        && facts.ai
+        && facts.agent
         && !facts.root_scope
         && !facts.host_session
 }
@@ -95,7 +98,7 @@ pub fn must_probe_live_session(facts: &RouteFacts) -> bool {
     !routes_through_host(facts)
         && facts.has_session
         && facts.local
-        && facts.ai
+        && facts.agent
         && !facts.root_scope
         && !facts.host_session
 }
@@ -378,7 +381,7 @@ mod tests {
             persist_local: true,
             has_session: true,
             local: true,
-            ai: true,
+            agent: true,
             root_scope: false,
             host_session: false,
         }
@@ -396,7 +399,7 @@ mod tests {
         assert!(!off(|f| f.persist_local = false), "persist_local_sessions, as on Unix");
         assert!(!off(|f| f.has_session = false), "the window did not ask to persist it");
         assert!(!off(|f| f.local = false), "an ssh or container tab");
-        assert!(!off(|f| f.ai = false), "a shell (phase 4)");
+        assert!(!off(|f| f.agent = false), "a shell (phase 4)");
         assert!(!off(|f| f.root_scope = true), "never the root scope");
         assert!(!off(|f| f.host_session = true), "never the Host session");
     }
@@ -411,7 +414,7 @@ mod tests {
         facts.persist_local = false;
         assert!(must_probe_live_session(&facts), "persist_local_sessions turned off");
         for unprobed in [
-            RouteFacts { ai: false, ..facts },
+            RouteFacts { agent: false, ..facts },
             RouteFacts { root_scope: true, ..facts },
             RouteFacts { host_session: true, ..facts },
             RouteFacts { has_session: false, ..facts },
