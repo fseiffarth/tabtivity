@@ -137,7 +137,7 @@ export function MobileSettings() {
   const assistantOn = useExperimental("assistant");
   const sessionHostOn = useExperimental("windows_session_host");
   const tmuxAvailable = useTmuxAvailable();
-  const { confirmAction, dialogs } = useDialogs();
+  const { confirmAction, promptText, dialogs } = useDialogs();
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.updateSettings);
   const projects = useProjectsStore((state) => state.projects);
@@ -911,6 +911,32 @@ export function MobileSettings() {
             <div key={device.id} className="mobile-device">
               <div className="settings-row">
                 <span className="settings-list-label">{device.name}</span>
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  onClick={() => {
+                    void (async () => {
+                      const name = await promptText({
+                        title: translateNow("mobile.renameDevice"),
+                        label: translateNow("mobile.renameDeviceLabel"),
+                        initial: device.name,
+                        unchanged: device.name,
+                        confirmLabel: translateNow("mobile.rename"),
+                        validate: (value) => (value.trim().length > 64 ? translateNow("mobile.renameDeviceTooLong") : null),
+                      });
+                      if (name === null) return;
+                      try {
+                        const response = await invoke<AdminResponse>("mobile_admin", {
+                          request: { type: "rename_device", device_id: device.id, name: name.trim() },
+                        });
+                        if (response.status === "error") throw new Error(response.message);
+                        refresh();
+                      } catch (reason) {
+                        setError(String(reason));
+                      }
+                    })();
+                  }}
+                >{t("mobile.rename")} <UntestedTag id="mobile.renameDevice" /></button>
                 <button
                   type="button"
                   className="settings-btn sm danger"

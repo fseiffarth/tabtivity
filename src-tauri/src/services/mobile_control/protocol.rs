@@ -2389,6 +2389,9 @@ pub enum AdminRequest {
     PairingCode,
     Devices,
     Revoke { device_id: String },
+    /// Give one paired phone another name (`auth::AuthStore::rename_device`):
+    /// the desktop's label only, trimmed and cut like a pairing name.
+    RenameDevice { device_id: String, name: String },
     /// Keep one phone out of exactly these sections (`auth::HIDEABLE_SECTIONS`);
     /// an empty list lets it into all of them again.
     SetHiddenSections { device_id: String, sections: Vec<String> },

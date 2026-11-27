@@ -225,6 +225,10 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
                 Err(message) => AdminResponse::Error { message },
             }
         }
+        Ok(AdminRequest::RenameDevice { device_id, name }) => match auth.lock_ok().rename_device(&device_id, &name) {
+            Ok(()) => AdminResponse::Ok,
+            Err(message) => AdminResponse::Error { message },
+        },
         Ok(AdminRequest::SetHiddenSections { device_id, sections }) => match auth
             .lock_ok()
             .set_hidden_sections(&device_id, &sections)

@@ -57,13 +57,19 @@ const MAX_OPEN_TICKETS: usize = 64;
 /// (`host::section_guard`) and the alert rows of its kind.
 pub const HIDEABLE_SECTIONS: [&str; 3] = ["todo", "calendar", "mail"];
 
-/// A device's name (trimmed, at most 64 characters) and public key (a P-256
-/// SPKI, base64url, bounded before it is parsed), or the pairing error.
-fn checked_device(name: &str, public_key: &str) -> Result<String, String> {
+/// A device's name, trimmed and cut to 64 characters; empty is refused.
+fn clean_device_name(name: &str) -> Result<String, String> {
     let clean_name = name.trim().chars().take(64).collect::<String>();
     if clean_name.is_empty() {
         return Err("device_name_required".into());
     }
+    Ok(clean_name)
+}
+
+/// A device's name (trimmed, at most 64 characters) and public key (a P-256
+/// SPKI, base64url, bounded before it is parsed), or the pairing error.
+fn checked_device(name: &str, public_key: &str) -> Result<String, String> {
+    let clean_name = clean_device_name(name)?;
     let der = Base64UrlUnpadded::decode_vec(public_key).map_err(|_| "invalid_public_key")?;
     // Length first: the bound exists so an unauthenticated caller cannot
     // hand the SPKI parser an arbitrarily long buffer.
@@ -885,6 +891,25 @@ impl AuthStore {
         Ok(())
     }
 
+    /// Rename one paired phone: only the label the desktop lists it under (the
+    /// pairing key and id, hence every session and access list, stay).
+    pub fn rename_device(&mut self, device_id: &str, name: &str) -> Result<(), String> {
+        let name = clean_device_name(name)?;
+        let device = self
+            .devices
+            .devices
+            .iter_mut()
+            .find(|d| d.id == device_id)
+            .ok_or("unknown device")?;
+        if device.name == name {
+            return Ok(());
+        }
+        device.name = name;
+        self.save_devices()?;
+        self.audit("renamed", Some(device_id));
+        Ok(())
+    }
+
     pub fn revoke(&mut self, device_id: &str) -> Result<(), String> {
         let before = self.devices.devices.len();
         self.devices.devices.retain(|d| d.id != device_id);
@@ -1425,6 +1450,22 @@ mod tests {
         assert!(reopened.shells_for(&device) && !reopened.shells_for(&other));
         let listed = read_paired_devices(&control).unwrap();
         assert!(listed.iter().any(|d| d.id == device && d.shell_tabs) && listed.iter().any(|d| d.id == other && !d.shell_tabs));
+    }
+
+    #[test]
+    fn a_paired_phone_can_be_renamed_and_keeps_its_id_across_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut auth = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("auth store");
+        let (device, _) = paired_login(&mut auth);
+        assert!(auth.rename_device("nobody", "x").is_err());
+        assert_eq!(auth.rename_device(&device, "   ").unwrap_err(), "device_name_required");
+        auth.rename_device(&device, &format!("  {}  ", "n".repeat(80))).unwrap();
+        assert_eq!(auth.devices()[0].name, "n".repeat(64));
+        auth.rename_device(&device, "Kitchen phone").unwrap();
+        let reopened = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("reopen");
+        let listed = reopened.devices();
+        assert_eq!((listed[0].id.as_str(), listed[0].name.as_str()), (device.as_str(), "Kitchen phone"));
     }
 
     /// A phone paired before the field existed keeps the shells the host-wide
