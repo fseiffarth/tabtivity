@@ -290,3 +290,172 @@ Fixed on top of `6a17ef48f`, each with a test that fails without it.
 - `cargo clippy --workspace --all-targets -- -D warnings`, `-p tabtivity
   --no-default-features --lib`, `-p app-serverd --all-targets`: clean (exit 0).
 - `scripts/privacy-check.sh`: passes. Frontend untouched.
+
+## A2 — OpenCode spawn (decision 8) and two R1 fixes
+
+Commits on top of `c37bf3203`: `82761cc5e` (all code and tests), then the commit
+that adds this section.
+
+### What exists now (exact names, all in `agent_api_keys.rs` unless noted)
+
+- **Static arrays of 8**: `CUSTOM_TOKEN_ENV` (pub; `CUSTOM_ENDPOINT_KEY_<n>`),
+  `CUSTOM_CARRIER` (pub; `app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_<n>")`),
+  `CUSTOM_BASE_ENV` (private; `app_env!("CUSTOM_ENDPOINT_BASE_<n>")`, the
+  per-slot base var). `ENV_VARS`/`CARRIERS` are now 3 + 8 long, index for index
+  (so `agent_exec::targets()` maps a custom carrier with no change of its own);
+  `tmux_local::SECRET_ENV` has the eight carriers appended (slots 8645-8652,
+  23 entries; `key_carriers_hold_the_slots_after_the_mcp_tokens` updated).
+- **Routes.** `CLI_ROUTES` is unchanged (the built-ins). `CUSTOM_ROUTES: [Route; 8]`
+  (const `custom_route(i)`) and `routes_with(cli_id, &[CustomEndpoint]) ->
+  Vec<Route>`: the built-ins' routes plus, for `opencode` only, one route per
+  *configured* slot (so an unconfigured slot never costs a grant or a keychain
+  read). `spawn_endpoints(&Settings)` = the endpoints of the settings, none on a
+  hosted server.
+- **Spawn.** `inject_env_at(.., endpoints)` is the new pure core
+  (`inject_env_with` is now a `#[cfg(test)]` wrapper with `&[]`, so every
+  built-in test is unchanged); `inject_env` passes `spawn_endpoints`. Custom
+  routes get `api_proxy::issue(Custom(n), ..)`, which already returns `None`
+  without a key or a valid endpoint. `route_opencode_with(env, injected,
+  ambient, picker, endpoints)` is the core (`route_opencode` is a `#[cfg(test)]`
+  wrapper with `&[]`); `opencode_inline_with(.., endpoints)` builds the block
+  with `custom_block(endpoint, token_var, base)`. The per-slot base var is
+  removed from `env` again in `route_opencode_with` (it only names the route).
+- **Inline block** (exactly decision 8): `provider["tt-custom-<n>"] = {npm:
+  "@ai-sdk/openai-compatible", name: <label>, options: {baseURL:
+  "<proxy base>/custom-<n>" (no `/v1`), the key field = `{env:CUSTOM_ENDPOINT_KEY_<n>}`,
+  includeUsage: true}, models: {<id>: {name: <id>}}}`. `enabled_providers`
+  gets `tt-custom-<n>` (built-ins first, then slots by number, then `ollama`).
+  A user config that already has a block of that name (in `provider` or in
+  OpenCode 2's `providers`) keeps it: the slot is left out and its token,
+  carrier and base var are removed again (like a built-in); it still counts in
+  `enabled_providers` (it is theirs). No `providers` twin and no
+  `hide_in_picker` for a custom slot.
+- `opencode_routed` also tests the eight `tt-custom-<n>` blocks (path suffix `""`,
+  `is_proxy_base(.., Custom(n))`), so `launch_prep::drop_api_keys_for_old_tmux`
+  refuses a custom-only route on tmux < 3.2 too.
+- **Counting as a key of OpenCode's**: `keyed`, `refuse_in_container`,
+  `ready_clis`/`keyable_clis` (`ready_clis_with(enabled, endpoints, has)`),
+  `budget_blocked_with(ready, endpoints, limits, ledger)` and `status_with` all
+  use `routes_with(id, endpoints)`.
+- **`CliStatus.providers` for OpenCode** is now `["anthropic","gemini","openai",
+  "custom-<n>"..]` for every configured slot (slot order); `ready` is true when a
+  slot's key is saved. Other CLIs' rows are unchanged. `status()` passes
+  `spawn_endpoints`, so on a hosted server none appear.
+- `opencode_models`: `hidden_for`, `extra_for` and `refresh` drop custom providers
+  at the top (nothing hidden, nothing fetched, no background refresh started for
+  a slot); both `// A2:` notes resolved.
+
+### The two R1 fixes
+
+1. **Stale tokens after slot reuse.** `api_proxy::revoke_provider(provider)`
+   drops every grant of a provider at once. `remove_custom` now goes through
+   `remove_custom_in(path, slot, clear_key)`, which revokes right after the key
+   is cleared (a refused key removal changes nothing, grants included).
+   `add_custom_blocking` revokes the new slot's number before saving its key and
+   again if the keychain refuses (covers a hand edit of `settings.json` that
+   dropped a slot under a running tab). Tests:
+   `removing_a_custom_slot_revokes_its_grants_and_only_its_grants`
+   (`agent_api_keys`) and `revoking_a_provider_takes_only_its_grants`
+   (`api_proxy`). Grants are one process-wide map shared by parallel tests: these
+   tests use slots 6/7/8 (nothing else holds grants there) - keep it that way.
+2. **System proxy leak.** `api_proxy::client_builder(https_only)`: the plain-HTTP
+   (loopback) client, used for a `http://` loopback custom endpoint and the key
+   broker, is built with `.no_proxy()`. Test
+   `the_loopback_client_ignores_a_system_proxy_and_the_https_one_keeps_it`: a
+   built `reqwest::Client` prints `proxies` in `Debug` only when it holds some,
+   and one that honours the environment always holds the system matcher, so no
+   env var is touched. The HTTPS client is unchanged (see "Flagged for user").
+
+### OpenCode verification (2.4.2, real binary, no billed request)
+
+Binary `~/.local/share/tabtivity/agents/install/.opencode/bin/opencode`
+(`opencode --version` -> `opencode v2.4.2`; the `opencode` on PATH is
+Tabtivity's agent shim, which execs the app binary, so it was not used). Run
+with `env -i`, throwaway `HOME`/`XDG_*` dirs under the worktree (deleted
+afterwards), a dummy env var, and `OPENCODE_CONFIG_CONTENT` = the block above
+with `baseURL http://127.0.0.1:9/custom-1` and two models.
+
+- `opencode debug config`: accepted. OpenCode 2 converts the legacy block into
+  its own `providers["tt-custom-1"]` (`package: "aisdk:@ai-sdk/openai-compatible"`,
+  `settings` with apiKey (masked as stars), baseURL, includeUsage: true, both models) and
+  `enabled_providers` became the policies `deny provider.use *` + `allow
+  tt-custom-1`. **No twin in `providers` is needed.** (The built-ins' twin in
+  `hide_in_picker` exists to carry a model `disabled` list, or a block the user
+  already has in `providers`; a custom block hides nothing.)
+- `opencode models`: `tt-custom-1/llama-3.3-70b` and `tt-custom-1/qwen3-32b`,
+  nothing else (the policy hides every other provider).
+- `includeUsage` is the right option name: `opencode run --standalone -m
+  tt-custom-1/llama-3.3-70b "say ok"` against a local fake server on
+  `127.0.0.1` (dummy value, nothing billed) sent `POST /custom-1/chat/completions`
+  with `Authorization: Bearer <the env var's value>`, `"stream": true` and
+  `"stream_options": {"include_usage": true}` (a title request without
+  `max_tokens`; the chat turn with `max_completion_tokens: 32000`, which the
+  meter's worst case reads). So the proxy's `NoUsage` refusal is not hit by
+  OpenCode's own requests.
+- Gotcha: a bare `opencode models`/`debug config` starts a **background service**
+  (`opencode serve --service`) that outlives the command; use `--standalone` where
+  the command takes it. I stopped the one I started (it ran in the throwaway
+  HOME). No OpenCode, fake server or Tabtivity process of mine is left.
+
+### Choices inside the fixed decisions
+
+- **The token variable is not app-named.** The plan wrote
+  `app_env!("CUSTOM_ENDPOINT_KEY_<n>")` for it, but `agent_exec` maps a carrier to
+  the name *after* `CARRIER_PREFIX`, and the existing test holds `carrier ==
+  carrier_name(var)`. So the carrier is `app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_<n>")`
+  as planned and the variable OpenCode reads is the plain
+  `CUSTOM_ENDPOINT_KEY_<n>` (like `OPENAI_API_KEY` for the built-ins). Only the
+  carrier is a tmux secret.
+- A custom route is shadowed by no credential name (`credential_names()` is empty);
+  only its own base var in the spawn env or Tabtivity's counts as "user set".
+- A user's block is a conflict by name alone (any `provider` or `providers`
+  entry `tt-custom-<n>`), stricter than the built-ins' "has a baseURL/apiKey" rule:
+  a custom block without a base URL is not usable anyway.
+- A slot with a saved key but an unusable endpoint gets no token (`issue` -> None);
+  it is not in `injected`, so no block is written for it.
+- Models: the saved `CustomEndpoint.models`, each as `{name: id}`; an empty
+  listing writes `models: {}` (the provider is enabled but lists nothing).
+
+### Gotchas for A3 and later
+
+- `CliStatus.providers` of OpenCode lists `custom-<n>` ids; the TS consumer must
+  not assume the three built-ins.
+- Old tests keep calling `inject_env_with`/`route_opencode` (built-ins only); new
+  tests use `inject_env_at`/`route_opencode_with` with `&[CustomEndpoint]`.
+- `ENV_VARS`/`CARRIERS` grew by 8: anything that iterates them (the tmux
+  `update-environment` slots, `agent_exec::targets`) sees the custom ones.
+- The post-commit hook reports the embedded mobile PWA as stale; this change
+  does not touch it.
+
+### Gates (worktree, last code edit before them)
+
+- `cargo test -q -p tabtivity --lib`: 6648 passed, 23 ignored with `--test-threads=6`.
+  A default-threads run had one failure in `sysstat::tests::relaxed_lookup_reuses_an_entry_the_default_would_recompute`
+  (load flake, unrelated: passes alone and under `--test-threads=6`).
+- `cargo test -q -p tabtivity --no-default-features --lib --test server_secrets`:
+  6440 passed, 20 ignored (2 suites).
+- `cargo test -q --workspace -- --test-threads=6`: 7083 passed, 23 ignored (13 suites).
+- `cargo clippy --workspace --all-targets -- -D warnings`, `-p tabtivity
+  --no-default-features --lib`, `-p app-serverd --all-targets`: no issues.
+- `scripts/brand-check.sh`: only the old hit in `scripts/verify-cli/opencode/queue.py:26`.
+- `scripts/privacy-check.sh` (staged): clean. `git diff --check`: clean. Frontend untouched.
+- New tests: 8 in `agent_api_keys` (alone, beside a built-in, user's own block,
+  routes only when configured, `opencode_routed` custom-only, carriers in step,
+  status/ready/budget, remove revokes) + 2 in `api_proxy` (revoke, loopback client).
+
+### Flagged for user (not acted on)
+
+- **The main HTTPS client honours `HTTPS_PROXY`/`ALL_PROXY`** (it is the built-ins'
+  client too). For an `https://` custom endpoint the key rides a CONNECT tunnel
+  inside TLS to the endpoint, so the proxy cannot read it, but it learns the
+  host, and an institute endpoint on an internal name is sent *through* the
+  system proxy unless `NO_PROXY` lists it (it can then fail to connect, or reach a
+  gateway that terminates TLS for you). A per-slot "ignore system proxy" choice
+  would be the fix; left alone because some networks need the proxy.
+- **A hand edit of `settings.json` that drops or retargets a slot** does not revoke
+  its grants by itself (only the add/remove commands do): the proxy refuses a
+  dropped slot at once (404, before any key is read), but a slot re-added by hand
+  under the same number inside the 10 s settings cache keeps the old tab's token
+  until the next `add_custom`/`remove_custom` for it.
+- Slot grants are keyed by provider only: `revoke_provider` ends them for every tab,
+  which is what a removal wants.
