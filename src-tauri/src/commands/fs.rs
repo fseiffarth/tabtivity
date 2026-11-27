@@ -1244,6 +1244,10 @@ pub fn move_path_blocking(
 /// (`parseDroppedFiles`: WebKitGTK leaks only the first path of a multi-file
 /// drop): it is imported only if it is a regular file of the dropped `File`'s
 /// size, so a same-named file in the wrong folder is never copied.
+///
+/// A **remote** project (detected first, as [`list_dir`] does) gets the copy on
+/// its host over SFTP (`services::remote_import`): same naming, same bounds,
+/// links inside a copied folder left out.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_external_file(
     project_dir: String,
@@ -1252,7 +1256,13 @@ pub async fn import_external_file(
     replace: bool,
     dest_name: Option<String>,
     expected_size: Option<u64>,
+    ctx: Ctx,
 ) -> Result<String, String> {
+    if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
+        let pool = ctx.get::<RemotePoolState>();
+        let source = ImportSource { source_path, dest_name, expected_size };
+        return import_external_remote(pool, &target, source, dest_rel, replace).await;
+    }
     app_core::rt::try_blocking("fs", move || {
         if let Some(size) = expected_size {
             check_inferred_drop(&source_path, size)?;
@@ -1260,6 +1270,64 @@ pub async fn import_external_file(
         import_external_file_blocking(project_dir, source_path, dest_rel, replace, dest_name)
     })
     .await
+}
+
+/// The local half of a remote import: where the bytes come from and what the
+/// copy is called.
+struct ImportSource {
+    source_path: String,
+    dest_name: Option<String>,
+    expected_size: Option<u64>,
+}
+
+/// [`import_external_file`] onto a remote project's host: resolve and walk the
+/// local source (blocking), confine the destination folder under the project
+/// root, then upload on the pooled session, or a one-shot one when the pool is
+/// cold. Returns the project-relative path of the copy.
+async fn import_external_remote(
+    pool: &RemotePoolState,
+    target: &RemoteTarget,
+    source: ImportSource,
+    dest_rel: String,
+    replace: bool,
+) -> Result<String, String> {
+    use crate::services::remote_import;
+    let rel_dir = normalize_project_rel_path(&dest_rel)?;
+    let dest_dir = remote_join_confined(&target.spec.remote_path, &rel_dir)?;
+    let (src, file_name, plan) = app_core::rt::try_blocking("fs", move || {
+        if let Some(size) = source.expected_size {
+            check_inferred_drop(&source.source_path, size)?;
+        }
+        let src = canonical(&source.source_path)?;
+        let file_name = import_file_name(&src, source.dest_name.as_deref())?;
+        let plan = remote_import::plan_source(&src)?;
+        Ok((src, file_name, plan))
+    })
+    .await?;
+    let landed = match pooled(pool, target).await {
+        Some(sftp) => remote_import::upload_on(&sftp, src, &plan, &dest_dir, &file_name, replace).await?,
+        None => {
+            let s = &target.spec;
+            crate::services::sftp::with_oneshot(&s.user, &s.host, s.port, None, |sftp| async move {
+                let r = remote_import::upload_on(&sftp, src, &plan, &dest_dir, &file_name, replace).await;
+                (sftp, r)
+            })
+            .await?
+        }
+    };
+    Ok(if rel_dir.is_empty() { landed } else { format!("{rel_dir}/{landed}") })
+}
+
+/// The name an import lands under: the typed `dest_name` (a name, never a path)
+/// or the source's own.
+fn import_file_name(src: &Path, dest_name: Option<&str>) -> Result<String, String> {
+    match dest_name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => validate_import_name(n),
+        None => src
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .ok_or_else(|| "source has no file name".to_string()),
+    }
 }
 
 fn check_inferred_drop(source_path: &str, size: u64) -> Result<(), String> {
@@ -1292,14 +1360,7 @@ pub fn import_external_file_blocking(
         return Err("cannot copy a folder into itself".to_string());
     }
 
-    let source_name = src
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .ok_or_else(|| "source has no file name".to_string())?;
-    let file_name = match dest_name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        Some(n) => validate_import_name(n)?,
-        None => source_name,
-    };
+    let file_name = import_file_name(&src, dest_name.as_deref())?;
     let dest = if replace {
         dest_dir_c.join(&file_name)
     } else {
@@ -1330,9 +1391,25 @@ pub fn import_external_file_blocking(
 
 /// Whether a project-relative path currently exists. The drag-drop importer
 /// calls this before copying so it can prompt rename-vs-replace on a collision.
-/// It canonicalizes inside the project tree, so on a worker.
+/// It canonicalizes inside the project tree, so on a worker. A remote project
+/// is asked on its host, as [`import_external_file`] writes there.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn project_path_exists(project_dir: String, rel_path: String) -> Result<bool, String> {
+pub async fn project_path_exists(project_dir: String, rel_path: String, ctx: Ctx) -> Result<bool, String> {
+    if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
+        let pool = ctx.get::<RemotePoolState>();
+        let path = remote_join_confined(&target.spec.remote_path, &rel_path)?;
+        let s = &target.spec;
+        return match pooled(pool, &target).await {
+            Some(sftp) => crate::services::remote_import::exists_on(&sftp, &path).await,
+            None => {
+                crate::services::sftp::with_oneshot(&s.user, &s.host, s.port, None, |sftp| async move {
+                    let r = crate::services::remote_import::exists_on(&sftp, &path).await;
+                    (sftp, r)
+                })
+                .await
+            }
+        };
+    }
     app_core::rt::try_blocking("fs", move || project_path_exists_blocking(project_dir, rel_path)).await
 }
 
@@ -1433,28 +1510,7 @@ fn validate_import_name(name: &str) -> Result<String, String> {
 }
 
 fn unique_dest(dir: &Path, file_name: &str) -> PathBuf {
-    let direct = dir.join(file_name);
-    if !direct.exists() {
-        return direct;
-    }
-    // A leading-dot name with no other dot (".gitignore") has no extension, so
-    // `stem` keeps the whole name and the suffix lands at the end.
-    let ext = Path::new(file_name).extension().and_then(|e| e.to_str());
-    let stem = match ext {
-        Some(e) => &file_name[..file_name.len() - e.len() - 1],
-        None => file_name,
-    };
-    for n in 1..10_000 {
-        let candidate = match ext {
-            Some(e) => format!("{stem} ({n}).{e}"),
-            None => format!("{stem} ({n})"),
-        };
-        let p = dir.join(candidate);
-        if !p.exists() {
-            return p;
-        }
-    }
-    direct
+    dir.join(crate::services::remote_import::unique_name(file_name, |n| dir.join(n).exists()))
 }
 
 /// Validate and resolve a copy/move: confine both ends, refuse an existing

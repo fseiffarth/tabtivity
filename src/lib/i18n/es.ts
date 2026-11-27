@@ -4970,7 +4970,7 @@ export const dict: Dict = {
   "sendToProject.sourceLabel": "Enviando:",
   "sendToProject.pickProject": "Elige un proyecto y luego una carpeta dentro de él.",
   "sendToProject.noProjects": "No hay proyectos activos a los que enviar.",
-  "sendToProject.remoteUnsupported": "Los proyectos remotos aún no pueden ser destino.",
+  "sendToProject.remoteUnsupported": "Este proyecto remoto no tiene un espejo local donde copiar.",
   "sendToProject.thisProject": "este proyecto",
   "sendToProject.lastUsed": "usado por última vez",
   "sendToProject.changeProject": "Elegir otro proyecto",

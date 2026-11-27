@@ -27,6 +27,8 @@
 pub mod agent_host_move;
 // Content search and quick open on a remote-only project's host (E6a).
 pub mod host_search;
+// A local file or folder copied into a host tree (drop, "Send to project…").
+pub mod remote_import;
 pub mod remote_credentials;
 // A remote-only project's scaffold and first commit, made on the host.
 pub mod remote_scaffold;

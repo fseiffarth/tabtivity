@@ -3,12 +3,14 @@ import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
-import { resolveProjectDirectory, resolveLocalMirror, type ProjectEntry } from "../../types";
+import { type ProjectEntry } from "../../types";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { type FileEntry } from "../../lib/viewers/fileUtils";
-import { loadLastSendTarget, saveLastSendTarget } from "../../lib/projects/sendToProject";
+import { destLabelFor, destRootFor, loadLastSendTarget, saveLastSendTarget } from "../../lib/projects/sendToProject";
 import { useT } from "../../lib/i18n";
 import { ArrowLeftIcon, ArrowUpIcon, CheckIcon, CloseIcon, FolderIcon, GlobeIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
+import { UntestedTag } from "../common/UntestedTag";
 import { dirname } from "../../lib/paths";
 
 /** The item being sent — always a LOCAL absolute path (the dialog is only opened
@@ -27,16 +29,6 @@ interface Props {
    *  own folder is a common destination, so it's kept selectable. */
   fromProjectId?: string | null;
   onClose: () => void;
-}
-
-/** The local destination root for a project, or `""` when it has none this flow
- *  can write into. A local project is its own directory; a remote project's tree
- *  lives on the host and only its mirror is local — which this flow does not
- *  target yet (a copy into the mirror would sit un-synced), so remote projects
- *  resolve to `""` and are shown disabled. */
-function destRootFor(project: ProjectEntry): string {
-  if (project.remote) return resolveLocalMirror(project) ?? "";
-  return resolveProjectDirectory(project);
 }
 
 /**
@@ -171,13 +163,14 @@ export function SendToProjectDialog({ source, fromProjectId, onClose }: Props) {
                 ) : (
                   active.map((p) => {
                     const disabled = !destRootFor(p);
+                    const onHost = isHostPinned(p);
                     return (
                       <button
                         key={p.id}
                         type="button"
                         className="folder-picker-item send-to-project-item"
                         disabled={disabled}
-                        title={disabled ? t("sendToProject.remoteUnsupported") : destRootFor(p)}
+                        title={disabled ? t("sendToProject.remoteUnsupported") : destLabelFor(p)}
                         onClick={() => pickProject(p)}
                       >
                         <span className="folder-picker-icon">{p.remote ? <GlobeIcon /> : <FolderIcon />}</span>
@@ -188,6 +181,7 @@ export function SendToProjectDialog({ source, fromProjectId, onClose }: Props) {
                         {last?.projectId === p.id && (
                           <span className="send-to-project-tag">{t("sendToProject.lastUsed")}</span>
                         )}
+                        {onHost && <UntestedTag id="sendToProject.remoteOnly" />}
                       </button>
                     );
                   })

@@ -293,6 +293,7 @@ export const UNTESTED = {
   "fileTree.2": { area: "files", what: "FileTree · New Presentation" },
   "fileTree.3": { area: "files", what: "FileTree · {t(syncExcluded ? \"fileTree.includeInSync\" : \"fileTree.excludeFromSync\")}" },
   "fileTree.4": { area: "files", what: "FileTree · Send to project…" },
+  "sendToProject.remoteOnly": { area: "files", what: "Send to project… onto a remote-only project (or VM): the row is selectable and its hover names user@host:path; the folders shown are the host's; Copy here uploads the file, or the folder without its links, over SFTP into that host folder (a name already there gets \" (n)\"), also when the project is not open; dropping an OS file onto a remote project's Files view uploads to the host too, asking before it replaces a name already there" },
   "fileTree.5": { area: "files", what: "FileTree · Download to…" },
   "fileTree.downloadExcludedFolder": { area: "files", what: "FileTree · Download folder (stays excluded) — one-off pull of an excluded folder, or one inside an excluded tree, from the Remote or Local tree menu" },
   "fileTree.pasteFromSystem": { area: "files", what: "FileTree · Paste files/folders copied in the OS file manager (system clipboard)" },

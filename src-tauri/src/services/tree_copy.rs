@@ -24,7 +24,8 @@ use crate::services::mobile_control::files::ProjectDir;
 pub const MAX_ENTRIES: usize = 200_000;
 /// Most file bytes one copy writes.
 pub const MAX_BYTES: u64 = 32 << 30;
-const MAX_DEPTH: usize = 128;
+/// Deepest folder nesting one copy walks.
+pub const MAX_DEPTH: usize = 128;
 /// Skipped paths named in a report; the rest are only counted.
 const REPORT_NAMES: usize = 20;
 

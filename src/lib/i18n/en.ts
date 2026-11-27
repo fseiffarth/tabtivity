@@ -5166,7 +5166,7 @@ export const enSource = {
   "sendToProject.sourceLabel": "Sending:",
   "sendToProject.pickProject": "Choose a project, then a folder inside it.",
   "sendToProject.noProjects": "No active projects to send to.",
-  "sendToProject.remoteUnsupported": "Remote projects can't be a destination yet.",
+  "sendToProject.remoteUnsupported": "This remote project has no local mirror to copy into.",
   "sendToProject.thisProject": "this project",
   "sendToProject.lastUsed": "last used",
   "sendToProject.changeProject": "Choose a different project",

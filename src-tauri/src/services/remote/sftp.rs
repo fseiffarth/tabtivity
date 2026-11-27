@@ -891,30 +891,48 @@ pub async fn upload_file_streaming_on(
     local_path: &std::path::Path,
     remote_path: &str,
 ) -> Result<(), String> {
-    use tokio::io::AsyncReadExt;
-    ensure_parent_dirs_on(sftp, remote_path).await?;
-    let mut local = tokio::fs::File::open(local_path)
+    let local = tokio::fs::File::open(local_path)
         .await
         .map_err(|e| format!("open local bundle failed: {e}"))?;
+    upload_open_file_on(sftp, local, remote_path, u64::MAX).await.map(|_| ())
+}
+
+/// [`upload_file_streaming_on`] for a file the caller already opened (the
+/// remote import opens its sources through `home_io`, never by path), writing
+/// at most `limit` bytes: a file that grew past it since it was measured fails
+/// rather than writing on. Returns the bytes written.
+pub async fn upload_open_file_on(
+    sftp: &Sftp,
+    mut local: tokio::fs::File,
+    remote_path: &str,
+    limit: u64,
+) -> Result<u64, String> {
+    use tokio::io::AsyncReadExt;
+    ensure_parent_dirs_on(sftp, remote_path).await?;
     let mut remote = sftp
         .create(remote_path)
         .await
         .map_err(|e| format!("sftp create failed: {e}"))?;
     let mut buf = vec![0u8; STREAM_CHUNK];
+    let mut written: u64 = 0;
     loop {
         let n = local
             .read(&mut buf)
             .await
-            .map_err(|e| format!("read local bundle failed: {e}"))?;
+            .map_err(|e| format!("read local file failed: {e}"))?;
         if n == 0 {
             break;
+        }
+        written = written.saturating_add(n as u64);
+        if written > limit {
+            return Err("too large to copy: the copy is larger than the limit".to_string());
         }
         remote
             .write_all(&buf[..n])
             .await
             .map_err(|e| format!("sftp streaming write failed: {e}"))?;
     }
-    Ok(())
+    Ok(written)
 }
 
 /// Download a host file to a local path in bounded chunks (never buffering the
