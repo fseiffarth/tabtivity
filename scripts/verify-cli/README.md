@@ -222,7 +222,11 @@ gives its usage.
   option by the app's walk, by digits and by paging (PageDown/PageUp); frames
   and `answers.txt` (what Codex got back) land in `async_question_long/`.
 
-- **Copilot** (`copilot/`): `screens.sh <label> <bin> [port]` walks the folder
+- **Copilot** (`copilot/`): `round.sh <label> <bin> <port>` runs every probe
+  below for one binary into `probe-<label>.log` (five ports from `<port>`);
+  run old and new one after the other, not at once (`remote_store.py`'s
+  fixed tab id makes two runs see each other's processes), and diff the logs.
+  `screens.sh <label> <bin> [port]` walks the folder
   trust question, idle, a stub-forced `create` approval at 110 and 60 columns
   and the Esc after it, BYOK against `stub_openai.py`, for `frames.probe.ts`.
   `chat_send.py <label> <bin> [port] [case…]` sends prompts with the Chat's and

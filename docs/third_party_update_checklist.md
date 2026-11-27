@@ -2078,6 +2078,24 @@ folder-trust "Yes" no longer waits for MCP reconnects; sub-agent events gain
 `env` setting for every process Copilot starts (Tabtivity sets none).
 Real sign-in, model pickers and a model's own output were not exercised.
 
+Re-checked **1.0.117** (2026-11-27, `npm pack @github/copilot-linux-x64`,
+beside 1.0.116, offline against the stub, `scripts/verify-cli/copilot/round.sh`):
+all 13 `copilot-events-probe.py` checks pass on both; `screens.sh`,
+`chat_send.py` (all five arrived word for word), `hooks.py events` and `turn`
+(12 checks; only the leading leftover `done` comes and goes with timing) and
+`remote_store.py` (every case, the two versions run one after the other) print
+the same lines with ids and times masked. `--help` only rewords
+`--disable-mcp-server` (now case-insensitive; not used). The frame replay
+reads the same options, asks and decision lamp; the trust box only moved rows.
+The runtime still holds `authTokens`, `lastLoggedInUser` and
+`storeTokenPlaintext`. Changelog items near what Tabtivity reads: answering a
+permission prompt keeps the composer draft; `/exit` and Ctrl+D drop queued
+prompts; extra Enters on the folder-trust prompt reload plugins once; the
+`/model` picker shows service notices and retiring models (not read);
+permission prompts say which approvals last across a resume (the captured
+option labels did not change). Real sign-in, model pickers and a model's own
+output were not exercised.
+
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
 Auggie, CodeBuddy: `settings.json` `hooks.SessionStart[].hooks[]`, stdout JSON
