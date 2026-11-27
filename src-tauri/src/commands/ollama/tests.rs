@@ -1776,11 +1776,39 @@ fn trim_context_overlap_drops_echoed_prefix_tail() {
         trim_context_overlap("    return ", "\n\nprint(x)", "return a + b", false),
         "a + b",
     );
-    // Repeated trailing word.
+    // Repeated trailing word: BEFORE ends inside it, so the space is the
+    // insertion's own ("…fox jumps", not "…foxjumps").
     assert_eq!(
         trim_context_overlap("The quick brown fox", " over the dog", "fox jumps", false),
+        " jumps",
+    );
+    // With the space already typed, none is added.
+    assert_eq!(
+        trim_context_overlap("The quick brown fox ", " over the dog", "fox jumps", false),
         "jumps",
     );
+}
+
+/// The caret inside a half-typed word: a chat model answers with the whole
+/// word, which used to read "a cconvex set" / "a coconvex set" in the editor
+/// (echoes under MIN_SEAM_OVERLAP were kept).
+#[test]
+fn trim_context_overlap_drops_a_restarted_word() {
+    let before = "then this is a c";
+    assert_eq!(trim_context_overlap(before, "", "convex set that", false), "onvex set that");
+    assert_eq!(trim_context_overlap("then this is a co", "", "convex set", false), "nvex set");
+    // A continuation that does not restart the word is untouched.
+    assert_eq!(trim_context_overlap("then this is a co", "", "nvex set", false), "nvex set");
+    // Still streaming the fragment itself: nothing to show yet.
+    assert_eq!(trim_context_overlap("then this is a co", "", "c", false), "");
+    // Only the whole word counts, and only at the very start of the answer.
+    assert_eq!(trim_context_overlap("is a co", "", "o-op", false), "o-op");
+    assert_eq!(trim_context_overlap("is a co", "", " convex", false), " convex");
+    // After a space there is no fragment; a number is ambiguous.
+    assert_eq!(trim_context_overlap("is a ", "", "a set", false), "a set");
+    assert_eq!(trim_context_overlap("x = 1", "", "10", false), "10");
+    // Code: an identifier restarted after `(`.
+    assert_eq!(trim_context_overlap("foo(v", ")", "value", false), "alue");
 }
 
 #[test]
@@ -1799,10 +1827,11 @@ fn trim_context_overlap_keeps_unrelated_completion() {
         trim_context_overlap("I am writing to ", " Best regards", "express my thanks", false),
         "express my thanks",
     );
-    // A 1–2 char incidental match is below the threshold, so it is NOT trimmed.
+    // A 1–2 char incidental match is below the threshold, so it is NOT trimmed
+    // (a restarted word is: `trim_context_overlap_drops_a_restarted_word`).
     assert_eq!(
-        trim_context_overlap("foo a", "", "a list of items", false),
-        "a list of items"
+        trim_context_overlap("let v = (", "", "(a + b) * c", false),
+        "(a + b) * c"
     );
 }
 

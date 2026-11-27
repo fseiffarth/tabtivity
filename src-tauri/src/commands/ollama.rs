@@ -3648,6 +3648,28 @@ fn overlap_len(a: &str, b: &str) -> usize {
     0
 }
 
+/// The model starting the caret's word over: BEFORE ends in the fragment "co"
+/// and the answer begins "convex", which would read "coconvex". The fragment
+/// (the whole run of word chars at the end of BEFORE) is dropped from the very
+/// start of the answer, however short — the one seam below
+/// [`MIN_SEAM_OVERLAP`] trimmed, since a chat model restarts a half-typed word
+/// far more often than it continues one with the same letters. A number is
+/// left alone ("1" then "10" is either). An answer that is still a piece of
+/// the fragment (the "c" of a streamed "co…") is nothing yet. `None` when the
+/// answer does not restart the word. Pure + tested.
+fn strip_word_restart<'a>(prefix: &str, completion: &'a str) -> Option<&'a str> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let start = prefix.char_indices().rev().take_while(|&(_, c)| is_word(c)).last()?.0;
+    let fragment = &prefix[start..];
+    if fragment.chars().all(char::is_numeric) {
+        return None;
+    }
+    if let Some(rest) = completion.strip_prefix(fragment) {
+        return Some(rest);
+    }
+    (!completion.is_empty() && fragment.starts_with(completion)).then_some("")
+}
+
 /// Remove text the model echoed from the surrounding context, so only the genuinely
 /// new insertion remains. Small models often repeat the word/line just before the
 /// cursor (BEFORE "…return " → completion "return a + b") or pre-echo the text just
@@ -3670,10 +3692,13 @@ fn trim_context_overlap(prefix: &str, suffix: &str, completion: &str, keep_break
                 Some(nl) if keep_break && !body.is_empty() => {
                     &rest[if gap[..nl].ends_with('\r') { nl - 1 } else { nl }..]
                 }
+                // BEFORE ends inside its last word ("…brown fox" → "fox jumps"):
+                // the space after the echo is the insertion's own.
+                None if p.len() == prefix.len() && !body.is_empty() => rest,
                 _ => body,
             }
         }
-        _ => completion,
+        _ => strip_word_restart(prefix, completion).unwrap_or(completion),
     };
 
     // Trailing overlap with the start of AFTER.
