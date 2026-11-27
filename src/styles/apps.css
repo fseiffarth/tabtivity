@@ -1168,6 +1168,12 @@
   gap: 12px;
   padding: 14px var(--space-6) 22px;
 }
+/* The fixed-height wizard frame below would otherwise squeeze rows: a row with
+   an explicit min-height (`.project-dialog-path`) shrank to it and its text
+   overlapped the next field. The body scrolls instead. */
+.dialog-framed > .dialog-scroll > * {
+  flex-shrink: 0;
+}
 /* Step wizards (the remote connect → browse → details steps of New project and
    Extend to remote, the HPC pipeline wizard): every step differs in height, and
    a content-sized centered dialog jumped on each Next/Back. One fixed height,
