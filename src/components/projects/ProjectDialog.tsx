@@ -130,14 +130,11 @@ export function ProjectDialog({
   // it. `null` = not edited: it follows the project's sanitized name.
   const [hostFolder, setHostFolder] = useState<string | null>(null);
   const [description, setDescription] = useState(memory.description ?? "");
-  const [descriptionFillMode, setDescriptionFillMode] = useState(() =>
-    memory.localModelsOnly && memory.descriptionFillMode && AGENT_SCAFFOLD_FILL_MODES.has(memory.descriptionFillMode)
-      ? "manual"
-      : memory.descriptionFillMode ?? "manual",
-  );
+  const [descriptionFillMode, setDescriptionFillMode] = useState(memory.descriptionFillMode ?? "manual");
   // Local models only (`services::agent_privacy`), asked for at creation: stored
   // right after the project is registered, before any of its tabs can open.
-  const [localModelsOnly, setLocalModelsOnly] = useState(memory.localModelsOnly ?? false);
+  // Always starts off; the dialog memory does not carry it.
+  const [localModelsOnly, setLocalModelsOnly] = useState(false);
   // Same default the import-source dropdown applies when the source is switched
   // by hand (`changeImportSource`) — a dialog opened *directly* on the clone
   // source (the New-tab menu's "Import from GitHub…") starts on the same answer
@@ -524,14 +521,13 @@ export function ProjectDialog({
       gitType: kind === "new" ? gitType : undefined,
       publishProvider,
       tierChoice: tierChoice ?? undefined,
-      localModelsOnly,
       descriptionFillMode,
       skipScaffold,
       name: draftUsed ? undefined : name,
       description: draftUsed ? undefined : description,
     });
   }, [
-    kind, projectsRoot, projectsRootPicked, gitType, publishProvider, tierChoice, localModelsOnly,
+    kind, projectsRoot, projectsRootPicked, gitType, publishProvider, tierChoice,
     descriptionFillMode, skipScaffold, name, description, draftUsed,
   ]);
 

@@ -7,14 +7,14 @@ import { storageKey } from "../../lib/brand";
  * A closed draft comes back, but once a New project is made from it the whole
  * record is cleared, so the next New dialog opens on the defaults. Import keeps
  * its choices (location, where it runs, …) across imports and drops only the
- * typed name and description.
+ * typed name and description. Local models only is never remembered: every
+ * dialog opens with it off, and an old record's `localModelsOnly` is ignored.
  */
 export interface ProjectDialogMemory {
   projectsRoot?: string;
   gitType?: string;
   publishProvider?: string;
   tierChoice?: "local" | "container" | "vm";
-  localModelsOnly?: boolean;
   descriptionFillMode?: string;
   skipScaffold?: boolean;
   name?: string;
@@ -45,7 +45,6 @@ export function readProjectDialogMemory(kind: "new" | "import"): ProjectDialogMe
     tierChoice: typeof r.tierChoice === "string" && TIERS.has(r.tierChoice)
       ? (r.tierChoice as ProjectDialogMemory["tierChoice"])
       : undefined,
-    localModelsOnly: bool(r.localModelsOnly),
     descriptionFillMode: str(r.descriptionFillMode),
     skipScaffold: bool(r.skipScaffold),
     name: str(r.name),

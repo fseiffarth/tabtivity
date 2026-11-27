@@ -3,7 +3,8 @@
  * before the window learns of it (so no tab of it can open on a cloud model
  * first), the cloud fill agents hidden while it is on, and offered only where
  * the backend can cover the project. The dialog also reopens on its last
- * answers (`projectDialogMemory`).
+ * answers (`projectDialogMemory`), except Local models only, which always
+ * starts off.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act, fireEvent, screen, cleanup } from "@testing-library/react";
@@ -18,6 +19,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 import { ProjectDialog } from "../../components/projects/ProjectDialog";
 import { readProjectDialogMemory, writeProjectDialogMemory } from "../../components/projects/projectDialogMemory";
+import { storageKey } from "../../lib/brand";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import type { ProjectEntry } from "../../types";
@@ -166,7 +168,7 @@ describe("New Project: Local models only", () => {
     expect(screen.queryByText("Codex")).toBeNull();
   });
 
-  it("reopens on the last answers; a created project clears them all", async () => {
+  it("reopens on the last answers but with Local models only off; a created project clears them all", async () => {
     stubBackend();
     await openNew();
     await typeName("draft");
@@ -174,14 +176,23 @@ describe("New Project: Local models only", () => {
       fireEvent.click(localSwitch());
     });
     cleanup();
-    expect(readProjectDialogMemory("new")).toMatchObject({ name: "draft", localModelsOnly: true });
+    expect(readProjectDialogMemory("new")).toMatchObject({ name: "draft" });
+    expect(readProjectDialogMemory("new")).not.toHaveProperty("localModelsOnly");
 
     await openNew();
     expect((screen.getByPlaceholderText("my-project") as HTMLInputElement).value).toBe("draft");
-    expect(localSwitch().checked).toBe(true);
+    expect(localSwitch().checked).toBe(false);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
     });
     expect(readProjectDialogMemory("new")).toEqual({});
+  });
+
+  it("ignores a Local models only answer an older build remembered", async () => {
+    stubBackend();
+    localStorage.setItem(storageKey("projectDialog.new"), JSON.stringify({ name: "old", localModelsOnly: true }));
+    await openNew();
+    expect((screen.getByPlaceholderText("my-project") as HTMLInputElement).value).toBe("old");
+    expect(localSwitch().checked).toBe(false);
   });
 });
