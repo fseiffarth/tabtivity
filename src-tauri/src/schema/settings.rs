@@ -100,10 +100,11 @@ pub struct AppMobileHostSettings {
     /// the quit path (`commands::mobile_control::stop_host_for_exit`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stay_after_quit: Option<bool>,
-    /// May a paired phone see and open shell tabs? Default off — Mobile is
-    /// agents-only unless this is set. Read by the sidecar per catalog load
-    /// (`mobile_control::discovery::shells_open`) and repeated by the desktop
-    /// bridge.
+    /// May paired phones see and open shell tabs at all? Default off — Mobile
+    /// is agents-only unless this is set, and then each phone's own switch
+    /// (`mobile_control::auth::Device::shell_tabs`) must allow it too. Read by
+    /// the sidecar per catalog load (`mobile_control::discovery::shells_open`)
+    /// and repeated by the desktop bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_tabs: Option<bool>,
     /// May a paired phone list and attach the desktop's clipboard image and

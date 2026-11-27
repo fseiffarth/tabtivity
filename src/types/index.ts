@@ -216,9 +216,10 @@ export interface Settings {
      * Settings → Mobile → Browser access). Unset is off; loopback only; read
      * by the sidecar at start. */
     browser_client?: boolean;
-    /** A paired phone may see and open shell tabs. Unset is off (the phone is
-     * agents-only); read by the sidecar per catalog load and repeated by the
-     * desktop bridge. */
+    /** Paired phones may see and open shell tabs at all; each phone's own
+     * switch (its device record's `shell_tabs`) must allow it too. Unset is
+     * off (the phone is agents-only); read by the sidecar per catalog load
+     * and repeated by the desktop bridge. */
     shell_tabs?: boolean;
     /** A paired phone may list and attach this desktop's clipboard image and
      * newest screenshots, downloads and pictures (+ → Desktop). Unset is off;

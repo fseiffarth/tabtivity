@@ -1303,9 +1303,11 @@ where
                     // The session's phone: a session never changes device, so
                     // this is the phone the upgrade route checked, and the
                     // per-phone list is re-read for it below.
-                    let (device, key) = {
+                    let (device, key, shells) = {
                         let mut auth = auth.lock_ok();
-                        (auth.authenticate(&token), auth.host_key().to_vec())
+                        let device = auth.authenticate(&token);
+                        let shells = device.as_deref().is_some_and(|device| auth.shells_for(device));
+                        (device, auth.host_key().to_vec(), shells)
                     };
                     // Two different facts, told apart on the wire: a session
                     // that ran out (a sidecar restart, the idle window) is the
@@ -1321,7 +1323,7 @@ where
                         })
                         .await
                     };
-                    if let Err(reason) = recheck(loaded.ok().and_then(Result::ok), &device, &tab_id, &tmux_name) {
+                    if let Err(reason) = recheck(loaded.ok().and_then(Result::ok), &device, shells, &tab_id, &tmux_name) {
                         break Err(reason.into());
                     }
                 }
@@ -1509,8 +1511,8 @@ where
 /// session, that has gone unavailable closes as `host_offline` when the last
 /// round found no master for its host, and as `session_gone` when it found
 /// the master but the host's tmux no longer lists the session.
-fn recheck(loaded: Option<Catalog>, device: &str, tab_id: &str, tmux_name: &str) -> Result<(), &'static str> {
-    let Some(catalog) = loaded.map(|catalog| catalog.for_device(device)) else {
+fn recheck(loaded: Option<Catalog>, device: &str, shells: bool, tab_id: &str, tmux_name: &str) -> Result<(), &'static str> {
+    let Some(catalog) = loaded.map(|catalog| catalog.for_device(device, shells)) else {
         return Err("catalog_unavailable");
     };
     if catalog.grants(tab_id, tmux_name) {
@@ -1568,11 +1570,11 @@ mod tests {
     fn narrowing_the_phone_list_detaches_an_open_terminal() {
         use crate::services::mobile_control::discovery::{fixture_scope, Catalog};
         let with = |devices: Option<Vec<String>>| Catalog { projects: vec![fixture_scope("t", "tmux-t", devices)] };
-        assert_eq!(super::recheck(Some(with(None)), "d1", "t", "tmux-t"), Ok(()));
-        assert_eq!(super::recheck(Some(with(Some(vec!["d1".into()]))), "d1", "t", "tmux-t"), Ok(()));
-        assert_eq!(super::recheck(Some(with(Some(vec!["d2".into()]))), "d1", "t", "tmux-t"), Err("access_revoked"));
-        assert_eq!(super::recheck(Some(with(Some(vec![]))), "d1", "t", "tmux-t"), Err("access_revoked"));
-        assert_eq!(super::recheck(None, "d1", "t", "tmux-t"), Err("catalog_unavailable"));
+        assert_eq!(super::recheck(Some(with(None)), "d1", true, "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(with(Some(vec!["d1".into()]))), "d1", true, "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(with(Some(vec!["d2".into()]))), "d1", true, "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(Some(with(Some(vec![]))), "d1", true, "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(None, "d1", true, "t", "tmux-t"), Err("catalog_unavailable"));
     }
 
     /// A host tab's three commands ride the master's literal socket through
@@ -1696,9 +1698,9 @@ mod tests {
             };
             Catalog { projects: vec![scope] }
         };
-        assert_eq!(super::recheck(Some(host(true)), "d1", "t", "tmux-t"), Ok(()));
-        assert_eq!(super::recheck(Some(host(false)), "d1", "t", "tmux-t"), Err("host_offline"));
-        assert_eq!(super::recheck(Some(host(false)), "d1", "t", "tmux-other"), Err("access_revoked"));
+        assert_eq!(super::recheck(Some(host(true)), "d1", true, "t", "tmux-t"), Ok(()));
+        assert_eq!(super::recheck(Some(host(false)), "d1", true, "t", "tmux-t"), Err("host_offline"));
+        assert_eq!(super::recheck(Some(host(false)), "d1", true, "t", "tmux-other"), Err("access_revoked"));
         assert!(!closing_retries("host_offline"));
         // The master is there, but the host's tmux no longer lists the
         // session: it ended, the host did not go away.
@@ -1707,10 +1709,10 @@ mod tests {
             spec: Box::new(serde_json::from_value(serde_json::json!({ "host": "h.example", "remote_path": "/srv/p" })).unwrap()),
             control_path: Some(std::env::temp_dir().join("cm-h")),
         };
-        assert_eq!(super::recheck(Some(ended), "d1", "t", "tmux-t"), Err("session_gone"));
+        assert_eq!(super::recheck(Some(ended), "d1", true, "t", "tmux-t"), Err("session_gone"));
         let mut local = fixture_scope("t", "tmux-t", None);
         local.tabs[0].public.available = false;
-        assert_eq!(super::recheck(Some(Catalog { projects: vec![local] }), "d1", "t", "tmux-t"), Err("access_revoked"));
+        assert_eq!(super::recheck(Some(Catalog { projects: vec![local] }), "d1", true, "t", "tmux-t"), Err("access_revoked"));
     }
 
     #[test]

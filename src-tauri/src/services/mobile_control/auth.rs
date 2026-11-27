@@ -117,6 +117,18 @@ pub struct Device {
     /// it every phone's sign-in) here; an unknown one simply matches no route.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_sections: Vec<String>,
+    /// Whether this phone may list and open shell tabs, under the host-wide
+    /// `shell_tabs` switch (`discovery::shells_open`), which must be on too.
+    /// A phone paired before the field has it (defaulted true): until then the
+    /// host-wide switch alone decided, so it keeps what it had. A new pairing
+    /// starts without ([`AuthStore::register`]).
+    #[serde(default = "shells_before_the_field")]
+    pub shell_tabs: bool,
+}
+
+/// [`Device::shell_tabs`] for a phone paired before the field existed.
+fn shells_before_the_field() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +227,7 @@ pub fn read_paired_devices(control_dir: &Path) -> Result<Vec<AdminDevice>, Strin
             last_seen_at: d.last_seen_at,
             online: false,
             hidden_sections: d.hidden_sections,
+            shell_tabs: d.shell_tabs,
         })
         .collect())
 }
@@ -508,6 +521,7 @@ impl AuthStore {
             last_seen_at: None,
             ecdh_public_key: None,
             hidden_sections: Vec::new(),
+            shell_tabs: false,
         });
         self.save_devices()?;
         self.audit("paired", Some(&id));
@@ -612,10 +626,24 @@ impl AuthStore {
         Ok((token, expires_at))
     }
 
-    /// A live session for `device_id` under `token`, with no pairing (tests
-    /// elsewhere in the sidecar that need a signed-in phone).
+    /// A live session for `device_id` under `token`, with no pairing round
+    /// (tests elsewhere in the sidecar that need a signed-in phone). The
+    /// device is listed in memory only, with its own shell switch on, so the
+    /// host-wide one alone decides.
     #[cfg(all(test, windows))]
     pub(super) fn insert_test_session(&mut self, token: &str, device_id: &str) {
+        if !self.devices.devices.iter().any(|d| d.id == device_id) {
+            self.devices.devices.push(Device {
+                id: device_id.into(),
+                name: "Phone".into(),
+                public_key: String::new(),
+                created_at: now(),
+                last_seen_at: None,
+                ecdh_public_key: None,
+                hidden_sections: Vec::new(),
+                shell_tabs: true,
+            });
+        }
         let created = Instant::now();
         let deadline = session_deadline(created, created);
         self.sessions.insert(token.to_string(), Session { device_id: device_id.into(), created, deadline });
@@ -716,6 +744,7 @@ impl AuthStore {
                 last_seen_at: d.last_seen_at,
                 online: self.sessions.values().any(|s| s.device_id == d.id && s.deadline >= t),
                 hidden_sections: d.hidden_sections.clone(),
+                shell_tabs: d.shell_tabs,
             })
             .collect()
     }
@@ -830,6 +859,29 @@ impl AuthStore {
             .collect();
         self.save_devices()?;
         self.audit("sections_changed", Some(device_id));
+        Ok(())
+    }
+
+    /// Whether `device_id` itself may have shell tabs ([`Device::shell_tabs`]).
+    /// Only half the gate: the host-wide `discovery::shells_open` is the other.
+    /// An unknown device has none.
+    pub fn shells_for(&self, device_id: &str) -> bool {
+        self.devices.devices.iter().any(|d| d.id == device_id && d.shell_tabs)
+    }
+
+    /// Let one paired phone have shell tabs, or not: the desktop's per-device
+    /// switch. Turning it off unlists that phone's shells at once and detaches
+    /// an open one at `pty_bridge`'s next re-check.
+    pub fn set_shell_tabs(&mut self, device_id: &str, on: bool) -> Result<(), String> {
+        let device = self
+            .devices
+            .devices
+            .iter_mut()
+            .find(|d| d.id == device_id)
+            .ok_or("unknown device")?;
+        device.shell_tabs = on;
+        self.save_devices()?;
+        self.audit(if on { "shells_on" } else { "shells_off" }, Some(device_id));
         Ok(())
     }
 
@@ -1314,7 +1366,7 @@ mod tests {
         let id = |c: char| c.to_string().repeat(27);
         let paired: Vec<AdminDevice> = ['a', 'b']
             .into_iter()
-            .map(|c| AdminDevice { id: id(c), name: c.into(), created_at: 1, last_seen_at: None, online: false, hidden_sections: vec![] })
+            .map(|c| AdminDevice { id: id(c), name: c.into(), created_at: 1, last_seen_at: None, online: false, hidden_sections: vec![], shell_tabs: false })
             .collect();
         assert_eq!(scope_device_list(&[id('b'), id('a'), id('b')], &paired).unwrap(), vec![id('b'), id('a')]);
         // An unpaired id is dropped; nothing left is refused.
@@ -1351,6 +1403,46 @@ mod tests {
         let reopened = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("reopen");
         assert!(reopened.hides(&device, "todo"));
         assert_eq!(read_paired_devices(&control).unwrap()[0].hidden_sections, ["todo", "mail"]);
+    }
+
+    /// A new pairing has no shells of its own; the switch is stored and
+    /// survives a reopen; an unknown device has none.
+    #[test]
+    fn a_phones_own_shell_switch_starts_off_and_survives_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut auth = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("auth store");
+        let (device, _) = paired_login(&mut auth);
+        let (other, _) = paired_login(&mut auth);
+        assert!(!auth.shells_for(&device) && !auth.shells_for(&other));
+        assert!(auth.set_shell_tabs("nobody", true).is_err());
+        assert!(!auth.shells_for("nobody"));
+        auth.set_shell_tabs(&device, true).unwrap();
+        assert!(auth.shells_for(&device) && !auth.shells_for(&other));
+        assert!(auth.devices().iter().any(|d| d.id == device && d.shell_tabs));
+
+        let reopened = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("reopen");
+        assert!(reopened.shells_for(&device) && !reopened.shells_for(&other));
+        let listed = read_paired_devices(&control).unwrap();
+        assert!(listed.iter().any(|d| d.id == device && d.shell_tabs) && listed.iter().any(|d| d.id == other && !d.shell_tabs));
+    }
+
+    /// A phone paired before the field existed keeps the shells the host-wide
+    /// switch alone gave it until now.
+    #[test]
+    fn a_phone_paired_before_its_own_shell_switch_keeps_shells() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("mobile-control");
+        let mut auth = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("auth store");
+        let (device, _) = paired_login(&mut auth);
+        drop(auth);
+        let path = control.join("devices.json");
+        let mut file: serde_json::Value = store::read_json(&path).unwrap();
+        file["devices"][0].as_object_mut().unwrap().remove("shell_tabs").expect("written by this build");
+        store::write_json_atomic(&path, &file, 0o600).unwrap();
+        let reopened = AuthStore::open(&control, "https://desk.example.ts.net".into()).expect("reopen");
+        assert!(reopened.shells_for(&device));
+        assert!(read_paired_devices(&control).unwrap()[0].shell_tabs);
     }
 
     #[test]

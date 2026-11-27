@@ -115,6 +115,40 @@ describe("Settings → Mobile, a paired phone's access", () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
+  describe("the phone's own Shells switch", () => {
+    const renderShells = (master: boolean, own: boolean, onChanged = vi.fn()) => {
+      useSettingsStore.setState({ settings: { [MOBILE_HOST_KEY]: { enabled: true, shell_tabs: master } } as never });
+      render(
+        <PairedDeviceAccess
+          device={{ id: PIXEL, name: "Pixel", created_at: 1_790_000_000, shell_tabs: own }}
+          pairedIds={PAIRED}
+          onChanged={onChanged}
+        />,
+      );
+      return onChanged;
+    };
+
+    it("turns this phone's shells on through the sidecar", async () => {
+      const user = userEvent.setup();
+      const onChanged = renderShells(true, false);
+      const button = screen.getByRole("button", { name: "Shells" });
+      expect(button.getAttribute("aria-pressed")).toBe("false");
+      await user.click(button);
+      expect(invokeMock).toHaveBeenCalledWith("mobile_admin", {
+        request: { type: "set_shell_tabs", device_id: PIXEL, on: true },
+      });
+      await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    });
+
+    it("cannot be pressed while the host-wide switch keeps shells off every phone", () => {
+      renderShells(false, true);
+      const button = screen.getByRole("button", { name: "Shells" }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("aria-pressed")).toBe("false");
+      expect(button.title).toContain("No shells on the phone");
+    });
+  });
+
   it("disconnecting from an every-phone project keeps it on the other phones", async () => {
     const user = userEvent.setup();
     renderPixel();

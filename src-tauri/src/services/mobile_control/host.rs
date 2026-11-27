@@ -693,7 +693,14 @@ fn off_worker<T>(read: impl FnOnce() -> T) -> T {
 /// The catalog as `phone` may see it: every scope whose per-phone list
 /// leaves it out is gone (`Catalog::for_device`).
 fn catalog(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
-    catalog_unfiltered(state).map(|catalog| catalog.for_device(phone.device_id()))
+    let shells = state.auth.lock_ok().shells_for(phone.device_id());
+    catalog_unfiltered(state).map(|catalog| catalog.for_device(phone.device_id(), shells))
+}
+
+/// Whether `phone` may have shell tabs: the host-wide switch
+/// (`discovery::shells_open`) and its own (`auth::Device::shell_tabs`).
+fn phone_shells(state: &HostState, phone: &Phone) -> bool {
+    shells_open(&state.config.state_dir) && state.auth.lock_ok().shells_for(phone.device_id())
 }
 
 /// Every opted-in scope, whichever phones it is open to. Not for a phone's
@@ -713,14 +720,17 @@ fn catalog_unfiltered(state: &HostState) -> Result<Catalog, (StatusCode, Json<se
 /// The create-tab poll is waiting for a tab the desktop has just been asked to
 /// open, so by definition it is not in the cached snapshot yet.
 fn catalog_fresh(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCode, Json<serde_json::Value>)> {
-    let key = state.auth.lock_ok().host_key().to_vec();
+    let (key, shells) = {
+        let auth = state.auth.lock_ok();
+        (auth.host_key().to_vec(), auth.shells_for(phone.device_id()))
+    };
     off_worker(|| {
         state
             .catalog
             .lock_ok()
             .load_fresh(&state.config.state_dir, &key)
     })
-    .map(|catalog| catalog.for_device(phone.device_id()))
+    .map(|catalog| catalog.for_device(phone.device_id(), shells))
     .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
 }
 
@@ -1477,7 +1487,7 @@ async fn project(
     // agent: the ＋ sheet's agent list would only offer what the create refuses.
     let agents = if public.kind == ScopeKind::Assistant { Vec::new() } else { agents };
     let closed = closed_tab_rows(closed);
-    let archived = archived_tab_rows(&state.config.state_dir, &project.raw_id, project.public.kind == ScopeKind::Assistant);
+    let archived = archived_tab_rows(&state.config.state_dir, &project.raw_id, project.public.kind == ScopeKind::Assistant, phone_shells(&state, &phone));
     let mut timings = timings
         .into_iter()
         .map(|timing| (timing.tmux_session.clone(), timing))
@@ -1572,8 +1582,8 @@ async fn project(
                 // reason and offers only what these allow, never a project type.
                 "folder": project.has_folder(),
                 "create": project.create,
-                // Whether the phone may offer a new shell (`shells_open`).
-                "shells": shells_open(&state.config.state_dir),
+                // Whether the phone may offer a new shell (`phone_shells`).
+                "shells": phone_shells(&state, &phone),
                 // Whether the ＋ sheet offers Desktop (`desktop_images_open`).
                 "desktop_images": desktop_images_open(&state.config.state_dir),
                 // `tmux` where tabs attach through tmux; `unsupported` on a
@@ -1635,17 +1645,16 @@ fn archived_tab_kind(tab: &crate::schema::project::TabEntry) -> Option<CreateTab
 /// Archived fold, read off the state dir so they show with no window too:
 /// the opaque id, the label, the tab kind, the agent's name for an agent tab
 /// and when it was archived. Only what the phone may start is listed: agent
-/// tabs, and shell tabs while shells are on the phone (`shells_open`) — never
+/// tabs, and shell tabs while this phone may have them (`phone_shells`) — never
 /// a viewer, whose label is a file name. The agent is named as the live list
 /// names it (`discovery::agent_label_for`: the registry's name for its CLI,
 /// else the tab's label). No folder, command line or session id crosses. The
 /// assistant's scope has no archive.
-fn archived_tab_rows(state_dir: &std::path::Path, raw_id: &str, assistant: bool) -> Vec<serde_json::Value> {
+fn archived_tab_rows(state_dir: &std::path::Path, raw_id: &str, assistant: bool, shells: bool) -> Vec<serde_json::Value> {
     use crate::services::tab_archive;
     if assistant {
         return Vec::new();
     }
-    let shells = shells_open(state_dir);
     let clean = |text: &str| -> String { text.chars().filter(|c| !c.is_control()).take(MAX_TAB_LABEL).collect() };
     tab_archive::list_at(&tab_archive::archive_path_in(state_dir, raw_id))
         .into_iter()
@@ -1740,7 +1749,7 @@ async fn create_tab(
     }
     // The catalog would never list the new shell, so the create would only
     // time out after leaving an unreachable tab on the desktop.
-    if matches!(request.kind, CreateTabKind::Shell) && !shells_open(&state.config.state_dir) {
+    if matches!(request.kind, CreateTabKind::Shell) && !phone_shells(&state, &phone) {
         return api_error(StatusCode::FORBIDDEN, "shells_off");
     }
     if matches!(request.kind, CreateTabKind::Agent) {
@@ -2151,7 +2160,7 @@ async fn restore_archived_tab(
         return api_error(StatusCode::CONFLICT, "not_attachable");
     };
     match kind {
-        CreateTabKind::Shell if !shells_open(&state.config.state_dir) => {
+        CreateTabKind::Shell if !phone_shells(&state, &phone) => {
             return api_error(StatusCode::FORBIDDEN, "shells_off");
         }
         CreateTabKind::Agent => {
