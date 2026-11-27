@@ -2001,7 +2001,8 @@ label.settings-toggle-card-row {
   min-height: 16px;
   color: var(--text-muted);
   font-size: var(--text-md);
-  word-break: break-all;
+  /* Long paths still wrap; prose no longer splits mid-word ("U/se"). */
+  overflow-wrap: anywhere;
 }
 
 /* A running create/import's steps (ProjectDialog footer). */
