@@ -307,7 +307,7 @@ pgp = { version = "0.20", default-features = false }
 # `rand_core`, so passing its `OsRng` is a type error rather than a version
 # nit. The tree already carries both lines transitively; this names the one the
 # OpenPGP calls need.
-rand = "0.8"
+rand = "0.9"
 
 # ── In-app browser (see docs/browser_plan_b.md, docs/browser_plan_c.md) ──────
 # The URL parser the navigation gate runs on. Named directly rather than reached
