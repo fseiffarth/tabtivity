@@ -6053,6 +6053,7 @@ export const dict: Dict = {
   "terminal.pathLink.openLine": "Ouvrir dans un onglet à la ligne {line}",
   "terminal.pathLink.openFolder": "Ouvrir dans un onglet Fichiers",
   "terminal.pathLink.newSubwindow": "Ctrl+clic : dans une nouvelle sous-fenêtre",
+  "terminal.pathLink.sidePanel": "Ctrl+clic : afficher dans le panneau latéral",
   "terminal.pathLink.showInFiles": "Afficher dans Données",
   "linkBack.label": "Retour à {name}",
   "linkBack.closeHint": "Retour ferme cet onglet",

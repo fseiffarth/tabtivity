@@ -6077,6 +6077,7 @@ export const dict: Dict = {
   "terminal.pathLink.openLine": "In einem Tab bei Zeile {line} öffnen",
   "terminal.pathLink.openFolder": "In einem Dateien-Tab öffnen",
   "terminal.pathLink.newSubwindow": "Strg+Klick: in einem neuen Unterfenster",
+  "terminal.pathLink.sidePanel": "Strg+Klick: in der Seitenleiste zeigen",
   "terminal.pathLink.showInFiles": "Im Daten-Tab zeigen",
   "linkBack.label": "Zurück zu {name}",
   "linkBack.closeHint": "Zurück schließt diesen Tab",

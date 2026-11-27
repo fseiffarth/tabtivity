@@ -6279,6 +6279,7 @@ export const enSource = {
   "terminal.pathLink.openLine": "Open in a tab at line {line}",
   "terminal.pathLink.openFolder": "Open in a Files tab",
   "terminal.pathLink.newSubwindow": "Ctrl+click: in a new subwindow",
+  "terminal.pathLink.sidePanel": "Ctrl+click: show in the side panel",
   "terminal.pathLink.showInFiles": "Show in Data",
   "linkBack.label": "Back to {name}",
   "linkBack.closeHint": "Back closes this tab",

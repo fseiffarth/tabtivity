@@ -63,7 +63,7 @@ import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startK
 import { findSignInDone, findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
 import { isAppLink, parseAppLink } from "../../lib/navigation/appLinks";
 import { openAppLink } from "../layout/openAppLink";
-import { openPathLink } from "../../lib/terminal/pathLinks";
+import { openPathLink, revealInSidePanel, sidePanelRevealOf } from "../../lib/terminal/pathLinks";
 import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
@@ -748,8 +748,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // A file path the program printed opens the file's tab, on the same click
       // (after the double-click window) — no question first, since it only ever
       // opens an in-app viewer of a file inside the tab's folder or project; a
-      // double-click copies it, like a URL. Ctrl (⌘) + click opens it in a new
-      // subwindow.
+      // double-click copies it, like a URL. Ctrl (⌘) + click shows it in the
+      // side panel's file tree — where that panel cannot (a popout, a path
+      // outside the project), in a new subwindow.
       termDisposables.push(registerPathLinkProvider(term, () => pathLinkContextRef.current, {
         activate: (event, entry, at) => {
           if (event.detail > 1) return;
@@ -760,8 +761,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             linkOpenTimer = null;
             const ctx = pathLinkContextRef.current;
             const owner = splitPtyId(id);
+            const linkScope = owner?.scope ?? ROOT_SCOPE;
+            if (newSubwindow && revealInSidePanel(entry, { scope: linkScope, projectId, projectDir: ctx.projectDir })) return;
             openPathLink(entry, at, {
-              scope: owner?.scope ?? ROOT_SCOPE, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled,
+              scope: linkScope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled,
               t: tRef.current, newSubwindow, fromTab: owner?.key,
             });
           }, LINK_OPEN_DELAY_MS);
@@ -770,7 +773,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           hoveredLink = text;
           const ctx = pathLinkContextRef.current;
           const name = relativePathWithin(ctx.projectDir || cwd, entry.path) || entry.path;
-          setPathHover({ left: event.clientX, top: event.clientY - 4, name, line: at.line, isDir: entry.is_dir });
+          const sidePanel = sidePanelRevealOf(entry, { scope: splitPtyId(id)?.scope ?? ROOT_SCOPE, projectId, projectDir: ctx.projectDir }) !== null;
+          setPathHover({ left: event.clientX, top: event.clientY - 4, name, line: at.line, isDir: entry.is_dir, sidePanel });
         },
         leave: () => {
           hoveredLink = null;

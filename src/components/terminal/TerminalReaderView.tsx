@@ -79,7 +79,7 @@ import { PromptGhost } from "./PromptGhost";
 import { ReaderAnswerAlbum, ReaderAnswerFilesContext, useReaderAnswerFiles } from "./ReaderAnswerFiles";
 import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
-import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
+import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, revealInSidePanel, sidePanelRevealOf, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { isPathWithin, relativePathWithin, resolvePath } from "../../lib/paths";
 import { NAMES } from "../../lib/brand";
@@ -2237,8 +2237,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const ctx = pathContextRef.current;
     setPathHover(null);
     const at = { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined };
-    // A file opens in the Files tab; a folder, or Ctrl+click, still as a tab —
-    // except a file no in-app viewer shows, which has no tab to open.
+    // Ctrl+click shows it in the side panel's file tree where that panel can.
+    // Otherwise a file opens in the Files tab; a folder, or Ctrl+click, still
+    // as a tab — except a file no in-app viewer shows, which has no tab to open.
+    if (newSubwindow && revealInSidePanel(entry, { scope, projectId, projectDir: ctx.projectDir })) return;
     if (onShowFiles && !entry.is_dir && (!newSubwindow || !internalViewerFor(entry, ctx.disabled))) {
       showInFiles(entry, at);
       return;
@@ -2336,6 +2338,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       line: Number(el.dataset.line) || undefined,
       isDir: entry.is_dir,
       viewless: !entry.is_dir && !internalViewerFor(entry, pathContextRef.current.disabled),
+      sidePanel: sidePanelRevealOf(entry, { scope, projectId, projectDir: pathContextRef.current.projectDir }) !== null,
     });
   };
   const onPathOut = (event: ReactMouseEvent) => {

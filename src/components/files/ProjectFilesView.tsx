@@ -372,6 +372,9 @@ export interface ProjectFilesViewProps {
    *  Unset (the docked compact column) → hidden, not remembered: that column
    *  has no toolbar to bring the section back once closed. */
   downloadsHost?: DownloadsHost;
+  /** The side panel's viewer: its trees take an agent tab's Ctrl+click reveal
+   *  (`stores/sidePanelReveal`). */
+  takeReveals?: boolean;
 }
 
 export function ProjectFilesView({
@@ -399,6 +402,7 @@ export function ProjectFilesView({
   onViewChange,
   assistant,
   downloadsHost,
+  takeReveals = false,
 }: ProjectFilesViewProps) {
   const t = useT();
   // Sessions/Jobs/workspaces ask their questions in the panel's own chrome, the
@@ -3395,6 +3399,7 @@ export function ProjectFilesView({
           onSearchOpenChange={setSearchOpen}
           refreshNonce={refreshNonce}
           toolbarActions={filesActions}
+          takeReveals={takeReveals}
         />
       )}
       {view === "remarks" && projectId && (

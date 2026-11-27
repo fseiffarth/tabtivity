@@ -15,6 +15,10 @@ import { openFileEntry } from "../files/openFileEntry";
 import { openProjectFilesTab } from "../tabs/openProjectFilesTab";
 import { fileTabMatcher } from "../tabs/fileTab";
 import { useTabsStore } from "../../stores/tabs";
+import { useProjectsStore } from "../../stores/projects";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { sideChatHolder, useReaderSideChatStore } from "../../stores/agents/readerSideChat";
+import { requestSidePanelReveal } from "../../stores/sidePanelReveal";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { linkBackKey, useLinkBackStore } from "../../stores/linkBack";
 import { relativePathWithin } from "../paths";
@@ -154,4 +158,36 @@ export function openPathLink(
     links.set(ctx.scope, opened.key, { from: ctx.fromTab, close: earlier?.close ?? !prior });
   }
   if (at.line) useEditorJumpStore.getState().requestJump(entry.path, at.line, at.column ?? 0);
+}
+
+/** Where a Ctrl (⌘) + click on a path link shows it: the project-relative path
+ *  for the side panel's file tree, or null when that panel cannot show it — a
+ *  popout (no side panel), a tab outside the project scope the panel shows (a
+ *  root tab over a project, a box), the panel covered by a Reader's chat
+ *  (`reader_side_chat`), or a path outside the project's own folder. The
+ *  caller then opens the link as before (`openPathLink` `newSubwindow`). */
+export function sidePanelRevealOf(
+  entry: FileEntry,
+  ctx: { scope: string; projectId: string | null; projectDir: string },
+): string | null {
+  if (!ctx.projectId || !ctx.projectDir || isDetachedWindow()) return null;
+  // A project's own scope, shown now: a box's panel is an accordion whose
+  // member may be folded or on its Git view.
+  if (ctx.scope !== ctx.projectId || useTabsStore.getState().scope !== ctx.scope) return null;
+  if (useProjectsStore.getState().activeId !== ctx.projectId) return null;
+  if (sideChatHolder(useReaderSideChatStore.getState())) return null;
+  return relativePathWithin(ctx.projectDir, entry.path);
+}
+
+/** Show a path link in the side panel's file tree (`sidePanelRevealOf`):
+ *  opens the panel on its Files view, the folder listed / the file selected.
+ *  False when the panel cannot show it. */
+export function revealInSidePanel(
+  entry: FileEntry,
+  ctx: { scope: string; projectId: string | null; projectDir: string },
+): boolean {
+  const rel = sidePanelRevealOf(entry, ctx);
+  if (rel === null || !ctx.projectId) return false;
+  requestSidePanelReveal(ctx.projectId, rel, entry.is_dir);
+  return true;
 }

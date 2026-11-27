@@ -6051,6 +6051,7 @@ export const dict: Dict = {
   "terminal.pathLink.openLine": "Abrir en una pestaña en la línea {line}",
   "terminal.pathLink.openFolder": "Abrir en una pestaña de archivos",
   "terminal.pathLink.newSubwindow": "Ctrl+clic: en una nueva subventana",
+  "terminal.pathLink.sidePanel": "Ctrl+clic: mostrar en el panel lateral",
   "terminal.pathLink.showInFiles": "Mostrar en Datos",
   "linkBack.label": "Volver a {name}",
   "linkBack.closeHint": "Volver cierra esta pestaña",

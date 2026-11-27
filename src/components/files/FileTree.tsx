@@ -21,6 +21,7 @@ import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { useActivityStore } from "../../stores/activity";
 import { useFileClipboardStore } from "../../stores/fileClipboard";
 import { type FileEntry, type InternalViewer, fmtSize, fmtModified, visibleEntries, internalViewerFor, disabledViewers, fileEntriesEqual, stringMapsEqual, nextSelection } from "../../lib/viewers/fileUtils";
+import { useSidePanelRevealStore } from "../../stores/sidePanelReveal";
 import {
   dropFileTreeSnapshot,
   readFileTreeSnapshot,
@@ -216,7 +217,13 @@ interface Props {
    *  total on the left, actions on the right. Omitted by hosts that draw their
    *  actions elsewhere (a box's member roots, a bare tree). */
   toolbarEnd?: React.ReactNode;
+  /** The side panel's tree: takes this project's pending reveal (an agent
+   *  tab's Ctrl+click on a path link, `stores/sidePanelReveal`). */
+  takeReveals?: boolean;
 }
+
+/** How long a reveal waits for its entry to show up in the folder's listing. */
+const REVEAL_WAIT_MS = 4000;
 
 /** `rowRect` is the right-clicked row's bounding box, captured at open time, so
  *  a glowing frame can float onto it and show which entry the menu targets. */
@@ -735,6 +742,7 @@ export function FileTree({
   sharedSearch,
   refreshNonce,
   toolbarEnd,
+  takeReveals = false,
 }: Props) {
   const t = useT();
   // Non-null inside a detached popout: replaces the main window's CenterPanel
@@ -1261,17 +1269,33 @@ export function FileTree({
     if (parent !== relPath) load(parent);
   }
 
+  // An agent tab's Ctrl+click on a path link asked the side panel to show it.
+  const sideReveal = useSidePanelRevealStore((s) =>
+    takeReveals && projectId && s.pending?.projectId === projectId ? s.pending : null,
+  );
+  useEffect(() => {
+    if (!sideReveal || !active || !projectId) return;
+    const ask = useSidePanelRevealStore.getState().take(projectId);
+    if (ask) revealPath(ask.rel, ask.isDir);
+    // `revealPath` reads only setters and the current `relPath`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sideReveal, active, projectId]);
+
   // Resolve a pending reveal once the target folder is listed: select the entry
-  // and scroll its row into view, then clear the request. Gives up (clears) if
-  // the entry isn't in the listing — e.g. hidden by a filter.
+  // and scroll its row into view, then clear the request. A folder painted from
+  // its last snapshot may not hold a file made since (an agent's new file), so
+  // a miss waits for the fresh listing (or the watch's re-list) and gives up
+  // after `REVEAL_WAIT_MS` — e.g. an entry hidden by a filter.
+  useEffect(() => {
+    if (!pendingReveal) return;
+    const timer = setTimeout(() => setPendingReveal(null), REVEAL_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [pendingReveal]);
   useEffect(() => {
     if (!pendingReveal) return;
     if (pendingReveal.parent !== relPath) return; // still navigating
     const entry = entries.find((e) => e.name === pendingReveal.name);
-    if (!entry) {
-      setPendingReveal(null);
-      return;
-    }
+    if (!entry) return;
     anchorRef.current = entry.path;
     setSelected(new Set([entry.path]));
     const path = entry.path;

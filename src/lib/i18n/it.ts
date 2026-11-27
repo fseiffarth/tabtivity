@@ -6051,6 +6051,7 @@ export const dict: Dict = {
   "terminal.pathLink.openLine": "Apri in una scheda alla riga {line}",
   "terminal.pathLink.openFolder": "Apri in una scheda File",
   "terminal.pathLink.newSubwindow": "Ctrl+clic: in una nuova sottofinestra",
+  "terminal.pathLink.sidePanel": "Ctrl+clic: mostra nel pannello laterale",
   "terminal.pathLink.showInFiles": "Mostra in Dati",
   "linkBack.label": "Torna a {name}",
   "linkBack.closeHint": "Indietro chiude questa scheda",
