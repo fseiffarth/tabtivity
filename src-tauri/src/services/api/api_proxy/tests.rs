@@ -1872,3 +1872,32 @@ async fn a_custom_endpoint_is_checked_with_its_model_listing_before_a_key_is_sav
     }
     assert_eq!(seen.requests.lock_ok().len(), before);
 }
+
+#[test]
+fn revoking_a_provider_takes_only_its_grants() {
+    let slot2 = issue_provider_for_test(Provider::Custom(6), "p1", "tab-rev-a").unwrap();
+    let slot2_other_tab = issue_provider_for_test(Provider::Custom(6), "p1", "tab-rev-b").unwrap();
+    let slot3 = issue_provider_for_test(Provider::Custom(7), "p1", "tab-rev-a").unwrap();
+    let built_in = issue_provider_for_test(Provider::OpenAi, "p1", "tab-rev-a").unwrap();
+    revoke_provider(Provider::Custom(6));
+    assert!(!token_live(&slot2));
+    assert!(!token_live(&slot2_other_tab));
+    assert!(token_live(&slot3));
+    assert!(token_live(&built_in));
+    // The slot's next grant is a fresh token, never the revoked one.
+    let again = issue_provider_for_test(Provider::Custom(6), "p1", "tab-rev-a").unwrap();
+    assert_ne!(again, slot2);
+    for token in [again, slot3, built_in] {
+        grants().lock_ok().remove(&token);
+    }
+}
+
+#[test]
+fn the_loopback_client_ignores_a_system_proxy_and_the_https_one_keeps_it() {
+    // A built `reqwest::Client` prints its `proxies` only when it has some;
+    // one that honours the environment always holds the system matcher.
+    let has_proxies = |https_only: bool| format!("{:?}", client_builder(https_only).build().unwrap()).contains("proxies");
+    assert!(!has_proxies(false), "plain HTTP to the loopback must not go to HTTP_PROXY");
+    assert!(has_proxies(true), "the HTTPS client keeps the system proxy");
+    assert!(!format!("{:?}", client(false).unwrap()).contains("proxies"));
+}

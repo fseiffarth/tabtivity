@@ -91,8 +91,10 @@ pub fn opencode_id(provider: Provider) -> &'static str {
         Provider::Anthropic => "anthropic",
         Provider::Gemini => "google",
         Provider::OpenAi => "openai",
-        // A2: a custom slot has no models.dev catalog entry; its models are
-        // the endpoint's own listing (`CustomEndpoint::models`).
+        // A custom slot has no models.dev catalog entry and nothing to hide:
+        // its models are the endpoint's own saved listing
+        // (`CustomEndpoint::models`), put into its block at spawn
+        // (`agent_api_keys::custom_block`). Nothing here is fetched for it.
         Provider::Custom(_) => provider.opencode_custom_id().unwrap_or("tt-custom-0"),
     }
 }
@@ -201,7 +203,7 @@ pub fn extra(provider: Provider, catalog: &[CatalogModel], listed: &[String]) ->
     let chat = |id: &str| match provider {
         Provider::Anthropic => id.starts_with("claude-"),
         Provider::Gemini => id.starts_with("gemini-") && !id.contains("embedding") && !id.contains("image") && !id.contains("tts"),
-        // A2: a custom endpoint's models are all its own; nothing to add to.
+        // A custom endpoint's models are all its own: nothing to add to.
         Provider::Custom(_) => false,
         Provider::OpenAi => {
             let o_series = id.strip_prefix('o').is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()));
@@ -225,7 +227,7 @@ pub fn extra(provider: Provider, catalog: &[CatalogModel], listed: &[String]) ->
 pub fn extra_for(providers: &[Provider]) -> HashMap<Provider, Vec<String>> {
     let Store { mut catalog, mut keys } = load();
     let mut out = HashMap::new();
-    for &provider in providers {
+    for &provider in providers.iter().filter(|p| !p.is_custom()) {
         let models = catalog.as_mut().and_then(|c| c.providers.remove(opencode_id(provider)));
         if let (Some(models), Some(listed)) = (models, keys.remove(provider.id())) {
             let ids = extra(provider, &models, &listed.ids);
@@ -242,6 +244,9 @@ pub fn extra_for(providers: &[Provider]) -> HashMap<Provider, Vec<String>> {
 /// background [`refresh`] when any of those is missing or older than
 /// [`FRESH`]. Reads one small file.
 pub fn hidden_for(providers: &[Provider]) -> HashMap<Provider, Vec<String>> {
+    // A custom slot has no catalog entry: nothing to hide, nothing to fetch.
+    let providers: Vec<Provider> = providers.iter().copied().filter(|p| !p.is_custom()).collect();
+    let providers = providers.as_slice();
     let Store { mut catalog, mut keys } = load();
     let now = crate::clock::now_secs();
     let catalog_stale = catalog.as_ref().is_none_or(|c| stale(c.fetched, now));
@@ -272,6 +277,7 @@ pub fn forget(provider: Provider) {
 /// stale, once at a time, in the background. A failed fetch keeps the old
 /// list (or none) and is tried again by the next spawn.
 pub fn refresh(providers: Vec<Provider>) {
+    let providers: Vec<Provider> = providers.into_iter().filter(|p| !p.is_custom()).collect();
     if REFRESHING.swap(true, Ordering::AcqRel) {
         return;
     }

@@ -322,6 +322,21 @@ fn revoke_all() {
     grants().lock_ok().clear();
 }
 
+/// Revoke every grant for `provider` at once. A custom slot being removed
+/// (or about to be handed out again) calls this: a tab started before still
+/// holds a token for the slot number, and it must never send to an endpoint
+/// added under that number later.
+pub fn revoke_provider(provider: Provider) {
+    grants().lock_ok().retain(|_, h| h.grant.provider != provider);
+}
+
+/// A grant for `provider` with no key, upstream or tmux session behind it,
+/// for the revocation tests.
+#[cfg(test)]
+pub(crate) fn issue_provider_for_test(provider: Provider, scope: &str, tab: &str) -> Option<String> {
+    issue_grant(Grant { provider, scope: scope.to_string(), tab: tab.to_string(), tmux: None, admin: None })
+}
+
 // ---------------------------------------------------------------------------
 // Keys (cached in memory; the keychain read is off the request path)
 
@@ -643,7 +658,17 @@ impl ProxyState {
 
 fn client(https_only: bool) -> Result<reqwest::Client, String> {
     crate::services::mail_engine::install_crypto_provider();
-    reqwest::Client::builder()
+    client_builder(https_only).build().map_err(|e| format!("API proxy: {e}"))
+}
+
+/// The client's settings. The plain-HTTP (loopback) client, which a custom
+/// endpoint on this machine and the server's key broker use, never honours
+/// `HTTP_PROXY`/`ALL_PROXY` from the app's environment: with one set and no
+/// `NO_PROXY` for the loopback, the bearer key would travel in clear to that
+/// proxy. The HTTPS client keeps the system proxy (an institute's network
+/// may need one; the key rides CONNECT there).
+fn client_builder(https_only: bool) -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder()
         // The key must never follow a redirect to another host.
         .redirect(reqwest::redirect::Policy::none())
         .https_only(https_only)
@@ -653,9 +678,12 @@ fn client(https_only: bool) -> Result<reqwest::Client, String> {
         .no_gzip()
         .no_brotli()
         .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(READ_IDLE)
-        .build()
-        .map_err(|e| format!("API proxy: {e}"))
+        .read_timeout(READ_IDLE);
+    if https_only {
+        builder
+    } else {
+        builder.no_proxy()
+    }
 }
 
 /// How long [`check_key`] waits for the provider before saving untested.

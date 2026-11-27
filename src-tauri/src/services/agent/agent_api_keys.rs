@@ -26,6 +26,10 @@
 //! ledger row of its own. The base URL is checked when saved and again at
 //! every use ([`validate_base_url`]); [`add_custom`], [`refresh_custom`] and
 //! [`remove_custom`] are the one way in and out. A hosted server has none.
+//! Each configured slot is a route of the `opencode` CLI only
+//! ([`routes_with`], [`CUSTOM_ROUTES`]): a proxy token under a per-slot
+//! carrier and variable, and a block `provider["tt-custom-<n>"]` in OpenCode's
+//! inline config ([`custom_block`]) whose `apiKey` is `{env:<variable>}`.
 //!
 //! Rules:
 //!
@@ -199,7 +203,7 @@ impl Provider {
             Provider::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
             Provider::OpenAi => &["OPENAI_API_KEY", "CODEX_API_KEY"],
             // A custom endpoint has no credential name of the user's to
-            // shadow: its token variable is its own (A2).
+            // shadow: its token and base variables are its own (`CUSTOM_TOKEN_ENV`).
             Provider::Custom(_) => &[],
         }
     }
@@ -223,7 +227,60 @@ pub const OPENAI_BASE_ENV: &str = "OPENAI_BASE_URL";
 /// `agent_exec::targets`). Never in `tmux_local::SECRET_ENV` — those slots
 /// stay set on the user's own tmux server, where a common name would cost
 /// their own sessions the variable.
-pub const ENV_VARS: &[&str] = &[ANTHROPIC_TOKEN_ENV, GEMINI_TOKEN_ENV, OPENAI_TOKEN_ENV];
+pub const ENV_VARS: &[&str] = &[
+    ANTHROPIC_TOKEN_ENV,
+    GEMINI_TOKEN_ENV,
+    OPENAI_TOKEN_ENV,
+    CUSTOM_TOKEN_ENV[0],
+    CUSTOM_TOKEN_ENV[1],
+    CUSTOM_TOKEN_ENV[2],
+    CUSTOM_TOKEN_ENV[3],
+    CUSTOM_TOKEN_ENV[4],
+    CUSTOM_TOKEN_ENV[5],
+    CUSTOM_TOKEN_ENV[6],
+    CUSTOM_TOKEN_ENV[7],
+];
+
+/// The variable OpenCode's `{env:…}` reference reads a custom slot's proxy
+/// token from, per slot (`tt-custom-<n>`'s `apiKey`). Not app-named, unlike
+/// its carrier: `agent_exec` maps a carrier to the name after
+/// [`crate::services::agent_exec::CARRIER_PREFIX`], as for every built-in.
+pub const CUSTOM_TOKEN_ENV: [&str; MAX_CUSTOM as usize] = [
+    "CUSTOM_ENDPOINT_KEY_1",
+    "CUSTOM_ENDPOINT_KEY_2",
+    "CUSTOM_ENDPOINT_KEY_3",
+    "CUSTOM_ENDPOINT_KEY_4",
+    "CUSTOM_ENDPOINT_KEY_5",
+    "CUSTOM_ENDPOINT_KEY_6",
+    "CUSTOM_ENDPOINT_KEY_7",
+    "CUSTOM_ENDPOINT_KEY_8",
+];
+
+/// A custom slot's proxy base URL while the spawn is assembled: OpenCode reads
+/// no such variable, so [`route_opencode`] moves it into the inline config's
+/// `baseURL` and removes it again.
+const CUSTOM_BASE_ENV: [&str; MAX_CUSTOM as usize] = [
+    crate::app_env!("CUSTOM_ENDPOINT_BASE_1"),
+    crate::app_env!("CUSTOM_ENDPOINT_BASE_2"),
+    crate::app_env!("CUSTOM_ENDPOINT_BASE_3"),
+    crate::app_env!("CUSTOM_ENDPOINT_BASE_4"),
+    crate::app_env!("CUSTOM_ENDPOINT_BASE_5"),
+    crate::app_env!("CUSTOM_ENDPOINT_BASE_6"),
+    crate::app_env!("CUSTOM_ENDPOINT_BASE_7"),
+    crate::app_env!("CUSTOM_ENDPOINT_BASE_8"),
+];
+
+/// The carriers of [`CUSTOM_TOKEN_ENV`], slot for slot.
+pub const CUSTOM_CARRIER: [&str; MAX_CUSTOM as usize] = [
+    crate::app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_1"),
+    crate::app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_2"),
+    crate::app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_3"),
+    crate::app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_4"),
+    crate::app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_5"),
+    crate::app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_6"),
+    crate::app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_7"),
+    crate::app_env!("AGENT_SECRET_CUSTOM_ENDPOINT_KEY_8"),
+];
 
 // The carriers of [`ENV_VARS`], index for index: `agent_exec::CARRIER_PREFIX`
 // and the variable's name (a test holds them to it). `SECRET` in the name
@@ -235,7 +292,19 @@ pub const OPENAI_CARRIER: &str = crate::app_env!("AGENT_SECRET_OPENAI_API_KEY");
 /// Every variable [`inject_env`] can set a secret under on Linux and macOS.
 /// `tmux_local::SECRET_ENV` lists the same consts (a test holds the two
 /// together), so none rides a tmux argv.
-pub const CARRIERS: &[&str] = &[ANTHROPIC_CARRIER, GEMINI_CARRIER, OPENAI_CARRIER];
+pub const CARRIERS: &[&str] = &[
+    ANTHROPIC_CARRIER,
+    GEMINI_CARRIER,
+    OPENAI_CARRIER,
+    CUSTOM_CARRIER[0],
+    CUSTOM_CARRIER[1],
+    CUSTOM_CARRIER[2],
+    CUSTOM_CARRIER[3],
+    CUSTOM_CARRIER[4],
+    CUSTOM_CARRIER[5],
+    CUSTOM_CARRIER[6],
+    CUSTOM_CARRIER[7],
+];
 
 /// Whether a token travels under its carrier: everywhere but Windows.
 const CARRY: bool = cfg!(unix);
@@ -295,6 +364,38 @@ const CLI_ROUTES: &[(&str, &[Route])] = &[
     ),
 ];
 
+/// The route of custom slot index `i` (slot `i + 1`): its own token and base
+/// variables, from the static arrays.
+const fn custom_route(i: usize) -> Route {
+    Route { provider: Provider::Custom(i as u8 + 1), token_var: CUSTOM_TOKEN_ENV[i], base_var: CUSTOM_BASE_ENV[i] }
+}
+
+/// The routes of the eight custom slots. Only the `opencode` CLI has them, and
+/// only the ones whose slot is configured ([`routes_with`]): `CLI_ROUTES`
+/// stays the built-ins'.
+const CUSTOM_ROUTES: [Route; MAX_CUSTOM as usize] = [
+    custom_route(0),
+    custom_route(1),
+    custom_route(2),
+    custom_route(3),
+    custom_route(4),
+    custom_route(5),
+    custom_route(6),
+    custom_route(7),
+];
+
+/// The routes of CLI `id` with the configured custom slots: `CLI_ROUTES`' for
+/// the built-ins, then (OpenCode only) one per endpoint of `endpoints`, by
+/// slot. A slot that is not configured is no route, so it never costs a
+/// keychain read or a grant. Pure.
+fn routes_with(id: &str, endpoints: &[CustomEndpoint]) -> Vec<Route> {
+    let mut routes = routes_of(id).to_vec();
+    if id == "opencode" {
+        routes.extend(CUSTOM_ROUTES.iter().filter(|r| r.provider.slot().is_some_and(|n| endpoints.iter().any(|e| e.slot == n))));
+    }
+    routes
+}
+
 /// The base-URL variable that rides beside token carrier `carrier`, and the
 /// provider it points at — for a spawn that has to drop the token again
 /// (tmux < 3.2) and must not leave the CLI pointed at a proxy it holds no
@@ -303,6 +404,7 @@ pub fn base_of_carrier(carrier: &str) -> Option<(&'static str, Provider)> {
     CLI_ROUTES
         .iter()
         .flat_map(|(_, routes)| routes.iter())
+        .chain(CUSTOM_ROUTES.iter())
         .find(|r| carrier_of(r.token_var) == carrier)
         .map(|r| (r.base_var, r.provider))
 }
@@ -740,10 +842,14 @@ fn add_custom_blocking(draft: &CustomDraft, key: &str, models: Vec<String>) -> R
     forget_endpoints();
     let endpoint = endpoint?;
     let provider = Provider::Custom(endpoint.slot);
+    // A slot that is new here has no grants: one a hand edit of the settings
+    // took out from under a running tab would still hold a token for it.
+    crate::services::api_proxy::revoke_provider(provider);
     if let Err(e) = set_key(provider, Some(key), None) {
         // No half-added endpoint: without its key it could never run.
         let _ = remove_custom_at(&path, endpoint.slot);
         forget_endpoints();
+        crate::services::api_proxy::revoke_provider(provider);
         return Err(e);
     }
     Ok(endpoint)
@@ -752,12 +858,27 @@ fn add_custom_blocking(draft: &CustomDraft, key: &str, models: Vec<String>) -> R
 /// Remove custom slot `slot`: its key from the keychain first (a locked
 /// keyring refuses, with its own message, and nothing changes), then the
 /// endpoint and its limit from the settings. Its ledger entry stays for the
-/// rest of the month.
+/// rest of the month. Every proxy token the slot ever got is revoked at once:
+/// a tab that started before must never send to an endpoint added under the
+/// same number later.
 pub fn remove_custom(slot: u8) -> Result<(), String> {
     refuse_on_server()?;
+    remove_custom_in(&crate::storage::settings_path(), slot, |provider| set_key(provider, None, None))
+}
+
+/// [`remove_custom`] over a settings file, with the way the key is cleared
+/// given: the keychain in production.
+fn remove_custom_in(
+    path: &std::path::Path,
+    slot: u8,
+    clear_key: impl FnOnce(Provider) -> Result<(), String>,
+) -> Result<(), String> {
     let provider = Provider::custom(slot).ok_or_else(|| "unknown custom endpoint".to_string())?;
-    set_key(provider, None, None)?;
-    let result = remove_custom_at(&crate::storage::settings_path(), slot).map(|_| ());
+    clear_key(provider)?;
+    // Right after the key goes, not after the write: the slot has no key to
+    // send with from here on, and its grants must not outlive that.
+    crate::services::api_proxy::revoke_provider(provider);
+    let result = remove_custom_at(path, slot).map(|_| ());
     forget_endpoints();
     result
 }
@@ -802,6 +923,16 @@ fn with_pick(mut enabled: Vec<String>, cmd: &str, pick: Option<bool>) -> Vec<Str
     enabled
 }
 
+/// The custom endpoints a spawn may route to: those of `settings`, none on a
+/// hosted server (as [`custom_endpoints`]).
+fn spawn_endpoints(settings: &crate::schema::Settings) -> Vec<CustomEndpoint> {
+    if crate::services::server::is_server() {
+        Vec::new()
+    } else {
+        custom_endpoints_in(settings)
+    }
+}
+
 /// Whether CLI `cmd` is in the table and takes the key on this spawn: the
 /// tab's `pick` when it made one, else switched on. Settings only, no
 /// keychain.
@@ -822,7 +953,10 @@ pub fn keyed(cmd: &str, pick: Option<bool>, settings: &crate::schema::Settings) 
     applies_to(cmd, pick, settings)
         && crate::services::api_proxy::running()
         && cli_of(cmd).is_some_and(|id| {
-            routes_of(id).iter().any(|r| crate::services::api_proxy::key_for(r.provider).is_some())
+            // A custom slot counts as one of OpenCode's keys.
+            routes_with(id, &spawn_endpoints(settings))
+                .iter()
+                .any(|r| crate::services::api_proxy::key_for(r.provider).is_some())
         })
 }
 
@@ -851,9 +985,10 @@ pub struct Binding<'a> {
 /// otherwise each of the CLI's routes the user did not set gets
 /// `grant(provider)` — a proxy token and base URL — when that has one: the
 /// token under its carrier with `carry`, else under the CLI's own name, the
-/// base URL under the CLI's variable. Returns the names it set.
+/// base URL under the CLI's variable. Returns the names it set. OpenCode's
+/// routes also include one per custom slot of `endpoints` ([`routes_with`]).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn inject_env_with(
+pub(crate) fn inject_env_at(
     cmd: &str,
     subcommand: bool,
     local_model: bool,
@@ -863,6 +998,7 @@ pub(crate) fn inject_env_with(
     carry: bool,
     ambient: impl Fn(&str) -> bool,
     mut grant: impl FnMut(Provider) -> Option<(String, String)>,
+    endpoints: &[CustomEndpoint],
 ) -> Vec<&'static str> {
     if local_model || subcommand {
         return Vec::new();
@@ -874,7 +1010,7 @@ pub(crate) fn inject_env_with(
         return Vec::new();
     }
     let mut set = Vec::new();
-    for route in routes_of(id) {
+    for route in &routes_with(id, endpoints) {
         if user_set(route, env, &ambient) {
             continue;
         }
@@ -887,6 +1023,24 @@ pub(crate) fn inject_env_with(
         }
     }
     set
+}
+
+/// [`inject_env_at`] for the built-in providers only: no custom slot is
+/// configured. The built-ins' tests use it.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn inject_env_with(
+    cmd: &str,
+    subcommand: bool,
+    local_model: bool,
+    enabled: &[String],
+    admin: Option<&'static str>,
+    env: &mut HashMap<String, String>,
+    carry: bool,
+    ambient: impl Fn(&str) -> bool,
+    grant: impl FnMut(Provider) -> Option<(String, String)>,
+) -> Vec<&'static str> {
+    inject_env_at(cmd, subcommand, local_model, enabled, admin, env, carry, ambient, grant, &[])
 }
 
 /// Point a local agent session of `cmd` at the proxy for its keyed providers.
@@ -916,16 +1070,18 @@ pub fn inject_env(
     }
     // Nothing is logged: in the `--agent-shim` process stderr is the user's
     // own terminal, and a token is a secret too.
-    inject_env_with(
+    let settings = settings();
+    inject_env_at(
         cmd,
         subcommand,
         local_model,
-        &with_pick(enabled_clis(), cmd, pick),
+        &with_pick(settings.agent_api_key_clis.clone().unwrap_or_default(), cmd, pick),
         admin,
         env,
         CARRY,
         |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()),
         |provider| crate::services::api_proxy::issue(provider, admin, binding.scope, binding.tab, binding.tmux),
+        &spawn_endpoints(&settings),
     )
 }
 
@@ -960,8 +1116,10 @@ pub fn inject_launch(opts: &mut crate::terminal::PtyOptions, admin: Option<&'sta
         }
         Some("opencode") if !injected.is_empty() => {
             let ambient = std::env::var(OPENCODE_INLINE_ENV).ok();
+            let endpoints = spawn_endpoints(&settings());
             // The cached listings are the user's own keys': an administrator's
-            // key hides nothing.
+            // key hides nothing. A custom slot has no catalog to hide from
+            // (`routes_of` lists the built-ins only).
             let picker = match admin {
                 None => {
                     let keyed: Vec<Provider> =
@@ -973,7 +1131,7 @@ pub fn inject_launch(opts: &mut crate::terminal::PtyOptions, admin: Option<&'sta
                 }
                 Some(_) => Picker::default(),
             };
-            route_opencode(&mut opts.env, &injected, ambient.as_deref(), &picker);
+            route_opencode_with(&mut opts.env, &injected, ambient.as_deref(), &picker, &endpoints);
         }
         _ => {}
     }
@@ -990,9 +1148,9 @@ fn opencode_provider(provider: Provider) -> (&'static str, &'static str) {
         Provider::Anthropic => ("anthropic", "/v1"),
         Provider::Gemini => ("google", "/v1beta"),
         Provider::OpenAi => ("openai", "/v1"),
-        // A2: a custom slot is not routed through `CLI_ROUTES` yet; its block
-        // (`tt-custom-<n>`, the proxy base as `baseURL`, no path suffix) is
-        // built by the OpenCode spawn wiring.
+        // A custom slot's block (`tt-custom-<n>`, the proxy base as `baseURL`
+        // with no path suffix: the proxy's paths start at `/chat/completions`)
+        // is built by [`custom_block`].
         Provider::Custom(_) => (provider.opencode_custom_id().unwrap_or("tt-custom-0"), ""),
     }
 }
@@ -1007,12 +1165,17 @@ fn opencode_provider(provider: Provider) -> (&'static str, &'static str) {
 /// it — OpenCode 2's own `providers` block too — and every one does when
 /// `existing` is not a JSON object. A routed provider's catalog models its
 /// key cannot call (`picker`) are hidden as well ([`hide_in_picker`]).
+/// A custom slot of `keyed` becomes the block `provider["tt-custom-<n>"]`
+/// ([`custom_block`], from its entry in `endpoints`); a config that already
+/// has a block of that name (either shape), or no entry for the slot, leaves
+/// it out.
 /// Returns the config when something was added, and the providers left out.
 /// Pure.
 fn opencode_inline_with(
     existing: Option<&str>,
     keyed: &[(Provider, &str, String)],
     picker: &Picker,
+    endpoints: &[CustomEndpoint],
 ) -> (Option<String>, Vec<Provider>) {
     let all = || keyed.iter().map(|(p, _, _)| *p).collect();
     let mut config = match existing.map(serde_json::from_str::<serde_json::Value>) {
@@ -1027,6 +1190,22 @@ fn opencode_inline_with(
     let mut left_out = Vec::new();
     for (provider, token_var, base) in keyed {
         let (name, path) = opencode_provider(*provider);
+        if let Provider::Custom(slot) = provider {
+            let taken = config["provider"].get(name).is_some() || config["providers"].get(name).is_some();
+            let Some(endpoint) = endpoints.iter().find(|e| e.slot == *slot).filter(|_| !taken) else {
+                left_out.push(*provider);
+                continue;
+            };
+            let Some(providers) = config
+                .as_object_mut()
+                .map(|root| root.entry("provider").or_insert_with(|| serde_json::json!({})))
+                .and_then(serde_json::Value::as_object_mut)
+            else {
+                return (None, all());
+            };
+            providers.insert(name.to_string(), custom_block(endpoint, token_var, base));
+            continue;
+        }
         if native_claimed(&config, name) {
             left_out.push(*provider);
             continue;
@@ -1063,6 +1242,25 @@ fn opencode_inline_with(
         only_keyed_providers(&mut config, keyed);
     }
     (added.then(|| config.to_string()), left_out)
+}
+
+/// OpenCode's block for custom endpoint `endpoint`: an OpenAI-compatible
+/// provider (`@ai-sdk/openai-compatible`) at the proxy's `base`, the key
+/// named by `{env:<token_var>}` — never the token — and `includeUsage`, which
+/// puts `stream_options.include_usage` on every streamed request (the proxy
+/// refuses one without it, its `NoUsage` refusal).
+/// Its models are the saved listing, each under its exact id. Checked with
+/// OpenCode 2.4.2: the legacy `provider` block is all OpenCode 2 needs, there
+/// is no `providers` twin to add.
+fn custom_block(endpoint: &CustomEndpoint, token_var: &str, base: &str) -> serde_json::Value {
+    let models: serde_json::Map<String, serde_json::Value> =
+        endpoint.models.iter().map(|id| (id.clone(), serde_json::json!({ "name": id }))).collect();
+    serde_json::json!({
+        "npm": "@ai-sdk/openai-compatible",
+        "name": endpoint.label,
+        "options": { "baseURL": base, "apiKey": format!("{{env:{token_var}}}"), "includeUsage": true },
+        "models": models,
+    })
 }
 
 /// A keyed tab runs on the key, never on OpenCode's own logins: without this
@@ -1139,15 +1337,26 @@ fn hide_in_picker(
 /// Tabtivity's Ollama models — or else (`ambient`) the user's own from
 /// Tabtivity's environment. A route that config keeps for itself loses its
 /// token and base URL again, so the CLI stays on what the user set.
-fn route_opencode(env: &mut HashMap<String, String>, injected: &[&'static str], ambient: Option<&str>, picker: &Picker) {
-    let routes = routes_of("opencode");
+///
+/// A custom slot of `endpoints` is such a route too: its per-slot base
+/// variable ([`CUSTOM_BASE_ENV`]) only carries the proxy URL here, and is
+/// removed from `env` again whatever happens, so it never reaches the CLI
+/// except as its block's `baseURL`.
+fn route_opencode_with(
+    env: &mut HashMap<String, String>,
+    injected: &[&'static str],
+    ambient: Option<&str>,
+    picker: &Picker,
+    endpoints: &[CustomEndpoint],
+) {
+    let routes = routes_with("opencode", endpoints);
     let keyed: Vec<(Provider, &str, String)> = routes
         .iter()
         .filter(|r| injected.contains(&r.base_var))
         .map(|r| (r.provider, r.token_var, env[r.base_var].clone()))
         .collect();
     let existing = env.get(OPENCODE_INLINE_ENV).cloned().or_else(|| ambient.map(str::to_string));
-    let (config, left_out) = opencode_inline_with(existing.as_deref(), &keyed, picker);
+    let (config, left_out) = opencode_inline_with(existing.as_deref(), &keyed, picker, endpoints);
     if let Some(config) = config {
         env.insert(OPENCODE_INLINE_ENV.to_string(), config);
     }
@@ -1156,6 +1365,15 @@ fn route_opencode(env: &mut HashMap<String, String>, injected: &[&'static str], 
         env.remove(route.token_var);
         env.remove(carrier_of(route.token_var));
     }
+    for route in routes.iter().filter(|r| r.provider.is_custom()) {
+        env.remove(route.base_var);
+    }
+}
+
+/// [`route_opencode_with`] for the built-in providers only.
+#[cfg(test)]
+fn route_opencode(env: &mut HashMap<String, String>, injected: &[&'static str], ambient: Option<&str>, picker: &Picker) {
+    route_opencode_with(env, injected, ambient, picker, &[]);
 }
 
 /// Whether `env`'s OpenCode inline config points a provider at the proxy
@@ -1165,7 +1383,9 @@ pub fn opencode_routed(env: &HashMap<String, String>) -> bool {
     let Some(config) = env.get(OPENCODE_INLINE_ENV).and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok()) else {
         return false;
     };
-    Provider::ALL.into_iter().any(|p| {
+    // The custom slots too: `tt-custom-<n>` at the proxy's `/custom-<n>`.
+    let slots = (1..=MAX_CUSTOM).filter_map(Provider::custom);
+    Provider::ALL.into_iter().chain(slots).any(|p| {
         let (name, path) = opencode_provider(p);
         config["provider"][name]["options"]["baseURL"]
             .as_str()
@@ -1198,7 +1418,8 @@ pub fn refuse_in_container(cmd: &str, pick: Option<bool>, keyless: bool) -> Resu
     };
     let admin = crate::services::server::is_server()
         && crate::services::server::agent_keys::chosen_in(&crate::storage::state_dir()).contains(id);
-    let own = applies_to(cmd, pick, &settings()) && routes_of(id).iter().any(|r| has_key(r.provider));
+    let settings = settings();
+    let own = applies_to(cmd, pick, &settings) && routes_with(id, &spawn_endpoints(&settings)).iter().any(|r| has_key(r.provider));
     if admin || own {
         let label = crate::services::agent_registry::agent_label_for_id(id).unwrap_or(id);
         return Err(format!(
@@ -1399,7 +1620,8 @@ fn status_with(
     let is_saved = |p: Provider| providers.iter().any(|s| s.id == p.id() && s.saved);
     let clis = CLI_ROUTES
         .iter()
-        .map(|&(id, routes)| {
+        .map(|&(id, _)| {
+            let routes = routes_with(id, endpoints);
             let enabled = enabled.iter().any(|c| c == id);
             CliStatus {
                 id,
@@ -1428,7 +1650,9 @@ fn status_with(
 /// one of their providers. Reads the keychain only for providers of a
 /// switched-on CLI, so with nothing switched on it never touches it.
 pub fn ready_clis() -> Vec<&'static str> {
-    ready_clis_with(&enabled_clis(), has_key)
+    let settings = settings();
+    let enabled = settings.agent_api_key_clis.clone().unwrap_or_default();
+    ready_clis_with(&enabled, &spawn_endpoints(&settings), has_key)
 }
 
 /// The CLIs the ＋ menu's API section offers: served by the proxy, which runs
@@ -1440,17 +1664,25 @@ pub fn keyable_clis() -> Vec<&'static str> {
     if !crate::services::api_proxy::running() {
         return Vec::new();
     }
-    let limits = crate::services::api_usage::limits_in(&settings());
+    let settings = settings();
+    let limits = crate::services::api_usage::limits_in(&settings);
     let all: Vec<String> = CLI_ROUTES.iter().map(|(id, _)| id.to_string()).collect();
-    ready_clis_with(&all, |p| limits.contains_key(p.id()) && crate::services::api_proxy::key_for(p).is_some())
+    ready_clis_with(&all, &spawn_endpoints(&settings), |p| {
+        limits.contains_key(p.id()) && crate::services::api_proxy::key_for(p).is_some()
+    })
 }
 
-fn ready_clis_with(enabled: &[String], has: impl Fn(Provider) -> bool) -> Vec<&'static str> {
+/// [`ready_clis`] over `enabled`, with OpenCode's custom slots of `endpoints`
+/// counted as its keys; `has` is asked once per provider, and never for a
+/// custom slot nobody configured.
+fn ready_clis_with(enabled: &[String], endpoints: &[CustomEndpoint], has: impl Fn(Provider) -> bool) -> Vec<&'static str> {
     let mut known: HashMap<Provider, bool> = HashMap::new();
     CLI_ROUTES
         .iter()
         .filter(|(id, _)| enabled.iter().any(|c| c == id))
-        .filter(|(_, routes)| routes.iter().any(|r| *known.entry(r.provider).or_insert_with(|| has(r.provider))))
+        .filter(|(id, _)| {
+            routes_with(id, endpoints).iter().any(|r| *known.entry(r.provider).or_insert_with(|| has(r.provider)))
+        })
         .map(|(id, _)| *id)
         .collect()
 }
@@ -1465,7 +1697,7 @@ pub fn status() -> ApiKeyStatus {
         &crate::services::api_usage::limits_in(&settings),
         &crate::services::api_usage::legacy_usd_limits_in(&settings),
         &crate::services::api_usage::book().snapshot(chrono::Utc::now()),
-        &custom_endpoints_in(&settings),
+        &spawn_endpoints(&settings),
     );
     // On a hosted server no custom slot is ever listed (`custom_endpoints`).
     if crate::services::server::is_server() {
@@ -1497,11 +1729,12 @@ pub fn budget_blocked_clis(ready: &[&'static str]) -> Vec<&'static str> {
     let settings = settings();
     let limits = crate::services::api_usage::limits_in(&settings);
     let ledger = crate::services::api_usage::book().snapshot(chrono::Utc::now());
-    budget_blocked_with(ready, &limits, &ledger)
+    budget_blocked_with(ready, &spawn_endpoints(&settings), &limits, &ledger)
 }
 
 fn budget_blocked_with(
     ready: &[&'static str],
+    endpoints: &[CustomEndpoint],
     limits: &std::collections::BTreeMap<String, u64>,
     ledger: &crate::services::api_usage::Ledger,
 ) -> Vec<&'static str> {
@@ -1509,7 +1742,7 @@ fn budget_blocked_with(
         .iter()
         .copied()
         .filter(|id| {
-            let routes = routes_of(id);
+            let routes = routes_with(id, endpoints);
             !routes.is_empty()
                 && routes.iter().all(|r| {
                     crate::services::api_usage::Verdict::of(ledger.billed(r.provider), limits.get(r.provider.id()).copied())
@@ -1992,10 +2225,40 @@ mod tests {
         assert_eq!(json["providers"][3]["endpoint"]["modelCount"], 1);
         assert_eq!(json["providers"][3]["endpoint"]["baseUrl"], "https://llm.example.org:8443/v1");
         assert!(json["providers"][0].get("endpoint").is_none(), "absent for a built-in");
-        // The CLIs keep the built-ins only until the spawn wiring counts a
-        // slot as a key of OpenCode's (A2).
+        // A configured slot is one of OpenCode's keys, and only OpenCode's.
         let opencode = s.clis.iter().find(|c| c.id == "opencode").unwrap();
-        assert_eq!(opencode.providers, vec!["anthropic", "gemini", "openai"]);
+        assert_eq!(opencode.providers, vec!["anthropic", "gemini", "openai", "custom-1"]);
+        assert!(s.clis.iter().filter(|c| c.id != "opencode").all(|c| !c.providers.iter().any(|p| p.starts_with("custom-"))));
+    }
+
+    /// A custom slot with a saved key makes a switched-on OpenCode ready on
+    /// its own, and a slot nobody configured is never even asked about.
+    #[test]
+    fn a_custom_slot_is_a_key_of_opencodes_and_an_unconfigured_one_is_not_asked() {
+        let ledger = crate::services::api_usage::Ledger { month: "2026-10".into(), ..Default::default() };
+        let one = endpoint(1, "Lab");
+        let status = |enabled: &[&str], endpoints: &[CustomEndpoint]| {
+            status_with(true, "keychain", |p| p == Provider::Custom(1), &on(enabled), &Default::default(), &Default::default(), &ledger, endpoints)
+        };
+        let opencode = |s: &ApiKeyStatus| s.clis.iter().find(|c| c.id == "opencode").unwrap().ready;
+        assert!(opencode(&status(&["opencode"], std::slice::from_ref(&one))));
+        assert!(!opencode(&status(&["opencode"], &[])), "no endpoint, no route");
+        assert!(!opencode(&status(&[], std::slice::from_ref(&one))), "off stays off");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let ready = ready_clis_with(&on(&["opencode", "claude"]), std::slice::from_ref(&one), |p| {
+            asked.borrow_mut().push(p.id());
+            p == Provider::Custom(1)
+        });
+        assert_eq!(ready, vec!["opencode"]);
+        assert!(!asked.borrow().contains(&"custom-2"), "{asked:?}");
+        asked.borrow_mut().clear();
+        assert!(ready_clis_with(&on(&["opencode"]), &[], |p| { asked.borrow_mut().push(p.id()); false }).is_empty());
+        assert!(asked.borrow().iter().all(|id| !id.starts_with("custom-")), "{asked:?}");
+        // Budget: the custom slot's open limit keeps OpenCode unblocked while
+        // every built-in has none.
+        let limits = std::collections::BTreeMap::from([("custom-1".to_string(), 1_000)]);
+        assert!(budget_blocked_with(&["opencode"], std::slice::from_ref(&one), &limits, &ledger).is_empty());
+        assert_eq!(budget_blocked_with(&["opencode"], &[], &limits, &ledger), vec!["opencode"]);
     }
 
     #[test]
@@ -2168,6 +2431,224 @@ mod tests {
         assert_eq!(models["old"]["disabled"], true);
     }
 
+    /// A grant for the listed providers only, as the proxy gives one to a
+    /// provider that has a key.
+    fn proxied_only(ids: &'static [Provider]) -> impl FnMut(Provider) -> Option<(String, String)> {
+        move |p| ids.contains(&p).then(|| proxied(p)).flatten()
+    }
+
+    fn lab(slot: u8) -> CustomEndpoint {
+        CustomEndpoint {
+            slot,
+            label: "Lab LLM".into(),
+            base_url: "https://llm.example.org/v1".into(),
+            models: vec!["llama-3.3-70b".into(), "qwen3-32b".into()],
+        }
+    }
+
+    /// Route OpenCode over `eps` with `grant`, as a spawn does.
+    fn routed_opencode(
+        eps: &[CustomEndpoint],
+        grant: impl FnMut(Provider) -> Option<(String, String)>,
+        carry: bool,
+        existing: Option<&str>,
+    ) -> (HashMap<String, String>, Vec<&'static str>) {
+        let mut env = HashMap::new();
+        let set = inject_env_at("opencode", false, false, &on(&["opencode"]), None, &mut env, carry, |_| false, grant, eps);
+        route_opencode_with(&mut env, &set, existing, &Picker::default(), eps);
+        (env, set)
+    }
+
+    fn config_of(env: &HashMap<String, String>) -> serde_json::Value {
+        serde_json::from_str(&env[OPENCODE_INLINE_ENV]).unwrap()
+    }
+
+    #[test]
+    fn a_custom_slot_alone_becomes_an_opencode_block_that_never_holds_its_token() {
+        const ONLY_2: &[Provider] = &[Provider::Custom(2)];
+        for carry in [true, false] {
+            let (env, set) = routed_opencode(&[lab(2)], proxied_only(ONLY_2), carry, None);
+            let token_name = if carry { CUSTOM_CARRIER[1] } else { CUSTOM_TOKEN_ENV[1] };
+            assert_eq!(set, [token_name, CUSTOM_BASE_ENV[1]]);
+            assert_eq!(env[token_name], format!("{FAKE_TOKEN}-custom-2"));
+            // The base variable only carried the URL into the config.
+            assert!(!env.contains_key(CUSTOM_BASE_ENV[1]), "{env:?}");
+            let text = &env[OPENCODE_INLINE_ENV];
+            assert!(!text.contains(FAKE_TOKEN), "no token in the config: {text}");
+            let config = config_of(&env);
+            let block = &config["provider"]["tt-custom-2"];
+            assert_eq!(block["npm"], "@ai-sdk/openai-compatible");
+            assert_eq!(block["name"], "Lab LLM");
+            assert_eq!(block["options"]["baseURL"], "http://127.0.0.1:9/custom-2");
+            assert_eq!(block["options"]["apiKey"], format!("{{env:{}}}", CUSTOM_TOKEN_ENV[1]));
+            assert_eq!(block["options"]["includeUsage"], true);
+            assert_eq!(block["models"], serde_json::json!({"llama-3.3-70b": {"name": "llama-3.3-70b"}, "qwen3-32b": {"name": "qwen3-32b"}}));
+            assert_eq!(config["provider"].as_object().unwrap().len(), 1);
+            // OpenCode 2 needs no `providers` twin: the legacy block is converted.
+            assert!(config.get("providers").is_none(), "{config}");
+            assert_eq!(config["enabled_providers"], serde_json::json!(["tt-custom-2"]));
+            assert!(opencode_routed(&env));
+        }
+    }
+
+    #[test]
+    fn a_custom_slot_beside_a_built_in_key_adds_one_block_and_one_enabled_provider() {
+        const BOTH: &[Provider] = &[Provider::OpenAi, Provider::Custom(1), Provider::Custom(3)];
+        let ollama = r#"{"provider":{"ollama":{"options":{"baseURL":"http://127.0.0.1:11434/v1"}}}}"#;
+        let (env, set) = routed_opencode(&[lab(1), lab(3)], proxied_only(BOTH), true, Some(ollama));
+        // The built-ins first, then the slots by number.
+        assert_eq!(
+            set,
+            [OPENAI_CARRIER, OPENAI_BASE_ENV, CUSTOM_CARRIER[0], CUSTOM_BASE_ENV[0], CUSTOM_CARRIER[2], CUSTOM_BASE_ENV[2]]
+        );
+        let config = config_of(&env);
+        assert_eq!(config["provider"]["openai"]["options"]["baseURL"], "http://127.0.0.1:9/openai/v1");
+        assert_eq!(config["provider"]["openai"]["options"]["apiKey"], "{env:OPENAI_API_KEY}");
+        assert_eq!(config["provider"]["tt-custom-1"]["options"]["baseURL"], "http://127.0.0.1:9/custom-1");
+        assert_eq!(config["provider"]["tt-custom-3"]["options"]["apiKey"], format!("{{env:{}}}", CUSTOM_TOKEN_ENV[2]));
+        assert_eq!(config["provider"]["ollama"]["options"]["baseURL"], "http://127.0.0.1:11434/v1");
+        assert_eq!(config["enabled_providers"], serde_json::json!(["openai", "tt-custom-1", "tt-custom-3", "ollama"]));
+        assert!(!env[OPENCODE_INLINE_ENV].contains(FAKE_TOKEN));
+        for var in [CUSTOM_BASE_ENV[0], CUSTOM_BASE_ENV[2], OPENAI_BASE_ENV] {
+            assert_eq!(env.contains_key(var), var == OPENAI_BASE_ENV, "{var}");
+        }
+        // Each token only under its own carrier.
+        assert_eq!(env[CUSTOM_CARRIER[0]], format!("{FAKE_TOKEN}-custom-1"));
+        assert_eq!(env[CUSTOM_CARRIER[2]], format!("{FAKE_TOKEN}-custom-3"));
+        assert!(!env.contains_key(CUSTOM_CARRIER[1]));
+        // A built-in's picker lists reach only the built-in.
+        let hidden = HashMap::from([(Provider::OpenAi, vec!["gpt-x".to_string()])]);
+        let eps = [lab(1)];
+        let mut env = HashMap::new();
+        let set = inject_env_at("opencode", false, false, &on(&["opencode"]), None, &mut env, true, |_| false, proxied_only(BOTH), &eps);
+        route_opencode_with(&mut env, &set, None, &Picker { hidden, ..Default::default() }, &eps);
+        let config = config_of(&env);
+        assert_eq!(config["providers"]["openai"]["models"]["gpt-x"]["disabled"], true);
+        assert!(config["providers"].get("tt-custom-1").is_none(), "{config}");
+        assert!(config["provider"]["tt-custom-1"]["models"]["qwen3-32b"].get("disabled").is_none());
+    }
+
+    #[test]
+    fn a_users_own_block_for_a_custom_slot_keeps_it_and_loses_its_token() {
+        const BOTH: &[Provider] = &[Provider::OpenAi, Provider::Custom(1)];
+        let mine = r#"{"provider":{"tt-custom-1":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://gateway.example.org/v1"}}},"model":"tt-custom-1/x"}"#;
+        let (env, _) = routed_opencode(&[lab(1)], proxied_only(BOTH), true, Some(mine));
+        let config = config_of(&env);
+        assert_eq!(
+            config["provider"]["tt-custom-1"],
+            serde_json::json!({"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://gateway.example.org/v1"}})
+        );
+        assert_eq!(config["model"], "tt-custom-1/x");
+        // Still theirs, so still allowed; the proxy token and base are gone.
+        assert_eq!(config["enabled_providers"], serde_json::json!(["openai", "tt-custom-1"]));
+        for var in [CUSTOM_CARRIER[0], CUSTOM_TOKEN_ENV[0], CUSTOM_BASE_ENV[0]] {
+            assert!(!env.contains_key(var), "{var}");
+        }
+        assert!(env.contains_key(OPENAI_CARRIER), "the built-in is still routed");
+        // OpenCode 2's own block of that name counts as theirs as well.
+        let native = r#"{"providers":{"tt-custom-1":{"name":"Mine"}}}"#;
+        let (env, _) = routed_opencode(&[lab(1)], proxied_only(&[Provider::Custom(1)]), true, Some(native));
+        assert!(!env.contains_key(OPENCODE_INLINE_ENV), "nothing was routed, nothing is restricted: {env:?}");
+        assert!(!env.contains_key(CUSTOM_CARRIER[0]) && !env.contains_key(CUSTOM_BASE_ENV[0]));
+        // An inline config that is no JSON object is left alone too.
+        for broken in ["not json", "[1]", r#"{"provider":"x"}"#] {
+            let (env, _) = routed_opencode(&[lab(1)], proxied_only(&[Provider::Custom(1)]), true, Some(broken));
+            assert!(env.is_empty(), "{broken}: {env:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_configured_slot_is_a_route_and_only_of_opencode() {
+        assert!(routes_with("opencode", &[]).iter().all(|r| !r.provider.is_custom()));
+        let routes = routes_with("opencode", &[lab(5), lab(2)]);
+        assert_eq!(routes.iter().filter(|r| r.provider.is_custom()).map(|r| r.provider).collect::<Vec<_>>(), [Provider::Custom(2), Provider::Custom(5)]);
+        for id in ["claude", "gemini", "codex"] {
+            assert_eq!(routes_with(id, &[lab(2)]).len(), routes_of(id).len(), "{id}");
+        }
+        // With nothing granted for a configured slot (no key), nothing is set.
+        let (env, set) = routed_opencode(&[lab(2)], proxied_only(&[]), true, None);
+        assert!(set.is_empty() && env.is_empty());
+    }
+
+    #[test]
+    fn opencode_is_routed_when_only_a_custom_slot_points_at_the_proxy() {
+        let with = |config: &str| HashMap::from([(OPENCODE_INLINE_ENV.to_string(), config.to_string())]);
+        assert!(opencode_routed(&with(r#"{"provider":{"tt-custom-4":{"options":{"baseURL":"http://127.0.0.1:4242/custom-4"}}}}"#)));
+        // Another slot's path, a foreign host, another provider's name.
+        assert!(!opencode_routed(&with(r#"{"provider":{"tt-custom-4":{"options":{"baseURL":"http://127.0.0.1:4242/custom-5"}}}}"#)));
+        assert!(!opencode_routed(&with(r#"{"provider":{"tt-custom-4":{"options":{"baseURL":"https://llm.example.org/custom-4"}}}}"#)));
+        assert!(!opencode_routed(&with(r#"{"provider":{"ollama":{"options":{"baseURL":"http://127.0.0.1:4242/custom-4"}}}}"#)));
+        // The routed spawn of a custom slot alone is recognised end to end.
+        let (env, _) = routed_opencode(&[lab(6)], proxied_only(&[Provider::Custom(6)]), true, None);
+        assert!(opencode_routed(&env));
+    }
+
+    #[test]
+    fn the_custom_carriers_stay_in_step_with_the_token_variables_and_the_tmux_secrets() {
+        assert_eq!(CUSTOM_CARRIER.len(), CUSTOM_TOKEN_ENV.len());
+        for (i, route) in CUSTOM_ROUTES.iter().enumerate() {
+            let slot = i as u8 + 1;
+            assert_eq!(route.provider, Provider::Custom(slot));
+            assert_eq!((route.token_var, route.base_var), (CUSTOM_TOKEN_ENV[i], CUSTOM_BASE_ENV[i]));
+            assert_eq!(CUSTOM_CARRIER[i], crate::services::agent_exec::carrier_name(CUSTOM_TOKEN_ENV[i]));
+            assert!(ENV_VARS.contains(&route.token_var) && CARRIERS.contains(&CUSTOM_CARRIER[i]));
+            assert_eq!(carrier_of(route.token_var), CUSTOM_CARRIER[i]);
+            assert!(!ENV_VARS.contains(&route.base_var), "the base URL is no carrier target");
+            assert!(crate::services::tmux_local::SECRET_ENV.contains(&CUSTOM_CARRIER[i]), "{}", CUSTOM_CARRIER[i]);
+            assert!(!crate::services::tmux_local::SECRET_ENV.contains(&route.token_var));
+            assert!(!crate::services::tmux_local::SECRET_ENV.contains(&route.base_var));
+            assert!(crate::services::agent_exec::targets().contains(&route.token_var), "agent_exec maps the carrier");
+            assert_eq!(base_of_carrier(CUSTOM_CARRIER[i]), Some((CUSTOM_BASE_ENV[i], Provider::Custom(slot))));
+        }
+        // The token variables and carriers are distinct names.
+        let mut all: Vec<&str> = ENV_VARS.iter().chain(CARRIERS).chain(CUSTOM_BASE_ENV.iter()).copied().collect();
+        let n = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), n);
+        // `agent_exec` turns a custom carrier into exactly its token variable.
+        let env = HashMap::from([(CUSTOM_CARRIER[2].to_string(), "t".to_string())]);
+        let mapping = crate::services::agent_exec::mapping(env.iter().map(|(k, v)| (std::ffi::OsStr::new(k), std::ffi::OsStr::new(v))));
+        assert_eq!(mapping.set, vec![(std::ffi::OsString::from(CUSTOM_TOKEN_ENV[2]), std::ffi::OsString::from("t"))]);
+        assert_eq!(mapping.remove.len(), 1);
+    }
+
+    /// Removing a slot revokes every proxy grant it ever got at once: a tab
+    /// that started before must never send to an endpoint added under the
+    /// same number later.
+    #[test]
+    fn removing_a_custom_slot_revokes_its_grants_and_only_its_grants() {
+        let (_dir, path) = temp_settings();
+        // Slot 8: no `api_proxy` test holds grants for it (they share the map).
+        let slot = 8;
+        let settings = crate::schema::Settings { agent_api_custom_endpoints: Some(vec![lab(slot), lab(1)]), ..Default::default() };
+        crate::storage::write_json_atomic(&path, &settings).unwrap();
+        let provider = Provider::Custom(slot);
+        let old_tab = crate::services::api_proxy::issue_provider_for_test(provider, "p1", "tab-remove-a").unwrap();
+        let other_tab = crate::services::api_proxy::issue_provider_for_test(provider, "p1", "tab-remove-b").unwrap();
+        let neighbour = crate::services::api_proxy::issue_provider_for_test(Provider::Gemini, "p1", "tab-remove-a").unwrap();
+        // A refused key removal (locked keyring) changes nothing, grants included.
+        assert!(remove_custom_in(&path, slot, |_| Err("keyring locked".into())).is_err());
+        assert!(crate::services::api_proxy::token_live(&old_tab));
+        assert_eq!(custom_endpoints_in(&read(&path)).len(), 2);
+        // The removal.
+        remove_custom_in(&path, slot, |p| {
+            assert_eq!(p, provider);
+            Ok(())
+        })
+        .unwrap();
+        assert!(!crate::services::api_proxy::token_live(&old_tab));
+        assert!(!crate::services::api_proxy::token_live(&other_tab));
+        assert!(crate::services::api_proxy::token_live(&neighbour), "another provider's grants stay");
+        assert_eq!(custom_endpoints_in(&read(&path)).iter().map(|e| e.slot).collect::<Vec<_>>(), [1]);
+        // The slot added again later gets no old token back.
+        let fresh = crate::services::api_proxy::issue_provider_for_test(provider, "p1", "tab-remove-a").unwrap();
+        assert_ne!(fresh, old_tab);
+        assert!(remove_custom_in(&path, 9, |_| Ok(())).is_err(), "a number that is no slot");
+        crate::services::api_proxy::revoke_provider(provider);
+        crate::services::api_proxy::on_tab_gone("tab-remove-a");
+    }
+
     #[test]
     fn only_a_proxy_base_counts_as_an_opencode_route() {
         let with = |config: &str| HashMap::from([(OPENCODE_INLINE_ENV.to_string(), config.to_string())]);
@@ -2252,9 +2733,9 @@ mod tests {
         assert_eq!(json["store"], "vault");
         // Claude's only provider is out of budget, Gemini's has no limit:
         // both are blocked; with a limit and room, Gemini is not.
-        assert_eq!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger), vec!["claude", "gemini"]);
+        assert_eq!(budget_blocked_with(&["claude", "gemini"], &[], &limits, &ledger), vec!["claude", "gemini"]);
         let limits = std::collections::BTreeMap::from([("anthropic".to_string(), 50_000), ("gemini".to_string(), 5_000)]);
-        assert!(budget_blocked_with(&["claude", "gemini"], &limits, &ledger).is_empty());
+        assert!(budget_blocked_with(&["claude", "gemini"], &[], &limits, &ledger).is_empty());
     }
 
     #[test]
@@ -2264,9 +2745,9 @@ mod tests {
             asked.borrow_mut().push(p);
             p == Provider::Anthropic
         };
-        assert!(ready_clis_with(&[], has).is_empty());
+        assert!(ready_clis_with(&[], &[], has).is_empty());
         assert!(asked.borrow().is_empty(), "nothing switched on, nothing read");
-        let ready = ready_clis_with(&on(&["claude", "gemini", "vibe"]), has);
+        let ready = ready_clis_with(&on(&["claude", "gemini", "vibe"]), &[], has);
         assert_eq!(ready, vec!["claude"]);
         // Each provider read at most once.
         let mut seen = asked.borrow().clone();
