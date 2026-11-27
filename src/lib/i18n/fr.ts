@@ -6195,6 +6195,8 @@ export const dict: Dict = {
   "terminal.readerFiles.shellsHeading": "Commandes shell ({count})",
   "terminal.readerFiles.shellsList": "Commandes shell lancées par cette conversation",
   "terminal.readerFiles.shellShow": "Afficher la commande entière",
+  "terminal.readerFiles.shellGroupShow": "{program} : {count} commandes. Les afficher",
+  "terminal.readerFiles.shellGroupHide": "{program} : {count} commandes. Les replier",
   "terminal.readerFiles.shellBackground": "en arrière-plan",
   "terminal.readerFiles.shellTitle": "Commande shell",
   "terminal.readerFiles.shellCopy": "Copier la commande",

@@ -6193,6 +6193,8 @@ export const dict: Dict = {
   "terminal.readerFiles.shellsHeading": "Comandi shell ({count})",
   "terminal.readerFiles.shellsList": "Comandi shell eseguiti da questa conversazione",
   "terminal.readerFiles.shellShow": "Mostra il comando intero",
+  "terminal.readerFiles.shellGroupShow": "{program}: {count} comandi. Mostrali",
+  "terminal.readerFiles.shellGroupHide": "{program}: {count} comandi. Comprimili",
   "terminal.readerFiles.shellBackground": "in background",
   "terminal.readerFiles.shellTitle": "Comando shell",
   "terminal.readerFiles.shellCopy": "Copia comando",

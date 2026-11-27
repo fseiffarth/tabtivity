@@ -6425,6 +6425,8 @@ export const enSource = {
   "terminal.readerFiles.shellsHeading": "Shell commands ({count})",
   "terminal.readerFiles.shellsList": "Shell commands this conversation ran",
   "terminal.readerFiles.shellShow": "Show the whole command",
+  "terminal.readerFiles.shellGroupShow": "{program}: {count} commands. Show them",
+  "terminal.readerFiles.shellGroupHide": "{program}: {count} commands. Fold them away",
   "terminal.readerFiles.shellBackground": "background",
   "terminal.readerFiles.shellTitle": "Shell command",
   "terminal.readerFiles.shellCopy": "Copy command",

@@ -14,7 +14,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { registerReaderInside, useSteeringInside } from "../../lib/agents/readerSteering";
 import { largestScroller, scrollBox } from "../../lib/shortcuts/documentScroll";
 import { decide, effectiveCursor, rowsOf } from "../../lib/terminal/readerFilesSteer";
-import { ArrowUpRightIcon, CloseIcon, LinkIcon } from "../common/icons/Icon";
+import { ArrowUpRightIcon, ChevronRightIcon, CloseIcon, LinkIcon } from "../common/icons/Icon";
 import { copyText } from "../../lib/terminal/copyText";
 import { startFilePointerDrag, warmDragIcon } from "../files/fileTreeDrag";
 import { PLATFORM } from "../../lib/window/dragPlatform";
@@ -86,6 +86,58 @@ export function shellRowsOf(shells: readonly RunningShell[]): ShellRow[] {
   }
   return shells.map((shell, index) => ({ shell, key: keys[index] }));
 }
+
+/** Words that run the next word as the program (`rtk git …`, `sudo rg …`). */
+const SHELL_WRAPPERS = new Set(["rtk", "sudo", "env", "time", "nice", "nohup", "command", "exec", "timeout"]);
+/** A leading `cd <dir> &&` (or `;`). */
+const LEADING_CD = /^cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*(?:&&|;)\s*/u;
+
+/** The program a command runs, the name its list group goes by: its first
+ *  line's first word past any leading `cd <dir> &&`, `VAR=value` and wrapper
+ *  (`timeout 30` with its duration, `rtk proxy`), cut to the leaf (`scripts/gates.sh` →
+ *  `gates.sh`). A loop or a subshell goes by its keyword (`for`, `(`). */
+export function shellProgramOf(command: string): string {
+  let line = command.split("\n", 1)[0].trim();
+  let cd: RegExpExecArray | null;
+  while ((cd = LEADING_CD.exec(line))) line = line.slice(cd[0].length);
+  const words = line.split(/\s+/u).filter(Boolean);
+  let at = 0;
+  while (at < words.length - 1 && (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[at]) || SHELL_WRAPPERS.has(words[at]))) {
+    const takesArg = (words[at] === "timeout" && /^\d/u.test(words[at + 1] ?? "")) || (words[at] === "rtk" && words[at + 1] === "proxy");
+    at += takesArg ? 2 : 1;
+  }
+  const word = words[Math.min(at, words.length - 1)] ?? "";
+  const bare = word.replace(/^["']+|["';]+$/gu, "");
+  return (bare ? basename(bare) : "") || word || "sh";
+}
+
+/** The commands of one program, newest first; `key` is its header row's
+ *  steering key (never a path, a URL or a command's key). */
+export interface ShellGroup {
+  program: string;
+  key: string;
+  rows: ShellRow[];
+}
+
+/** `rows` (newest first) grouped by `shellProgramOf`, the group of the newest
+ *  command first. */
+export function shellGroupsOf(rows: readonly ShellRow[]): ShellGroup[] {
+  const groups = new Map<string, ShellGroup>();
+  for (const row of rows) {
+    const program = shellProgramOf(row.shell.command);
+    const group = groups.get(program) ?? { program, key: `shellgroup:${program}`, rows: [] };
+    group.rows.push(row);
+    groups.set(program, group);
+  }
+  return [...groups.values()];
+}
+
+/** The shell rows the list draws, in order: a lone command as itself, a
+ *  group as its header row, then its commands while it is open. */
+export function visibleShellKeys(groups: readonly ShellGroup[], open: ReadonlySet<string>): { key: string }[] {
+  return groups.flatMap((group) => group.rows.length === 1 ? [{ key: group.rows[0].key }]
+    : [{ key: group.key }, ...(open.has(group.key) ? group.rows.map((row) => ({ key: row.key })) : [])]);
+}
 /** Characters of a link's path and query a row shows before its middle goes. */
 const LINK_REST_MAX = 56;
 
@@ -115,9 +167,11 @@ function middle(text: string, max: number): string {
  * first: the transcript's `shellsRun`), running or done. A click shows the
  * whole command in the viewer half, with the agent's description and a Copy
  * button; nothing runs it.
+ * The commands are grouped by program (`shellGroupsOf`): one run more than
+ * once is a folded row that a click opens, so they never outweigh the files.
  *
  * Under keyboard steering (`steerId`, Inside this view) the files, the links
- * and the commands are one walkable list with a cursor of its own
+ * and the commands (a folded group as its one row; `v`/`o` fold it) are one walkable list with a cursor of its own
  * (`readerFilesSteer`): `o` opens the row, `v` shows the file or command here,
  * ←/→ scroll the viewer. Moving the cursor opens nothing.
  *
@@ -160,6 +214,15 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
   const t = useT();
   const linkRows = onOpenLink ? links : NO_LINKS;
   const shellRows = useMemo(() => shellRowsOf(shells), [shells]);
+  // Commands are grouped by program, each group of two or more folded to one
+  // row until opened, so a long run of `rg`/`sed` does not bury the files.
+  const shellGroups = useMemo(() => shellGroupsOf(shellRows), [shellRows]);
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleGroup = (key: string) => setOpenGroups((now) => {
+    const next = new Set(now);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  });
   // The command shown in the viewer half, by row key; a file picked after it
   // takes the half back. One whose row is gone shows the file again.
   const [shellShown, setShellShown] = useState<string | null>(null);
@@ -181,15 +244,15 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
   }, [hostFiles]);
   // Grouped here so the drawn order and the steering walk are one order.
   const grouped = groupReaderFiles(files);
-  const rows = rowsOf(grouped, linkRows, shellRows);
+  const rows = rowsOf(grouped, linkRows, visibleShellKeys(shellGroups, openGroups));
   // The cursor is a key (path / URL), so rows arriving above it do not move it;
   // one whose row vanished snaps back to the start (the shown file's row).
   const [cursorSet, setCursorSet] = useState<string | null>(null);
   const cursor = effectiveCursor(rows, cursorSet, picked?.path);
   const bodyRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
-  const liveRef = useRef({ files, rows, cursor, disabled, onPick: pick, onOpenTab, onOpenLink });
-  liveRef.current = { files, rows, cursor, disabled, onPick: pick, onOpenTab, onOpenLink };
+  const liveRef = useRef({ files, rows, cursor, disabled, onPick: pick, onOpenTab, onOpenLink, toggleGroup });
+  liveRef.current = { files, rows, cursor, disabled, onPick: pick, onOpenTab, onOpenLink, toggleGroup };
   // TeX ⇄ PDF in this one pane (`texPdfHost`): a build, a forward search or
   // Open PDF shows the PDF here, a reverse click or an error row the source at
   // its line. A file no viewer here shows answers false, so it opens as a tab.
@@ -242,7 +305,9 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
             if (target) now.onPick(target);
             break;
           case "showShell":
-            if (result.row) setShellShown(result.row.key);
+            // On a group's header row, v / o fold it open or shut.
+            if (result.row?.key.startsWith("shellgroup:")) now.toggleGroup(result.row.key);
+            else if (result.row) setShellShown(result.row.key);
             break;
           case "openTab":
           case "openTabNew":
@@ -353,30 +418,53 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, shells = 
               <div className="terminal-files-heading">
                 {t("terminal.readerFiles.shellsHeading", { count: shellRows.length })}
                 <UntestedTag id="terminal.reader.shellsRun" />
+                <UntestedTag id="terminal.reader.shellGroups" />
               </div>
-              <div className="terminal-files-group" role="listbox" aria-label={t("terminal.readerFiles.shellsList")}>
-                {shellRows.map(({ shell, key }) => {
-                  const moment = chatMoment(shell.at);
-                  const active = shellShown === key && !!shownShell;
-                  const here = steering && cursor === key;
-                  return (
-                    <button type="button" role="option" key={key} aria-selected={active}
-                      className={["terminal-files-link", active && "active", here && "steer-cursor"].filter(Boolean).join(" ")}
-                      aria-current={here || undefined} data-steer-row={key} title={t("terminal.readerFiles.shellShow")}
-                      onClick={() => setShellShown(key)}>
-                      <span className="terminal-files-link-main">
-                        <span className="terminal-reader-shell-mark" aria-hidden="true">$</span>
-                        <span className="terminal-files-shell-line">{shell.command.split("\n", 1)[0]}</span>
-                      </span>
-                      {(shell.description || moment || shell.background) && (
-                        <small className="terminal-files-link-meta">
-                          {shell.description && <span className="terminal-files-link-label">{shell.description}</span>}
-                          {shell.background && <span>{t("terminal.readerFiles.shellBackground")}</span>}
-                          {moment && <span>{chatTime(moment, use24h)}</span>}
-                        </small>
-                      )}
+              <div className="terminal-files-group terminal-files-shells" role="listbox" aria-label={t("terminal.readerFiles.shellsList")}>
+                {shellGroups.map((group) => {
+                  const shellRow = ({ shell, key }: ShellRow, member: boolean) => {
+                    const moment = chatMoment(shell.at);
+                    const active = shellShown === key && !!shownShell;
+                    const here = steering && cursor === key;
+                    return (
+                      <button type="button" role="option" key={key} aria-selected={active}
+                        className={["terminal-files-link", member && "terminal-files-shell-member", active && "active", here && "steer-cursor"].filter(Boolean).join(" ")}
+                        aria-current={here || undefined} data-steer-row={key} title={t("terminal.readerFiles.shellShow")}
+                        onClick={() => setShellShown(key)}>
+                        <span className="terminal-files-link-main">
+                          {!member && <span className="terminal-reader-shell-mark" aria-hidden="true">$</span>}
+                          <span className="terminal-files-shell-line">{shell.command.split("\n", 1)[0]}</span>
+                        </span>
+                        {(shell.description || moment || shell.background) && (
+                          <small className="terminal-files-link-meta">
+                            {shell.description && <span className="terminal-files-link-label">{shell.description}</span>}
+                            {shell.background && <span>{t("terminal.readerFiles.shellBackground")}</span>}
+                            {moment && <span>{chatTime(moment, use24h)}</span>}
+                          </small>
+                        )}
+                      </button>
+                    );
+                  };
+                  if (group.rows.length === 1) return shellRow(group.rows[0], false);
+                  const open = openGroups.has(group.key);
+                  // A folded group stands for its shown command.
+                  const holdsShown = !!shownShell && group.rows.some((row) => row.key === shellShown);
+                  const here = steering && cursor === group.key;
+                  const moment = chatMoment(group.rows[0].shell.at);
+                  return <Fragment key={group.key}>
+                    <button type="button" role="option" aria-selected={!open && holdsShown}
+                      className={["terminal-files-shell-group", open && "open", !open && holdsShown && "active", here && "steer-cursor"].filter(Boolean).join(" ")}
+                      aria-current={here || undefined} data-steer-row={group.key}
+                      title={t(open ? "terminal.readerFiles.shellGroupHide" : "terminal.readerFiles.shellGroupShow", { count: group.rows.length, program: group.program })}
+                      onClick={() => toggleGroup(group.key)}>
+                      <ChevronRightIcon className="terminal-files-shell-chevron" />
+                      <span className="terminal-reader-shell-mark" aria-hidden="true">$</span>
+                      <span className="terminal-files-shell-line">{group.program}</span>
+                      <small className="terminal-files-shell-count">{group.rows.length}</small>
+                      {moment && <small className="terminal-files-shell-time">{chatTime(moment, use24h)}</small>}
                     </button>
-                  );
+                    {open && group.rows.map((row) => shellRow(row, true))}
+                  </Fragment>;
                 })}
               </div>
             </>}
