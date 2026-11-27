@@ -80,6 +80,7 @@ import type {
   MailSyncSummary,
   StagedAttachment,
 } from "../types/mail";
+import { openShownUrl } from "./externalLinks";
 
 /**
  * Minutes between automatic checks when `mail_check_interval_min` was never
@@ -1544,7 +1545,8 @@ export function mailLinkNeedsAttention(link: {
  *  `MailBody.links` table keyed by `lid` — never from a string the frame handed
  *  back, which is what preserves the anti-phishing property regardless. */
 export function openMailLink(url: string): Promise<void> {
-  return invoke("open_external_url", { url });
+  // The link dialog (`MailLinkDialog`) showed this exact address; its Open is the ask.
+  return openShownUrl(url);
 }
 
 // ── Authentication-Results display (pure) ────────────────────────────────────

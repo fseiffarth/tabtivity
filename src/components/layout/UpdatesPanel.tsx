@@ -14,6 +14,7 @@ import type {
   UpdateCheck,
   UpdateProgress,
 } from "../../types/update";
+import { openExternalUrl } from "../../lib/externalLinks";
 
 /**
  * Settings → Updates: is there a newer Tabtivity on the project's GitHub releases
@@ -137,7 +138,7 @@ export function UpdatesPanel({
   // This release's own page when a check landed, the releases index otherwise.
   const releasePage = check?.htmlUrl ?? releasesUrl;
   const openReleasePage = () => {
-    if (releasePage) void invoke("open_external_url", { url: releasePage }).catch(() => {});
+    if (releasePage) void openExternalUrl(releasePage).catch(() => {});
   };
 
   const pct =

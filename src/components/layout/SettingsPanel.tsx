@@ -137,6 +137,7 @@ import {
 import { ErrorNote } from "../common/ErrorNote";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { useCanPark } from "../../lib/workspaceCaps";
+import { openExternalUrl } from "../../lib/externalLinks";
 
 // The workspace-layout help text. The key is the one that works here, from
 // `livePanelToggleLabel` (unless rebound): a lone Super on a Linux desktop that leaves it to the
@@ -821,7 +822,7 @@ function GitHostingSettings({ onBack, onClose }: SubPanelProps) {
                   type="button"
                   className="inline-link-btn"
                   onClick={() =>
-                    void invoke("open_external_url", { url: tokenPageUrl(provider, row.profileUrl) })
+                    void openExternalUrl(tokenPageUrl(provider, row.profileUrl)).catch(() => {})
                   }
                 >
                   {t("pill.getTokenCta", { provider: providerName(provider) })}

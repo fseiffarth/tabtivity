@@ -196,6 +196,8 @@ export function SignInSheet({ tabId, agent, signIn, done = false, ended = false,
                   <small>{t("mobile.signIn.site", { site: shown.site })}</small>
                 </a>
               </div>
+              {/* The exact address the button opens, before it is tapped. */}
+              <code className="sign-in-url">{shown.url}</code>
             </div>
           </li>
           <li>

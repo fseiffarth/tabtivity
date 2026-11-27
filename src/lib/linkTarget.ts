@@ -30,6 +30,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { askToOpenUrl, openExternalUrl, openShownUrl } from "./externalLinks";
 import type { LinkOpenTarget } from "../types/browser";
 import type { GlobalAppEntry } from "../types";
 
@@ -257,11 +258,16 @@ export interface DispatchHooks {
   globalApps?: Record<string, GlobalAppEntry>;
   /** Report a refusal to the user. */
   onRefuse?: (reason: string) => void;
+  /** The caller's own dialog already showed this exact URL and the user said
+   *  open (the PDF viewer's link confirm). Otherwise anything leaving for the
+   *  browser or an app asks first (`openExternalUrl`). */
+  addressShown?: boolean;
 }
 
-/** Hand a URL to the OS. `open_external_url` refuses non-`http(s)` itself. */
-function openExternal(url: string): void {
-  void invoke("open_external_url", { url }).catch(() => {});
+/** Hand a URL to the OS, after the user saw its exact address and said yes.
+ *  `open_external_url` refuses non-`http(s)` itself. */
+function openExternal(url: string, hooks: DispatchHooks): void {
+  void (hooks.addressShown ? openShownUrl(url) : openExternalUrl(url)).catch(() => {});
 }
 
 /**
@@ -274,33 +280,36 @@ export function performLinkTarget(target: LinkTarget, hooks: DispatchHooks = {})
   switch (target.kind) {
     case "in_app":
       if (hooks.openBrowserTab) hooks.openBrowserTab(target.url, target.mode);
-      else openExternal(target.url);
+      else openExternal(target.url, hooks);
       return;
     case "compose":
       if (hooks.openComposer) hooks.openComposer(target.address);
-      else openExternal(`mailto:${target.address}`);
+      else openExternal(`mailto:${target.address}`, hooks);
       return;
     case "ask":
       if (hooks.showChooser) hooks.showChooser(target.url);
-      else openExternal(target.url);
+      else openExternal(target.url, hooks);
       return;
     case "global_app": {
       const exec = hooks.globalApps?.[target.role]?.exec?.trim();
       if (!exec) {
-        openExternal(target.url);
+        openExternal(target.url, hooks);
         return;
       }
-      void invoke("launch_app", {
-        exec,
-        args: [target.url],
-        file: null,
-        projectId: null,
-        role: target.role,
-      }).catch(() => openExternal(target.url));
+      const launch = () =>
+        invoke("launch_app", {
+          exec,
+          args: [target.url],
+          file: null,
+          projectId: null,
+          role: target.role,
+        }).catch(() => openShownUrl(target.url).catch(() => {}));
+      if (hooks.addressShown) void launch();
+      else void askToOpenUrl(target.url).then((open) => (open ? launch() : undefined));
       return;
     }
     case "external":
-      openExternal(target.url);
+      openExternal(target.url, hooks);
       return;
     case "refuse":
       hooks.onRefuse?.(target.reason);

@@ -15,6 +15,7 @@ import { installStrayDropGuard } from "./lib/window/strayDropGuard";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./styles/index.css";
+import { LinkOpenHost } from "./components/common/LinkOpenHost";
 
 installCrashReporter();
 /** Installed here rather than from a component, and in EVERY window (the main
@@ -53,5 +54,8 @@ const app = import.meta.env.DEV ? (
 );
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>{app}</React.StrictMode>,
+  <React.StrictMode>
+    {app}
+    <LinkOpenHost />
+  </React.StrictMode>,
 );

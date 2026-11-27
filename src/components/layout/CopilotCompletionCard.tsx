@@ -10,6 +10,7 @@ import type { Settings } from "../../types";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { SettingsAdvanced, SettingsCard } from "./settingsUi";
+import { openExternalUrl } from "../../lib/externalLinks";
 
 /** Backend `copilot_setup`. */
 interface CopilotSetup { supported: boolean; installed: boolean; installCommand: string | null }
@@ -123,7 +124,9 @@ export function CopilotCompletionCard() {
       const device = await invoke<{ userCode: string; verificationUri: string } | null>("copilot_sign_in", { projectId });
       if (device) {
         if (currentProject.current === projectId) setCode(device.userCode);
-        void invoke("open_external_url", { url: device.verificationUri }).catch(() => {});
+        // Asked, never opened straight away: the user sees GitHub's exact
+        // address first (`openExternalUrl`); the code shows meanwhile.
+        void openExternalUrl(device.verificationUri).catch(() => {});
         await invoke("copilot_finish_sign_in", { projectId });
       }
     } catch (e) {

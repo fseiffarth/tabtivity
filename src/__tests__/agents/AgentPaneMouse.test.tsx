@@ -153,6 +153,7 @@ vi.mock("../../stores/settings", () => ({
 }));
 
 import { TerminalView } from "../../components/terminal/TerminalView";
+import { LinkOpenHost } from "../../components/common/LinkOpenHost";
 import { useProjectsStore } from "../../stores/projects";
 
 /** Render an agent pane (`zoomable`) and hand back its container element. */
@@ -160,7 +161,11 @@ async function agentPane(id: string): Promise<HTMLElement> {
   let container!: HTMLElement;
   await act(async () => {
     container = render(
-      <TerminalView id={id} cmd="claude" cwd="/p" kind="agent" zoomable visible focused />,
+      <>
+        <TerminalView id={id} cmd="claude" cwd="/p" kind="agent" zoomable visible focused />
+        {/* The window's "Open this link?" (mounted beside <App /> in bootstrap). */}
+        <LinkOpenHost />
+      </>,
     ).container;
   });
   // Read the pane AFTER the act: React 18 flushes the render when the act block

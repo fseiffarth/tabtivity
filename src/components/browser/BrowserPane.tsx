@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { errorPhrase, liveControlAvailable, titleToTabLabel } from "../../lib/browser";
 import { useT } from "../../lib/i18n";
 import { useBrowserStore, EMPTY_BROWSER_TAB } from "../../stores/browser";
@@ -13,6 +12,7 @@ import { BrowserReaderView } from "./BrowserReaderView";
 import { BrowserStartPage } from "./BrowserStartPage";
 import { useBrowserEvents } from "./useBrowserEvents";
 import { MoreIcon, RefreshIcon } from "../common/icons/Icon";
+import { openShownUrl } from "../../lib/externalLinks";
 
 /**
  * The in-app browser tab (TODO group J #61), behind the `web_browser`
@@ -385,5 +385,6 @@ export const DEFAULT_SEARCH_TEMPLATE = "https://duckduckgo.com/?q=%s";
  *  `open_external_url` the rest of the app uses, which independently refuses
  *  anything that is not `http(s)`. */
 function openExternal(url: string): void {
-  void invoke("open_external_url", { url }).catch(() => {});
+  // The address bar shows this exact URL; the button is the ask.
+  void openShownUrl(url).catch(() => {});
 }

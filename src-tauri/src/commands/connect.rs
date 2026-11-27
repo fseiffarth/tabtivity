@@ -145,7 +145,7 @@ pub fn connect_open(app: AppHandle) -> Result<(), String> {
         .inner_size(1280.0, 820.0)
         .decorations(true)
         // Decision D6: a new-window request never opens an app webview.
-        .on_new_window(crate::app_new_window(app.clone()))
+        .on_new_window(crate::app_new_window(app.clone(), WINDOW))
         // A reload starts the frontend afresh: the sockets the old page
         // opened are nobody's now.
         .on_page_load(move |_, payload| {

@@ -556,6 +556,36 @@
   margin-left: 0;
 }
 
+/* The link the Open button goes to, always shown in full before it is
+   pressed: its host up front, then the whole URL, scrolling past ~5 lines
+   (a sign-in URL can run to hundreds of characters). */
+.terminal-sign-in-link {
+  margin-top: 8px;
+}
+.terminal-sign-in-link-label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.terminal-sign-in-site {
+  color: var(--text-primary);
+}
+.terminal-sign-in-url {
+  display: block;
+  margin-top: 4px;
+  max-height: 6.5em;
+  overflow-y: auto;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .terminal-sign-in-code {
   display: flex;
   gap: 8px;

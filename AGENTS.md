@@ -238,6 +238,10 @@ Frontend:
   shadow pseudo-element and animate opacity. Opacity is not free there either: a
   new loop or entry not tied to work in progress stops under
   `[data-software-paint]` (`docs/context/desktop_ui_system.md`).
+- A link reaches the browser only after the user saw its exact address and
+  said yes: `lib/externalLinks` `openExternalUrl` (the window's
+  `LinkOpenHost` asks); `openShownUrl` only from a surface that already shows
+  that exact URL (ESLint).
 - Viewer features go in the shared `ProjectFilesView`, not one host.
 - YAML/table viewers edit surgically: comments, quoting, line endings survive.
 - Never render a missing sensor reading as zero; omit it.

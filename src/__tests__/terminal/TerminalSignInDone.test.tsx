@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import { TerminalSignInDoneCard } from "../../components/terminal/TerminalSignInCard";
+import { TerminalSignInCard, TerminalSignInDoneCard } from "../../components/terminal/TerminalSignInCard";
 
 afterEach(() => {
   cleanup();
@@ -30,5 +30,25 @@ describe("TerminalSignInDoneCard", () => {
     expect(getByText("Signed in")).toBeTruthy();
     act(() => void vi.advanceTimersByTime(8_000));
     expect(onDismiss).toHaveBeenCalledOnce();
+  });
+});
+
+describe("TerminalSignInCard", () => {
+  it("shows where the Open button goes, host and whole link, before it is pressed", () => {
+    const url = "https://github.com/login/device";
+    const onOpen = vi.fn();
+    const { getByText, container } = render(
+      <TerminalSignInCard
+        host={document.body}
+        request={{ url, wantsCode: false }}
+        onOpen={onOpen}
+        onCopy={vi.fn()}
+        onSendCode={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(getByText("github.com")).toBeTruthy();
+    expect(container.ownerDocument.querySelector(".terminal-sign-in-url")?.textContent).toBe(url);
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });

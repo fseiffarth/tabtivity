@@ -8,7 +8,9 @@
 //! reload the app and lose drafts or put a foreign page where the app's own
 //! code ran. So every navigation of those webviews is judged here, and a new
 //! window (a middle click, `target=_blank`, `window.open`) never opens inside
-//! the app: a web URL goes to the system browser, anything else is refused.
+//! the app: a web URL is handed back to the window that asked
+//! ([`OPEN_REQUEST_EVENT`]), which shows its exact address and opens it in the
+//! system browser only on the user's yes; anything else is refused.
 //!
 //! Windows with a gate of their own are left to it: the live browser pages
 //! (`browser-*`, `commands::browser`) and the native print windows
@@ -86,10 +88,14 @@ pub fn may_navigate(url: &Url, app: &AppOrigins) -> bool {
     }
 }
 
+/// The event a window gets for a web URL its new-window request named. The
+/// frontend's `LinkOpenHost` asks the user before anything opens.
+pub const OPEN_REQUEST_EVENT: &str = "nav-gate-open-request";
+
 /// What a new-window request from an app window becomes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NewWindow {
-    /// Hand this web URL to the system browser (`open_external_url`'s rule).
+    /// A web URL the user is asked about before the system browser gets it.
     External(String),
     /// Open nothing.
     Deny,

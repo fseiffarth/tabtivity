@@ -369,7 +369,7 @@ pub async fn detach_subwindow(
     .title(&title)
     .decorations(detached_decorations(crate::paths::OsKind::current()))
     // Decision D6: a new-window request never opens an app webview.
-    .on_new_window(crate::app_new_window(app.clone()))
+    .on_new_window(crate::app_new_window(app.clone(), &label))
     // Built mid-talk: hidden from capture before its renderer can raise its
     // own privacy curtain (docs/done/privacy_curtain_plan.md).
     .content_protected(crate::commands::presenter::protect_new_window(&app));

@@ -22,6 +22,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { invoke } from "@tauri-apps/api/core";
+import { answerLinkAsk, useLinkAsks } from "../../lib/externalLinks";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -189,6 +190,11 @@ describe("UpdatesPanel", () => {
     expect(screen.queryByRole("button", { name: /^Download/ })).toBeNull();
     // A check that could not run is exactly when the manual route matters.
     await userEvent.click(await screen.findByRole("button", { name: /release page/i }));
-    expect(calls("open_external_url")[0][1]).toEqual({ url: RELEASES });
+    // Asked first, with the exact address; opened only on the yes.
+    const ask = useLinkAsks.getState().asks[0];
+    expect(ask?.url).toBe(RELEASES);
+    expect(calls("open_external_url")).toHaveLength(0);
+    answerLinkAsk(ask.id, true);
+    await waitFor(() => expect(calls("open_external_url")[0][1]).toEqual({ url: RELEASES }));
   });
 });

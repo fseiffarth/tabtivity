@@ -756,18 +756,22 @@ fn disable_canvas_acceleration<R: tauri::Runtime>(webview: &tauri::Webview<R>) {
 #[cfg(feature = "desktop")]
 pub(crate) fn app_new_window<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
+    label: &str,
 ) -> impl Fn(tauri::Url, tauri::webview::NewWindowFeatures) -> tauri::webview::NewWindowResponse<R> + Send + 'static
 {
+    let label = label.to_string();
     move |url, _features| {
         if let services::nav_gate::NewWindow::External(target) =
             services::nav_gate::new_window(&url, &app_origins(&app))
         {
-            // Off the UI thread: `opener` may wait on the desktop's handler.
-            std::thread::spawn(move || {
-                if let Err(e) = commands::ssh::open_external_url(target) {
-                    eprintln!("nav-gate: {e}");
-                }
-            });
+            // Never opened from here: the window that asked shows the exact
+            // address and opens it only on the user's yes (`LinkOpenHost`,
+            // `src/lib/externalLinks.ts`). A window with no host to ask opens
+            // nothing.
+            use tauri::Emitter;
+            if let Err(e) = app.emit_to(label.as_str(), services::nav_gate::OPEN_REQUEST_EVENT, target) {
+                eprintln!("nav-gate: {e}");
+            }
         }
         tauri::webview::NewWindowResponse::Deny
     }
@@ -788,7 +792,7 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .cloned()
         .unwrap_or_else(|| tauri::utils::config::WindowConfig { label: label.to_string(), ..Default::default() });
     tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
-        .on_new_window(app_new_window(app.handle().clone()))
+        .on_new_window(app_new_window(app.handle().clone(), label))
         .build()?;
     Ok(())
 }

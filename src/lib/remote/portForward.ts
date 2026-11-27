@@ -12,6 +12,7 @@ import { translateNow, type TranslationKey } from "../i18n";
 import { IS_WINDOWS } from "../platform";
 import { forwardedUrl, type ServerTarget } from "../terminal/serverUrls";
 import type { ProjectEntry } from "../../types";
+import { openExternalUrl } from "../externalLinks";
 
 /** One row of the backend's registry (`ForwardRow`): no paths, no tokens. */
 export interface PortForwardRow {
@@ -133,7 +134,7 @@ export async function forwardAndOpen(opts: {
     const { localPort } = await openPortForward(opts.target, opts.tabUid);
     opts.onForwarded?.();
     if (opts.open !== false) {
-      await invoke("open_external_url", { url: forwardedUrl(opts.page, localPort) });
+      await openExternalUrl(forwardedUrl(opts.page, localPort));
     }
     return localPort;
   } catch (e) {

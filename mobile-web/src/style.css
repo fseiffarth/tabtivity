@@ -1928,6 +1928,7 @@ span.files-close { background:transparent; }
 .sign-in-open a { --rim:#8c7df4; display:grid; flex:1; gap:2px; min-width:0; padding:12px 14px; border:1px solid #8c7df4; color:#fff; text-align:center; text-decoration:none; }
 .sign-in-open small { color:#dcd6ff; font-weight:400; font-size:.78rem; overflow-wrap:anywhere; }
 .sign-in-open button { flex:0 0 auto; }
+.sign-in-url { display:block; margin-top:6px; max-height:6.5em; overflow-y:auto; padding:6px 8px; border-radius:8px; background:rgba(255,255,255,.06); color:#c9c4e8; font-size:.74rem; line-height:1.3; overflow-wrap:anywhere; user-select:text; -webkit-user-select:text; }
 .readable-cloud-link { margin-bottom:10px; }
 .sign-in-code { display:flex; gap:8px; align-items:center; padding:10px 12px; border:1px solid var(--edge); background-color:#0b0d13; }
 .sign-in-code code { flex:1; font:700 1.45rem ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.14em; text-align:center; -webkit-user-select:all; user-select:all; }

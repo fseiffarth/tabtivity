@@ -97,7 +97,7 @@ import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } fro
 import { buildScaffoldFillPrompt } from "../../lib/projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
 import { UntestedTag } from "../common/UntestedTag";
-import { type ConfirmSpec, useDialogs } from "../common/PromptDialogs";
+import { useDialogs } from "../common/PromptDialogs";
 import { noteTypedClear, useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { noteTypedLine, screenAtCursor } from "../../lib/agents/typedClear";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
@@ -107,6 +107,7 @@ import { MOBILE_HOST_KEY, envName, storageKey } from "../../lib/brand";
 import { noteCheckpointKey } from "../../lib/agents/checkpoints";
 import { useCheckpointsStore } from "../../stores/agents/checkpoints";
 import type { AssistantLaunch } from "../../lib/assistant";
+import { openExternalUrl, openShownUrl } from "../../lib/externalLinks";
 
 // Hoisted to module scope: keystroke input fires this on every key, so we reuse
 // one encoder rather than allocating a `new TextEncoder()` per keystroke. The
@@ -422,28 +423,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const aiOffWaitingTextRef = useRef<() => string>(() => "");
   aiOffWaitingTextRef.current = () => t("terminal.aiOff.waiting");
   // A clicked link never opens straight away: the user confirms the exact URL
-  // first, since anything a program prints can be a link. Refs, because the
-  // spawn effect below outlives renders.
+  // first (`openExternalUrl`, the app-wide ask), since anything a program
+  // prints can be a link.
   const { dialogs, confirmAction } = useDialogs();
-  const confirmLinkRef = useRef<(url: string) => Promise<boolean>>(() => Promise.resolve(false));
-  confirmLinkRef.current = (url) => {
-    const spec: ConfirmSpec = {
-      title: (
-        <>
-          {t("terminal.openLink.title")}
-          <UntestedTag id="terminal.openLink.title" />
-        </>
-      ),
-      body: (
-        <>
-          {t("terminal.openLink.body")}
-          <code className="file-delete-path" style={{ display: "block", marginTop: 8 }}>{url}</code>
-        </>
-      ),
-      confirmLabel: t("terminal.openLink.confirm"),
-    };
-    return confirmAction(spec);
-  };
 
   // Where this tab's program runs, from its explicit props and its project —
   // never from the cwd. A loopback link or server chip means the tab's own
@@ -523,7 +505,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       await forwardServerRef.current(route.forward, true, true);
       return;
     }
-    if (await confirmLinkRef.current(url)) await invoke("open_external_url", { url });
+    await openExternalUrl(url, t("terminal.openLink.body"));
   };
 
   // The local servers the program printed (`watchServers`), and the ones whose
@@ -697,7 +679,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // activates a link on each release, so the double-click's second release
     // (`detail` 2) is ignored here. The hovered link is tracked because the
     // second press has to know it is on one before xterm sees it. Opening
-    // always asks first (`confirmLinkRef`).
+    // always asks first (`openExternalUrl`).
     let hoveredLink: string | null = null;
     let linkOpenTimer: ReturnType<typeof setTimeout> | null = null;
     const cancelLinkOpen = () => {
@@ -2705,13 +2687,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     if (forward) {
       void forwardServerRef.current(forward, true);
     } else if (locality.kind === "local") {
-      // A server on this machine opens as printed: its host is the loopback, so
-      // no confirmation; a node name is another machine and asks like any link.
-      if (isLoopbackServerHost(server.host)) {
-        void invoke("open_external_url", { url: localPageUrl(server) }).catch(() => {});
-      } else {
-        void openLinkRef.current(localPageUrl(server)).catch(() => {});
-      }
+      // Asks like any link, loopback or not: the chip names host and port,
+      // the dialog the exact address (path and token included).
+      void openLinkRef.current(localPageUrl(server)).catch(() => {});
     } else {
       toast(t("terminal.remoteLoopback.unsupported"));
     }
@@ -2922,7 +2900,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           if (routeLink(signIn.url, localityRef.current) !== "external") {
             void openLinkRef.current(signIn.url).catch(() => {});
           } else {
-            void invoke("open_external_url", { url: signIn.url }).catch(() => {});
+            // The card shows this exact address; its Open button is the ask.
+            void openShownUrl(signIn.url).catch(() => {});
           }
         }}
         onCopy={() => {

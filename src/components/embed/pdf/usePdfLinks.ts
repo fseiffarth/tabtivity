@@ -161,6 +161,8 @@ export function usePdfLinks({
         {
           globalApps: settings?.global_apps,
           onRefuse: (reason) => setEditError(t("pdfLinks.refused", { reason })),
+          // `PdfLinkConfirmDialog` showed this exact address; its Open was the ask.
+          addressShown: true,
         },
       );
     },

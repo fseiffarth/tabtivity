@@ -21,6 +21,16 @@ import { CloseIcon } from "../common/icons/Icon";
  */
 export const SIGN_IN_CARD_CLASS = "terminal-sign-in";
 
+/** The host a sign-in link leads to, shown above the whole link so the user
+ *  sees where "Open sign-in page" goes before pressing it. */
+function siteOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 export function TerminalSignInCard({
   host,
   request,
@@ -62,6 +72,12 @@ export function TerminalSignInCard({
       </div>
       <div className="hint-bubble-body">
         {t(request.wantsCode ? "terminal.signIn.bodyCode" : "terminal.signIn.body")}
+      </div>
+      <div className="terminal-sign-in-link">
+        <div className="terminal-sign-in-link-label">
+          {t("terminal.signIn.linkLabel")} <strong className="terminal-sign-in-site">{siteOf(request.url)}</strong>
+        </div>
+        <code className="terminal-sign-in-url">{request.url}</code>
       </div>
       <div className="hint-bubble-actions">
         <button type="button" className="hint-bubble-got-it terminal-sign-in-open" onClick={onOpen}>

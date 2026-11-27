@@ -11,6 +11,14 @@ import {
   resetForwardConfirmations,
 } from "../../lib/remote/portForward";
 import type { ProjectEntry } from "../../types";
+import { answerLinkAsk, useLinkAsks } from "../../lib/externalLinks";
+
+/** Say yes to every "Open this link?" as it comes (the host's part). */
+function answerAsks(open: boolean): () => void {
+  return useLinkAsks.subscribe((s) => {
+    for (const ask of s.asks) queueMicrotask(() => answerLinkAsk(ask.id, open));
+  });
+}
 
 const target = { projectId: "p1", hostId: "primary", remoteHost: "localhost", remotePort: 8888 };
 const page = { scheme: "http" as const, pathAndQuery: "/lab?token=abc" };
@@ -40,13 +48,22 @@ describe("forwardAndOpen", () => {
     );
     const confirm = vi.fn().mockResolvedValue(true);
     const notify = vi.fn();
+    const asked: string[] = [];
+    const watch = useLinkAsks.subscribe((s) => s.asks.forEach((a) => asked.push(a.url)));
+    const stop = answerAsks(true);
     const first = await forwardAndOpen({ target, page, tabUid: "p1:t1", confirm, notify });
+    stop();
+    watch();
     expect(first).toBe(9001);
+    // The page opens only after the user saw its exact address.
+    expect(asked).toContain("http://127.0.0.1:9001/lab?token=abc");
     expect(invoke).toHaveBeenCalledWith("port_forward_open", {
       projectId: "p1", hostId: "primary", tabUid: "p1:t1", remoteHost: "localhost", remotePort: 8888,
     });
     expect(invoke).toHaveBeenCalledWith("open_external_url", { url: "http://127.0.0.1:9001/lab?token=abc" });
+    const stopAgain = answerAsks(true);
     await forwardAndOpen({ target, page, tabUid: "p1:t1", confirm, notify });
+    stopAgain();
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(notify).not.toHaveBeenCalled();
   });
@@ -75,7 +92,9 @@ describe("forwardAndOpen: a failed open", () => {
         : Promise.reject(new Error("failed to open http://127.0.0.1:9001/lab?token=SECRET: no browser")),
     );
     const notify = vi.fn();
+    const stop = answerAsks(true);
     const out = await forwardAndOpen({ target, page, tabUid: "t", confirm: () => Promise.resolve(true), notify });
+    stop();
     expect(out).toBeNull();
     expect(notify).toHaveBeenCalledTimes(1);
     const shown = String(notify.mock.calls[0][0]);

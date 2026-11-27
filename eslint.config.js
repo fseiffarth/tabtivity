@@ -50,7 +50,17 @@ const GLYPH_SYNTAX = [
     message: 'Draw a chrome mark from common/icons/Icon.tsx, not a text glyph.',
   },
 ]
-const GUARD_SYNTAX = [...LISTEN_SYNTAX, ...PATH_SYNTAX]
+// No link opens without its exact address on screen and the user's yes:
+// everything goes through src/lib/externalLinks.ts (openExternalUrl asks,
+// openShownUrl only from a surface that already showed the URL).
+const OPEN_URL_SYNTAX = [
+  {
+    selector: "CallExpression[callee.name='invoke'][arguments.0.value='open_external_url']",
+    message:
+      'Open links through openExternalUrl() (asks, showing the exact address) or openShownUrl() (src/lib/externalLinks.ts), never a bare open_external_url.',
+  },
+]
+const GUARD_SYNTAX = [...LISTEN_SYNTAX, ...PATH_SYNTAX, ...OPEN_URL_SYNTAX]
 
 export default tseslint.config(
   {
@@ -188,6 +198,14 @@ export default tseslint.config(
     },
   },
   {
+    // The rest of the frontend: the one door to the browser is externalLinks.ts.
+    files: ['src/*.{ts,tsx}', 'src/lib/**/*.{ts,tsx}', 'src/stores/**/*.{ts,tsx}', 'src/hooks/**/*.{ts,tsx}', 'src/web/**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}', 'src/lib/externalLinks.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', ...OPEN_URL_SYNTAX],
+    },
+  },
+  {
     // Layering (code screen section G, after S3): `lib/` and `stores/` are the
     // layers the components build on, so they never import a component. A
     // module both need goes in `lib/`; a component-only piece stays out of it.
@@ -231,7 +249,7 @@ export default tseslint.config(
     // rest of that file.
     files: ['src/components/tabs/detachedDropTargets.ts'],
     rules: {
-      'no-restricted-syntax': ['error', ...PATH_SYNTAX],
+      'no-restricted-syntax': ['error', ...PATH_SYNTAX, ...OPEN_URL_SYNTAX],
     },
   },
   {
@@ -246,7 +264,7 @@ export default tseslint.config(
       'src/components/tabs/TabHoverCard.tsx',
     ],
     rules: {
-      'no-restricted-syntax': ['error', ...LISTEN_SYNTAX],
+      'no-restricted-syntax': ['error', ...LISTEN_SYNTAX, ...OPEN_URL_SYNTAX],
     },
   },
   {

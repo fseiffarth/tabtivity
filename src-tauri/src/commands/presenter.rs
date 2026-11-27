@@ -174,7 +174,7 @@ pub async fn open_presenter_window(
     )
     .title(concat!(crate::app_name!(), " — Presentation"))
     // Decision D6: a new-window request never opens an app webview.
-    .on_new_window(crate::app_new_window(app.clone()))
+    .on_new_window(crate::app_new_window(app.clone(), &label))
     // Decorated on purpose, unlike a popout: with one monitor this window is
     // dragged to a projector by hand, and a borderless window is awkward to move
     // and impossible to close if the renderer never seeds.

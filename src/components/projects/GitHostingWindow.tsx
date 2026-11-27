@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
 import { useT } from "../../lib/i18n";
 import type { GitHostingInfo, GitProvider, ProjectEntry } from "../../types";
@@ -10,6 +9,7 @@ import { DialogShell } from "../common/PromptDialogs";
 import { GitTokenScopes, tokenPageUrl } from "../common/GitTokenScopes";
 import { providerName } from "./projectTypeTags";
 import { guessProvider } from "./PublishWindow";
+import { openExternalUrl } from "../../lib/externalLinks";
 
 /**
  * A project's own git hosting: a profile URL and an access token that
@@ -116,9 +116,7 @@ export function GitHostingWindow({
           type="button"
           className="inline-link-btn"
           onClick={() =>
-            void invoke("open_external_url", {
-              url: tokenPageUrl(tokenProvider, profileUrl || globalUrl),
-            })
+            void openExternalUrl(tokenPageUrl(tokenProvider, profileUrl || globalUrl)).catch(() => {})
           }
         >
           {t("pill.getTokenCta", { provider: providerName(tokenProvider) })}
