@@ -926,6 +926,12 @@ async fn start_headless_on(
             if let Some(state) = memory.as_deref() {
                 open_reattach_record(state, reattach::Role::Host, port, first_try, lost);
             }
+            if let Some(taken) = lost_port_to_end(ctx.is_some() && crate::services::server::is_server(), lost) {
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::services::api_proxy_port::on_fallback_for(crate::services::api_proxy_port::Service::AgentTools, taken, port)
+                })
+                .await;
+            }
             let heartbeat = memory.is_some().then(|| tokio::spawn(reattach_heartbeat()));
             tokio::spawn(async move {
                 server.await;
@@ -965,6 +971,16 @@ async fn start_headless_on(
             Err(error)
         }
     }
+}
+
+/// The remembered port a server daemon's listener lost to another holder,
+/// whose sessions are then ended and the user told
+/// (`api_proxy_port::on_fallback_for` with `Service::AgentTools`, #2456): on
+/// a loopback every account shares, the agents of tabs that outlived the
+/// last daemon would otherwise send their tool calls to whoever took it. A
+/// desktop's Mobile host keeps the reattach record's handling alone. Pure.
+fn lost_port_to_end(server_daemon: bool, lost: Option<u16>) -> Option<u16> {
+    lost.filter(|_| server_daemon)
 }
 
 /// How long the Mobile host waits before its `attempt`-th bind retry: 5 s,
@@ -1392,6 +1408,17 @@ fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
 
 #[cfg(test)]
 mod security_tests {
+    /// Only a server daemon ends the sessions naming the port it lost; a
+    /// desktop's Mobile host leaves them to the reattach record, and a port
+    /// kept (or never remembered) ends nothing.
+    #[test]
+    fn only_a_server_daemon_ends_the_sessions_of_a_lost_tools_port() {
+        use super::*;
+        assert_eq!(lost_port_to_end(true, Some(41_000)), Some(41_000));
+        assert_eq!(lost_port_to_end(false, Some(41_000)), None);
+        assert_eq!(lost_port_to_end(true, None), None);
+    }
+
     #[tokio::test]
     async fn cockpit_route_is_an_exclusive_lane() {
         use super::*;

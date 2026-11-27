@@ -14,6 +14,7 @@ import {
   type UnavailableReason,
 } from "../../../mobile-web/src/connection";
 import { BRAND } from "../../lib/brand";
+import { setOnServer } from "../../../mobile-web/src/hostKind";
 
 /** `navigator.onLine` is read-only on the real object. */
 function withOnline(online: boolean, run: () => void): void {
@@ -106,6 +107,20 @@ describe("describeUnavailable", () => {
     // `host_down` and `desktop_down` are the pair a reader is most likely to
     // confuse, and the copy has to send them to different places.
     expect(describeUnavailable("host_down").title).toContain(`${BRAND.display} Mobile isn't running`);
+    expect(describeUnavailable("desktop_down").title).toContain(`${BRAND.display} isn't running`);
+  });
+
+  it("sends a server's phone to the browser client, never to a desktop to start", () => {
+    setOnServer(true);
+    try {
+      const { title, hint } = describeUnavailable("desktop_down");
+      expect(title).toBe(`That needs the ${BRAND.display} window, which a server does not have.`);
+      expect(hint).toContain("browser client");
+      expect(describeFailure(new ApiError(503, "desktop_unavailable"))).toBe(title);
+    } finally {
+      setOnServer(false);
+    }
+    expect(describeFailure(new ApiError(501, "server_no_window"))).toBe(`That needs the ${BRAND.display} window, which a server does not have.`);
     expect(describeUnavailable("desktop_down").title).toContain(`${BRAND.display} isn't running`);
   });
 

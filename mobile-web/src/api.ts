@@ -447,8 +447,10 @@ export interface MobileMailAttachment { filename: string; mime: string; size: nu
  * the sections the desktop keeps this phone out of (absent from an older
  * host: none) and the desktop's AI switch (`ai_off`, absent: on); the
  * desktop's name and the desktops it is linked with, for the switcher
- * (`shell/linkedDesktops.ts` checks every entry; absent from an older host). */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean; host?: string; linked_desktops?: unknown; /** The desktop machine's OpenVPN tunnel, `"up"` or `"down"`; null or absent when it has no VPN config (or from an older host). */ vpn?: unknown }> {
+ * (`shell/linkedDesktops.ts` checks every entry; absent from an older host);
+ * and whether the host is a server daemon, which never has a window
+ * (`server`, absent: no). */
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean; host?: string; linked_desktops?: unknown; /** The desktop machine's OpenVPN tunnel, `"up"` or `"down"`; null or absent when it has no VPN config (or from an older host). */ vpn?: unknown; server?: boolean }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */

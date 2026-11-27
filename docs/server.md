@@ -6,7 +6,7 @@ Read this first; keep it current when a decision or an open point changes.
 
 > **Status (screened against code 2026-11-22):** the whole of P0–P5 is in `develop` (`4ed492a5d`, 2026-10-11): `src-gateway`, `src-serverd`, `src-core`, `services::server`/`connect`/`command_class`, `scripts/package-server-deb.sh` + ci-cd.yml `package-server`. Nothing has run on a real server. The bullets below are the 2026-10-11 record, corrected where the merge made them stale; no `hosted` branch or `.claude/worktrees/hosted` exists any more. Open items here are not re-verified individually. Not live-tested.
 
-## Status (2026-10-11)
+## Status (2026-10-11, with the 2026-11-03 catch-up)
 
 - **Built, reviewed, merged into `develop`, never run live.** The `hosted`
   branch (`f3efd50b..`; every phase P0–P5 plus follow-ups, each reviewed, then
@@ -37,6 +37,30 @@ Read this first; keep it current when a decision or an open point changes.
   and ICS-import tools, the staged-write review, the overlay-docked agent),
   local-model and reader lanes too, with their controls and events in the
   browser client — everything the window's listener serves.
+- **The phone's features since 2026-10-11 on a server (2026-11-03, #2436,
+  #2437, open #2438).** The status says `server`; whatever only a window
+  answers is `501 server_no_window` (`host::server_window_codes`) and the
+  phone names the browser client instead of "start the desktop"; Mail,
+  From the desktop, the ⎇/locality moves and Diverged are left out. A
+  local project's agent starts in a linked worktree with no window, and
+  (`develop`, 2026-11) a project's cloud session too. Still window-only on
+  a server: mail, alerts, Tabby's model switch, the moves, Diverged and
+  mode/local/API-key/sign-in launches (#2438).
+- **Browser client caught up with `develop`'s commands (2026-11-03,
+  #2443).** Every command and event `develop` added since 2026-10-11 was
+  audited for the daemon: image paste, ▶ run in background, PDF page
+  drag/copy and the Models & agents meters now work in the browser
+  (`docs/context/web_client.md`); read-aloud and laptop uploads remain
+  (#2444).
+- **Agents caught up with `develop` (2026-11-03, #2456).** Audit of the
+  agent, CLI, MCP and key-path work since 2026-10-11: the daemon's agent
+  tools keep their loopback port across restarts (a tenant could otherwise
+  take it and answer another user's tool calls), a local-model tab's Ollama
+  is owner-checked before it starts, Tabby is refused on a server (not
+  offered in v1; `develop` made it on by default), Codex and OpenCode are
+  held off the administrator's key by the daemon too, and self-updaters stay
+  off whatever a tab's environment says. The rest was fine; the table is in
+  TODO #2456.
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 - **Released as a `.deb` (2026-10-14, plan §8.1).** Each GitHub release
@@ -216,5 +240,8 @@ Each step's exact clicks are in its `hosted_handoff.md` section.
 8. Markup questions on a server (#2390), the root, local-model and reader
    lanes (#2391) and the admin's phone Local models (#2392): the TODOs'
    manual tests.
+9. The 2026-11-03 catch-up with `develop`: the phone on a server (#2436,
+   #2437), the browser client (#2443) and agents (#2456) — each TODO's
+   manual test.
 
 An `UntestedTag` is cleared only when the user says that item is tested.

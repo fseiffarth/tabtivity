@@ -16,6 +16,7 @@ import { refreshPush } from "./push";
 import { hasLocalUnlock } from "./localLock";
 import { clearConnectGrace, clearConnectReload, isConnectReload, noteConnectGrace, noteUnlockedLeave, takeConnectGrace, takeConnectReload, takeReloadGrace } from "./reloadGrace";
 import { noteDesktopTheme } from "./theme";
+import { setOnServer } from "./hostKind";
 import { isUntested, setUntestedTagsVisible } from "../../src/lib/untested";
 import { useT, type TranslationKey } from "../../src/lib/i18n";
 import { Pair, noteOidcOutcome } from "./screens/Pair";
@@ -490,17 +491,21 @@ export function App() {
   }, [auth, tab, projectView, terminal]);
 
   useVisiblePoll(
-    () => getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, host, linked_desktops, vpn }) => {
+    () => getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, host, linked_desktops, vpn, server }) => {
       noteDesktopTheme(color_scheme);
       setVpn(vpn === "up" || vpn === "down" ? vpn : null);
       // The switcher's list, kept for a home that is down (`linkedDesktops.ts`).
       noteHomeStatus({ host, linked_desktops });
       if (typeof host === "string" && host) setHostName(host);
-      const hidden = hideableSections(hidden_sections);
+      // A server has no window to read mail through (the browser client
+      // has it), so its phone leaves the section out as if hidden.
+      const onServer = server === true;
+      const hidden = hideableSections(onServer ? [...(Array.isArray(hidden_sections) ? hidden_sections : []), "mail"] : hidden_sections);
       setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
       try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
       const visible = show_untested_tags === true;
-      if (setUntestedTagsVisible(visible)) refreshTags((tick) => tick + 1);
+      const reworded = setOnServer(onServer);
+      if (setUntestedTagsVisible(visible) || reworded) refreshTags((tick) => tick + 1);
       try { localStorage.setItem(storageDashKey("show-untested-tags"), String(visible)); } catch { /* unavailable */ }
     }),
     30_000,

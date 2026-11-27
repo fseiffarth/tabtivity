@@ -131,6 +131,22 @@ describe("StatusCluster", () => {
     expect(updateSettings).toHaveBeenCalledWith({ header_status_expanded: false });
   });
 
+  it("asks no backend about this machine's link in the browser client", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { markServerClient, resetLinkStateForTests } = await import("../../lib/transport/linkState");
+    vi.mocked(invoke).mockClear();
+    markServerClient();
+    try {
+      render(<StatusCluster />);
+      await screen.findByTestId("machines");
+      const asked = vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);
+      expect(asked).not.toContain("network_conn_type");
+      expect(asked).not.toContain("network_wifi_ssid");
+    } finally {
+      resetLinkStateForTests();
+    }
+  });
+
   it("mounts no Machines menu while the feature is off (perf plan §6)", async () => {
     useSettingsStore.setState({
       settings: { header_status_expanded: true, machines_enabled: false } as never,
