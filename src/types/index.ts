@@ -88,6 +88,17 @@ export interface KeyboardChord {
   altGr?: boolean;
 }
 
+/** A custom OpenAI-compatible endpoint (`Settings::agent_api_custom_endpoints`,
+ *  backend `schema::settings::CustomEndpoint`). Slot `n` is the provider
+ *  `custom-<n>`; its key is in the keyring, its limit in
+ *  `agent_api_token_limits`. Never a secret. */
+export interface CustomEndpoint {
+  slot: number;
+  label: string;
+  base_url: string;
+  models: string[];
+}
+
 /**
  * A user-defined "custom agent" — an arbitrary CLI the user wants offered in the
  * add-tab menu's Agents group alongside the built-in agents (Claude, Codex, …).
@@ -580,6 +591,11 @@ export interface Settings {
    *  for the stored API keys (backend `services::api_usage`), enforced by the
    *  API proxy. Saving a key requires one. */
   agent_api_token_limits?: Record<string, number>;
+  /** Custom OpenAI-compatible endpoints for OpenCode (`custom-<slot>` in
+   *  `agent_api_token_limits`), written only by the add/remove/refresh
+   *  commands (`agent_api_custom_endpoint_*`): a settings patch cannot change
+   *  them. Never a key. */
+  agent_api_custom_endpoints?: CustomEndpoint[];
   /** The order of the Agents group's rows, which is the order Ctrl+1–9 number
    *  them: row keys (a built-in's command, `"claude"`; a custom agent's
    *  `"custom:<id>"`). Set by Manage CLIs' ↑/↓. Unset = the default agent

@@ -9,98 +9,21 @@ import { useSettingsStore } from "../../stores/settings";
 import { useT } from "../../lib/i18n";
 import { AGENT_ITEMS } from "../../lib/tabs/newTabItems";
 import { AgentsStatus, AgentsFold } from "./agentsUi";
-
-/** `agent_api_keys_status` (`services::agent_api_keys`). Never a key. */
-interface AgentApiKeyStatus {
-  /** The keyring can be read now; while locked every `saved` reads false. */
-  readable: boolean;
-  /** `keychain` (a desktop's OS store) or `vault` (a server's sealed store,
-   *  opened only by a paired device — nothing here can unlock it). */
-  store?: "keychain" | "vault";
-  providers: {
-    id: string;
-    saved: boolean;
-    /** The monthly limit in billed tokens (`agent_api_token_limits`) as the
-     *  backend reads it. */
-    limitTokens?: number | null;
-    /** Billed tokens this month: what the limit counts. */
-    billed?: number;
-    /** Their cost by the price table — an estimate, shown only. */
-    spentUsd?: number;
-    /** An older build's dollar limit while no token limit is set: a hint. */
-    legacyLimitUsd?: number | null;
-    /** `open`, `reached`, or `noLimit` (refused until a limit is set). */
-    budget?: "open" | "reached" | "noLimit";
-    /** Models priced at the provider's highest rate (not in the table). */
-    unknownModels?: string[];
-    /** This month by model, most billed first: input and output apart. */
-    models?: {
-      model: string;
-      input: number;
-      output: number;
-      cacheWrite: number;
-      cacheRead: number;
-      requests: number;
-      billed: number;
-      usd: number;
-    }[];
-    /** The workspace a saved Anthropic key that is not scoped to one names. */
-    workspace?: string | null;
-  }[];
-  clis: {
-    id: string;
-    enabled: boolean;
-    providers: string[];
-    ready: boolean;
-    /** A hosted server's administrator offers this user a key for the CLI. */
-    adminOffered?: boolean;
-    /** This user runs the CLI on the administrator's key. */
-    usesAdmin?: boolean;
-    /** Through the server's key broker: this month's use and budget. */
-    adminBroker?: { month: string; billed: number; budget?: number | null } | null;
-  }[];
-  /** UTC month counted (`YYYY-MM`) and the day the count restarts. */
-  month?: string;
-  resetsOn?: string;
-  /** This month's count restarted: the ledger file could not be read. */
-  ledgerRestarted?: string | null;
-  /** When the price table was read off the vendors' pages. */
-  pricesDate?: string;
-}
+import { AgentCustomEndpointsRows } from "./AgentCustomEndpointsRows";
+import {
+  apiProviderName,
+  asMillions,
+  DEFAULT_API_LIMIT_MTOK,
+  parseApiLimit,
+  tokenCount,
+  usd,
+  type AgentApiKeyStatus,
+} from "./agentApiKeysShared";
 
 /** `agent_api_key_set`'s answer: saved, or an Anthropic key that is not
  *  scoped to a workspace — saved only once one of `workspaces` is picked (an
  *  id typed in when the key could list none). */
 type ApiKeySave = { kind: "saved" } | { kind: "pickWorkspace"; workspaces: { id: string; name: string }[] };
-
-/** The monthly limit a new key's row proposes, in million billed tokens. */
-export const DEFAULT_API_LIMIT_MTOK = 5;
-/** The backend's `api_usage::MAX_LIMIT`, billed tokens. */
-const MAX_API_LIMIT_TOKENS = 1_000_000_000_000;
-const MILLION = 1_000_000;
-
-/** A typed limit (million billed tokens) as whole billed tokens, or `null`
- *  when it is not a usable one. */
-function parseApiLimit(text: string): number | null {
-  const n = Number(text.trim());
-  if (text.trim() === "" || !Number.isFinite(n)) return null;
-  const tokens = Math.round(n * MILLION);
-  return tokens > 0 && tokens <= MAX_API_LIMIT_TOKENS ? tokens : null;
-}
-
-/** Billed tokens as the limit field shows them: millions, no trailing zeros. */
-const asMillions = (tokens: number) => String(Number((tokens / MILLION).toFixed(6)));
-
-const usd = (n: number) => `$${n.toFixed(2)}`;
-const tokenCount = (n: number) =>
-  new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
-
-/** Provider names as their vendors spell them. */
-const API_KEY_PROVIDERS: Record<string, string> = {
-  anthropic: "Anthropic",
-  gemini: "Google Gemini",
-  openai: "OpenAI",
-};
 
 /** What a CLI's agents run on: its own login, the user's own API key, or a
  *  hosted server administrator's key (#2389). */
@@ -141,6 +64,8 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
   useEffect(refresh, []);
   const labels = useMemo(() => new Map(AGENT_ITEMS.map((a) => [a.cmd, a.label])), []);
   if (!status) return null;
+  // The built-in providers; a custom endpoint has its own group below them.
+  const builtIns = status.providers.filter((p) => !p.endpoint);
   const saved = new Set(status.providers.filter((p) => p.saved).map((p) => p.id));
   const enabled = settings?.agent_api_key_clis ?? [];
   const limits = settings?.agent_api_token_limits ?? {};
@@ -242,8 +167,8 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
           {t("settings.agentApiLedgerRestarted", { date: status.ledgerRestarted })}
         </p>
       )}
-      {status.providers.map((p) => {
-        const name = API_KEY_PROVIDERS[p.id] ?? p.id;
+      {builtIns.map((p) => {
+        const name = apiProviderName(p.id, status.providers);
         const draft = drafts[p.id] ?? "";
         const limitText = limitDraft(p.id, p.limitTokens);
         const limitOk = parseApiLimit(limitText) !== null;
@@ -435,6 +360,13 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
           </Fragment>
         );
       })}
+      <AgentCustomEndpointsRows
+        status={status}
+        onChanged={() => {
+          refresh();
+          onChange?.();
+        }}
+      />
       {!status.readable && status.store !== "vault" && (
         <div className="agents-actions">
           <button
@@ -466,7 +398,7 @@ export function AgentApiKeysRows({ onChange }: { onChange?: () => void }) {
                   label: t("settings.agentCredOwnKey", {
                     // Only the providers a key is saved for: the others
                     // stay on the CLI's own login (OpenCode).
-                    providers: (hasKey ? keyed : row.providers).map((p) => API_KEY_PROVIDERS[p] ?? p).join(", "),
+                    providers: (hasKey ? keyed : row.providers).map((p) => apiProviderName(p, status.providers)).join(", "),
                   }),
                 },
               ]

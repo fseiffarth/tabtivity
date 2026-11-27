@@ -2416,12 +2416,47 @@ pub async fn agent_api_key_set(provider: String, key: String, workspace: Option<
     Ok(ApiKeySave::Saved)
 }
 
-/// Remove `provider`'s API key (and its workspace) from the OS keychain.
+/// Remove `provider`'s API key (and its workspace) from the OS keychain. A
+/// custom endpoint's slot is refused: dropping only its key would leave an
+/// endpoint that can never run, so the UI's Remove goes through
+/// `agent_api_custom_endpoint_remove` (key, endpoint and limit together).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_api_key_clear(provider: String) -> Result<(), String> {
     let provider = api_key_provider(&provider)?;
+    if provider.is_custom() {
+        return Err("a custom endpoint's key is removed together with the endpoint: use Remove endpoint".into());
+    }
     app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::set_key(provider, None, None))
         .await
+}
+
+/// Add a custom OpenAI-compatible endpoint for OpenCode
+/// (`agent_api_keys::add_custom`): checks the base URL and the key against
+/// `GET <base>/models`, picks the slot, saves the endpoint, its monthly token
+/// limit (`limitTokens`, billed tokens) and the key (keychain only). The
+/// answer is the saved endpoint, its model list possibly empty.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_api_custom_endpoint_add(
+    label: String,
+    base_url: String,
+    key: String,
+    limit_tokens: u64,
+) -> Result<crate::schema::settings::CustomEndpoint, String> {
+    crate::services::agent_api_keys::add_custom(label, base_url, key, limit_tokens).await
+}
+
+/// Remove custom endpoint `slot`: its key, the endpoint and its limit.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_api_custom_endpoint_remove(slot: u8) -> Result<(), String> {
+    app_core::rt::try_blocking("agent", move || crate::services::agent_api_keys::remove_custom(slot)).await
+}
+
+/// Fetch custom endpoint `slot`'s model list again with its stored key.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_api_custom_endpoint_refresh_models(
+    slot: u8,
+) -> Result<crate::schema::settings::CustomEndpoint, String> {
+    crate::services::agent_api_keys::refresh_custom(slot).await
 }
 
 /// Copy this computer's login files for `id` into Tabtivity's store — the one
@@ -2594,6 +2629,17 @@ fn session_export_write_blocking(path: &str, content: &str) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_the_key_of_a_custom_endpoint_is_refused_and_points_at_remove() {
+        // Refused before any keychain access: dropping only the key would
+        // strand an endpoint that can never run.
+        let refused = app_core::rt::block_on(agent_api_key_clear("custom-3".into())).expect_err("refused");
+        assert!(refused.contains("Remove endpoint"), "{refused}");
+        // An id that is no slot keeps its own error.
+        let unknown = app_core::rt::block_on(agent_api_key_clear("custom-9".into())).expect_err("unknown");
+        assert!(unknown.contains("unknown API key provider"), "{unknown}");
+    }
 
     #[test]
     fn a_session_export_writes_only_a_text_file_and_never_through_a_link() {
