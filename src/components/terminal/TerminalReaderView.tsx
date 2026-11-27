@@ -1,4 +1,4 @@
-import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type SyntheticEvent, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type SyntheticEvent, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type DragEvent as ReactDragEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import { wrapStep } from "../../lib/wrapStep";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -65,6 +65,9 @@ import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges } from "./TerminalReaderChanges";
 import { useCheckpointNow, useReaderCheckpoints } from "./ReaderCheckpoints";
 import { TerminalReaderFiles, type ReaderFile } from "./TerminalReaderFiles";
+import { startFilePointerDrag } from "../files/fileTreeDrag";
+import { FileDropContext } from "../files/fileDropContext";
+import { setLinkDragData } from "../../lib/terminal/linkDrag";
 import { inboxLeaves } from "../../../mobile-web/src/terminal/inboxRefs";
 import { stopKey } from "../../../mobile-web/src/terminal/agentBusy";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
@@ -2270,7 +2273,36 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setArtifact({ target: name, request: readerRequest(scope, current, cwd, undefined, 0) ?? {} });
     return true;
   };
+  // Inside a popout, a dragged file link's drop goes through its controller.
+  const fileDrop = useContext(FileDropContext);
+  // When a file link's drag last ended: the click its release fires is swallowed.
+  const dragClickGuard = useRef(0);
+  // A file link drags like a Data row (`startFilePointerDrag`): onto a tab
+  // bar or pane as a tab, out of the window as a copy into another app.
+  const onPathPointerDown = (event: ReactPointerEvent) => {
+    const el = pathLinkAt(event.target);
+    const entry = el ? pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "") : null;
+    if (!entry) return;
+    const ctx = pathContextRef.current;
+    startFilePointerDrag(event, entry, {
+      projectId, projectDir: ctx.projectDir || tabDir, disabled: ctx.disabled, host: !!remoteHost, fileDrop, dragClickGuard,
+    });
+  };
+  const webLinkAt = (target: EventTarget | null) =>
+    target instanceof Element ? target.closest<HTMLElement>(".web-link[data-href]") : null;
+  // A web link drags its address out (HTML5: a browser, a mail, a text box);
+  // `draggable` is set on the first hover, the chat's markup has none.
+  const onPathDragStart = (event: ReactDragEvent) => {
+    const url = chatLinkUrl(webLinkAt(event.target)?.getAttribute("data-href"));
+    if (!url) return;
+    setPathHover(null);
+    setLinkDragData(event.dataTransfer, url);
+  };
   const onPathClick = (event: ReactMouseEvent) => {
+    if (Date.now() - dragClickGuard.current < 400) {
+      event.preventDefault();
+      return;
+    }
     if (openWebAt(event.target) || openArtifactAt(event.target)) {
       event.preventDefault();
       return;
@@ -2291,6 +2323,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     openPathAt(el, event.ctrlKey || event.metaKey);
   };
   const onPathOver = (event: ReactMouseEvent) => {
+    const web = webLinkAt(event.target);
+    if (web && !web.draggable && chatLinkUrl(web.getAttribute("data-href"))) web.draggable = true;
     const el = pathLinkAt(event.target);
     const entry = el ? pathLinksRef.current.get(el.getAttribute(PATH_LINK_ATTR) ?? "") : null;
     if (!el || !entry) return;
@@ -3275,6 +3309,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           className="terminal-reader-list"
           onScroll={() => { onScroll(); setPathHover(null); }}
           onClick={onPathClick}
+          onPointerDown={onPathPointerDown}
+          onDragStart={onPathDragStart}
           onKeyDown={onPathKey}
           onMouseOver={onPathOver}
           onMouseOut={onPathOut}
@@ -3521,6 +3557,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           use24h={use24h}
           picked={shownFile}
           projectId={projectId}
+          projectDir={pathContext.projectDir || tabDir}
+          hostFiles={!!remoteHost}
           disabled={pathContext.disabled}
           visible={visible}
           scopeNote={openStep ? t("terminal.changes.subagent", { name: openStep.task || openStep.role || "" })

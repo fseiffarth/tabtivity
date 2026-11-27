@@ -118,6 +118,44 @@ export interface EntryDragContext {
   moveEntryToFolder: (sourceRel: string, name: string, target: ResolvedMoveTarget, sourceAbs: string) => Promise<void>;
 }
 
+/** A file row outside any tree (the agent pane's Data tab) dragged like a tree
+ *  row without drag-to-move: onto a tab bar, a pane edge, a popout or past the
+ *  window into a new one opens it as a tab (a file with an in-app viewer
+ *  only), and out of the window into another app copies it there. Nothing is
+ *  ever moved, so a folder row under the release does nothing. `host` marks
+ *  paths that are a remote host's (no OS drag-out). */
+export function startFilePointerDrag(
+  e: React.PointerEvent,
+  entry: FileEntry,
+  opts: {
+    projectId: string | null;
+    projectDir: string;
+    disabled?: ReadonlySet<InternalViewer>;
+    host?: boolean;
+    fileDrop: FileDropController | null;
+    dragClickGuard: MutableRefObject<number>;
+  },
+) {
+  const disabledViewerSet = new Set(opts.disabled ?? []);
+  startEntryPointerDrag({
+    selected: new Set(),
+    entries: [entry],
+    disabledViewerSet,
+    relForEntry: (en) => en.name,
+    setMoveTarget: () => {},
+    projectId: opts.projectId,
+    projectDir: opts.projectDir,
+    relPath: "",
+    remoteListing: !!opts.host,
+    relPathRef: { current: "" },
+    load: () => Promise.resolve(),
+    fileDrop: opts.fileDrop,
+    moveTargetRef: { current: null },
+    dragClickGuard: opts.dragClickGuard,
+    moveEntryToFolder: () => Promise.resolve(),
+  }, e, entry, entry.is_dir ? null : internalViewerFor(entry, disabledViewerSet));
+}
+
 // Start a pointer-based drag from a file row, mirroring TabBar.onTabPointerDown.
 // HTML5 native DnD is unreliable on WebKitGTK (it hijacks the pointer stream
 // and fires pointercancel), so once the pointer crosses a 5px threshold we
