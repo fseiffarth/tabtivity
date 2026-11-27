@@ -575,3 +575,101 @@ commit that adds this section.
    next request is refused with the budget message; set it back.
 7. Press **Remove**: a confirm dialog names the endpoint; Cancel keeps it, Remove deletes
    it and the row disappears; the OpenCode row falls back to its other keys.
+
+## R2 — final review of the whole range (`02ad378e9..e05ddca52`)
+
+Fixes on top of `e05ddca52`: `b769b3f52` (limit write), then the filemap commit,
+then the commit that adds this section.
+
+### Confirmed and fixed
+
+- **A limit write erased the limit of an endpoint added after the window loaded
+  its settings** (`b769b3f52`). `add_custom` writes `agent_api_token_limits["custom-<n>"]`
+  in the backend and nothing refreshes the window's cached settings; a settings
+  patch replaces the whole `agent_api_token_limits` map, and both "Set limit"
+  (`AgentCustomEndpointsRows`) and a built-in's Save (`AgentApiKeysRows.writeLimit`)
+  spread the cached map. Add endpoint A, add B, set a limit on A: B's limit was
+  gone, B showed "no limit" and every request of it was refused until the user
+  noticed. Both writers now start from `currentApiLimits()`
+  (`agentApiKeysShared.ts`: the file's map through `get_settings`, the cache only
+  when that cannot be read). Test: `writes a limit over the file's limits, not the
+  window's cached copy` (`AgentCustomEndpoints.test.tsx`), failed before the fix.
+  A read-then-patch window of a few ms remains (same as every other whole-map
+  setting); a backend merge command would close it.
+
+### Checked and rejected (no bug)
+
+- UI to backend chain: `agent_api_custom_endpoint_add { label, baseUrl, key,
+  limitTokens }` maps to `base_url`/`limit_tokens`, slot ids `custom-<n>`, OpenCode
+  ids `tt-custom-<n>`, models from the saved listing, limit key
+  `agent_api_token_limits["custom-<n>"]` written by `add_custom` (the UI does not
+  write it first), proxy base `<proxy>/custom-<n>` (no `/v1`) and `{env:CUSTOM_ENDPOINT_KEY_<n>}`
+  all line up. Every `settings.agentCustom*` key used exists in en/de/es/fr/it.
+- A2 spawn: the token only travels under `CUSTOM_CARRIER` (all eight in
+  `tmux_local::SECRET_ENV`, mapped back by `agent_exec::targets` over `ENV_VARS`),
+  never in the inline config (`{env:…}`), an argv or a log; a user's own
+  `tt-custom-<n>` block (either shape) wins and takes its token/base/carrier back
+  out; local-model tabs (including the assistant's `OpenCodeLocal`), subcommands,
+  the locked-project gate (`agent_privacy`), containers (`refuse_in_container`) and
+  remote spawns never reach `inject_env_at`; `opencode_routed` and
+  `base_of_carrier` cover the custom slots, so tmux < 3.2 refuses a custom-only route.
+- Revocation: `remove_custom` clears the key, revokes the slot's grants, then
+  writes; `add_custom` revokes before and after. The loopback client has
+  `.no_proxy()`. `custom_base` is read per request (404 before any key read).
+- R1's guard: `patch_settings_at` drops and `save_settings_at` keeps
+  `agent_api_custom_endpoints`; no other settings writer takes caller data
+  (`patch_json` writers each set their own field and round-trip the list).
+- Hosted server: `custom_endpoints()` and `spawn_endpoints()` are empty, the
+  commands refuse, `issue` refuses admin + custom, `server/` never names `Provider`.
+  The `--no-default-features` lib and `server_secrets` pass.
+- No leftover `// A2:` notes or TODOs; the `#[cfg(test)]` items
+  (`inject_env_with`, `route_opencode`, `issue_provider_for_test`) are test-only
+  wrappers, not in a production path. No `any`, no bare `listen()`, confirmation
+  through `useDialogs()`, `UntestedTag` row `opencode-custom-endpoint` present and
+  used. `scripts/brand-check.sh` shows only `scripts/verify-cli/opencode/queue.py:26`;
+  `scripts/privacy-check.sh 02ad378e9 HEAD` is clean (12 commits).
+
+### Flagged for user (not acted on)
+
+- **The three commands are class Core (fixed by the plan), so a paired browser
+  can call them.** `agent_api_custom_endpoint_add` makes the desktop `GET
+  <any https URL>/models` with a key the caller chose (an SSRF-like probe that
+  returns the listed model ids), and a new endpoint is a route OpenCode tabs
+  send prompts to. Unlike `agent_api_key_set` (fixed host) it changes where
+  data goes. Consider class Client/Admin for add/refresh.
+- **`opencode_models::listed_ids` strips a leading `models/` from every id**,
+  also for a custom endpoint. An endpoint that lists and requires the id
+  `models/x` (Google's OpenAI-compatible listing does, and accepts both) would be
+  called with `x`. Not confirmed to break a real endpoint; a one-line skip for
+  `Provider::Custom` if it does.
+- **Inline-config size.** Up to 200 model ids per slot and 8 slots go into one
+  `OPENCODE_CONFIG_CONTENT` env string; with long ids that could pass Linux's
+  128 KiB per-string limit (spawn would fail). Realistic lists are far smaller.
+- **Settings read twice per spawn** (`inject_env`, then `inject_launch`): an
+  endpoint removed between the two leaves its carrier and base variable in the
+  env for that one spawn (the token is that tab's own proxy token, which the
+  removal already revoked). Narrow; not fixed.
+- Earlier flags still stand: the HTTPS client honours the system proxy
+  (A2), `https://` to private addresses is accepted (A1), no key check on a
+  404/405/501 from `/models` (A1), cached tokens count at a tenth (A1), 32 768
+  assumed when `max_tokens` is absent (R1), non-English strings are machine-grade (A3).
+
+### Filemap rows updated
+
+`docs/filemap_backend.md`: `agent/agent_api_keys.rs`, `api/api_proxy.rs`,
+`api/api_meter.rs`, `api/api_usage.rs`, `commands/settings.rs` (patch/save guard),
+`schema/settings.rs` (`CustomEndpoint`), one clause each.
+
+### Gates (after the last edit, worktree)
+
+- `npm run build`: exit 0 (tsc, desktop, mobile, web bundles).
+- `npm test -- --reporter=dot`: 13 895 passed (the full suite; 13 894 + 1 new).
+- `npm run lint`: 0 errors, 31 warnings (same count as before this review).
+- `cargo test -q --workspace -- --test-threads=6`: 7084 passed, 23 ignored, no flake.
+- `cargo test -q -p tabtivity --no-default-features --lib --test server_secrets`:
+  6441 passed, 20 ignored.
+- Clippy `--workspace --all-targets`, `-p tabtivity --no-default-features --lib`,
+  `-p app-serverd --all-targets`: clean.
+- `scripts/brand-check.sh`: only the old `queue.py:26` hit. `scripts/privacy-check.sh`:
+  clean. `git diff --check 02ad378e9`: clean.
+- Not run live (rule: never start the app).
