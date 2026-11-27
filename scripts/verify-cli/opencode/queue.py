@@ -22,8 +22,8 @@ relies on:
   `idle`     the chord on an idle OpenCode just submits the prompt.
 
 `ctrl+x q` with nothing queued QUITS the full TUI: never pressed without a mark.
-Run it from a tab that is not OpenCode, or with `OPENCODE*` and
-`TABTIVITY_OPENCODE_SESSION` unset (see chat_send.py).
+Run it from a tab that is not OpenCode, or with `OPENCODE*` and the app's
+`*_OPENCODE_SESSION` unset (see chat_send.py).
 """
 import json
 import os

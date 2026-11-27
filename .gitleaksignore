@@ -105,3 +105,5 @@ affbc76427b7fda3c833f2ebc159daa5116a32c9:src-tauri/src/services/mobile_control/h
 4ba71fcaaf5c412c1bc517fe69e7c19e64489c58:src-tauri/src/services/mobile_control/shell_mask/tests.rs:aws-access-token:69
 # a model name ("claude-opus-4.5") in a token-stats test key, not a secret
 f859698df4da7a9c56f4774c067ba166cfedc3b1:src-tauri/src/services/token_stats.rs:generic-api-key:2639
+# a fixed 16-hex idempotency_key in a mobile host test request, not a secret
+f82c2c20d29b99573d2dca695693a29d4b12f807:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:1670

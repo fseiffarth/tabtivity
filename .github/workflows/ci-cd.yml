@@ -200,6 +200,9 @@ jobs:
 
       - name: Install Linux dependencies
         run: |
+          # The runner image's Microsoft apt repo can answer 403 and fail the
+          # update; nothing below comes from it.
+          grep -rl packages.microsoft.com /etc/apt/sources.list.d/ | xargs -r sudo rm -f
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -366,6 +369,9 @@ jobs:
 
       - name: Install Linux dependencies
         run: |
+          # The runner image's Microsoft apt repo can answer 403 and fail the
+          # update; nothing below comes from it.
+          grep -rl packages.microsoft.com /etc/apt/sources.list.d/ | xargs -r sudo rm -f
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -849,6 +855,9 @@ jobs:
 
       - name: Install Linux dependencies
         run: |
+          # The runner image's Microsoft apt repo can answer 403 and fail the
+          # update; nothing below comes from it.
+          grep -rl packages.microsoft.com /etc/apt/sources.list.d/ | xargs -r sudo rm -f
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
