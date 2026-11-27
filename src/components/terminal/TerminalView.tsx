@@ -2923,7 +2923,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         onDismiss={() => dismissSignIn(signIn.url)}
       />
     )}
-    {host && visible && !signIn && (
+    {/* No server chips in an agent tab: an agent prints addresses in its prose,
+        quoted code and tool output, so a `localhost:PORT` there is rarely a
+        server the tab started, and its kind is a guess from nearby words. */}
+    {host && visible && !signIn && !agentPane && (
       <TerminalServerChips
         host={host}
         servers={(locality.kind === "local" ? withoutOwnServers(servers, [phonePort]) : servers)
